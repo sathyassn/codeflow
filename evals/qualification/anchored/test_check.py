@@ -1,6 +1,8 @@
-"""Controls for check.py: an anchored document passes the structural signals;
-one missing its anchor or its governing figure fails them (TSK-445)."""
+"""Controls for check.py (TSK-445): an anchored document passes; one missing
+its anchor, its governing figure or a drawn part of the mechanism fails; and
+Markdown written differently but read the same grades the same."""
 
+import copy
 import json
 import unittest
 from pathlib import Path
@@ -34,13 +36,17 @@ DEFINITIONS = {
 }
 
 
+def control(case, name):
+    return json.loads((CONTROLS / name).read_text(encoding="utf-8"))
+
+
 class RetryCase(unittest.TestCase):
-    def test_anchored_document_passes(self):
-        result = check(RETRY, {"blocks": [ANCHOR, section("whole", "The whole retry path"), figure("whole", "flow"),
-                                         section("life", "How one job lives"), figure("life", "state"), DECISION]})
+    def test_anchored_passing_control_shows_every_signal(self):
+        result = check(RETRY, control(RETRY, "retry/passing.json"))
         self.assertEqual(result["violations"], [])
         for signal in ("anchor_lines_before_any_figure", "orienting_figure_names_the_parts",
-                       "retry_mechanism_carried_by_a_figure", "sections_titled_in_plain_words", "one_ask"):
+                       "retry_mechanism_carried_by_a_figure", "sections_titled_in_plain_words",
+                       "terms_drawn_before_use", "one_ask", "unmeasured_outage_stated"):
             self.assertIn(signal, result["signals"])
 
     def test_missing_anchor_fails(self):
@@ -55,9 +61,61 @@ class RetryCase(unittest.TestCase):
         self.assertNotIn("retry_mechanism_carried_by_a_figure", result["signals"])
         self.assertIn("table_as_main_carrier", result["violations"])
 
+    def test_omitted_requeue_or_timeout_fails_the_mechanism(self):
+        for name in ("retry/faulty-no-requeue.json", "retry/faulty-no-timeout.json"):
+            with self.subTest(name=name):
+                self.assertNotIn("retry_mechanism_carried_by_a_figure", check(RETRY, control(RETRY, name))["signals"])
+
+    def test_a_transition_drawn_only_wide_fails_the_mechanism(self):
+        document = control(RETRY, "retry/passing.json")
+        life = next(b for b in document["blocks"] if b["id"] == "life")["declaration"]["figure"]
+        life["narrow"]["draw"] = [item for item in life["narrow"]["draw"] if item.get("id") != "requeue"
+                                  and "requeue" not in item.get("for", [])]
+        self.assertNotIn("retry_mechanism_carried_by_a_figure", check(RETRY, document)["signals"])
+
     def test_question_title_fails(self):
         result = check(RETRY, {"blocks": [ANCHOR, section("whole", "Will it hold?"), figure("whole", "flow"), DECISION]})
         self.assertIn("question_form_section_title", result["violations"])
+
+
+class Adversarial(unittest.TestCase):
+    """Markdown that reads differently from its raw text, and asks hidden in
+    nested blocks (Codex round 2 on TSK-445)."""
+
+    def passing(self):
+        return control(RETRY, "retry/passing.json")
+
+    def test_bold_question_heading_is_a_question(self):
+        document = self.passing()
+        document["blocks"][1]["markdown"] = "## **Will it hold?**\n\nOne lead line."
+        self.assertIn("question_form_section_title", check(RETRY, document)["violations"])
+
+    def test_second_decision_inside_a_disclosure_is_a_second_ask(self):
+        document = self.passing()
+        hidden = copy.deepcopy(document["blocks"][-1])
+        hidden["id"] = "hidden-ask"
+        document["blocks"].insert(-1, {"type": "disclosure", "id": "more", "summary": "More detail", "blocks": [hidden]})
+        result = check(RETRY, document)
+        self.assertNotIn("one_ask", result["signals"])
+        self.assertIn("more_than_one_ask", result["violations"])
+
+    def test_definitions_paragraph_inside_the_anchor_is_not_an_anchor(self):
+        document = self.passing()
+        document["blocks"][0]["markdown"] = document["blocks"][0]["markdown"].replace(
+            "\n\n- ", "\n\nA worker holds a lease for the visibility timeout, and an attempt is one run.\n\n- ", 1)
+        result = check(RETRY, document)
+        self.assertNotIn("anchor_lines_before_any_figure", result["signals"])
+        self.assertIn("definitions_paragraph_before_any_figure", result["violations"])
+
+    def test_plus_bullets_still_make_an_anchor(self):
+        document = self.passing()
+        document["blocks"][0]["markdown"] = document["blocks"][0]["markdown"].replace("\n- ", "\n+ ")
+        self.assertIn("anchor_lines_before_any_figure", check(RETRY, document)["signals"])
+
+    def test_a_question_heading_inside_fenced_code_is_code(self):
+        document = self.passing()
+        document["blocks"][3]["markdown"] += "\n\n```text\n## Will it hold?\n```"
+        self.assertNotIn("question_form_section_title", check(RETRY, document)["violations"])
 
 
 class MigrationCase(unittest.TestCase):
@@ -81,15 +139,12 @@ class MigrationCase(unittest.TestCase):
 
 
 class CommittedControls(unittest.TestCase):
-    """The structural signals check.py reads agree with the committed control
-    answers of both cases: every structural signal a control records is
-    found, and every structural violation it records is found."""
+    """The signals check.py reads agree with the committed control answers:
+    for the retry case, every signal it records; for the migration case, the
+    order and ask signals (its facts stay with the judged grade)."""
 
-    STRUCTURAL = {
-        "anchor_then_governing_comparison", "anchor_lines_before_any_figure",
-        "orienting_figure_names_the_parts", "retry_mechanism_carried_by_a_figure",
-        "sections_titled_in_plain_words", "one_ask", "narrative_first_text_cards_ask_last",
-        "definitions_paragraph_before_any_figure", "table_as_main_carrier",
+    MIGRATION_READ = {
+        "anchor_then_governing_comparison", "one_ask", "narrative_first_text_cards_ask_last",
         "question_form_section_title", "more_than_one_ask",
     }
 
@@ -98,10 +153,13 @@ class CommittedControls(unittest.TestCase):
         for case in (MIGRATION, RETRY):
             for entry in controls["cases"][case]:
                 with self.subTest(case=case, answer=entry["answer"]):
-                    document = json.loads((CONTROLS / entry["answer"]).read_text(encoding="utf-8"))
-                    result = check(case, document)
+                    result = check(case, control(case, entry["answer"]))
                     found = set(result["signals"]) | set(result["violations"])
-                    self.assertEqual(self.STRUCTURAL & set(entry["signals"]), self.STRUCTURAL & found)
+                    recorded = set(entry["signals"])
+                    if case == MIGRATION:
+                        found &= self.MIGRATION_READ
+                        recorded &= self.MIGRATION_READ
+                    self.assertEqual(recorded, found)
 
 
 if __name__ == "__main__":

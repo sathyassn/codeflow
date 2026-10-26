@@ -1,11 +1,12 @@
-"""Structural grader for anchored present documents (TSK-445).
+"""Grader for anchored present documents (TSK-445).
 
-Reads the present document a subject opened and reports which structural
-signals of two cases it shows: `migration-review-leads-with-the-picture`
-and `retry-review-opens-with-the-whole`. It reads block order, block types,
-headings and anchor lines only. Whether a figure is the right one, whether a
-fact is invented and whether terms are drawn before use stay with the
-judged grade; this script only decides what structure can settle.
+Reads the present document a subject opened and reports which signals of two
+cases it shows: `migration-review-leads-with-the-picture` and
+`retry-review-opens-with-the-whole`. Narrative Markdown is parsed as
+CommonMark with markdown-it-py (the specification `codeflow present` renders
+with), so emphasis, list markers and code blocks read as a reader sees them.
+Figures are read from their declarations: the words a composition draws, its
+marks and its states. Whether a fact is invented stays with the judged grade.
 
 Usage: python3 -B check.py <case-id> <document.json>
 Prints one JSON object: {"signals": [...], "violations": [...]}.
@@ -17,44 +18,92 @@ import json
 import re
 import sys
 
+try:
+    from markdown_it import MarkdownIt
+except ImportError as error:  # pragma: no cover - evaluator setup
+    raise SystemExit("check.py needs markdown-it-py: python3 -m pip install markdown-it-py") from error
+
 MIGRATION = "migration-review-leads-with-the-picture"
 RETRY = "retry-review-opens-with-the-whole"
 ASKING = {"decision", "form", "feedback_prompt"}
-RETRY_TERMS = ("lease", "attempt", "visibility timeout", "dead-letter")
+FIGURES = {"figure", "html"}
+PARSER = MarkdownIt("commonmark")
+
+# The retry terms, each with the words that name it in a figure or in prose.
+RETRY_TERMS = {
+    "lease": ("lease",),
+    "attempt": ("attempt",),
+    "visibility timeout": ("visibility timeout",),
+    "dead-letter queue": ("dead-letter", "dead letter"),
+}
+# What the retry mechanism figure must draw, at both widths: the dead-letter
+# step after a third failure, the backoff, a lost lease that counts no
+# attempt, and the operator requeue out of the dead-letter queue.
+RETRY_MECHANISM = {
+    "dead-letter": ("dead-letter", "dead letter"),
+    "backoff": ("30 s", "30 seconds", "60 s", "60 seconds"),
+    "lost lease": ("lease lost", "lost lease", "loses its lease", "lease expires"),
+    "no attempt counted": ("no attempt", "not counted", "does not count"),
+    "requeue": ("requeue",),
+    "visibility timeout": ("visibility timeout",),
+}
 
 
-def headings(markdown: str) -> list[str]:
-    return [line.lstrip("#").strip() for line in markdown.splitlines() if line.startswith("#")]
+class Narrative:
+    """One narrative block's Markdown, parsed: its headings, its top-level
+    list items and its top-level paragraphs, with code left out."""
+
+    def __init__(self, markdown: str) -> None:
+        tokens = PARSER.parse(markdown)
+        self.order: list[str] = []
+        self.headings: list[str] = []
+        self.items = 0
+        self.paragraphs: list[str] = []
+        self.list_text: list[str] = []
+        depth = 0
+        for index, token in enumerate(tokens):
+            if token.type in ("bullet_list_open", "ordered_list_open"):
+                if depth == 0:
+                    self.order.append("list")
+                depth += 1
+            elif token.type in ("bullet_list_close", "ordered_list_close"):
+                depth -= 1
+            elif token.type == "list_item_open" and depth == 1:
+                self.items += 1
+            elif token.type == "heading_open" and depth == 0:
+                self.order.append("heading")
+                self.headings.append(plain(tokens[index + 1]))
+            elif token.type == "paragraph_open":
+                text = plain(tokens[index + 1])
+                if depth == 0:
+                    self.order.append("paragraph")
+                    self.paragraphs.append(text)
+                else:
+                    self.list_text.append(text)
+            elif token.type in ("fence", "code_block") and depth == 0:
+                self.order.append("code")
+
+    def is_anchor(self) -> bool:
+        """A heading, then one list of four or five items, and nothing else."""
+        return self.order == ["heading", "list"] and 4 <= self.items <= 5
+
+    def is_section(self) -> bool:
+        """A heading, then a lead of at most two sentences."""
+        if not self.order or self.order[0] != "heading" or "list" in self.order:
+            return False
+        return all(kind == "paragraph" for kind in self.order[1:]) and sentences(" ".join(self.paragraphs)) <= 2
 
 
-def list_items(markdown: str) -> list[str]:
-    return [line for line in markdown.splitlines() if re.match(r"\s*[-*] ", line)]
-
-
-def prose(markdown: str) -> str:
-    kept = [line for line in markdown.splitlines() if not line.startswith("#")]
-    return re.sub(r"`[^`]*`", "", " ".join(kept))
+def plain(inline) -> str:
+    """The words of an inline token as a reader sees them: text and code
+    spans, with emphasis and link markup dropped."""
+    if inline is None or inline.type != "inline":
+        return ""
+    return "".join(child.content for child in (inline.children or []) if child.type in ("text", "code_inline")).strip()
 
 
 def sentences(text: str) -> int:
     return len([part for part in re.split(r"(?<=[.!?])\s+", text.strip()) if part])
-
-
-def titles(block: dict) -> list[str]:
-    kind = block.get("type")
-    if kind in ASKING:
-        return []
-    found = []
-    if kind == "narrative":
-        found += headings(block.get("markdown", ""))
-    for key in ("title", "summary", "label"):
-        if isinstance(block.get(key), str):
-            found.append(block[key])
-    if kind == "figure":
-        found.append(block.get("declaration", {}).get("figure", {}).get("title", ""))
-    for column in block.get("columns", []) if kind == "comparison" else []:
-        found.append(column.get("title", ""))
-    return found
 
 
 def walk(blocks: list[dict]):
@@ -65,42 +114,76 @@ def walk(blocks: list[dict]):
             yield from walk(tab.get("blocks", []))
 
 
-def is_anchor(block: dict) -> bool:
-    if block.get("type") != "narrative":
+def narrative(block: dict) -> Narrative | None:
+    return Narrative(block.get("markdown", "")) if block.get("type") == "narrative" else None
+
+
+def titles(block: dict) -> list[str]:
+    kind = block.get("type")
+    if kind in ASKING:
+        return []
+    parsed = narrative(block)
+    found = list(parsed.headings) if parsed else []
+    for key in ("title", "summary", "label"):
+        if isinstance(block.get(key), str):
+            found.append(block[key])
+    if kind == "figure":
+        found.append(declaration(block).get("title", ""))
+    if kind == "comparison":
+        found += [column.get("title", "") for column in block.get("columns", [])]
+    return found
+
+
+def declaration(block: dict) -> dict:
+    return block.get("declaration", {}).get("figure", {}) if block.get("type") == "figure" else {}
+
+
+def drawn_words(figure: dict, composition: str) -> str:
+    """The words a composition draws, with the figure's title and legend."""
+    words = [figure.get("title", "")] + [state.get("means", "") for state in figure.get("states", [])]
+    words += [item["text"] for item in figure.get(composition, {}).get("draw", []) if "text" in item]
+    return " ".join(words).lower()
+
+
+def labelled_marks(figure: dict, composition: str) -> str:
+    """The words of the texts that label a drawn mark, at one width."""
+    draw = figure.get(composition, {}).get("draw", [])
+    marks = {item["id"] for item in draw if "state" in item and "id" in item}
+    return " ".join(
+        item["text"] for item in draw if "text" in item and set(item.get("for", [])) & marks
+    ).lower()
+
+
+def has_any(text: str, words: tuple[str, ...]) -> bool:
+    return any(word in text for word in words)
+
+
+def figure_draws_mechanism(figure: dict) -> bool:
+    if figure.get("family") not in ("state", "flow"):
         return False
-    markdown = block.get("markdown", "")
-    return markdown.lstrip().startswith("## ") and 4 <= len(list_items(markdown)) <= 5
-
-
-def is_section(block: dict) -> bool:
-    """A section block: a heading and a lead of at most two sentences."""
-    if block.get("type") != "narrative":
-        return False
-    markdown = block.get("markdown", "")
-    return markdown.lstrip().startswith("#") and not list_items(markdown) and sentences(prose(markdown)) <= 2
-
-
-def family(block: dict) -> str | None:
-    if block.get("type") != "figure":
-        return None
-    return block.get("declaration", {}).get("figure", {}).get("family")
+    for composition in ("wide", "narrow"):
+        labels = labelled_marks(figure, composition)
+        if not all(has_any(labels, words) for words in RETRY_MECHANISM.values()):
+            return False
+    return True
 
 
 def check(case: str, document: dict) -> dict:
     blocks = document.get("blocks", [])
     signals: list[str] = []
     violations: list[str] = []
-    first_figure = next((i for i, b in enumerate(blocks) if b.get("type") in ("figure", "html")), None)
-    anchored = bool(blocks) and is_anchor(blocks[0])
+    first_figure = next((i for i, b in enumerate(blocks) if b.get("type") in FIGURES), None)
+    first = narrative(blocks[0]) if blocks else None
+    anchored = bool(first and first.is_anchor())
 
     # The content block after the anchor, skipping at most one section block.
     after = 1
-    if len(blocks) > after and is_section(blocks[after]):
+    if len(blocks) > after and (narrative(blocks[after]) or Narrative("")).is_section():
         after += 1
     governing = blocks[after] if anchored and len(blocks) > after else None
 
-    asks = [b for b in blocks if b.get("type") in ("decision", "feedback_prompt")]
-    if len(asks) == 1 and asks[-1] is blocks[-1]:
+    asks = [b for b in walk(blocks) if b.get("type") in ASKING]
+    if len(asks) == 1 and asks[0] is blocks[-1]:
         signals.append("one_ask")
     elif len(asks) > 1:
         violations.append("more_than_one_ask")
@@ -111,36 +194,63 @@ def check(case: str, document: dict) -> dict:
     before = blocks[: first_figure if first_figure is not None else len(blocks)]
     if case == MIGRATION:
         if governing is not None and (
-            family(governing) in ("extent", "coverage") or governing.get("type") == "table"
+            declaration(governing).get("family") in ("extent", "coverage") or governing.get("type") == "table"
         ):
             signals.append("anchor_then_governing_comparison")
-        prose_first = any(
-            b.get("type") == "comparison"
-            or (b.get("type") == "narrative" and not is_anchor(b) and not is_section(b))
-            for b in before
-        )
+        prose_first = False
+        for index, block in enumerate(before):
+            parsed = narrative(block)
+            if block.get("type") == "comparison":
+                prose_first = True
+            elif parsed and not (index == 0 and parsed.is_anchor()) and not parsed.is_section():
+                prose_first = True
         if prose_first or first_figure is None:
             violations.append("narrative_first_text_cards_ask_last")
     elif case == RETRY:
         if anchored and (first_figure is None or first_figure > 0):
             signals.append("anchor_lines_before_any_figure")
-        if governing is not None and governing.get("type") in ("figure", "html"):
+        whole = declaration(governing) if governing is not None else {}
+        if whole and all(has_any(drawn_words(whole, "wide"), words) for words in RETRY_TERMS.values()):
             signals.append("orienting_figure_names_the_parts")
-        if any(family(b) in ("state", "flow") for b in walk(blocks)):
+        figures = [declaration(b) for b in walk(blocks) if b.get("type") == "figure"]
+        if any(figure_draws_mechanism(figure) for figure in figures):
             signals.append("retry_mechanism_carried_by_a_figure")
-        narratives = [b for b in blocks if b.get("type") == "narrative" and not is_anchor(b)]
-        if narratives and all(b.get("markdown", "").lstrip().startswith("#") for b in narratives):
+        narratives = [(i, narrative(b)) for i, b in enumerate(blocks) if b.get("type") == "narrative"]
+        if narratives and all(
+            parsed.headings and parsed.order[0] == "heading" for _, parsed in narratives
+        ):
             signals.append("sections_titled_in_plain_words")
-        for b in before:
-            if b.get("type") == "narrative" and not is_anchor(b):
-                text = prose(b.get("markdown", "")).lower()
-                if sum(term in text for term in RETRY_TERMS) >= 2:
-                    violations.append("definitions_paragraph_before_any_figure")
-                    break
-        if not any(b.get("type") in ("figure", "html") for b in walk(blocks)) and any(
+        # A term is drawn before use when some figure at or above the first
+        # block whose prose names it draws it at both widths.
+        drawn_by: dict[str, int] = {}
+        for index, block in enumerate(blocks):
+            figure = declaration(block)
+            if figure:
+                for term, words in RETRY_TERMS.items():
+                    if all(has_any(drawn_words(figure, c), words) for c in ("wide", "narrow")):
+                        drawn_by.setdefault(term, index)
+        used_at: dict[str, int] = {}
+        for index, parsed in narratives:
+            if index == 0 and parsed.is_anchor():
+                continue
+            text = " ".join(parsed.paragraphs + parsed.list_text).lower()
+            for term, words in RETRY_TERMS.items():
+                if has_any(text, words):
+                    used_at.setdefault(term, index)
+        if len(drawn_by) == len(RETRY_TERMS) and all(drawn_by[t] <= used_at.get(t, len(blocks)) for t in RETRY_TERMS):
+            signals.append("terms_drawn_before_use")
+        for block in before:
+            parsed = narrative(block)
+            if parsed:
+                for paragraph in parsed.paragraphs:
+                    if sum(has_any(paragraph.lower(), words) for words in RETRY_TERMS.values()) >= 2:
+                        violations.append("definitions_paragraph_before_any_figure")
+        if not any(b.get("type") in FIGURES for b in walk(blocks)) and any(
             b.get("type") == "table" for b in blocks
         ):
             violations.append("table_as_main_carrier")
+        if "outage" in json.dumps(blocks).lower():
+            signals.append("unmeasured_outage_stated")
     else:
         raise SystemExit(f"unknown case {case}")
     return {"signals": sorted(set(signals)), "violations": sorted(set(violations))}
