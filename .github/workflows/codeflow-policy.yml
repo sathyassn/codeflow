@@ -67,6 +67,20 @@ jobs:
       pull-requests: read
       actions: read
     steps:
+      # Only a protected base supplies the code this job builds and runs
+      # (TSK-1001): before any checkout or build, a pull request into any
+      # other branch fails here, since a branch its author controls would
+      # run its own code as the judge.
+      - name: The base branch is a protected one
+        if: github.event_name == 'pull_request_target'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          case "$BASE_REF" in
+            main|master|integration/*) echo "base ${BASE_REF} is protected" ;;
+            *) echo "::error::the base ${BASE_REF} is not main, master or integration/**; its code is not trusted to judge this pull request"; exit 1 ;;
+          esac
+
       # The target, never the pull request head: for a pull request its base
       # commit, otherwise the event's own commit. The binary, the pin and the
       # policy all come from this checkout.
@@ -198,10 +212,17 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           DRAFT: ${{ steps.body.outputs.draft }}
         run: |
+          set -euo pipefail
           wait=2100
           if [ "$DRAFT" = true ]; then wait=0; fi
-          python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
+          # The provenance verifier: PyJWT with cryptography, every
+          # distribution pinned by SHA-256 in the target's requirements file.
+          python3 -m venv "${RUNNER_TEMP}/admission"
+          "${RUNNER_TEMP}/admission/bin/pip" install --quiet --disable-pip-version-check --require-hashes --no-deps \
+            -r scripts/requirements-admission.txt
+          "${RUNNER_TEMP}/admission/bin/python" -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
             --workflow .github/workflows/codeflow-ci.yml \
             --trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py \
+            --trusted-file scripts/requirements-admission.txt \
             --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --body-sha256 "$BODY_SHA256" --draft "$DRAFT" \
             --require "codeflow gates" --require windows --wait "$wait"

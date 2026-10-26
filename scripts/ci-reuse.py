@@ -63,7 +63,6 @@ run of the same pull request, head and base passed, so its verdicts stand.
 from __future__ import annotations
 
 import argparse
-import base64
 import io
 import zipfile
 import fnmatch
@@ -219,8 +218,12 @@ def trusted_files_problem(git, base: str, head: str, paths: list[str]) -> str | 
     """Why the head's copy of a trusted file is not the base's, or None.
     The run tested the merge of the head into the base; a file whose bytes
     are equal at both carries the base's content into that merge, so the
-    run's jobs, names and verdict logic are the base's, never the pull
-    request's."""
+    run's jobs, job names and verdict logic are the base's. What the gate
+    jobs select and the floors they enforce come from the base as well,
+    since codeflow-ci takes its judge files (test config, selection scripts
+    and their data) from the base revision; the code under test, and the
+    `codeflow` built from it, are the pull request's, which the gate tests
+    rather than trusts."""
     if not paths:
         return "no trusted file was named; admission binds the workflow file and the verdict script"
     for path in paths:
@@ -325,40 +328,72 @@ OIDC_JWKS = f"{OIDC_ISSUER}/.well-known/jwks"
 PROVENANCE_AUDIENCE = "codeflow-admission"
 PROVENANCE_ARTIFACT = "codeflow-provenance-{attempt}"
 PROVENANCE_FILE = "provenance.jwt"
-# DigestInfo prefix for SHA-256 in an EMSA-PKCS1-v1_5 encoding (RFC 8017).
-SHA256_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+# The token is archival evidence of a run, read after the run ended, so it
+# is never required to be unexpired at admission. Its `iat`, `nbf` and `exp`
+# must be present and numeric, `nbf` no later than `exp`, and `iat` inside
+# the run's own window from the runs API (`run_started_at` to `updated_at`),
+# with this much clock skew either side (TSK-1001).
+CLOCK_SKEW_SECONDS = 300
+VERIFIER_HELP = ("PyJWT with cryptography, installed with `pip install --require-hashes --no-deps -r "
+                 "scripts/requirements-admission.txt`")
 
 
-def b64url(text: str) -> bytes:
+def base64url_decode(text: str) -> bytes:
+    import base64
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-def verify_rs256(token: str, keys: list[dict]) -> dict:
-    """The claims of an RS256 JWT whose signature verifies under the JWKS key
-    its header names (RFC 7515, RFC 8017 RSASSA-PKCS1-v1_5); raises Skip
-    for anything else. Uses no third-party code."""
-    parts = token.strip().split(".")
-    if len(parts) != 3:
-        raise Skip("the provenance token is not a JWT")
+def epoch(value: str | None) -> float | None:
+    """Seconds since the epoch of an API timestamp such as
+    `2026-10-25T10:16:56Z`, or None when it cannot be read."""
+    if not isinstance(value, str):
+        return None
     try:
-        header = json.loads(b64url(parts[0]))
-        claims = json.loads(b64url(parts[1]))
-        signature = int.from_bytes(b64url(parts[2]), "big")
-    except (ValueError, TypeError) as error:
-        raise Skip(f"the provenance token cannot be read: {error}") from error
-    if not isinstance(header, dict) or header.get("alg") != "RS256" or not isinstance(claims, dict):
-        raise Skip("the provenance token is not an RS256 token with claims")
-    key = next((key for key in keys if key.get("kid") == header.get("kid") and key.get("kty") == "RSA"), None)
-    if key is None:
-        raise Skip(f"no GitHub OIDC key {header.get('kid')!r} signs the provenance token")
-    modulus = int.from_bytes(b64url(key["n"]), "big")
-    exponent = int.from_bytes(b64url(key["e"]), "big")
-    size = (modulus.bit_length() + 7) // 8
-    digest = hashlib.sha256(f"{parts[0]}.{parts[1]}".encode("ascii")).digest()
-    payload = SHA256_DIGEST_INFO + digest
-    expected = b"\x00\x01" + b"\xff" * (size - len(payload) - 3) + b"\x00" + payload
-    if signature >= modulus or pow(signature, exponent, modulus).to_bytes(size, "big") != expected:
-        raise Skip("the provenance token's signature does not verify")
+        from datetime import datetime
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def verify_token(token: str, keys: list[dict], run: dict) -> dict:
+    """The claims of the run's OIDC token, verified with PyJWT and
+    cryptography (TSK-1001): RS256 only, the one GitHub key the header's
+    `kid` names, this issuer and audience, and the archival time policy
+    above. Raises Skip for anything else, including a missing verifier."""
+    try:
+        import jwt
+    except ImportError as error:
+        raise Skip(f"the provenance verifier is not installed ({error}); it needs {VERIFIER_HELP}") from error
+    try:
+        header = jwt.get_unverified_header(token.strip())
+    except jwt.PyJWTError as error:
+        raise Skip(f"the provenance token is not a JWT: {error}") from error
+    if header.get("alg") != "RS256":
+        raise Skip(f"the provenance token is signed with {header.get('alg')!r}, not RS256")
+    matching = [key for key in keys if isinstance(key, dict) and key.get("kid") == header.get("kid")]
+    if len(matching) != 1:
+        raise Skip(f"{len(matching)} GitHub OIDC keys match the provenance token's key id {header.get('kid')!r}")
+    try:
+        key = jwt.PyJWK(matching[0], algorithm="RS256")
+        claims = jwt.decode(token.strip(), key=key.key, algorithms=["RS256"], audience=PROVENANCE_AUDIENCE,
+                            issuer=OIDC_ISSUER,
+                            options={"require": ["iss", "aud", "iat", "nbf", "exp"], "verify_exp": False,
+                                     "verify_nbf": False, "verify_iat": False})
+    except jwt.PyJWTError as error:
+        raise Skip(f"the provenance token does not verify: {type(error).__name__}: {error}") from error
+    times = {name: claims.get(name) for name in ("iat", "nbf", "exp")}
+    bad = sorted(name for name, value in times.items()
+                 if isinstance(value, bool) or not isinstance(value, (int, float)))
+    if bad:
+        raise Skip(f"the provenance token's {', '.join(bad)} is missing or not a number")
+    if times["nbf"] > times["exp"]:
+        raise Skip("the provenance token's validity ends before it begins")
+    started, ended = epoch(run.get("run_started_at")), epoch(run.get("updated_at"))
+    if started is None or ended is None:
+        raise Skip(f"run {run.get('id')} has no readable start and end times to bind its token to")
+    if not started - CLOCK_SKEW_SECONDS <= times["iat"] <= ended + CLOCK_SKEW_SECONDS:
+        raise Skip(f"the provenance token was issued at {times['iat']}, outside run {run.get('id')}'s window "
+                   f"({run.get('run_started_at')} to {run.get('updated_at')})")
     return claims
 
 
@@ -382,7 +417,7 @@ def provenance_problem(api, git, run: dict, repo: str, pull: int, head: str, bas
     except Exception as error:  # noqa: BLE001 - an unreadable provenance refuses
         return f"run {run['id']} carries no readable signed provenance ({type(error).__name__}: {error})"
     try:
-        claims = verify_rs256(token, keys)
+        claims = verify_token(token, keys, run)
     except Skip as error:
         return f"run {run['id']}: {error}"
     merge_ref = f"refs/pull/{pull}/merge"

@@ -19,6 +19,16 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+# The provenance verifier is PyJWT with cryptography, pinned by hash
+# (TSK-1001); run under it, installing it first when it is missing.
+_ENV = importlib.util.spec_from_file_location("admission_env", ROOT / "scripts" / "admission_env.py")
+_admission_env = importlib.util.module_from_spec(_ENV)
+_ENV.loader.exec_module(_admission_env)
+_admission_env.ensure()
+
+import jwt  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
+
 SPEC = importlib.util.spec_from_file_location("ci_reuse", ROOT / "scripts" / "ci-reuse.py")
 reuse = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reuse)
@@ -277,6 +287,8 @@ BODY_SHA = reuse.hashlib.sha256(BODY.encode()).hexdigest()
 
 def admission_run(**changes):
     changes.setdefault("display_title", TITLE)
+    changes.setdefault("run_started_at", STARTED)
+    changes.setdefault("updated_at", ENDED)
     changes.setdefault("pull_requests", [dict(ASSOCIATION)])
     return run(**changes)
 
@@ -308,50 +320,32 @@ class FilesGit:
         return list(self.merge_parents)
 
 
-def _prime(bits):
-    import secrets
-    while True:
-        candidate = secrets.randbits(bits) | (1 << (bits - 1)) | 1
-        if all(pow(witness, candidate - 1, candidate) == 1 for witness in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29)):
-            return candidate
-
-
-def _key():
-    """A throwaway RSA key (1024-bit, tests only) as (n, d) and its JWK."""
-    e = 65537
-    while True:
-        p, q = _prime(512), _prime(512)
-        phi = (p - 1) * (q - 1)
-        if p != q and phi % e:
-            break
-    n = p * q
-    d = pow(e, -1, phi)
-    def b64(value):
-        raw = value.to_bytes((value.bit_length() + 7) // 8, "big")
-        return reuse.base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-    return (n, d), {"kty": "RSA", "kid": "k1", "n": b64(n), "e": b64(e), "alg": "RS256"}
+def _key(kid="k1"):
+    """A fresh RSA key from cryptography, and its public JWK from PyJWT:
+    signing and the published key come from the libraries, independent of
+    the verifier under test."""
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private.public_key()))
+    public.update({"kid": kid, "alg": "RS256", "use": "sig"})
+    return private, public
 
 
 KEY, JWK = _key()
+STARTED, ENDED = "2026-10-25T10:00:00Z", "2026-10-25T10:40:00Z"
+ISSUED = int(reuse.epoch("2026-10-25T10:01:00Z"))
 
 
-def token(claims=None, key=KEY, kid="k1"):
-    """An RS256 JWT signed by `key` with the claims a trusted run of #95 at
-    the head into the base carries, changed by `claims`."""
+def token(claims=None, key=KEY, kid="k1", algorithm="RS256", drop=()):
+    """A JWT signed by PyJWT with `key`, carrying the claims a trusted run of
+    #95 at the head into the base carries, changed by `claims`, less `drop`."""
     payload = {"iss": reuse.OIDC_ISSUER, "aud": reuse.PROVENANCE_AUDIENCE, "repository": REPO, "run_id": "77",
                "run_attempt": "1", "event_name": "pull_request", "ref": "refs/pull/95/merge",
                "base_ref": BASE_REF, "workflow_ref": f"{REPO}/{WORKFLOW}@refs/pull/95/merge", "sha": MERGE,
-               "workflow_sha": MERGE}
+               "workflow_sha": MERGE, "iat": ISSUED, "nbf": ISSUED - 5, "exp": ISSUED + 300}
     payload.update(claims or {})
-    def part(value):
-        return reuse.base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
-    signing = f"{part({'alg': 'RS256', 'kid': kid})}.{part(payload)}"
-    n, d = key
-    size = (n.bit_length() + 7) // 8
-    digest = reuse.SHA256_DIGEST_INFO + reuse.hashlib.sha256(signing.encode()).digest()
-    encoded = b"\x00\x01" + b"\xff" * (size - len(digest) - 3) + b"\x00" + digest
-    signature = pow(int.from_bytes(encoded, "big"), d, n).to_bytes(size, "big")
-    return f"{signing}.{reuse.base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
+    for name in drop:
+        payload.pop(name)
+    return jwt.encode(payload, key, algorithm=algorithm, headers={"kid": kid})
 
 
 class AdmissionApi(FakeApi):
@@ -481,14 +475,15 @@ class AdmissionTests(unittest.TestCase):
                                ({"run_attempt": "2"}, "run_attempt="),
                                ({"base_ref": "attacker"}, "base_ref="),
                                ({"event_name": "pull_request_target"}, "event_name="),
-                               ({"aud": "sts.amazonaws.com"}, "aud="),
+                               ({"aud": "sts.amazonaws.com"}, "InvalidAudience"),
+                               ({"iss": "https://example.invalid"}, "InvalidIssuer"),
                                ({"repository": "fork/r"}, "repository="),
                                ({"workflow_sha": BASE}, "names no merge commit")):
             with self.subTest(claims=claims):
                 self.assertIn(needle, self.refused(AdmissionApi(tokens={name: token(claims)})))
         forged, _ = _key()
         self.assertIn("does not verify", self.refused(AdmissionApi(tokens={name: token(key=forged)})))
-        self.assertIn("no GitHub OIDC key", self.refused(AdmissionApi(tokens={name: token(kid="k2")})))
+        self.assertIn("0 GitHub OIDC keys match", self.refused(AdmissionApi(tokens={name: token(kid="k2")})))
         self.assertIn("no readable signed provenance", self.refused(AdmissionApi(tokens={})))
         self.assertIn("not a JWT", self.refused(AdmissionApi(tokens={name: "nonsense"})))
         # The merge commit the run executed held another workflow, or was
@@ -497,6 +492,54 @@ class AdmissionTests(unittest.TestCase):
                       self.refused(AdmissionApi(), git=FilesGit(merge_files={WORKFLOW: b"jobs: no-op"})))
         self.assertIn("not of the base", self.refused(AdmissionApi(), git=FilesGit(merge_parents=[MAIN, HEAD])))
         self.assertEqual(self.admitted(AdmissionApi(tokens={name: token()})), 77)
+
+    def test_the_token_is_verified_by_the_library_under_an_archival_time_policy(self):
+        # Review 3 finding 4: PyJWT with cryptography verifies the token.
+        # It is archival evidence: an expired token still admits, but iat,
+        # nbf and exp must be present and numeric, nbf no later than exp,
+        # and iat inside the run's own window.
+        name = "codeflow-provenance-1"
+        def refuse(value, needle):
+            self.assertIn(needle, self.refused(AdmissionApi(tokens={name: value})))
+        expired = token({"iat": ISSUED, "nbf": ISSUED - 5, "exp": ISSUED + 1})
+        self.assertEqual(self.admitted(AdmissionApi(tokens={name: expired})), 77)
+        for missing in ("iat", "nbf", "exp"):
+            with self.subTest(missing=missing):
+                refuse(token(drop=(missing,)), "does not verify")
+        for field in ("iat", "nbf", "exp"):
+            with self.subTest(field=field):
+                refuse(token({field: "soon"}), "")
+        refuse(token({"nbf": ISSUED + 600, "exp": ISSUED + 300}), "ends before it begins")
+        refuse(token({"iat": ISSUED - 7200}), "outside run 77's window")
+        refuse(token({"iat": ISSUED + 7200, "nbf": ISSUED + 7200, "exp": ISSUED + 7500}), "outside run 77's window")
+        api = AdmissionApi(runs=[admission_run(run_started_at=None)])
+        self.assertIn("no readable start and end times", self.refused(api))
+        # Algorithm confusion: an HS256 token keyed with the public JWK text.
+        import hmac
+        def part(value):
+            return jwt.utils.base64url_encode(json.dumps(value).encode()).decode()
+        signing = f"{part({'alg': 'HS256', 'kid': 'k1'})}.{part({'iss': reuse.OIDC_ISSUER})}"
+        mac = hmac.new(json.dumps(JWK).encode(), signing.encode(), "sha256").digest()
+        refuse(f"{signing}.{jwt.utils.base64url_encode(mac).decode()}", "not RS256")
+        unsigned = jwt.encode({"iss": reuse.OIDC_ISSUER}, None, algorithm="none")
+        refuse(unsigned, "not RS256")
+        # Two published keys with the token's key id: refused, never guessed.
+        duplicate = AdmissionApi(tokens={name: token()})
+        duplicate.oidc_keys = lambda: [JWK, JWK]
+        self.assertIn("2 GitHub OIDC keys match", self.refused(duplicate))
+
+    def test_an_overlong_signature_is_refused(self):
+        # Review 3 finding 3: a valid signature with a leading zero byte is
+        # not RSASSA-PKCS1-v1_5 (its length must equal the modulus length).
+        header, payload, signature = token().split(".")
+        raw = reuse.base64url_decode(signature)
+        padded = jwt.utils.base64url_encode(b"\x00" + raw).decode()
+        self.assertIn("does not verify",
+                      self.refused(AdmissionApi(tokens={"codeflow-provenance-1": f"{header}.{payload}.{padded}"})))
+
+    def test_a_missing_verifier_refuses(self):
+        with mock.patch.dict("sys.modules", {"jwt": None}):
+            self.assertIn("provenance verifier is not installed", self.refused(AdmissionApi()))
 
     def test_a_pull_request_that_moves_during_admission_refuses(self):
         # Review finding 3: the pull request is read again before success.
