@@ -1,0 +1,11 @@
+id = "TSK-1007"
+uid = "b15c5d00-3860-4732-a5ab-a058158b9659"
+kind = "TSK"
+title = "codeflow ci checks the lines a code pull request's Testing section must hold"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T18:13:33Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
