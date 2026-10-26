@@ -1,6 +1,7 @@
 //! Durable-work commands: `work next`, `work claim` and `work start`. All three
 //! read the one readiness core (SPC-013 R-40, R-110); only `work claim`
-//! writes, and what it writes is a branch.
+//! writes, and what it writes is a branch. `work status` is the recovery
+//! inventory: per task, the worktrees holding work found nowhere else.
 
 use std::fmt::Write as _;
 
@@ -53,6 +54,10 @@ pub enum WorkCommand {
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },
+    /// List, per task, each worktree with uncommitted changes, unpushed
+    /// commits or commits on no branch, read from git; work that cannot be
+    /// recovered is named. Reads only.
+    Status,
 }
 
 #[must_use]
@@ -65,6 +70,30 @@ pub fn run(args: &WorkArgs) -> i32 {
             target,
             on,
         } => start(task_id, target.as_deref(), on),
+        WorkCommand::Status => status(),
+    }
+}
+
+fn status() -> i32 {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            eprintln!("work status: error: {error}");
+            return 2;
+        }
+    };
+    match codeflow_core::worktree_inventory::inventory(&cwd) {
+        Ok(inventory) => {
+            print_block!(codeflow_core::worktree_inventory::render(&inventory));
+            0
+        }
+        Err(error) => {
+            eprintln!(
+                "work status: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
+            1
+        }
     }
 }
 

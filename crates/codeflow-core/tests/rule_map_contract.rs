@@ -1274,7 +1274,8 @@ fn multi_session_map_routes_cleanup_reviews_and_handoffs() {
             (
                 "status",
                 vec![
-                    "check live remote refs, PRs and checks",
+                    "check live each changeable fact it rests on",
+                    "or mark it unverified with its last check time",
                     "sweep lanes and seats",
                 ],
             ),

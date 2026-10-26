@@ -10714,3 +10714,46 @@ fn tsk1002_glob_hook_uses_actual_files_and_search_roots() {
     std::fs::create_dir(tmp.path().join(".ssh")).unwrap();
     assert!(verdict("cat $HOME/.ssh/*.rs"), "empty secret store");
 }
+
+/// TSK-422 AC-8: `CodeFlow`'s own writes under the coordination ledger pass
+/// the guards (they happen inside `codeflow follow`), and an agent's direct
+/// edit of the ledger is refused by the built edit and git guards.
+#[test]
+fn the_guards_allow_codeflow_follow_and_refuse_a_direct_ledger_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    enforced_repo(root);
+    let coord = root.join(".git/codeflow/coord");
+    std::fs::create_dir_all(&coord).unwrap();
+    std::fs::write(coord.join("events.jsonl"), "").unwrap();
+    assert_guard(
+        root,
+        &[
+            "printf x >> .git/codeflow/coord/events.jsonl",
+            "rm -rf .git/codeflow",
+            "cp /dev/null .git/codeflow/coord/counters.json",
+        ],
+        &[
+            "codeflow follow add --title t --description d --done-when w --source operator --no-link-reason none",
+            "codeflow follow list --md",
+            "cat .git/codeflow/coord/events.jsonl",
+        ],
+        "git.hook_integrity",
+    );
+    for file in ["events.jsonl", "status/s1.json"] {
+        let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+            "file_path":coord.join(file), "content":"{}\n"},
+            "cwd":root})
+        .to_string();
+        let out = run_with_stdin(
+            codeflow().args(["hook", "edit-guard"]).current_dir(root),
+            &payload,
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{file}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

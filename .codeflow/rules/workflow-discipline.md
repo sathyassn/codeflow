@@ -63,7 +63,8 @@ the failed attempt and new evidence, then try one bounded probe tied to a
 different hypothesis. One bounded confirmation of a prior failure is
 allowed only when current provenance or freshness materially matters;
 after it confirms the same failure, change hypothesis or strategy and never
-retry it again unchanged. If the tactic fails, step back to the real
+retry it again unchanged. A fresh check before a later decision is not such
+a retry ("Check changeable state live"). If the tactic fails, step back to the real
 constraint and critical path, compare viable routes, and take the safest
 evidence-backed reversible route that preserves accepted outcome, scope,
 authority, and quality. Escalate only an external dependency or a choice
@@ -222,6 +223,42 @@ loads it) and check each; a file that each branch reads from its own base
 has one consumer per branch, and each copy is checked. A rule or record that
 encodes the operator's guidance quotes or closely paraphrases it; a
 restriction the operator never gave is an invented fact.
+
+## Check changeable state live
+
+This is the one statement of how a session treats state that can change;
+other files point here.
+
+- **What counts.** Changeable state is anything that can differ from the
+  last time you looked: seat and model availability and usage limits; tools,
+  MCP servers and credentials; CI runs, required checks and rulesets; PR,
+  branch and integration-line state; task record status; host load and
+  locks; and other agents' progress.
+- **Check it at the moment of use.** Before you state such a fact, route on
+  it or act on it, check it live with a probe that observes it now: a
+  command, an API read or a native canary. Each claim and routing decision
+  gets its own check. A check made for a decision covers the action that
+  immediately carries it out; a later decision needs a check of its own.
+- **A fresh check is not a retry.** "Navigate blockers" bounds recovery
+  within one attempt: one confirmation of a failure, then a new hypothesis,
+  never the same retry unchanged. A check before a later decision is a new
+  observation for that decision, so it runs even when the same probe failed
+  for an earlier one. If it fails, that decision takes its fallback with no
+  further retries; if it succeeds, the decision uses the recovered state.
+- **Facts bound to an immutable identity need no re-check.** The content at
+  a commit SHA, a merged PR's merge commit or a finished run's recorded
+  result stays true. What can change is whether that identity is still the
+  one that matters, such as where a branch points now; check that live.
+- **An earlier result is a lead, never a fact.** A previous probe, an error
+  or usage-limit message, a peer's report or a note in a record tells you
+  where to look. It never establishes the current state, and a stated
+  expiry or reset time is not proof that the state still holds.
+- **When a live check is impossible,** say the fact is unverified and give
+  the time of the last check, for example "Codex unverified, last probed at
+  14:05". Never present it as current.
+- **Resume, compaction and summaries change nothing.** A fact carried in a
+  summary, a compacted context or a resumed session is an earlier result;
+  check it again before you rely on it.
 
 ## Match the gate
 
@@ -442,8 +479,9 @@ are generated (`codeflow status`); never hand-maintain a dashboard.
   record belong in ADRs, not in chat history.
 - After compaction or resume, re-read the managed block of `AGENTS.md` before
   acting: the skill listing and earlier rules may be gone from context. On
-  a resume, recheck the facts that may have changed (the target tip, the
-  seats, the open findings) before continuing.
+  a resume, check live the facts that may have changed (the target tip, the
+  seats, the open findings) before continuing, as "Check changeable state
+  live" says.
 - **Synchronize implementation truth in the same PR.** The ship flow updates
   capability state, architecture when an accepted ADR declares impact,
   frozen state for approved specs consumed by the ship, and other

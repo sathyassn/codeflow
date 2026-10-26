@@ -217,15 +217,46 @@ struct Facts<'a> {
     line_authority: HashMap<Option<PathBuf>, Option<String>>,
 }
 
+/// What this thread asked of the line and what it read for it (TSK-453):
+/// every request for the line's enforcement path or authority metadata,
+/// and each reading the per-directory cache did not answer.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct LineReads {
+    pub(super) asked: usize,
+    pub(super) enforcement: usize,
+    pub(super) authority: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static LINE_READS: std::cell::Cell<LineReads> = const {
+        std::cell::Cell::new(LineReads { asked: 0, enforcement: 0, authority: 0 })
+    };
+}
+
+#[cfg(test)]
+fn count_line_read(update: impl FnOnce(&mut LineReads)) {
+    LINE_READS.with(|reads| {
+        let mut now = reads.get();
+        update(&mut now);
+        reads.set(now);
+    });
+}
+
 impl Facts<'_> {
     /// The enforcement path the line names from `dir`, read once per
     /// directory; a word whose path passes through no protected name is
     /// not resolved.
     fn line_enforcement(&mut self, dir: Option<&Path>) -> Option<String> {
+        #[cfg(test)]
+        count_line_read(|reads| reads.asked += 1);
         let key = dir.map(Path::to_path_buf);
         if let Some(found) = self.line_enforcement.get(&key) {
             return found.clone();
         }
+        #[cfg(test)]
+        count_line_read(|reads| reads.enforcement += 1);
         let from = dir.unwrap_or(self.payload_cwd);
         let names = &self.names;
         let found = git_guard::line_names_where(
@@ -242,10 +273,14 @@ impl Facts<'_> {
     /// The word of the line that names policy authority metadata from
     /// `dir`, read once per directory.
     fn line_authority(&mut self, dir: Option<&Path>) -> Option<String> {
+        #[cfg(test)]
+        count_line_read(|reads| reads.asked += 1);
         let key = dir.map(Path::to_path_buf);
         if let Some(found) = self.line_authority.get(&key) {
             return found.clone();
         }
+        #[cfg(test)]
+        count_line_read(|reads| reads.authority += 1);
         let from = dir.unwrap_or(self.payload_cwd);
         let found = git_guard::line_path_readings(self.line)
             .into_iter()

@@ -701,6 +701,9 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
             (PathBuf::from("packed-refs"), false),
             (PathBuf::from("config"), false),
             (PathBuf::from("config.worktree"), false),
+            // The coordination ledger (ADR-0086): CodeFlow writes it from
+            // inside its own process; an agent's direct edit is refused.
+            (PathBuf::from("codeflow/coord"), true),
         ];
         if let Ok(names) = repo.worktrees() {
             // OS text rule (issue 79, `docs/architecture.md`): the names are kept
@@ -1922,6 +1925,38 @@ mod tests {
         marker.push(b'\n');
         std::fs::write(checkout.join(".git"), marker).unwrap();
         Some((dir, admin))
+    }
+
+    /// TSK-422 AC-8: an agent's direct edit of the coordination ledger is
+    /// refused under the reach rule, in the main checkout and through a
+    /// linked worktree, while `CodeFlow`'s other state beside it is not.
+    #[test]
+    fn the_coordination_ledger_is_refused_to_a_direct_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let common = repo.commondir().to_path_buf();
+        for file in [
+            "events.jsonl",
+            "counters.json",
+            "coord.lock",
+            "status/a.json",
+        ] {
+            let target = common.join("codeflow/coord").join(file);
+            assert!(
+                repository_authority_target(&target, dir.path(), false),
+                "{file}"
+            );
+        }
+        assert!(repository_authority_target(
+            &common.join("codeflow"),
+            dir.path(),
+            true
+        ));
+        assert!(!repository_authority_target(
+            &common.join("codeflow/registry-state.json"),
+            dir.path(),
+            false
+        ));
     }
 
     /// Review finding on issue 79: a worktree whose folder name is not valid

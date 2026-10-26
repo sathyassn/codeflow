@@ -1238,6 +1238,26 @@ writing such files where a filesystem sandbox exists and the guard refuses it on
 a best-effort basis elsewhere (issue 86). And a certified line can create a document
 that a later call runs as a script.
 
+## Coordination ledger
+
+The coordination ledger (ADR-0086) has no policy key. It lives at
+`<git common dir>/codeflow/coord/`, and its event schema, records and
+transaction rules are in the [coordination ledger schema](coordination-ledger.md).
+Three rules touch enforcement:
+
+- The edit guard, git-guard and exec-guard treat `codeflow/coord/` under
+  the common git directory as authority metadata, so an agent's direct
+  write, copy or recursive delete there is refused under
+  `git.hook_integrity` whatever the level. `codeflow follow` writes it from
+  inside its own process.
+- `codeflow validate --docs` reports a task, epic or ADR record that cites
+  an `FU-NNN`, `LN-NNN` or `WS-NNN` id as an error.
+- `codeflow ci` refuses a pull request body that cites one, under the
+  always-blocking rule `coord.ledger_citation`.
+
+No gate, hook, CI check or landing reads the ledger; a missing or damaged
+ledger changes no verdict.
+
 ## Git hook stages
 
 `codeflow git-hook` dispatches five hook stages and answers a `capabilities`
