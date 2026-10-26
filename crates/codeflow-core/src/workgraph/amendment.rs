@@ -573,6 +573,19 @@ pub fn range_problem_at(
 /// target's managed block byte for byte.
 #[must_use]
 pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) -> Option<String> {
+    range_problem_with(repo, base, head, paths, true)
+}
+
+/// [`range_problem`], with the per-commit history pass when `history`; the
+/// per-path probe that names the path at fault judges the final paths only,
+/// and names a history fault separately.
+fn range_problem_with(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+    paths: &[String],
+    history: bool,
+) -> Option<String> {
     let project = match project_at(repo, base) {
         Ok(project) => project,
         Err(error) => {
@@ -606,7 +619,10 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
     // reverted; that history still lands, so each commit is held to the
     // admitted paths, to regular entries only and to the target's managed
     // AGENTS.md block too (TSK-1001).
-    if let Some(problem) = history_problem(repo, base, head, &project) {
+    if let Some(problem) = history
+        .then(|| history_problem(repo, base, head, &project))
+        .flatten()
+    {
         return Some(problem);
     }
     if let Some(path) = text {
@@ -1022,12 +1038,30 @@ pub(super) fn landing_problem(
     }
     // Name the path at fault; a problem no single path shows (the policy
     // cannot be read) names the first.
-    let single = |path: &String| range_problem(repo, parent, landing, std::slice::from_ref(path));
-    Ok(paths
-        .iter()
-        .find(|path| single(path).is_some())
-        .or_else(|| paths.first())
-        .cloned())
+    let single = |path: &String| {
+        range_problem_with(repo, parent, landing, std::slice::from_ref(path), false)
+    };
+    if let Some(path) = paths.iter().find(|path| single(path).is_some()) {
+        return Ok(Some(path.clone()));
+    }
+    // No final path is at fault, so a commit of the landing's history is
+    // (TSK-1001): name the first entry it changes that a planning
+    // amendment may not carry.
+    let project = project_at(repo, parent).ok();
+    let historical = history_changes(repo, parent, landing)
+        .ok()
+        .and_then(|changes| {
+            changes.into_iter().find_map(|change| {
+                let admitted = project
+                    .as_ref()
+                    .is_some_and(|project| amendment_path(&change.path, project).is_some());
+                let special = [change.old_mode, change.new_mode]
+                    .into_iter()
+                    .any(|mode| special_entry_kind(mode).is_some());
+                (!admitted || special || change.path == "AGENTS.md").then_some(change.path)
+            })
+        });
+    Ok(historical.or_else(|| paths.first().cloned()))
 }
 
 #[cfg(test)]
