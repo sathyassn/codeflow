@@ -54,9 +54,10 @@ uuid = { version = "=1.24.0", features = ["serde", "v4"] }
 # whose zstd, zstd-safe and zstd-sys releases carry RUSTSEC-2026-0391,
 # RUSTSEC-2026-0395 to 0406 and RUSTSEC-2026-0410. rust-embed's compression
 # feature reaches it through include-flate with default features, so no
-# feature choice drops zstd. This takes the upstream maintainer's merged
-# bump to zstd 0.14 at its exact commit (TSK-1016). Remove it once an
-# include-flate release requires zstd 0.14.
+# feature choice drops zstd while retaining rust-embed compression. This
+# takes the upstream maintainer's merged bump to zstd 0.14 at its exact
+# commit (TSK-1016). TSK-1017 removes it once an include-flate-compress
+# release newer than 0.3.4 requires zstd 0.14.
 [patch.crates-io]
 include-flate-compress = { git = "https://github.com/SOF3/include-flate", rev = "bfe8fcd57aed281988f1ee86edbc35fd5905239a" }
 
