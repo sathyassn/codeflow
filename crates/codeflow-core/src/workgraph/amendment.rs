@@ -602,25 +602,12 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
             }
         }
     }
-    // The final diff can hide a path a commit added and a later one
+    // The final diff can hide a change a commit made and a later one
     // reverted; that history still lands, so each commit is held to the
-    // admitted set too (TSK-1001).
-    match history_paths(repo, base, head) {
-        Err(error) => {
-            return Some(format!(
-                "cannot read the range's commits to classify it: {error}"
-            ))
-        }
-        Ok(history) => {
-            for path in &history {
-                if amendment_path(path, &project).is_none() {
-                    let path = crate::git::display_key(path);
-                    return Some(format!(
-                        "a commit of this planning-only pull request changes {path}, outside the admitted set, though the final diff may not show it; a planning amendment's history carries planning paths only, so drop that commit (rebase it out) and keep product changes on a task branch"
-                    ));
-                }
-            }
-        }
+    // admitted paths, to regular entries only and to the target's managed
+    // AGENTS.md block too (TSK-1001).
+    if let Some(problem) = history_problem(repo, base, head, &project) {
+        return Some(problem);
     }
     if let Some(path) = text {
         let path = crate::git::display_key(path);
@@ -651,35 +638,69 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
     None
 }
 
-/// Every path a commit of the range (reachable from `head`, not from
+/// One entry a commit of a range changes: its path, its mode and blob on
+/// each side (zero when absent), and the commit (TSK-1001).
+pub struct HistoryChange {
+    pub commit: Oid,
+    pub path: String,
+    pub old_mode: i32,
+    pub new_mode: i32,
+    pub old_blob: Oid,
+    pub new_blob: Oid,
+}
+
+/// Every entry a commit of the range (reachable from `head`, not from
 /// `base`) changes: a commit's change against its one parent, a root
-/// commit nothing beyond the range's own diff, and for a merge the paths it changes against every
-/// parent, which is what the merge itself introduced. A name that is not
-/// UTF-8 is an error, never a lookalike (TSK-1001).
+/// commit's whole tree (against the empty tree), and for a merge the
+/// entries it changes against every parent, which is what the merge itself
+/// introduced. The walk uses the guarded history reader, so a shallow or
+/// overlaid history refuses. A name that is not UTF-8 is an error, never a
+/// lookalike.
 ///
 /// # Errors
 /// Returns a message when the history or a tree cannot be read.
-pub fn history_paths(repo: &Repository, base: Oid, head: Oid) -> Result<BTreeSet<String>, String> {
+pub fn history_changes(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+) -> Result<Vec<HistoryChange>, String> {
     let message = |error: git2::Error| error.message().to_string();
     let mut walk = history::revwalk(repo).map_err(message)?;
     walk.push(head).map_err(message)?;
     walk.hide(base).map_err(message)?;
-    let changed =
-        |from: Option<&git2::Tree<'_>>, to: &git2::Tree<'_>| -> Result<BTreeSet<Vec<u8>>, String> {
-            let diff = repo
-                .diff_tree_to_tree(from, Some(to), None)
-                .map_err(message)?;
-            let mut paths = BTreeSet::new();
-            for delta in diff.deltas() {
-                for file in [delta.old_file(), delta.new_file()] {
-                    if let Some(name) = file.path_bytes() {
-                        paths.insert(name.to_vec());
-                    }
-                }
-            }
-            Ok(paths)
-        };
-    let mut found = BTreeSet::new();
+    let deltas = |commit: Oid,
+                  from: Option<&git2::Tree<'_>>,
+                  to: &git2::Tree<'_>|
+     -> Result<Vec<HistoryChange>, String> {
+        let diff = repo
+            .diff_tree_to_tree(from, Some(to), None)
+            .map_err(message)?;
+        let mut found = Vec::new();
+        for delta in diff.deltas() {
+            let (old, new) = (delta.old_file(), delta.new_file());
+            let name = new
+                .path_bytes()
+                .or_else(|| old.path_bytes())
+                .ok_or_else(|| "git reported a change with no path".to_string())?;
+            let path = String::from_utf8(name.to_vec()).map_err(|error| {
+                odd_name_problem(
+                    &crate::git::GitName::from_bytes(error.as_bytes())
+                        .display()
+                        .to_string(),
+                )
+            })?;
+            found.push(HistoryChange {
+                commit,
+                path,
+                old_mode: i32::from(old.mode()),
+                new_mode: i32::from(new.mode()),
+                old_blob: old.id(),
+                new_blob: new.id(),
+            });
+        }
+        Ok(found)
+    };
+    let mut found = Vec::new();
     for oid in walk {
         let commit = repo.find_commit(oid.map_err(message)?).map_err(message)?;
         let tree = commit.tree().map_err(message)?;
@@ -689,33 +710,94 @@ pub fn history_paths(repo: &Repository, base: Oid, head: Oid) -> Result<BTreeSet
             .map(|parent| repo.find_commit(parent).and_then(|parent| parent.tree()))
             .collect::<Result<_, _>>()
             .map_err(message)?;
-        let paths = match parents.as_slice() {
-            // A root commit starts a disjoint history, which the range
-            // check already reads whole from the target through the
-            // range's own paths; it introduces nothing on top of them.
-            [] => BTreeSet::new(),
-            [parent] => changed(Some(parent), &tree)?,
+        match parents.as_slice() {
+            [] => found.extend(deltas(commit.id(), None, &tree)?),
+            [parent] => found.extend(deltas(commit.id(), Some(parent), &tree)?),
             [first, rest @ ..] => {
-                let mut common = changed(Some(first), &tree)?;
+                let mut changes = deltas(commit.id(), Some(first), &tree)?;
                 for parent in rest {
-                    let other = changed(Some(parent), &tree)?;
-                    common.retain(|path| other.contains(path));
+                    let other: BTreeSet<String> = deltas(commit.id(), Some(parent), &tree)?
+                        .into_iter()
+                        .map(|change| change.path)
+                        .collect();
+                    changes.retain(|change| other.contains(&change.path));
                 }
-                common
+                found.extend(changes);
             }
-        };
-        for path in paths {
-            let text = String::from_utf8(path).map_err(|error| {
-                odd_name_problem(
-                    &crate::git::GitName::from_bytes(error.as_bytes())
-                        .display()
-                        .to_string(),
-                )
-            })?;
-            found.insert(text);
         }
     }
     Ok(found)
+}
+
+/// Every path [`history_changes`] lists.
+///
+/// # Errors
+/// Returns a message when the history or a tree cannot be read.
+pub fn history_paths(repo: &Repository, base: Oid, head: Oid) -> Result<BTreeSet<String>, String> {
+    Ok(history_changes(repo, base, head)?
+        .into_iter()
+        .map(|change| change.path)
+        .collect())
+}
+
+/// Why a commit of a planning range carries what a planning amendment may
+/// not, though the final diff may not show it: a path outside the admitted
+/// set, a symbolic link or submodule on either side, or a change to the
+/// managed block of `AGENTS.md` (TSK-1001).
+fn history_problem(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+    project: &ProjectPaths,
+) -> Option<String> {
+    let changes = match history_changes(repo, base, head) {
+        Ok(changes) => changes,
+        Err(error) => {
+            return Some(format!(
+                "cannot read the range's commits to classify it: {error}"
+            ))
+        }
+    };
+    let blob = |id: Oid| -> Result<Option<Vec<u8>>, String> {
+        if id.is_zero() {
+            return Ok(None);
+        }
+        repo.find_blob(id)
+            .map(|blob| Some(blob.content().to_vec()))
+            .map_err(|error| error.message().to_string())
+    };
+    for change in changes {
+        let path = crate::git::display_key(&change.path);
+        let commit = change.commit.to_string();
+        let commit = &commit[..9];
+        if amendment_path(&change.path, project).is_none() {
+            return Some(format!(
+                "commit {commit} of this planning-only pull request changes {path}, outside the admitted set, though the final diff may not show it; a planning amendment's history carries planning paths only, so drop that commit (rebase it out) and keep product changes on a task branch"
+            ));
+        }
+        if let Some(kind) = [change.old_mode, change.new_mode]
+            .into_iter()
+            .find_map(special_entry_kind)
+        {
+            return Some(format!(
+                "commit {commit} of this planning-only pull request changes the {kind} {path}, though the final diff may not show it; a planning amendment's history carries regular files only, so drop that commit (rebase it out)"
+            ));
+        }
+        if change.path == "AGENTS.md" {
+            let (before, after) = match (blob(change.old_blob), blob(change.new_blob)) {
+                (Ok(before), Ok(after)) => (before, after),
+                (Err(error), _) | (_, Err(error)) => {
+                    return Some(format!("cannot read AGENTS.md in commit {commit}: {error}"))
+                }
+            };
+            if !instructions_block_unchanged(before.as_deref(), after.as_deref()) {
+                return Some(format!(
+                    "commit {commit}: {MANAGED_BLOCK_CHANGED}; a later commit restoring it does not take the change out of the landed history"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Why an entry named `shown` cannot ride in a planning amendment: its name
@@ -1044,10 +1126,16 @@ mod tests {
             (head, orphan)
         };
         let paths = std::slice::from_ref(&record);
-        // The controls: an ordinary planning range, and disjoint histories
-        // read from the target, both pass.
+        // The control: an ordinary planning range passes. A disjoint
+        // history's root commit lands its whole tree, so its product file
+        // `a` is refused even though the range's own paths omit it
+        // (TSK-1001).
         assert_eq!(range_problem(&repo, base, head, paths), None);
-        assert_eq!(range_problem(&repo, base, orphan, paths), None);
+        let orphaned = range_problem(&repo, base, orphan, paths).expect("refused");
+        assert!(
+            orphaned.contains("changes a, outside the admitted set"),
+            "{orphaned}"
+        );
         drop(repo);
 
         let hex = first.to_string();

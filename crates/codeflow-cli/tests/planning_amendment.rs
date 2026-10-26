@@ -1206,3 +1206,88 @@ fn a_task_pull_request_leaves_other_records_to_a_planning_amendment() {
         status_change.1
     );
 }
+
+/// TSK-1001 review finding 5: a planning amendment's landed history is held
+/// to the planning rules commit by commit, though a later commit restores
+/// the final tree: a change to the managed `AGENTS.md` block, a symbolic
+/// link under an admitted path, and a product file in an unrelated root
+/// commit merged in, each refuse in CI.
+#[test]
+fn a_planning_amendment_refuses_forbidden_history_a_later_commit_restores() {
+    // A managed-block change, restored.
+    let dir = repo();
+    let root = dir.path();
+    two_epic_amendment(root);
+    write(
+        root,
+        "AGENTS.md",
+        &agents("mine").replace("managed rules", "managed rules!"),
+    );
+    commit(root, "docs: edit the managed block");
+    write(root, "AGENTS.md", &agents("mine"));
+    commit(root, "docs: restore the managed block");
+    assert_blocks(
+        &ci(root, PLAN, BOTH),
+        "a managed block change a later commit restores",
+        &[
+            "work.classification",
+            "managed block of AGENTS.md",
+            "does not take the change out of the landed history",
+        ],
+    );
+
+    // A symbolic link under an admitted path, removed again.
+    #[cfg(unix)]
+    {
+        let dir = repo();
+        let root = dir.path();
+        two_epic_amendment(root);
+        std::os::unix::fs::symlink(
+            "../../src/lib.rs",
+            root.join("project-management/tasks/link.md"),
+        )
+        .unwrap();
+        commit(root, "docs: add a link");
+        std::fs::remove_file(root.join("project-management/tasks/link.md")).unwrap();
+        commit(root, "docs: remove the link");
+        assert_blocks(
+            &ci(root, PLAN, BOTH),
+            "a symbolic link a later commit removes",
+            &[
+                "work.classification",
+                "changes the symbolic link project-management/tasks/link.md",
+            ],
+        );
+    }
+
+    // An unrelated root commit carrying product code, merged in while the
+    // planning branch keeps its own tree.
+    let dir = repo();
+    let root = dir.path();
+    two_epic_amendment(root);
+    // `git switch --orphan` starts from an empty index and tree.
+    git(root, &["switch", "--orphan", "unrelated"]);
+    write(root, "src/evil.rs", "pub fn evil() {}\n");
+    commit(root, "feat: unrelated root");
+    git(root, &["switch", PLAN]);
+    git(
+        root,
+        &[
+            "merge",
+            "-s",
+            "ours",
+            "--allow-unrelated-histories",
+            "-m",
+            "chore: merge unrelated",
+            "unrelated",
+        ],
+    );
+    assert_blocks(
+        &ci(root, PLAN, BOTH),
+        "an unrelated root commit with product code",
+        &[
+            "work.classification",
+            "changes src/evil.rs, outside the admitted set",
+        ],
+    );
+}
