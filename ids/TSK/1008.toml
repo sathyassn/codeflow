@@ -1,0 +1,11 @@
+id = "TSK-1008"
+uid = "230ca674-e3c0-4216-b381-1832002b8d4a"
+kind = "TSK"
+title = "Acceptance evidence names its test or command, and a fix proves it failed before"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T18:14:01Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
