@@ -270,9 +270,14 @@ TRUSTED = [WORKFLOW, "scripts/ci-reuse.py"]
 TITLE = f"codeflow-ci pull request #95 into {BASE_REF} at {BASE}"
 
 
+ASSOCIATION = {"number": 95, "head": {"sha": HEAD}, "base": {"ref": BASE_REF, "sha": BASE}}
+BODY = "Task: TSK-1\n\n## Summary\n"
+BODY_SHA = reuse.hashlib.sha256(BODY.encode()).hexdigest()
+
+
 def admission_run(**changes):
     changes.setdefault("display_title", TITLE)
-    changes.setdefault("pull_requests", [{"number": 95, "base": {"ref": BASE_REF}}])
+    changes.setdefault("pull_requests", [dict(ASSOCIATION)])
     return run(**changes)
 
 
@@ -292,13 +297,24 @@ class FilesGit:
 
 
 class AdmissionApi(FakeApi):
-    def __init__(self, live=None, **kwargs):
+    def __init__(self, live=None, later=None, heads=None, **kwargs):
         kwargs.setdefault("runs", [admission_run()])
+        kwargs.setdefault("pulls", heads if heads is not None else [{"number": 95, "head": {"sha": HEAD}}])
         super().__init__(**kwargs)
-        self.live = {"state": "open", "head": {"sha": HEAD}, "base": {"ref": BASE_REF, "sha": BASE}}
+        self.live = {"state": "open", "draft": False, "head": {"sha": HEAD}, "body": BODY,
+                     "base": {"ref": BASE_REF, "sha": BASE, "repo": {"id": 1}}}
         self.live.update(live or {})
+        self.later = later
+        self.reads = 0
 
     def pull(self, number):
+        # `later`, when given, is what every read after the first returns:
+        # the pull request moving while admission runs.
+        self.reads += 1
+        if self.later is not None and self.reads > 1:
+            moved = dict(self.live)
+            moved.update(self.later)
+            return moved
         return self.live
 
 
@@ -309,12 +325,12 @@ class AdmissionTests(unittest.TestCase):
     verdict script unchanged from the base; each other case refuses, and
     only a pending or absent run is worth waiting for."""
 
-    def admitted(self, api, git=None):
-        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95, git or FilesGit(), TRUSTED)
+    def admitted(self, api, git=None, base_ref=BASE_REF, base_sha=BASE, body=BODY_SHA):
+        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95, git or FilesGit(), TRUSTED, base_ref, base_sha, body)
 
-    def refused(self, api, pending=False, git=None):
+    def refused(self, api, pending=False, git=None, **expected):
         with self.assertRaises(reuse.Skip) as caught:
-            self.admitted(api, git)
+            self.admitted(api, git, **expected)
         self.assertEqual(isinstance(caught.exception, reuse.Pending), pending, str(caught.exception))
         return str(caught.exception)
 
@@ -332,21 +348,57 @@ class AdmissionTests(unittest.TestCase):
         reason = self.refused(AdmissionApi(), git=FilesGit(missing={(HEAD, WORKFLOW)}))
         self.assertIn(f"cannot read {WORKFLOW}", reason)
         with self.assertRaises(reuse.Skip):
-            reuse.admit(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, FilesGit(), [])
+            reuse.admit(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, FilesGit(), [], BASE_REF, BASE, BODY_SHA)
         with self.assertRaises(reuse.Skip):
-            reuse.admit(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, None, TRUSTED)
+            reuse.admit(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, None, TRUSTED, BASE_REF, BASE, BODY_SHA)
 
     def test_a_run_for_another_base_or_a_retargeted_pull_request_refuses(self):
-        # AC-2: the run's trusted title must name the live base branch and
-        # commit; a run made for another base waits for a fresh one.
+        # AC-2: the run's trusted title and association must name the base
+        # the caller judged; a run made for another base waits for a fresh one.
         other_base = admission_run(display_title=f"codeflow-ci pull request #95 into {BASE_REF} at {MAIN}")
         self.assertIn("tested the base", self.refused(AdmissionApi(runs=[other_base]), pending=True))
-        retargeted = AdmissionApi(live={"base": {"ref": "main", "sha": BASE}})
-        self.assertIn("tested the base main", self.refused(retargeted, pending=True))
-        moved = AdmissionApi(live={"base": {"ref": BASE_REF, "sha": MAIN}})
-        git = FilesGit()
-        git.files[MAIN] = git.files[BASE]
-        self.assertIn(f"at {MAIN}", self.refused(moved, pending=True, git=git))
+        # A retarget: the live base no longer matches the judged one.
+        retargeted = AdmissionApi(live={"base": {"ref": "main", "sha": BASE, "repo": {"id": 1}}})
+        self.assertIn("does not match the snapshot", self.refused(retargeted))
+        # The caller judged another base than the live one.
+        self.assertIn("base_sha", self.refused(AdmissionApi(), base_sha=MAIN))
+        self.assertIn("no expected base", self.refused(AdmissionApi(), base_ref=""))
+
+    def test_a_companion_pull_request_cannot_lend_its_run(self):
+        # Review finding 2: a companion pull request with the same head into
+        # a base its author controls can run another workflow and title it
+        # for this pull request. GitHub's own association names the
+        # companion, so the run never admits.
+        spoof = admission_run(pull_requests=[{"number": 96, "head": {"sha": HEAD},
+                                              "base": {"ref": "attacker", "sha": MAIN}}])
+        self.assertIn("tested the base", self.refused(AdmissionApi(runs=[spoof]), pending=True))
+        both = admission_run(pull_requests=[dict(ASSOCIATION), {"number": 96, "head": {"sha": HEAD},
+                                                                "base": {"ref": "attacker", "sha": MAIN}}])
+        self.refused(AdmissionApi(runs=[both]), pending=True)
+        self.assertIn("associated with 2 pull requests", reuse.association_problem(both, 95, HEAD, BASE_REF, BASE))
+        # A companion that shares the head refuses even when its run is
+        # gone from the association, open or closed.
+        companion = [{"number": 95, "head": {"sha": HEAD}}, {"number": 96, "head": {"sha": HEAD}}]
+        self.assertIn("#96 also have head", self.refused(AdmissionApi(heads=companion)))
+        # A later pull request that only contains the head is no companion.
+        stacked = [{"number": 95, "head": {"sha": HEAD}}, {"number": 97, "head": {"sha": MAIN}}]
+        self.assertEqual(self.admitted(AdmissionApi(heads=stacked)), 77)
+
+    def test_a_pull_request_that_moves_during_admission_refuses(self):
+        # Review finding 3: the pull request is read again before success.
+        for later, field in (({"base": {"ref": BASE_REF, "sha": MAIN, "repo": {"id": 1}}}, "base_sha"),
+                             ({"head": {"sha": MAIN}}, "head"),
+                             ({"body": BODY + "edited"}, "body_sha256"),
+                             ({"draft": True}, "draft")):
+            with self.subTest(field=field):
+                api = AdmissionApi(later=later)
+                reason = self.refused(api)
+                self.assertIn("moved during admission", reason)
+                self.assertIn(field, reason)
+                self.assertGreaterEqual(api.reads, 2)
+        # A body edited after the caller judged it, or a draft, refuses at once.
+        self.assertIn("body_sha256", self.refused(AdmissionApi(live={"body": "another body"})))
+        self.assertIn("draft", self.refused(AdmissionApi(live={"draft": True})))
 
     def test_a_run_without_the_trusted_title_or_for_another_pull_request_refuses(self):
         for title in (None, "", "codeflow-ci", f"codeflow-ci pull request #96 into {BASE_REF} at {BASE}",
@@ -355,9 +407,9 @@ class AdmissionTests(unittest.TestCase):
                 self.refused(AdmissionApi(runs=[admission_run(display_title=title)]), pending=True)
 
     def test_a_moved_head_a_closed_pull_request_or_an_unreadable_base_refuses(self):
-        self.assertIn("re-run it for the current head", self.refused(AdmissionApi(live={"head": {"sha": MAIN}})))
-        self.assertIn("not open", self.refused(AdmissionApi(live={"state": "closed"})))
-        self.assertIn("names no base", self.refused(AdmissionApi(live={"base": {}})))
+        self.assertIn("head", self.refused(AdmissionApi(live={"head": {"sha": MAIN}})))
+        self.assertIn("state", self.refused(AdmissionApi(live={"state": "closed"})))
+        self.assertIn("base_ref", self.refused(AdmissionApi(live={"base": {}})))
 
     def test_a_draft_neutral_run_at_the_same_head_refuses(self):
         draft = [job("codeflow gates", "skipped"), job("windows", "skipped"), job("secret scan")]
@@ -407,6 +459,7 @@ class AdmissionTests(unittest.TestCase):
                     mock.patch.object(reuse.time, "sleep") as sleep, redirect_stdout(out):
                 code = reuse.admit_main(["--repo", "o/r", "--head", HEAD, "--workflow", WORKFLOW,
                                          "--require", "codeflow gates", "--require", "windows", *files,
+                                         "--base-ref", BASE_REF, "--base-sha", BASE, "--body-sha256", BODY_SHA,
                                          "--pull", "95", "--wait", str(wait)])
             return code, out.getvalue(), sleep.call_count
         self.assertEqual(run_main(AdmissionApi(), 0)[0], 0)
@@ -459,6 +512,13 @@ class EditReuseTests(unittest.TestCase):
         running = [admission_run(id=78, run_number=6, status="in_progress", conclusion=None)]
         self.skipped(AdmissionApi(runs=running))
         self.skipped(AdmissionApi(jobs={77: [job("codeflow gates")]}))
+
+    def test_a_companion_pull_request_stops_edit_reuse(self):
+        companion = [{"number": 95, "head": {"sha": HEAD}}, {"number": 96, "head": {"sha": HEAD}}]
+        self.assertIn("#96", self.skipped(AdmissionApi(heads=companion)))
+        spoof = admission_run(pull_requests=[{"number": 96, "head": {"sha": HEAD},
+                                              "base": {"ref": BASE_REF, "sha": BASE}}])
+        self.skipped(AdmissionApi(runs=[spoof]))
 
     def test_main_writes_the_run_only_on_reuse_and_never_fails(self):
         def run_main(api):

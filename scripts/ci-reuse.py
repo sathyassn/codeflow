@@ -44,11 +44,13 @@ Usage: ci-reuse.py --repo OWNER/NAME --sha SHA --event EVENT --workflow-ref REF 
                    --push-only NAME --require NAME [--require NAME ...]
 
 `ci-reuse.py admit --repo OWNER/NAME --head SHA --pull N --workflow PATH --trusted-file PATH ...
---require NAME [--wait SECONDS]` is the merge admission `commit standards` runs (TSK-449,
-TSK-1001): it reads pull request N live and passes only when every trusted
-file hashes the same at its head as at its base commit, and the newest
-pull_request run of PATH at exactly that head, titled by the trusted
-workflow for N and that base branch and commit, completed with success and
+--base-ref REF --base-sha SHA --body-sha256 DIGEST --require NAME [--wait SECONDS]` is the merge
+admission `commit standards` runs (TSK-449, TSK-1001). It passes only when
+pull request N, read live before and after, matches the head, base and body
+the caller judged; every trusted file hashes the same at the head as at that
+base; no other pull request shares the head; and the newest pull_request run
+of PATH at that head, titled by the trusted workflow and associated by
+GitHub with exactly N, that head and that base, completed with success and
 every named verdict job succeeded. It waits up to SECONDS for a pending or
 absent run and refuses everything else.
 
@@ -229,20 +231,68 @@ def trusted_files_problem(git, base: str, head: str, paths: list[str]) -> str | 
     return None
 
 
+def association_problem(run: dict, pull: int, head: str, base_ref: str, base_sha: str) -> str | None:
+    """Why the run's own pull request association, which GitHub records for
+    the run and the workflow cannot write, does not name exactly this pull
+    request at `head` into `base_ref` at `base_sha`, or None."""
+    linked = run.get("pull_requests") or []
+    if len(linked) != 1:
+        return (f"run {run.get('id')} is associated with {len(linked)} pull requests; admission needs exactly "
+                f"#{pull}, so another pull request sharing this head, or none, refuses")
+    entry = linked[0]
+    named = (entry.get("number"), (entry.get("head") or {}).get("sha"),
+             (entry.get("base") or {}).get("ref"), (entry.get("base") or {}).get("sha"))
+    if named != (pull, head, base_ref, base_sha):
+        return (f"run {run.get('id')} is associated with #{named[0]} at {named[1]} into {named[2]} at {named[3]}, "
+                f"not #{pull} at {head} into {base_ref} at {base_sha}")
+    return None
+
+
 def matching_runs(api, head: str, workflow_path: str, pull: int, base_ref: str, base_sha: str,
                   exclude: int | None = None) -> list[dict]:
     """The pull_request runs of `workflow_path` at exactly `head` whose
     trusted title names pull request `pull` and the base `base_ref` at
-    `base_sha`."""
+    `base_sha`, and whose own pull request association names exactly that
+    pull request, head and base (TSK-1001)."""
     found = []
     for run in api.runs(head):
         if not (run.get("event") == "pull_request" and run.get("head_sha") == head
                 and run.get("path") == workflow_path and isinstance(run.get("id"), int)
                 and run.get("id") != exclude):
             continue
-        if run_title(run) == (pull, base_ref, base_sha):
+        if run_title(run) == (pull, base_ref, base_sha) and association_problem(
+                run, pull, head, base_ref, base_sha) is None:
             found.append(run)
     return found
+
+
+def companion_problem(api, head: str, pull: int) -> str | None:
+    """Why another pull request, open or closed, has `head` as its head: its
+    runs test the same head against a base that pull request chose, whose
+    workflow may differ, so no run at this head is trusted while one
+    exists (TSK-1001). None when `pull` is the only one."""
+    others = sorted({entry.get("number") for entry in api.pulls(head)
+                     if (entry.get("head") or {}).get("sha") == head and entry.get("number") != pull},
+                    key=str)
+    if others:
+        return (f"pull request(s) {', '.join(f'#{number}' for number in others)} also have head {head}; a run of "
+                "another pull request may carry another base's workflow, so admission refuses while one shares "
+                "this head; push a new commit to this pull request")
+    return None
+
+
+def snapshot(live: dict) -> dict:
+    """The identity of a pull request that admission binds: state, draft,
+    head and base commits, base branch and the SHA-256 of its body."""
+    return {
+        "state": live.get("state"),
+        "draft": live.get("draft"),
+        "head": (live.get("head") or {}).get("sha", ""),
+        "base_ref": (live.get("base") or {}).get("ref") or "",
+        "base_sha": (live.get("base") or {}).get("sha") or "",
+        "base_repo": ((live.get("base") or {}).get("repo") or {}).get("id"),
+        "body_sha256": hashlib.sha256((live.get("body") or "").encode("utf-8")).hexdigest(),
+    }
 
 
 def newest(runs: list[dict]) -> dict:
@@ -259,49 +309,65 @@ def verdicts_problem(api, run: dict, required: set[str]) -> str | None:
 
 
 def admit(head: str, workflow_path: str, required: set[str], api, pull: int, git=None,
-          trusted: list[str] | None = None) -> int:
+          trusted: list[str] | None = None, expected_base_ref: str = "", expected_base_sha: str = "",
+          expected_body_sha256: str | None = None) -> int:
     """Merge admission for a pull request (TSK-449 AC-6, TSK-1001): the id
     of the newest codeflow-ci pull_request run that tested exactly this
-    pull request's current head against its current base, when it
+    pull request's head against the base the caller judged, when it
     completed with success and every required verdict job succeeded.
 
-    Every input is a trusted identity, never a name the pull request sets:
-    the pull request is read live (its head and base commits and its base
-    branch); the workflow file and the verdict script must hash the same at
-    the head as at the base (a pull request that edits them would choose its
-    own jobs); and the run must carry the title the trusted workflow writes,
-    naming this pull request, base branch and base commit, so a run made
-    for another base never admits after a retarget. Anything missing,
-    unreadable or different refuses. A draft's run skips its verdicts
-    (neutral), so it never admits; only a pending or absent run is worth
-    waiting for."""
+    Every input is a trusted identity, never a name the pull request sets.
+    The caller passes the head, base branch, base commit and body digest its
+    own judgment used; the pull request is read live, must match them, and
+    is read again before success, so admission never joins a judgment of
+    one snapshot to evidence for another. The workflow file and the verdict
+    script must hash the same at the head as at that base. The run must
+    carry the title the trusted workflow writes and GitHub's own association
+    naming exactly this pull request, head and base, and no other pull
+    request may share the head, since its run could test another base's
+    workflow. Anything missing, unreadable, moved or different refuses. A
+    draft never admits; only a pending or absent run is worth waiting for."""
     if not SHA.match(head):
         raise Skip(f"the head {head!r} is not a commit id")
-    live = api.pull(pull)
-    live_head = (live.get("head") or {}).get("sha", "")
-    base = live.get("base") or {}
-    base_ref, base_sha = base.get("ref") or "", base.get("sha") or ""
-    if live.get("state") != "open":
-        raise Skip(f"pull request #{pull} is {live.get('state')}, not open")
-    if live_head != head:
-        raise Skip(f"pull request #{pull} is now at head {live_head or 'unknown'}, not {head}; this check belongs "
-                   "to an older event, so re-run it for the current head")
-    if not base_ref or not SHA.match(base_sha):
-        raise Skip(f"pull request #{pull} names no base branch and commit ({base_ref!r} at {base_sha!r})")
-    problem = trusted_files_problem(git, base_sha, head, list(trusted or [])) if git else \
+    if not expected_base_ref or not SHA.match(expected_base_sha):
+        raise Skip(f"no expected base was given ({expected_base_ref!r} at {expected_base_sha!r}); admission binds "
+                   "the base the caller judged")
+    before = snapshot(api.pull(pull))
+    expected = {"state": "open", "draft": False, "head": head, "base_ref": expected_base_ref,
+                "base_sha": expected_base_sha}
+    if expected_body_sha256 is not None:
+        expected["body_sha256"] = expected_body_sha256
+    moved = sorted(key for key, value in expected.items() if before.get(key) != value)
+    if moved:
+        raise Skip(f"pull request #{pull} does not match the snapshot this check judged ({', '.join(moved)}: "
+                   f"{', '.join(f'{key}={before.get(key)!r}' for key in moved)}); re-run this check for its current "
+                   "state")
+    problem = trusted_files_problem(git, expected_base_sha, head, list(trusted or [])) if git else \
         "no git reader was given, so the workflow file cannot be proved to be the base's"
     if problem:
         raise Skip(problem)
-    runs = matching_runs(api, head, workflow_path, pull, base_ref, base_sha)
+    problem = companion_problem(api, head, pull)
+    if problem:
+        raise Skip(problem)
+    runs = matching_runs(api, head, workflow_path, pull, expected_base_ref, expected_base_sha)
     if not runs:
-        raise Pending(f"no {workflow_path} pull_request run of #{pull} at head {head} tested the base {base_ref} "
-                      f"at {base_sha}; a retarget or a base change starts one")
+        raise Pending(f"no {workflow_path} pull_request run of #{pull} at head {head} tested the base "
+                      f"{expected_base_ref} at {expected_base_sha} with that association; a retarget or a base "
+                      "change starts one")
     run = newest(runs)
     if run.get("status") != "completed":
         raise Pending(f"run {run['id']} for head {head} is {run.get('status')}")
     if run.get("conclusion") != "success":
         raise Skip(f"run {run['id']} for head {head} concluded {run.get('conclusion')}")
     problem = verdicts_problem(api, run, required)
+    if problem:
+        raise Skip(problem)
+    after = snapshot(api.pull(pull))
+    if after != before:
+        changed = sorted(key for key in before if before[key] != after.get(key))
+        raise Skip(f"pull request #{pull} moved during admission ({', '.join(changed)}); re-run this check for its "
+                   "current state")
+    problem = companion_problem(api, head, pull)
     if problem:
         raise Skip(problem)
     return run["id"]
@@ -317,6 +383,9 @@ def edit_reuse(head: str, workflow_path: str, required: set[str], api, pull: int
     or a newest one that failed, was cancelled or is still running."""
     if not SHA.match(head) or not SHA.match(base_sha) or not base_ref:
         raise Skip(f"the head {head!r} or the base {base_ref!r} at {base_sha!r} is not readable")
+    problem = companion_problem(api, head, pull)
+    if problem:
+        raise Skip(problem)
     runs = matching_runs(api, head, workflow_path, pull, base_ref, base_sha, exclude=current)
     if not runs:
         raise Skip(f"no earlier run of #{pull} at head {head} tested the base {base_ref} at {base_sha}")
@@ -368,6 +437,9 @@ def admit_main(argv: list[str]) -> int:
     parser.add_argument("--workflow", required=True, help="the workflow file whose run must pass")
     parser.add_argument("--trusted-file", action="append", default=[],
                         help="a file that must hash the same at the head as at the base")
+    parser.add_argument("--base-ref", required=True, help="the base branch the caller judged")
+    parser.add_argument("--base-sha", required=True, help="the base commit the caller judged")
+    parser.add_argument("--body-sha256", required=True, help="the SHA-256 of the body the caller judged")
     parser.add_argument("--require", action="append", default=[], help="a verdict job that must succeed")
     parser.add_argument("--wait", type=int, default=0, help="seconds to wait for a pending or absent run")
     parser.add_argument("--api", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
@@ -376,7 +448,8 @@ def admit_main(argv: list[str]) -> int:
     deadline = time.monotonic() + max(args.wait, 0)
     while True:
         try:
-            run = admit(args.head, args.workflow, set(args.require), api, args.pull, Git(), args.trusted_file)
+            run = admit(args.head, args.workflow, set(args.require), api, args.pull, Git(), args.trusted_file,
+                        args.base_ref, args.base_sha, args.body_sha256)
         except Pending as reason:
             if time.monotonic() + POLL_SECONDS > deadline:
                 print(f"ci-reuse admit: refused: {reason}; re-run this check once that run completes")

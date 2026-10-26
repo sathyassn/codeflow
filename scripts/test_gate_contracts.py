@@ -284,6 +284,41 @@ class GateContracts(unittest.TestCase):
             self.assertEqual(names('essential'), 'lint,smoke')
             self.assertEqual(names('full'), 'lint')
 
+    def test_release_impact_judges_the_candidate_with_the_targets_definitions(self):
+        # TSK-1001 review finding 1: release impact runs on
+        # pull_request_target from the target's base commit, builds only
+        # that checkout's codeflow, runs only its release.py, fetches the
+        # candidate as git data, and pins and rechecks head, base and body.
+        workflow = read('.github/workflows/codeflow-release.yml')
+        self.assertIn('  pull_request_target:\n    types: [opened, synchronize, reopened, edited, ready_for_review]\n',
+                      workflow)
+        self.assertNotRegex(workflow, r'(?m)^  pull_request:')
+        job = workflow.split('  release-impact:\n', 1)[1].split('\n  release-state:\n', 1)[0]
+        self.assertIn("    if: github.event_name == 'pull_request_target'\n", job)
+        checkouts = re.findall(r'uses: actions/checkout@[0-9a-f]{40}[^\n]*\n        with:\n          ref: ([^\n]+)\n', job)
+        self.assertEqual(checkouts, ['${{ github.event.pull_request.base.sha }}'])
+        self.assertEqual(job.count('uses: actions/checkout@'), 1)
+        self.assertNotIn('pull_request.head.ref', job)
+        self.assertNotIn('github.event.pull_request.body', job)
+        self.assertNotIn(': write', job)
+        self.assertIn('"+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"', job)
+        # Nothing of the candidate is checked out, built or run.
+        for forbidden in ('git checkout', 'git switch', 'git worktree', 'refs/codeflow/pr-head:', '--root',
+                          '--config', 'cd '):
+            self.assertNotIn(forbidden, job.replace('refs/codeflow/pr-head"', ''), forbidden)
+        self.assertEqual(job.count('cargo build --release --locked -p codeflow-cli'), 1)
+        steps = [name for name in re.findall(r'^      - name: (.+)$', job, re.M)]
+        self.assertEqual(steps[-3:], ['Pin the head, base and body judged', 'Validate reviewed release intent',
+                                      'Recheck the pinned snapshot before reporting'])
+        self.assertIn('python3 -I scripts/release.py pr-snapshot', job)
+        self.assertIn('--expect "$RUNNER_TEMP/release-snapshot.json"', job)
+        self.assertIn('--body-file "$RUNNER_TEMP/release-body.md"', job)
+        self.assertIn('--codeflow-bin target/release/codeflow', job)
+        # Merge admission binds the base and body the policy job judged.
+        policy = read('.github/workflows/codeflow-policy.yml')
+        self.assertIn('--base-ref "$BASE_REF" --base-sha "$BASE_SHA" --body-sha256 "$BODY_SHA256"', policy)
+        self.assertIn('          BODY_SHA256: ${{ steps.body.outputs.sha256 }}\n', policy)
+
     def test_release_tier_targets_leave_the_hosted_landing_gate(self):
         # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and
         # present-binary-delta run in gates-release, which runs on the release
@@ -340,8 +375,11 @@ class GateContracts(unittest.TestCase):
     def test_release_reuses_cache_and_only_cancels_pr_events(self):
         workflow = read('.github/workflows/codeflow-release.yml')
         self.assertIn('Swatinem/rust-cache@', workflow)
-        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
-        self.assertIn("github.event_name == 'pull_request' && github.ref || github.run_id", workflow)
+        # Release impact runs on pull_request_target (TSK-1001): one group per
+        # pull request, cancelled when superseded; push runs are never.
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}", workflow)
+        self.assertIn("format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || "
+                      "format('{0}-run-{1}', github.workflow, github.run_id)", workflow)
         self.assertIn('cargo build --release --locked -p codeflow-cli', workflow)
 
     def test_every_workflow_action_is_pinned_to_a_commit(self):
