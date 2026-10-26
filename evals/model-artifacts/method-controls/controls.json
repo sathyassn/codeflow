@@ -213,11 +213,11 @@
         "answer": "retry/passing.json",
         "signals": [
           "anchor_lines_before_any_figure",
+          "one_ask",
           "orienting_figure_names_the_parts",
           "retry_mechanism_carried_by_a_figure",
           "sections_titled_in_plain_words",
           "terms_drawn_before_use",
-          "one_ask",
           "unmeasured_outage_stated"
         ],
         "decision": "pass"
@@ -226,8 +226,8 @@
         "role": "faulty",
         "answer": "retry/faulty.json",
         "signals": [
-          "retry_mechanism_carried_by_a_figure",
           "one_ask",
+          "retry_mechanism_carried_by_a_figure",
           "definitions_paragraph_before_any_figure"
         ],
         "decision": "fail"
@@ -237,10 +237,34 @@
         "answer": "retry/faulty-no-figure.json",
         "signals": [
           "anchor_lines_before_any_figure",
-          "sections_titled_in_plain_words",
           "one_ask",
+          "sections_titled_in_plain_words",
           "unmeasured_outage_stated",
           "table_as_main_carrier"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-no-requeue.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-no-timeout.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "sections_titled_in_plain_words",
+          "unmeasured_outage_stated"
         ],
         "decision": "fail"
       }

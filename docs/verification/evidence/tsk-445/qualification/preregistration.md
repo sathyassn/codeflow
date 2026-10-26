@@ -4,7 +4,11 @@ Registered before any trial launched, 2026-10-26T20:16:03Z.
 
 - Kind: focused diagnostic of an instruction change (explanation-method pack
   cases), not a canary or full suite; one native trial per case and arm.
-- Suite: sha256:8f39d76721c552debd496941313328865b4b0f995852b3ae54bf1f030becd15f at d9b5954e9.
+- Suite: sha256:8f39d76721c552debd496941313328865b4b0f995852b3ae54bf1f030becd15f at d9b5954e9,
+  re-registered as sha256:a42fceb623ca4bed5d8ac126fa3a9e0601019d241d4eb4dc63cf31a535c18dd8 after
+  the round 2 grading fixes (anchor wording in the fixture notes). The
+  candidate binary is rebuilt at the head the trials run on, and its digest
+  is recorded here before launch.
 - Cases: retry-review-opens-with-the-whole (CF-METH-004, CF-PRES-004) and
   migration-review-leads-with-the-picture (CF-METH-004, CF-PRES-004).
 - One variable: the CodeFlow revision the fixture is scaffolded with.
@@ -20,8 +24,9 @@ Registered before any trial launched, 2026-10-26T20:16:03Z.
 - Order: sequential, retry case then migration case, candidate arm first
   in each pair.
 - Grading: the present document the subject opened (its stored revision),
-  graded for structure by evals/qualification/anchored/check.py and for the
-  judged signals by the evaluator, Claude Opus 5.5, against the fixture's
+  graded by evals/qualification/anchored/check.py, which reads the
+  Markdown as CommonMark and the figure declarations for every structural
+  and retry signal; the migration facts are judged by the evaluator, Claude Opus 5.5, against the fixture's
   grading note. The other-lineage grading pass is owed to the primary.
 - Pass for AC-7: the candidate retry trial opens with an anchor and an
   orienting figure and carries the mechanism in a figure, with no

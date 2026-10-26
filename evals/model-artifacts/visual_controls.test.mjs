@@ -113,7 +113,9 @@ test("every figure in a committed method answer validates and re-derives its fac
       }
     }
   }
-  assert.equal(count, 5);
+  // TSK-445 adds the figure-first migration answer (1) and the retry
+  // answers (passing 2, faulty 1, no requeue 2, no timeout 2).
+  assert.equal(count, 13);
 });
 
 test("the guide page and display answers adapt, and the class rules grade the guide page", { timeout: 300_000 }, async () => {
