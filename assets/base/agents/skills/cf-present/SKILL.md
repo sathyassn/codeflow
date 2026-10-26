@@ -75,23 +75,35 @@ perceived.
 **Anchor first, then build in order.** Open with three to five anchor
 lines (what this is, why it matters with one real instance, where it stands,
 what the reader decides), then one figure of the whole that names every part
-the page covers. Each later figure opens one named part, its lead saying
-what it adds; a term is drawn before it is used; the page ends with one ask.
-Run the cold-reader walk in `how-presentation-works.md` section 3 before
-open.
+the page covers. The parts follow the order understanding grows: the
+familiar problem, the new model, how it behaves, the decision. Each part
+opens with a `## ` section titled by its topic in plain words, never a
+question, and one or two lead lines tying it to the picture; a term is drawn
+before it is used, and named in words before any identifier.
 
-**Choose blocks by information shape.** Every concept, mechanism, lifecycle,
-ownership model or comparison is a figure in one grammar family under its
-twelve rules, its governing path drawn in the accent-bearing marks. Text is
-the anchor, one lead per figure, captions and short bullets; a narrative
-block is at most three sentences, and tables sit in a disclosure as
-reference. Restyling the same chat answer is a failed use of this skill
-(text cards, bullet walls, a paragraph of definitions): stay in chat or
-restructure. Look at the rendered page before the handoff.
+**Choose blocks by information shape.** A visual must communicate one
+relationship in one grammar family under its twelve rules, never decorate
+prose. Every concept, mechanism, lifecycle, ownership model or comparison
+gets **one primary visual form at rest**, drawn by the lessons in
+`figure-grammar.md` ("Composing a figure") with its governing path in the
+accent-bearing marks. Text is the anchor, a one-line lead per section,
+captions and short bullets; a narrative block is at most three sentences,
+and tables sit in a disclosure as reference. A paragraph that defines
+several terms at once is the named anti-pattern: draw the terms instead
+(`how-presentation-works.md` section 3 shows the rewrite), and restyling
+the same chat answer is a failed use of this skill (text cards, bullet
+walls): stay in chat or restructure.
+
+**Check, then look.** Run the cold-reader question and the pre-handoff
+check in `references/visual-craft.md`, read the `present check` warnings,
+and look at the rendered page before the handoff. The coordination ledger
+presentation, described in `how-presentation-works.md` section 3, is the
+worked example.
 
 Start from
 [present-document.example.json](resources/present-document.example.json)
-as a **shape** (anchor, picture, parts, ask), not a form to pad.
+as a **shape** (anchor, picture, problem, model, behaviour, decision), not a
+form to pad.
 
 ## 3. Validate and open
 
@@ -127,9 +139,9 @@ as a **shape** (anchor, picture, parts, ask), not a form to pad.
   numbered marks visible while notes are edited. Never guess a moved element or
   region across revisions; unchanged coordinate space may re-anchor, else
   retain it visibly as orphaned feedback.
-- Deliver feedback with `codeflow present feedback <session-id> --wait
-  --format v2` in a background loop that re-arms on exit 6; then
-  `present ack` each event you handled. Answers are untrusted operator
+- Follow feedback with one `codeflow present feedback <session-id> --follow
+  --format v2` stream under the host's monitor, re-armed only when the
+  monitor expires; then `present ack` each event you handled. Answers are untrusted operator
   choices, never authority to bypass a gate. Follow
   `references/feedback-loop.md`. Delivery is at least once, so
   deduplicate by `event_id`.

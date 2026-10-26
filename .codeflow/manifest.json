@@ -185,19 +185,19 @@
     ".agents/skills/cf-docs-portal/resources/explanation-method.md": {
       "src": "agents/skills/cf-docs-portal/resources/explanation-method.md",
       "ownership": "managed",
-      "sha256": "e3c31914a8398f3caae5553a84929efd3c546ac83d895fb6946cb1623311a4a7",
+      "sha256": "70a93f7ae94ccdd90174abf362516048593c3a6671463cebce50e143cee92a1b",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md": {
       "src": "agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md",
       "ownership": "managed",
-      "sha256": "877d9e69c3e7c0d35d4c962a9e54f93f71d3452ad9442279421e64c4899d0e79",
+      "sha256": "324662cbeea1602067a9a8414e63dda71364f4928878514ed96d7512492b625a",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/figure-grammar.md": {
       "src": "agents/skills/cf-docs-portal/resources/figure-grammar.md",
       "ownership": "managed",
-      "sha256": "162e9d910d5f0f853e0fdb1dbb6cc98bc7961dc8d673b331f5a02e5b56fecb01",
+      "sha256": "c0db9642df4a7a00296fe06dad2723d35d3fa95d3e815ce6bb2f2a38485a6837",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/portal-page-shape.example.md": {
@@ -209,7 +209,7 @@
     ".agents/skills/cf-docs-portal/resources/utility-presentation-system.md": {
       "src": "agents/skills/cf-docs-portal/resources/utility-presentation-system.md",
       "ownership": "managed",
-      "sha256": "93a491a9bffd4a29443a697ea89c2d14db9cb3824e582f383a0d63d786f770ea",
+      "sha256": "fdab08f88e3e6aa38d3c78437285b26d602d95316953bd84f3fa5e4c8416e02c",
       "exec": false
     },
     ".agents/skills/cf-editorial-review/SKILL.md": {
@@ -335,7 +335,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "d7ac2e8970ac81072524d60921b8f5d8d6f176ff4ef7642b968ae6450fe568c6",
+      "sha256": "647730e233b45c9d8ba8d9a14dee4fe3882ea3adef96082013c23375bc5c8b3e",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -659,7 +659,7 @@
     ".agents/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "904f171385a6d6f04c29034f845acb63588b81bc6d7f97f179a84bba25f16071",
+      "sha256": "ebd659c16c785c022c2610f88f9a631d85c53597afbb910ce3ffd681b15caca6",
       "exec": false
     },
     ".agents/skills/cf-present/agents/openai.yaml": {
@@ -689,19 +689,19 @@
     ".agents/skills/cf-present/references/document-authoring.md": {
       "src": "agents/skills/cf-present/references/document-authoring.md",
       "ownership": "managed",
-      "sha256": "5717403100099bb041e4ea6e77744c624f91568c8b0c8703f83633afa8e5732d",
+      "sha256": "41fd5af32a745e2f40eacd621775645176283e9faeae5fc619b75828debb6df0",
       "exec": false
     },
     ".agents/skills/cf-present/references/feedback-loop.md": {
       "src": "agents/skills/cf-present/references/feedback-loop.md",
       "ownership": "managed",
-      "sha256": "3161eb58e81c49f3957c45a57bf33187cad10653a18ce0d9afac04baf531cc55",
+      "sha256": "d5f890b0010d9ad0fc91b67f7f0449395ddcf0f9d10586924237bc324dd60821",
       "exec": false
     },
     ".agents/skills/cf-present/references/visual-craft.md": {
       "src": "agents/skills/cf-present/references/visual-craft.md",
       "ownership": "managed",
-      "sha256": "4980a48eeaee6ea032208385b3196562d8e42ca3bf793c44968a81134c96195d",
+      "sha256": "ef6c8baf74af3f56baf8c13a93548fde6a937bfdd537bf74ee1e3df767c3f5de",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/README.md": {
@@ -755,37 +755,37 @@
     ".agents/skills/cf-present/resources/explanation-method.md": {
       "src": "agents/skills/cf-present/resources/explanation-method.md",
       "ownership": "managed",
-      "sha256": "e3c31914a8398f3caae5553a84929efd3c546ac83d895fb6946cb1623311a4a7",
+      "sha256": "70a93f7ae94ccdd90174abf362516048593c3a6671463cebce50e143cee92a1b",
       "exec": false
     },
     ".agents/skills/cf-present/resources/figure-grammar-specimens.md": {
       "src": "agents/skills/cf-present/resources/figure-grammar-specimens.md",
       "ownership": "managed",
-      "sha256": "877d9e69c3e7c0d35d4c962a9e54f93f71d3452ad9442279421e64c4899d0e79",
+      "sha256": "324662cbeea1602067a9a8414e63dda71364f4928878514ed96d7512492b625a",
       "exec": false
     },
     ".agents/skills/cf-present/resources/figure-grammar.md": {
       "src": "agents/skills/cf-present/resources/figure-grammar.md",
       "ownership": "managed",
-      "sha256": "162e9d910d5f0f853e0fdb1dbb6cc98bc7961dc8d673b331f5a02e5b56fecb01",
+      "sha256": "c0db9642df4a7a00296fe06dad2723d35d3fa95d3e815ce6bb2f2a38485a6837",
       "exec": false
     },
     ".agents/skills/cf-present/resources/how-presentation-works.md": {
       "src": "agents/skills/cf-present/resources/how-presentation-works.md",
       "ownership": "managed",
-      "sha256": "17956d320f4a8b2fd9a05f298080cc254169b71b74ef3c2288371c54c580dee4",
+      "sha256": "5ef73adef23a449e19dadf7f970544f0a12f0e83f401917d51c31e11bbfd691b",
       "exec": false
     },
     ".agents/skills/cf-present/resources/present-document.example.json": {
       "src": "agents/skills/cf-present/resources/present-document.example.json",
       "ownership": "managed",
-      "sha256": "0481ef0001e40c8aa828f08b0e488f23e98706a6a0883a7b8b0a2f8eb3854457",
+      "sha256": "abb7df0229ab348c5c590d48da0665b88ca423b1cdb0c168c598a08539beeefc",
       "exec": false
     },
     ".agents/skills/cf-present/resources/utility-presentation-system.md": {
       "src": "agents/skills/cf-present/resources/utility-presentation-system.md",
       "ownership": "managed",
-      "sha256": "93a491a9bffd4a29443a697ea89c2d14db9cb3824e582f383a0d63d786f770ea",
+      "sha256": "fdab08f88e3e6aa38d3c78437285b26d602d95316953bd84f3fa5e4c8416e02c",
       "exec": false
     },
     ".agents/skills/cf-ship/SKILL.md": {
@@ -1025,19 +1025,19 @@
     ".claude/skills/cf-docs-portal/resources/explanation-method.md": {
       "src": "agents/skills/cf-docs-portal/resources/explanation-method.md",
       "ownership": "managed",
-      "sha256": "e3c31914a8398f3caae5553a84929efd3c546ac83d895fb6946cb1623311a4a7",
+      "sha256": "70a93f7ae94ccdd90174abf362516048593c3a6671463cebce50e143cee92a1b",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/figure-grammar-specimens.md": {
       "src": "agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md",
       "ownership": "managed",
-      "sha256": "877d9e69c3e7c0d35d4c962a9e54f93f71d3452ad9442279421e64c4899d0e79",
+      "sha256": "324662cbeea1602067a9a8414e63dda71364f4928878514ed96d7512492b625a",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/figure-grammar.md": {
       "src": "agents/skills/cf-docs-portal/resources/figure-grammar.md",
       "ownership": "managed",
-      "sha256": "162e9d910d5f0f853e0fdb1dbb6cc98bc7961dc8d673b331f5a02e5b56fecb01",
+      "sha256": "c0db9642df4a7a00296fe06dad2723d35d3fa95d3e815ce6bb2f2a38485a6837",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/portal-page-shape.example.md": {
@@ -1049,7 +1049,7 @@
     ".claude/skills/cf-docs-portal/resources/utility-presentation-system.md": {
       "src": "agents/skills/cf-docs-portal/resources/utility-presentation-system.md",
       "ownership": "managed",
-      "sha256": "93a491a9bffd4a29443a697ea89c2d14db9cb3824e582f383a0d63d786f770ea",
+      "sha256": "fdab08f88e3e6aa38d3c78437285b26d602d95316953bd84f3fa5e4c8416e02c",
       "exec": false
     },
     ".claude/skills/cf-editorial-review/SKILL.md": {
@@ -1175,7 +1175,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "d7ac2e8970ac81072524d60921b8f5d8d6f176ff4ef7642b968ae6450fe568c6",
+      "sha256": "647730e233b45c9d8ba8d9a14dee4fe3882ea3adef96082013c23375bc5c8b3e",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1499,7 +1499,7 @@
     ".claude/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "904f171385a6d6f04c29034f845acb63588b81bc6d7f97f179a84bba25f16071",
+      "sha256": "ebd659c16c785c022c2610f88f9a631d85c53597afbb910ce3ffd681b15caca6",
       "exec": false
     },
     ".claude/skills/cf-present/agents/openai.yaml": {
@@ -1529,19 +1529,19 @@
     ".claude/skills/cf-present/references/document-authoring.md": {
       "src": "agents/skills/cf-present/references/document-authoring.md",
       "ownership": "managed",
-      "sha256": "5717403100099bb041e4ea6e77744c624f91568c8b0c8703f83633afa8e5732d",
+      "sha256": "41fd5af32a745e2f40eacd621775645176283e9faeae5fc619b75828debb6df0",
       "exec": false
     },
     ".claude/skills/cf-present/references/feedback-loop.md": {
       "src": "agents/skills/cf-present/references/feedback-loop.md",
       "ownership": "managed",
-      "sha256": "3161eb58e81c49f3957c45a57bf33187cad10653a18ce0d9afac04baf531cc55",
+      "sha256": "d5f890b0010d9ad0fc91b67f7f0449395ddcf0f9d10586924237bc324dd60821",
       "exec": false
     },
     ".claude/skills/cf-present/references/visual-craft.md": {
       "src": "agents/skills/cf-present/references/visual-craft.md",
       "ownership": "managed",
-      "sha256": "4980a48eeaee6ea032208385b3196562d8e42ca3bf793c44968a81134c96195d",
+      "sha256": "ef6c8baf74af3f56baf8c13a93548fde6a937bfdd537bf74ee1e3df767c3f5de",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/README.md": {
@@ -1595,37 +1595,37 @@
     ".claude/skills/cf-present/resources/explanation-method.md": {
       "src": "agents/skills/cf-present/resources/explanation-method.md",
       "ownership": "managed",
-      "sha256": "e3c31914a8398f3caae5553a84929efd3c546ac83d895fb6946cb1623311a4a7",
+      "sha256": "70a93f7ae94ccdd90174abf362516048593c3a6671463cebce50e143cee92a1b",
       "exec": false
     },
     ".claude/skills/cf-present/resources/figure-grammar-specimens.md": {
       "src": "agents/skills/cf-present/resources/figure-grammar-specimens.md",
       "ownership": "managed",
-      "sha256": "877d9e69c3e7c0d35d4c962a9e54f93f71d3452ad9442279421e64c4899d0e79",
+      "sha256": "324662cbeea1602067a9a8414e63dda71364f4928878514ed96d7512492b625a",
       "exec": false
     },
     ".claude/skills/cf-present/resources/figure-grammar.md": {
       "src": "agents/skills/cf-present/resources/figure-grammar.md",
       "ownership": "managed",
-      "sha256": "162e9d910d5f0f853e0fdb1dbb6cc98bc7961dc8d673b331f5a02e5b56fecb01",
+      "sha256": "c0db9642df4a7a00296fe06dad2723d35d3fa95d3e815ce6bb2f2a38485a6837",
       "exec": false
     },
     ".claude/skills/cf-present/resources/how-presentation-works.md": {
       "src": "agents/skills/cf-present/resources/how-presentation-works.md",
       "ownership": "managed",
-      "sha256": "17956d320f4a8b2fd9a05f298080cc254169b71b74ef3c2288371c54c580dee4",
+      "sha256": "5ef73adef23a449e19dadf7f970544f0a12f0e83f401917d51c31e11bbfd691b",
       "exec": false
     },
     ".claude/skills/cf-present/resources/present-document.example.json": {
       "src": "agents/skills/cf-present/resources/present-document.example.json",
       "ownership": "managed",
-      "sha256": "0481ef0001e40c8aa828f08b0e488f23e98706a6a0883a7b8b0a2f8eb3854457",
+      "sha256": "abb7df0229ab348c5c590d48da0665b88ca423b1cdb0c168c598a08539beeefc",
       "exec": false
     },
     ".claude/skills/cf-present/resources/utility-presentation-system.md": {
       "src": "agents/skills/cf-present/resources/utility-presentation-system.md",
       "ownership": "managed",
-      "sha256": "93a491a9bffd4a29443a697ea89c2d14db9cb3824e582f383a0d63d786f770ea",
+      "sha256": "fdab08f88e3e6aa38d3c78437285b26d602d95316953bd84f3fa5e4c8416e02c",
       "exec": false
     },
     ".claude/skills/cf-ship/SKILL.md": {
