@@ -109,10 +109,9 @@
 //! path that exists is also judged where it really lands (the real path of
 //! its longest existing prefix), so a link to `/` is `/`.
 //!
-//! **Residual (ADR-0009).** A value from the environment or the output of
-//! a command the reader does not run (`$(git rev-parse …)`) is judged by
-//! its spelling and passes; `read` is the exception above, since the
-//! builtin exists to take such a value. The deletions inside a sourced
+//! **Unread values.** Output of an unmodeled command is unknown, never a
+//! literal path containing the command's spelling. A recursive deletion
+//! using it refuses as unproven. The deletions inside a sourced
 //! file, a program in another language, or a function a sourced file
 //! defines are not seen.
 
@@ -5128,8 +5127,7 @@ impl Reader<'_> {
                 let kind = if *quoted { Kind::Quoted } else { Kind::Split };
                 match self.substitution(script, st) {
                     Output::Known(outputs) => outputs.into_iter().map(|v| (v, kind)).collect(),
-                    Output::External => vec![(format!("$({script})"), Kind::Quoted)],
-                    Output::Unknown => vec![(taint(why::OUTPUT), Kind::Quoted)],
+                    Output::External | Output::Unknown => vec![(taint(why::OUTPUT), Kind::Quoted)],
                 }
             }
             Part::Array(elements) => {
@@ -7781,6 +7779,19 @@ fn is_name(name: &str) -> bool {
 #[cfg(test)]
 #[cfg_attr(not(unix), allow(dead_code, unused_imports))]
 mod tests {
+    #[test]
+    fn tsk1002_unread_command_output_is_not_a_literal_deletion_path() {
+        for line in [
+            "rm -rf \"$(git rev-parse --show-toplevel)\"",
+            "rm -rf `git rev-parse --show-toplevel`",
+            "rm -rf \"$(git rev-parse --show-toplevel)/.git\"",
+        ] {
+            let finding =
+                super::composed_deletion_in(line, Some(std::path::Path::new("/fixture"))).unwrap();
+            assert!(finding.unproven.is_some(), "{line}");
+        }
+    }
+
     #[test]
     fn bounded_shell_readings_keep_literal_deletions_and_repeated_controls() {
         let repeated = std::iter::repeat_n("eval true", 80)

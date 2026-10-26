@@ -12,55 +12,16 @@ pub(crate) fn evaluate(
     root: &Path,
     home: Option<&Path>,
 ) -> Vec<Violation> {
-    let mut violations = Vec::new();
-    if levels.secret_reads.is_active() {
-        for unwrapped in outward::unwrapped_commands(command, cwd, home) {
-            let args = &unwrapped.args;
-            let name = args
-                .first()
-                .map_or("", |s| super::unresolved::writer_name(s));
-            if matches!(
-                name,
-                "cat"
-                    | "head"
-                    | "tail"
-                    | "less"
-                    | "more"
-                    | "bat"
-                    | "sed"
-                    | "awk"
-                    | "grep"
-                    | "rg"
-                    | "cp"
-                    | "base64"
-                    | "Get-Content"
-            ) {
-                // Only a word the shell expands names files it never spells;
-                // a quoted search pattern such as `'^/etc/.*'` is text.
-                let expands = |at: usize| {
-                    unwrapped
-                        .expands
-                        .as_ref()
-                        .is_none_or(|flags| flags.get(at).copied().unwrap_or(true))
-                };
-                let reader_cwd = unwrapped.cwd.as_deref().unwrap_or(cwd);
-                if let Some((_, path)) = args
-                    .iter()
-                    .enumerate()
-                    .skip(1)
-                    .find(|(at, word)| secret_path(word, reader_cwd, home, Some(expands(*at))))
-                {
-                    violations.push(Violation::new(
-                        "security.secret_reads",
-                        levels.secret_reads,
-                        format!("keychain or secret-store read names `{path}`"),
-                        crate::remedy::OUTWARD_ACTION.remedy(),
-                    ));
-                }
-            }
-        }
-    }
-    for code in outward::interpreter_bodies(command) {
+    // Position-scoped arguments carry more precise provenance than the broad
+    // literal scan below. Keep their finding first when both name one path.
+    let mut violations = super::arguments::evaluate(command, integrity, cwd, root, home);
+    violations.extend(secret_reads(command, levels, cwd, home));
+    let visible = if command.contains("<<") {
+        super::composed::paths::execution_text(command, cwd, home)
+    } else {
+        command.to_owned()
+    };
+    for code in outward::interpreter_bodies(&visible) {
         if levels.headless_peer_runs.is_active() {
             if let Some(run) = super::headless::raw_run(&code) {
                 violations.push(crate::hooks::exec_guard::headless_violation(
@@ -111,15 +72,97 @@ pub(crate) fn evaluate(
             }
         }
     }
-    violations.extend(super::arguments::evaluate(
-        command, integrity, cwd, root, home,
-    ));
+    violations
+}
+
+fn secret_reads(
+    command: &str,
+    levels: &SecuritySection,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    if levels.secret_reads.is_active() {
+        for unwrapped in outward::unwrapped_commands(command, cwd, home) {
+            let args = &unwrapped.args;
+            let name = args
+                .first()
+                .map_or("", |s| super::unresolved::writer_name(s));
+            let reader_cwd = unwrapped.cwd.as_deref().unwrap_or(cwd);
+            for (at, value, glob) in
+                file_operands(name, args, unwrapped.expands.as_deref(), command)
+            {
+                // find supplies these positional operands from its own
+                // starting paths, which are inspected as operands too. Do
+                // not mistake that known supplier for an external variable.
+                let supplied = matches!(unwrapped.supplier, Some(outward::Supplier::Find { .. }))
+                    && matches!(value, "$1" | "${1}" | "$@" | "${@}" | "$*" | "${*}");
+                let unread = !supplied
+                    && unwrapped.unresolved.iter().any(|word| {
+                        crate::hooks::git_guard::command_argv(word)
+                            .iter()
+                            .any(|part| part.contains(value))
+                    });
+                let expands = glob
+                    || unwrapped
+                        .expands
+                        .as_ref()
+                        .is_none_or(|flags| flags.get(at).copied().unwrap_or(true));
+                let secret = if unwrapped.cwd.is_none()
+                    && (glob || (expands && crate::hooks::git_guard::has_glob(value)))
+                {
+                    uncertain_glob(
+                        value,
+                        cwd,
+                        home,
+                        "cannot establish the glob's working directory",
+                    )
+                } else if glob {
+                    secret_search_glob(
+                        value,
+                        name,
+                        args,
+                        unwrapped.expands.as_deref(),
+                        reader_cwd,
+                        home,
+                        command,
+                    )
+                } else {
+                    secret_path_result(value, reader_cwd, home, Some(expands))
+                };
+                if unread || secret.as_ref().map_or(true, |value| *value) {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        if unread {
+                            format!("cannot verify file operand `{value}` while a secret store is reachable")
+                        } else if let Err(why) = secret {
+                            format!("cannot verify file glob `{value}`: {why}")
+                        } else {
+                            format!("keychain or secret-store read names `{value}`")
+                        },
+                        crate::remedy::OUTWARD_ACTION.remedy(),
+                    ));
+                    break;
+                }
+            }
+        }
+    }
     violations
 }
 
 /// `reader` is `Some` for a reader's argument, saying whether the shell
 /// expands it as a pattern, and `None` for a literal in interpreter code.
 fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: Option<bool>) -> bool {
+    secret_path_result(word, cwd, home, reader).unwrap_or(true)
+}
+
+fn secret_path_result(
+    word: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    reader: Option<bool>,
+) -> Result<bool, &'static str> {
     let expanded_word = word
         .strip_prefix("$HOME/")
         .or_else(|| word.strip_prefix("${HOME}/"))
@@ -127,24 +170,34 @@ fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: Option<bool>
     let word = expanded_word.as_deref().unwrap_or(word);
     // A named home may be another user's, but the configured store suffix
     // remains sensitive. Never let a leading slash replace the joined home.
-    let tilde_word = word
-        .strip_prefix('~')
-        .and_then(|tail| tail.split_once('/'))
-        .map(|(_, suffix)| format!("~/{}", suffix.trim_start_matches('/')));
+    let tilde_word = (reader != Some(false))
+        .then(|| {
+            word.strip_prefix('~')
+                .and_then(|tail| tail.split_once('/'))
+                .map(|(_, suffix)| format!("~/{}", suffix.trim_start_matches('/')))
+        })
+        .flatten();
     let word = tilde_word.as_deref().unwrap_or(word);
     // Keep the literal spelling for home patterns even when HOME is unknown.
     // Also judge relative store names from the payload cwd, without reading
     // files or resolving symlinks. Do not reduce paths to their basename:
     // auth.json is protected in its store, not in every project directory.
-    let absolute = if let Some(suffix) = word.strip_prefix("~/") {
+    let absolute = if let Some(suffix) = word.strip_prefix("~/").filter(|_| reader != Some(false)) {
         home.map(|home| outward::lexical_join(home, Path::new(suffix)))
     } else {
         Some(outward::lexical_join(cwd, Path::new(word)))
     };
-    secret_path_spelling(word, home, reader)
+    if reader == Some(true) && (crate::hooks::git_guard::has_glob(word) || word.contains('{')) {
+        return secret_glob(word, cwd, home);
+    }
+    Ok(secret_path_spelling(word, home, reader.map(|_| false))
         || absolute.as_deref().is_some_and(|path| {
-            secret_path_spelling(&crate::portable_path::slashed(path), home, reader)
-        })
+            secret_path_spelling(
+                &crate::portable_path::slashed(path),
+                home,
+                reader.map(|_| false),
+            )
+        }))
 }
 
 fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
@@ -176,33 +229,361 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
     })
 }
 
-/// A reader can traverse a named directory or expand a pattern without naming
-/// the protected leaf. Only a nonempty literal prefix supplies that evidence.
-/// A word the shell does not expand is all literal: its wildcards are text.
-fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
-    let wildcard = |c| matches!(c, '*' | '?' | '[' | '{');
-    let prefix = if expands {
-        word.split(wildcard).next().unwrap_or("")
+/// Expand shell words without substituting a directory for an incomplete
+/// listing. Store directories refuse before any filesystem enumeration.
+fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'static str> {
+    let readings = crate::hooks::git_guard::brace_expand(word)
+        .ok_or("cannot inspect every brace alternative")?;
+    for reading in readings {
+        let directory = reading.rsplit_once('/').map_or("", |(dir, _)| dir);
+        if secret_directory(directory, cwd, home) {
+            return Ok(true);
+        }
+        let Some((base, pattern)) = glob_base(&reading, cwd, home) else {
+            return uncertain_glob(
+                &reading,
+                cwd,
+                home,
+                "cannot resolve the glob's home directory",
+            );
+        };
+        if !crate::hooks::git_guard::has_glob(pattern) {
+            if secret_path(pattern, base, home, Some(false)) {
+                return Ok(true);
+            }
+            continue;
+        }
+        match crate::hooks::git_guard::secret_glob_paths(pattern, base) {
+            Ok(paths) => {
+                for path in paths {
+                    let text = match secret_path_text(&path) {
+                        Ok(text) => text,
+                        Err(why) => return uncertain_glob(&reading, cwd, home, why),
+                    };
+                    if secret_path_spelling(&text, home, Some(false)) {
+                        return Ok(true);
+                    }
+                }
+            }
+            Err(why) => {
+                if secret_intersection(&reading, cwd, home) {
+                    return Err(why);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn uncertain_glob(
+    word: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    why: &'static str,
+) -> Result<bool, &'static str> {
+    if secret_intersection(word, cwd, home) {
+        Err(why)
     } else {
-        word
+        Ok(false)
+    }
+}
+
+fn glob_base<'a>(
+    word: &'a str,
+    cwd: &'a Path,
+    home: Option<&'a Path>,
+) -> Option<(&'a Path, &'a str)> {
+    if let Some(tail) = word.strip_prefix("~/") {
+        home.map(|home| (home, tail))
+    } else {
+        Some((cwd, word))
+    }
+}
+
+fn home_spelling(word: &str, home: Option<&Path>) -> String {
+    let word = word.to_ascii_lowercase();
+    home.and_then(|home| {
+        let home = crate::portable_path::slashed(home).to_ascii_lowercase();
+        word.strip_prefix(home.trim_end_matches('/'))
+            .filter(|tail| tail.is_empty() || tail.starts_with('/'))
+            .map(|tail| format!("~{tail}"))
+    })
+    .unwrap_or(word)
+}
+
+fn secret_stores() -> &'static [String] {
+    static STORES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    STORES.get_or_init(|| {
+        let table = actions::table();
+        // The accepted TSK-1002 boundary explicitly includes gh's store;
+        // actions.json currently has no gh entry. Installed presets stay as-is.
+        let mut stores = vec!["~/.config/gh".into()];
+        let rules = table.sandbox_read_denies.iter().map(String::as_str).chain(
+            table
+                .claude_read_groups
+                .iter()
+                .filter(|group| group.carveouts.is_empty())
+                .flat_map(|group| group.denies.iter())
+                .filter_map(|rule| {
+                    rule.strip_prefix("Read(")
+                        .and_then(|rule| rule.strip_suffix(')'))
+                }),
+        );
+        for rule in rules.filter(|rule| rule.starts_with("~/")) {
+            let directory = if let Some(at) = rule.find(['*', '?', '[']) {
+                let prefix = &rule[..at];
+                if prefix.ends_with('/') {
+                    prefix.trim_end_matches('/')
+                } else {
+                    prefix.rsplit_once('/').map_or("", |(dir, _)| dir)
+                }
+            } else {
+                rule.rsplit_once('/').map_or("", |(dir, _)| dir)
+            };
+            if directory != "~" && !directory.is_empty() {
+                stores.push(directory.to_owned());
+            }
+        }
+        stores.sort();
+        stores.dedup();
+        stores
+    })
+}
+
+fn secret_directory(directory: &str, cwd: &Path, home: Option<&Path>) -> bool {
+    let Some((base, directory)) = glob_base(directory, cwd, home) else {
+        return true;
     };
-    if prefix.is_empty() {
-        return false;
+    let absolute = outward::lexical_join(base, Path::new(directory));
+    let spelling = home_spelling(&crate::portable_path::slashed(&absolute), home);
+    secret_stores().iter().any(|store| {
+        spelling == *store
+            || spelling
+                .strip_prefix(store)
+                .is_some_and(|tail| tail.starts_with('/'))
+            || (crate::hooks::git_guard::has_glob(directory)
+                && (super::pattern::glob_intersects(&spelling, store).unwrap_or(true)
+                    || super::pattern::glob_intersects(&spelling, &format!("{store}/**"))
+                        .unwrap_or(true)))
+    })
+}
+
+fn secret_intersection(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
+    secret_path_spelling(word, home, Some(true))
+        || glob_base(word, cwd, home).is_none_or(|(base, word)| {
+            secret_path_spelling(
+                &crate::portable_path::slashed(&outward::lexical_join(base, Path::new(word))),
+                home,
+                Some(true),
+            )
+        })
+}
+
+#[allow(clippy::too_many_arguments)] // Search syntax and shell provenance share one context.
+fn secret_search_glob(
+    pattern: &str,
+    name: &str,
+    args: &[String],
+    expands: Option<&[bool]>,
+    cwd: &Path,
+    home: Option<&Path>,
+    line: &str,
+) -> Result<bool, &'static str> {
+    let rest = args.get(1..).unwrap_or_default();
+    let literal: Vec<_> = (1..args.len())
+        .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
+        .collect();
+    let Some(mut roots) = super::search_pattern::search_roots(
+        name,
+        rest,
+        &literal,
+        super::search_pattern::names_ripgrep_config(line),
+    ) else {
+        return uncertain_glob(pattern, cwd, home, "cannot establish the search roots");
+    };
+    if roots.is_empty() {
+        roots.push(".");
     }
-    let patterned = prefix.len() != word.len();
-    if let Some(basename) = store.strip_prefix("**/") {
-        let stem = basename.split(wildcard).next().unwrap_or("");
-        let name = prefix.rsplit('/').next().unwrap_or("");
-        return patterned && !name.is_empty() && !stem.is_empty() && stem.starts_with(name);
+    for root in roots {
+        if secret_directory(root, cwd, home) {
+            return Ok(true);
+        }
+        let Some((base, root)) = glob_base(root, cwd, home) else {
+            return uncertain_glob(
+                pattern,
+                cwd,
+                home,
+                "cannot resolve a search root's home directory",
+            );
+        };
+        let expanded = if crate::hooks::git_guard::has_glob(root) {
+            crate::hooks::git_guard::secret_glob_paths(root, base)
+        } else {
+            Ok(vec![outward::lexical_join(base, Path::new(root))])
+        };
+        match expanded {
+            Ok(roots) => {
+                for root in roots {
+                    if search_root_matches(pattern, &root, home)? {
+                        return Ok(true);
+                    }
+                }
+            }
+            Err(why) => {
+                if secret_intersection(pattern, cwd, home) {
+                    return Err(why);
+                }
+            }
+        }
     }
-    let stem = store.split(wildcard).next().unwrap_or("");
-    if patterned {
-        // A wildcard at the home root names no store; `*.md` stays ordinary.
-        prefix != "~/" && stem.starts_with(prefix)
+    Ok(false)
+}
+
+fn search_root_matches(
+    pattern: &str,
+    root: &Path,
+    home: Option<&Path>,
+) -> Result<bool, &'static str> {
+    let patterns = crate::hooks::git_guard::brace_expand(pattern)
+        .ok_or("cannot inspect every search-glob brace alternative")?;
+    let paths = match crate::hooks::git_guard::secret_search_paths(root) {
+        Ok(paths) => paths,
+        Err(why) => return uncertain_glob(pattern, root, home, why),
+    };
+    for path in paths {
+        let text = match secret_path_text(&path) {
+            Ok(text) => text,
+            Err(why) => return uncertain_glob(pattern, root, home, why),
+        };
+        if !secret_path_spelling(&text, home, Some(false)) {
+            continue;
+        }
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        for pattern in &patterns {
+            let pattern = pattern.trim_start_matches('/').to_ascii_lowercase();
+            let candidate = if pattern.contains('/') {
+                relative
+            } else {
+                Path::new(path.file_name().unwrap_or(std::ffi::OsStr::new("")))
+            };
+            let name = match secret_path_text(candidate) {
+                Ok(name) => name,
+                Err(why) => return uncertain_glob(&pattern, root, home, why),
+            };
+            // The candidate is an actual name, not another glob language.
+            // Keep literal backslashes and brackets in that name as data.
+            // Only actual secret candidates reach this parse. An unsupported
+            // selector cannot clear one; its parse error must refuse.
+            let matcher = glob::Pattern::new(&pattern)
+                .map_err(|_| "cannot inspect the search glob's syntax")?;
+            if matcher.matches_with(
+                &name,
+                glob::MatchOptions {
+                    case_sensitive: false,
+                    require_literal_separator: true,
+                    require_literal_leading_dot: false,
+                },
+            ) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Pattern rules require actual text, never an escaped display or storage key.
+fn secret_path_text(path: &Path) -> Result<String, &'static str> {
+    let name = crate::git::GitName::from_os_str(path.as_os_str());
+    let text = name
+        .rule_text()
+        .map_err(|_| "cannot inspect a non-UTF-8 glob path")?;
+    Ok(if cfg!(windows) {
+        text.replace('\\', "/")
     } else {
-        stem.strip_prefix(prefix.trim_end_matches('/'))
-            .is_some_and(|tail| tail.starts_with('/'))
+        text.to_owned()
+    })
+}
+
+/// A program may accept a file operand even when it is not a known reader.
+/// Only syntax known to be text is excluded. Unknown short-option clusters
+/// retain every possible attached value; long options retain their = value.
+fn file_operands<'a>(
+    name: &str,
+    args: &'a [String],
+    expands: Option<&[bool]>,
+    line: &str,
+) -> Vec<(usize, &'a str, bool)> {
+    if matches!(
+        name,
+        "echo"
+            | "printf"
+            | "print"
+            | "alias"
+            | "unalias"
+            | "export"
+            | ":"
+            | "true"
+            | "false"
+            | "cd"
+            | "chdir"
+            | "pushd"
+            | "popd"
+            | "declare"
+            | "typeset"
+            | "readonly"
+            | "unset"
+    ) {
+        return Vec::new();
     }
+    let rest = args.get(1..).unwrap_or_default();
+    let literal: Vec<_> = (1..args.len())
+        .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
+        .collect();
+    let configured = super::search_pattern::names_ripgrep_config(line);
+    if let Some(paths) = super::search_pattern::path_values(name, rest, &literal, configured) {
+        return paths
+            .into_iter()
+            .map(|(at, value, glob)| (at + 1, value, glob))
+            .collect();
+    }
+    // A parser that cannot read an option clears no argument as search text.
+    let patterns = super::search_pattern::pattern_words(name, rest, &literal, configured);
+    rest.iter()
+        .enumerate()
+        .filter(|(at, _)| !patterns.contains(at))
+        .flat_map(|(at, word)| {
+            super::arguments::argument_values(word)
+                .into_iter()
+                .map(move |value| (at + 1, value, false))
+        })
+        .collect()
+}
+
+/// Compare complete glob languages rather than their literal prefixes. The
+/// shared brace reader bounds alternatives; unknown pattern syntax refuses.
+fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
+    if !expands {
+        return !store.starts_with("**/")
+            && store
+                .strip_prefix(word.trim_end_matches('/'))
+                .is_some_and(|tail| tail.starts_with('/'));
+    }
+    let Some(mut readings) = crate::hooks::git_guard::word_readings(word) else {
+        return true;
+    };
+    // Keep the existing conservative singleton-brace reading too. Shell
+    // options can give braces meanings beyond the default comma grammar.
+    if word.contains('{') && !word.contains([',', '$']) {
+        readings.push(word.replace(['{', '}'], ""));
+    }
+    readings.iter().any(|reading| {
+        let intersects =
+            |left: &str, right: &str| super::pattern::glob_intersects(left, right).unwrap_or(true);
+        intersects(reading, store)
+            || (!store.starts_with("**/")
+                && (intersects(reading, &format!("{store}/**"))
+                    || intersects(&format!("{}/**", reading.trim_end_matches('/')), store)))
+    })
 }
 
 #[cfg(test)]
@@ -218,6 +599,173 @@ mod tests {
             Path::new("/fixture"),
             Some(Path::new("/fixture-home")),
         )
+    }
+
+    fn glob_fixture_read(command: &str, root: &Path, home: &Path) -> bool {
+        evaluate(
+            command,
+            &SecuritySection::default(),
+            PolicyLevel::Block,
+            root,
+            root,
+            Some(home),
+        )
+        .iter()
+        .any(|v| v.rule == "security.secret_reads")
+    }
+
+    #[test]
+    fn tsk1002_glob_expansion_uses_actual_matches() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src/public.rs"), "fixture").unwrap();
+        for pattern in ["src/*.rs", "src/[ip]*.rs", "src/*.{rs,md}"] {
+            assert!(
+                !glob_fixture_read(&format!("cat {pattern}"), root, root),
+                "ordinary {pattern}"
+            );
+        }
+        std::fs::write(root.join("src/id_rsa.rs"), "planted fixture").unwrap();
+        for pattern in ["src/*.rs", "src/[ip]*.rs", "src/*.{rs,md}"] {
+            assert!(
+                glob_fixture_read(&format!("cat {pattern}"), root, root),
+                "secret {pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn tsk1002_glob_store_directory_is_protected_when_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let home = temp.path().join("home");
+        std::fs::create_dir(&root).unwrap();
+        for store in [".ssh", ".codex", ".aws", ".gnupg", ".config/gh"] {
+            std::fs::create_dir_all(home.join(store)).unwrap();
+            let command = format!("cat $HOME/{store}/*.rs");
+            assert!(
+                glob_fixture_read(&command, &root, &home),
+                "empty store {store}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tsk1002_glob_unreadable_secret_pattern_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let saved = std::fs::metadata(&locked).unwrap().permissions();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read_dir(&locked).is_err();
+        let refused = glob_fixture_read("cat locked/[i]d_rsa*", root, root);
+        std::fs::set_permissions(&locked, saved).unwrap();
+        if !unreadable {
+            eprintln!("permissions do not make this directory unreadable on this host");
+            return;
+        }
+        assert!(refused, "unreadable intersecting glob must refuse");
+    }
+
+    #[test]
+    fn tsk1002_glob_search_options_use_search_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for dir in ["src", "other"] {
+            std::fs::create_dir(root.join(dir)).unwrap();
+            std::fs::write(root.join(dir).join("public.rs"), "fixture").unwrap();
+        }
+        let forms = [
+            "rg -g '*.rs' token",
+            "rg --glob='*.rs' token",
+            "rg --iglob '*.RS' token",
+            "grep -r --include='*.rs' token",
+        ];
+        for form in forms {
+            assert!(
+                !glob_fixture_read(&format!("{form} src"), root, root),
+                "ordinary {form}"
+            );
+        }
+        std::fs::write(root.join("src/id_rsa.rs"), "planted fixture").unwrap();
+        for form in forms {
+            assert!(
+                glob_fixture_read(&format!("{form} src"), root, root),
+                "secret {form}"
+            );
+            assert!(
+                !glob_fixture_read(&format!("{form} other"), root, root),
+                "other root {form}"
+            );
+        }
+    }
+
+    #[test]
+    fn tsk1002_secret_operands_globs_and_redirections() {
+        let fixture = tempfile::tempdir().unwrap();
+        for name in ["id_rsa", "fixture.pem", "fixture.key"] {
+            std::fs::write(fixture.path().join(name), "planted fixture").unwrap();
+        }
+        assert_secret_commands(
+            &[
+                "D=$HOME/.codex/auth.json; wc -c \"$D\"",
+                "D=~/.ssh; od \"$D/id_ed25519\"",
+                "git diff --no-index /dev/null $HOME/.codex/auth.json",
+                "xxd id_rsa",
+                "tar cf - ~/.ssh",
+                "zip -r out.zip ~/.aws",
+                "python3 -c 'print(1)' id_rsa",
+                "rg -g 'id_*' token .",
+                "rg -ug'id_*' token .",
+                "grep -nf$HOME/.codex/auth.json x",
+                "grep -r --include='id_*' token .",
+                "rg --iglob='*.PEM' token .",
+                "rg --glob='*.{pem,txt}' token .",
+                "cat {id_rsa,README.md}",
+                "cat [i]d_rsa",
+                "cat *.{pem,key}",
+                "cat ~/{.codex/auth.json,notes}",
+                "cat ~/.ss[h]/config",
+                "cat<~/.codex/auth.json",
+                "exec {fd}<~/.codex/auth.json; cat <&$fd",
+                "exec 3<~/.codex/auth.json; cat <&3",
+                "cat 0<~/.netrc",
+                "while read l; do echo \"$l\"; done<~/.netrc",
+                "base64 --input=$HOME/.codex/auth.json",
+                "grep -f$HOME/.codex/auth.json x",
+                "rg --file=$HOME/.codex/auth.json x",
+                "sort --files0-from=id_rsa",
+                "cat 'dir\nname/id_rsa'",
+            ],
+            fixture.path(),
+        );
+    }
+
+    #[test]
+    fn tsk1002_text_and_literal_paths_remain_data() {
+        for line in [
+            "rg 'id_rsa' README.md",
+            "grep -n id_rsa docs/x.md",
+            "rg -e id_rsa README.md",
+            "rg -m 1 id_rsa README.md",
+            "grep -neid_rsa README.md",
+            r"rg -n 'Read\(\*\*/id_rsa|id_rsa' assets/base/security-actions.json crates/codeflow-core/src/security/actions* | head -10",
+            "grep --regexp=id_rsa README.md",
+            "rg -g '*.rs' foo .",
+            "cat src/*.rs",
+            "cat '~somebody/.codex/auth.json'",
+            "cat < 'id_rs?'",
+            "cat > notes.txt <<'EOF'\npython3 tool.py .claude/settings.json\nEOF",
+        ] {
+            assert!(
+                check(line, &SecuritySection::default()).is_empty(),
+                "{line}"
+            );
+        }
     }
 
     #[test]
@@ -338,15 +886,41 @@ mod tests {
     }
 
     fn assert_secret_commands(commands: &[&str], cwd: &Path) {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("home");
+        let root = fixture.path().join("repo");
+        let cwd = if let Ok(tail) = cwd.strip_prefix("/fixture-home") {
+            home.join(tail)
+        } else if cwd.exists() {
+            cwd.to_path_buf()
+        } else {
+            root.clone()
+        };
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".pypirc"), "planted fixture").unwrap();
+        std::fs::write(home.join(".codex/auth.json"), "planted fixture").unwrap();
+        for name in ["id_rsa", "fixture.pem", "fixture.key"] {
+            std::fs::write(cwd.join(name), "planted fixture").unwrap();
+        }
         for command in commands {
+            // Keep the literal absolute-cd case pointed at this fixture's
+            // HOME after replacing the old fixed /fixture-home directory.
+            let command = command.replace(
+                "cd /fixture-home",
+                &format!(
+                    "cd '{}'",
+                    crate::portable_path::slashed(&home).replace('\'', "'\\''")
+                ),
+            );
             assert!(
                 evaluate(
-                    command,
+                    &command,
                     &SecuritySection::default(),
                     PolicyLevel::Block,
-                    cwd,
-                    Path::new("/fixture"),
-                    Some(Path::new("/fixture-home"))
+                    &cwd,
+                    &root,
+                    Some(&home)
                 )
                 .iter()
                 .any(|v| v.rule == "security.secret_reads"),
@@ -453,13 +1027,17 @@ mod tests {
 
     #[test]
     fn a_quoted_wildcard_is_text_and_an_unquoted_one_expands() {
+        let fixture = tempfile::tempdir().unwrap();
+        std::fs::create_dir(fixture.path().join("etc")).unwrap();
+        std::fs::write(fixture.path().join("id_rsa"), "planted fixture").unwrap();
+        std::fs::write(fixture.path().join("etc/.netrc"), "planted fixture").unwrap();
         let reads = |command: &str| {
             evaluate(
                 command,
                 &SecuritySection::default(),
                 PolicyLevel::Block,
-                Path::new("/fixture"),
-                Path::new("/fixture"),
+                fixture.path(),
+                fixture.path(),
                 Some(Path::new("/fixture-home")),
             )
             .iter()
@@ -475,7 +1053,7 @@ mod tests {
             assert!(!reads(command), "{command}");
         }
         for command in [
-            "cat /etc/.*",
+            "cat etc/.*",
             "cat id_rs?",
             "cat ~/.codex/auth.*",
             "rg x ~/.codex/*",
@@ -1023,8 +1601,9 @@ mod tests {
         );
     }
 
-    /// Large ordinary globs allow only with a safe enclosing directory;
-    /// an escape or a held checkout still reports the entry budget.
+    /// The integrity judge can use a safe enclosing prefix. AC-8's secret
+    /// check separately refuses incomplete intersecting expansions; an escape
+    /// or held checkout still reports the integrity entry budget.
     #[test]
     fn interpreter_large_glob_requires_a_safe_prefix() {
         let repo = repo();
@@ -1040,7 +1619,10 @@ mod tests {
                 integrity_refusal(&findings)
                     .is_some_and(|v| v.message.contains("more than 4096 entries"))
             } else {
-                findings.is_empty()
+                integrity_refusal(&findings).is_none()
+                    && findings.iter().any(|v| {
+                        v.rule == "security.secret_reads" && v.message.contains("cannot verify")
+                    })
             };
             if !correct {
                 wrong.push(format!("{command}: refuse={refuse}: {findings:?}"));

@@ -1096,7 +1096,8 @@ pub const REVIEW_ROUND_THREE_PROBES: &[(&str, &str, Expect)] = &[
     (
         "trap-cleanup-idiom",
         "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; echo hi; rm -rf build",
-        Expect::Allowed,
+        // TSK-1002 AC-1: unread command output is an unproven operand.
+        Expect::Unproven,
     ),
     (
         "trap-function",
@@ -1308,7 +1309,8 @@ pub const REVIEW_ROUND_THREE_PROBES: &[(&str, &str, Expect)] = &[
     (
         "output-program",
         "D=$(git rev-parse --show-toplevel); rm -rf \"$D/build\"",
-        Expect::Allowed,
+        // TSK-1002 AC-1 also applies when an assignment carries the output.
+        Expect::Unproven,
     ),
     (
         "output-cat-here-string",

@@ -152,6 +152,7 @@ pub(crate) struct InterpreterCall {
     /// Shell expansions the shared resolver could not establish.
     pub(crate) unresolved: Vec<String>,
     pub(crate) links: Vec<super::composed::paths::Link>,
+    pub(crate) checkouts: Vec<PathBuf>,
     /// The words the interpreter hands its program, read by the family's
     /// own option grammar: the values of its options, a script, and every
     /// word after the code or script boundary. Inline code is left out.
@@ -196,6 +197,8 @@ pub(crate) enum Supplier {
 /// A simple command the line runs, as [`unwrapped_commands`] reaches it.
 pub(crate) struct Unwrapped {
     pub(crate) args: Vec<String>,
+    pub(crate) unresolved: Vec<String>,
+    pub(crate) supplier: Option<Supplier>,
     /// For each word, whether the shell may expand it as an unquoted glob
     /// or brace pattern; `None` when the parse that reached it lost that.
     pub(crate) expands: Option<Vec<bool>>,
@@ -204,6 +207,8 @@ pub(crate) struct Unwrapped {
 
 pub(crate) fn unwrapped_commands(command: &str, cwd: &Path, home: Option<&Path>) -> Vec<Unwrapped> {
     let mut parsed = Parsed {
+        resolve_shell: true,
+        shell_home: home.map(Path::to_path_buf),
         home: home.map(Path::to_path_buf),
         ..Parsed::default()
     };
@@ -364,11 +369,13 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if let Some(cwd) = cwd.filter(|_| out.resolve_shell) {
         for step in super::composed::paths::commands(command, cwd, out.shell_home.as_deref()) {
             let first_call = out.calls.len();
+            let first_command = out.commands.len();
             if step.text == "__unresolved_shell_code" {
                 out.calls.push(InterpreterCall {
                     positional_source: PositionalSource::Unresolved,
                     unresolved: step.unresolved.clone(),
                     links: step.links.clone(),
+                    checkouts: step.checkouts.clone(),
                     args: Vec::new(),
                     patterns: Vec::new(),
                     cwd: step.cwd.clone(),
@@ -379,9 +386,13 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
             let first_code = out.code.len();
             visit_literal(&step.text, step.cwd.as_deref(), depth, out);
+            for command in &mut out.commands[first_command..] {
+                command.unresolved.extend(step.unresolved.iter().cloned());
+            }
             for call in &mut out.calls[first_call..] {
                 call.unresolved.extend(step.unresolved.iter().cloned());
                 call.links.clone_from(&step.links);
+                call.checkouts.clone_from(&step.checkouts);
                 if call.code.is_empty() {
                     if let Some(code) = &step.input_code {
                         call.code = vec![code.clone()];
@@ -406,8 +417,8 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         .clone()
         .or_else(|| crate::hooks::git_guard::configuration_line_backstop(command));
     let mut directories = vec![cwd.map(Path::to_path_buf)];
-    // argv walks find's child with its supplier attached. Flattening that
-    // same child here would lose the evidence for its positional arguments.
+    // Pipeline carriers include the producer text. Split those before argv
+    // inspection; find's child retains its supplier evidence in argv.
     let words = command_argv(command);
     let segments = if out.resolve_shell
         && strip_launchers(&words).is_some_and(|(program, _)| program == "find")
@@ -442,10 +453,12 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         for dir in &directories {
             // The shell reads these files even when the executable is not a
             // reader. Keep their cwd alongside the unwrapped command's cwd.
-            for source in crate::hooks::git_guard::redirect_reads(&segment) {
+            for (source, expands) in crate::hooks::git_guard::redirect_reads(&segment) {
                 out.commands.push(Unwrapped {
                     args: vec!["cat".to_string(), source],
-                    expands: None,
+                    unresolved: Vec::new(),
+                    supplier: out.supplier.clone(),
+                    expands: Some(vec![false, expands]),
                     cwd: dir.clone(),
                 });
             }
@@ -1033,6 +1046,8 @@ fn argv(
     let name = crate::hooks::git_guard::launcher_name(program);
     out.commands.push(Unwrapped {
         args: args.to_vec(),
+        unresolved: Vec::new(),
+        supplier: out.supplier.clone(),
         expands: patterns.map(<[bool]>::to_vec),
         cwd: cwd.map(Path::to_path_buf),
     });
@@ -1468,6 +1483,7 @@ fn record_interpreter(
             positional_source: out.positional_source,
             unresolved: Vec::new(),
             links: Vec::new(),
+            checkouts: Vec::new(),
             args,
             patterns,
             cwd: cwd.map(Path::to_path_buf),

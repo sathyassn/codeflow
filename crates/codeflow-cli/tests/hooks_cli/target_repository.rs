@@ -1,5 +1,7 @@
 //! TSK-379: built hooks judge the repository holding a target.
-use super::{codeflow, enforced_repo, guard_payload, run_with_stdin, shell_path};
+use super::{
+    codeflow, enforced_repo, expansion_codeflow, guard_payload, run_with_stdin, shell_path,
+};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -43,7 +45,7 @@ impl Fixture {
 
     fn command(&self, cwd: &Path, hook: &str, command: &str) -> Output {
         run_with_stdin(
-            codeflow()
+            expansion_codeflow()
                 .args(["hook", hook, "--contract", "3"])
                 .current_dir(cwd)
                 .env("HOME", self.temp.path())
@@ -2359,7 +2361,8 @@ fn git_output_options_cannot_write_enforcement_files() {
 }
 
 // Codex review round 9, C1 and C4: builtin wrappers, appends and sourced
-// files change HOME too; a read-only use of the reassigned home passes.
+// files change HOME too. Ordinary read-only calls pass; TSK-1002 AC-6
+// requires secret-store file operands to refuse regardless of the program.
 #[test]
 fn wrapped_and_unproven_home_changes_are_read() {
     let f = Fixture::new();
@@ -2381,8 +2384,17 @@ fn wrapped_and_unproven_home_changes_are_read() {
             let out = f.command(&f.root, hook, &command);
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
+        let command = format!("HOME={root}; git status -- ~/.claude/settings.json");
+        let out = f.command(&f.root, hook, &command);
+        assert_eq!(
+            out.status.code(),
+            Some(if hook == "exec-guard" { 2 } else { 0 }),
+            "{hook}: {out:?}"
+        );
+        if hook == "exec-guard" {
+            assert!(String::from_utf8_lossy(&out.stderr).contains("security.secret_reads"));
+        }
         for command in [
-            format!("HOME={root}; git status -- ~/.claude/settings.json"),
             "export -n HOME; git status".to_string(),
             "command -v git && git status".to_string(),
         ] {

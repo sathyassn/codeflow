@@ -527,6 +527,52 @@ pub(crate) fn other_words<'a>(
         .collect()
 }
 
+/// Search file operands and option values, using the same option arity and
+/// pattern-text clearance as both writer guards. Unknown options clear no text.
+pub(crate) fn path_values<'a>(
+    program: &str,
+    args: &'a [String],
+    literal: &[bool],
+    configured: bool,
+) -> Option<Vec<(usize, &'a str, bool)>> {
+    let grammar = grammar(program)?;
+    let call = read_call(grammar, args)?;
+    let patterns = pattern_words(program, args, literal, configured);
+    let mut paths = Vec::new();
+    for at in call.operands {
+        if !patterns.contains(&at) {
+            paths.push((at, args[at].as_str(), false));
+        }
+    }
+    for (at, offset, glob) in call.option_values {
+        if !patterns.contains(&at) {
+            if let Some(value) = args.get(at).and_then(|word| word.get(offset..)) {
+                paths.push((at, value, glob));
+            }
+        }
+    }
+    Some(paths)
+}
+
+/// The path operands a search tool walks, excluding its pattern text and
+/// option values. `None` means its option grammar cannot prove the roots.
+pub(crate) fn search_roots<'a>(
+    program: &str,
+    args: &'a [String],
+    literal: &[bool],
+    configured: bool,
+) -> Option<Vec<&'a str>> {
+    let call = read_call(grammar(program)?, args)?;
+    let patterns = pattern_words(program, args, literal, configured);
+    Some(
+        call.operands
+            .into_iter()
+            .filter(|at| !patterns.contains(at))
+            .map(|at| args[at].as_str())
+            .collect(),
+    )
+}
+
 /// Whether the command line names `RIPGREP_CONFIG_PATH` anywhere, as
 /// written or as the shell decodes its words: an assignment, `export`,
 /// `declare`, `typeset`, `read`, `printf -v` or any other use may set the
@@ -718,6 +764,8 @@ fn own_pattern_words(program: &str, args: &[String], configured: bool) -> Vec<us
 struct Call {
     /// The indices of the `-e` and `--regexp` values.
     option_patterns: Vec<usize>,
+    /// Option value location, byte offset in its word, and path-glob semantics.
+    option_values: Vec<(usize, usize, bool)>,
     /// The indices of the operands, the first one first.
     operands: Vec<usize>,
     /// An option supplies the pattern (`-e`, `--regexp`, `-f`, `--file`).
@@ -732,6 +780,7 @@ struct Call {
 fn read_call(grammar: &Grammar, args: &[String]) -> Option<Call> {
     let mut call = Call {
         option_patterns: Vec::new(),
+        option_values: Vec::new(),
         operands: Vec::new(),
         supplied: false,
         no_pattern: false,
@@ -783,6 +832,15 @@ fn read_long(
         return None;
     }
     let value_at = if value.is_some() { at } else { at + 1 };
+    let offset = value.map_or(0, |value| args[at].len() - value.len());
+    call.option_values.push((
+        value_at,
+        offset,
+        matches!(
+            name,
+            "glob" | "iglob" | "include" | "exclude" | "exclude-dir" | "pre-glob"
+        ),
+    ));
     if grammar.pattern.is_some_and(|(_, long)| long == name) {
         call.supplied = true;
         if value_at < args.len() {
@@ -818,6 +876,13 @@ fn read_short(
         }
         let attached = !cluster[offset + letter.len_utf8()..].is_empty();
         let value_at = if attached { at } else { at + 1 };
+        let value_offset = if attached {
+            1 + offset + letter.len_utf8()
+        } else {
+            0
+        };
+        call.option_values
+            .push((value_at, value_offset, letter == 'g'));
         if grammar.pattern.is_some_and(|(short, _)| short == letter) {
             call.supplied = true;
             if value_at < args.len() {
@@ -878,6 +943,38 @@ mod tests {
             }
             other => Err(other),
         }
+    }
+
+    #[test]
+    fn tsk1002_search_paths_retain_attached_file_and_glob_values() {
+        for (program, line, expected) in [
+            (
+                "rg",
+                "-ugid_* token .",
+                vec![(0, "id_*", true), (2, ".", false)],
+            ),
+            (
+                "grep",
+                "-nfid_rsa token",
+                vec![(0, "id_rsa", false), (1, "token", false)],
+            ),
+            (
+                "rg",
+                "--iglob=*.PEM token .",
+                vec![(0, "*.PEM", true), (2, ".", false)],
+            ),
+        ] {
+            let args = words(line);
+            let paths = path_values(program, &args, &vec![true; args.len()], false).unwrap();
+            for path in expected {
+                assert!(paths.contains(&path), "{line}: {paths:?}");
+            }
+        }
+        let args = words("-m 1 id_rsa README.md");
+        assert!(!path_values("rg", &args, &vec![true; args.len()], false)
+            .unwrap()
+            .iter()
+            .any(|(_, value, _)| *value == "id_rsa"));
     }
 
     #[test]

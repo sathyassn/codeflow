@@ -8840,8 +8840,12 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     }
     let out = exec_guard_contract_3(&root, "python3 tool.py many/*");
     let err = String::from_utf8_lossy(&out.stderr);
-    if out.status.code() != Some(0) {
-        wrong.push(format!("should allow the contained ordinary glob: {err}"));
+    // AC-8: the integrity judge can use a safe enclosing prefix, but an
+    // incomplete secret-file expansion must still refuse.
+    if out.status.code() != Some(2) || !err.contains("security.secret_reads") {
+        wrong.push(format!(
+            "should refuse the unverified secret-file glob: {err}"
+        ));
     }
     let payload = serde_json::json!({
         "tool_name": "Bash", "tool_input": {"command": "python3 tool.py many/*"}, "cwd": root,
@@ -10556,4 +10560,157 @@ fn gnu_prefixed_programs_share_the_plain_verdict() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[path = "support/guard_cases.rs"]
+mod guard_cases;
+
+fn guard_classification_cases(ac: u8) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    enforced_repo(&root);
+    guard_cases::seed_glob_matches(&root);
+    let mut wrong = Vec::new();
+    for &(_, line, refuse) in guard_cases::CASES.iter().filter(|c| c.0 == ac) {
+        let mut refused = false;
+        for guard in ["git-guard", "exec-guard"] {
+            let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
+                "tool_input":{"command":line}})
+            .to_string();
+            let output = run_with_stdin(
+                expansion_codeflow()
+                    .args(["hook", guard, "--contract", "3"])
+                    .current_dir(&root)
+                    .env("HOME", tmp.path())
+                    .env_remove("CDPATH"),
+                &payload,
+            );
+            assert!(
+                matches!(output.status.code(), Some(0 | 2)),
+                "{guard}: {output:?}"
+            );
+            if guard == guard_cases::refusing_guard(ac, line) {
+                refused = output.status.code() == Some(2);
+            }
+            if !refuse {
+                assert!(
+                    output.status.success(),
+                    "ordinary command refused by {guard}: {line}: {output:?}"
+                );
+            }
+        }
+        if refused != refuse {
+            wrong.push(format!("AC-{ac}: expected refuse={refuse}: {line:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn tsk1002_ac01_guard_verdicts() {
+    guard_classification_cases(1);
+}
+
+#[test]
+fn tsk1002_ac02_guard_verdicts() {
+    guard_classification_cases(2);
+}
+
+#[test]
+fn tsk1002_ac03_guard_verdicts() {
+    guard_classification_cases(3);
+}
+
+#[test]
+fn tsk1002_ac04_guard_verdicts() {
+    guard_classification_cases(4);
+}
+
+#[test]
+fn tsk1002_ac05_guard_verdicts() {
+    guard_classification_cases(5);
+}
+
+#[test]
+fn tsk1002_ac06_guard_verdicts() {
+    guard_classification_cases(6);
+}
+
+#[test]
+fn tsk1002_ac07_guard_verdicts() {
+    guard_classification_cases(7);
+}
+
+#[test]
+fn tsk1002_ac08_guard_verdicts() {
+    guard_classification_cases(8);
+}
+
+#[test]
+fn tsk1002_ac09_guard_verdicts() {
+    guard_classification_cases(9);
+}
+
+#[test]
+fn tsk1002_ac10_guard_verdicts() {
+    guard_classification_cases(10);
+}
+
+#[test]
+fn tsk1002_ac11_guard_verdicts() {
+    guard_classification_cases(11);
+}
+
+#[test]
+fn tsk1002_ac13_guard_verdicts() {
+    guard_classification_cases(13);
+}
+
+#[test]
+fn tsk1002_glob_hook_uses_actual_files_and_search_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    for dir in ["src", "other"] {
+        std::fs::create_dir(root.join(dir)).unwrap();
+        std::fs::write(root.join(dir).join("public.rs"), "fixture").unwrap();
+    }
+    let verdict = |line: &str| {
+        let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
+            "tool_input":{"command":line}})
+        .to_string();
+        let out = run_with_stdin(
+            expansion_codeflow()
+                .args(["hook", "exec-guard", "--contract", "3"])
+                .current_dir(&root)
+                .env("HOME", tmp.path()),
+            &payload,
+        );
+        assert!(matches!(out.status.code(), Some(0 | 2)), "{out:?}");
+        out.status.code() == Some(2)
+    };
+    let forms = [
+        "cat src/*.rs",
+        "rg -g '*.rs' token src",
+        "rg --glob='*.rs' token src",
+        "rg --iglob '*.RS' token src",
+        "grep -r --include='*.rs' token src",
+    ];
+    for line in forms {
+        assert!(!verdict(line), "ordinary: {line}");
+    }
+    std::fs::write(root.join("src/id_rsa.rs"), "planted fixture").unwrap();
+    for line in forms {
+        assert!(verdict(line), "secret: {line}");
+    }
+    for line in [
+        "cat other/*.rs",
+        "rg -g '*.rs' token other",
+        "grep -r --include='*.rs' token other",
+    ] {
+        assert!(!verdict(line), "other root: {line}");
+    }
+    std::fs::create_dir(tmp.path().join(".ssh")).unwrap();
+    assert!(verdict("cat $HOME/.ssh/*.rs"), "empty secret store");
 }

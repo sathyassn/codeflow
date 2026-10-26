@@ -6345,7 +6345,6 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/edit_guard.rs", "enforcement_patterns", "is_file", 1, "Git marker absence is proven; metadata errors propagate before classifying an existing linked-worktree gitfile."),
     ("crates/codeflow-core/src/hooks/edit_guard.rs", "find_candidates", "is_dir", 1, "Directory entry file_type errors propagate before testing the obtained type."),
     ("crates/codeflow-core/src/hooks/git_discard.rs", "restore_paths", "is_dir", 1, "Missing paths are proven absent; existing symlink metadata errors propagate before directory classification."),
-    ("crates/codeflow-core/src/hooks/git_guard.rs", "every_path_below", "is_dir", 1, "Obtained path metadata; failures produce GlobStop::Unreadable and refuse the glob judgment."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "expand_components", "is_dir", 1, "Obtained entry FileType; failures produce GlobStop::Unreadable rather than omitting recursion."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_directory", "is_dir", 1, "After proven absence handling, metadata errors are unproven; a known non-directory has no glob children."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "read_sed_script", "is_file", 2, "Both path and opened-file metadata are fallibly obtained; errors already yield SedRead::Unreadable."),

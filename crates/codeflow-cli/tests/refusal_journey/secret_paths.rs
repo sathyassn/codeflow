@@ -100,7 +100,7 @@ fn installed_hooks_refuse_secret_path_spellings_without_execution() {
 /// need their own native evidence; they do not run this Seatbelt fixture.
 #[cfg(target_os = "macos")]
 #[test]
-fn native_macos_sandbox_denies_stores_but_not_workspace_key_names() {
+fn native_macos_sandbox_denies_stores_and_workspace_hard_secrets() {
     use std::fmt::Write as _;
     let project = Project::new();
     let settings: Value =
@@ -156,7 +156,28 @@ fn native_macos_sandbox_denies_stores_but_not_workspace_key_names() {
             );
         }
     }
-    for name in ["README.md", "id_rsa", ".env"] {
+    // Model the file-tool rule in addition to the store-root denyRead list.
+    assert!(settings["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|rule| rule == "Read(**/id_rsa*)"));
+    write!(
+        profile,
+        "(deny file-read* (regex {}))",
+        serde_json::to_string(".*/id_rsa[^/]*$").unwrap()
+    )
+    .unwrap();
+    let key = project.root.join("id_rsa");
+    std::fs::write(&key, "planted fixture\n").unwrap();
+    let out = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", &profile, "/bin/cat"])
+        .arg(&key)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "sandbox read workspace id_rsa");
+    assert!(out.stdout.is_empty(), "sandbox leaked workspace fixture");
+    for name in ["README.md", ".env"] {
         let path = project.root.join(name);
         std::fs::write(&path, "ordinary fixture\n").unwrap();
         success(
@@ -167,4 +188,38 @@ fn native_macos_sandbox_denies_stores_but_not_workspace_key_names() {
                 .unwrap(),
         );
     }
+}
+
+#[path = "../support/guard_cases.rs"]
+mod guard_cases;
+
+#[test]
+fn tsk1002_ac14_installed_hooks_classify_every_planted_case() {
+    let project = Project::new();
+    guard_cases::seed_glob_matches(&project.root);
+    let mut wrong = Vec::new();
+    for harness in ["claude", "codex", "grok"] {
+        for &(ac, line, refuse) in guard_cases::CASES {
+            // replay() invokes the installed harness's hook commands. It never
+            // invokes the planted shell text as a command.
+            let outputs = project.replay(harness, "Bash", json!({"command": line}));
+            let expected_rule =
+                if guard_cases::refusing_guard(ac, line) == "git-guard" || ac == 5 || ac == 2 {
+                    "git.hook_integrity"
+                } else {
+                    "security.secret_reads"
+                };
+            let refused = outputs.iter().any(|out| {
+                out.status.code() == Some(2)
+                    && String::from_utf8_lossy(&out.stderr).contains(expected_rule)
+            });
+            if (refuse && !refused) || (!refuse && outputs.iter().any(|out| !out.status.success()))
+            {
+                wrong.push(format!(
+                    "{harness}: AC-{ac}: expected refuse={refuse}: {line:?}: {outputs:?}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

@@ -496,7 +496,6 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
 
 thread_local! {
     /// Prospective checkouts exist only while judging this command line.
-    static RAW_EXPANSIONS_CHECKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static PLANNED_CHECKOUTS: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -569,7 +568,7 @@ pub(crate) fn prospective_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 /// Worktree destinations are relative to Git's command directory.
-fn planned_worktrees(words: &[String], cwd: &Path) -> Vec<PathBuf> {
+pub(crate) fn planned_worktrees(words: &[String], cwd: &Path) -> Vec<PathBuf> {
     let Some((program, args)) = strip_launchers(words) else {
         return Vec::new();
     };
@@ -635,6 +634,23 @@ fn planned_worktrees(words: &[String], cwd: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// Judge an interpreter path against checkouts created earlier on this line.
+pub(crate) fn planned_path_integrity(path: &Path, roots: &[PathBuf]) -> Option<String> {
+    roots.iter().find_map(|root| {
+        let (Ok(path), Ok(root)) = (prospective_path(path), prospective_path(root)) else {
+            return Some("cannot compare prospective checkout paths".into());
+        };
+        if root.starts_with(&path) {
+            return Some(format!("the prospective checkout `{}`", root.display()));
+        }
+        let relative = path.strip_prefix(root).ok()?;
+        let relative = crate::portable_path::slashed(relative);
+        enforcement_text(&relative)
+            .or_else(|| integrity_target(&relative))
+            .map(str::to_owned)
+    })
+}
+
 /// Distinguish an unread output operand from unread data sent to a known file.
 fn unresolved_writer_word<'a>(
     tokens: &[String],
@@ -661,6 +677,14 @@ fn unresolved_writer_word<'a>(
             if let Some(places) = effects.places {
                 targets.extend(places.dirs);
             }
+        } else if matches!(name, "sed" | "find") {
+            if let UnknownDirUse::Words(words) = unknown_dir_use(name, args, line) {
+                targets.extend(words);
+            }
+        } else if WRITING_PROGRAMS.contains(&name) {
+            // Preserve each operand whole. Splitting it into text words loses
+            // the identity of command substitutions in deletion operands.
+            targets.extend(args.iter().cloned());
         } else if let UnknownDirUse::Words(words) = unknown_dir_use(name, args, line) {
             targets.extend(words);
         }
@@ -692,6 +716,7 @@ fn expanded_integrity(
         cwd,
         line_home::home().as_deref(),
     ) {
+        PLANNED_CHECKOUTS.with(|paths| paths.borrow_mut().clone_from(&step.checkouts));
         let dirs = step.cwd.as_ref().map_or_else(
             || Cwd::Unknown("unresolved shell directory".into()),
             |dir| {
@@ -702,13 +727,16 @@ fn expanded_integrity(
                 }
             },
         );
-        // The position reader already emitted each shell body with its own
-        // resolved operands. Reopening the wrapper would judge its quoted,
-        // unresolved source again and bypass the shared reparse budget.
+        // Keep the resolved parent operands intact. The generic expander can
+        // remove an unread substitution while visiting its executable body;
+        // that must never certify the parent writer. Shell wrappers already
+        // have position-scoped bodies from the shared reader.
         let segments = if script_reader(&command_argv(&step.text)).is_some() {
             vec![step.text.clone()]
         } else {
-            expand_shell_commands(&step.text).segments
+            let mut segments = vec![step.text.clone()];
+            add_unique(&mut segments, expand_shell_commands(&step.text).segments);
+            segments
         };
         for segment in segments {
             let mut tokens = shell_tokens(&segment);
@@ -737,46 +765,47 @@ fn expanded_integrity(
                 && (!read_only_program(&tokens) || !redirects.targets.is_empty())
             {
                 for word in tokens.iter().chain(redirects.targets.iter()) {
-                    let paths = match crate::security::composed::paths::linked_paths(
-                        word.strip_prefix("of=").unwrap_or(word),
-                        here,
-                        &step.links,
-                    ) {
-                        Ok(paths) => paths,
-                        Err(why) => {
-                            violations.push(hook_integrity_violation(level, why));
-                            continue;
-                        }
-                    };
-                    for path in paths {
-                        let name = crate::git::GitName::from_os_str(path.as_os_str());
-                        if let Ok(path) = name.rule_text() {
-                            // Reuse the ordinary writer judgment on each possible
-                            // alias target, including prospective worktrees.
-                            let mapped = tokens
-                                .iter()
-                                .map(|w| {
-                                    if w == word {
-                                        if word.starts_with("of=") {
-                                            format!("of={path}")
-                                        } else {
-                                            path.to_owned()
-                                        }
-                                    } else {
-                                        w.clone()
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-                            let mut writes = redirect_writes(&segment);
-                            for target in &mut writes.targets {
-                                if target == word {
-                                    path.clone_into(target);
-                                }
+                    for value in crate::security::arguments::argument_values(word) {
+                        let paths = match crate::security::composed::paths::linked_paths(
+                            value,
+                            here,
+                            &step.links,
+                        ) {
+                            Ok(paths) => paths,
+                            Err(why) => {
+                                violations.push(hook_integrity_violation(level, why));
+                                continue;
                             }
-                            if let Some(v) = integrity_write_in_dirs(
-                                &mapped, &writes, level, cwd, &dirs, &segment, run,
-                            ) {
-                                violations.push(v);
+                        };
+                        for path in paths {
+                            let name = crate::git::GitName::from_os_str(path.as_os_str());
+                            if let Ok(path) = name.rule_text() {
+                                // Reuse the ordinary writer judgment on each possible
+                                // alias target, including prospective worktrees.
+                                let mapped = tokens
+                                    .iter()
+                                    .map(|w| {
+                                        if w == word {
+                                            format!(
+                                                "{}{path}",
+                                                word.strip_suffix(value).unwrap_or("")
+                                            )
+                                        } else {
+                                            w.clone()
+                                        }
+                                    })
+                                    .collect::<Vec<_>>();
+                                let mut writes = redirect_writes(&segment);
+                                for target in &mut writes.targets {
+                                    if target == word {
+                                        path.clone_into(target);
+                                    }
+                                }
+                                if let Some(v) = integrity_write_in_dirs(
+                                    &mapped, &writes, level, cwd, &dirs, &segment, run,
+                                ) {
+                                    violations.push(v);
+                                }
                             }
                         }
                     }
@@ -824,21 +853,6 @@ fn expanded_integrity(
                     violations.push(violation);
                 }
             }
-            let mut added =
-                planned_worktrees(&command_argv(&segment), step.cwd.as_deref().unwrap_or(cwd));
-            for path in added.clone() {
-                let name = crate::git::GitName::from_os_str(path.as_os_str());
-                match name
-                    .rule_text()
-                    .map_err(|e| e.to_string())
-                    .and_then(|word| {
-                        crate::security::composed::paths::linked_paths(word, here, &step.links)
-                    }) {
-                    Ok(paths) => add_unique(&mut added, paths),
-                    Err(why) => violations.push(hook_integrity_violation(level, why)),
-                }
-            }
-            PLANNED_CHECKOUTS.with(|paths| add_unique(&mut paths.borrow_mut(), added));
         }
     }
     violations
@@ -903,7 +917,7 @@ fn evaluate_report_with_runners(
     let run = run_dirs(segments, cwd);
     let expanded_operands = command.contains(['$', '`', '~'])
         || (command.contains("<(") || command.contains("=("))
-        || command.contains("<<<")
+        || command.contains("<<")
         || segments.iter().any(|segment| {
             let words = command_argv(segment);
             strip_launchers(&words).is_some_and(|(program, args)| {
@@ -919,6 +933,7 @@ fn evaluate_report_with_runners(
                         | "pax"
                         | "cpio"
                         | "rsync"
+                        | "alias"
                 ) || basename(program) == "git"
                     || is_shell(basename(program))
                     || (matches!(basename(program), "source" | ".") && !args.is_empty())
@@ -977,13 +992,13 @@ fn evaluate_report_with_runners(
         // Hook/policy integrity: writes or removes that would disarm or tamper
         // with the enforcement plane, evaluated on ANY command (not just git).
         let moved = line.moves_for(&shell, top_level, &tokens);
-        RAW_EXPANSIONS_CHECKED.with(|flag| flag.set(expanded_operands));
-        let writes = redirect_writes(segment);
+        // Literal syntax retains the conservative shell-grammar reading,
+        // including zsh grouped globs and unmodeled directory changes. A raw
+        // expansion or heredoc would instead rejudge resolved values or data.
         let integrity = if expanded_operands
-            && writes.targets.is_empty()
-            && writes.unread.is_empty()
-            && script_reader(&command_argv(segment))
-                .is_some_and(|(name, _)| is_shell(name) || name == "eval")
+            && (unresolved_word(segment)
+                || command.contains("<<")
+                || script_reader(&command_argv(segment)).is_some())
         {
             None
         } else {
@@ -997,7 +1012,6 @@ fn evaluate_report_with_runners(
                 &run,
             )
         };
-        RAW_EXPANSIONS_CHECKED.with(|flag| flag.set(false));
         if let Some(mut v) = integrity {
             let authority = v.message.contains(super::edit_guard::AUTHORITY_PATH)
                 || v.message.contains(super::edit_guard::GIT_CONFIG_AUTHORITY);
@@ -2664,7 +2678,7 @@ fn plain_brace_char(c: char) -> char {
 /// Brace expansion of a word whose `{`, `}` and `,` all count, as Bash
 /// reads them: the first group from the left expands, then each result in
 /// turn. `None` past [`BRACE_WORD_LIMIT`] words.
-fn brace_expand(word: &str) -> Option<Vec<String>> {
+pub(crate) fn brace_expand(word: &str) -> Option<Vec<String>> {
     fn into(word: &str, out: &mut Vec<String>) -> Option<()> {
         let Some((open, close, alternatives)) = brace_group(word) else {
             if out.len() >= BRACE_WORD_LIMIT {
@@ -3086,6 +3100,23 @@ impl WordGlob {
     }
 }
 
+/// Secret reads cannot replace an incomplete expansion with a safe prefix:
+/// a secret leaf may be the entry beyond the budget.
+pub(crate) fn secret_glob_paths(word: &str, cwd: &Path) -> Result<Vec<PathBuf>, &'static str> {
+    WordGlob::new(word, cwd)
+        .expand()
+        .map_err(|stop| stop.reason())
+}
+
+/// Search tools walk recursively, so their file selectors use a larger but
+/// finite metadata budget. File contents are never opened here.
+pub(crate) fn secret_search_paths(root: &Path) -> Result<Vec<PathBuf>, &'static str> {
+    every_path_below_with_limit(root, &mut 0, 65_536).map_err(|stop| match stop {
+        GlobStop::TooManyEntries => "cannot inspect every search path: more than 65536 entries",
+        GlobStop::Unreadable => stop.reason(),
+    })
+}
+
 /// Stream the prefix's entries without materializing glob candidates.
 /// Protected names and links escaping the prefix invalidate containment.
 /// Directory traversal stays bounded even for deep or cyclic trees; a flat
@@ -3174,6 +3205,14 @@ fn glob_directory(dir: &Path) -> Result<Option<std::fs::ReadDir>, GlobStop> {
 /// are included and linked directories are entered, each real directory
 /// once.
 fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobStop> {
+    every_path_below_with_limit(dir, read, GLOB_ENTRY_LIMIT)
+}
+
+fn every_path_below_with_limit(
+    dir: &Path,
+    read: &mut usize,
+    limit: usize,
+) -> Result<Vec<PathBuf>, GlobStop> {
     let mut found = vec![dir.to_path_buf()];
     let mut pending = vec![dir.to_path_buf()];
     let mut entered = std::collections::HashSet::new();
@@ -3189,15 +3228,14 @@ fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobSt
         for entry in entries {
             let entry = entry.map_err(|_| GlobStop::Unreadable)?;
             *read += 1;
-            if *read > GLOB_ENTRY_LIMIT {
+            if *read > limit {
                 return Err(GlobStop::TooManyEntries);
             }
             let path = dir.join(entry.file_name());
-            if std::fs::metadata(&path)
-                .map_err(|_| GlobStop::Unreadable)?
-                .is_dir()
-            {
-                pending.push(path.clone());
+            match crate::absence::is_kind(&path, true) {
+                Some(true) => pending.push(path.clone()),
+                Some(false) => {}
+                None => return Err(GlobStop::Unreadable),
             }
             found.push(path);
         }
@@ -4740,9 +4778,6 @@ fn worktree_delete_check(
         }
     };
     for target in targets.iter().filter(|t| !t.is_empty()) {
-        if RAW_EXPANSIONS_CHECKED.with(std::cell::Cell::get) && unresolved_word(target) {
-            continue;
-        }
         match resolve_targets(target, cwd, line) {
             Err(error) => return Some(hook_integrity_violation(level, error)),
             Ok(Some(paths)) => {
@@ -12805,27 +12840,34 @@ pub(crate) fn command_argv(segment: &str) -> Vec<String> {
 
 /// File sources of input redirections, excluding here-documents, here-strings
 /// and descriptor duplication. Use the same quote provenance as command argv.
-pub(crate) fn redirect_reads(segment: &str) -> Vec<String> {
-    let mut words = shell_words(segment).into_iter();
+pub(crate) fn redirect_reads(segment: &str) -> Vec<(String, bool)> {
+    let decoded = join_continuations(&decode_dollar_quotes(segment));
+    let chars: Vec<char> = decoded.chars().collect();
     let mut sources = Vec::new();
-    while let Some(word) = words.next() {
-        let Some(len) =
-            redirect_operator_len(&word.text).filter(|len| *len <= word.unquoted_prefix)
-        else {
-            continue;
-        };
-        // The operator ends the matched span after any descriptor digits;
-        // `<<`, `<<<`, `<<-` and `<&` never read a file source.
-        let operator = &word.text[..len];
-        let input =
-            operator.ends_with("<>") || (operator.ends_with('<') && !operator.ends_with("<<"));
-        let target = if len == word.text.len() {
-            words.next().map(|word| word.text)
-        } else {
-            Some(word.text[len..].to_string())
-        };
-        if input {
-            sources.extend(target);
+    let (mut single, mut double) = (false, false);
+    let mut at = 0;
+    while let Some(&ch) = chars.get(at) {
+        at += 1;
+        match ch {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '\\' if !single => at += 1,
+            '<' | '>' if !single && !double && chars.get(at) != Some(&'(') => {
+                let (_, after) = redirect_operator(&chars, at - 1);
+                let (target, end) = redirect_word(&chars, after);
+                let op: String = chars[at - 1..after].iter().collect();
+                if matches!(op.as_str(), "<" | "<>") {
+                    let raw: String = chars[after..end].iter().collect();
+                    let pattern = command_argv_patterns(&raw)
+                        .1
+                        .first()
+                        .copied()
+                        .unwrap_or(false);
+                    sources.push((target, pattern));
+                }
+                at = end;
+            }
+            _ => {}
         }
     }
     sources

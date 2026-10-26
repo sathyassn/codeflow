@@ -17,6 +17,7 @@ pub(crate) struct Command {
     /// Literal data a preceding pipeline producer supplies to this command.
     pub(crate) input_code: Option<String>,
     pub(crate) links: Vec<Link>,
+    pub(crate) checkouts: Vec<PathBuf>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -35,6 +36,15 @@ pub(crate) fn writer_commands(line: &str, cwd: &Path, home: Option<&Path>) -> Ve
     read_commands(line, cwd, home, true)
 }
 
+/// Executable text after command-position resolution, excluding heredoc data.
+pub(crate) fn execution_text(line: &str, cwd: &Path, home: Option<&Path>) -> String {
+    commands(line, cwd, home)
+        .into_iter()
+        .map(|step| step.text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool) -> Vec<Command> {
     let Ok((tokens, docs)) = lex(line) else {
         return vec![Command {
@@ -44,6 +54,7 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
             stdout: None,
             input_code: None,
             links: Vec::new(),
+            checkouts: Vec::new(),
         }];
     };
     let mut result = Vec::new();
@@ -73,6 +84,7 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
                 .vars
                 .insert("CDPATH".into(), Var::Unknown("inherited CDPATH"));
         }
+        let mut reading = Vec::new();
         walk(
             &tokens,
             &docs,
@@ -81,35 +93,25 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
                 stack: Vec::new(),
             }],
             dialect,
-            &mut result,
+            &mut reading,
             0,
             &mut Reparses::default(),
         );
+        result.extend(position_effects(reading));
     }
-    // A command can be reached by several branches and by both dialects.
-    // Judge each directory/text pair once, retaining every unresolved reason.
+    // Deduplicate only after each shell reading has its own ordered effects.
+    // The same text before and after a declaration has different authority.
     let mut indices = HashMap::new();
-    let mut unique: Vec<(usize, Command)> = Vec::new();
-    for (position, command) in result.into_iter().enumerate() {
-        let key = (command.cwd.clone(), command.text.clone());
+    let mut unique: Vec<Command> = Vec::new();
+    for command in result {
+        let key = (
+            command.cwd.clone(),
+            command.text.clone(),
+            command.links.clone(),
+            command.checkouts.clone(),
+        );
         if let Some(&index) = indices.get(&key) {
-            let (last_position, prior): &mut (usize, Command) = &mut unique[index];
-            // Prospective checkout declarations take effect at their first
-            // occurrence. Other repeated commands are judged at their last
-            // occurrence, after every checkout declaration that preceded one.
-            let words = pipeline_tail_words(&prior.text);
-            let declares_checkout =
-                crate::hooks::git_guard::strip_launchers(&words).is_some_and(|(program, args)| {
-                    (program.rsplit('/').next() == Some("git")
-                        && args.iter().any(|arg| arg == "worktree"))
-                        || matches!(
-                            crate::security::unresolved::writer_name(program),
-                            "ln" | "link" | "cp" | "pax" | "cpio" | "rsync"
-                        )
-                });
-            if !declares_checkout {
-                *last_position = position;
-            }
+            let prior: &mut Command = &mut unique[index];
             for word in command.unresolved {
                 if !prior.unresolved.contains(&word) {
                     prior.unresolved.push(word);
@@ -117,16 +119,31 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
             }
         } else {
             indices.insert(key, unique.len());
-            unique.push((position, command));
+            unique.push(command);
         }
     }
-    unique.sort_by_key(|(position, _)| *position);
-    let mut links = Vec::new();
     unique
+}
+
+fn position_effects(commands: Vec<Command>) -> Vec<Command> {
+    let mut links = Vec::new();
+    let mut checkouts = Vec::new();
+    commands
         .into_iter()
-        .map(|(_, mut command)| {
+        .map(|mut command| {
             command.links.clone_from(&links);
+            command.checkouts.clone_from(&checkouts);
             if let Some(dir) = &command.cwd {
+                let words = pipeline_tail_words(&command.text);
+                for path in crate::hooks::git_guard::planned_worktrees(&words, dir) {
+                    if let Some(word) = path.to_str() {
+                        match linked_paths(word, dir, &links) {
+                            Ok(paths) => checkouts.extend(paths),
+                            Err(why) => command.unresolved.push(why),
+                        }
+                    }
+                    checkouts.push(path);
+                }
                 links.extend(created_links(
                     &command.text,
                     dir,
@@ -203,7 +220,7 @@ fn created_links(text: &str, cwd: &Path, input: Option<&str>) -> Vec<Link> {
     let Some(dest) = copy.dest else {
         return Vec::new();
     };
-    let dest = lexical_join(cwd, Path::new(&dest));
+    let dest = cwd.join(&dest);
     let mut links = Vec::new();
     for source in copy.sources {
         // The destination can be an existing directory, or one made earlier
@@ -215,14 +232,12 @@ fn created_links(text: &str, cwd: &Path, input: Option<&str>) -> Vec<Link> {
         .into_iter()
         .flatten()
         {
-            let to = lexical_join(
-                if symbolic {
-                    from.parent().unwrap_or(cwd)
-                } else {
-                    cwd
-                },
-                Path::new(&source),
-            );
+            let to = if symbolic {
+                from.parent().unwrap_or(cwd)
+            } else {
+                cwd
+            }
+            .join(&source);
             links.push(Link { from, to });
         }
     }
@@ -353,39 +368,52 @@ pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec
         return Ok(Vec::new());
     }
     let original = cwd.join(word);
-    let original = crate::hooks::git_guard::prospective_path(&original)?;
-    let mut paths = vec![original.clone()];
-    for _ in 0..16 {
-        let before = paths.len();
-        for path in paths.clone() {
+    let mut pending = vec![(original.clone(), vec![original])];
+    let mut seen = std::collections::HashSet::new();
+    let mut mapped = Vec::new();
+    while let Some((path, ancestors)) = pending.pop() {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if seen.len() > 64 || ancestors.len() > 16 {
+            return Err("cannot verify paths through too many same-line links".into());
+        }
+        // Follow each link before consuming a following parent component,
+        // just as the kernel does. Whole-path lexical normalization loses it.
+        let mut prefix = PathBuf::new();
+        let mut components = path.components();
+        while let Some(component) = components.next() {
+            prefix.push(component.as_os_str());
+            let prefix_path = crate::hooks::git_guard::prospective_path(&prefix)?;
             for link in links {
                 let from = crate::hooks::git_guard::prospective_path(&link.from)?;
-                if let Ok(tail) = path.strip_prefix(&from) {
-                    if link
-                        .to
-                        .to_str()
-                        .is_none_or(crate::hooks::git_guard::unresolved_word)
-                    {
-                        return Err(
-                            "cannot verify a link target created earlier on this line".into()
-                        );
-                    }
-                    let target = lexical_join(&link.to, tail);
-                    let target = crate::hooks::git_guard::prospective_path(&target)?;
-                    if !paths.contains(&target) {
-                        paths.push(target);
-                    }
+                if prefix_path != from {
+                    continue;
                 }
+                if link
+                    .to
+                    .to_str()
+                    .is_none_or(crate::hooks::git_guard::unresolved_word)
+                {
+                    return Err("cannot verify a link target created earlier on this line".into());
+                }
+                let target = link.to.join(components.clone().as_path());
+                if ancestors.contains(&target) {
+                    return Err(
+                        "cannot verify a cycle of links created earlier on this line".into(),
+                    );
+                }
+                let mut next_ancestors = ancestors.clone();
+                next_ancestors.push(target.clone());
+                pending.push((target.clone(), next_ancestors));
+                mapped.push(target);
             }
         }
-        if paths.len() == before {
-            return Ok(paths.into_iter().filter(|p| p != &original).collect());
-        }
-        if paths.len() > 64 {
-            break;
-        }
     }
-    Err("cannot verify paths through too many same-line links".into())
+    mapped
+        .into_iter()
+        .map(|path| crate::hooks::git_guard::prospective_path(&path))
+        .collect()
 }
 
 /// Maximum distinct concrete shell-code readings per input line.
@@ -495,6 +523,7 @@ fn unread_code(reason: &str) -> Command {
         stdout: None,
         input_code: None,
         links: Vec::new(),
+        checkouts: Vec::new(),
     }
 }
 
@@ -589,19 +618,21 @@ fn walk(
                 compounds.pop();
             }
         }
-        if (matches!(tokens.get(at), Some(Tok::Word(_)))
+        let defines_function = (matches!(tokens.get(at), Some(Tok::Word(_)))
             && matches!(tokens.get(at + 1), Some(Tok::Op("(")))
             && matches!(tokens.get(at + 2), Some(Tok::Op(")"))))
-            || matches!(
-                plain(&tokens[at]),
-                Some("if" | "for" | "while" | "until" | "case" | "function")
-            )
-        {
+            || keyword == Some("function");
+        if defines_function || matches!(keyword, Some("if" | "for" | "while" | "until" | "case")) {
             let moves = tokens[at..]
                 .iter()
                 .any(|token| matches!(plain(token), Some("cd" | "chdir" | "pushd" | "popd")));
             for state in &mut states {
-                state.state.directory = None;
+                // Control flow alone cannot change cwd. Keep it exact for
+                // ordinary loops; declarations and possible moves retain the
+                // existing conservative directory reading.
+                if moves || defines_function {
+                    state.state.directory = None;
+                }
                 if moves {
                     for name in ["PWD", "OLDPWD"] {
                         state.state.vars.insert(
@@ -822,6 +853,7 @@ fn walk(
                         stdout: None,
                         input_code: None,
                         links: Vec::new(),
+                        checkouts: Vec::new(),
                     }];
                 }
                 pipeline.get_or_insert_with(|| before.clone());
@@ -1025,6 +1057,7 @@ fn simple(
     let mut unresolved = Vec::new();
     let mut text = Vec::new();
     let mut bodies = Vec::new();
+    let mut doc_headers = Vec::new();
     for token in tokens {
         match token {
             Tok::Word(word) => text.push(resolve(&mut run, word, Ctx::Fields, &mut unresolved)),
@@ -1053,7 +1086,9 @@ fn simple(
                         unresolved.push(doc.body.raw.clone());
                         doc.body.raw.clone()
                     });
-                    text.push(format!("{op}'{}'", doc.delimiter));
+                    let header = format!("{op}'{}'", doc.delimiter);
+                    doc_headers.push(header.clone());
+                    text.push(header);
                     bodies.push(format!("{body}\n{}", doc.delimiter));
                 }
             }
@@ -1063,13 +1098,30 @@ fn simple(
             _ => {}
         }
     }
+    // A here-document given to an ordinary program is data, even when its
+    // contents look like interpreter commands. Keep bodies only for code
+    // readers; their reparse below still sees the original tokens and docs.
+    let header_words = crate::hooks::git_guard::command_argv(&text.join(" "));
+    let reads_code = crate::hooks::git_guard::script_reader(&header_words).is_some()
+        || crate::security::outward::reads_stdin_code(&text.join(" "));
+    if !reads_code {
+        text.retain(|part| !doc_headers.contains(part));
+    }
     let mut text = text.join(" ");
     for body in bodies {
-        text.push('\n');
-        text.push_str(&body);
+        if reads_code {
+            text.push('\n');
+            text.push_str(&body);
+        }
     }
     let words = crate::hooks::git_guard::command_argv(&text);
     let launched = crate::hooks::git_guard::strip_launchers(&words);
+    if launched.is_some_and(|(program, _)| position.state.aliases.contains_key(program)) {
+        // Alias syntax can replace the command and introduce redirections.
+        // The path reader does not expand it, so never certify its operands.
+        text = "__unresolved_shell_code".into();
+        unresolved.push("an alias defined earlier on this line".into());
+    }
     let stdout = launched
         .filter(|(program, _)| matches!(*program, "echo" | "printf" | "print"))
         .and_then(|_| {
@@ -1092,6 +1144,7 @@ fn simple(
         stdout,
         input_code: None,
         links: Vec::new(),
+        checkouts: Vec::new(),
     });
     // The existing evaluator owns assignments, exports, invalidation and static
     // substitutions. PWD is ordinary assignable state only for this consumer.
@@ -1420,6 +1473,67 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn tsk1002_alias_calls_and_data_heredocs_have_distinct_meanings() {
+        for line in [
+            "alias wipe='rm -rf'; wipe .git",
+            "alias wipe='rm -rf'\nwipe .git",
+            "alias w='printf x >'\nw .codeflow/policy.json",
+        ] {
+            let steps = commands(line, Path::new("/fixture"), None);
+            assert!(
+                steps
+                    .iter()
+                    .any(|step| step.text == "__unresolved_shell_code"
+                        && step.unresolved.iter().any(|why| why.contains("alias"))),
+                "{line}: {steps:?}"
+            );
+        }
+        let line = "cat > notes.txt <<'EOF'\npython3 tool.py .claude/settings.json\nEOF";
+        assert!(!execution_text(line, Path::new("/fixture"), None).contains("python3"));
+        assert!(execution_text(
+            "python3 <<'EOF'\nprint(1)\nEOF",
+            Path::new("/fixture"),
+            None
+        )
+        .contains("print(1)"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tsk1002_same_line_links_resolve_before_parent_components() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join(".codeflow/rules")).unwrap();
+        std::fs::write(root.join(".codeflow/policy.json"), "fixture").unwrap();
+        let links = vec![Link {
+            from: root.join("l"),
+            to: root.join(".codeflow/rules"),
+        }];
+        let modeled = linked_paths("l/../policy.json", &root, &links).unwrap();
+        std::os::unix::fs::symlink(".codeflow/rules", root.join("l")).unwrap();
+        let native = root.join("l/../policy.json").canonicalize().unwrap();
+        let native = crate::hooks::git_guard::prospective_path(&native).unwrap();
+        assert!(modeled.contains(&native), "{modeled:?}: {native:?}");
+    }
+
+    #[test]
+    fn tsk1002_prospective_checkouts_follow_command_positions() {
+        let steps = commands("python3 before.py /tmp/new-checkout; git worktree add -b task/new /tmp/new-checkout; python3 after.py /tmp/new-checkout", Path::new("/fixture"), None);
+        assert!(steps
+            .iter()
+            .find(|s| s.text.contains("before.py"))
+            .unwrap()
+            .checkouts
+            .is_empty());
+        assert!(steps
+            .iter()
+            .find(|s| s.text.contains("after.py"))
+            .unwrap()
+            .checkouts
+            .contains(&PathBuf::from("/tmp/new-checkout")));
     }
 
     #[test]

@@ -96,6 +96,12 @@ pub(crate) fn evaluate(
 ) -> Vec<Violation> {
     let _scope = edit_guard::RepoFactsScope::enter();
     let calls = outward::interpreter_calls_with_home(line, payload_cwd, home);
+    let visible = if line.contains("<<") {
+        composed::paths::execution_text(line, payload_cwd, home)
+    } else {
+        line.to_owned()
+    };
+    let line = visible.as_str();
     let (opaque, runs) = outward::code_sources(line);
     if calls.is_empty() && !runs && !opaque && outward::interpreter_bodies(line).is_empty() {
         return Vec::new();
@@ -299,12 +305,14 @@ fn literal_paths(
 /// itself, or for an option the value written after `=` and a short
 /// option's attached value (`-o.claude/settings.json`). Stdin's `-` and
 /// `--` name none.
-fn argument_values(word: &str) -> Vec<&str> {
+pub(crate) fn argument_values(word: &str) -> Vec<&str> {
     if word.is_empty() || word == "-" || word == "--" {
         return Vec::new();
     }
     if !word.starts_with('-') {
-        return vec![word];
+        return std::iter::once(word)
+            .chain(word.split_once('=').map(|(_, value)| value))
+            .collect();
     }
     let mut values: Vec<&str> = word
         .split_once('=')
@@ -703,6 +711,7 @@ fn call_reaches(
             // every authority reach is judged before any enforcement one.
             found.extend(strongest_over_dirs(value, &dirs, |dir| {
                 let mut reached = value_reach(value, *pattern, dir, facts);
+                reached = strongest(reached, planned_reach(value, *pattern, dir, call, facts));
                 let paths = match composed::paths::linked_paths(
                     value,
                     dir.unwrap_or(facts.payload_cwd),
@@ -714,6 +723,8 @@ fn call_reaches(
                 for path in paths {
                     if let Some(path) = path.to_str() {
                         reached = strongest(reached, value_reach(path, *pattern, dir, facts));
+                        reached =
+                            strongest(reached, planned_reach(path, *pattern, dir, call, facts));
                     }
                 }
                 reached
@@ -736,6 +747,7 @@ fn call_reaches(
         for word in code_literal_words(code) {
             found.extend(strongest_over_dirs(&word, &dirs, |dir| {
                 let mut reached = code_reach(&word, dir, facts);
+                reached = strongest(reached, planned_reach(&word, false, dir, call, facts));
                 let paths = match composed::paths::linked_paths(
                     &word,
                     dir.unwrap_or(facts.payload_cwd),
@@ -747,6 +759,7 @@ fn call_reaches(
                 for path in paths {
                     if let Some(path) = path.to_str() {
                         reached = strongest(reached, code_reach(path, dir, facts));
+                        reached = strongest(reached, planned_reach(path, false, dir, call, facts));
                     }
                 }
                 reached
@@ -755,6 +768,34 @@ fn call_reaches(
     }
     found.extend(supplied_reach(call, facts));
     found
+}
+
+fn planned_reach(
+    value: &str,
+    pattern: bool,
+    dir: Option<&Path>,
+    call: &outward::InterpreterCall,
+    facts: &Facts<'_>,
+) -> Option<Reach> {
+    if call.checkouts.is_empty() {
+        return None;
+    }
+    let paths = literal_paths(
+        value,
+        pattern,
+        dir.unwrap_or(facts.payload_cwd),
+        facts.payload_cwd,
+        facts.home,
+    )
+    .map_err(|why| Reach::Enforcement(format!("cannot inspect prospective checkout path: {why}")));
+    match paths {
+        Ok(paths) => paths.iter().find_map(|path| {
+            git_guard::planned_path_integrity(path, &call.checkouts).map(|reached| {
+                Reach::Enforcement(format!("interpreter path `{value}` may reach {reached}"))
+            })
+        }),
+        Err(reach) => Some(reach),
+    }
 }
 
 /// The file a literal argument names from `dir`.
