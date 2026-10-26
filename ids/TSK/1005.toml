@@ -1,0 +1,11 @@
+id = "TSK-1005"
+uid = "4c76f3f8-d24f-450e-8dc2-22aac01ea2b8"
+kind = "TSK"
+title = "A target's test report decides its result, and every skip or disabled target is recorded"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T18:12:38Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
