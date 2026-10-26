@@ -1953,7 +1953,197 @@ pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
     }
     faults.extend(review_warnings(&document));
     faults.extend(figure_balance_warnings(&document));
+    faults.extend(writing_warnings(&document));
     faults
+}
+
+/// Known mannered patterns (`cf-editorial-review` "Mannered prose"), as a
+/// lowercase phrase and the plain rewrite the warning suggests. A phrase
+/// matches at word boundaries in prose text; code is never read.
+const MANNERED_PHRASES: &[(&str, &str)] = &[
+    ("it is worth noting", "state the fact"),
+    ("it's worth noting", "state the fact"),
+    ("it should be noted", "state the fact"),
+    ("needless to say", "state the fact"),
+    ("it goes without saying", "state the fact"),
+    ("let me walk you through", "name the step"),
+    ("let's dive into", "name the subject"),
+    ("let us dive into", "name the subject"),
+    ("great question", "give the answer"),
+    ("i hope this helps", "end with the ask"),
+    ("the result:", "state the result"),
+    ("the bottom line:", "state the point"),
+    ("the takeaway:", "state the point"),
+    ("here's the thing", "state the point"),
+    ("game changer", "name what changes"),
+    ("game-changer", "name what changes"),
+    ("testament to", "name the evidence"),
+    ("evolving landscape", "name the change"),
+];
+
+/// Advisory writing warnings (TSK-445): a section or block title written
+/// as a question, and known mannered patterns in prose. A title names the
+/// topic in plain words; a decision, form or feedback prompt asks the
+/// reader, so its question is never warned about. They never refuse a
+/// document.
+fn writing_warnings(document: &PresentationDocument) -> Vec<CheckFault> {
+    let mut warnings = Vec::new();
+    let question = |title: &str| title.trim_end().ends_with('?');
+    if question(&document.title) {
+        warnings.push(title_warning(None, "the document title", &document.title));
+    }
+    for block in document.walk() {
+        let id = Some(block.id().to_string());
+        for title in block_titles(block) {
+            if question(&title) {
+                warnings.push(title_warning(id.clone(), "a title", &title));
+            }
+        }
+        for text in prose_texts(block) {
+            if let Some(message) = mannered_pattern(&text) {
+                warnings.push(CheckFault::warning(id.clone(), "mannered", message));
+            }
+        }
+    }
+    warnings
+}
+
+fn title_warning(block_id: Option<String>, what: &str, title: &str) -> CheckFault {
+    CheckFault::warning(
+        block_id,
+        "title",
+        format!(
+            "{what} \"{}\" is a question; name the topic in plain words (\"How one follow-up lives\", not \"How does a follow-up live?\")",
+            title.trim()
+        ),
+    )
+}
+
+/// The titles a reader sees for a block: a narrative's headings, a table,
+/// stage, callout or tabs title, a comparison column title, a tree label, a
+/// disclosure summary and a figure title. Decisions, forms and feedback
+/// prompts ask the reader and are left out.
+fn block_titles(block: &Block) -> Vec<String> {
+    match block {
+        Block::Narrative { markdown, .. } => {
+            let mut titles = Vec::new();
+            let mut current: Option<String> = None;
+            for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
+                match event {
+                    Event::Start(Tag::Heading { .. }) => current = Some(String::new()),
+                    Event::End(TagEnd::Heading(_)) => titles.extend(current.take()),
+                    Event::Text(text) | Event::Code(text) => {
+                        if let Some(title) = current.as_mut() {
+                            title.push_str(&text);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            titles
+        }
+        Block::Table { title, .. }
+        | Block::Html { title, .. }
+        | Block::Callout { title, .. }
+        | Block::Tabs { title, .. } => title.iter().cloned().collect(),
+        Block::Comparison { columns, .. } => {
+            columns.iter().map(|column| column.title.clone()).collect()
+        }
+        Block::Tree { label, .. } => vec![label.clone()],
+        Block::Disclosure { summary, .. } => vec![summary.clone()],
+        Block::Figure { declaration, .. } => vec![figure_text(declaration).0.to_string()],
+        _ => Vec::new(),
+    }
+}
+
+/// The prose of a block as plain text, one entry per Markdown field and
+/// caption, with inline and fenced code left out. Table cells are data and
+/// are not read.
+fn prose_texts(block: &Block) -> Vec<String> {
+    let mut texts: Vec<String> = match block {
+        Block::Table { .. } => Vec::new(),
+        _ => block
+            .markdown_fields()
+            .into_iter()
+            .map(|markdown| {
+                coalesced_markdown(markdown)
+                    .into_iter()
+                    .filter_map(|(event, _)| match event {
+                        Event::Text(text) => Some(text.into_string()),
+                        Event::SoftBreak | Event::HardBreak | Event::End(_) => {
+                            Some(" ".to_string())
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect(),
+    };
+    match block {
+        Block::Figure { declaration, .. } => texts.push(figure_text(declaration).1.to_string()),
+        Block::Table {
+            caption: Some(caption),
+            ..
+        }
+        | Block::Html {
+            caption: Some(caption),
+            ..
+        } => texts.push(caption.clone()),
+        _ => {}
+    }
+    texts
+}
+
+/// The first known mannered pattern in `text`, as a warning message.
+fn mannered_pattern(text: &str) -> Option<String> {
+    // An en dash between digits is a numeric range and stays.
+    let chars: Vec<char> = text.chars().collect();
+    let dash = chars.iter().enumerate().find_map(|(at, &c)| {
+        let range = c == '\u{2013}'
+            && at > 0
+            && chars[at - 1].is_ascii_digit()
+            && chars.get(at + 1).is_some_and(char::is_ascii_digit);
+        (matches!(c, '\u{2014}' | '\u{2013}') && !range).then_some(c)
+    });
+    if let Some(dash) = dash {
+        let name = if dash == '\u{2014}' { "an em" } else { "an en" };
+        return Some(format!(
+            "{name} dash in prose; use a comma, a colon or a new sentence"
+        ));
+    }
+    let lower = text.replace('\u{2019}', "'").to_lowercase();
+    let at_word = |at: usize, len: usize| {
+        let before = lower[..at].chars().next_back();
+        let after = lower[at + len..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    };
+    let found = |needle: &str| {
+        lower
+            .match_indices(needle)
+            .any(|(at, matched)| at_word(at, matched.len()))
+    };
+    for (phrase, plain) in MANNERED_PHRASES {
+        if found(phrase) {
+            return Some(format!(
+                "\"{phrase}\" is mannered prose; {plain} directly (cf-editorial-review, \"Mannered prose\")"
+            ));
+        }
+    }
+    // A contrast turn: "not just X, but Y" or "not only X but also Y" in
+    // one sentence frames a fact instead of stating it.
+    for sentence in lower.split(['.', '!', '?', ';']) {
+        for opener in ["not just ", "not only "] {
+            if let Some(at) = sentence.find(opener) {
+                if sentence[at..].contains(" but ") || sentence[at..].contains(", but") {
+                    return Some(
+                        "\"not just X, but Y\" is a contrast turn; state what it is and what it does"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    None
 }
 
 fn figure_balance_warnings(document: &PresentationDocument) -> Vec<CheckFault> {
@@ -2130,6 +2320,84 @@ mod tests {
             check_lines("documents/v2-html-missing-caption.json"),
             [(Some("answer-flow".to_string()), "block", "fault")]
         );
+    }
+
+    /// The `title` and `mannered` warnings for a document, as (block, rule).
+    fn writing_lines(document: &serde_json::Value) -> Vec<(Option<String>, &'static str)> {
+        check_document(&serde_json::to_vec(document).unwrap())
+            .into_iter()
+            .filter(|line| matches!(line.rule, "title" | "mannered"))
+            .inspect(|line| assert_eq!(line.severity, "warning", "{line:?}"))
+            .map(|line| (line.block_id, line.rule))
+            .collect()
+    }
+
+    #[test]
+    fn check_warns_on_a_question_form_section_or_block_title() {
+        let document = serde_json::json!({"schema_version": 2, "title": "Will the ledger hold?", "blocks": [
+            {"type": "narrative", "id": "hold", "markdown": "## Will it hold?\n\nTwo tests of the design."},
+            {"type": "narrative", "id": "deeper", "markdown": "### When a session stops\n\nThe next one adopts."},
+            {"type": "table", "id": "cover", "title": "Which plane covers what?", "columns": ["Plane"], "rows": [["CI"]]},
+            {"type": "disclosure", "id": "more", "summary": "Why so many planes?", "blocks": [
+                {"type": "callout", "id": "note", "tone": "info", "title": "What if CI is down?", "markdown": "The merge waits."}
+            ]},
+            {"type": "decision", "id": "ask", "title": "Ship now or hold?", "markdown": "Choose one.",
+             "options": [{"value": "ship", "label": "Ship"}, {"value": "hold", "label": "Hold"}]}
+        ]});
+        assert_eq!(
+            writing_lines(&document),
+            [
+                (None, "title"),
+                (Some("hold".to_string()), "title"),
+                (Some("cover".to_string()), "title"),
+                (Some("more".to_string()), "title"),
+                (Some("note".to_string()), "title"),
+            ]
+        );
+        let message = check_document(&serde_json::to_vec(&document).unwrap())
+            .into_iter()
+            .find(|line| line.block_id.as_deref() == Some("hold"))
+            .unwrap()
+            .message;
+        assert!(message.contains("\"Will it hold?\""), "{message}");
+    }
+
+    #[test]
+    fn check_warns_on_known_mannered_patterns() {
+        let document = serde_json::json!({"schema_version": 2, "title": "Review the guard", "blocks": [
+            {"type": "narrative", "id": "ceremony", "markdown": "It is worth noting that the tests pass."},
+            {"type": "bullets", "id": "points", "items": [
+                "This is not just a linter, but a discipline.",
+                "Let me walk you through the hook."
+            ]},
+            {"type": "callout", "id": "reveal", "tone": "info", "markdown": "The result: nothing changed."},
+            {"type": "narrative", "id": "dash", "markdown": "The guard runs first \u{2014} always."}
+        ]});
+        assert_eq!(
+            writing_lines(&document),
+            [
+                (Some("ceremony".to_string()), "mannered"),
+                (Some("points".to_string()), "mannered"),
+                (Some("points".to_string()), "mannered"),
+                (Some("reveal".to_string()), "mannered"),
+                (Some("dash".to_string()), "mannered"),
+            ]
+        );
+    }
+
+    #[test]
+    fn check_is_quiet_on_plain_titles_and_prose() {
+        // Words that resemble a pattern stay quiet: a real negation, a label
+        // colon, a question asked of the reader in a decision, and code.
+        let document = serde_json::json!({"schema_version": 2, "title": "Review the coordination ledger design", "blocks": [
+            {"type": "narrative", "id": "anchor", "markdown": "## What you are looking at\n\n- **What:** the design for issue 272.\n- **Where it stands:** a missing check, not a failed test."},
+            {"type": "narrative", "id": "life", "markdown": "## How one follow-up lives\n\nIt closes only through proof, which is worth a figure. Run `it is worth noting`."},
+            {"type": "table", "id": "pages", "title": "Pages 3 to 5", "columns": ["Range"], "rows": [["3\u{2013}5"]]},
+            {"type": "decision", "id": "ask", "title": "Accept the design?", "markdown": "Choose one.",
+             "options": [{"value": "yes", "label": "Accept"}, {"value": "no", "label": "Hold"}]},
+            {"type": "feedback_prompt", "id": "prompt", "prompt": "What is missing?"}
+        ]});
+        assert_eq!(writing_lines(&document), []);
     }
 
     fn document(blocks: Vec<Block>) -> PresentationDocument {
