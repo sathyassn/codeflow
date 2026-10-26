@@ -1,0 +1,11 @@
+id = "TSK-1006"
+uid = "bc19db4d-d8eb-43ef-a640-ed59f483941c"
+kind = "TSK"
+title = "Every test-running target meets the coverage floor or records why not"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T18:13:11Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
