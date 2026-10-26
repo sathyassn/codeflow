@@ -215,7 +215,8 @@ fn codeflow_release_jobs_live_outside_the_managed_ci_file() {
     // TSK-1001: the trusted job lives in its own workflow, from the
     // target's definitions.
     let trusted =
-        std::fs::read_to_string(root.join(".github/workflows/codeflow-release-trusted.yml")).unwrap();
+        std::fs::read_to_string(root.join(".github/workflows/codeflow-release-trusted.yml"))
+            .unwrap();
     for required in [
         "pull_request_target:\n    types: [opened, synchronize, reopened, edited, ready_for_review]",
         "name: release impact (trusted)",
