@@ -2057,7 +2057,7 @@ fn block_titles(block: &Block) -> Vec<String> {
 }
 
 /// The prose of a block as plain text, one entry per Markdown field and
-/// caption, with inline and fenced code left out. Table cells are data and
+/// caption, with inline code and fenced and indented code blocks left out. Table cells are data and
 /// are not read.
 fn prose_texts(block: &Block) -> Vec<String> {
     let mut texts: Vec<String> = match block {
@@ -2066,11 +2066,21 @@ fn prose_texts(block: &Block) -> Vec<String> {
             .markdown_fields()
             .into_iter()
             .map(|markdown| {
+                // Text inside a fenced or an indented code block is code.
+                let mut in_code = false;
                 coalesced_markdown(markdown)
                     .into_iter()
                     .filter_map(|(event, _)| match event {
-                        Event::Text(text) => Some(text.into_string()),
-                        Event::SoftBreak | Event::HardBreak | Event::End(_) => {
+                        Event::Start(Tag::CodeBlock(_)) => {
+                            in_code = true;
+                            None
+                        }
+                        Event::End(TagEnd::CodeBlock) => {
+                            in_code = false;
+                            Some(" ".to_string())
+                        }
+                        Event::Text(text) if !in_code => Some(text.into_string()),
+                        Event::SoftBreak | Event::HardBreak | Event::End(_) if !in_code => {
                             Some(" ".to_string())
                         }
                         _ => None,
@@ -2392,12 +2402,29 @@ mod tests {
         let document = serde_json::json!({"schema_version": 2, "title": "Review the coordination ledger design", "blocks": [
             {"type": "narrative", "id": "anchor", "markdown": "## What you are looking at\n\n- **What:** the design for issue 272.\n- **Where it stands:** a missing check, not a failed test."},
             {"type": "narrative", "id": "life", "markdown": "## How one follow-up lives\n\nIt closes only through proof, which is worth a figure. Run `it is worth noting`."},
-            {"type": "table", "id": "pages", "title": "Pages 3 to 5", "columns": ["Range"], "rows": [["3\u{2013}5"]]},
+            {"type": "table", "id": "pages", "title": "Pages 3 to 5", "columns": ["Range"], "rows": [["3 to 5"]]},
             {"type": "decision", "id": "ask", "title": "Accept the design?", "markdown": "Choose one.",
              "options": [{"value": "yes", "label": "Accept"}, {"value": "no", "label": "Hold"}]},
             {"type": "feedback_prompt", "id": "prompt", "prompt": "What is missing?"}
         ]});
         assert_eq!(writing_lines(&document), []);
+    }
+
+    #[test]
+    fn check_reads_no_code_block_and_no_numeric_range_as_mannered() {
+        // A pattern inside a fenced or an indented code block is code, and an
+        // en dash between digits in prose is a numeric range; prose around
+        // the code is still read.
+        let document = serde_json::json!({"schema_version": 2, "title": "Review the guard", "blocks": [
+            {"type": "narrative", "id": "fenced", "markdown": "The hook prints:\n\n```text\nIt is worth noting that the tests pass.\n```\n\nThat line is its output."},
+            {"type": "narrative", "id": "indented", "markdown": "The log reads:\n\n    The result: nothing changed.\n\nNothing else is printed."},
+            {"type": "narrative", "id": "range", "markdown": "Pages 3\u{2013}5 hold the rules."},
+            {"type": "narrative", "id": "after", "markdown": "```text\nok\n```\n\nIt is worth noting that the tests pass."}
+        ]});
+        assert_eq!(
+            writing_lines(&document),
+            [(Some("after".to_string()), "mannered")]
+        );
     }
 
     fn document(blocks: Vec<Block>) -> PresentationDocument {
