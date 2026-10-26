@@ -1399,9 +1399,53 @@ mod tests {
         );
         assert_allowed(
             &repo,
+            &["trap 'rm -f out.tmp' EXIT; python3 x.py notes.txt"],
+        );
+    }
+
+    /// Security review SF-1 to SF-3 and Codex review round 4: a program
+    /// word the guard does not model may be a shell function (zoxide's `z`,
+    /// one made with `autoload` or the zsh `functions` table), a word the
+    /// shell expands into `cd`, or a command that installs a hook or an
+    /// option that changes directory. Any such command before an
+    /// interpreter call makes the directory unknown.
+    #[test]
+    fn unmodeled_commands_before_an_interpreter_are_unknown() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
             &[
-                "trap -l; python3 x.py settings.json",
-                "trap 'rm -f out.tmp' EXIT; python3 x.py notes.txt",
+                // SF-1: a program word that expands to `cd`.
+                "${X:-cd} .claude && python3 ../src/w.py settings.json",
+                "\"${X:-cd}\" .claude && python3 x.py settings.json",
+                "{cd,.claude}; python3 x.py settings.json",
+                "x=c d=d $x$d .claude && python3 x.py settings.json",
+                "${=X} && python3 x.py settings.json",
+                // SF-2: functions the line defines.
+                "autoload -Uz f && f && python3 x.py settings.json",
+                "functions[f]='builtin cd ./hidden'; f; python3 x.py settings.json",
+                "aliases[up]='cd .claude'; up; python3 x.py settings.json",
+                // SF-3: a shell function from the profile.
+                "z .claude; python3 x.py settings.json",
+                "make && python3 x.py settings.json",
+                // Codex round 4: options and hooks.
+                "setopt autocd; hidden; python3 x.py settings.json",
+                "shopt -s autocd; hidden; python3 x.py settings.json",
+                "PROMPT_COMMAND='builtin cd ./hidden'; python3 x.py settings.json",
+                "PROMPT_COMMAND[0]='builtin cd ./hidden'; python3 x.py settings.json",
+                "precmd_functions+=(f); python3 x.py settings.json",
+                "chpwd_functions=(f); python3 x.py settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "python3 x.py settings.json",
+                "python3 x.py settings.json; ls",
+                "make && python3 x.py notes.txt",
+                "cd web && node build.js",
             ],
         );
     }

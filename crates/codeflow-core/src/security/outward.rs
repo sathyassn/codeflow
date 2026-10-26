@@ -494,23 +494,29 @@ pub(crate) enum DirChange {
     Unknown,
 }
 
-/// The directory changes the words of one simple command make (TSK-302
-/// review round 3). Within the modeled grammar the answer is exact;
-/// anything outside it is [`DirChange::Unknown`], never "no change":
+/// The directory changes the words of one simple command make (TSK-302,
+/// narrowed by TSK-397). Where the shell runs next depends on state the
+/// guard cannot see: shell functions and aliases (zoxide's `z`, a `cd`
+/// wrapper, zsh `autoload` and the `functions` table), hooks such as zsh
+/// `chpwd`, and the shell's `HOME`, `CDPATH`, `PWD` and directory stack.
+/// So the modeled set is small, and anything outside it is
+/// [`DirChange::Unknown`], never "no change":
 ///
-/// - `cd`, `chdir` and `pushd` with any options; `cd` alone goes to
-///   `home`; `cd -`, a stack index, `~user` and a value filled in at run
-///   time are unknown. `popd` and `dirs` return to directories already
-///   listed.
-/// - `source` and `.` can move the shell to anywhere: unknown.
+/// - An interpreter call (`python3`, `node`, `perl`, `ruby` and their
+///   versioned names) is the call being judged; it changes nothing unless
+///   a directory-change token follows it unconsumed.
 /// - The launchers `command`, `builtin`, `exec`, `nohup`, `nice`,
-///   `timeout`, `stdbuf`, `time`, `env` and `xargs` are unwrapped through
-///   their option grammar, values included, attached or separate, and
-///   the command they run is read in turn. `env -C`, `-CDIR`, `--chdir`
-///   and `--chdir=` change directory. An option the grammar does not list,
-///   `env -S`, and `sudo` are unknown.
-/// - `git -C DIR` counts as a change.
-/// - Any other program cannot move the shell, so it makes no change.
+///   `timeout`, `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun`,
+///   `ionice` and the zsh precommands are unwrapped through their option
+///   grammar, and the command they run is read in turn. `env -C`, `-CDIR`,
+///   `--chdir` and `--chdir=` are followed, as a process's own directory.
+///   An option the grammar does not list is unknown.
+/// - Every other word is unknown: a shell directory change (`cd` in any
+///   form, `chdir`, `pushd`, `popd`), code the guard does not read
+///   (`eval`, `source`, `.`, `sudo`, a `trap` action, `alias`), and any
+///   other program, which may be a shell function, including a word that
+///   is expanded, globbed or braced (`${X:-cd}`, `{cd,dir}`). `git -C DIR`
+///   is followed as well, since `git` may also be a function.
 pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChange> {
     let mut found = Vec::new();
     launcher_changes(words, home, 0, &mut found);
@@ -759,6 +765,14 @@ fn launcher_changes(
             !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         });
         if word == "!" || assignment {
+            // An assignment that installs code the shell runs between or
+            // around commands (Codex review round 4).
+            if word
+                .split_once('=')
+                .is_some_and(|(name, _)| HOOK_VARIABLES.contains(&name))
+            {
+                found.push(DirChange::Unknown);
+            }
             at += 1;
         } else {
             break;
@@ -787,14 +801,10 @@ fn launcher_changes(
         // code that runs later in this shell, often from quoted text the
         // directory-change scan never splits (TSK-397 security review F1).
         "cd" | "chdir" | "pushd" | "popd" | "eval" | "source" | "." | "sudo" | "doas" | "alias"
-        | "unalias" => {
+        | "unalias" | "trap" => {
             found.push(DirChange::Unknown);
         }
-        // `trap -l` and `trap -p` only print.
-        "trap" if !rest.iter().all(|w| matches!(w.as_str(), "-l" | "-p")) => {
-            found.push(DirChange::Unknown);
-        }
-        "dirs" => {}
+
         // zsh precommands run the command after them in this shell.
         "noglob" | "nocorrect" | "-" => inner(Some(0), found),
         "builtin" => inner(
@@ -834,18 +844,43 @@ fn launcher_changes(
                     break;
                 }
             }
+            found.push(DirChange::Unknown);
         }
-        // Any other word: a program that cannot move this shell, unless a
-        // directory-change token follows it that the grammar above did not
-        // consume. Then the word is an unmodeled launcher, and the
-        // directory is unknown rather than unchanged (TSK-302 review round
-        // 4): the guard never fails open on a word it does not know.
-        _ => {
+        // An interpreter call changes nothing, unless a directory-change
+        // token follows it that the grammar above did not consume (TSK-302
+        // review round 4).
+        _ if program_is_interpreter(program) => {
             if hides_a_directory_change(rest) {
                 found.push(DirChange::Unknown);
             }
         }
+        // Any other word may be a shell function, an alias or a word the
+        // shell expands into `cd` (TSK-397 security review SF-1 to SF-3).
+        _ => found.push(DirChange::Unknown),
     }
+}
+
+/// Shell variables whose value is code the shell runs on its own: bash's
+/// `PROMPT_COMMAND` and the zsh hook arrays. Array and `+=` spellings are
+/// not plain assignments, so they are read as program words, which are
+/// unknown anyway.
+const HOOK_VARIABLES: &[&str] = &[
+    "PROMPT_COMMAND",
+    "precmd_functions",
+    "preexec_functions",
+    "chpwd_functions",
+    "periodic_functions",
+    "zshaddhistory_functions",
+    "zshexit_functions",
+];
+
+/// Whether `word`, as written, names an interpreter (`python3`,
+/// `/usr/bin/node`); an expanded, globbed or braced word does not.
+fn program_is_interpreter(word: &str) -> bool {
+    !crate::hooks::git_guard::unresolved_word(word)
+        && !crate::hooks::git_guard::has_glob(word)
+        && !word.contains(['{', '}'])
+        && interpreter_family(word.rsplit('/').next().unwrap_or(word)).is_some()
 }
 
 /// Whether the words after an unmodeled program hold a directory-change
@@ -877,10 +912,25 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
         dirs: vec![cwd.to_path_buf()],
         unknown: mentions_cdpath(command),
     };
-    for segment in expand_commands(command) {
-        let mut words = command_argv(&segment);
-        strip_reserved_words(&mut words);
-        for change in dir_changes(&words, home) {
+    // Only what runs before the last interpreter call can move it; a
+    // command after it changes nothing the guard judges. A line with no
+    // interpreter call is read in full.
+    let segments: Vec<Vec<String>> = expand_commands(command)
+        .iter()
+        .map(|segment| {
+            let mut words = command_argv(segment);
+            strip_reserved_words(&mut words);
+            words
+        })
+        .collect();
+    let last = segments
+        .iter()
+        .rposition(|words| words.iter().any(|word| program_is_interpreter(word)));
+    for words in segments
+        .iter()
+        .take(last.map_or(segments.len(), |last| last + 1))
+    {
+        for change in dir_changes(words, home) {
             set.change(&change);
         }
     }
