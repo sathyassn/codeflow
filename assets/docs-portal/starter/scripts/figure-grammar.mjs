@@ -82,6 +82,18 @@ export const MARKS = Object.freeze({
   nc: { className: "cf-m-nc", shapes: SOLID, key: "cell", cross: "cf-m-nc-cross" },
 });
 
+// Tones (figure-grammar.md section 4). A drawn mark may carry a companion hue
+// (cat1, cat2) when it is a peer the subject names, or the accent when it is
+// the governing region. A tone changes hue only, so it is never a channel:
+// it goes only on marks whose kind, edge, width and dash the figure sheet
+// leaves as they are, and only on a mark a text item labels.
+export const TONES = Object.freeze(["accent", "cat1", "cat2"]);
+const TONED_MARKS = Object.freeze({
+  accent: Object.freeze(["layer", "layer-remote", "state", "node"]),
+  cat1: Object.freeze(["layer", "layer-remote", "state", "node", "optional", "denied"]),
+  cat2: Object.freeze(["layer", "layer-remote", "state", "node", "optional", "denied"]),
+});
+
 // The rendered channels rule 3 counts. Paint kind is read as two channels,
 // the interior and the edge, so a solid disc, a hollow ring, a faint outline
 // and a hatch are told apart without reading a hue.
@@ -261,6 +273,7 @@ function validateComposition(composition, name, stateNames, maxWidth, fail) {
   if (!Array.isArray(composition.draw) || composition.draw.length === 0 || composition.draw.length > LIMITS.draw) { fail(`${name}.draw must list 1 to ${LIMITS.draw} items`); return; }
   const ids = new Set();
   const references = [];
+  const toned = [];
   for (const [index, item] of composition.draw.entries()) {
     const where = `${name}.draw[${index}]`;
     if (!isObject(item)) { fail(`${where} must be an object`); continue; }
@@ -290,9 +303,17 @@ function validateComposition(composition, name, stateNames, maxWidth, fail) {
     }
     if (!stateNames.has(item.state)) { fail(`${where} draws undeclared state ${item.state}`); continue; }
     const mark = MARKS[stateNames.get(item.state)];
-    if (mark !== undefined) validateShape(item, mark.shapes, where, fail, ["state", "id"]);
+    if (mark !== undefined) validateShape(item, mark.shapes, where, fail, ["state", "id", "tone"]);
+    if (item.tone !== undefined) {
+      if (!TONES.includes(item.tone)) fail(`${where} tone must be one of ${TONES.join(", ")}`);
+      else if (!TONED_MARKS[item.tone].includes(stateNames.get(item.state))) fail(`${where} tone ${item.tone} goes only on the ${TONED_MARKS[item.tone].join(", ")} marks`);
+      else if (item.id === undefined) fail(`${where} a toned mark needs an id a text item labels: hue is never alone`);
+      else toned.push([where, item.id]);
+    }
   }
   for (const [where, id] of references) if (!ids.has(id)) fail(`${where} labels unknown mark ${id}`);
+  const labelled = new Set(references.map(([, id]) => id));
+  for (const [where, id] of toned) if (!labelled.has(id)) fail(`${where} is toned but no text item labels ${id}: hue is never alone`);
 }
 
 function validateShape(item, shapes, where, fail, extraKeys) {
@@ -679,7 +700,11 @@ export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, f
   const legend = declared.map((name) => {
     const state = states.get(name);
     const wideOnly = wideDrawn.has(name) && !narrowDrawn.has(name);
-    const sample = [...wide.draw, ...narrow.draw].find((item) => item.state === name);
+    const drawnItems = [...wide.draw, ...narrow.draw].filter((item) => item.state === name);
+    const sample = drawnItems[0];
+    // The key takes a tone only when every drawn mark of the state shares it.
+    const tones = new Set(drawnItems.map((item) => item.tone));
+    const keyTone = tones.size === 1 && sample?.tone !== undefined ? ` data-cf-tone="${escapeAttribute(sample.tone)}"` : "";
     const keyId = `${prefix}-key-${name}`;
     const key = legendKey(state, sample, keyId);
     const drawing = key.replaceAll(keyId, "");
@@ -687,7 +712,7 @@ export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, f
     keyed.set(drawing, name);
     const entity = `legend-${name}`;
     const target = ENTITY_ID.test(entity) ? ` data-cf-entity="${entity}" data-cf-entity-label="${escapeAttribute(entityLabel(state.means))}"` : "";
-    return `<li data-state="${escapeAttribute(name)}"${wideOnly ? " data-cf-wide" : ""}${target}>${key}${escapeText(state.means)}</li>`;
+    return `<li data-state="${escapeAttribute(name)}"${wideOnly ? " data-cf-wide" : ""}${target}${keyTone}>${key}${escapeText(state.means)}</li>`;
   }).join("");
   // The title is always visible, numbered when the host numbers its figures;
   // the kicker only qualifies it. One disclosure holds the description and
@@ -751,7 +776,8 @@ function drawItem(item, states, hatchId, idPrefix, entities) {
   const value = item.value === undefined ? "" : ` data-cf-value="${escapeAttribute(String(item.value))}"`;
   const primary = shapeElement(item, mark.className, extra);
   const parts = markParts(item, state.mark, mark);
-  return `<g data-state="${escapeAttribute(item.state)}"${id}${value}>${primary}${parts}</g>`;
+  const tone = item.tone === undefined ? "" : ` data-cf-tone="${escapeAttribute(item.tone)}"`;
+  return `<g data-state="${escapeAttribute(item.state)}"${id}${value}${tone}>${primary}${parts}</g>`;
 }
 
 function shapeElement(item, className, extra) {
