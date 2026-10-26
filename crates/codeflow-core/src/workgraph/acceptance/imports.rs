@@ -323,11 +323,9 @@ fn is_shared_planning(
     landing: Oid,
     head: Oid,
 ) -> Result<bool, String> {
-    if record.kind != RecordKind::Task
-        || !matches!(record.status.as_str(), "todo" | "blocked")
-        || !record.active_blocks().is_empty()
-        || !record.superseded_blocks().is_empty()
-    {
+    // The state is judged once, at the landing, by identity: the head holds
+    // the same version, which the walk below proves.
+    if record.kind != RecordKind::Task {
         return Ok(false);
     }
     let Some(first) = admissible_planning_landing(repo, landing)? else {
