@@ -8750,8 +8750,6 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     let root = tmp.path().join("repo");
     std::fs::create_dir_all(&root).unwrap();
     enforced_repo(&root);
-    // A `cd` the guard can follow needs a destination that exists (TSK-397).
-    std::fs::create_dir_all(root.join("src")).unwrap();
     let linked = root.join(".worktrees/w");
     git(
         &root,
@@ -8891,8 +8889,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "find . -name '*.py' -exec python3 -m py_compile {} +",
         "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
         "python3 tool.py -v -n3 -o out.json",
-        // `./` skips CDPATH, so this `cd` is followed (TSK-397).
-        "cd ./src && python3 app.py settings.json",
+        "cd ./src && python3 app.py notes.txt",
         "find . -name '*.rs' -execdir python3 lint.py {} +",
         "find src -execdir python3 lint.py notes.txt \\;",
         "cd .codex && python3 -c 'print(1)'",
@@ -9250,6 +9247,9 @@ fn exec_guard_keeps_the_starting_directory_after_cd() {
             "CDPATH+=.claude && cd src && python3 tool.py ../settings.json",
             false,
         ),
+        ("cd ./src && python3 tool.py settings.json", false),
+        ("popd && python3 tool.py settings.json", false),
+        ("cd && python3 tool.py settings.json", false),
     ] {
         let output = exec_guard_contract_3(&root, line);
         if allowed {

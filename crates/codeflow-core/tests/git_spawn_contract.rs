@@ -50,8 +50,8 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     (
         "codeflow-core/src/security/interpreter.rs",
         "shell",
-        2,
-        "the cd directory-set tests run `cd <dir> && /bin/pwd -P` under the installed bash and zsh in a disposable fixture, never git (TSK-397)",
+        1,
+        "the cd hook test runs a `cd` function and a `chpwd` hook under the installed bash and zsh in a disposable fixture, never git (TSK-397)",
     ),
     (
         "codeflow-core/src/security/interpreter.rs",

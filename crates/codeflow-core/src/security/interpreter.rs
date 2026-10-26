@@ -1046,8 +1046,7 @@ mod tests {
                 "ls | xargs python3 edit.py",
                 "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
-                // `./` skips CDPATH, so this `cd` is followed (TSK-397).
-                "cd ./src && python3 app.py settings.json",
+                "cd ./src && python3 app.py notes.txt",
                 "python3 edit.py \"@ROOT@/src/app.py\"",
             ],
         );
@@ -1078,13 +1077,16 @@ mod tests {
                 // A bare name may be found through a `CDPATH` only the shell
                 // holds, so its destination is unknown (Codex finding 3).
                 "cd src && python3 app.py settings.json",
+                // Any `cd` may run a function or hook first (Codex round 3).
+                "cd ./src && python3 app.py settings.json",
+                "cd /tmp && python3 app.py settings.json",
             ],
         );
         assert_allowed(
             &repo,
             &[
                 "cd ./src && python3 tool.py ../lib",
-                "cd ./src && python3 app.py settings.json",
+                "cd ./src && python3 app.py notes.txt",
             ],
         );
     }
@@ -1286,6 +1288,9 @@ mod tests {
                 "cd src && python3 tool.py ../settings.json",
                 "cd destination && python3 settings.json",
                 "cd destination && python3 .claude/settings.json",
+                // Security review F2: forms the CDPATH rule never refused,
+                // so these lines show the unresolved-`cd` fix on its own.
+                "cd ./destination && python3 x.py settings.json",
             ],
         );
         assert_refused(
@@ -1295,6 +1300,7 @@ mod tests {
             &[
                 "cd .. && python3 settings.json",
                 "cd src hidden && python3 settings.json",
+                "cd @ROOT@/src @ROOT@/hidden && python3 settings.json",
                 "cd -- src hidden && python3 settings.json",
             ],
         );
@@ -1303,9 +1309,9 @@ mod tests {
         assert!(set("cd destination", &repo.root).unknown);
         assert!(set("cd ..", &repo.root.join("src")).unknown);
         assert!(set("cd src", &repo.root).unknown);
-        assert!(!set("cd ./src", &repo.root).unknown);
+        assert!(set("cd ./src", &repo.root).unknown);
         assert!(
-            !set(
+            set(
                 &format!("cd {}", repo.root.join("src").display()),
                 &repo.root
             )
@@ -1338,6 +1344,114 @@ mod tests {
         );
     }
 
+    /// Codex review round 3 findings 2 and 3: `popd`, a bare `pushd` and
+    /// `pushd +N` use a directory stack the guard never saw, and a bare `cd`
+    /// uses the shell's `HOME`. Every shell directory change, in any
+    /// spelling, makes the directory unknown.
+    #[test]
+    fn every_shell_directory_change_is_unknown() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "popd && python3 tool.py settings.json",
+                "pushd && python3 tool.py settings.json",
+                "pushd +1 && python3 tool.py settings.json",
+                "pushd ./src && python3 tool.py settings.json",
+                "cd && python3 tool.py settings.json",
+                "cd ~ && python3 tool.py settings.json",
+                "chdir ./src && python3 tool.py settings.json",
+                "builtin cd ./src && python3 tool.py settings.json",
+                "command cd ./src && python3 tool.py settings.json",
+                "eval cd ./src && python3 tool.py settings.json",
+                "cd ./src; python3 tool.py settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "python3 tool.py settings.json",
+                "cd ./src && python3 tool.py notes.txt",
+                "pushd ./src >/dev/null && python3 tool.py out.json && popd",
+            ],
+        );
+    }
+
+    /// Security review F1: a `trap` action or an `alias` value is code the
+    /// shell runs later, and a directory change inside its quoted text is
+    /// never split out, so either makes the directory unknown.
+    #[test]
+    fn trap_actions_and_aliases_are_unknown() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "trap 'builtin cd ./hidden' DEBUG; python3 x.py settings.json",
+                "trap 'cd ./hidden' ERR; false; python3 x.py settings.json",
+                "trap \"pushd ./hidden\" DEBUG; python3 x.py settings.json",
+                "shopt -s expand_aliases\nalias up='cd ./hidden'\nup\npython3 x.py settings.json",
+                "unalias up; python3 x.py settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "trap -l; python3 x.py settings.json",
+                "trap 'rm -f out.tmp' EXIT; python3 x.py notes.txt",
+            ],
+        );
+    }
+
+    /// Codex review round 3 finding 1: a `cd` function or a zsh `chpwd`
+    /// hook in the shell moves it after `cd ./src`. The real shells land in
+    /// `.claude`, and the guard refuses the line.
+    #[cfg(unix)]
+    #[test]
+    fn a_cd_hook_moves_the_shell_after_a_followed_cd() {
+        let repo = repo();
+        let claude = std::fs::canonicalize(repo.root.join(".claude")).unwrap();
+        for (shell, args) in [
+            (
+                "bash",
+                [
+                    "-c",
+                    r#"cd() { builtin cd "$@" && builtin cd "$R/.claude"; }; cd ./src && /bin/pwd -P"#,
+                ],
+            ),
+            (
+                "zsh",
+                [
+                    "-fc",
+                    r#"chpwd() { builtin cd -q "$R/.claude"; }; cd ./src && /bin/pwd -P"#,
+                ],
+            ),
+        ] {
+            let Ok(output) = std::process::Command::new(shell)
+                .args(args)
+                .env("R", &repo.root)
+                .env_remove("CDPATH")
+                .current_dir(&repo.root)
+                .output()
+            else {
+                eprintln!("skipped: {shell} is not installed");
+                continue;
+            };
+            assert!(output.status.success(), "{shell}: {output:?}");
+            let printed = String::from_utf8(output.stdout).unwrap();
+            assert_eq!(Path::new(printed.trim()), claude, "{shell}");
+        }
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &["cd ./src && python3 tool.py settings.json"],
+        );
+    }
+
     #[test]
     fn inherited_cdpath_includes_search_destinations() {
         const CHILD_ROOT: &str = "CODEFLOW_TEST_397_CDPATH_ROOT";
@@ -1353,25 +1467,7 @@ mod tests {
                 None,
             );
             assert!(argument_refusal(&findings), "{findings:?}");
-            let dirs = outward::line_directories(line, &root, None);
-            assert!(dirs.dirs.contains(&root));
-            assert!(dirs.dirs.contains(&root.join("src")));
-            assert!(dirs.dirs.contains(&root.join(".claude/src")));
-            #[cfg(unix)]
-            for shell in ["bash", "zsh"] {
-                let Ok(output) = std::process::Command::new(shell)
-                    .args(["-c", "cd src && /bin/pwd -P"])
-                    .current_dir(&root)
-                    .output()
-                else {
-                    eprintln!("skipped: {shell} is not installed");
-                    continue;
-                };
-                assert!(output.status.success());
-                let printed = String::from_utf8(output.stdout).unwrap();
-                let actual = PathBuf::from(printed.lines().last().unwrap());
-                assert!(dirs.dirs.contains(&actual), "{shell}: {actual:?}");
-            }
+            assert!(outward::line_directories(line, &root, None).unknown);
             return;
         }
         let repo = repo();
@@ -1395,7 +1491,7 @@ mod tests {
     }
 
     /// Codex review round 2 finding 4: a `CDPATH` entry such as `bridge/..`
-    /// is resolved physically, so `.claude/src` is in the set.
+    /// reaches `.claude/src`; the `cd` makes the directory unknown.
     #[cfg(unix)]
     #[test]
     fn cdpath_entries_resolve_links_before_parents() {
@@ -1412,8 +1508,7 @@ mod tests {
                 None,
             );
             assert!(argument_refusal(&findings), "{findings:?}");
-            let dirs = outward::line_directories(line, &root, None);
-            assert!(dirs.dirs.contains(&root.join(".claude/src")), "{dirs:?}");
+            assert!(outward::line_directories(line, &root, None).unknown);
             return;
         }
         let repo = linked_repo();
@@ -1435,11 +1530,11 @@ mod tests {
         );
     }
 
-    /// A `cd` through a symbolic link keeps its physical destination in the
-    /// set beside the starting directory, matching `pwd -P` in bash and zsh.
+    /// A `cd` through a symbolic link makes the directory unknown, like
+    /// every shell directory change.
     #[cfg(unix)]
     #[test]
-    fn a_cd_through_a_link_keeps_its_physical_destination() {
+    fn a_cd_through_a_link_is_unknown() {
         let repo = repo();
         std::os::unix::fs::symlink(repo.root.join("src"), repo.root.join("link")).unwrap();
         let dirs = outward::line_directories(
@@ -1447,23 +1542,8 @@ mod tests {
             &repo.root,
             Some(&repo.home),
         );
+        assert!(dirs.unknown, "{dirs:?}");
         assert!(dirs.dirs.contains(&repo.root), "{dirs:?}");
-        assert!(dirs.dirs.contains(&repo.root.join("src")), "{dirs:?}");
-        for shell in ["bash", "zsh"] {
-            let Ok(output) = std::process::Command::new(shell)
-                .args(["-c", "cd link && /bin/pwd -P"])
-                .current_dir(&repo.root)
-                .env_remove("CDPATH")
-                .output()
-            else {
-                eprintln!("skipped: {shell} is not installed");
-                continue;
-            };
-            assert!(output.status.success());
-            let printed = String::from_utf8(output.stdout).unwrap();
-            let actual = PathBuf::from(printed.trim());
-            assert!(dirs.dirs.contains(&actual), "{shell}: {actual:?}");
-        }
         std::os::unix::fs::symlink(&repo.home, repo.root.join("outside")).unwrap();
         assert_refused(
             &repo,
@@ -1516,38 +1596,41 @@ mod tests {
             outward::interpreter_calls("node --eval=code x", cwd)[0].args,
             ["x"]
         );
-        // The line's directory set: every directory a change may reach,
-        // whether or not it succeeds, through every spelling.
+        // The line's directory set. A process's own directory option is
+        // followed, beside the starting directory; a shell directory change,
+        // in every spelling, makes the set unknown and keeps the starting
+        // directory (TSK-397).
         let set = |line: &str| outward::line_directories(line, cwd, Some(Path::new("/h")));
         let has = |line: &str, dir: &str| set(line).dirs.contains(&PathBuf::from(dir));
-        for (line, dir) in [
-            ("cd sub && python3 x", "/w/sub"),
-            ("cd -- sub && python3 x", "/w/sub"),
-            ("cd -P -L sub && python3 x", "/w/sub"),
-            ("cd -q sub; python3 x", "/w/sub"),
-            ("command cd sub && python3 x", "/w/sub"),
-            ("command -p cd sub && python3 x", "/w/sub"),
-            ("builtin cd sub && python3 x", "/w/sub"),
-            ("! cd sub; python3 x", "/w/sub"),
-            ("pushd sub >/dev/null && python3 x", "/w/sub"),
-            ("chdir sub && python3 x", "/w/sub"),
-            ("env -C sub python3 x", "/w/sub"),
-            ("env -Csub python3 x", "/w/sub"),
-            ("env --chdir=sub python3 x", "/w/sub"),
-            ("git -C sub status; python3 x", "/w/sub"),
-            ("cd a && cd b && python3 x", "/w/a/b"),
-            ("cd a && cd .. && python3 x", "/w/a"),
-            ("cd && python3 x", "/h"),
+        for line in [
+            "env -C sub python3 x",
+            "env -Csub python3 x",
+            "env --chdir=sub python3 x",
+            "git -C sub status; python3 x",
         ] {
-            assert!(has(line, dir), "{line}: {:?}", set(line));
+            assert!(has(line, "/w/sub"), "{line}: {:?}", set(line));
             assert!(has(line, "/w"), "{line}: {:?}", set(line));
         }
         for line in [
+            "cd sub && python3 x",
+            "cd -- sub && python3 x",
+            "cd -P -L sub && python3 x",
+            "cd -q sub; python3 x",
+            "command cd sub && python3 x",
+            "command -p cd sub && python3 x",
+            "builtin cd sub && python3 x",
+            "! cd sub; python3 x",
+            "pushd sub >/dev/null && python3 x",
+            "chdir sub && python3 x",
+            "cd a && cd b && python3 x",
+            "cd a && cd .. && python3 x",
+            "cd && python3 x",
             "cd \"$D\" && python3 x",
             "cd - && python3 x",
             "cd ~u && python3 x",
         ] {
-            assert!(set(line).unknown, "{line}");
+            assert!(set(line).unknown, "{line}: {:?}", set(line));
+            assert!(has(line, "/w"), "{line}: {:?}", set(line));
         }
         assert!(outward::interpreter_calls("rustc x.rs", cwd).is_empty());
         // A version suffix is read past; a multi-byte name ending is not cut
@@ -1817,8 +1900,7 @@ mod tests {
         assert_public_allowed(
             &repo,
             &[
-                // `./` skips CDPATH, so this `cd` is followed (TSK-397).
-                "cd ./src && python3 app.py settings.json",
+                "cd ./src && python3 app.py notes.txt",
                 "find . -name '*.py' -execdir python3 -m py_compile {} +",
                 "find . -name '*.rs' -execdir python3 lint.py {} +",
                 "find src -execdir python3 lint.py notes.txt \\;",
