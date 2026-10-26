@@ -29,8 +29,8 @@
 //! and shown only through its parsed fields. A link planted in the folder
 //! can be locked or replaced, never written through or printed. The folder
 //! stays an advisory coordination boundary: a seat that can write it can
-//! block or split coordination between gates. A record a pre-3.2 gate wrote
-//! inside the lock file is still read while no record file exists.
+//! block or split coordination between gates. A record a pre-3.2 gate keeps
+//! inside the lock file is still read while the record file names no holder.
 //!
 //! **Target lifetime on Unix.** Heavy quick targets and reserved commands
 //! have a watcher that ends their process group when the controller exits.
@@ -711,31 +711,37 @@ fn record_path(lock: &Path) -> PathBuf {
 /// The holder record for the lock at `lock`, parsed and rendered again from
 /// its known fields only, so an outside file reached through a planted link
 /// is never printed. The record file is read through an anchored read-only
-/// open that refuses links. With no record file, the legacy record a
-/// pre-3.2 gate kept inside the lock file is read instead, through `held`
-/// when the caller holds the lock file open, else through the same
-/// read-only open. Empty when neither exists. Nothing is created.
+/// open that refuses links. While it is absent or empty, the legacy record
+/// a pre-3.2 gate keeps inside the lock file is read instead, so a gate of
+/// an older binary on the same machine is still seen: through `held` when
+/// the caller holds the lock file open, else through the same read-only
+/// open. Empty when neither names a holder. Nothing is created.
 fn read_holder(lock: &Path, held: Option<&mut File>) -> std::io::Result<String> {
-    let record = record_path(lock);
-    let text = if crate::absence::proven_absent(&record)? {
-        match held {
-            Some(file) => read_record(file)?,
-            None if crate::absence::proven_absent(lock)? => String::new(),
-            None => {
-                let (anchor, relative) = lock_anchor(lock)?;
-                read_record(&mut crate::contained::Tree::open(anchor)?.open_regular(&relative)?)?
-            }
-        }
-    } else {
-        let (anchor, relative) = lock_anchor(&record)?;
-        read_record(&mut crate::contained::Tree::open(anchor)?.open_regular(&relative)?)?
-    };
-    parse_record(&text).map_err(|error| {
+    let unreadable = |error: String| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("unreadable gate lock record: {error}"),
         )
-    })
+    };
+    let record = record_path(lock);
+    if !crate::absence::proven_absent(&record)? {
+        let (anchor, relative) = lock_anchor(&record)?;
+        let text =
+            read_record(&mut crate::contained::Tree::open(anchor)?.open_regular(&relative)?)?;
+        let parsed = parse_record(&text).map_err(unreadable)?;
+        if !parsed.is_empty() {
+            return Ok(parsed);
+        }
+    }
+    let legacy = match held {
+        Some(file) => read_record(file)?,
+        None if crate::absence::proven_absent(lock)? => String::new(),
+        None => {
+            let (anchor, relative) = lock_anchor(lock)?;
+            read_record(&mut crate::contained::Tree::open(anchor)?.open_regular(&relative)?)?
+        }
+    };
+    parse_record(&legacy).map_err(unreadable)
 }
 
 /// At most 4096 bytes of `file`, from its start.
@@ -1393,6 +1399,35 @@ mod tests {
                 "outside file changed at {dir:?}"
             );
         }
+    }
+
+    /// TSK-1003: a gate of a pre-3.2 binary keeps its record inside the lock
+    /// file. While the record file names no holder, that legacy record is
+    /// still read, so its killed gate's live targets keep the lock held.
+    #[cfg(unix)]
+    #[test]
+    fn a_legacy_record_is_read_while_the_record_file_is_empty() {
+        use std::os::unix::process::CommandExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("locks");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut target = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = target.id();
+        std::fs::write(dir.join(RECORD_FILE), "").unwrap();
+        std::fs::write(
+            dir.join(LOCK_FILE),
+            format!("pid=999999\nstarted=1\ndir=/old\ngroup={group}\n"),
+        )
+        .unwrap();
+        let held = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
+            .expect_err("the legacy record's live group keeps the lock");
+        assert_eq!(held.running_groups, vec![group]);
+        target.kill().unwrap();
+        target.wait().unwrap();
     }
 
     #[test]
