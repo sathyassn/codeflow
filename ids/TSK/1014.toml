@@ -1,0 +1,11 @@
+id = "TSK-1014"
+uid = "bc00144c-8a83-4ac6-b942-80eba0b71dba"
+kind = "TSK"
+title = "Coverage defaults apply to targets that set no rules of their own"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T19:03:15Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
