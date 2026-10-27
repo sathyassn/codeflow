@@ -508,8 +508,11 @@ fn strict_repository_gate_installs_its_declared_coverage_tool() {
         .split("\n  gates-coverage:\n")
         .next()
         .expect("codeflow gates job must precede its coverage shards");
+    // TSK-1001: the parts run the base's driver with the base's test config.
     assert!(
-        gates.contains("run: codeflow test --mode full --strict"),
+        gates.contains(
+            "\"$driver/codeflow\" test --mode full --strict --all --only \"$only\" --config \"$driver/test-config.json\""
+        ),
         "strict aggregate gate must remain enabled"
     );
     // TSK-184, TSK-270: the coverage shards run the instrumented suite, and
