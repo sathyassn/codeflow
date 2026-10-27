@@ -108,8 +108,9 @@ pub struct StatusDetails {
 pub struct TaskTarget {
     /// The receiving target's tip a task completion binds against, such as
     /// `origin/main`. In a clone with remotes, `task status` grants landing,
-    /// stacking and waiver authority only with `--base` and `--into`; hosted
-    /// CI pins its own base and is the authority.
+    /// stacking and waiver authority only with `--base` and `--into`, because
+    /// any process in the clone can change the git settings that would
+    /// otherwise decide it; hosted CI pins its own base and is the authority.
     #[arg(long, value_name = "REF", requires = "into")]
     pub base: Option<String>,
     /// The receiving target's branch name, such as `main`; given with
