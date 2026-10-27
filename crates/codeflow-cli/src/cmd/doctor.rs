@@ -34,7 +34,8 @@ pub fn run(args: &DoctorArgs) -> i32 {
     };
     if args.preflight {
         let mut out = std::io::stdout();
-        for line in preflight_report(&root, &|name| find_on_path(name)) {
+        let excluded = project_roots(&root);
+        for line in preflight_report(&root, &|name| find_on_path(name, &excluded)) {
             let _ = term_writeln!(out, "{line}");
         }
         return 0;
@@ -82,14 +83,51 @@ fn harness_executable(harness: &str) -> &str {
     harness.split('-').next().unwrap_or(harness)
 }
 
-/// The first `name` on `PATH`, as the operating system would find it; never
-/// executed.
-fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+/// The project folder and, for a linked worktree, the main checkout that
+/// holds the common `.git`, each canonical: the folders a checked-out file
+/// could plant an executable in.
+fn project_roots(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut roots: Vec<std::path::PathBuf> = std::fs::canonicalize(root).into_iter().collect();
+    // The repository lock folder is `<common .git>/codeflow`.
+    let common = codeflow_core::testing::gate_guard::lock_dirs(root, None)
+        .ok()
+        .and_then(|dirs| {
+            dirs.first()
+                .and_then(|dir| dir.parent().map(std::path::Path::to_path_buf))
+        });
+    if let Some(common) = common {
+        let main = if common.file_name().is_some_and(|name| name == ".git") {
+            common.parent()
+        } else {
+            Some(common.as_path())
+        };
+        if let Some(main) = main.and_then(|main| std::fs::canonicalize(main).ok()) {
+            if !roots.contains(&main) {
+                roots.push(main);
+            }
+        }
+    }
+    roots
+}
+
+/// The first `name` on `PATH`, as the operating system would find it, with
+/// two exceptions (TSK-1003): relative entries, such as `.` or an empty one,
+/// are skipped, and a candidate whose canonical path lies inside one of
+/// `excluded` (the project and its main checkout) is skipped, so a file
+/// planted in the project is never taken for a tool. The preflight runs
+/// only `codex`, and only for the builder profile line.
+fn find_on_path(name: &str, excluded: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|dir| {
-        let candidate = dir.join(name);
-        candidate.is_file().then_some(candidate)
-    })
+    std::env::split_paths(&path)
+        .filter(|dir| dir.is_absolute())
+        .find_map(|dir| {
+            let candidate = dir.join(name);
+            if !candidate.is_file() {
+                return None;
+            }
+            let canonical = std::fs::canonicalize(&candidate).ok()?;
+            (!excluded.iter().any(|root| canonical.starts_with(root))).then_some(canonical)
+        })
 }
 
 /// One executable's line: observed on `PATH`, or unavailable.
@@ -100,8 +138,14 @@ fn executable_line(
 ) -> String {
     match look(name) {
         Some(path) => format!(
-            "{label} {name}: observed on PATH at {path}; doctor does not run it",
-            path = shown(&path.display())
+            "{label} {name}: observed on PATH at {path}; {run}",
+            path = shown(&path.display()),
+            // The builder profile line loads codex's config (TSK-1003).
+            run = if name == "codex" {
+                "doctor runs it only to load its config for the builder profile line"
+            } else {
+                "doctor does not run it"
+            }
         ),
         None => format!("{label} {name}: unavailable: not found on PATH"),
     }
@@ -260,6 +304,104 @@ fn sandbox_lines(root: &std::path::Path) -> Vec<String> {
     lines
 }
 
+/// What the installed Codex says about the builder launch overrides
+/// (TSK-1003). This is the one preflight value that runs a binary:
+/// `codex --version` and `codex features list` with the overrides, which
+/// load config and start no model, session or sandbox. An exit code of 0
+/// shows only that Codex accepted the command; whether the project config
+/// loaded is read from the feature table, and is otherwise unverified.
+fn codex_builder_line(
+    root: &std::path::Path,
+    look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+) -> String {
+    use codeflow_core::doctor::{CodexLoad, ProjectLayer};
+    let label = "codex builder profile";
+    let config = std::fs::read_to_string(root.join(".codex/config.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok());
+    let defines_builder = config
+        .as_ref()
+        .and_then(|config| config.get("permissions"))
+        .and_then(toml::Value::as_table)
+        .is_some_and(|profiles| profiles.contains_key("cf-builder"));
+    if !defines_builder {
+        return format!("{label}: unavailable: .codex/config.toml defines no cf-builder profile");
+    }
+    let Some(codex) = look("codex") else {
+        return format!("{label}: unavailable: codex not found on PATH");
+    };
+    let probe = codeflow_core::doctor::probe_codex_builder_profile(root, &codex);
+    let version = match &probe.version {
+        Ok(version) => version.clone(),
+        Err(reason) => return format!("{label}: unavailable: {}", shown(reason)),
+    };
+    let version = shown(&version);
+    let stage = |load: &CodexLoad, name: &str| match load {
+        CodexLoad::Accepted(_) => None,
+        CodexLoad::Rejected(reason) => Some((true, format!("rejected {name}: {reason}"))),
+        CodexLoad::NotRun(reason) => Some((false, format!("not checked {name}: {reason}"))),
+    };
+    let problems: Vec<(bool, String)> = [
+        stage(&probe.startup, "without a project config"),
+        stage(&probe.project, "in the project folder"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if problems.iter().any(|(rejected, _)| *rejected) {
+        let text: Vec<&str> = problems.iter().map(|(_, text)| text.as_str()).collect();
+        return format!(
+            "{label}: observed REJECTED by {version}: {}; a builder seat launched as transport.md says will not open, so qualify the profile on this Codex before building",
+            shown(&text.join("; "))
+        );
+    }
+    if !problems.is_empty() {
+        let text: Vec<&str> = problems.iter().map(|(_, text)| text.as_str()).collect();
+        return format!("{label}: unavailable: {}", shown(&text.join("; ")));
+    }
+    let configured: std::collections::BTreeMap<String, bool> = config
+        .as_ref()
+        .and_then(|config| config.get("features"))
+        .and_then(toml::Value::as_table)
+        .map(|features| {
+            features
+                .iter()
+                .filter_map(|(name, value)| value.as_bool().map(|value| (name.clone(), value)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let accepted = format!(
+        "{label}: observed {version} accepts the builder launch overrides without a project config, as the TUI startup load reads them, and in the project folder"
+    );
+    let boundary = "doctor cannot observe the boundary a running seat enforces";
+    match probe.project_layer(&configured) {
+        Some(ProjectLayer::ConsistentWithLoading { features }) => {
+            let features: Vec<String> = features
+                .iter()
+                .map(|(feature, value)| format!("features.{} = {value}", shown(feature)))
+                .collect();
+            format!(
+                "{accepted}; its feature table there is consistent with the project config loading ({} only in the project folder), which does not prove which config layer supplied it; {boundary}",
+                features.join(", ")
+            )
+        }
+        Some(ProjectLayer::NotLoaded {
+            feature,
+            shown: seen,
+            configured,
+        }) => format!(
+            "{accepted}, but Codex did not load the project config there (features.{feature} shows {seen}, the project sets {configured}); trust the project in Codex, or a builder seat runs the restricted startup profile; {boundary}",
+            feature = shown(&feature)
+        ),
+        Some(ProjectLayer::Unverified { conflicting: true }) => format!(
+            "{accepted}; whether Codex loaded the project config is unverified, because the features the project sets disagree or are missing; {boundary}"
+        ),
+        Some(ProjectLayer::Unverified { conflicting: false }) | None => format!(
+            "{accepted}; whether Codex loaded the project config is unverified, because no feature the project sets differs from the user config; {boundary}"
+        ),
+    }
+}
+
 /// The preflight evidence report (TSK-452): each value is marked
 /// `configured` (what project files request), `observed` (what doctor saw on
 /// this host) or `unavailable` (what doctor cannot establish).
@@ -272,6 +414,7 @@ fn preflight_report(
     ];
     lines.extend(seat_lines(root, look));
     lines.extend(sandbox_lines(root));
+    lines.push(codex_builder_line(root, look));
     for tool in PREFLIGHT_TOOLS {
         lines.push(executable_line("tool", tool, look));
     }

@@ -23,10 +23,16 @@ use crate::scaffold::sha256_hex;
 use crate::scaffold::state::InstalledManifest;
 
 mod ci_pin;
+mod codex_profile;
 mod git_config;
 mod grok_hooks;
 mod remote_perimeter;
 mod startup_files;
+
+pub use codex_profile::{
+    probe_codex_builder_profile, CodexBuilderProbe, CodexLoad, ProjectLayer,
+    CODEX_BUILDER_OVERRIDES,
+};
 
 /// Outcome of a health check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1952,7 +1958,22 @@ fn probe_version<'a>(probe_id: &str, observed: &'a str) -> Option<&'a str> {
 }
 
 struct ProbeCapture {
+    /// The last [`VERSION_PROBE_OUTPUT_BYTES`] bytes read.
     bytes: Vec<u8>,
+    /// How many earlier bytes were dropped to keep that bound.
+    dropped: usize,
+    /// A read error that ended the capture early.
+    error: Option<String>,
+}
+
+/// What a capture lost: bytes dropped from the front of either stream, and a
+/// read error that ended either one early.
+#[derive(Debug, Default)]
+struct CaptureLoss {
+    stdout_dropped: usize,
+    stderr_dropped: usize,
+    error: Option<String>,
+    stdout_utf8: bool,
 }
 
 /// Run `cmd` bounded by `timeout`: its stdout when it succeeds, else its
@@ -1966,10 +1987,9 @@ fn run_bounded_command(cmd: &str, args: &[&str], timeout: Duration) -> Result<St
     }
 }
 
-/// Run `cmd`, killing its process tree after `timeout`, and capture how it
-/// ended. With `stdin` the child reads that text (otherwise it inherits
-/// doctor's stdin); with `cwd` it runs there. `Err` means it did not start
-/// or did not finish in time.
+/// [`run_captured_with`], keeping only the last
+/// [`VERSION_PROBE_OUTPUT_BYTES`] of each stream, as a version or canary
+/// probe needs.
 fn run_captured(
     cmd: &str,
     args: &[&str],
@@ -1977,6 +1997,46 @@ fn run_captured(
     stdin: Option<&str>,
     cwd: Option<&Path>,
 ) -> Result<CapturedRun, String> {
+    run_captured_with(cmd, args, timeout, stdin, cwd).map(|(run, _)| run)
+}
+
+/// [`run_captured_with`] for a caller that judges the whole output
+/// (TSK-1003): output over the bound, a read error or stdout that is not
+/// UTF-8 is an error, never a shortened or altered answer.
+fn run_captured_complete(
+    cmd: &str,
+    args: &[&str],
+    timeout: Duration,
+    stdin: Option<&str>,
+    cwd: Option<&Path>,
+) -> Result<CapturedRun, String> {
+    let (run, loss) = run_captured_with(cmd, args, timeout, stdin, cwd)?;
+    if let Some(error) = loss.error {
+        return Err(format!("its output could not be read completely: {error}"));
+    }
+    if loss.stdout_dropped > 0 || loss.stderr_dropped > 0 {
+        return Err(format!(
+            "it printed more than {} KiB on a stream, so its output was not judged",
+            VERSION_PROBE_OUTPUT_BYTES / 1024
+        ));
+    }
+    if !loss.stdout_utf8 {
+        return Err("its output is not UTF-8".to_string());
+    }
+    Ok(run)
+}
+
+/// Run `cmd`, killing its process tree after `timeout`, and capture how it
+/// ended. With `stdin` the child reads that text (otherwise it inherits
+/// doctor's stdin); with `cwd` it runs there. `Err` means it did not start
+/// or did not finish in time.
+fn run_captured_with(
+    cmd: &str,
+    args: &[&str],
+    timeout: Duration,
+    stdin: Option<&str>,
+    cwd: Option<&Path>,
+) -> Result<(CapturedRun, CaptureLoss), String> {
     let mut command = crate::git::process(cmd);
     command
         .args(args)
@@ -2047,11 +2107,20 @@ fn run_captured(
             std::thread::sleep(VERSION_PROBE_POLL);
         }
     }
-    Ok(CapturedRun {
-        code: status.code(),
-        stdout: String::from_utf8_lossy(&stdout.bytes).to_string(),
-        stderr: String::from_utf8_lossy(&stderr.bytes).to_string(),
-    })
+    let loss = CaptureLoss {
+        stdout_dropped: stdout.dropped,
+        stderr_dropped: stderr.dropped,
+        error: stdout.error.or(stderr.error),
+        stdout_utf8: std::str::from_utf8(&stdout.bytes).is_ok(),
+    };
+    Ok((
+        CapturedRun {
+            code: status.code(),
+            stdout: String::from_utf8_lossy(&stdout.bytes).to_string(),
+            stderr: String::from_utf8_lossy(&stderr.bytes).to_string(),
+        },
+        loss,
+    ))
 }
 
 fn probe_timeout_message(timeout: Duration) -> String {
@@ -2091,10 +2160,17 @@ fn spawn_probe_reader<R: Read + Send + 'static>(
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut retained = Vec::with_capacity(VERSION_PROBE_OUTPUT_BYTES);
+        let mut dropped = 0;
+        let mut error = None;
         let mut chunk = [0_u8; 8192];
         loop {
-            let Ok(read) = pipe.read(&mut chunk) else {
-                break;
+            let read = match pipe.read(&mut chunk) {
+                Ok(read) => read,
+                Err(read_error) if read_error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(read_error) => {
+                    error = Some(read_error.to_string());
+                    break;
+                }
             };
             if read == 0 {
                 break;
@@ -2103,9 +2179,14 @@ fn spawn_probe_reader<R: Read + Send + 'static>(
             if retained.len() > VERSION_PROBE_OUTPUT_BYTES {
                 let excess = retained.len() - VERSION_PROBE_OUTPUT_BYTES;
                 retained.drain(..excess);
+                dropped += excess;
             }
         }
-        let _ = sender.send(ProbeCapture { bytes: retained });
+        let _ = sender.send(ProbeCapture {
+            bytes: retained,
+            dropped,
+            error,
+        });
     });
     receiver
 }
