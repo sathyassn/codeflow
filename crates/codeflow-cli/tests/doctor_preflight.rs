@@ -142,3 +142,319 @@ fn an_unparsable_codex_config_is_reported_unavailable() {
         "{out}"
     );
 }
+
+/// What a fake `codex` does with a `features list` run.
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq)]
+enum Fake {
+    /// Prints the feature table; in a folder with `.codex/config.toml` it
+    /// shows `network_proxy true`, as when Codex loads the project config.
+    LoadsProject,
+    /// Prints the feature table but never the project's setting, as when
+    /// Codex skips an untrusted project's config.
+    SkipsProject,
+    /// Refuses the run in a folder without `.codex/config.toml`, with
+    /// Codex's own message, as Codex 0.163 and later do at TUI startup for
+    /// a project-only profile.
+    RejectsStartup,
+    /// Refuses the run in the project folder.
+    RejectsProject,
+    /// Exits 0 and prints nothing.
+    PrintsNothing,
+    /// Prints a junk line, then exactly 64 KiB of valid feature rows, so
+    /// the last 64 KiB alone look like a whole valid table.
+    PadsOutput,
+    /// In the project folder shows `network_proxy` with the project's value
+    /// but `hooks` without it: contradictory evidence.
+    Contradicts,
+    /// Answers `--version` with something that is not a codex-cli version.
+    NoVersion,
+}
+
+/// A fake `codex` on its own `PATH` folder. It logs each `features list`
+/// run's folder and arguments to `codex.log` beside it.
+#[cfg(unix)]
+fn fake_codex(fake: Fake) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let log = bin.path().join("codex.log");
+    let version = if fake == Fake::NoVersion {
+        "echo 'something else'"
+    } else {
+        "echo 'codex-cli 9.9.9'"
+    };
+    let body = match fake {
+        Fake::LoadsProject => "proxy=false\nif [ -f .codex/config.toml ]; then proxy=true; fi\nprintf 'apps  stable  true\\nnetwork_proxy  stable  %s\\n' \"$proxy\"\n",
+        Fake::SkipsProject | Fake::NoVersion => "printf 'apps  stable  true\\nnetwork_proxy  stable  false\\n'\n",
+        Fake::RejectsStartup => "if [ ! -f .codex/config.toml ]; then\n  echo 'Error loading configuration: default_permissions requires a `[permissions]` table' >&2\n  exit 1\nfi\nprintf 'network_proxy  stable  true\\n'\n",
+        Fake::RejectsProject => "if [ -f .codex/config.toml ]; then\n  echo 'Error loading configuration: unknown permission key' >&2\n  exit 1\nfi\nprintf 'network_proxy  stable  false\\n'\n",
+        Fake::PrintsNothing => "",
+        Fake::PadsOutput => "echo 'JUNK'\ni=0\nwhile [ $i -lt 2048 ]; do printf 'f%05d             stable  true\\n' $i; i=$((i+1)); done\n",
+        Fake::Contradicts => "proxy=false\nif [ -f .codex/config.toml ]; then proxy=true; fi\nprintf 'hooks  stable  false\\nnetwork_proxy  stable  %s\\n' \"$proxy\"\n",
+    };
+    let script = format!(
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then {version}; exit 0; fi\nprintf '%s|%s\\n' \"$PWD\" \"$*\" >> '{log}'\n{body}",
+        log = log.display()
+    );
+    let path = bin.path().join("codex");
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// A configured project whose Codex config sets a feature, so the probe can
+/// tell whether Codex loaded it.
+#[cfg(unix)]
+fn builder_project() -> tempfile::TempDir {
+    let project = configured_project();
+    write(
+        project.path(),
+        ".codex/config.toml",
+        "default_permissions = \"cf-guard\"\n[features]\nnetwork_proxy = true\n[permissions.cf-guard]\n[permissions.cf-builder]\n",
+    );
+    project
+}
+
+#[cfg(unix)]
+fn builder_line(project: &Path, fake: Fake) -> (String, tempfile::TempDir) {
+    let bin = fake_codex(fake);
+    let out = preflight(project, bin.path());
+    let line = out
+        .lines()
+        .find(|line| line.starts_with("codex builder profile:"))
+        .unwrap_or_else(|| panic!("no builder line in\n{out}"))
+        .to_string();
+    (line, bin)
+}
+
+/// TSK-1003 AC-4: when the installed Codex refuses the builder overrides in
+/// the run without a project config, the preflight says the seat will not
+/// open.
+#[cfg(unix)]
+#[test]
+fn a_codex_that_rejects_the_builder_profile_at_startup_is_reported() {
+    let project = builder_project();
+    let (line, _bin) = builder_line(project.path(), Fake::RejectsStartup);
+    assert!(
+        line.starts_with("codex builder profile: observed REJECTED by codex-cli 9.9.9: rejected without a project config: Error loading configuration: default_permissions requires a `[permissions]` table"),
+        "{line}"
+    );
+    assert!(line.contains("will not open"), "{line}");
+    assert!(!line.contains("in the project folder:"), "{line}");
+}
+
+/// TSK-1003 AC-4: a refusal in the project folder is a rejection too.
+#[cfg(unix)]
+#[test]
+fn a_codex_that_rejects_the_project_profile_is_reported() {
+    let project = builder_project();
+    let (line, _bin) = builder_line(project.path(), Fake::RejectsProject);
+    assert!(
+        line.contains("REJECTED by codex-cli 9.9.9: rejected in the project folder: Error loading configuration: unknown permission key"),
+        "{line}"
+    );
+}
+
+/// TSK-1003 AC-4: acceptance with evidence that the project config loaded,
+/// and the exact launch overrides in both runs, one outside the project.
+#[cfg(unix)]
+#[test]
+fn a_codex_that_loads_the_project_config_is_reported_with_the_exact_overrides() {
+    let project = builder_project();
+    let (line, bin) = builder_line(project.path(), Fake::LoadsProject);
+    assert!(
+        line.starts_with("codex builder profile: observed codex-cli 9.9.9 accepts the builder launch overrides without a project config, as the TUI startup load reads them, and in the project folder; its feature table there is consistent with the project config loading (features.network_proxy = true only in the project folder), which does not prove which config layer supplied it"),
+        "{line}"
+    );
+    assert!(
+        line.ends_with("doctor cannot observe the boundary a running seat enforces"),
+        "{line}"
+    );
+    let log = std::fs::read_to_string(bin.path().join("codex.log")).unwrap();
+    let loads: Vec<&str> = log.lines().collect();
+    assert_eq!(loads.len(), 2, "{log}");
+    let expected = "features list -c permissions.cf-builder.description=\"CodeFlow builder seat\" -c default_permissions=\"cf-builder\"";
+    for load in &loads {
+        assert!(load.ends_with(&format!("|{expected}")), "{load}");
+    }
+    let project_dir = std::fs::canonicalize(project.path()).unwrap();
+    let dirs: Vec<std::path::PathBuf> = loads
+        .iter()
+        .map(|load| std::fs::canonicalize(load.split('|').next().unwrap()).unwrap_or_default())
+        .collect();
+    assert!(dirs.contains(&project_dir), "{log}");
+    assert!(dirs.iter().any(|dir| *dir != project_dir), "{log}");
+}
+
+/// TSK-1003: exit 0 in the project folder without the project's setting
+/// means Codex skipped the project config; that is said, never accepted.
+#[cfg(unix)]
+#[test]
+fn a_codex_that_skips_the_project_config_is_reported() {
+    let project = builder_project();
+    let (line, _bin) = builder_line(project.path(), Fake::SkipsProject);
+    assert!(
+        line.contains("but Codex did not load the project config there (features.network_proxy shows false, the project sets true)"),
+        "{line}"
+    );
+    assert!(!line.contains("consistent with"), "{line}");
+}
+
+/// TSK-1003: with no feature that tells the two runs apart, project loading
+/// is unverified.
+#[cfg(unix)]
+#[test]
+fn project_loading_without_a_distinguishing_feature_is_unverified() {
+    let project = configured_project();
+    let (line, _bin) = builder_line(project.path(), Fake::LoadsProject);
+    assert!(
+        line.contains("whether Codex loaded the project config is unverified"),
+        "{line}"
+    );
+}
+
+/// TSK-1003: exit 0 with no feature table, a missing codex-cli version and
+/// an executable that cannot run are unavailable, never accepted.
+#[cfg(unix)]
+#[test]
+fn unexpected_codex_answers_are_unavailable() {
+    let project = builder_project();
+    let (line, _bin) = builder_line(project.path(), Fake::PrintsNothing);
+    assert!(
+        line.starts_with("codex builder profile: unavailable: not checked without a project config: codex exited 0 but did not print a feature table"),
+        "{line}"
+    );
+    let (line, _bin) = builder_line(project.path(), Fake::NoVersion);
+    assert_eq!(
+        line,
+        "codex builder profile: unavailable: codex --version did not print a codex-cli version"
+    );
+    let bin = tempfile::tempdir().unwrap();
+    write(bin.path(), "codex", "not run\n");
+    let out = preflight(project.path(), bin.path());
+    assert!(
+        out.contains("codex builder profile: unavailable: codex --version did not run: "),
+        "{out}"
+    );
+}
+
+/// TSK-1003: with no builder profile configured, nothing is run.
+#[cfg(unix)]
+#[test]
+fn no_builder_profile_means_no_codex_run() {
+    let project = configured_project();
+    write(
+        project.path(),
+        ".codex/config.toml",
+        "default_permissions = \"cf-guard\"\n[permissions.cf-guard]\n",
+    );
+    let bin = fake_codex(Fake::LoadsProject);
+    let out = preflight(project.path(), bin.path());
+    assert!(
+        out.contains(
+            "codex builder profile: unavailable: .codex/config.toml defines no cf-builder profile"
+        ),
+        "{out}"
+    );
+    assert!(!bin.path().join("codex.log").exists(), "codex ran");
+}
+
+/// TSK-1003: one feature showing the project's value never outweighs
+/// another that contradicts it; the line says unverified.
+#[cfg(unix)]
+#[test]
+fn contradictory_feature_evidence_is_unverified() {
+    let project = configured_project();
+    write(
+        project.path(),
+        ".codex/config.toml",
+        "default_permissions = \"cf-guard\"\n[features]\nhooks = true\nnetwork_proxy = true\n[permissions.cf-guard]\n[permissions.cf-builder]\n",
+    );
+    let (line, _bin) = builder_line(project.path(), Fake::Contradicts);
+    assert!(
+        line.contains("whether Codex loaded the project config is unverified, because the features the project sets disagree or are missing"),
+        "{line}"
+    );
+}
+
+/// TSK-1003 (SEC-2): a `codex` planted in the project is never run, whether
+/// `PATH` reaches it through a relative entry or an absolute one inside the
+/// project; the next `codex` on `PATH` outside the project is used.
+#[cfg(unix)]
+#[test]
+fn a_codex_inside_the_project_or_on_a_relative_path_entry_is_never_run() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = builder_project();
+    let marker = project.path().join("planted-ran");
+    for dir in [project.path().to_path_buf(), project.path().join("bin")] {
+        std::fs::create_dir_all(&dir).unwrap();
+        let planted = dir.join("codex");
+        std::fs::write(
+            &planted,
+            format!(
+                "#!/bin/sh\ntouch '{}'\necho 'codex-cli 9.9.9'\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let outside = fake_codex(Fake::LoadsProject);
+    let path = std::env::join_paths([
+        std::path::PathBuf::from("."),
+        std::path::PathBuf::new(),
+        project.path().join("bin"),
+        outside.path().to_path_buf(),
+    ])
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .current_dir(project.path())
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", project.path().join("personal"))
+        .args(["doctor", "--preflight"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&output.stdout);
+    assert!(!marker.exists(), "a planted codex ran:\n{out}");
+    let outside_dir = std::fs::canonicalize(outside.path()).unwrap();
+    assert!(
+        out.contains(&format!(
+            "executable codex: observed on PATH at {}",
+            outside_dir.join("codex").display()
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains("codex builder profile: observed codex-cli 9.9.9"),
+        "{out}"
+    );
+}
+
+/// TSK-1003 (SEC-2): with only a planted `codex` on `PATH`, none is found.
+#[cfg(unix)]
+#[test]
+fn only_a_planted_codex_means_codex_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = builder_project();
+    let planted = project.path().join("codex");
+    std::fs::write(&planted, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = preflight(project.path(), project.path());
+    assert!(
+        out.contains("codex builder profile: unavailable: codex not found on PATH"),
+        "{out}"
+    );
+}
+
+/// TSK-1003: output larger than the capture bound is never judged from its
+/// tail. A table whose last 64 KiB look valid is unavailable, not accepted.
+#[cfg(unix)]
+#[test]
+fn output_over_the_capture_bound_is_unavailable() {
+    let project = builder_project();
+    let (line, _bin) = builder_line(project.path(), Fake::PadsOutput);
+    assert!(
+        line.starts_with("codex builder profile: unavailable: not checked without a project config: it printed more than 64 KiB on a stream, so its output was not judged"),
+        "{line}"
+    );
+}

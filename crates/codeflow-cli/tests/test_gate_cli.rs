@@ -14,6 +14,8 @@ use std::time::Instant;
 mod drain_pipe;
 #[path = "test_gate_cli/evidence.rs"]
 mod evidence;
+#[path = "test_gate_cli/named_config.rs"]
+mod named_config;
 #[path = "support/own_repository.rs"]
 mod own_repository;
 use drain_pipe::{drain_lines, drain_pipe};
@@ -385,10 +387,10 @@ fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
             parsed
         })
         .expect("the target wrote its group");
-    // The gate records the group in its lock file just after the target
+    // The gate records the group in its holder record just after the target
     // starts, and the target can write its file first: wait for the record
     // before killing the gate, or the kill can land between the two.
-    let lock_file = home.path().join("locks/full-gate.lock");
+    let lock_file = home.path().join("locks/full-gate.record");
     let recorded = (0..200).any(|_| {
         let text = std::fs::read_to_string(&lock_file).unwrap_or_default();
         let found = text.lines().any(|l| l == format!("group={group}"));
@@ -556,7 +558,8 @@ fn a_stale_lock_from_a_dead_gate_is_reclaimed() {
     let err = stderr(&output);
     assert_eq!(output.status.code(), Some(0), "{err}");
     assert!(
-        err.contains("reclaimed a stale gate lock") && err.contains("pid 999999 in /gone"),
+        err.contains("reclaimed a stale gate lock")
+            && err.contains("pid 999999 in an unknown directory"),
         "{err}"
     );
 }
@@ -1229,7 +1232,15 @@ fn essential_and_full_refuse_every_mode_pair_across_worktrees_and_repositories()
                 );
                 assert!(error.contains(&format!("pid {}", child.id())), "{error}");
                 assert!(error.contains(&format!("{holder} mode")), "{error}");
-                assert!(error.contains(first.path().to_str().unwrap()), "{error}");
+                // The holder's folder is shown only to a gate that trusts
+                // it: a worktree of the same repository. Another repository
+                // sees an unknown directory (TSK-1003).
+                if directory == linked.as_path() {
+                    assert!(error.contains(first.path().to_str().unwrap()), "{error}");
+                } else {
+                    assert!(error.contains("in an unknown directory"), "{error}");
+                    assert!(!error.contains(first.path().to_str().unwrap()), "{error}");
+                }
                 assert!(!error.contains("starting target"), "{error}");
             }
         }
@@ -1478,6 +1489,50 @@ fn essential_refuses_an_unavailable_lock_directory_before_any_target() {
     assert!(!error.contains("starting target"), "{error}");
 }
 
+/// TSK-1003: with an existing lock file in a lock folder `codeflow` cannot
+/// write, the lock still opens read only, but the holder record cannot be
+/// written. `reserve` refuses without running its command, and the
+/// permissions doctor names the folder.
+#[cfg(unix)]
+#[test]
+fn reserve_refuses_when_the_holder_record_cannot_be_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = repo(QUICK_PASS);
+    let home = tempfile::tempdir().unwrap();
+    let locks = home.path().join("locks");
+    std::fs::create_dir(&locks).unwrap();
+    std::fs::write(locks.join("full-gate.lock"), "").unwrap();
+    std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let reserved = run(
+        dir.path(),
+        home.path(),
+        &["reserve", "--", "touch", "reserved-ran"],
+    );
+    let doctor = run(
+        dir.path(),
+        home.path(),
+        &["doctor", "--check", "permissions"],
+    );
+    std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(reserved.status.code(), Some(1), "{}", stderr(&reserved));
+    assert!(
+        stderr(&reserved).contains("holder record cannot be written"),
+        "{}",
+        stderr(&reserved)
+    );
+    assert!(!dir.path().join("reserved-ran").exists(), "the command ran");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&doctor.stdout),
+        stderr(&doctor)
+    );
+    // A warning, as for every other unwritable gate folder.
+    assert!(
+        report.contains("warn  permissions:") && report.contains("locks: Permission denied"),
+        "{report}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn quick_default_class_controls_undeclared_targets_and_keeps_explicit_light_work() {
@@ -1525,7 +1580,7 @@ fn quick_default_class_controls_undeclared_targets_and_keeps_explicit_light_work
 fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     let home = tempfile::tempdir().unwrap();
     let root = held_until_released("essential");
-    let path = home.path().join("locks/full-gate.lock");
+    let path = home.path().join("locks/full-gate.record");
     let empty = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(empty.status.success(), "{}", stderr(&empty));
     assert!(String::from_utf8_lossy(&empty.stdout).contains("no recorded holder"));
