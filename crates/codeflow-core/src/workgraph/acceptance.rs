@@ -674,13 +674,20 @@ pub(crate) fn bind_completion_with_amendment(
                     (true, Transport::TaskLanding) => Carried::ReopenedStack,
                     (true, Transport::Direct) => Carried::Transport(Transport::Direct),
                 };
+                // The task's declared target, as this clone resolves it, is
+                // a receiving line too: a landing merge on its first-parent
+                // line is line work (TSK-340 review round 3).
+                let receiving = match target {
+                    Some(tip) => stacking.clone().with_line_head(tip),
+                    None => stacking.clone(),
+                };
                 match binding_source(
                     repo,
                     task,
                     landing,
                     reviewed,
                     carried,
-                    stacking,
+                    &receiving,
                     default_target,
                     anchor,
                 ) {
@@ -797,9 +804,20 @@ fn archive_problem(
         tail.push(normal(parsed));
     }
     let mut made = completions_made(repo, task, anchor, landing)?;
-    // The current completion is the active block, never archived.
+    // The current completion is never archived: it is the last occurrence
+    // when the record never left `complete` after it and holds the same
+    // completion. Only that one occurrence is set aside.
     let current = active_block(task);
-    made.retain(|(held, _, _)| Some(held) != current.as_ref());
+    if made.last().is_some_and(|last| {
+        !last.reopened_after
+            && Some(&last.block) == current.as_ref()
+            && record_at(repo, last.at, task)
+                .ok()
+                .flatten()
+                .is_some_and(|then| then.superseded_blocks() == archive)
+    }) {
+        made.pop();
+    }
     // The first block the range archives may be the completion the
     // reference held before this range (at the anchor): `reopen_problems`
     // checks it against that record, and the range's history does not hold
@@ -807,11 +825,17 @@ fn archive_problem(
     let reference_active = reference.and_then(active_block);
     if !tail.is_empty()
         && tail.first() == reference_active.as_ref()
-        && made.first().map(|(held, _, _)| held) != tail.first()
+        && made.first().map(|made| &made.block) != tail.first()
     {
         tail.remove(0);
     }
-    for (index, (held, at, _)) in made.iter().enumerate() {
+    for (
+        index,
+        Made {
+            block: held, at, ..
+        },
+    ) in made.iter().enumerate()
+    {
         match tail.get(index) {
             Some(archived) if archived == held => {}
             Some(archived) => {
@@ -843,16 +867,27 @@ fn archive_problem(
     Ok(None)
 }
 
+/// One completion the range's history made: the commit that introduced
+/// it, its active block, and whether the record left `complete` after it.
+struct Made {
+    block: AcceptanceBlock,
+    at: Oid,
+    reopened_after: bool,
+}
+
 /// Every completion of `task`'s record the range's history made, from
-/// `anchor` (excluded) to the landing, in the order it made them, with the
-/// commit that first held each and the record there. A history that cannot
-/// be read is an error, never an empty list.
+/// `anchor` (excluded) to the landing, in the order it made them. A
+/// completion is an occurrence, never a block's content: a commit whose
+/// record is complete while no parent holds that same completion (active
+/// block and archive) introduces one, so `complete -> todo -> complete`
+/// with an identical block is two completions. A history that cannot be
+/// read is an error, never an empty list.
 fn completions_made(
     repo: &Repository,
     task: &RecordView,
     anchor: Option<Oid>,
     landing: Landing<'_>,
-) -> Result<Vec<(AcceptanceBlock, Oid, RecordView)>, String> {
+) -> Result<Vec<Made>, String> {
     let _judgment = history::judgment();
     let unreadable =
         |error: git2::Error| format!("cannot read the history of {}: {error}", task.path);
@@ -863,17 +898,41 @@ fn completions_made(
     if let Some(anchor) = anchor {
         walk.hide(anchor).map_err(unreadable)?;
     }
-    let mut made: Vec<(AcceptanceBlock, Oid, RecordView)> = Vec::new();
+    let state = |record: &RecordView| {
+        (record.status == "complete")
+            .then(|| active_block(record))
+            .flatten()
+            .map(|active| (active, record.superseded_blocks()))
+    };
+    let mut made: Vec<Made> = Vec::new();
     for oid in walk {
         let oid = oid.map_err(unreadable)?;
-        if let Some(record) = record_at(repo, oid, task)? {
-            if record.status == "complete" {
-                if let Some(active) = active_block(&record) {
-                    if !made.iter().any(|(held, _, _)| *held == active) {
-                        made.push((active, oid, record));
-                    }
+        let Some(record) = record_at(repo, oid, task)? else {
+            continue;
+        };
+        let Some((active, archive)) = state(&record) else {
+            if let Some(last) = made.last_mut() {
+                last.reopened_after = true;
+            }
+            continue;
+        };
+        let commit = repo
+            .find_commit(oid)
+            .map_err(|error| format!("cannot read commit {oid}: {error}"))?;
+        let mut held_before = false;
+        for parent in history::parents(repo, &commit).map_err(|error| error.to_string())? {
+            if let Some(then) = record_at(repo, parent, task)? {
+                if state(&then).is_some_and(|(was, kept)| was == active && kept == archive) {
+                    held_before = true;
                 }
             }
+        }
+        if !held_before {
+            made.push(Made {
+                block: active,
+                at: oid,
+                reopened_after: false,
+            });
         }
     }
     Ok(made)
@@ -1198,9 +1257,10 @@ fn binding_source(
         span_head: landing.commit(),
         completion_tail: landing.commit(),
     };
+    let receiving = stacking;
     let stacking = match carried {
         Carried::Transport(Transport::TaskLanding) | Carried::ReopenedStack => {
-            Stacking::OnTarget(stacking)
+            Stacking::OnTarget(receiving)
         }
         Carried::Transport(Transport::Direct) => Stacking::Never,
     };
@@ -1210,7 +1270,15 @@ fn binding_source(
     if carried != Carried::Transport(Transport::TaskLanding) {
         return Err(direct);
     }
-    match task_landing(repo, task, landing, reviewed, default_target, anchor) {
+    match task_landing(
+        repo,
+        task,
+        landing,
+        reviewed,
+        default_target,
+        anchor,
+        receiving,
+    ) {
         Landed::NoMerge => Err(direct),
         Landed::Span { merge, head } => {
             if let Some(problem) =
@@ -1225,6 +1293,7 @@ fn binding_source(
             })
         }
         Landed::Refused(problem) => Err(problem),
+        Landed::NotALanding(why) => Err(format!("{direct} ({why})")),
     }
 }
 
@@ -1460,10 +1529,14 @@ enum Landed {
     Span { merge: Oid, head: Oid },
     /// A landing merge exists, and this is why it does not carry the review.
     Refused(String),
+    /// The merge that brings the review is on no receiving line the run
+    /// trusts, so the direct span is the judgment, and this says why.
+    NotALanding(String),
 }
 
 /// Resolve the task-landing provenance. This checks transport structure,
 /// never infers a line's parent and never grants a review verdict itself.
+#[allow(clippy::too_many_lines)] // Find, authorize and check the landing merge in one judgment order.
 fn task_landing(
     repo: &Repository,
     task: &RecordView,
@@ -1471,6 +1544,7 @@ fn task_landing(
     reviewed: Oid,
     default_target: Option<Oid>,
     anchor: Option<Oid>,
+    receiving: &StackingTips,
 ) -> Landed {
     let _judgment = history::judgment();
     if let Err(error) = history::check(repo) {
@@ -1555,6 +1629,10 @@ fn task_landing(
             merge.id()
         ));
     }
+    // Only a merge on a trusted receiving line is a landing (TSK-340).
+    if let Some(why) = untrusted_landing(repo, merge.id(), reviewed, receiving) {
+        return Landed::NotALanding(why);
+    }
     if let Err(error) = check_after_landing(
         repo,
         task,
@@ -1574,6 +1652,27 @@ fn task_landing(
         )),
         Err(_) => unreadable("the landing merge"),
     }
+}
+
+/// Why `merge` is no landing, if it is not: it lies on the first-parent
+/// line of none of the receiving lines this run trusts (TSK-340 review
+/// round 3). Merge shape alone never proves one.
+fn untrusted_landing(
+    repo: &Repository,
+    merge: Oid,
+    reviewed: Oid,
+    receiving: &StackingTips,
+) -> Option<String> {
+    let tips = receiving.tips();
+    (!tips
+        .iter()
+        .any(|tip| is_first_parent_ancestor(repo, merge, *tip)))
+    .then(|| {
+        format!(
+            "the merge {merge} that brings the reviewed commit {reviewed} is not on the first-parent line of a target this run trusts ({}), so it is not a landing",
+            tips.iter().map(Oid::to_string).collect::<Vec<_>>().join(", ")
+        )
+    })
 }
 
 /// A direct non-planning change after landing needs both a landed adoption
