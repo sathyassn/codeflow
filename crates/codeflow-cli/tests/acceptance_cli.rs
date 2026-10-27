@@ -2006,6 +2006,101 @@ fn an_unrecorded_integration_line_earns_no_authority() {
     }
 }
 
+/// TSK-340 review round 6: `task status` settles the default target before
+/// it reads any tip, and never falls back to another name. With
+/// `origin/HEAD` naming `main` and `origin/main` missing, a fetched
+/// `origin/master` holding a side merge of the review refuses, naming the
+/// fetch; with both `origin/main` and `origin/master` and no `origin/HEAD`,
+/// it refuses as ambiguous; a repository whose only default is `master`
+/// completes.
+#[test]
+fn the_default_target_is_settled_before_any_tip() {
+    for case in ["missing main", "ambiguous", "master default"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        if case == "master default" {
+            git(root, &["branch", "-m", "main", "master"]);
+            let path = record_path("TSK-001");
+            let text = std::fs::read_to_string(root.join(&path)).unwrap();
+            write(
+                root,
+                &path,
+                &text.replace("integration_target: main", "integration_target: master"),
+            );
+            commit(root, "docs(records): target master");
+            let origin = root.join(".git").join("fixture-origin.git");
+            git(
+                root,
+                &[
+                    "init",
+                    "-q",
+                    "--bare",
+                    "-b",
+                    "master",
+                    origin.to_str().unwrap(),
+                ],
+            );
+            git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+            git(root, &["push", "-q", "origin", "master"]);
+            git(root, &["fetch", "-q", "origin"]);
+            git(root, &["switch", "-c", "task/TSK-001-work", "master"]);
+            write(root, "src/lib.rs", "pub fn work() {}\n");
+            let reviewed = commit(root, "feat: the work");
+            write(
+                root,
+                &path,
+                &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed))
+                    .replace("integration_target: main", "integration_target: master"),
+            );
+            let verb = status_complete(root, "TSK-001");
+            assert_eq!(verb.0, 0, "{case}: {}", verb.1);
+            continue;
+        }
+        let _remote = with_origin(root, "main");
+        let (reviewed, side) = side_merge(root);
+        git(root, &["update-ref", "refs/remotes/origin/master", &side]);
+        if case == "ambiguous" {
+            // A fetch may have recorded `origin/HEAD`; this case has none.
+            git(root, &["remote", "set-head", "origin", "-d"]);
+        }
+        if case == "missing main" {
+            git(
+                root,
+                &[
+                    "symbolic-ref",
+                    "refs/remotes/origin/HEAD",
+                    "refs/remotes/origin/main",
+                ],
+            );
+            git(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+            // No configured upstream either: only `origin/HEAD` names main.
+            git(root, &["branch", "--unset-upstream", "main"]);
+        }
+        // The record names `master`, the name a fallback would pick.
+        let declared = if case == "missing main" {
+            "master"
+        } else {
+            "main"
+        };
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)).replace(
+                "integration_target: main",
+                &format!("integration_target: {declared}"),
+            ),
+        );
+        let verb = status_complete(root, "TSK-001");
+        assert_ne!(verb.0, 0, "{case}: {}", verb.1);
+        let needle = if case == "missing main" {
+            "git fetch origin main"
+        } else {
+            "git remote set-head origin --auto"
+        };
+        assert!(verb.1.contains(needle), "{case}: {}", verb.1);
+    }
+}
+
 /// TSK-340 review round 2: reversing the merge parents manufactures no
 /// landing authority. The review lies on a task branch; `main` amends and
 /// restores AC-1; a branch from that `main` merges the review as its second
