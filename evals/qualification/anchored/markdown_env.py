@@ -27,6 +27,14 @@ security boundary.
 - In scope: other users (the build directory is made by `tempfile.mkdtemp`,
   mode 0700, and the venv is built inside it), accidental collisions at the
   managed name, and stale or mismatched environments.
+- Root requirement, checked the way ssh checks its directories: before the
+  helper trusts or runs anything under the root, the root and the managed
+  venv directory must each be a real directory (opened without following a
+  symlink) owned by the current user and not writable by group or others.
+  Anything else is refused before its interpreter runs. The default root,
+  `target/` in the user's own checkout, passes. On Windows, which has no
+  equivalent mode check here, a configured root outside the repository is
+  refused.
 - Checked cheaply: before each build step the staging directory must still
   be the directory the helper created (same device and inode, read without
   following symlinks); otherwise the build is refused.
@@ -104,9 +112,48 @@ def installed(python: Path) -> dict[str, str | None]:
     return json.loads(result.stdout) if result.returncode == 0 else {}
 
 
+def untrusted(path: Path) -> str | None:
+    """Why a root or venv directory may not be trusted, or None. The
+    directory is opened without following a symlink and checked on that
+    open file: a directory owned by the current user and not writable by
+    group or others."""
+    if os.name == "nt":
+        configured = os.environ.get("CODEFLOW_ANCHORED_VENV")
+        if configured and not Path(os.path.abspath(configured)).is_relative_to(ROOT):
+            return "a configured root outside the repository is refused on Windows, which has no mode check here"
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        handle = os.open(path, flags)
+    except OSError as error:
+        return f"it cannot be opened as a directory without following a symlink ({error.strerror})"
+    try:
+        info = os.fstat(handle)
+    finally:
+        os.close(handle)
+    if not stat.S_ISDIR(info.st_mode):
+        return "it is not a directory"
+    if info.st_uid != os.getuid():
+        return f"it is owned by uid {info.st_uid}, not the current user"
+    if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return f"it is writable by group or others (mode {stat.S_IMODE(info.st_mode):o})"
+    return None
+
+
+def require_trusted(path: Path, what: str) -> None:
+    reason = untrusted(path)
+    if reason:
+        sys.exit(f"markdown_env: the {what} {path} is not trusted: {reason}. Nothing under it was run or changed. "
+                 f"{REMEDY}.")
+
+
 def valid(venv: Path) -> bool:
-    """A real directory, not a symlink, stamped for these pins and this
-    Python, whose interpreter sees exactly the pinned versions."""
+    """A real directory, not a symlink, owned by the current user and not
+    writable by others under a root of the same kind, stamped for these pins
+    and this Python, whose interpreter sees exactly the pinned versions. The
+    ownership checks come first, so an untrusted interpreter never runs."""
+    if untrusted(venv.parent) or untrusted(venv):
+        return False
     stamp = venv / STAMP
     if venv.is_symlink() or not venv.is_dir() or stamp.is_symlink() or not stamp.is_file():
         return False
@@ -145,6 +192,7 @@ def build(venv: Path) -> None:
     """Build the venv in a private directory and move it into place. Never
     deletes: a failed or raced build stays in its own directory."""
     venv.parent.mkdir(parents=True, exist_ok=True)
+    require_trusted(venv.parent, "managed root")
     parent = Path(tempfile.mkdtemp(prefix=f".{venv.name}.build-", dir=venv.parent))
     staging = parent / "venv"
     os.mkdir(staging, 0o700)
@@ -180,6 +228,10 @@ def build(venv: Path) -> None:
 
 def ensure() -> None:
     venv = venv_path()
+    if os.path.lexists(venv.parent):
+        require_trusted(venv.parent, "managed root")
+    if os.path.lexists(venv):
+        require_trusted(venv, "managed venv")
     if Path(sys.prefix).resolve() == venv.resolve() and valid(venv):
         return
     if os.path.lexists(venv) and not valid(venv):

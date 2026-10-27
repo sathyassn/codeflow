@@ -625,7 +625,14 @@ security boundary.
 
 - In scope: other users (the build happens inside a `tempfile.mkdtemp`
   directory, mode 0700), accidental collisions at the managed name, and
-  stale or mismatched environments.
+  stale or mismatched environments. Against other users the root must be
+  yours: before trusting or running anything under it, the helper requires
+  the root and the managed venv directory to be real directories owned by
+  the current user and not writable by group or others, and refuses
+  anything else before its interpreter runs. The default `target/` passes;
+  a shared or world-writable `CODEFLOW_ANCHORED_VENV` root is refused. On
+  Windows, with no equivalent check here, a configured root outside the
+  repository is refused.
 - Checked cheaply: before each build step the staging directory must still
   be the one the helper created (same device and inode, symlinks not
   followed), or the build stops.

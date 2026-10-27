@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -206,6 +207,74 @@ class StagingIdentity(Scratch):
                 self.swap_before("stamp", replacement)
                 shutil.rmtree(self.root)  # this test's own scratch only
                 self.root.mkdir()
+
+
+class RootTrust(Scratch):
+    """A venv planted under a root, or in a venv directory, that another user
+    could write is refused before its interpreter runs (Codex round 8). The
+    planted interpreter writes a canary file when it runs."""
+
+    def plant(self) -> tuple[Path, Path]:
+        venv = markdown_env.venv_path()
+        ran = self.root.parent / f"{self.root.name}-planted-ran"
+        (venv / "bin").mkdir(parents=True)
+        python = markdown_env.interpreter(venv)
+        python.write_text(f"#!/bin/sh\ntouch '{ran}'\necho '{{}}'\n", encoding="utf-8")
+        python.chmod(0o700)
+        (venv / markdown_env.STAMP).write_text(json.dumps(markdown_env.stamp_data(), sort_keys=True) + "\n",
+                                              encoding="utf-8")
+        venv.chmod(0o700)
+        self.addCleanup(lambda: ran.unlink(missing_ok=True))
+        return venv, ran
+
+    def assert_refused_without_running(self, venv: Path, ran: Path) -> None:
+        self.assertFalse(markdown_env.valid(venv))
+        with mock.patch.object(markdown_env.os, "execv") as execv, self.assertRaises(SystemExit) as refused:
+            markdown_env.ensure()
+        self.assertIn("is not trusted", str(refused.exception))
+        execv.assert_not_called()
+        self.assertFalse(ran.exists(), "the planted interpreter ran")
+
+    def test_the_canary_shows_a_trusted_planted_interpreter_would_run(self) -> None:
+        venv, ran = self.plant()
+        self.root.chmod(0o700)
+        markdown_env.valid(venv)
+        self.assertTrue(ran.exists())
+
+    def test_a_group_writable_root_is_refused(self) -> None:
+        venv, ran = self.plant()
+        self.root.chmod(0o770)
+        self.assert_refused_without_running(venv, ran)
+
+    def test_a_world_writable_root_is_refused(self) -> None:
+        venv, ran = self.plant()
+        self.root.chmod(0o777)
+        self.assert_refused_without_running(venv, ran)
+
+    def test_a_group_writable_venv_directory_is_refused(self) -> None:
+        venv, ran = self.plant()
+        self.root.chmod(0o700)
+        venv.chmod(0o770)
+        self.assert_refused_without_running(venv, ran)
+
+    def test_a_venv_owned_by_another_uid_is_refused(self) -> None:
+        # Creating a directory owned by another uid needs root, so the stat
+        # result of the planted venv is replaced with one naming another uid.
+        venv, ran = self.plant()
+        self.root.chmod(0o700)
+        real_fstat = os.fstat
+        planted = os.stat(venv).st_ino
+
+        def fstat(handle):
+            info = real_fstat(handle)
+            if info.st_ino != planted:
+                return info
+            values = list(info)
+            values[stat.ST_UID] = os.getuid() + 1
+            return os.stat_result(values)
+
+        with mock.patch.object(markdown_env.os, "fstat", fstat):
+            self.assert_refused_without_running(venv, ran)
 
 
 class ContentNamed(Scratch):
