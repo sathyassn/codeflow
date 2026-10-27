@@ -177,10 +177,7 @@ impl ConfinedRoot {
             let file = open_at(&parent.file, leaf, false)?;
             super::read_opened_regular(&file, maximum_bytes, after_open, || {
                 let linked = open_at(&parent.file, leaf, false)?;
-                Ok((
-                    linked.metadata()?,
-                    Some(same_file::Handle::from_file(linked)?),
-                ))
+                Ok((linked.metadata()?, Some(super::FileIdentity::of(&linked)?)))
             })
         }
         #[cfg(windows)]
@@ -195,10 +192,7 @@ impl ConfinedRoot {
             let file = open()?;
             let result = super::read_opened_regular(&file, maximum_bytes, after_open, || {
                 let linked = open()?;
-                Ok((
-                    linked.metadata()?,
-                    Some(same_file::Handle::from_file(linked)?),
-                ))
+                Ok((linked.metadata()?, Some(super::FileIdentity::of(&linked)?)))
             });
             drop(parent);
             result

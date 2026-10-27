@@ -95,7 +95,7 @@ fn read_bounded_regular_with_hooks(
 fn reopened_identity(
     path: &Path,
     before_reopen: impl FnOnce() -> std::io::Result<()>,
-) -> std::io::Result<(std::fs::Metadata, Option<same_file::Handle>)> {
+) -> std::io::Result<(std::fs::Metadata, Option<FileIdentity>)> {
     let after = std::fs::symlink_metadata(path)?;
     #[cfg(windows)]
     {
@@ -118,7 +118,7 @@ fn reopened_identity(
                 "file changed while it was being read",
             ));
         }
-        Ok((after, Some(same_file::Handle::from_file(reopened)?)))
+        Ok((after, Some(FileIdentity::of(&reopened)?)))
     }
     #[cfg(not(windows))]
     {
@@ -131,7 +131,7 @@ fn read_opened_regular(
     file: &std::fs::File,
     maximum_bytes: u64,
     after_open: impl FnOnce() -> std::io::Result<()>,
-    after_read: impl FnOnce() -> std::io::Result<(std::fs::Metadata, Option<same_file::Handle>)>,
+    after_read: impl FnOnce() -> std::io::Result<(std::fs::Metadata, Option<FileIdentity>)>,
 ) -> std::io::Result<Vec<u8>> {
     let opened = file.metadata()?;
     if !opened.is_file() || opened.len() > maximum_bytes {
@@ -140,7 +140,7 @@ fn read_opened_regular(
             "file changed identity or type while opening",
         ));
     }
-    let opened_identity = same_file::Handle::from_file(file.try_clone()?)?;
+    let opened_identity = FileIdentity::of(file)?;
     after_open()?;
     let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).unwrap_or(0));
     file.take(maximum_bytes.saturating_add(1))
@@ -153,7 +153,7 @@ fn read_opened_regular(
     }
     // The held descriptor's own identity after the read, then the path's.
     let held = file.metadata()?;
-    let held_identity = same_file::Handle::from_file(file.try_clone()?)?;
+    let held_identity = FileIdentity::of(file)?;
     let (after, linked_identity) = after_read()?;
     if after.file_type().is_symlink()
         || !after.is_file()
@@ -172,6 +172,78 @@ fn read_opened_regular(
         ));
     }
     Ok(bytes)
+}
+
+/// A file's identity, read from a handle this module opened. On Unix it is
+/// the device and inode. On Windows it is the volume serial number and the
+/// full 128-bit file id from `GetFileInformationByHandleEx(FileIdInfo)`:
+/// the 64-bit file index is not unique on `ReFS` (TSK-1020 review 4). A call
+/// that fails, or an all-zero id, refuses: no identity is never a match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileIdentity {
+    volume: u64,
+    id: u128,
+}
+
+impl FileIdentity {
+    /// The identity of an open file.
+    pub(crate) fn of(file: &std::fs::File) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = file.metadata()?;
+            Ok(Self {
+                volume: metadata.dev(),
+                id: u128::from(metadata.ino()),
+            })
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
+            };
+            let mut info = FILE_ID_INFO::default();
+            // SAFETY: the handle is open for the duration of the call, and
+            // `info` is a writable FILE_ID_INFO whose exact size is passed.
+            let ok = unsafe {
+                GetFileInformationByHandleEx(
+                    file.as_raw_handle().cast(),
+                    FileIdInfo,
+                    (&raw mut info).cast(),
+                    u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).unwrap_or(u32::MAX),
+                )
+            };
+            if ok == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Self::from_file_id_info(info.VolumeSerialNumber, info.FileId.Identifier)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = file;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "no file identity on this platform",
+            ))
+        }
+    }
+
+    /// The identity a `FileIdInfo` query returned, refused when the id is all
+    /// zero, which names no file reliably.
+    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
+    fn from_file_id_info(volume: u64, identifier: [u8; 16]) -> std::io::Result<Self> {
+        if identifier == [0; 16] {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the file system gave no reliable file identity",
+            ));
+        }
+        Ok(Self {
+            volume,
+            id: u128::from_le_bytes(identifier),
+        })
+    }
 }
 
 /// Whether two metadata name the same file: device and inode on Unix. Other
@@ -377,7 +449,7 @@ mod windows_tests {
         let (_, identity) = reopened_identity(&path, || Ok(())).unwrap();
         assert_eq!(
             identity.unwrap(),
-            same_file::Handle::from_path(&path).unwrap(),
+            super::FileIdentity::of(&std::fs::File::open(&path).unwrap()).unwrap(),
             "a regular file reopens as itself"
         );
         let swapped = path.clone();
@@ -387,5 +459,51 @@ mod windows_tests {
         })
         .expect_err("a link is refused, not followed");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::FileIdentity;
+
+    /// TSK-1020 review 4: the whole 128-bit id decides. Two ids that share
+    /// their low 64 bits, as `ReFS` ids can, are different files.
+    #[test]
+    fn identities_compare_the_volume_and_the_full_128_bit_id() {
+        let low = [7u8, 0, 0, 0, 0, 0, 0, 0];
+        let mut first = [0u8; 16];
+        let mut second = [0u8; 16];
+        first[..8].copy_from_slice(&low);
+        second[..8].copy_from_slice(&low);
+        first[15] = 1;
+        second[15] = 2;
+        let a = FileIdentity::from_file_id_info(9, first).unwrap();
+        let b = FileIdentity::from_file_id_info(9, second).unwrap();
+        assert_ne!(a, b, "a shared low 64 bits is not the same file");
+        assert_eq!(a, FileIdentity::from_file_id_info(9, first).unwrap());
+        assert_ne!(
+            a,
+            FileIdentity::from_file_id_info(10, first).unwrap(),
+            "another volume"
+        );
+        let error = FileIdentity::from_file_id_info(9, [0; 16]).expect_err("no reliable identity");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn an_open_file_has_its_own_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, two) = (dir.path().join("one"), dir.path().join("two"));
+        std::fs::write(&one, b"1").unwrap();
+        std::fs::write(&two, b"2").unwrap();
+        let first = FileIdentity::of(&std::fs::File::open(&one).unwrap()).unwrap();
+        assert_eq!(
+            first,
+            FileIdentity::of(&std::fs::File::open(&one).unwrap()).unwrap()
+        );
+        assert_ne!(
+            first,
+            FileIdentity::of(&std::fs::File::open(&two).unwrap()).unwrap()
+        );
     }
 }
