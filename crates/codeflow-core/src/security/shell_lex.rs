@@ -19,14 +19,16 @@
 
 /// One word as the shell's lexer reads it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // Each flag is one lexical fact a check reads.
 pub(crate) struct Token {
     /// The word with quotes and escapes removed and expansions kept as
     /// written; only meaningful for a word with no quoting or expansion.
     pub(crate) text: String,
     /// Any part of the word was quoted or escaped.
     pub(crate) quoted: bool,
-    /// How many leading characters of `text` were plain: unquoted,
-    /// unescaped and not an expansion.
+    /// How many leading bytes of `text` were plain: unquoted, unescaped and
+    /// not an expansion. A byte offset, so slicing `text` by it is safe for
+    /// any input (TSK-397 Codex review round 9).
     pub(crate) plain_prefix: usize,
     /// The names of plain parameter expansions in the word (`$NAME`,
     /// `${NAME}`).
@@ -34,9 +36,13 @@ pub(crate) struct Token {
     /// Any other expansion: a command or arithmetic substitution, a
     /// backquote, a special parameter or a `${...}` with an operator.
     pub(crate) complex: bool,
-    /// The word's tilde prefix (`~`, `~+`, `~user`), when it starts with
-    /// an unquoted `~`.
+    /// The strongest unquoted tilde prefix in the word (`~`, `~+`,
+    /// `~user`), wherever it appears: the shell expands one at the start, and
+    /// after `=` or `:` in an assignment value or an assignment-shaped
+    /// argument (TSK-397 security review SR5-1).
     pub(crate) tilde: Option<String>,
+    /// Any part of the word was ANSI-C quoted (`$'...'`).
+    pub(crate) ansi: bool,
     /// A redirection operator (`>`, `2>>`, `<<<`, `&>`).
     pub(crate) redirect: bool,
 }
@@ -115,8 +121,10 @@ struct Lexer {
     opaque: bool,
     current_shell: bool,
     /// Here-documents waiting for their body: delimiter, whether the body
-    /// expands, whether leading tabs are stripped.
-    heredocs: Vec<(String, bool, bool)>,
+    /// expands, whether leading tabs are stripped, and whether the
+    /// delimiter word held an expansion or ANSI-C quoting, which the
+    /// lexer does not model (SR5-3).
+    heredocs: Vec<(String, bool, bool, bool)>,
 }
 
 impl Lexer {
@@ -127,17 +135,18 @@ impl Lexer {
     /// Lex commands until `closer` (unquoted, at this level) or the end.
     #[allow(clippy::too_many_lines)] // One state machine over the shell's operators.
     fn list(&mut self, closer: Option<char>) -> Vec<Vec<Token>> {
-        let mut commands = Vec::new();
+        let mut commands: Vec<Vec<Token>> = Vec::new();
         let mut words: Vec<Token> = Vec::new();
         let mut word: Option<Token> = None;
         let mut heredoc_next = None;
         let end_word = |word: &mut Option<Token>,
                         words: &mut Vec<Token>,
                         heredoc_next: &mut Option<bool>,
-                        heredocs: &mut Vec<(String, bool, bool)>| {
+                        heredocs: &mut Vec<(String, bool, bool, bool)>| {
             if let Some(done) = word.take() {
                 if let Some(strip) = heredoc_next.take() {
-                    heredocs.push((done.text.clone(), !done.quoted, strip));
+                    let unmodeled = done.complex || !done.params.is_empty() || done.ansi;
+                    heredocs.push((done.text.clone(), !done.quoted, strip, unmodeled));
                 }
                 words.push(done);
             }
@@ -240,19 +249,6 @@ impl Lexer {
                 }
                 _ => {
                     let token = word.get_or_insert_with(Token::default);
-                    if token.text.is_empty() && !token.quoted && c == '~' {
-                        let start = self.at;
-                        let mut end = start;
-                        while self.chars.get(end).is_some_and(|c| {
-                            !matches!(
-                                c,
-                                '/' | ' ' | '\t' | '\n' | ';' | '&' | '|' | '<' | '>' | '(' | ')'
-                            )
-                        }) {
-                            end += 1;
-                        }
-                        token.tilde = Some(self.chars[start..end].iter().collect());
-                    }
                     self.word_char(token);
                 }
             }
@@ -305,10 +301,26 @@ impl Lexer {
             }
             '$' => self.dollar(token, false),
             _ => {
+                if c == '~' {
+                    let start = self.at;
+                    let mut end = start;
+                    while self.chars.get(end).is_some_and(|c| {
+                        !matches!(
+                            c,
+                            '/' | ':' | ' ' | '\t' | '\n' | ';' | '&' | '|' | '<' | '>' | '(' | ')'
+                        )
+                    }) {
+                        end += 1;
+                    }
+                    let prefix: String = self.chars[start..end].iter().collect();
+                    if token.tilde.as_deref().is_none_or(|known| known == "~") {
+                        token.tilde = Some(prefix);
+                    }
+                }
                 token.text.push(c);
                 self.at += 1;
                 if plain {
-                    token.plain_prefix += 1;
+                    token.plain_prefix += c.len_utf8();
                 }
             }
         }
@@ -413,6 +425,7 @@ impl Lexer {
                 // ANSI-C quoting: a backslash escapes any character,
                 // including a quote.
                 token.quoted = true;
+                token.ansi = true;
                 self.at += 1;
                 while let Some(c) = self.peek(0) {
                     self.at += 1;
@@ -454,7 +467,7 @@ impl Lexer {
                     token.complex = true;
                     self.list(Some('}'));
                 } else {
-                    self.parameter(token);
+                    self.parameter(token, in_double);
                 }
             }
             Some('[') => {
@@ -492,7 +505,7 @@ impl Lexer {
     }
 
     /// `${...}` after its `{`: a plain name, or anything with an operator.
-    fn parameter(&mut self, token: &mut Token) {
+    fn parameter(&mut self, token: &mut Token, in_double: bool) {
         let mut body = String::new();
         let mut depth = 0usize;
         while let Some(c) = self.peek(0) {
@@ -534,6 +547,12 @@ impl Lexer {
                     depth += 1;
                     body.push(c);
                     self.at += 1;
+                }
+                // Inside double quotes, whether `'` quotes depends on the
+                // operator; the lexer does not model that (SR5-5).
+                '\'' if in_double => {
+                    self.opaque = true;
+                    return;
                 }
                 '$' | '`' | '"' | '\'' | '\\' => {
                     // A nested expansion or quote inside the operator's
@@ -579,7 +598,18 @@ impl Lexer {
                     self.at += 1;
                     return;
                 }
-                ')' => depth = depth.saturating_sub(1),
+                // A `)` closing `$((` alone means the shell reads `$( (`,
+                // a nested subshell; and a quote or backslash inside
+                // arithmetic is not modeled. Both are opaque (SR5-4).
+                ')' if depth == 0 => {
+                    self.opaque = true;
+                    return;
+                }
+                '\'' | '"' | '\\' => {
+                    self.opaque = true;
+                    return;
+                }
+                ')' => depth -= 1,
                 '$' | '`' => {
                     self.at -= 1;
                     let mut inner = Token::default();
@@ -622,7 +652,10 @@ impl Lexer {
     /// ended. An expanding body has its backslash-newlines removed and is
     /// then read by double-quote rules.
     fn heredoc_bodies(&mut self) {
-        for (delimiter, expands, strip) in std::mem::take(&mut self.heredocs) {
+        for (delimiter, expands, strip, unmodeled) in std::mem::take(&mut self.heredocs) {
+            if unmodeled {
+                self.opaque = true;
+            }
             let mut found = false;
             let mut body = String::new();
             while self.at < self.chars.len() {
@@ -689,31 +722,22 @@ pub(crate) struct Reading {
     /// The first interpreter operand whose value may be derived from the
     /// working directory, judged with the assignments made before it.
     pub(crate) derived: Option<Token>,
-    /// Names the line assigns a value not derived from the working
-    /// directory: a plain assignment, a declaration (`export NAME=`), a
-    /// `printf -v NAME`, or a loop variable, each with untainted values.
-    pub(crate) assigned: Vec<String>,
+    /// The line assigns `HOME` in some form, so its value is unknown.
+    pub(crate) home_assigned: bool,
 }
 
 impl Reading {
-    /// Record an assignment to `name`, clean or tainted.
-    fn record(&mut self, name: &str, tainted: bool) {
-        self.assigned.retain(|known| known != name);
-        if !tainted {
-            self.assigned.push(name.to_string());
-        }
-    }
-
-    /// Whether a value may be derived from the working directory: a
-    /// command, arithmetic or special expansion, a parameter this line has
-    /// not assigned cleanly (`PWD` and `OLDPWD` always count; `HOME` does
-    /// not), or a tilde prefix other than `~`.
+    /// Whether a value may be derived from the working directory. No
+    /// variable is trusted: any parameter expansion counts except `$HOME`
+    /// on a line that never assigns `HOME`, and so do a command,
+    /// arithmetic or special expansion and a tilde prefix other than `~`
+    /// (TSK-397 Codex review round 9).
     pub(crate) fn tainted(&self, word: &Token) -> bool {
         word.complex
-            || word.params.iter().any(|name| {
-                matches!(name.as_str(), "PWD" | "OLDPWD")
-                    || !(name == "HOME" || self.assigned.contains(name))
-            })
+            || word
+                .params
+                .iter()
+                .any(|name| name != "HOME" || self.home_assigned)
             || word.tilde.as_deref().is_some_and(|prefix| prefix != "~")
     }
 }
@@ -730,7 +754,15 @@ pub(crate) fn read(
     hides: &dyn Fn(&[String]) -> bool,
     hook_variables: &[&str],
 ) -> Reading {
-    let mut reading = Reading::default();
+    let mut reading = Reading {
+        home_assigned: lexed.commands.iter().flatten().any(|word| {
+            word.text == "HOME"
+                || ["HOME=", "HOME+=", "HOME["]
+                    .iter()
+                    .any(|prefix| word.text.starts_with(prefix))
+        }),
+        ..Reading::default()
+    };
     for command in &lexed.commands {
         let mut at = 0;
         let mut header = false;
@@ -741,12 +773,6 @@ pub(crate) fn read(
             }
             if word.plain() && HEADERS.contains(&word.text.as_str()) {
                 header = true;
-                if let Some(name) = command.get(at + 1).filter(|w| w.plain()) {
-                    let tainted = command
-                        .get(at + 2..)
-                        .is_some_and(|values| values.iter().any(|w| reading.tainted(w)));
-                    reading.record(&name.text, tainted);
-                }
                 break;
             }
             if word.plain() && RESERVED.contains(&word.text.as_str()) {
@@ -757,8 +783,6 @@ pub(crate) fn read(
                 if hook_variables.contains(&name) {
                     reading.moves = true;
                 }
-                let tainted = reading.tainted(word);
-                reading.record(name, tainted);
                 at += 1;
                 continue;
             }
@@ -771,52 +795,33 @@ pub(crate) fn read(
         if rest.is_empty() {
             continue;
         }
-        record_declarations(&mut reading, rest);
-        match program_operands(rest, launcher, interpreter, 0) {
-            Some(operands) => {
-                let texts: Vec<String> = operands.iter().map(|w| w.text.clone()).collect();
-                if hides(&texts) {
-                    reading.moves = true;
+        if let Some(operands) = program_operands(rest, launcher, interpreter, 0) {
+            let texts: Vec<String> = operands.iter().map(|w| w.text.clone()).collect();
+            if hides(&texts) {
+                reading.moves = true;
+            }
+            for word in operands.iter().filter(|w| !w.redirect) {
+                if reading.derived.is_none() && reading.tainted(word) {
+                    reading.derived = Some(word.clone());
                 }
-                for word in operands.iter().filter(|w| !w.redirect) {
+                reading.operands.push(word.clone());
+            }
+        } else {
+            reading.moves = true;
+            // A quoted, escaped or expanded program word may still be an
+            // interpreter, so its operands are judged as one's are; they are
+            // never dropped (TSK-397 Codex review round 9).
+            if rest.first().is_some_and(|program| !program.plain()) {
+                for word in rest[1..].iter().filter(|w| !w.redirect) {
                     if reading.derived.is_none() && reading.tainted(word) {
                         reading.derived = Some(word.clone());
                     }
                     reading.operands.push(word.clone());
                 }
             }
-            None => reading.moves = true,
         }
     }
     reading
-}
-
-/// Names a declaration builtin or `printf -v` assigns. Each is recorded
-/// clean or tainted by its value; the command itself still counts as one
-/// that may move the shell.
-fn record_declarations(reading: &mut Reading, words: &[Token]) {
-    let Some(program) = words.first().filter(|w| w.plain()) else {
-        return;
-    };
-    match program.text.as_str() {
-        "export" | "declare" | "typeset" | "local" | "readonly" => {
-            for word in &words[1..] {
-                if let Some(name) = word.assignment() {
-                    let tainted = reading.tainted(word);
-                    reading.record(name, tainted);
-                }
-            }
-        }
-        "printf" => {
-            if let (Some(flag), Some(name)) = (words.get(1), words.get(2)) {
-                if flag.plain() && flag.text == "-v" && name.plain() {
-                    let tainted = words[3..].iter().any(|w| reading.tainted(w));
-                    reading.record(&name.text, tainted);
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 /// The operands of the interpreter a command runs from its program word,

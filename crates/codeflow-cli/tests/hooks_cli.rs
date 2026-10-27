@@ -9740,13 +9740,16 @@ fn shell_expansions_preserve_checkout_protection() {
         "W=.worktrees/w || W=src; python3 tool.py $W",
         "PWD=$PWD/.worktrees/w; cd docs && python3 tool.py $OLDPWD",
         "D=.worktrees/w; if false; then D=src; else python3 tool.py $D; fi",
+        // TSK-397: `true` may be a shell function that changes directory, so
+        // the directory is unknown after it, and no variable is trusted then.
+        "D=src; if true; then python3 tool.py $D/app.py; fi",
+        "if true; then python3 tool.py $PWD/src/app.py; fi",
     ] {
         cases.push(("exec-guard", line.into(), true));
     }
     for line in [
         r#"for f in src/*.py; do python3 lint.py "$f"; done"#,
-        "D=src; if true; then python3 tool.py $D/app.py; fi",
-        "if true; then python3 tool.py $PWD/src/app.py; fi",
+        "D=src; python3 tool.py $D/app.py",
     ] {
         cases.push(("exec-guard", line.into(), false));
     }

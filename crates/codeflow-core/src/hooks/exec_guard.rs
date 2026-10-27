@@ -97,6 +97,16 @@ pub fn evaluate_in(
     cwd: &std::path::Path,
     root: &std::path::Path,
 ) -> Vec<Violation> {
+    // A NUL byte ends a C string in the shell but not in the guard, so the
+    // two would read different commands; refuse before any lexing (TSK-397
+    // Codex review round 9).
+    if command.contains('\0') {
+        return vec![Violation::always_blocking(
+            "git.hook_integrity",
+            "the command holds a NUL byte, which the shell and the guard would read as different commands".to_string(),
+            "remove the NUL byte from the command",
+        )];
+    }
     // The dangerous/privilege modules read only `command`; branch, sandbox
     // bypass, and the protected-path policy are irrelevant to them, so default
     // values suffice.

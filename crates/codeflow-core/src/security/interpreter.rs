@@ -1906,6 +1906,102 @@ mod tests {
         );
     }
 
+    /// Security review round 5: a tilde anywhere in a word is a tilde, an
+    /// assignment counts only as a whole command in the main shell, and the
+    /// lexer's unmodeled corners are opaque.
+    #[test]
+    fn assignments_and_lexer_corners_fail_closed() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                // SR5-1: a tilde after `=` or `:`.
+                "x=~+; z; python3 /abs/r.py \"$x\"",
+                "x=a:~+; z; python3 /abs/r.py \"$x\"",
+                "export x=~+; z; python3 /abs/r.py \"$x\"",
+                "a=(~+); z; python3 /abs/r.py \"${a[0]}\"",
+                "z; python3 /abs/r.py d=~+/src/..",
+                // SR5-2: assignments that do not reach the main shell, or
+                // whose value the line does not know.
+                "(x=notes.txt); z; python3 /abs/r.py \"$x\"",
+                "x=notes.txt | true; z; python3 /abs/r.py \"$x\"",
+                "y=$(x=notes.txt); z; python3 /abs/r.py \"$x\"",
+                "x+=notes.txt; z; python3 /abs/r.py \"$x\"",
+                "for x; do z; python3 /abs/r.py \"$x\"; done",
+                "declare -n x=PWD; z; python3 /abs/r.py \"$x\"",
+                "case x in *) z; python3 /abs/r.py \"$x\";; esac",
+                "HOME=.claude; z; python3 /abs/r.py \"$HOME\"",
+                "printf -v x %s notes.txt; z; python3 /abs/r.py \"$x\"",
+                // SR5-3 to SR5-5: corners the lexer does not model.
+                "python3 x.py settings.json <<$'E'\nE",
+                "python3 x.py settings.json <<$(x)\n$(x)",
+                "python3 x.py settings.json \"$(( '1' ))\"",
+                "python3 x.py settings.json \"$((echo 1) )\"",
+                "python3 x.py settings.json \"${x:-'}'}\"",
+                // SR4-2 as round 4 wrote it, with `$'\''` as an operand.
+                "python3 x.py settings.json $'\\'' \"$\\\n{ cd ./src/lnk; }\"",
+            ],
+        );
+        assert_allowed(&repo, &["z; python3 /abs/r.py ~/notes.txt"]);
+    }
+
+    /// Codex review round 9: no variable is trusted once the directory is
+    /// unknown, a quoted or expanded interpreter name keeps its operands
+    /// judged, and non-ASCII input is read without a panic.
+    #[test]
+    fn no_variable_is_trusted_and_no_operand_is_dropped() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                // C9-1: the program word is quoted, escaped or expanded.
+                "z; \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; \\python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "prog=python3; z; \"$prog\" /abs/read_dir.py \"$PWD/src/..\"",
+                // C9-2: every assignment path, now untrusted.
+                "z; p=$(pwd); p+=/src/..; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); export p+=/src/..; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); declare p+=/src/..; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); (p=safe); python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); p=safe python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); case p in x) ;; esac; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); p+=; python3 /abs/read_dir.py \"$p\"",
+                "p=safe; z; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); export p=safe; python3 /abs/read_dir.py \"$p\"",
+                "z; p=$(pwd); printf -v p %s safe; python3 /abs/read_dir.py \"$p\"",
+                // The accepted cost: a variable after an unmodeled command.
+                "printf -v p '%s%s' 'no' 'tes.txt'; python3 tool.py \"$p\"",
+                "export a=notes.txt; python3 tool.py \"$a\"",
+                "x=notes.txt; z; python3 /abs/r.py \"$x\"",
+                // C9-3: non-ASCII words.
+                "é; python3 x.py settings.json",
+                "export x=é; python3 x.py settings.json",
+                "é=1; python3 x.py settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "x=café; python3 x.py notes.txt",
+                "printf -v p %s notes.txt; python3 x.py notes.txt",
+                "p=notes.txt; python3 x.py \"$p\"",
+            ],
+        );
+        // C9-4: a NUL byte refuses before anything is read.
+        let found = crate::hooks::exec_guard::evaluate_at(
+            "python3 x.py settings.json \"$\0{ cd ./hidden; }\"",
+            &SecuritySection::default(),
+            PolicyLevel::Block,
+            &repo.root,
+            &repo.root,
+        );
+        assert!(found.iter().any(|v| v.message.contains("NUL")), "{found:?}");
+    }
+
     /// Codex review round 3 finding 1: a `cd` function or a zsh `chpwd`
     /// hook in the shell moves it after `cd ./src`. The real shells land in
     /// `.claude`, and the guard refuses the line.
@@ -2999,7 +3095,6 @@ mod tests {
             &[
                 "python3 <<< $'print(17330\\x32)'",
                 "python3 -c $'print(1)'",
-                "printf -v p '%s%s' 'no' 'tes.txt'; python3 tool.py \"$p\"",
                 "printf -v p '%s%s' '.cla' 'ude/settings.json'",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
                 "python3 tool.py 'no''tes.txt'",
@@ -3061,7 +3156,6 @@ mod tests {
             &[
                 "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
-                "printf -v p '%s%s' 'no' 'tes.txt'; python3 tool.py \"$p\"",
                 "echo -e \"python3 tool.py .claude/settings.json\"",
                 "print -r '.cla\\x75de/settings.json'",
                 "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
@@ -3134,7 +3228,6 @@ mod tests {
                 "print -r '.cla\\x75de/settings.json'",
                 "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
                 "a=no; b=\"${a}tes.txt\"; python3 tool.py \"$b\"",
-                "export a=notes.txt; python3 tool.py \"$a\"",
                 "f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo -ne 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",

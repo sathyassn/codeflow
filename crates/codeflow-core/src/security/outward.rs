@@ -1106,13 +1106,23 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
     // python3 w.py f; do cd .claude; done`), so text order is not run order,
     // and a shell directory change or unmodeled command in any step makes the
     // set unknown (TSK-397 security review SF-6).
+    // When nothing on the line can move the shell, every command runs in
+    // the starting directory, so a step the walk cannot place (a loop body,
+    // which it reads conservatively) is that directory, not an unknown one.
+    let stays = !set.unknown;
     let mut seen = std::collections::HashSet::from([cwd.to_path_buf()]);
     for step in super::composed::paths::commands(command, cwd, home) {
         let mut local = DirSet {
             dirs: step.cwd.into_iter().collect(),
             unknown: false,
         };
-        local.unknown = local.dirs.is_empty();
+        if local.dirs.is_empty() {
+            if stays {
+                local.dirs.push(cwd.to_path_buf());
+            } else {
+                local.unknown = true;
+            }
+        }
         for segment in expand_commands(&step.text) {
             let mut words = command_argv(&segment);
             strip_reserved_words(&mut words);
