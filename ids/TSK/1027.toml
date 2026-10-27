@@ -1,0 +1,11 @@
+id = "TSK-1027"
+uid = "e127aad1-ef35-4372-9204-008e8b365079"
+kind = "TSK"
+title = "A review seat on macOS has a sanctioned route to drive a browser"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-27T20:46:47Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
