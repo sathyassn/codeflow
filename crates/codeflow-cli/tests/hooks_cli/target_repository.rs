@@ -193,6 +193,71 @@ fn tsk1002_r12_tee_destinations_are_writes() {
 
 #[cfg(windows)]
 #[test]
+fn tsk1002_review3_windows_unmapped_path_spellings() {
+    let f = Fixture::new();
+    let root = f.linked.to_str().unwrap().replace('/', "\\");
+    let home = f.temp.path().to_str().unwrap().replace('/', "\\");
+    for (guard, line) in [
+        ("git-guard", format!(r"printf x > '\\.\{root}\.git\config'")),
+        ("git-guard", r"printf x > '.git\config::$DATA'".to_string()),
+        ("exec-guard", format!(r"cat '{home}\.codex\AUTH~1.JSO'")),
+        (
+            "exec-guard",
+            r"cat '\\?\UNC\invalid\share\.codex\auth.json'".to_string(),
+        ),
+    ] {
+        let out = f.command(&f.linked, guard, &line);
+        assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
+    }
+    let out = f.command(&f.linked, "exec-guard", "cat notes.md");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
+
+#[test]
+fn tsk1002_review3_environment_ignore_inputs_cannot_hide_secrets() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.linked.join("scan/ignored")).unwrap();
+    std::fs::write(
+        f.linked.join("scan/ignored/id_rsa.rs"),
+        "fake private fixture",
+    )
+    .unwrap();
+    std::fs::write(f.linked.join(".gitignore"), "scan/ignored/\n").unwrap();
+    let config = f.temp.path().join("rg-options");
+    std::fs::write(&config, "--no-ignore-vcs\n").unwrap();
+    let mut cmd = f.guard_command(&f.linked, "exec-guard");
+    cmd.env("RIPGREP_CONFIG_PATH", config);
+    let out = run_with_stdin(
+        &mut cmd,
+        &guard_payload("rg -g '*.rs' token scan", &f.linked),
+    );
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("security.secret_reads"));
+}
+
+#[test]
+fn tsk1002_review3_nul_path_streams_preserve_file_names() {
+    let f = Fixture::new();
+    std::fs::write(f.temp.path().join("notes.md"), "ordinary fixture").unwrap();
+    for (line, expected) in [
+        ("printf '%s\\0' \"$HOME/notes.md\" | xargs -0 cat", 0),
+        ("printf '%s\\000' \"$HOME/notes.md\" | xargs -0 cat", 0),
+        (
+            "printf '%s\\0' \"$HOME/.codex/auth.json\" | xargs -0 cat",
+            2,
+        ),
+        (
+            "printf() { :; }; printf '%s\\0' \"$HOME/notes.md\" | xargs -0 cat",
+            2,
+        ),
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        assert_eq!(out.status.code(), Some(expected), "{line}: {out:?}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
 fn tsk1002_ci1_windows_home_streams_stay_guarded() {
     let f = Fixture::new();
     std::fs::create_dir(f.temp.path().join(".codex")).unwrap();
@@ -283,17 +348,15 @@ fn tsk1002_r13_home_catalog_globs_and_named_metadata_paths() {
 }
 
 #[test]
-fn tsk1002_r13_linked_search_honors_ignored_build_roots() {
+fn tsk1002_r13_linked_search_inspects_ignored_build_roots() {
     let f = Fixture::new();
     std::fs::write(f.linked.join(".gitignore"), "/target/\n").unwrap();
     std::fs::create_dir(f.linked.join("target")).unwrap();
     std::fs::write(f.linked.join("target/id_rsa.rs"), "fake secret\n").unwrap();
     std::fs::write(f.linked.join("public.rs"), "ordinary fixture\n").unwrap();
-    for line in ["rg -g '*.rs' foo .", "rg -g '*.rs' foo ./"] {
-        let out = f.command(&f.linked, "exec-guard", line);
-        assert_eq!(out.status.code(), Some(0), "{line}: {out:?}");
-    }
     for line in [
+        "rg -g '*.rs' foo .",
+        "rg -g '*.rs' foo ./",
         "rg --no-ignore -g '*.rs' foo .",
         "rg -g '*.rs' foo target",
         "rg -g '*' foo .",

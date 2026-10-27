@@ -6800,11 +6800,18 @@ fn expand_shell_commands(command: &str) -> Expanded {
 }
 
 fn expand_command_bodies(command: &str, git_bodies: bool) -> Expanded {
-    let mut raw = Vec::new();
-    split_into_segments(command, &mut raw, 0, false);
+    let raw = command_segments(command);
     let mut out = Expanded::default();
     expand_segments(raw, &mut out, 1, &mut Literals::default(), git_bodies);
     out
+}
+
+/// Split shell syntax without also expanding the code carried by a command.
+/// Position-aware consumers already visit those bodies with their own state.
+pub(crate) fn command_segments(command: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    split_into_segments(command, &mut segments, 0, false);
+    segments
 }
 
 /// Push each segment, then the commands its text carries, unwrapped again
@@ -7515,7 +7522,7 @@ fn env_split_option(word: &str) -> Option<SplitString<'_>> {
 /// `\_` escape, and they may hold more env options, assignments or a shell
 /// `-c`, so the text is expanded like any other command. `None` when no
 /// launcher in front uses `-S`.
-fn env_split_command(tokens: &[String]) -> Option<String> {
+pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
     let assignment = |t: &str| {
         t.split_once('=')
             .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
@@ -7606,21 +7613,85 @@ pub(crate) fn has_shell_code_option(args: &[String]) -> bool {
     shell_code_option(args).0
 }
 
+/// Unknown parameters and encoded bodies never establish readable code.
+fn powershell_code(args: &[String]) -> Option<String> {
+    let unread = || Some("__unresolved_shell_code".to_string());
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        let option = arg.trim_start_matches(['-', '/', '\u{2013}', '\u{2014}', '\u{2015}']);
+        if option == arg {
+            // Windows PowerShell's implicit command form. Treat other bare
+            // forms as code too, preserving literal-path inspection.
+            return Some(args[at..].join(" "));
+        }
+        let option = option.to_ascii_lowercase();
+        if option.is_empty() {
+            return unread();
+        }
+        if "encodedcommand".starts_with(&option) || option == "ec" {
+            return unread();
+        }
+        if option == "c" || "command".starts_with(&option) && option.len() >= 3 {
+            return args
+                .get(at + 1)
+                .map(|_| args[at + 1..].join(" "))
+                .or_else(unread);
+        }
+        if option == "f" || "file".starts_with(&option) {
+            return if args.get(at + 1).is_some() {
+                None
+            } else {
+                unread()
+            };
+        }
+        let flags = [
+            "noprofile",
+            "nologo",
+            "noninteractive",
+            "sta",
+            "mta",
+            "login",
+        ];
+        let values = [
+            "executionpolicy",
+            "workingdirectory",
+            "windowstyle",
+            "inputformat",
+            "outputformat",
+        ];
+        let choices: Vec<_> = flags
+            .iter()
+            .map(|name| (*name, false))
+            .chain(values.iter().map(|name| (*name, true)))
+            .filter(|(name, _)| name.starts_with(&option))
+            .collect();
+        let [(_, takes_value)] = choices.as_slice() else {
+            return unread();
+        };
+        at += 1;
+        if *takes_value {
+            if args.get(at).is_none() {
+                return unread();
+            }
+            at += 1;
+        }
+    }
+    None
+}
+
 /// Shell-specific inline forms share the same body reader and reparse budget.
 /// Fish's initialization commands execute before its main command.
 pub(crate) fn shell_inline_code(program: &str, args: &[String]) -> Option<String> {
     let mut bodies = Vec::new();
+    let normalized = program.to_ascii_lowercase();
+    if matches!(normalized.trim_end_matches(".exe"), "powershell" | "pwsh") {
+        return powershell_code(args);
+    }
     let program = program.strip_suffix(".exe").unwrap_or(program);
-    if matches!(program, "powershell" | "pwsh" | "cmd") {
+    if program == "cmd" {
         return args
             .iter()
-            .position(|arg| {
-                if program == "cmd" {
-                    arg.eq_ignore_ascii_case("/c") || arg.eq_ignore_ascii_case("/k")
-                } else {
-                    arg.eq_ignore_ascii_case("-command") || arg.eq_ignore_ascii_case("-c")
-                }
-            })
+            .position(|arg| arg.eq_ignore_ascii_case("/c") || arg.eq_ignore_ascii_case("/k"))
             .map(|at| args[at + 1..].join(" "));
     }
     if program.trim_end_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-')) == "fish" {
@@ -13418,6 +13489,12 @@ fn takes_next_word(launcher: &str, a: &str) -> bool {
 
 /// Known shell names, including versioned and Windows executable spellings.
 pub(crate) fn is_shell(name: &str) -> bool {
+    if matches!(
+        name.to_ascii_lowercase().trim_end_matches(".exe"),
+        "pwsh" | "powershell"
+    ) {
+        return true;
+    }
     let name = name.strip_suffix(".exe").unwrap_or(name);
     let name = name.trim_end_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-'));
     matches!(

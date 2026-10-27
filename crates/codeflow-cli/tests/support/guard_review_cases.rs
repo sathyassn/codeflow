@@ -385,7 +385,7 @@ pub const CASES: &[(u8, &str, &str, bool)] = &[
     (8, "", "cat src/public.rs", false),
     (8, "", "cat public-links/*.rs", false),
     (8, "", "rg -L -g '*.rs' token public-links", false),
-    (9, "", "rg -g '*.rs' token scan", false),
+    (9, "exec-guard", "rg -g '*.rs' token scan", true),
     (
         9,
         "exec-guard",

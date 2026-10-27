@@ -10587,6 +10587,9 @@ mod guard_review_cases;
 #[path = "support/guard_review2_cases.rs"]
 mod guard_review2_cases;
 
+#[path = "support/guard_review3_cases.rs"]
+mod guard_review3_cases;
+
 fn review_guard_cases(finding: u8) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("repo");
@@ -10594,6 +10597,9 @@ fn review_guard_cases(finding: u8) {
     std::fs::create_dir(&root).unwrap();
     enforced_repo(&root);
     guard_review_cases::seed(&root, &home);
+    if finding >= 40 {
+        guard_review3_cases::seed(&root, &home);
+    }
     if finding >= 21 {
         guard_review2_cases::seed(finding, &root, &home);
     }
@@ -10609,9 +10615,11 @@ fn review_guard_cases(finding: u8) {
     for &(_, owner, command, refuse) in guard_review_cases::CASES
         .iter()
         .chain(guard_review2_cases::CASES)
+        .chain(guard_review3_cases::CASES)
         .filter(|c| c.0 == finding)
     {
-        let line = guard_review_cases::render(command, &root, &home);
+        let line =
+            guard_review_cases::render(command, &root, &home).replace("@HOME@", &shell_path(&home));
         for guard in ["git-guard", "exec-guard"] {
             let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
                 "tool_input":{"command":line}})
@@ -10942,4 +10950,59 @@ fn the_guards_allow_codeflow_follow_and_refuse_a_direct_ledger_edit() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+}
+
+#[test]
+fn tsk1002_review3_planned_recursive_links() {
+    review_guard_cases(40);
+}
+
+#[test]
+fn tsk1002_review3_recursive_directory_readers() {
+    review_guard_cases(41);
+}
+
+#[test]
+fn tsk1002_review3_physical_cd_components() {
+    review_guard_cases(42);
+}
+
+#[test]
+fn tsk1002_review3_ignored_secret_paths() {
+    review_guard_cases(43);
+}
+
+#[test]
+fn tsk1002_review3_same_line_executable_files() {
+    review_guard_cases(44);
+}
+
+#[test]
+fn tsk1002_review3_powershell_parameters() {
+    review_guard_cases(45);
+}
+
+#[test]
+fn tsk1002_review3_deno_parameters() {
+    review_guard_cases(46);
+}
+
+#[test]
+fn tsk1002_review3_applescript_bodies() {
+    review_guard_cases(47);
+}
+
+#[test]
+fn tsk1002_review3_curl_file_values() {
+    review_guard_cases(48);
+}
+
+#[test]
+fn tsk1002_review3_ordinary_home_metadata() {
+    review_guard_cases(49);
+}
+
+#[test]
+fn tsk1002_r23_recursive_detection_respects_argument_roles() {
+    review_guard_cases(50);
 }

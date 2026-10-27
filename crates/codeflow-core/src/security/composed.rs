@@ -2687,8 +2687,29 @@ impl Run<'_> {
     /// removed: what the modelled builtins write, and outside text for any
     /// other program. Also whether it holds text the line spells.
     fn capture(&self, body: &str) -> (Result<Value, &'static str>, bool) {
+        let mut value = match self.capture_stdout(body) {
+            Ok(value) => value,
+            Err(reason) => return (Err(reason), true),
+        };
+        while let Some(Piece::Text(text)) = value.0.last_mut() {
+            while text.ends_with('\n') {
+                text.pop();
+            }
+            if text.is_empty() {
+                value.0.pop();
+            } else {
+                break;
+            }
+        }
+        let online = value.0.iter().any(|piece| matches!(piece, Piece::Text(_)));
+        (Ok(value), online)
+    }
+
+    /// Literal stdout bytes for pipeline and process-substitution consumers.
+    /// Unlike command substitution, these retain trailing newlines.
+    fn capture_stdout(&self, body: &str) -> Result<Value, &'static str> {
         if self.nesting >= 8 {
-            return (Err("nesting deeper than the guard reads"), true);
+            return Err("nesting deeper than the guard reads");
         }
         let mut scratch = Vec::new();
         let mut run = new_run(
@@ -2706,23 +2727,9 @@ impl Run<'_> {
         }
         let mut value = Value::default();
         for record in records {
-            match record {
-                Ok(piece) => value.append(&piece),
-                Err(reason) => return (Err(reason), true),
-            }
+            value.append(&record?);
         }
-        while let Some(Piece::Text(text)) = value.0.last_mut() {
-            while text.ends_with('\n') {
-                text.pop();
-            }
-            if text.is_empty() {
-                value.0.pop();
-            } else {
-                break;
-            }
-        }
-        let online = value.0.iter().any(|piece| matches!(piece, Piece::Text(_)));
-        (Ok(value), online)
+        Ok(value)
     }
 
     /// `$((...))` and `$[...]`: integer arithmetic over decimal literals

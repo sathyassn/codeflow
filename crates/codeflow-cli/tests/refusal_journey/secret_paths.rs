@@ -177,6 +177,9 @@ fn native_macos_sandbox_denies_stores_and_leaves_workspace_files_readable() {
         .unwrap();
     success(&out);
     assert_eq!(out.stdout, b"planted fixture\n");
+    for harness in ["claude", "codex", "grok"] {
+        project.shell(harness, "cat id_rsa", Some("security.secret_reads"));
+    }
     for name in ["README.md", ".env"] {
         let path = project.root.join(name);
         std::fs::write(&path, "ordinary fixture\n").unwrap();
@@ -190,39 +193,46 @@ fn native_macos_sandbox_denies_stores_and_leaves_workspace_files_readable() {
     }
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn tsk1002_review2_b06_native_store_profile_leaves_workspace_key_readable() {
-    let project = Project::new();
-    let settings: Value =
-        serde_json::from_slice(&std::fs::read(project.root.join(".claude/settings.json")).unwrap())
-            .unwrap();
-    assert!(settings["permissions"]["deny"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|rule| rule == "Read(**/id_rsa*)"));
-    let (profile, _) = native_secret_read_profile(&settings, &project.home.canonicalize().unwrap());
-    let key = project.root.join("id_rsa");
-    let contents = "fake workspace key fixture\n";
-    std::fs::write(&key, contents).unwrap();
-    let native = Command::new("/usr/bin/sandbox-exec")
-        .args(["-p", &profile, "/bin/cat"])
-        .arg(&key)
-        .output()
-        .unwrap();
-    success(&native);
-    assert_eq!(native.stdout, contents.as_bytes());
-    for harness in ["claude", "codex", "grok"] {
-        project.shell(harness, "cat id_rsa", Some("security.secret_reads"));
-    }
-}
-
 #[path = "../support/guard_cases.rs"]
 mod guard_cases;
 
 #[path = "../support/guard_review_cases.rs"]
 mod guard_review_cases;
+
+#[path = "../support/guard_review3_cases.rs"]
+mod guard_review3_cases;
+
+#[test]
+fn tsk1002_review3_installed_routes_keep_the_same_verdicts() {
+    let project = Project::new();
+    guard_review_cases::seed(&project.root, &project.home);
+    guard_review3_cases::seed(&project.root, &project.home);
+    for finding in 40..50 {
+        let &(_, _, command, refuse) = guard_review3_cases::CASES
+            .iter()
+            .find(|case| case.0 == finding)
+            .unwrap();
+        let line = command.replace(
+            "@HOME@",
+            &codeflow_core::portable_path::slashed(&project.home),
+        );
+        for harness in ["claude", "codex", "grok"] {
+            let outputs = project.replay(harness, "Bash", json!({"command":line}));
+            assert!(!outputs.is_empty(), "{harness}: no installed hook ran");
+            if refuse {
+                assert!(
+                    outputs.iter().any(|out| out.status.code() == Some(2)),
+                    "{harness}: {line}: {outputs:?}"
+                );
+            } else {
+                assert!(
+                    outputs.iter().all(|out| out.status.success()),
+                    "{harness}: {line}: {outputs:?}"
+                );
+            }
+        }
+    }
+}
 
 #[test]
 fn tsk1002_review_installed_hooks_refuse_executable_inputs() {

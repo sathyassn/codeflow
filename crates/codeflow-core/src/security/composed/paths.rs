@@ -14,10 +14,23 @@ pub(crate) struct Command {
     pub(crate) unresolved: Vec<String>,
     /// Literal builtin output, captured without executing a program.
     stdout: Option<String>,
-    /// Literal data a preceding pipeline producer supplies to this command.
-    pub(crate) input_code: Option<String>,
+    /// Literal stdin data established for this command position.
+    input_code: Option<String>,
+    /// An inner pipe or stdin redirect owns the input, including unknown input.
+    input_bound: bool,
     pub(crate) links: Vec<Link>,
     pub(crate) checkouts: Vec<PathBuf>,
+}
+
+impl Command {
+    /// Inherit known stdin only when no inner pipe or redirect owns it.
+    pub(crate) fn input<'a>(&'a self, inherited: Option<&'a str>) -> Option<&'a str> {
+        if self.input_bound {
+            self.input_code.as_deref()
+        } else {
+            self.input_code.as_deref().or(inherited)
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -75,6 +88,7 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
             unresolved: vec![line.into()],
             stdout: None,
             input_code: None,
+            input_bound: true,
             links: Vec::new(),
             checkouts: Vec::new(),
         }];
@@ -130,6 +144,8 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
         let key = (
             command.cwd.clone(),
             command.text.clone(),
+            command.input_code.clone(),
+            command.input_bound,
             command.links.clone(),
             command.checkouts.clone(),
         );
@@ -150,6 +166,7 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
 
 fn position_effects(commands: Vec<Command>) -> Vec<Command> {
     let mut links = Vec::new();
+    let mut next_group = 0;
     let mut checkouts = Vec::new();
     commands
         .into_iter()
@@ -167,11 +184,14 @@ fn position_effects(commands: Vec<Command>) -> Vec<Command> {
                     }
                     checkouts.push(path);
                 }
-                links.extend(created_links(
-                    &command.text,
-                    dir,
-                    command.input_code.as_deref(),
-                ));
+                let mut created = created_links(&command.text, dir, command.input_code.as_deref());
+                for link in &mut created {
+                    if let Some(group) = &mut link.alternatives {
+                        *group += next_group;
+                    }
+                }
+                next_group += created.len();
+                links.extend(created);
             }
             command
         })
@@ -184,6 +204,16 @@ fn position_effects(commands: Vec<Command>) -> Vec<Command> {
 pub(crate) struct Link {
     from: PathBuf,
     to: PathBuf,
+    /// Mutually exclusive destinations for the same link creation.
+    alternatives: Option<usize>,
+}
+
+impl Link {
+    /// The path at which this link may be created.
+    #[must_use]
+    pub(crate) fn path(&self) -> &Path {
+        &self.from
+    }
 }
 
 fn pipeline_tail_words(text: &str) -> Vec<String> {
@@ -245,7 +275,7 @@ fn created_links(text: &str, cwd: &Path, input: Option<&str>) -> Vec<Link> {
     };
     let dest = cwd.join(&dest);
     let mut links = Vec::new();
-    for source in copy.sources {
+    for (group, source) in copy.sources.into_iter().enumerate() {
         // The destination can be an existing directory, or one made earlier
         // on the line. Retain both spellings without consulting the hook's cwd.
         for from in [
@@ -261,7 +291,11 @@ fn created_links(text: &str, cwd: &Path, input: Option<&str>) -> Vec<Link> {
                 cwd
             }
             .join(&source);
-            links.push(Link { from, to });
+            links.push(Link {
+                from,
+                to,
+                alternatives: Some(group),
+            });
         }
     }
     links
@@ -351,6 +385,7 @@ fn archive_links(name: &str, args: &[String], cwd: &Path, input: Option<&str>) -
     }
     if unknown {
         return vec![Link {
+            alternatives: None,
             from: dest,
             to: cwd.join("$__unread_link_source"),
         }];
@@ -358,6 +393,7 @@ fn archive_links(name: &str, args: &[String], cwd: &Path, input: Option<&str>) -
     operands
         .into_iter()
         .map(|source| Link {
+            alternatives: None,
             from: lexical_join(&dest, Path::new(source.trim_start_matches('/'))),
             to: lexical_join(cwd, Path::new(&source)),
         })
@@ -378,6 +414,7 @@ fn rsync_links(args: &[String], cwd: &Path) -> Vec<Link> {
         .into_iter()
         .filter(|(option, _)| option == "--link-dest")
         .map(|(_, source)| Link {
+            alternatives: None,
             from: dest.clone(),
             to: lexical_join(&dest, Path::new(&source)),
         })
@@ -391,11 +428,11 @@ pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec
         return Ok(Vec::new());
     }
     let original = cwd.join(word);
-    let mut pending = vec![(original.clone(), vec![original])];
+    let mut pending = vec![(original.clone(), vec![original.clone()], Vec::new())];
     let mut seen = std::collections::HashSet::new();
     let mut mapped = Vec::new();
-    while let Some((path, ancestors)) = pending.pop() {
-        if !seen.insert(path.clone()) {
+    while let Some((path, ancestors, choices)) = pending.pop() {
+        if !seen.insert((path.clone(), choices.clone())) {
             continue;
         }
         if seen.len() > 64 || ancestors.len() > 16 {
@@ -405,10 +442,24 @@ pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec
         // just as the kernel does. Whole-path lexical normalization loses it.
         let mut prefix = PathBuf::new();
         let mut components = path.components();
+        let mut replaced = false;
         while let Some(component) = components.next() {
+            // A directory destination also admits a link below this prefix.
+            // Retain that alternative, but never consume a parent component
+            // on the original spelling after following a planned link.
+            if replaced && matches!(component, std::path::Component::ParentDir) {
+                break;
+            }
             prefix.push(component.as_os_str());
             let prefix_path = crate::hooks::git_guard::prospective_path(&prefix)?;
-            for link in links {
+            for (index, link) in links.iter().enumerate() {
+                if link.alternatives.is_some_and(|group| {
+                    choices
+                        .iter()
+                        .any(|&(prior, chosen)| prior == group && chosen != index)
+                }) {
+                    continue;
+                }
                 let from = crate::hooks::git_guard::prospective_path(&link.from)?;
                 if prefix_path != from {
                     continue;
@@ -428,15 +479,27 @@ pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec
                 }
                 let mut next_ancestors = ancestors.clone();
                 next_ancestors.push(target.clone());
-                pending.push((target.clone(), next_ancestors));
-                mapped.push(target);
+                let mut next_choices = choices.clone();
+                if let Some(group) = link.alternatives {
+                    if !next_choices.contains(&(group, index)) {
+                        next_choices.push((group, index));
+                    }
+                }
+                pending.push((target, next_ancestors, next_choices));
+                replaced = true;
+            }
+        }
+        if !replaced && path != original {
+            // prospective_path is a folded comparison key, not a filesystem
+            // path. Return the case-preserving physical spelling instead.
+            let resolved = crate::hooks::edit_guard::normalized(&path, true)
+                .map_err(|error| error.to_string())?;
+            if !mapped.contains(&resolved) {
+                mapped.push(resolved);
             }
         }
     }
-    mapped
-        .into_iter()
-        .map(|path| crate::hooks::git_guard::prospective_path(&path))
-        .collect()
+    Ok(mapped)
 }
 
 /// Maximum distinct concrete shell-code readings per input line.
@@ -514,7 +577,7 @@ pub(crate) fn literal_input_script(line: &str) -> Option<String> {
                 word.parts.iter().find_map(|part| match part {
                     Part::ProcSubst(body) => {
                         run.approx.set(false);
-                        let value = run.capture(body).0.ok().and_then(|v| v.exact());
+                        let value = run.capture_stdout(body).ok().and_then(|v| v.exact());
                         (!run.approx.get()).then_some(value).flatten()
                     }
                     _ => None,
@@ -528,7 +591,10 @@ pub(crate) fn literal_input_script(line: &str) -> Option<String> {
 pub(crate) fn literal_output(line: &str) -> Option<String> {
     let mut events = Vec::new();
     let run = new_run(Dialect::Bash, State::default(), &mut events, 0, 0);
-    let value = run.capture(line).0.ok().and_then(|value| value.exact());
+    let value = run
+        .capture_stdout(line)
+        .ok()
+        .and_then(|value| value.exact());
     (!run.approx.get()).then_some(value).flatten()
 }
 
@@ -538,6 +604,16 @@ fn stdin_option(args: &[String]) -> bool {
         .any(|arg| arg.starts_with('-') && !arg.starts_with("--") && arg.contains('s'))
 }
 
+fn stdin_redirect(token: &Tok) -> bool {
+    let Tok::Redir { op, .. } = token else {
+        return false;
+    };
+    let digits = op.bytes().take_while(u8::is_ascii_digit).count();
+    let (fd, rest) = op.split_at(digits);
+    // Bare input redirects and fd 0 (including leading zeros) bind stdin.
+    fd.bytes().all(|byte| byte == b'0') && rest.starts_with('<')
+}
+
 fn unread_code(reason: &str) -> Command {
     Command {
         text: "__unresolved_shell_code".into(),
@@ -545,6 +621,7 @@ fn unread_code(reason: &str) -> Command {
         unresolved: vec![reason.into()],
         stdout: None,
         input_code: None,
+        input_bound: true,
         links: Vec::new(),
         checkouts: Vec::new(),
     }
@@ -854,15 +931,18 @@ fn walk(
         if !producers.is_empty() {
             let consumers = output.split_off(first_output);
             for consumer in consumers {
+                if consumer.input_bound {
+                    output.push(consumer);
+                    continue;
+                }
                 let before = output.len();
                 for producer in producers.iter().filter(|producer| {
                     producer.cwd == consumer.cwd || producer.cwd.is_none() || consumer.cwd.is_none()
                 }) {
                     let mut command = consumer.clone();
                     command.text = format!("{} | {}", producer.text, command.text);
-                    if command.input_code.is_none() {
-                        command.input_code.clone_from(&producer.stdout);
-                    }
+                    command.input_code.clone_from(&producer.stdout);
+                    command.input_bound = true;
                     if crate::security::outward::reads_stdin_code(&consumer.text) {
                         command
                             .unresolved
@@ -913,6 +993,7 @@ fn walk(
                         unresolved: vec!["pipeline input with too many reachable states".into()],
                         stdout: None,
                         input_code: None,
+                        input_bound: true,
                         links: Vec::new(),
                         checkouts: Vec::new(),
                     }];
@@ -986,6 +1067,93 @@ fn walk(
 
 fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// A NUL-delimited stream can carry bytes that a shell argument cannot.
+/// Keep this narrow printf form out of command-substitution decoding.
+fn nul_stdout(program: &str, args: &[String]) -> Option<String> {
+    if program != "printf" || !matches!(args.first().map(String::as_str), Some("%s\\0" | "%s\\000"))
+    {
+        return None;
+    }
+    let mut output = String::new();
+    if args.len() == 1 {
+        output.push('\0');
+    }
+    for arg in &args[1..] {
+        output.push_str(arg);
+        output.push('\0');
+    }
+    Some(output)
+}
+
+fn names_written_file(position: &Position, dir: &Path, file: &str, links: &[Link]) -> bool {
+    let candidate = lexical_join(dir, Path::new(file));
+    if crate::hooks::git_guard::has_glob(file) {
+        // New files are absent from the expansion snapshot. A selector that
+        // may name one cannot certify the code the interpreter will read.
+        let Some(name) = candidate.file_name().and_then(|name| name.to_str()) else {
+            return true;
+        };
+        let Ok(pattern) = glob::Pattern::new(name) else {
+            return true;
+        };
+        return position
+            .scripts
+            .iter()
+            .map(|(path, _)| path)
+            .chain(links.iter().map(|link| &link.from))
+            .any(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_none_or(|name| {
+                        pattern.matches_with(
+                            name,
+                            glob::MatchOptions {
+                                case_sensitive: !cfg!(windows),
+                                require_literal_separator: true,
+                                require_literal_leading_dot: false,
+                            },
+                        )
+                    })
+            });
+    }
+    if !position
+        .scripts
+        .iter()
+        .any(|(path, _)| path.file_name() == candidate.file_name())
+        && !links
+            .iter()
+            .any(|link| candidate.starts_with(&link.from) || candidate.starts_with(&link.to))
+        && !std::fs::symlink_metadata(&candidate)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return false;
+    }
+    let readings = |path: &Path| -> Result<Vec<PathBuf>, String> {
+        let mut paths = vec![crate::hooks::git_guard::prospective_path(path)?];
+        let mapped = linked_paths(
+            path.to_str().ok_or("cannot read a script path")?,
+            dir,
+            links,
+        )?;
+        for path in mapped {
+            paths.push(crate::hooks::git_guard::prospective_path(&path)?);
+        }
+        Ok(paths)
+    };
+    let Ok(candidates) = readings(&candidate) else {
+        return true;
+    };
+    for (path, _) in &position.scripts {
+        let Ok(written) = readings(path) else {
+            return true;
+        };
+        if written.iter().any(|path| candidates.contains(path)) {
+            return true;
+        }
+    }
+    false
 }
 
 fn unresolved_word(word: &Word) -> String {
@@ -1183,6 +1351,8 @@ fn simple(
     let mut text = Vec::new();
     let mut bodies = Vec::new();
     let mut doc_input = None;
+    let mut here_input = None;
+    let stdin = tokens.iter().rev().find(|token| stdin_redirect(token));
     let mut doc_headers = Vec::new();
     for token in tokens {
         match token {
@@ -1192,10 +1362,22 @@ fn simple(
                 target: Some(word),
                 ..
             } => {
-                text.push(format!(
+                let before = unresolved.len();
+                let redirect = format!(
                     "{op} {}",
                     resolve(&mut run, word, Ctx::Fields, &mut unresolved)
-                ));
+                );
+                if op.ends_with("<<<")
+                    && stdin.is_some_and(|last| std::ptr::eq(token, last))
+                    && unresolved.len() == before
+                {
+                    here_input =
+                        crate::security::outward::here_string(&redirect).map(|mut body| {
+                            body.push('\n');
+                            body
+                        });
+                }
+                text.push(redirect);
             }
             Tok::Redir {
                 op,
@@ -1203,17 +1385,19 @@ fn simple(
                 ..
             } => {
                 if let Some(doc) = docs.get(*index) {
-                    let body = run
+                    let known_body = run
                         .word(&doc.body, Ctx::Assign)
                         .fields
                         .ok()
                         .and_then(|fields| fields.first().and_then(Value::exact));
-                    let body = body.unwrap_or_else(|| {
+                    let body = known_body.clone().unwrap_or_else(|| {
                         unresolved.push(doc.body.raw.clone());
                         doc.body.raw.clone()
                     });
                     let header = format!("{op}'{}'", doc.delimiter);
-                    doc_input = Some(body.clone());
+                    if stdin.is_some_and(|last| std::ptr::eq(token, last)) {
+                        doc_input = known_body;
+                    }
                     doc_headers.push(header.clone());
                     text.push(header);
                     bodies.push(format!("{body}\n{}", doc.delimiter));
@@ -1265,17 +1449,24 @@ fn simple(
             .filter(|(program, _)| matches!(*program, "echo" | "printf" | "print"))
             .and_then(|_| {
                 run.approx.set(false);
-                let captured = run.capture(&text).0;
+                let captured = run.capture_stdout(&text);
                 if run.approx.get() {
                     None
                 } else {
-                    captured.ok().and_then(|value| value.exact())
+                    captured.ok().and_then(|value| value.exact()).or_else(|| {
+                        launched
+                            .filter(|(program, _)| {
+                                unresolved.is_empty()
+                                    && run.state.world.is_none()
+                                    && !run.state.functions.contains_key(*program)
+                                    && !run.state.aliases.contains_key(*program)
+                            })
+                            .and_then(|(program, args)| nul_stdout(program, args))
+                    })
                 }
             })
     };
-    let input_code = doc_input
-        .clone()
-        .or_else(|| crate::security::outward::here_string(&text));
+    let input_code = doc_input.clone().or(here_input);
     if let Some(dir) = &position.state.directory {
         let mut targets = crate::hooks::git_guard::redirect_writes(&text).targets;
         if let Some((program, args)) = launched {
@@ -1295,7 +1486,7 @@ fn simple(
                 .any(|token| matches!(token, Tok::Redir { op, .. } if op.contains(">>")));
         for target in targets {
             let path = lexical_join(dir, Path::new(&target));
-            if doc_input.is_none() && !position.scripts.iter().any(|(prior, _)| prior == &path) {
+            if doc_headers.is_empty() && !position.scripts.iter().any(|(prior, _)| prior == &path) {
                 continue;
             }
             position.scripts.retain(|(prior, _)| prior != &path);
@@ -1317,6 +1508,7 @@ fn simple(
         unresolved,
         stdout,
         input_code,
+        input_bound: stdin.is_some(),
         links: Vec::new(),
         checkouts: Vec::new(),
     });
@@ -1330,6 +1522,115 @@ fn simple(
         return position;
     }
     let reader = crate::hooks::git_guard::script_reader(&words);
+    if !position.scripts.is_empty() {
+        let links = position_effects(output.clone())
+            .last()
+            .map(|command| command.links.clone())
+            .unwrap_or_default();
+        let linked_script = links.iter().any(|link| {
+            position
+                .scripts
+                .iter()
+                .any(|(path, _)| path.starts_with(&link.from) || path.starts_with(&link.to))
+        });
+        if let Some((program, args)) = launched {
+            let family = crate::security::outward::interpreter_family(
+                crate::hooks::git_guard::basename(program),
+            );
+            let interpreter = family.is_some();
+            let make = matches!(
+                crate::security::unresolved::writer_name(program),
+                "make" | "gmake"
+            );
+            let mut candidates = Vec::new();
+            let file_arguments = family
+                .filter(|family| matches!(*family, "python" | "node" | "nodejs" | "perl" | "ruby"))
+                .map(|family| {
+                    crate::security::outward::interpreter_arguments(family, args, None)
+                        .0
+                        .into_iter()
+                        .map(|(arg, _)| arg)
+                        .collect::<Vec<_>>()
+                });
+            if program.contains(['/', '\\']) {
+                candidates.push(program);
+            }
+            if let Some(files) = &file_arguments {
+                candidates.extend(files.iter().map(String::as_str));
+            } else if interpreter
+                || (reader.is_none_or(|(name, args)| {
+                    crate::hooks::git_guard::shell_inline_code(name, args).is_none()
+                }) && !crate::hooks::git_guard::reads_shell_stdin(&words)
+                    && (make || reader.is_some()))
+            {
+                candidates.extend(args.iter().map(String::as_str));
+            }
+            let explicit_makefile = make
+                && args.iter().any(|arg| {
+                    matches!(arg.as_str(), "-f" | "--file" | "--makefile")
+                        || arg.starts_with("-f")
+                        || arg.starts_with("--file=")
+                        || arg.starts_with("--makefile=")
+                });
+            if make && !explicit_makefile {
+                candidates.extend(["GNUmakefile", "makefile", "Makefile"]);
+            }
+            let mut directory = position.state.directory.clone();
+            if make {
+                let mut at = 0;
+                while let Some(arg) = args.get(at) {
+                    let target = if matches!(arg.as_str(), "-C" | "--directory") {
+                        at += 1;
+                        args.get(at).map(String::as_str)
+                    } else {
+                        arg.strip_prefix("--directory=")
+                            .or_else(|| arg.strip_prefix("-C"))
+                    };
+                    if let Some(target) = target {
+                        directory = directory.map(|dir| lexical_join(&dir, Path::new(target)));
+                    }
+                    at += 1;
+                }
+            }
+            let executes_written = directory.as_ref().map_or(
+                !position.scripts.is_empty() && !candidates.is_empty(),
+                |dir| {
+                    candidates.iter().any(|file| {
+                        let file = file
+                            .strip_prefix("--file=")
+                            .or_else(|| file.strip_prefix("--makefile="))
+                            .or_else(|| file.strip_prefix("-f").filter(|value| !value.is_empty()))
+                            .unwrap_or(file);
+                        names_written_file(&position, dir, file, &links)
+                    })
+                },
+            );
+            let unverified_selection = candidates
+                .iter()
+                .any(|file| crate::hooks::git_guard::has_glob(file));
+            let raw_body = directory.as_ref().is_some_and(|dir| {
+                reader.is_some_and(|(_, args)| {
+                    args.iter()
+                        .find(|arg| !arg.starts_with('-'))
+                        .is_some_and(|file| {
+                            let file = lexical_join(dir, Path::new(file));
+                            position.scripts.iter().any(|(path, _)| path == &file)
+                        })
+                })
+            });
+            if executes_written
+                && (reader.is_none()
+                    || interpreter
+                    || linked_script
+                    || unverified_selection
+                    || !raw_body)
+            {
+                let mut unread = unread_code("a file written earlier on this line is executed without a verified code reading");
+                unread.input_code = Some("__unresolved_shell_code".into());
+                output.push(unread);
+            }
+        }
+    }
     let script = if let Some(("eval", args)) = reader {
         Some(eval_body(args))
     } else if let Some((name, args)) = reader {
@@ -1354,8 +1655,10 @@ fn simple(
                         word.parts.iter().find_map(|part| match part {
                             Part::ProcSubst(body) => {
                                 run.approx.set(false);
-                                let captured =
-                                    run.capture(body).0.ok().and_then(|value| value.exact());
+                                let captured = run
+                                    .capture_stdout(body)
+                                    .ok()
+                                    .and_then(|value| value.exact());
                                 (!run.approx.get()).then_some(captured).flatten()
                             }
                             _ => None,
@@ -1449,6 +1752,7 @@ fn simple(
                     _ => {
                         position.state.directory = None;
                         set_pwd(&mut position.state);
+                        output.push(unread_code("cannot establish one physical directory through links declared on this line"));
                         return position;
                     }
                 }
@@ -1659,6 +1963,106 @@ fn change_directory(position: &mut Position, program: &str, args: &[String]) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn r26_unused_heredoc_does_not_certify_the_written_script() {
+        let temp = tempfile::tempdir().unwrap();
+        let line = "cat 3<<'E' > x.py; python3 x.py\nprint(1)\nE";
+        let readings = commands(line, temp.path(), None);
+        assert!(
+            readings.iter().any(|step| step
+                .unresolved
+                .iter()
+                .any(|why| { why.contains("written earlier on this line") })),
+            "{readings:?}"
+        );
+    }
+
+    #[test]
+    fn r25_stdout_retains_newlines_while_substitution_removes_them() {
+        for (line, expected) in [
+            ("printf '%s\\n' public", "public\n"),
+            ("printf '%s\\n\\n' public", "public\n\n"),
+            ("echo public", "public\n"),
+            ("printf '%s' public", "public"),
+        ] {
+            assert_eq!(literal_output(line).as_deref(), Some(expected), "{line}");
+        }
+        let commands = probes("P=$(printf '%s\\n\\n' public); probe \"$P\"");
+        assert!(!commands.is_empty());
+        for command in commands {
+            assert_eq!(
+                crate::hooks::git_guard::command_argv(&command.text),
+                ["probe", "public"]
+            );
+        }
+    }
+
+    #[test]
+    fn review3_physical_link_child_parent_has_one_result() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("MiXeD");
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        let links = [Link {
+            alternatives: None,
+            from: root.join("l"),
+            to: root.join(".git"),
+        }];
+        for word in ["l/hooks/..", "./l/hooks/..", "l/hooks/../config"] {
+            let expected = if word.ends_with("config") {
+                root.join(".git/config")
+            } else {
+                root.join(".git")
+            };
+            assert_eq!(
+                linked_paths(word, &root, &links).unwrap(),
+                [expected],
+                "{word}"
+            );
+        }
+    }
+
+    #[test]
+    fn r23_directory_link_alternatives_keep_the_descendant_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("MiXeD");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::create_dir_all(root.join(".worktrees/w/.claude")).unwrap();
+        let links = created_links("ln -s ../.worktrees/w docs", &root, None);
+        let paths = linked_paths("docs/w/.claude", &root, &links).unwrap();
+        assert!(
+            paths.contains(&root.join(".worktrees/w/.claude")),
+            "{paths:?}"
+        );
+    }
+
+    #[test]
+    fn r24_written_and_executed_link_paths_share_comparison_keys() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("MiXeD");
+        std::fs::create_dir_all(root.join("clean")).unwrap();
+        for (written, executed) in [("l/x.py", "clean/x.py"), ("clean/x.py", "l/x.py")] {
+            let line =
+                format!("ln -s clean l; cat <<'E' > {written}; python3 {executed}\nprint(1)\nE");
+            let readings = commands(&line, &root, None);
+            assert!(
+                readings.iter().any(|step| step
+                    .unresolved
+                    .iter()
+                    .any(|why| { why.contains("written earlier on this line") })),
+                "{line}: {readings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn r24_one_link_choice_can_be_followed_more_than_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let links = created_links("ln -s . l", &root, None);
+        let paths = linked_paths("l/l/notes", &root, &links).unwrap();
+        assert_eq!(paths, [root.join("notes")]);
+    }
+
     fn probes(line: &str) -> Vec<Command> {
         commands(
             line,
@@ -1725,13 +2129,13 @@ mod tests {
         std::fs::create_dir_all(root.join(".codeflow/rules")).unwrap();
         std::fs::write(root.join(".codeflow/policy.json"), "fixture").unwrap();
         let links = vec![Link {
+            alternatives: None,
             from: root.join("l"),
             to: root.join(".codeflow/rules"),
         }];
         let modeled = linked_paths("l/../policy.json", &root, &links).unwrap();
         std::os::unix::fs::symlink(".codeflow/rules", root.join("l")).unwrap();
         let native = root.join("l/../policy.json").canonicalize().unwrap();
-        let native = crate::hooks::git_guard::prospective_path(&native).unwrap();
         assert!(modeled.contains(&native), "{modeled:?}: {native:?}");
     }
 

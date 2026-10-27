@@ -127,6 +127,8 @@ struct Parsed {
     code: Vec<String>,
     stdin_interpreter: usize,
     commands: Vec<Unwrapped>,
+    /// Literal stdin at the current command position, scoped across recursion.
+    literal_input: Option<String>,
     home: Option<PathBuf>,
     created_tags: Vec<(PathBuf, String)>,
     calls: Vec<InterpreterCall>,
@@ -197,6 +199,8 @@ pub(crate) enum Supplier {
 /// A simple command the line runs, as [`unwrapped_commands`] reaches it.
 pub(crate) struct Unwrapped {
     pub(crate) args: Vec<String>,
+    /// Literal stdin from this command position, before any file-list parsing.
+    pub(crate) input: Option<String>,
     pub(crate) unresolved: Vec<String>,
     pub(crate) supplier: Option<Supplier>,
     /// For each word, whether the shell may expand it as an unquoted glob
@@ -367,8 +371,11 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 16 {
         return;
     }
+    let inherited_input = out.literal_input.take();
     if let Some(cwd) = cwd.filter(|_| out.resolve_shell) {
         for step in super::composed::paths::commands(command, cwd, out.shell_home.as_deref()) {
+            let input = step.input(inherited_input.as_deref()).map(str::to_owned);
+            out.literal_input.clone_from(&input);
             let first_call = out.calls.len();
             let first_command = out.commands.len();
             if step.text == "__unresolved_shell_code" {
@@ -381,7 +388,7 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                     patterns: Vec::new(),
                     cwd: step.cwd.clone(),
                     chdir: Vec::new(),
-                    code: Vec::new(),
+                    code: input.iter().cloned().collect(),
                     supplier: None,
                 });
             }
@@ -393,7 +400,8 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
             // xargs turns stdin text into child operands, not code. Unknown
             // producers and argument files cannot certify those operands.
-            let (supplied, replacement) = xargs_input(&step, &out.commands[first_command..]);
+            let (supplied, replacement) =
+                xargs_input(input.as_deref(), &out.commands[first_command..]);
             for command in &mut out.commands[first_command..] {
                 if matches!(command.supplier, Some(Supplier::Xargs)) {
                     apply_xargs_input(
@@ -420,7 +428,7 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                     );
                 }
                 if call.code.is_empty() {
-                    if let Some(code) = &step.input_code {
+                    if let Some(code) = &input {
                         call.code = vec![code.clone()];
                     } else if step.text.contains("<<") {
                         call.code = out.code[first_code..].to_vec();
@@ -431,6 +439,7 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     } else {
         visit_literal(command, cwd, depth, out);
     }
+    out.literal_input = inherited_input;
 }
 
 /// xargs input has quote/backslash handling, but no shell comments,
@@ -493,7 +502,7 @@ fn xargs_words(input: &str, split_blanks: bool) -> Option<Vec<String>> {
 }
 
 fn xargs_input(
-    step: &super::composed::paths::Command,
+    input: Option<&str>,
     commands: &[Unwrapped],
 ) -> (Option<Vec<String>>, Option<String>) {
     let Some(command) = commands.iter().find(|command| {
@@ -566,23 +575,19 @@ fn xargs_input(
         }
     }
     verified &= replacement.as_ref().is_none_or(|value| !value.is_empty());
-    let supplied = step
-        .input_code
-        .as_deref()
-        .filter(|_| verified)
-        .and_then(|input| {
-            if let Some(delimiter) = delimiter {
-                Some(
-                    input
-                        .split(delimiter)
-                        .filter(|word| !word.is_empty())
-                        .map(str::to_owned)
-                        .collect(),
-                )
-            } else {
-                xargs_words(input, replacement.is_none())
-            }
-        });
+    let supplied = input.filter(|_| verified).and_then(|input| {
+        if let Some(delimiter) = delimiter {
+            Some(
+                input
+                    .split(delimiter)
+                    .filter(|word| !word.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        } else {
+            xargs_words(input, replacement.is_none())
+        }
+    });
     (supplied, replacement)
 }
 
@@ -624,15 +629,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
     let mut directories = vec![cwd.map(Path::to_path_buf)];
     // Pipeline carriers include the producer text. Split those before argv
     // inspection; find's child retains its supplier evidence in argv.
-    let words = command_argv(command);
-    let segments = if out.resolve_shell
-        && strip_launchers(&words).is_some_and(|(program, _)| program == "find")
-    {
-        vec![command.to_owned()]
-    } else {
-        expand_commands(command)
-    };
-    for segment in segments {
+    for segment in visit_segments(command, out.resolve_shell) {
         let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
         let before = words.len();
         strip_reserved_words(&mut words);
@@ -660,6 +657,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
             // reader. Keep their cwd alongside the unwrapped command's cwd.
             for (source, expands) in crate::hooks::git_guard::redirect_reads(&segment) {
                 out.commands.push(Unwrapped {
+                    input: None,
                     links: Vec::new(),
                     args: vec!["cat".to_string(), source],
                     unresolved: Vec::new(),
@@ -721,6 +719,19 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         }
     }
     out.config_trigger = inherited;
+}
+
+fn visit_segments(command: &str, positioned: bool) -> Vec<String> {
+    if !positioned {
+        return expand_commands(command);
+    }
+    let words = command_argv(command);
+    if strip_launchers(&words).is_some_and(|(program, _)| program == "find") {
+        return vec![command.to_owned()];
+    }
+    // visit/argv read carried bodies at their own command positions.
+    // Expanding them here again loses their pipeline stdin evidence.
+    crate::hooks::git_guard::command_segments(command)
 }
 
 /// Every directory a line may run an interpreter in (TSK-302 review round
@@ -1252,6 +1263,7 @@ fn argv(
     let name = crate::hooks::git_guard::launcher_name(program);
     let command_at = out.commands.len();
     out.commands.push(Unwrapped {
+        input: out.literal_input.clone(),
         links: Vec::new(),
         args: args.to_vec(),
         unresolved: Vec::new(),
@@ -1298,6 +1310,12 @@ fn argv(
         }
     }
     if name == "env" {
+        if let Some(command) = crate::hooks::git_guard::env_split_command(args) {
+            // env's split grammar can change options and cwd. Retain every
+            // trailing argument without certifying a directory for the child.
+            visit(&command, None, depth + 1, out);
+            return;
+        }
         if let (Some(dir), Some(inner)) = (
             rest.iter().find_map(|s| s.strip_prefix("GIT_DIR=")),
             skip_env(rest),
@@ -1334,11 +1352,6 @@ fn argv(
                         depth + 1,
                         out,
                     );
-                }
-            }
-            if let Some(at) = rest.iter().position(|a| a == "-S" || a == "--split-string") {
-                if let Some(script) = rest.get(at + 1) {
-                    visit(script, cwd, depth + 1, out);
                 }
             }
             skip_env(rest)
@@ -1616,6 +1629,8 @@ fn cd_operand(args: &[String]) -> Option<&str> {
 /// suffix (`python3.13`, `ruby3.3`) and a Windows `.exe` are read as the
 /// interpreter they name.
 pub(crate) fn interpreter_family(name: &str) -> Option<&'static str> {
+    let normalized = name.to_ascii_lowercase();
+    let name = normalized.as_str();
     let name = name.strip_suffix(".exe").unwrap_or(name);
     // The name without its version suffix: the digits and dots it ends with.
     let end = name
@@ -1666,6 +1681,186 @@ fn make_inline_code(args: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Options must be consumed before choosing the executable body. Unknown
+/// arities cannot establish which later word is code.
+fn deno_input(args: &[String]) -> Result<(Program, Option<String>, Vec<String>), &'static str> {
+    let mut mode = None;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if matches!(arg.as_str(), "eval" | "run" | "repl") && mode.is_none() {
+            mode = Some(arg.as_str());
+            continue;
+        }
+        let (option, attached) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(k, v)| (k, Some(v)));
+        if matches!(option, "--eval") && mode == Some("repl") {
+            let body = attached
+                .map(str::to_owned)
+                .or_else(|| args.get(at).cloned())
+                .ok_or("deno eval body is missing")?;
+            if at + usize::from(attached.is_none()) < args.len() {
+                return Err("cannot establish deno repl options after its eval body");
+            }
+            return Ok((Program::Inline, Some(body), Vec::new()));
+        }
+        if matches!(
+            option,
+            "--ext"
+                | "-c"
+                | "--config"
+                | "--import-map"
+                | "--location"
+                | "--env-file"
+                | "--seed"
+                | "--inspect"
+                | "--inspect-brk"
+                | "--v8-flags"
+                | "--cert"
+                | "--lock"
+                | "--log-level"
+        ) {
+            if attached.is_none() {
+                args.get(at).ok_or("deno option value is missing")?;
+                at += 1;
+            }
+            continue;
+        }
+        if matches!(option, "--help" | "--version") {
+            return Ok((Program::Script, None, Vec::new()));
+        }
+        if matches!(
+            option,
+            "--quiet"
+                | "-q"
+                | "--no-check"
+                | "--check"
+                | "--no-config"
+                | "--no-lock"
+                | "--cached-only"
+                | "--allow-all"
+                | "-A"
+        ) {
+            continue;
+        }
+        if arg.starts_with('-') && arg != "-" {
+            return Err("cannot establish deno code after an unknown option");
+        }
+        return match mode {
+            Some("eval") => Ok((Program::Inline, Some(arg.clone()), args[at..].to_vec())),
+            Some("run") if arg == "-" || descriptor_program(arg) => {
+                Ok((Program::Stdin, None, args[at..].to_vec()))
+            }
+            Some("run") => Ok((Program::Script, None, args[at - 1..].to_vec())),
+            _ => Err("cannot establish deno's executable input"),
+        };
+    }
+    match mode {
+        Some("run" | "repl") => Ok((Program::Stdin, None, Vec::new())),
+        _ => Err("cannot establish deno's executable input"),
+    }
+}
+
+/// Arguments handed to a program, excluding the interpreter's own code and
+/// options. None means an unmodelled executable, whose operands stay visible.
+pub(crate) fn recursive_arguments(name: &str, args: &[String]) -> Option<Vec<String>> {
+    if crate::hooks::git_guard::is_shell(name) {
+        let mut words = vec![name.to_string()];
+        words.extend_from_slice(args);
+        if crate::hooks::git_guard::shell_inline_code(name, args).is_some()
+            || crate::hooks::git_guard::reads_shell_stdin(&words)
+        {
+            return Some(Vec::new());
+        }
+        return Some(
+            args.iter()
+                .skip_while(|arg| arg.starts_with('-'))
+                .cloned()
+                .collect(),
+        );
+    }
+    let family = interpreter_family(name)?;
+    match family {
+        "python" | "node" | "nodejs" | "perl" | "ruby" => Some(
+            interpreter_argument_roles(family, args, None, false)
+                .0
+                .into_iter()
+                .map(|(value, _)| value)
+                .collect(),
+        ),
+        "deno" => Some(deno_input(args).map_or_else(|_| Vec::new(), |(_, _, arguments)| arguments)),
+        "make" => Some(Vec::new()), // Targets and recipe flags are not tree inputs.
+        "osascript" => {
+            let mut at = 0;
+            while let Some(arg) = args.get(at) {
+                match arg.as_str() {
+                    "-e" | "-l" | "-s" => at += 2,
+                    "-i" => at += 1,
+                    "--" => return Some(args[at + 1..].to_vec()),
+                    _ => return Some(args[at..].to_vec()),
+                }
+            }
+            Some(Vec::new())
+        }
+        _ => None,
+    }
+}
+
+/// Remove only the separators accepted by the shared shell reader.
+fn shell_trim_start(text: &str) -> &str {
+    let start = text
+        .char_indices()
+        .find(|(_, ch)| !crate::hooks::git_guard::shell_blank(*ch))
+        .map_or(text.len(), |(at, _)| at);
+    &text[start..]
+}
+
+/// Every body is code. Only a complete quoted shell string can be handed
+/// to the shell scanner; constructed commands stay unreadable.
+fn applescript_bodies(args: &[String]) -> (Vec<String>, bool) {
+    let mut bodies = Vec::new();
+    let mut unread = false;
+    for pair in args.windows(2).filter(|pair| pair[0] == "-e") {
+        let body = &pair[1];
+        bodies.push(body.clone());
+        let lower = body.to_ascii_lowercase();
+        for marker in ["do shell script", "doshellscript", "do script"] {
+            for (at, _) in lower.match_indices(marker) {
+                let tail = shell_trim_start(&body[at + marker.len()..]);
+                let tail = shell_trim_start(tail.trim_start_matches('('));
+                let mut chars = tail.char_indices();
+                let Some((_, quote @ ('\'' | '"'))) = chars.next() else {
+                    unread = true;
+                    continue;
+                };
+                let mut shell = String::new();
+                let mut escaped = false;
+                let mut end = None;
+                for (at, ch) in chars {
+                    if escaped {
+                        shell.push(ch);
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == quote {
+                        end = Some(at + ch.len_utf8());
+                        break;
+                    } else {
+                        shell.push(ch);
+                    }
+                }
+                if end.is_none_or(|at| shell_trim_start(&tail[at..]).starts_with(['&', '+'])) {
+                    unread = true;
+                } else {
+                    bodies.push(shell);
+                }
+            }
+        }
+    }
+    (bodies, unread)
+}
+
 fn record_extended_interpreter(
     name: &str,
     rest: &[String],
@@ -1677,8 +1872,10 @@ fn record_extended_interpreter(
         return false;
     }
     let first = out.code.len();
+    let mut unread = false;
     if matches!(name, "powershell" | "cmd") {
         if let Some(mut code) = crate::hooks::git_guard::shell_inline_code(name, rest) {
+            unread |= code == "__unresolved_shell_code";
             if cfg!(windows) {
                 code = code.replace('\\', "/");
                 if let Some(home) = out.home.as_deref() {
@@ -1692,31 +1889,31 @@ fn record_extended_interpreter(
             }
         }
     } else if name == "deno" {
-        if let Some(at) = rest.iter().position(|arg| arg == "eval") {
-            if let Some(code) = rest[at + 1..].iter().find(|arg| !arg.starts_with('-')) {
-                out.code.push(code.clone());
+        match deno_input(rest) {
+            Ok((program, code, _)) => {
+                out.stdin_interpreter += usize::from(program == Program::Stdin);
+                out.code.extend(code);
             }
+            Err(_) => unread = true,
         }
     } else if name == "make" {
         out.code.extend(make_inline_code(rest));
         out.stdin_interpreter += usize::from(make_stdin_code(rest));
     } else {
-        for pair in rest.windows(2).filter(|pair| pair[0] == "-e") {
-            let words = command_argv(&pair[1]);
-            for sequence in words.windows(4) {
-                if sequence[..3]
-                    .iter()
-                    .zip(["do", "shell", "script"])
-                    .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
-                {
-                    out.code.push(sequence[3].clone());
-                }
-            }
-        }
+        let (bodies, unknown) = applescript_bodies(rest);
+        out.code.extend(bodies);
+        unread |= unknown;
+    }
+    if unread {
+        out.code.push("__unresolved_shell_code".into());
     }
     out.calls.push(InterpreterCall {
         positional_source: out.positional_source,
-        unresolved: Vec::new(),
+        unresolved: if unread {
+            vec!["interpreter parameters or executable code cannot be verified".into()]
+        } else {
+            Vec::new()
+        },
         links: Vec::new(),
         checkouts: Vec::new(),
         // Make targets and directory flags are not arguments to its recipe
@@ -1890,10 +2087,19 @@ fn pattern_tail(patterns: Option<&[bool]>, len: usize) -> Option<&[bool]> {
 /// script ends the options, and so does node's eval code; perl and ruby
 /// read options until the first other word. An option the table does not
 /// know is a flag, so a word after it stays an argument either way.
-fn interpreter_arguments(
+pub(crate) fn interpreter_arguments(
     family: &str,
     rest: &[String],
     patterns: Option<&[bool]>,
+) -> (Vec<(String, bool)>, Vec<String>) {
+    interpreter_argument_roles(family, rest, patterns, true)
+}
+
+fn interpreter_argument_roles(
+    family: &str,
+    rest: &[String],
+    patterns: Option<&[bool]>,
+    option_values: bool,
 ) -> (Vec<(String, bool)>, Vec<String>) {
     let mut args = Vec::new();
     let mut chdir = Vec::new();
@@ -1926,9 +2132,11 @@ fn interpreter_arguments(
                 return (args, chdir);
             }
             if value.is_none() && long_takes_value(family, name) {
-                args.extend(rest.get(at).map(|text| argument(at, text.clone())));
+                if option_values {
+                    args.extend(rest.get(at).map(|text| argument(at, text.clone())));
+                }
                 at += 1;
-            } else {
+            } else if option_values {
                 args.push(argument(at - 1, word.clone()));
             }
             continue;
@@ -1962,7 +2170,12 @@ fn interpreter_arguments(
                         return (args, chdir);
                     }
                 }
-                Short::Value => args.extend(value(&mut at)),
+                Short::Value => {
+                    let value = value(&mut at);
+                    if option_values {
+                        args.extend(value);
+                    }
+                }
                 Short::Chdir => chdir.extend(value(&mut at).map(|(text, _)| text)),
                 Short::Module => {
                     // `-m MODULE`: a module name, not a path; the words
@@ -2419,6 +2632,9 @@ enum Program {
 /// Where an interpreter family of `family` takes its program from, read by
 /// the same option grammar as [`interpreter_arguments`].
 fn family_program(family: &str, rest: &[String]) -> Program {
+    if family == "deno" {
+        return deno_input(rest).map_or(Program::Inline, |(program, _, _)| program);
+    }
     if family == "make" {
         return if make_stdin_code(rest) {
             Program::Stdin
@@ -2688,6 +2904,99 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r25_env_split_keeps_trailing_arguments_and_unknown_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        for prefix in [
+            "env -S 'python3 tool.py'",
+            "env --split-string='python3 tool.py'",
+            "env -iS 'python3 tool.py'",
+            "nice env -S 'python3 tool.py'",
+        ] {
+            let line = format!("{prefix} 'ordinary data.json'");
+            let calls = super::interpreter_calls_with_home(&line, temp.path(), None);
+            assert!(
+                calls.iter().any(|call| {
+                    call.args == ["tool.py", "ordinary data.json"] && call.cwd.is_none()
+                }),
+                "{line}: {calls:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn r24_nested_archive_readers_keep_their_own_stdin() {
+        let temp = tempfile::tempdir().unwrap();
+        for (line, expected) in [
+            (
+                r#"bash -c 'printf "%s\n" clean/notes.rs | cpio -o'"#,
+                Some("clean/notes.rs\n"),
+            ),
+            (
+                "printf '%s\\n' clean/notes.rs | bash -c 'producer | cpio -o'",
+                None,
+            ),
+            (
+                "printf '%s\\n' outer | bash -c 'printf \"%s\\n\" inner | cpio -o'",
+                Some("inner\n"),
+            ),
+            (
+                "printf '%s\\n' clean/notes.rs | bash -c 'cpio -o'",
+                Some("clean/notes.rs\n"),
+            ),
+            ("printf '%s\\n' outer | (producer | cpio -o)", None),
+            ("printf '%s\\n' outer | bash -c 'cpio -o < names.txt'", None),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o 00< names.txt'",
+                None,
+            ),
+            ("printf '%s\\n' outer | bash -c 'cpio -o <&3'", None),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o 3< names.txt'",
+                Some("outer\n"),
+            ),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o <<< inner < names.txt'",
+                None,
+            ),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o <<< inner'",
+                Some("inner\n"),
+            ),
+            ("printf '%s\\n' outer | bash -c 'cpio -o <<< $UNSET'", None),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o <<E\n$UNSET\nE'",
+                None,
+            ),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o <<E\ninner\nE'",
+                Some("inner\n"),
+            ),
+        ] {
+            let commands = super::unwrapped_commands(line, temp.path(), None);
+            let readers: Vec<_> = commands
+                .iter()
+                .filter(|command| command.args.first().is_some_and(|arg| arg == "cpio"))
+                .collect();
+            assert!(!readers.is_empty(), "{line}");
+            for reader in readers {
+                assert_eq!(reader.input.as_deref(), expected, "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn r24_applescript_shell_separators_preserve_other_characters() {
+        for (body, unread) in [
+            ("do shell script \t\n \"printf hello\"", false),
+            ("do shell script \"printf hello\"\n + suffix", true),
+            ("do shell script\u{a0}\"printf hello\"", true),
+        ] {
+            let (_, actual) = super::applescript_bodies(&["-e".into(), body.into()]);
+            assert_eq!(actual, unread, "{body}");
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn tsk1002_ci1_native_xargs_escapes_are_unverified() {

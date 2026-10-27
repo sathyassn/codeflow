@@ -509,7 +509,9 @@ pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditErro
 }
 
 fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
-    let path = crate::portable_path::without_verbatim(path.to_path_buf());
+    let path = crate::portable_path::without_verbatim(
+        crate::portable_path::guard_path(path).map_err(EditError)?,
+    );
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {

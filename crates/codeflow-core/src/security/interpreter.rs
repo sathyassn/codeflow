@@ -16,11 +16,14 @@ pub(crate) fn evaluate(
     // A rooted Windows home without a drive inherits the caller's drive.
     // Keep absolute homes unchanged so kernel link/parent semantics survive.
     let resolved_home = home.map(|home| {
-        if cfg!(windows) && home.has_root() && !home.is_absolute() {
+        let home = if cfg!(windows) && home.has_root() && !home.is_absolute() {
             cwd.join(home)
         } else {
             home.to_path_buf()
-        }
+        };
+        // The original spelling remains available when no mapping exists;
+        // using it as an operand still takes guard_path's refusal below.
+        crate::portable_path::guard_path(&home).unwrap_or(home)
     });
     let home = resolved_home.as_deref();
     // Position-scoped arguments carry more precise provenance than the broad
@@ -41,6 +44,15 @@ pub(crate) fn evaluate(
     codes.sort();
     codes.dedup();
     for code in codes {
+        if code == "__unresolved_shell_code" && levels.secret_reads.is_active() {
+            violations.push(Violation::new(
+                "security.secret_reads",
+                levels.secret_reads,
+                "cannot verify the executable input's secret reads".to_string(),
+                crate::remedy::OUTWARD_ACTION.remedy(),
+            ));
+            continue;
+        }
         if levels.headless_peer_runs.is_active() {
             if let Some(run) = super::headless::raw_run(&code) {
                 violations.push(crate::hooks::exec_guard::headless_violation(
@@ -100,6 +112,9 @@ fn secret_reads(
     cwd: &Path,
     home: Option<&Path>,
 ) -> Vec<Violation> {
+    let mapped_home = home
+        .map(|home| crate::portable_path::guard_path(home).unwrap_or_else(|_| home.to_path_buf()));
+    let home = mapped_home.as_deref();
     let mut violations = Vec::new();
     if levels.secret_reads.is_active() {
         for unwrapped in outward::unwrapped_commands(command, cwd, home) {
@@ -108,14 +123,7 @@ fn secret_reads(
                 .first()
                 .map_or("", |s| super::unresolved::writer_name(s));
             let reader_cwd = unwrapped.cwd.as_deref().unwrap_or(cwd);
-            let mut recursive = recursive_read(
-                name,
-                args,
-                unwrapped.expands.as_deref(),
-                reader_cwd,
-                home,
-                command,
-            );
+            let mut recursive = recursive_read(name, &unwrapped, reader_cwd, home, command);
             if recursive.is_some() && unwrapped.cwd.is_none() {
                 recursive = Some(Err(
                     "cannot establish the recursive reader's working directory",
@@ -153,7 +161,7 @@ fn secret_reads(
                         levels.secret_reads,
                         match secret {
                             Err(why) => format!("cannot verify file operand `{value}`: {why}"),
-                            Ok(_) => format!("keychain or secret-store read names `{value}`"),
+                            Ok(_) => format!("file operand names a secret file or store `{value}`"),
                         },
                         if secret.is_err() {
                             crate::remedy::SECRET_SELECTION.remedy()
@@ -180,10 +188,24 @@ fn inspect_operand(
     home: Option<&Path>,
 ) -> Result<bool, &'static str> {
     let (at, value, glob) = operand;
+    if value == "__unverified_transfer_input" {
+        return Err("cannot establish a transfer option's quoted input filename");
+    }
     let name = call
         .args
         .first()
         .map_or("", |program| super::unresolved::writer_name(program));
+    if matches!(name, "rsync" | "scp")
+        && remote_endpoint(value)
+        && super::unresolved::writer_effects(name, &call.args[1..], &[])
+            .and_then(|effects| effects.copy)
+            .and_then(|copy| copy.dest)
+            .as_deref()
+            == Some(value)
+    {
+        // A parsed remote destination is not a local content-read operand.
+        return Ok(false);
+    }
     if outward::descriptor_program(value)
         && (crate::hooks::git_guard::is_shell(name) || outward::interpreter_family(name).is_some())
     {
@@ -228,6 +250,7 @@ fn inspect_operand(
             cwd,
             home,
             command,
+            &call.links,
         );
     }
     let symbolic_link = name == "ln"
@@ -262,6 +285,11 @@ fn secret_path_result(
     home: Option<&Path>,
     reader: Option<bool>,
 ) -> Result<bool, &'static str> {
+    let candidate = cwd.join(word);
+    let mapped = crate::portable_path::guard_path(&candidate)
+        .map_err(|_| "cannot establish a Windows path's mapped filename")?;
+    let mapped = (mapped != candidate).then(|| crate::portable_path::slashed(&mapped));
+    let word = mapped.as_deref().unwrap_or(word);
     let spelling = crate::portable_path::filesystem_spelling(word);
     let word = spelling.as_str();
     let expanded_word = word
@@ -298,13 +326,11 @@ fn secret_path_result(
         return secret_glob(word, cwd, home);
     }
     Ok(
-        (!literal_tilde && secret_path_spelling(word, home, reader.map(|_| false)))
+        // Flat operands name one file or store. Only recursive root
+        // inspection applies the ancestor rule for descendant reads.
+        (!literal_tilde && secret_path_spelling(word, home, None))
             || absolute.as_deref().is_some_and(|path| {
-                secret_path_spelling(
-                    &crate::portable_path::slashed(path),
-                    home,
-                    reader.map(|_| false),
-                )
+                secret_path_spelling(&crate::portable_path::slashed(path), home, None)
             })
             || match absolute.as_deref() {
                 Some(path) => real_secret_path(path, home)?,
@@ -322,24 +348,31 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
             .map(|tail| format!("~{tail}"))
     });
     let word = home_relative.as_deref().unwrap_or(&word);
-    actions::table().sandbox_read_denies.iter().any(|path| {
-        word == path
-            || word
-                .strip_prefix(path)
-                .is_some_and(|tail| tail.starts_with('/'))
-            || reader.is_some_and(|expands| secret_prefix(word, path, expands))
-    }) || actions::table().claude_read_groups.iter().any(|group| {
-        // This group has no carve-outs; source-name and env-file groups do.
-        group.carveouts.is_empty()
-            && group.denies.iter().any(|rule| {
-                let Some(pattern) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')'))
-                else {
-                    return false;
-                };
-                matches_extended_glob(word, pattern)
-                    || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
-            })
-    })
+    // A directory rule also protects the store itself, even when it is
+    // absent. This is equality, not the ancestor rule for descendant reads.
+    secret_stores()
+        .iter()
+        .any(|store| word.trim_end_matches('/') == store)
+        || actions::table().sandbox_read_denies.iter().any(|path| {
+            word == path
+                || word
+                    .strip_prefix(path)
+                    .is_some_and(|tail| tail.starts_with('/'))
+                || reader.is_some_and(|expands| secret_prefix(word, path, expands))
+        })
+        || actions::table().claude_read_groups.iter().any(|group| {
+            // This group has no carve-outs; source-name and env-file groups do.
+            group.carveouts.is_empty()
+                && group.denies.iter().any(|rule| {
+                    let Some(pattern) =
+                        rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')'))
+                    else {
+                        return false;
+                    };
+                    matches_extended_glob(word, pattern)
+                        || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
+                })
+        })
 }
 
 /// Expand shell words without substituting a directory for an incomplete
@@ -558,6 +591,7 @@ fn secret_search_glob(
     cwd: &Path,
     home: Option<&Path>,
     line: &str,
+    links: &[super::composed::paths::Link],
 ) -> Result<bool, &'static str> {
     let rest = args.get(1..).unwrap_or_default();
     let literal: Vec<_> = (1..args.len())
@@ -586,7 +620,7 @@ fn secret_search_glob(
             vec![outward::lexical_join(base, Path::new(root))]
         };
         for root in roots {
-            if search_root_matches(pattern, &root, home, Some((name, args)), &mut read)? {
+            if search_root_matches(pattern, &root, home, links, &mut read)? {
                 return Ok(true);
             }
         }
@@ -598,12 +632,14 @@ fn secret_search_glob(
 /// and archive creation tools consume every descendant of their input roots.
 fn recursive_read(
     name: &str,
-    args: &[String],
-    expands: Option<&[bool]>,
+    call: &outward::Unwrapped,
     cwd: &Path,
     home: Option<&Path>,
     line: &str,
 ) -> Option<Result<bool, &'static str>> {
+    let args = &call.args;
+    let expands = call.expands.as_deref();
+    let links = &call.links;
     let rest = args.get(1..).unwrap_or_default();
     let recursive = recursive_option(name, rest);
     if matches!(name, "rg" | "ag" | "ack") || name == "grep" && recursive {
@@ -628,56 +664,308 @@ fn recursive_read(
             .collect();
         if patterns.is_empty() {
             return Some(secret_search_glob(
-                "*", name, args, expands, cwd, home, line,
+                "*", name, args, expands, cwd, home, line, links,
             ));
         }
         for pattern in patterns {
-            match secret_search_glob(pattern, name, args, expands, cwd, home, line) {
+            match secret_search_glob(pattern, name, args, expands, cwd, home, line, links) {
                 Ok(false) => {}
                 result => return Some(result),
             }
         }
         return Some(Ok(false));
     }
-    let base = cwd.to_path_buf();
-    let roots: Vec<String> = match name {
-        "cp" if recursive => match super::unresolved::writer_effects(name, rest, &[])
-            .and_then(|effects| effects.copy)
-        {
-            Some(copy) => copy.sources,
-            None => return Some(Err("cannot establish recursive copy sources")),
-        },
-        "zip" if recursive => rest
-            .iter()
-            .filter(|arg| !arg.starts_with('-'))
-            .skip(1)
-            .cloned()
-            .collect(),
-        "tar" => match archive_read_roots(rest, cwd) {
-            Ok(Some(roots)) => roots,
-            Ok(None) => return None,
+    let selected = archive_sources(name, rest, call.input.as_deref());
+    let (roots, literal): (Vec<String>, bool) = if let Some(selected) = selected {
+        match selected {
+            Ok(sources) => sources,
             Err(why) => return Some(Err(why)),
-        },
-        _ => return None,
+        }
+    } else {
+        (
+            match name {
+                "grep" => return None, // Without recursion it reads only named files.
+                "cp" if recursive => match super::unresolved::writer_effects(name, rest, &[])
+                    .and_then(|effects| effects.copy)
+                {
+                    Some(copy) => copy.sources,
+                    None => return Some(Err("cannot establish recursive copy sources")),
+                },
+                "zip" if recursive => rest
+                    .iter()
+                    .filter(|arg| !arg.starts_with('-'))
+                    .skip(1)
+                    .cloned()
+                    .collect(),
+                "tar" => match archive_read_roots(rest, cwd) {
+                    Ok(Some(roots)) => roots,
+                    Ok(None) => return None,
+                    Err(why) => return Some(Err(why)),
+                },
+                _ => match conservative_read_roots(name, args, expands, cwd, home, line, links) {
+                    Some(Ok(roots)) => roots,
+                    Some(Err(why)) => return Some(Err(why)),
+                    None => return None,
+                },
+            },
+            false,
+        )
     };
-    Some((|| {
-        let mut read = 0;
+    Some(inspect_recursive_roots(&roots, literal, cwd, home, links))
+}
+
+fn inspect_recursive_roots(
+    roots: &[String],
+    literal: bool,
+    cwd: &Path,
+    home: Option<&Path>,
+    links: &[super::composed::paths::Link],
+) -> Result<bool, &'static str> {
+    let mut read = 0;
+    for root in roots {
+        let (base, pattern) = if literal {
+            (cwd, root.as_str())
+        } else {
+            glob_base(root, cwd, home).ok_or("cannot establish a recursive root")?
+        };
+        let roots = if !literal && crate::hooks::git_guard::has_glob(pattern) {
+            crate::hooks::git_guard::secret_glob_paths(pattern, base)?
+        } else {
+            vec![base.join(pattern)]
+        };
         for root in roots {
-            let (base, pattern) =
-                glob_base(&root, &base, home).ok_or("cannot establish a recursive root")?;
-            let roots = if crate::hooks::git_guard::has_glob(pattern) {
-                crate::hooks::git_guard::secret_glob_paths(pattern, base)?
-            } else {
-                vec![outward::lexical_join(base, Path::new(pattern))]
-            };
-            for root in roots {
-                if search_root_matches("*", &root, home, None, &mut read)? {
-                    return Ok(true);
-                }
+            if search_root_matches("*", &root, home, links, &mut read)? {
+                return Ok(true);
             }
         }
-        Ok(false)
-    })())
+    }
+    Ok(false)
+}
+
+/// These archive modes consume filename lists, not the contents of stdin.
+/// Keep literal list bytes separate from shell-expanded argv roots.
+fn archive_sources(
+    name: &str,
+    args: &[String],
+    input: Option<&str>,
+) -> Option<Result<(Vec<String>, bool), &'static str>> {
+    if !matches!(name, "cpio" | "pax") {
+        return None;
+    }
+    let mut flags = String::new();
+    let mut operands = Vec::new();
+    let mut unknown = false;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if arg == "--" {
+            operands.extend_from_slice(&args[at..]);
+            break;
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            operands.push(arg.clone());
+        } else if let Some(long) = arg.strip_prefix("--") {
+            let (option, attached) = long
+                .split_once('=')
+                .map_or((long, false), |(name, _)| (name, true));
+            match option {
+                "create" => flags.push('o'),
+                "pass-through" => flags.push('p'),
+                "null" => flags.push('0'),
+                "owner" | "format" | "file" | "message" => at += usize::from(!attached),
+                "quiet"
+                | "verbose"
+                | "make-directories"
+                | "preserve-modification-time"
+                | "unconditional" => {}
+                _ => unknown = true,
+            }
+        } else {
+            for (offset, flag) in arg[1..].char_indices() {
+                flags.push(flag);
+                let valued = if name == "pax" {
+                    "bfopsxBEGTU"
+                } else {
+                    "CEFfHIORM"
+                };
+                if valued.contains(flag) {
+                    at += usize::from(offset + 2 == arg.len());
+                    break;
+                }
+                unknown |= !"0abBcdhilmoprtuvwHL".contains(flag);
+            }
+        }
+    }
+    let reads_names = if name == "pax" {
+        flags.contains('w')
+    } else {
+        flags.contains(['o', 'p'])
+    };
+    if !reads_names {
+        return None;
+    }
+    if unknown {
+        return Some(Err("cannot establish archive filename-list options"));
+    }
+    if name == "pax" && flags.contains('r') {
+        operands.pop(); // Pass-through destination is written, not read.
+    }
+    if name == "pax" && !operands.is_empty() {
+        return Some(Ok((operands, false)));
+    }
+    let Some(input) = input else {
+        return Some(Err("cannot establish the archive's stdin filename list"));
+    };
+    Some(Ok((
+        input
+            .split(if flags.contains('0') { '\0' } else { '\n' })
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        true,
+    )))
+}
+
+/// Directory-capable copy operations and unmodelled recursive/archive syntax
+/// retain every candidate source. Unknown input streams cannot certify roots.
+fn conservative_read_roots(
+    name: &str,
+    args: &[String],
+    expands: Option<&[bool]>,
+    cwd: &Path,
+    home: Option<&Path>,
+    line: &str,
+    links: &[super::composed::paths::Link],
+) -> Option<Result<Vec<String>, &'static str>> {
+    if matches!(
+        name,
+        "ls" | "stat"
+            | "test"
+            | "["
+            | "du"
+            | "find"
+            | "rm"
+            | "rmdir"
+            | "unlink"
+            | "mv"
+            | "ln"
+            | "install"
+            | "chmod"
+            | "chown"
+            | "chgrp"
+            | "echo"
+            | "printf"
+            | "print"
+    ) {
+        return None;
+    }
+    let rest = args.get(1..).unwrap_or_default();
+    let program_args = outward::recursive_arguments(name, rest);
+    let effects = super::unresolved::writer_effects(name, rest, &[]);
+    let flags = program_args.as_deref().unwrap_or_else(|| {
+        effects
+            .as_ref()
+            .map_or(rest, |effects| effects.read.flags.as_slice())
+    });
+    let unknown = effects
+        .as_ref()
+        .is_some_and(|effects| effects.read.unknown.is_some());
+    let archive = archive_syntax(flags) || unknown;
+    if matches!(name, "cp" | "scp" | "rsync") && !archive {
+        return None;
+    }
+    let copy = effects.and_then(|effects| effects.copy);
+    if copy.is_none() && !archive {
+        return None;
+    }
+    let roots: Vec<String> = if let Some(copy) = copy.filter(|_| !unknown) {
+        copy.sources
+    } else if let Some(program_args) = &program_args {
+        program_args
+            .iter()
+            .flat_map(|word| super::arguments::argument_values(word))
+            .map(str::to_owned)
+            .collect()
+    } else {
+        file_operands(name, args, expands, line, cwd)
+            .into_iter()
+            .filter(|(at, _, _)| *at != 1 || !rest.first().is_some_and(|arg| archive_verb(arg)))
+            .map(|(_, word, _)| word.to_owned())
+            .collect()
+    };
+    let directories = match recursive_directories(roots, cwd, home, links) {
+        Ok(directories) => directories,
+        Err(why) => return Some(Err(why)),
+    };
+    if directories.is_empty() {
+        return None;
+    }
+    if unknown
+        || directories.iter().any(|root| {
+            crate::hooks::git_guard::unresolved_word(root)
+                || root == "-"
+                || matches!(name, "rsync" | "scp") && remote_endpoint(root)
+        })
+    {
+        Some(Err(
+            "cannot establish every source of an unmodelled recursive or archive operation",
+        ))
+    } else {
+        Some(Ok(directories))
+    }
+}
+
+fn recursive_directories(
+    roots: Vec<String>,
+    cwd: &Path,
+    home: Option<&Path>,
+    links: &[super::composed::paths::Link],
+) -> Result<Vec<String>, &'static str> {
+    let mut directories = Vec::new();
+    for root in roots {
+        let Some((base, word)) = glob_base(&root, cwd, home) else {
+            return Err("cannot establish an unmodelled recursive root");
+        };
+        let path = base.join(word);
+        let planned = links
+            .iter()
+            .any(|link| link.path().starts_with(&path) || path.starts_with(link.path()));
+        if crate::hooks::git_guard::has_glob(word) || planned {
+            directories.push(root);
+        } else {
+            match crate::absence::is_kind(&path, true) {
+                Some(true) => directories.push(root),
+                Some(false) => {}
+                None => return Err("cannot establish an unmodelled operand's file type"),
+            }
+        }
+    }
+    Ok(directories)
+}
+
+fn remote_endpoint(path: &str) -> bool {
+    path.split_once(':').is_some_and(|(host, tail)| {
+        !(host.contains(['/', '\\']) || (host.len() == 1 && tail.starts_with(['/', '\\'])))
+    })
+}
+
+fn archive_syntax(flags: &[String]) -> bool {
+    flags.iter().enumerate().any(|(at, arg)| {
+        at == 0 && archive_verb(arg)
+            || matches!(
+                arg.as_str(),
+                "--recursive" | "--archive" | "--create" | "--append"
+            )
+            || arg.strip_prefix('-').is_some_and(|flags| {
+                !flags.starts_with('-')
+                    && flags.chars().all(|ch| ch.is_ascii_alphabetic())
+                    && flags.contains(['r', 'R', 'a', 'c', 'w', 'o', 'u'])
+            })
+    })
+}
+
+fn archive_verb(word: &str) -> bool {
+    matches!(word, "a" | "u" | "c" | "create" | "archive")
 }
 
 /// Read option letters only up to a value-taking flag; a filename containing
@@ -838,102 +1126,11 @@ fn archive_read_roots(args: &[String], cwd: &Path) -> Result<Option<Vec<String>>
     Ok(Some(roots))
 }
 
-fn search_ignore_repository(
-    root: &Path,
-    tool: Option<(&str, &[String])>,
-) -> Result<Option<git2::Repository>, &'static str> {
-    let discovery_root = match crate::absence::is_kind(root, true) {
-        Some(true) => root,
-        Some(false) => return Ok(None), // Explicit files override ignore rules.
-        None => return Err("cannot establish a search root's type"),
-    };
-    let ignore = tool
-        .filter(|(name, args)| {
-            *name == "rg"
-                && !args.iter().any(|arg| {
-                    arg.starts_with("--no-ignore")
-                        || arg == "--unrestricted"
-                        || arg.starts_with('-') && !arg.starts_with("--") && arg.contains('u')
-                })
-        })
-        .map(|_| crate::hooks::repo::open(discovery_root))
-        .transpose()
-        .map_err(|_| "cannot establish the search repository's ignore rules")?
-        .flatten();
-    Ok(if let Some(repo) = ignore {
-        let real_root = crate::portable_path::canonicalize(root)
-            .map_err(|_| "cannot resolve the explicit search root")?;
-        if repository_ignores(&repo, &real_root)? {
-            None // An explicit ignored root overrides the parent's ignore.
-        } else {
-            Some(repo)
-        }
-    } else {
-        None
-    })
-}
-
-/// libgit2's ignore matcher consumes paths within this worktree. Absolute
-/// spellings and a linked checkout's location outside the main workdir
-/// must not select another root's ignore context.
-fn repository_ignores(repo: &git2::Repository, path: &Path) -> Result<bool, &'static str> {
-    let workdir = repo
-        .workdir()
-        .ok_or("cannot establish the ignored path's worktree")?;
-    // repo::open has already checked and set this physical workdir.
-    let workdir = crate::portable_path::without_verbatim(workdir.to_path_buf());
-    let absolute = outward::lexical_join(path, Path::new("."));
-    let relative = absolute
-        .strip_prefix(&workdir)
-        .map_err(|_| "cannot locate the ignored path within its worktree")?;
-    if relative.as_os_str().is_empty() {
-        return Ok(false);
-    }
-    repo.is_path_ignored(relative)
-        .map_err(|_| "cannot inspect a path's ignore status")
-}
-
-fn search_path_ignored(
-    path: &Path,
-    root: &Path,
-    real_root: &Path,
-    repo: &git2::Repository,
-    explicit_patterns: &[String],
-) -> Result<bool, &'static str> {
-    let basename = path.file_name().map_or(path, Path::new);
-    let relative = path.strip_prefix(root).unwrap_or(path);
-    for pattern in explicit_patterns {
-        let readings = crate::hooks::git_guard::brace_expand(pattern)
-            .ok_or("cannot inspect the ignore override's brace alternatives")?;
-        for pattern in readings {
-            let candidate = if pattern.contains('/') {
-                relative
-            } else {
-                basename
-            };
-            let candidate = secret_path_text(candidate)?;
-            let matcher = glob::Pattern::new(&pattern)
-                .map_err(|_| "cannot inspect a search ignore override")?;
-            if matcher.matches_with(
-                &candidate,
-                glob::MatchOptions {
-                    case_sensitive: false,
-                    require_literal_separator: true,
-                    require_literal_leading_dot: false,
-                },
-            ) {
-                return Ok(false);
-            }
-        }
-    }
-    repository_ignores(repo, &real_root.join(relative))
-}
-
 fn search_root_matches(
     pattern: &str,
     root: &Path,
     home: Option<&Path>,
-    tool: Option<(&str, &[String])>,
+    links: &[super::composed::paths::Link],
     read: &mut usize,
 ) -> Result<bool, &'static str> {
     if pattern == "*" && secret_path_spelling(&secret_path_text(root)?, home, Some(false)) {
@@ -951,42 +1148,18 @@ fn search_root_matches(
     } else {
         patterns
     };
-    let ignore = search_ignore_repository(root, tool)?;
-    let real_root = if ignore.is_some() {
-        Some(
-            crate::portable_path::canonicalize(root)
-                .map_err(|_| "cannot resolve the search root for ignore matching")?,
-        )
-    } else {
-        None
-    };
-    let explicit_patterns: Vec<_> = tool
-        .and_then(|(name, args)| {
-            let rest = args.get(1..).unwrap_or_default();
-            super::search_pattern::path_values(name, rest, &vec![false; rest.len()], false)
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(at, value, glob)| {
-            *glob
-                && tool.is_some_and(|(_, args)| {
-                    positive_selector(args.get(1..).unwrap_or_default(), *at, value)
-                })
-        })
-        .map(|(_, value, _)| value.to_ascii_lowercase())
-        .collect();
-    let paths = crate::hooks::git_guard::secret_search_paths(root, read, |path| {
-        let Some(repo) = &ignore else {
-            return Ok(false);
-        };
-        search_path_ignored(
-            path,
-            root,
-            real_root.as_deref().unwrap_or(root),
-            repo,
-            &explicit_patterns,
-        )
-    })?;
+    // The guard cannot reproduce every ignore source or same-line edit.
+    // Inspect ignored names too, under the same metadata budget.
+    let root_path = crate::hooks::git_guard::prospective_path(root)
+        .map_err(|_| "cannot resolve a recursive root")?;
+    for link in links {
+        let from = crate::hooks::git_guard::prospective_path(link.path())
+            .map_err(|_| "cannot resolve a link declared before a recursive read")?;
+        if from.starts_with(&root_path) || root_path.starts_with(&from) {
+            return Err("a recursive root or descendant may traverse a link declared on this line");
+        }
+    }
+    let paths = crate::hooks::git_guard::secret_search_paths(root, read, |_| Ok(false))?;
     for path in paths {
         if !real_secret_path(&path, home)? {
             continue;
@@ -1118,19 +1291,79 @@ fn file_operands<'a>(
                 })
         })
         .flat_map(|(at, word)| {
-            let mut values = super::arguments::argument_values(word);
-            if matches!(name, "curl" | "wget") {
-                values.extend(values.clone().into_iter().filter_map(|value| {
-                    value
-                        .strip_prefix(['@', '<'])
-                        .map(|file| file.split(';').next().unwrap_or(file))
-                }));
-            }
-            values.into_iter().map(move |value| (at + 1, value, false))
+            file_values(name, rest, at, word)
+                .into_iter()
+                .map(move |value| (at + 1, value, false))
         })
         .collect();
     paths.extend(global_files);
     paths
+}
+
+/// Transfer file syntax has its own filename quoting and field delimiters.
+fn file_values<'a>(name: &str, args: &[String], at: usize, word: &'a str) -> Vec<&'a str> {
+    let mut values = super::arguments::argument_values(word);
+    let mut parsed_file = false;
+    if name == "curl" {
+        let files: Vec<_> = values
+            .iter()
+            .copied()
+            .filter_map(|value| curl_file_value(args, at, value))
+            .collect();
+        if !files.is_empty() {
+            values = files;
+            parsed_file = true;
+        }
+    }
+    if matches!(name, "curl" | "wget") && !parsed_file {
+        values.extend(values.clone().into_iter().filter_map(|value| {
+            value
+                .strip_prefix(['@', '<'])
+                .map(|file| file.split(';').next().unwrap_or(file))
+        }));
+    }
+    values
+}
+
+fn curl_file_value<'a>(args: &[String], at: usize, value: &'a str) -> Option<&'a str> {
+    let option = args.get(at).map(String::as_str).unwrap_or_default();
+    let previous = at
+        .checked_sub(1)
+        .and_then(|at| args.get(at))
+        .map(String::as_str);
+    let urlencode = option.starts_with("--data-urlencode") || previous == Some("--data-urlencode");
+    let form = option.starts_with("-F")
+        || option.starts_with("--form=")
+        || matches!(previous, Some("-F" | "--form"));
+    if urlencode {
+        return value.split_once('@').map(|(_, file)| file);
+    }
+    let file = if form {
+        let value = value.split_once('=').map_or(value, |(_, value)| value);
+        value.strip_prefix(['@', '<'])?
+    } else {
+        return None;
+    };
+    let (file, attributes) = if let Some(quote @ ('\'' | '"')) = file.chars().next() {
+        let Some((file, tail)) = file[1..].split_once(quote) else {
+            return Some("__unverified_transfer_input");
+        };
+        if file.contains('\\') {
+            return Some("__unverified_transfer_input");
+        }
+        (file, tail)
+    } else {
+        file.split_once(';').unwrap_or((file, ""))
+    };
+    if file.contains(',')
+        || attributes
+            .split(';')
+            .filter(|attribute| !attribute.is_empty())
+            .any(|attribute| !attribute.starts_with("type=") && !attribute.starts_with("filename="))
+    {
+        return Some("__unverified_transfer_input");
+    }
+    Some(file)
 }
 
 fn git_global_files(args: &[String], end: usize) -> Vec<(usize, &str, bool)> {
@@ -1252,6 +1485,85 @@ fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn r23_planned_public_link_refuses_at_the_recursive_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("clean")).unwrap();
+        for line in [
+            "ln -s clean alias; rg x alias",
+            "ln -s clean alias; grep -r x alias",
+        ] {
+            let findings = secret_reads(
+                line,
+                &SecuritySection::default(),
+                temp.path(),
+                Some(temp.path()),
+            );
+            assert!(
+                findings
+                    .iter()
+                    .any(|finding| finding.message.contains("declared on this line")),
+                "{line}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn review3_writer_table_sources_are_walked_or_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir(root.join("payload")).unwrap();
+        std::fs::write(root.join("payload/id_rsa"), "fake private fixture").unwrap();
+        for (name, _) in super::super::unresolved::writer_spellings("out", "dest") {
+            let line = match name {
+                "cp" | "scp" => format!("{name} -r payload out"),
+                "rsync" => "rsync -a payload out".into(),
+                "ditto" => "ditto payload out".into(),
+                "tar" | "gtar" | "bsdtar" => format!("{name} cf out payload"),
+                "zip" => "zip -r out.zip payload".into(),
+                // Extraction's options and input cannot certify directory
+                // sources here; retain the conservative recursive fallback.
+                "unzip" => "unzip -r payload out".into(),
+                // These named-source writers do not consume a directory's
+                // contents. AC-6 still protects their explicit file operand.
+                "ln" | "mv" | "install" => format!("{name} payload/id_rsa out"),
+                // Downloads and patches are not recursive tree sources.
+                "curl" | "wget" | "patch" => continue,
+                _ => panic!("classify {name}'s source role in this test"),
+            };
+            let findings = secret_reads(&line, &SecuritySection::default(), root, Some(root));
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "{line}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn review3_unread_executable_inputs_keep_the_secret_read_boundary() {
+        let temp = tempfile::tempdir().unwrap();
+        for line in [
+            "pwsh -e RwBlAHQA",
+            "pwsh -unknown value",
+            "deno eval --unknown value 'console.log(1)'",
+            "osascript -e 'do shell script commandFromElsewhere'",
+            "cat <<'E' > x.py; python3 x.py\nprint(1)\nE",
+        ] {
+            let findings = evaluate(
+                line,
+                &SecuritySection::default(),
+                PolicyLevel::Off,
+                temp.path(),
+                temp.path(),
+                Some(temp.path()),
+            );
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "{line}: {findings:?}"
+            );
+        }
+    }
 
     #[test]
     fn tsk1002_ci1_and_or_paths_preserve_reader_verdicts() {
@@ -1379,21 +1691,20 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         std::fs::write(home.join(".codex/auth.json"), "fake secret fixture").unwrap();
-        let wrong: Vec<_> = [
-            "cat ~",
-            "cat ~/",
-            "cat \"$HOME/\"",
-            "grep -r token ~",
-            "rg token ~/",
-            "cp -r ~ out",
-        ]
-        .into_iter()
-        .filter(|command| !glob_fixture_read(command, &root, &home))
-        .collect();
+        let wrong: Vec<_> = ["grep -r token ~", "rg token ~/", "cp -r ~ out"]
+            .into_iter()
+            .filter(|command| !glob_fixture_read(command, &root, &home))
+            .collect();
         assert!(
             wrong.is_empty(),
             "home ancestor reads were allowed: {wrong:?}"
         );
+        for command in ["cat ~", "cat ~/", "cat \"$HOME/\""] {
+            assert!(
+                !glob_fixture_read(command, &root, &home),
+                "a flat directory operand does not read descendants: {command}"
+            );
+        }
     }
 
     #[test]

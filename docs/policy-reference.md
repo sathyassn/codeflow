@@ -246,12 +246,13 @@ Recursive readers inspect their roots even without a glob selector. This
 includes recursive search, copy and archive input trees. Search selectors
 such as `rg -g`, `--glob`, `--iglob` and `grep --include` select actual names
 under the parsed roots. A negated selector cannot clear an otherwise
-selected secret. Ripgrep's Git ignore rules prune ignored entries when the
-flags honor them. Ignore paths are anchored to the searched worktree,
-including linked checkouts. Unrestricted/no-ignore flags, matching positive
-directory selectors and explicit ignored roots override that pruning. Other ignore
-mechanisms may cause conservative refusals. Hidden candidates are inspected
-conservatively.
+selected secret. Ignored and hidden entries are inspected too: the guard
+cannot reproduce every ignore file, configuration source or same-line edit.
+Unknown recursive or archive syntax retains all candidate roots; inputs whose
+roots cannot be established refuse. A recursive root or descendant that may
+traverse a link declared earlier on the line refuses as cannot-verify.
+Listings and metadata operands do not inherit the ancestor rule for content
+readers; explicit secret-store operands retain their own protection.
 
 Shell expansion and recursive root inspection each use a 65,536-entry
 metadata budget. Unreadable, unresolved or over-budget selections refuse as
@@ -281,6 +282,12 @@ Rooted Windows homes without a drive inherit the command directory's drive.
 PowerShell aliases, cmd /c, AppleScript's do shell script and deno eval join
 the inline-code checks. Makefiles supplied on stdin or through `make --eval`
 are code too.
+Unknown PowerShell or deno parameter grammar and encoded PowerShell bodies
+refuse as cannot-verify. AppleScript bodies receive literal-path inspection;
+constructed shell commands refuse. A script written earlier on the same line
+must receive a verified code reading before execution by path, interpreter
+or Make. Otherwise it refuses. Windows device, UNC, alternate-stream and
+short-name spellings refuse when the guard cannot map their real paths.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the

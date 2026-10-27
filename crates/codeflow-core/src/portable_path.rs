@@ -103,6 +103,49 @@ pub(crate) fn filesystem_spelling(text: &str) -> String {
         .join("/")
 }
 
+/// Namespaces and streams need a mapping before a guard can compare names.
+/// Resolve short names through the kernel; an unmapped spelling refuses.
+pub(crate) fn guard_path(path: &Path) -> Result<PathBuf, String> {
+    if !cfg!(windows) {
+        return Ok(path.to_path_buf());
+    }
+    let text = path
+        .to_str()
+        .ok_or("cannot inspect a Windows path as text")?;
+    let spelling = text.replace('\\', "/").to_ascii_lowercase();
+    if spelling.starts_with("//./") || spelling.starts_with("//?/unc/") || spelling.contains("::") {
+        return Err("cannot map a Windows device, UNC or alternate-stream path".into());
+    }
+    let short = |text: &str| {
+        text.split('/').any(|part| {
+            part.split_once('~').is_some_and(|(_, tail)| {
+                let number = tail.split('.').next().unwrap_or_default();
+                !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())
+            })
+        })
+    };
+    if short(&spelling) {
+        let mut real = PathBuf::new();
+        for part in path.components() {
+            real.push(part.as_os_str());
+            let part = part
+                .as_os_str()
+                .to_str()
+                .ok_or("cannot inspect a Windows path component as text")?;
+            if short(&part.replace('\\', "/")) {
+                real = canonicalize(&real).map_err(|_| "cannot map a Windows short filename")?;
+                if short(&slashed(&real)) {
+                    return Err(
+                        "cannot establish the long spelling of a Windows short filename".into(),
+                    );
+                }
+            }
+        }
+        return Ok(real);
+    }
+    Ok(path.to_path_buf())
+}
+
 /// The user's home directory as the guards and doctor read it: the first
 /// of [`user_homes`].
 #[must_use]
