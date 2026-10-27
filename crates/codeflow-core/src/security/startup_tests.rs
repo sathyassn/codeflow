@@ -547,6 +547,36 @@ fn a_directory_change_is_not_a_write() {
             "{command}: {found:?}"
         );
     }
+    // Codex review round 6: an external `cd`, or a line that can rebind
+    // the name, keeps the write judgment of the `cd` operand itself.
+    for command in [
+        "cd ~ && command cd \"$p\"",
+        "cd ~ && chdir \"$p\"",
+        "enable -n cd; cd ~ && cd \"$p\"",
+        "disable cd; cd ~ && cd \"$p\"",
+        "cd() { :; }; cd ~ && cd \"$p\"",
+        "alias cd=x; cd ~ && cd \"$p\"",
+    ] {
+        assert!(refused(&f.judge(command)), "{command}");
+    }
+    // Codex review round 6, its exact forms run from the home: only the
+    // shell's own `cd` is exempt.
+    for (command, refuse) in [
+        ("cd \"$p\"", false),
+        ("pushd \"$p\"", false),
+        ("command cd \"$p\"", true),
+        ("chdir \"$p\"", true),
+        ("enable -n cd; cd \"$p\"", true),
+        ("disable cd; cd \"$p\"", true),
+        // Security review SR2-3: the unresolved operand through a launcher
+        // or a path keeps the write judgment too.
+        ("env cd \"$p\"", true),
+        ("exec cd \"$p\"", true),
+        ("/usr/bin/cd \"$p\"", true),
+    ] {
+        let found = f.judge_in(command, &f.home, &f.startup_env());
+        assert_eq!(refused(&found), refuse, "{command}: {found:?}");
+    }
 }
 
 /// Placing programs refuse in or into the home, `/etc` or a startup

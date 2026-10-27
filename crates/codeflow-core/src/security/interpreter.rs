@@ -1799,6 +1799,30 @@ mod tests {
                 // during expansion, before the interpreter starts.
                 "python3 x.py settings.json ${ cd ./hidden; }",
                 "python3 x.py settings.json <<EOF\n${ cd ./hidden; }\nEOF",
+                // Codex review round 6: quoted or assigned, the substitution
+                // still runs in this shell.
+                "python3 x.py settings.json \"${ cd ./hidden; }\"",
+                "v=\"${ cd ./hidden; }\"; python3 x.py settings.json",
+                "python3 x.py settings.json \"${| cd ./hidden; }\"",
+                "python3 x.py settings.json > \"${ cd ./hidden; }\"",
+                // Security review SR2-1: words after the substitution, or
+                // joined to it, are still judged.
+                "python3 x.py ${ cd ./hidden; } settings.json",
+                "python3 x.py settings.json${ cd ./hidden; }",
+                "python3 x.py settings.json <<< \"${ cd ./hidden; }\"",
+                // Security review SR2-2: from a directory the guard cannot
+                // follow, `.` or an ancestor may be a protected directory.
+                "while python3 /abs/w.py .; do cd ./hidden || break; done",
+                "while python3 /abs/w.py ./; do cd ./hidden || break; done",
+                "until python3 /abs/w.py .; do cd ./hidden; done",
+                "for i in 1 2; do python3 /abs/w.py .; cd ./hidden; done",
+                "f() { cd ./hidden; }; while python3 /abs/w.py .; do f; done",
+                "cd ./src && python3 /abs/w.py ..",
+                "cd ./src && python3 /abs/w.py x/..",
+                "cd ./src && python3 /abs/w.py $PWD",
+                "cd ./src && python3 /abs/w.py ${PWD}",
+                "cd ./src && python3 /abs/w.py $(pwd)",
+                "cd ./src && python3 /abs/w.py `pwd`",
             ],
         );
         assert_allowed(

@@ -2354,19 +2354,51 @@ fn checkout_config_violation(name: &str, args: &[String], line: &Line<'_>) -> Op
     crate::hooks::git_guard::checkout_config_write(rest, line.integrity)
 }
 
-/// Whether a simple command is the shell's own `cd`, `chdir`, `pushd` or
-/// `popd`: that word exactly, at command position after assignments and
-/// `builtin` or `command` only.
-fn shell_directory_builtin(tokens: &[String]) -> bool {
-    tokens
-        .iter()
-        .find(|word| {
-            let assignment = word.split_once('=').is_some_and(|(name, _)| {
-                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            });
-            !assignment && !matches!(word.as_str(), "builtin" | "command")
-        })
-        .is_some_and(|word| matches!(word.as_str(), "cd" | "chdir" | "pushd" | "popd"))
+/// Whether a simple command is certainly the shell's own `cd`, `pushd`
+/// or `popd`, a strict allowlist (TSK-397 Codex review round 6): that word
+/// exactly, at command position after assignments or `builtin` only, on a
+/// line with nothing that can rebind the name or change how builtins
+/// resolve. `chdir` is never exempt, since bash has no such builtin, and
+/// `command cd` is not, since it may run an external `cd`.
+fn shell_directory_builtin(tokens: &[String], text: &str) -> bool {
+    let word = tokens.iter().find(|word| {
+        let assignment = word.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        !assignment && word.as_str() != "builtin"
+    });
+    word.is_some_and(|word| matches!(word.as_str(), "cd" | "pushd" | "popd"))
+        && !rebinds_builtins(text)
+}
+
+/// Whether a line holds anything that can rebind a command name or change
+/// how builtins resolve: `enable`, `disable`, `alias`, `unalias`, `hash`,
+/// `eval`, `source`, `.`, `emulate`, `setopt`, `unsetopt`, `function`, or a
+/// function definition's `()`.
+fn rebinds_builtins(text: &str) -> bool {
+    text.contains("()")
+        || text
+            .split(|c: char| {
+                matches!(c, ' ' | '\t' | '\n' | '\r')
+                    || matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}')
+            })
+            .any(|word| {
+                matches!(
+                    word,
+                    "enable"
+                        | "disable"
+                        | "alias"
+                        | "unalias"
+                        | "hash"
+                        | "eval"
+                        | "source"
+                        | "."
+                        | "emulate"
+                        | "setopt"
+                        | "unsetopt"
+                        | "function"
+                )
+            })
 }
 
 /// The writes one simple command makes.
@@ -2397,7 +2429,7 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     // (`env cd`, `timeout 5 cd`, `exec cd`) or as a path (`/usr/bin/cd`)
     // the word runs the first `cd` file on `PATH`, which may write
     // anything, so it keeps the write judgment (security review SF-7).
-    if shell_directory_builtin(&tokens) {
+    if shell_directory_builtin(&tokens, line.text) {
         return None;
     }
     let (program, args) = strip_launchers(&tokens)?;

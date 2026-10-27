@@ -97,6 +97,10 @@ pub(crate) fn evaluate(
     let _scope = edit_guard::RepoFactsScope::enter();
     let calls = outward::interpreter_calls_with_home(line, payload_cwd, home);
     let (opaque, runs) = outward::code_sources(line);
+    // A current-shell substitution's body is code the splitter does not
+    // keep whole, so every word on the line may belong to a call the guard
+    // never saw (TSK-397 security review SR2-1).
+    let opaque = opaque || outward::current_shell_substitution(line);
     if calls.is_empty() && !runs && !opaque && outward::interpreter_bodies(line).is_empty() {
         return Vec::new();
     }
@@ -747,6 +751,18 @@ fn call_reaches(
             if outward::descriptor_program(value) {
                 continue;
             }
+            // The parser fills `$PWD`, `$(pwd)` and a backquoted `pwd` with
+            // the directory its walk believes the shell is in. Where the line
+            // may have moved the shell somewhere the guard cannot follow,
+            // that value, or an ancestor of it, names an unknown directory
+            // (TSK-397 security review SR2-2).
+            if dirs.contains(&None) && names_a_listed_directory(value, &dirs) {
+                found.push(Reach::Enforcement(format!(
+                    "an interpreter argument `{}` names the directory it runs in, which the guard cannot follow on this line",
+                    git_guard::shown_word(value)
+                )));
+                continue;
+            }
             // One finding per value is enough; its strongest is kept on
             // merge, and a fixed authority finding is never hidden because
             // every authority reach is judged before any enforcement one.
@@ -1227,6 +1243,12 @@ fn unreadable_reach(
             git_guard::token_integrity_path(value, dir, facts.payload_cwd)
         }
         Some(_) => None,
+        // From a directory the guard cannot follow, `.`, `..` or `$PWD`
+        // names that directory or one above it, which may be the checkout
+        // or a protected directory itself (TSK-397 security review SR2-2).
+        None if names_the_directory_or_above(value, facts.home.is_some()) => {
+            Some("the directory it runs in or one above it".to_string())
+        }
         None => git_guard::word_could_name(value).map(str::to_string),
     };
     if let Some(reached) = reached {
@@ -1254,6 +1276,37 @@ fn unreadable_reach(
     Some(Reach::Enforcement(format!(
         "an interpreter argument `{shown}` is filled in at run time on a line that names the enforcement path `{named}`"
     )))
+}
+
+/// Whether an absolute operand is one of the listed directories or an
+/// ancestor of one.
+fn names_a_listed_directory(value: &str, dirs: &[Option<PathBuf>]) -> bool {
+    let value = Path::new(value.trim_end_matches('/'));
+    value.is_absolute()
+        && dirs
+            .iter()
+            .flatten()
+            .any(|dir| dir.starts_with(value) || dir == value)
+}
+
+/// Whether an operand names the directory it is used from or an ancestor:
+/// `.`, `./`, `..`, `x/..`, `../..`, or `$PWD`, `${PWD}`, `$(pwd)` or a
+/// backquoted `pwd` in place of `.`, and `~` when the home is unknown.
+fn names_the_directory_or_above(value: &str, home_known: bool) -> bool {
+    let mut value = value.to_string();
+    for here in ["${PWD}", "$PWD", "$(pwd)", "`pwd`"] {
+        value = value.replace(here, ".");
+    }
+    if !home_known && (value == "~" || value.starts_with("~/")) {
+        value.replace_range(..1, ".");
+    }
+    if value.starts_with('/') || value.starts_with('~') {
+        return false;
+    }
+    value
+        .split('/')
+        .rfind(|part| !part.is_empty() && *part != ".")
+        .is_none_or(|last| last == "..")
 }
 
 /// Authority metadata as a trailing spelling a word can end in.

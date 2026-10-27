@@ -623,29 +623,28 @@ pub(crate) enum DirChange {
     Unknown,
 }
 
-/// The directory changes the words of one simple command make (TSK-302,
-/// narrowed by TSK-397). Where the shell runs next depends on state the
-/// guard cannot see: shell functions and aliases (zoxide's `z`, a `cd`
-/// wrapper, zsh `autoload` and the `functions` table), hooks such as zsh
-/// `chpwd`, and the shell's `HOME`, `CDPATH`, `PWD` and directory stack.
-/// So the modeled set is small, and anything outside it is
-/// [`DirChange::Unknown`], never "no change":
+/// The directory changes the words of one simple command make (TSK-302
+/// review round 3). Within the modeled grammar the answer is exact;
+/// anything outside it is [`DirChange::Unknown`], never "no change":
 ///
-/// - An interpreter call (`python3`, `node`, `perl`, `ruby` and their
-///   versioned names) is the call being judged; it changes nothing unless
-///   a directory-change token follows it unconsumed.
+/// - `cd`, `chdir` and `pushd` with any options; `cd` alone goes to
+///   `home`; `cd -`, a stack index, `~user` and a value filled in at run
+///   time are unknown. `popd` and `dirs` return to directories already
+///   listed.
+/// - `source` and `.` can move the shell to anywhere: unknown.
 /// - The launchers `command`, `builtin`, `exec`, `nohup`, `nice`,
-///   `timeout`, `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun`,
-///   `ionice` and the zsh precommands are unwrapped through their option
-///   grammar, and the command they run is read in turn. `env -C`, `-CDIR`,
-///   `--chdir` and `--chdir=` are followed, as a process's own directory.
-///   An option the grammar does not list is unknown.
-/// - Every other word is unknown: a shell directory change (`cd` in any
-///   form, `chdir`, `pushd`, `popd`), code the guard does not read
-///   (`eval`, `source`, `.`, `sudo`, a `trap` action, `alias`), and any
-///   other program, which may be a shell function, including a word that
-///   is expanded, globbed or braced (`${X:-cd}`, `{cd,dir}`). `git -C DIR`
-///   is followed as well, since `git` may also be a function.
+///   `timeout`, `stdbuf`, `time`, `env` and `xargs` are unwrapped through
+///   their option grammar, values included, attached or separate, and
+///   the command they run is read in turn. `env -C`, `-CDIR`, `--chdir`
+///   and `--chdir=` change directory. An option the grammar does not list,
+///   `env -S`, and `sudo` are unknown.
+/// - `git -C DIR` counts as a change.
+/// - Any other program cannot move the shell, so it makes no change.
+///
+/// This is the modelled grammar the command walk follows. Whether a command
+/// may also move the shell somewhere the guard cannot see is a separate
+/// question, [`shell_may_move`], which `line_directories` asks of every
+/// step (TSK-397).
 pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChange> {
     let mut found = Vec::new();
     launcher_changes(words, home, 0, &mut found);
@@ -894,14 +893,6 @@ fn launcher_changes(
             !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         });
         if word == "!" || assignment {
-            // An assignment that installs code the shell runs between or
-            // around commands (Codex review round 4).
-            if word
-                .split_once('=')
-                .is_some_and(|(name, _)| HOOK_VARIABLES.contains(&name))
-            {
-                found.push(DirChange::Unknown);
-            }
             at += 1;
         } else {
             break;
@@ -920,20 +911,11 @@ fn launcher_changes(
         None => found.push(DirChange::Unknown),
     };
     match name {
-        // A shell directory change lands where shell state the guard
-        // cannot see decides: a `cd` function or alias, a zsh `chpwd` hook,
-        // the shell's `HOME`, `CDPATH`, `PWD` and directory stack, and zsh
-        // options. Every form makes the directory unknown (TSK-397, by the
-        // operator's fail-closed decision after Codex review round 3).
-        // `eval`, `source`, `.`, `sudo` and `doas` run code or a shell the
-        // guard does not read, and a `trap` action or an `alias` value is
-        // code that runs later in this shell, often from quoted text the
-        // directory-change scan never splits (TSK-397 security review F1).
-        "cd" | "chdir" | "pushd" | "popd" | "eval" | "source" | "." | "sudo" | "doas" | "alias"
-        | "unalias" | "trap" => {
-            found.push(DirChange::Unknown);
+        "cd" | "chdir" | "pushd" => {
+            found.extend(cd_destination(name, rest, home, &target));
         }
-
+        "popd" | "dirs" => {}
+        "source" | "." | "sudo" | "doas" => found.push(DirChange::Unknown),
         // zsh precommands run the command after them in this shell.
         name if crate::hooks::git_guard::is_shell_modifier(name) => inner(Some(0), found),
         "builtin" => inner(
@@ -973,26 +955,59 @@ fn launcher_changes(
                     break;
                 }
             }
-            found.push(DirChange::Unknown);
         }
-        // An interpreter call changes nothing, unless a directory-change
-        // token follows it that the grammar above did not consume (TSK-302
-        // review round 4).
-        _ if program_is_interpreter(program) => {
+        // Any other word: a program that cannot move this shell, unless a
+        // directory-change token follows it that the grammar above did not
+        // consume. Then the word is an unmodeled launcher, and the
+        // directory is unknown rather than unchanged (TSK-302 review round
+        // 4): the guard never fails open on a word it does not know.
+        _ => {
             if hides_a_directory_change(rest) {
                 found.push(DirChange::Unknown);
             }
         }
-        // Any other word may be a shell function, an alias or a word the
-        // shell expands into `cd` (TSK-397 security review SF-1 to SF-3).
-        _ => found.push(DirChange::Unknown),
+    }
+}
+
+/// Where a `cd`, `chdir` or `pushd` moves: its operand, home when it has
+/// none, or `None` for a directory already in the set (a `pushd` with no
+/// operand or a stack index).
+fn cd_destination(
+    name: &str,
+    rest: &[String],
+    home: Option<&Path>,
+    target: &dyn Fn(&str) -> DirChange,
+) -> Option<DirChange> {
+    let mut operands = rest.iter();
+    let mut operand = None;
+    while let Some(word) = operands.next() {
+        if word == "--" {
+            operand = operands.next();
+            break;
+        }
+        // Every dash word is an option (`-L`, `-P`, `-q`, `-e`, `-@`); `-`
+        // alone is the previous directory, and a `pushd` stack index (`-1`)
+        // rotates to one already listed.
+        if word.starts_with('-') && word.len() > 1 {
+            if name == "pushd" && word[1..].chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            continue;
+        }
+        operand = Some(word);
+        break;
+    }
+    match operand {
+        Some(operand) if name == "pushd" && operand.starts_with('+') => None,
+        Some(operand) => Some(target(operand)),
+        None if name == "pushd" => None,
+        None => Some(home.map_or(DirChange::Unknown, |home| DirChange::To(home.to_path_buf()))),
     }
 }
 
 /// Shell variables whose value is code the shell runs on its own: bash's
-/// `PROMPT_COMMAND` and the zsh hook arrays. Array and `+=` spellings are
-/// not plain assignments, so they are read as program words, which are
-/// unknown anyway.
+/// `PROMPT_COMMAND` and the zsh hook arrays, matched in the line's text
+/// in every assignment spelling by [`hides_shell_state`].
 const HOOK_VARIABLES: &[&str] = &[
     "PROMPT_COMMAND",
     "precmd_functions",
@@ -1002,6 +1017,88 @@ const HOOK_VARIABLES: &[&str] = &[
     "zshaddhistory_functions",
     "zshexit_functions",
 ];
+
+/// Whether the line's text holds shell state the command walk never hands
+/// to [`dir_changes`]: an assignment to a hook variable, in any spelling
+/// (`chpwd_functions=(f)`, `precmd_functions+=(f)`,
+/// `PROMPT_COMMAND[0]=...`), or a current-shell command substitution
+/// (`${ cd x; }`, `${| cd x; }`), which runs in this shell during
+/// expansion wherever it appears: quoted, in an assignment, a redirection
+/// or a heredoc. The token's presence decides; its contents are not read
+/// (TSK-397 Codex review rounds 4 and 6).
+fn hides_shell_state(command: &str) -> bool {
+    current_shell_substitution(command)
+        || HOOK_VARIABLES.iter().any(|name| {
+            command.match_indices(name).any(|(at, _)| {
+                let before = command[..at].chars().next_back();
+                let starts = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+                let after = command[at + name.len()..].chars().next();
+                starts && matches!(after, Some('=' | '+' | '['))
+            })
+        })
+}
+
+/// Whether the line holds a current-shell command substitution: `${`
+/// followed by a blank, a newline or `|` (`${ cmd; }`, `${| cmd; }`),
+/// anywhere, quoted or not. Its body runs in this shell during expansion,
+/// and the splitter does not keep it whole, so the line is code the guard
+/// cannot read (TSK-397 security review SR2-1).
+pub(crate) fn current_shell_substitution(command: &str) -> bool {
+    command.match_indices("${").any(|(at, _)| {
+        command[at + 2..]
+            .chars()
+            .next()
+            .is_some_and(|c| matches!(c, '|' | ' ' | '\t' | '\n'))
+    })
+}
+
+/// Whether one simple command may move the shell somewhere the guard
+/// cannot follow (TSK-397). Where a command leaves the shell depends on
+/// state the guard cannot see: shell functions and aliases (zoxide's `z`,
+/// a `cd` wrapper, zsh `autoload` and the `functions` table), hooks such as
+/// zsh `chpwd`, and the shell's `HOME`, `CDPATH`, `PWD` and directory
+/// stack. So only an interpreter call, reached through the modeled
+/// launchers and their options (`nice -n 5`, `timeout 5`, `xargs`), is
+/// known not to; every other command may, including a shell directory
+/// change in any form and a word the shell expands into `cd`. An
+/// assignment-only command changes nothing here; a hook assignment is read
+/// from the line's text ([`hides_shell_state`]).
+pub(crate) fn shell_may_move(words: &[String]) -> bool {
+    let assignment = |word: &str| {
+        word.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    };
+    let Some(at) = words.iter().position(|word| program_is_interpreter(word)) else {
+        return words.iter().any(|word| word != "!" && !assignment(word));
+    };
+    let launched = words[..at].iter().all(|word| {
+        word == "!"
+            || assignment(word)
+            || word.starts_with('-')
+            || word
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, '.' | 's' | 'm' | 'h' | 'd'))
+            || matches!(
+                crate::hooks::git_guard::launcher_name(word),
+                "command"
+                    | "exec"
+                    | "nohup"
+                    | "nice"
+                    | "timeout"
+                    | "stdbuf"
+                    | "time"
+                    | "env"
+                    | "xargs"
+                    | "caffeinate"
+                    | "xcrun"
+                    | "ionice"
+                    | "noglob"
+                    | "nocorrect"
+            )
+    });
+    !launched || hides_a_directory_change(&words[at + 1..])
+}
 
 /// Whether `word`, as written, names an interpreter (`python3`,
 /// `/usr/bin/node`); an expanded, globbed or braced word does not.
@@ -1039,7 +1136,7 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
     // directory a later `cd` reaches is unknown (TSK-397 review F2).
     let mut set = DirSet {
         dirs: vec![cwd.to_path_buf()],
-        unknown: mentions_cdpath(command),
+        unknown: mentions_cdpath(command) || hides_shell_state(command),
     };
     // The shared walk supplies the directory before each command. Apply the
     // legacy launcher reader locally, rather than combining every change with
@@ -1059,6 +1156,9 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
         for segment in expand_commands(&step.text) {
             let mut words = command_argv(&segment);
             strip_reserved_words(&mut words);
+            if shell_may_move(&words) {
+                local.unknown = true;
+            }
             for change in dir_changes(&words, home) {
                 local.change(&change);
             }
