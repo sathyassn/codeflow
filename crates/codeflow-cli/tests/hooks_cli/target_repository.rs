@@ -30,7 +30,15 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("repo");
+        // Git matches `includeIf.gitdir:` against the resolved path, and on
+        // macOS the temporary directory sits behind the `/var` symlink.
+        // Windows keeps the path as given, because `canonicalize` adds a
+        // verbatim prefix there.
+        #[cfg(unix)]
+        let base = temp.path().canonicalize().unwrap();
+        #[cfg(not(unix))]
+        let base = temp.path().to_path_buf();
+        let root = base.join("repo");
         std::fs::create_dir(&root).unwrap();
         enforced_repo(&root);
         let linked = root.join(".worktrees/w");
@@ -2608,7 +2616,12 @@ fn worktree_add_reads_includes_of_every_admin_name() {
 #[cfg(unix)]
 #[test]
 fn worktree_add_reads_linked_includes_by_their_logical_path() {
-    for callback_logical in [true, false] {
+    for (spelling, callback_logical) in [
+        ("direct", true),
+        ("direct", false),
+        ("alias", true),
+        ("alias", false),
+    ] {
         let f = Fixture::new();
         let root = shell_path(&f.root);
         let marker = f.temp.path().join("callback-marker");
@@ -2635,12 +2648,22 @@ fn worktree_add_reads_linked_includes_by_their_logical_path() {
         };
         std::fs::write(logical.join("child.conf"), at_logical).unwrap();
         std::fs::write(physical.join("child.conf"), at_physical).unwrap();
+        // One case per spelling of the same file: the direct path, or the
+        // path through a directory alias. Only one include is active, so a
+        // guard that skipped the alias would be caught.
+        let alias = f.temp.path().join("alias");
+        std::os::unix::fs::symlink(&logical, &alias).unwrap();
+        let include = if spelling == "alias" {
+            alias.join("parent.conf")
+        } else {
+            logical.join("parent.conf")
+        };
         git(
             &f.root,
             &[
                 "config",
                 &format!("includeIf.gitdir:{root}/.git/worktrees/linkedwt.path"),
-                &shell_path(&logical.join("parent.conf")),
+                &shell_path(&include),
             ],
         );
         let stage = f.temp.path().join("stage");
@@ -2650,9 +2673,13 @@ fn worktree_add_reads_linked_includes_by_their_logical_path() {
         for hook in ["exec-guard", "git-guard"] {
             let out = f.command(&stage, hook, &command);
             if callback_logical {
-                assert!(refused(&out), "{hook} {command}: {out:?}");
+                assert!(refused(&out), "{spelling} {hook} {command}: {out:?}");
             } else {
-                assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{spelling} {hook} {command}: {out:?}"
+                );
             }
         }
         // Real Git takes the logical child, and runs it during the add.
