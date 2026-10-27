@@ -26,7 +26,6 @@ quick-xml.workspace = true
 regex.workspace = true
 git2.workspace = true
 fs2.workspace = true
-same-file.workspace = true
 rusqlite.workspace = true
 ulid.workspace = true
 tokio.workspace = true
