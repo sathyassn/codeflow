@@ -12,6 +12,7 @@ pub(crate) fn evaluate(
     root: &Path,
     home: Option<&Path>,
 ) -> Vec<Violation> {
+    let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
     // Position-scoped arguments carry more precise provenance than the broad
     // literal scan below. Keep their finding first when both name one path.
     let mut violations = super::arguments::evaluate(command, integrity, cwd, root, home);
@@ -21,7 +22,15 @@ pub(crate) fn evaluate(
     } else {
         command.to_owned()
     };
-    for code in outward::interpreter_bodies(&visible) {
+    let mut codes = outward::interpreter_bodies(&visible);
+    codes.extend(
+        outward::interpreter_calls_with_home(command, cwd, home)
+            .into_iter()
+            .flat_map(|call| call.code),
+    );
+    codes.sort();
+    codes.dedup();
+    for code in codes {
         if levels.headless_peer_runs.is_active() {
             if let Some(run) = super::headless::raw_run(&code) {
                 violations.push(crate::hooks::exec_guard::headless_violation(
@@ -89,59 +98,58 @@ fn secret_reads(
                 .first()
                 .map_or("", |s| super::unresolved::writer_name(s));
             let reader_cwd = unwrapped.cwd.as_deref().unwrap_or(cwd);
-            for (at, value, glob) in
-                file_operands(name, args, unwrapped.expands.as_deref(), command)
-            {
-                // find supplies these positional operands from its own
-                // starting paths, which are inspected as operands too. Do
-                // not mistake that known supplier for an external variable.
-                let supplied = matches!(unwrapped.supplier, Some(outward::Supplier::Find { .. }))
-                    && matches!(value, "$1" | "${1}" | "$@" | "${@}" | "$*" | "${*}");
-                let unread = !supplied
-                    && unwrapped.unresolved.iter().any(|word| {
-                        crate::hooks::git_guard::command_argv(word)
-                            .iter()
-                            .any(|part| part.contains(value))
-                    });
-                let expands = glob
-                    || unwrapped
-                        .expands
-                        .as_ref()
-                        .is_none_or(|flags| flags.get(at).copied().unwrap_or(true));
-                let secret = if unwrapped.cwd.is_none()
-                    && (glob || (expands && crate::hooks::git_guard::has_glob(value)))
-                {
-                    uncertain_glob(
-                        value,
-                        cwd,
-                        home,
-                        "cannot establish the glob's working directory",
-                    )
-                } else if glob {
-                    secret_search_glob(
-                        value,
-                        name,
-                        args,
-                        unwrapped.expands.as_deref(),
-                        reader_cwd,
-                        home,
-                        command,
-                    )
-                } else {
-                    secret_path_result(value, reader_cwd, home, Some(expands))
-                };
-                if unread || secret.as_ref().map_or(true, |value| *value) {
+            let mut recursive = recursive_read(
+                name,
+                args,
+                unwrapped.expands.as_deref(),
+                reader_cwd,
+                home,
+                command,
+            );
+            if recursive.is_some() && unwrapped.cwd.is_none() {
+                recursive = Some(Err(
+                    "cannot establish the recursive reader's working directory",
+                ));
+            }
+            if let Some(result) = &recursive {
+                if result.as_ref().map_or(true, |secret| *secret) {
                     violations.push(Violation::new(
                         "security.secret_reads",
                         levels.secret_reads,
-                        if unread {
-                            format!("cannot verify file operand `{value}` while a secret store is reachable")
-                        } else if let Err(why) = secret {
-                            format!("cannot verify file glob `{value}`: {why}")
-                        } else {
-                            format!("keychain or secret-store read names `{value}`")
+                        match result {
+                            Ok(_) => "a recursive reader selects a secret file or store".into(),
+                            Err(why) => format!("cannot verify every recursive read path: {why}"),
                         },
-                        crate::remedy::OUTWARD_ACTION.remedy(),
+                        crate::remedy::SECRET_SELECTION.remedy(),
+                    ));
+                    continue;
+                }
+            }
+            for (at, value, glob) in file_operands(
+                name,
+                args,
+                unwrapped.expands.as_deref(),
+                command,
+                reader_cwd,
+            ) {
+                if glob && recursive.is_some() {
+                    continue;
+                }
+                let secret =
+                    inspect_operand(command, &unwrapped, (at, value, glob), reader_cwd, home);
+                if secret.as_ref().map_or(true, |value| *value) {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        match secret {
+                            Err(why) => format!("cannot verify file operand `{value}`: {why}"),
+                            Ok(_) => format!("keychain or secret-store read names `{value}`"),
+                        },
+                        if secret.is_err() {
+                            crate::remedy::SECRET_SELECTION.remedy()
+                        } else {
+                            crate::remedy::OUTWARD_ACTION.remedy()
+                        },
                     ));
                     break;
                 }
@@ -149,6 +157,87 @@ fn secret_reads(
         }
     }
     violations
+}
+
+/// File operands retain their command-position provenance. Declared links
+/// add possible real paths before they exist on disk; virtual script
+/// descriptors keep the interpreter's existing best-effort code boundary.
+fn inspect_operand(
+    command: &str,
+    call: &outward::Unwrapped,
+    operand: (usize, &str, bool),
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Result<bool, &'static str> {
+    let (at, value, glob) = operand;
+    let name = call
+        .args
+        .first()
+        .map_or("", |program| super::unresolved::writer_name(program));
+    if outward::descriptor_program(value)
+        && (crate::hooks::git_guard::is_shell(name) || outward::interpreter_family(name).is_some())
+    {
+        return Ok(false);
+    }
+    let supplied = matches!(call.supplier, Some(outward::Supplier::Find { .. }))
+        && matches!(value, "$1" | "${1}" | "$@" | "${@}" | "$*" | "${*}");
+    if !supplied
+        && call.unresolved.iter().any(|word| {
+            crate::hooks::git_guard::command_argv(word)
+                .iter()
+                .any(|part| part.contains(value))
+        })
+    {
+        return Err("the file operand is supplied at run time and its paths cannot be established");
+    }
+    let expands = glob
+        || call
+            .expands
+            .as_ref()
+            .is_none_or(|flags| flags.get(at).copied().unwrap_or(true));
+    if expands
+        && crate::hooks::git_guard::has_glob(value)
+        && crate::hooks::git_guard::dot_glob_option(command).is_some()
+    {
+        return Err("shell options change which hidden paths the glob selects");
+    }
+    if call.cwd.is_none() && (glob || expands && crate::hooks::git_guard::has_glob(value)) {
+        return uncertain_glob(
+            value,
+            cwd,
+            home,
+            "cannot establish the glob's working directory",
+        );
+    }
+    if glob {
+        return secret_search_glob(
+            value,
+            name,
+            &call.args,
+            call.expands.as_deref(),
+            cwd,
+            home,
+            command,
+        );
+    }
+    let symbolic_link = name == "ln"
+        && call.args.iter().skip(1).any(|arg| {
+            arg == "--symbolic"
+                || arg == "--symbolic-link"
+                || arg.starts_with('-') && !arg.starts_with("--") && arg.contains('s')
+        });
+    let reading = (!symbolic_link).then_some(expands);
+    if secret_path_result(value, cwd, home, reading)? {
+        return Ok(true);
+    }
+    for mapped in super::composed::paths::linked_paths(value, cwd, &call.links)
+        .map_err(|_| "cannot resolve a read through a link declared on this line")?
+    {
+        if secret_path_result(&secret_path_text(&mapped)?, cwd, home, reading)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// `reader` is `Some` for a reader's argument, saying whether the shell
@@ -163,6 +252,8 @@ fn secret_path_result(
     home: Option<&Path>,
     reader: Option<bool>,
 ) -> Result<bool, &'static str> {
+    let spelling = crate::portable_path::filesystem_spelling(word);
+    let word = spelling.as_str();
     let expanded_word = word
         .strip_prefix("$HOME/")
         .or_else(|| word.strip_prefix("${HOME}/"))
@@ -178,11 +269,17 @@ fn secret_path_result(
         })
         .flatten();
     let word = tilde_word.as_deref().unwrap_or(word);
+    if reader.is_none() && word == "~" {
+        return Ok(false);
+    }
     // Keep the literal spelling for home patterns even when HOME is unknown.
-    // Also judge relative store names from the payload cwd, without reading
-    // files or resolving symlinks. Do not reduce paths to their basename:
+    // Also judge relative store names from the payload cwd, then inspect
+    // real targets when needed. Do not reduce paths to their basename:
     // auth.json is protected in its store, not in every project directory.
-    let absolute = if let Some(suffix) = word.strip_prefix("~/").filter(|_| reader != Some(false)) {
+    let literal_tilde = word == "~" && reader != Some(true);
+    let absolute = if word == "~" && reader == Some(true) {
+        home.map(Path::to_path_buf)
+    } else if let Some(suffix) = word.strip_prefix("~/").filter(|_| reader != Some(false)) {
         home.map(|home| outward::lexical_join(home, Path::new(suffix)))
     } else {
         Some(outward::lexical_join(cwd, Path::new(word)))
@@ -190,22 +287,28 @@ fn secret_path_result(
     if reader == Some(true) && (crate::hooks::git_guard::has_glob(word) || word.contains('{')) {
         return secret_glob(word, cwd, home);
     }
-    Ok(secret_path_spelling(word, home, reader.map(|_| false))
-        || absolute.as_deref().is_some_and(|path| {
-            secret_path_spelling(
-                &crate::portable_path::slashed(path),
-                home,
-                reader.map(|_| false),
-            )
-        }))
+    Ok(
+        (!literal_tilde && secret_path_spelling(word, home, reader.map(|_| false)))
+            || absolute.as_deref().is_some_and(|path| {
+                secret_path_spelling(
+                    &crate::portable_path::slashed(path),
+                    home,
+                    reader.map(|_| false),
+                )
+            })
+            || match absolute.as_deref() {
+                Some(path) => real_secret_path(path, home)?,
+                None => false,
+            },
+    )
 }
 
 fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
-    let word = word.to_ascii_lowercase();
+    let word = crate::portable_path::filesystem_spelling(word).to_ascii_lowercase();
     let home_relative = home.and_then(|home| {
         let home = crate::portable_path::slashed(home).to_ascii_lowercase();
         word.strip_prefix(home.trim_end_matches('/'))
-            .filter(|tail| tail.starts_with('/'))
+            .filter(|tail| tail.is_empty() || tail.starts_with('/'))
             .map(|tail| format!("~{tail}"))
     });
     let word = home_relative.as_deref().unwrap_or(&word);
@@ -232,7 +335,10 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
 /// Expand shell words without substituting a directory for an incomplete
 /// listing. Store directories refuse before any filesystem enumeration.
 fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'static str> {
-    let readings = crate::hooks::git_guard::brace_expand(word)
+    if home_rule_glob(word, cwd, home) {
+        return Ok(true);
+    }
+    let readings = crate::hooks::git_guard::word_readings(word)
         .ok_or("cannot inspect every brace alternative")?;
     for reading in readings {
         let directory = reading.rsplit_once('/').map_or("", |(dir, _)| dir);
@@ -260,7 +366,9 @@ fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'st
                         Ok(text) => text,
                         Err(why) => return uncertain_glob(&reading, cwd, home, why),
                     };
-                    if secret_path_spelling(&text, home, Some(false)) {
+                    if secret_path_spelling(&text, home, Some(false))
+                        || real_secret_path(&path, home)?
+                    {
                         return Ok(true);
                     }
                 }
@@ -273,6 +381,42 @@ fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'st
         }
     }
     Ok(false)
+}
+
+/// A named home rule protects its own filename, including conservative
+/// brace readings. This does not turn its parent into a whole-directory
+/// store or apply name intersection to ordinary workspace source globs.
+fn home_rule_glob(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
+    let Some((base, relative)) = glob_base(word, cwd, home) else {
+        return false;
+    };
+    let absolute = outward::lexical_join(base, Path::new(relative));
+    let word = home_spelling(&crate::portable_path::slashed(&absolute), home);
+    let Some(readings) = secret_pattern_readings(&word) else {
+        return true;
+    };
+    // File selectors must share an actual filename. Adding descendants
+    // here would turn a public *.md leaf into an ancestor of private jsonl.
+    let intersects = |rule: &str| {
+        rule.starts_with("~/")
+            && readings
+                .iter()
+                .any(|reading| super::pattern::glob_intersects(reading, rule).unwrap_or(true))
+    };
+    let table = actions::table();
+    table
+        .sandbox_read_denies
+        .iter()
+        .map(String::as_str)
+        .any(intersects)
+        || table.claude_read_groups.iter().any(|group| {
+            group.carveouts.is_empty()
+                && group.denies.iter().any(|rule| {
+                    rule.strip_prefix("Read(")
+                        .and_then(|rule| rule.strip_suffix(')'))
+                        .is_some_and(intersects)
+                })
+        })
 }
 
 fn uncertain_glob(
@@ -315,32 +459,21 @@ fn secret_stores() -> &'static [String] {
     static STORES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     STORES.get_or_init(|| {
         let table = actions::table();
-        // The accepted TSK-1002 boundary explicitly includes gh's store;
-        // actions.json currently has no gh entry. Installed presets stay as-is.
-        let mut stores = vec!["~/.config/gh".into()];
-        let rules = table.sandbox_read_denies.iter().map(String::as_str).chain(
-            table
-                .claude_read_groups
-                .iter()
-                .filter(|group| group.carveouts.is_empty())
-                .flat_map(|group| group.denies.iter())
-                .filter_map(|rule| {
-                    rule.strip_prefix("Read(")
-                        .and_then(|rule| rule.strip_suffix(')'))
-                }),
-        );
+        let mut stores = Vec::new();
+        let rules = table
+            .claude_read_groups
+            .iter()
+            .filter(|group| group.carveouts.is_empty())
+            .flat_map(|group| group.denies.iter())
+            .filter_map(|rule| {
+                rule.strip_prefix("Read(")
+                    .and_then(|rule| rule.strip_suffix(')'))
+            });
         for rule in rules.filter(|rule| rule.starts_with("~/")) {
-            let directory = if let Some(at) = rule.find(['*', '?', '[']) {
-                let prefix = &rule[..at];
-                if prefix.ends_with('/') {
-                    prefix.trim_end_matches('/')
-                } else {
-                    prefix.rsplit_once('/').map_or("", |(dir, _)| dir)
-                }
-            } else {
-                rule.rsplit_once('/').map_or("", |(dir, _)| dir)
+            let Some(directory) = rule.strip_suffix("/**") else {
+                continue;
             };
-            if directory != "~" && !directory.is_empty() {
+            if directory != "~" && !crate::hooks::git_guard::has_glob(directory) {
                 stores.push(directory.to_owned());
             }
         }
@@ -379,6 +512,33 @@ fn secret_intersection(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
         })
 }
 
+/// Existing names are judged through their real target as well as their
+/// visible spelling. Proven absence is the only metadata failure that clears
+/// a literal operand; unreadable and dangling links cannot certify a read.
+fn real_secret_path(path: &Path, home: Option<&Path>) -> Result<bool, &'static str> {
+    if secret_path_spelling(&secret_path_text(path)?, home, None) {
+        return Ok(true);
+    }
+    if crate::absence::cannot_exist(path)
+        .map_err(|_| "cannot establish whether a read path exists")?
+    {
+        return Ok(false);
+    }
+    let real = crate::portable_path::canonicalize(path)
+        .map_err(|_| "cannot resolve a read path's real target")?;
+    let text = secret_path_text(&real)?;
+    if secret_path_spelling(&text, home, None) {
+        return Ok(true);
+    }
+    let real_home = home
+        .map(|home| {
+            crate::hooks::edit_guard::normalized(home, true)
+                .map_err(|_| "cannot resolve the secret stores' home directory")
+        })
+        .transpose()?;
+    Ok(secret_path_spelling(&text, real_home.as_deref(), None))
+}
+
 #[allow(clippy::too_many_arguments)] // Search syntax and shell provenance share one context.
 fn secret_search_glob(
     pattern: &str,
@@ -393,88 +553,443 @@ fn secret_search_glob(
     let literal: Vec<_> = (1..args.len())
         .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
         .collect();
-    let Some(mut roots) = super::search_pattern::search_roots(
+    let mut roots = super::search_pattern::search_roots(
         name,
         rest,
         &literal,
         super::search_pattern::names_ripgrep_config(line),
-    ) else {
-        return uncertain_glob(pattern, cwd, home, "cannot establish the search roots");
-    };
+    )
+    .ok_or("cannot establish the search roots")?;
     if roots.is_empty() {
         roots.push(".");
     }
+    let mut read = 0;
     for root in roots {
         if secret_directory(root, cwd, home) {
             return Ok(true);
         }
-        let Some((base, root)) = glob_base(root, cwd, home) else {
-            return uncertain_glob(
-                pattern,
-                cwd,
-                home,
-                "cannot resolve a search root's home directory",
-            );
-        };
-        let expanded = if crate::hooks::git_guard::has_glob(root) {
-            crate::hooks::git_guard::secret_glob_paths(root, base)
+        let (base, root) =
+            glob_base(root, cwd, home).ok_or("cannot resolve a search root's home directory")?;
+        let roots = if crate::hooks::git_guard::has_glob(root) {
+            crate::hooks::git_guard::secret_glob_paths(root, base)?
         } else {
-            Ok(vec![outward::lexical_join(base, Path::new(root))])
+            vec![outward::lexical_join(base, Path::new(root))]
         };
-        match expanded {
-            Ok(roots) => {
-                for root in roots {
-                    if search_root_matches(pattern, &root, home)? {
-                        return Ok(true);
-                    }
-                }
-            }
-            Err(why) => {
-                if secret_intersection(pattern, cwd, home) {
-                    return Err(why);
-                }
+        for root in roots {
+            if search_root_matches(pattern, &root, home, Some((name, args)), &mut read)? {
+                return Ok(true);
             }
         }
     }
     Ok(false)
 }
 
+/// Search tools recurse by default (grep only with a recursive flag). Copy
+/// and archive creation tools consume every descendant of their input roots.
+fn recursive_read(
+    name: &str,
+    args: &[String],
+    expands: Option<&[bool]>,
+    cwd: &Path,
+    home: Option<&Path>,
+    line: &str,
+) -> Option<Result<bool, &'static str>> {
+    let rest = args.get(1..).unwrap_or_default();
+    let recursive = recursive_option(name, rest);
+    if matches!(name, "rg" | "ag" | "ack") || name == "grep" && recursive {
+        let literal: Vec<_> = (1..args.len())
+            .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
+            .collect();
+        let selectors = super::search_pattern::path_values(
+            name,
+            rest,
+            &literal,
+            super::search_pattern::names_ripgrep_config(line),
+        );
+        let Some(selectors) = selectors else {
+            return Some(Err("cannot establish a recursive reader's selectors"));
+        };
+        // A negated selector cannot clear an otherwise selected secret. With
+        // no positive selector the reader selects every file under its roots.
+        let patterns: Vec<_> = selectors
+            .iter()
+            .filter(|(at, value, glob)| *glob && positive_selector(rest, *at, value))
+            .map(|(_, value, _)| *value)
+            .collect();
+        if patterns.is_empty() {
+            return Some(secret_search_glob(
+                "*", name, args, expands, cwd, home, line,
+            ));
+        }
+        for pattern in patterns {
+            match secret_search_glob(pattern, name, args, expands, cwd, home, line) {
+                Ok(false) => {}
+                result => return Some(result),
+            }
+        }
+        return Some(Ok(false));
+    }
+    let base = cwd.to_path_buf();
+    let roots: Vec<String> = match name {
+        "cp" if recursive => match super::unresolved::writer_effects(name, rest, &[])
+            .and_then(|effects| effects.copy)
+        {
+            Some(copy) => copy.sources,
+            None => return Some(Err("cannot establish recursive copy sources")),
+        },
+        "zip" if recursive => rest
+            .iter()
+            .filter(|arg| !arg.starts_with('-'))
+            .skip(1)
+            .cloned()
+            .collect(),
+        "tar" => match archive_read_roots(rest, cwd) {
+            Ok(Some(roots)) => roots,
+            Ok(None) => return None,
+            Err(why) => return Some(Err(why)),
+        },
+        _ => return None,
+    };
+    Some((|| {
+        let mut read = 0;
+        for root in roots {
+            let (base, pattern) =
+                glob_base(&root, &base, home).ok_or("cannot establish a recursive root")?;
+            let roots = if crate::hooks::git_guard::has_glob(pattern) {
+                crate::hooks::git_guard::secret_glob_paths(pattern, base)?
+            } else {
+                vec![outward::lexical_join(base, Path::new(pattern))]
+            };
+            for root in roots {
+                if search_root_matches("*", &root, home, None, &mut read)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    })())
+}
+
+/// Read option letters only up to a value-taking flag; a filename containing
+/// r is not a recursive option. cp archive mode also implies recursion.
+fn recursive_option(name: &str, args: &[String]) -> bool {
+    args.iter().enumerate().any(|(at, arg)| {
+        if arg == "--recursive"
+            || arg == "--dereference-recursive"
+            || name == "cp" && arg == "--archive"
+        {
+            return true;
+        }
+        if name == "grep"
+            && (arg == "--directories=recurse"
+                || matches!(arg.as_str(), "-d" | "--directories")
+                    && args.get(at + 1).is_some_and(|value| value == "recurse"))
+        {
+            return true;
+        }
+        let Some(flags) = arg
+            .strip_prefix('-')
+            .filter(|flags| !flags.starts_with('-'))
+        else {
+            return false;
+        };
+        let valued = match name {
+            "grep" => "efmABCDd",
+            "cp" => "tS",
+            "zip" => "Pnxs",
+            _ => "",
+        };
+        for flag in flags.chars() {
+            if matches!(flag, 'r' | 'R') || name == "cp" && flag == 'a' {
+                return true;
+            }
+            if valued.contains(flag) {
+                break;
+            }
+        }
+        false
+    })
+}
+
+/// Only inclusion options restrict the selected files. Exclusions and
+/// preprocessing selectors must not turn an unrestricted read into a subset.
+fn positive_selector(args: &[String], at: usize, value: &str) -> bool {
+    if value.starts_with('!') {
+        return false;
+    }
+    let Some(word) = args.get(at) else {
+        return false;
+    };
+    let option = if word != value && word.ends_with(value) {
+        word[..word.len() - value.len()].trim_end_matches('=')
+    } else {
+        at.checked_sub(1)
+            .and_then(|previous| args.get(previous))
+            .map_or("", String::as_str)
+    };
+    matches!(option, "--glob" | "--iglob" | "--include")
+        || option.starts_with('-') && !option.starts_with("--") && option.ends_with('g')
+}
+
+/// A create archive reads whole input trees. Read its root and archive-file
+/// options separately so the destination never becomes an input root.
+fn archive_read_roots(args: &[String], cwd: &Path) -> Result<Option<Vec<String>>, &'static str> {
+    let creates = args.iter().enumerate().any(|(at, arg)| {
+        if arg == "--create" {
+            return true;
+        }
+        if arg.starts_with("--") || at != 0 && !arg.starts_with('-') {
+            return false;
+        }
+        for flag in arg.trim_start_matches('-').chars() {
+            if flag == 'c' {
+                return true;
+            }
+            if "fCTXIbLs".contains(flag) {
+                break;
+            }
+        }
+        false
+    });
+    if !creates {
+        return Ok(None);
+    }
+    let mut base = cwd.to_path_buf();
+    let mut roots = Vec::new();
+    let mut at = 0;
+    let mut literal = false;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if !literal && arg == "--" {
+            literal = true;
+            continue;
+        }
+        if !literal
+            && matches!(
+                arg.as_str(),
+                "--directory" | "--file" | "--blocking-factor" | "--tape-length"
+            )
+        {
+            let value = args
+                .get(at)
+                .ok_or("cannot establish an archive option value")?;
+            at += 1;
+            if arg == "--directory" {
+                base = outward::lexical_join(&base, Path::new(value));
+            }
+        } else if !literal && arg.starts_with("--directory=") {
+            base = outward::lexical_join(&base, Path::new(&arg[12..]));
+        } else if !literal
+            && (arg.starts_with("--file=")
+                || matches!(
+                    arg.as_str(),
+                    "--create"
+                        | "--gzip"
+                        | "--bzip2"
+                        | "--xz"
+                        | "--verbose"
+                        | "--dereference"
+                        | "--one-file-system"
+                        | "--preserve-permissions"
+                ))
+        {
+        } else if !literal
+            && (arg.starts_with('-') || at == 1 && arg.chars().all(|ch| ch.is_ascii_alphabetic()))
+        {
+            let flags = arg.trim_start_matches('-');
+            for (offset, flag) in flags.char_indices() {
+                if matches!(flag, 'f' | 'C' | 'b' | 'L' | 's') {
+                    let attached = &flags[offset + 1..];
+                    let value = if attached.is_empty() {
+                        let value = args
+                            .get(at)
+                            .ok_or("cannot establish an archive option value")?;
+                        at += 1;
+                        value.as_str()
+                    } else {
+                        attached
+                    };
+                    if flag == 'C' {
+                        base = outward::lexical_join(&base, Path::new(value));
+                    }
+                    break;
+                }
+                if !"czjJavhpmSo".contains(flag) {
+                    return Err("cannot establish every archive input root");
+                }
+            }
+        } else {
+            roots.push(secret_path_text(&outward::lexical_join(
+                &base,
+                Path::new(arg),
+            ))?);
+        }
+    }
+    Ok(Some(roots))
+}
+
+fn search_ignore_repository(
+    root: &Path,
+    tool: Option<(&str, &[String])>,
+) -> Result<Option<git2::Repository>, &'static str> {
+    let discovery_root = match crate::absence::is_kind(root, true) {
+        Some(true) => root,
+        Some(false) => return Ok(None), // Explicit files override ignore rules.
+        None => return Err("cannot establish a search root's type"),
+    };
+    let ignore = tool
+        .filter(|(name, args)| {
+            *name == "rg"
+                && !args.iter().any(|arg| {
+                    arg.starts_with("--no-ignore")
+                        || arg == "--unrestricted"
+                        || arg.starts_with('-') && !arg.starts_with("--") && arg.contains('u')
+                })
+        })
+        .map(|_| crate::hooks::repo::open(discovery_root))
+        .transpose()
+        .map_err(|_| "cannot establish the search repository's ignore rules")?
+        .flatten();
+    Ok(if let Some(repo) = ignore {
+        let real_root = crate::portable_path::canonicalize(root)
+            .map_err(|_| "cannot resolve the explicit search root")?;
+        if repository_ignores(&repo, &real_root)? {
+            None // An explicit ignored root overrides the parent's ignore.
+        } else {
+            Some(repo)
+        }
+    } else {
+        None
+    })
+}
+
+/// libgit2's ignore matcher consumes paths within this worktree. Absolute
+/// spellings and a linked checkout's location outside the main workdir
+/// must not select another root's ignore context.
+fn repository_ignores(repo: &git2::Repository, path: &Path) -> Result<bool, &'static str> {
+    let workdir = repo
+        .workdir()
+        .ok_or("cannot establish the ignored path's worktree")?;
+    // repo::open has already checked and set this physical workdir.
+    let workdir = crate::portable_path::without_verbatim(workdir.to_path_buf());
+    let absolute = outward::lexical_join(path, Path::new("."));
+    let relative = absolute
+        .strip_prefix(&workdir)
+        .map_err(|_| "cannot locate the ignored path within its worktree")?;
+    if relative.as_os_str().is_empty() {
+        return Ok(false);
+    }
+    repo.is_path_ignored(relative)
+        .map_err(|_| "cannot inspect a path's ignore status")
+}
+
+fn search_path_ignored(
+    path: &Path,
+    root: &Path,
+    real_root: &Path,
+    repo: &git2::Repository,
+    explicit_patterns: &[String],
+) -> Result<bool, &'static str> {
+    let basename = path.file_name().map_or(path, Path::new);
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    for pattern in explicit_patterns {
+        let readings = crate::hooks::git_guard::brace_expand(pattern)
+            .ok_or("cannot inspect the ignore override's brace alternatives")?;
+        for pattern in readings {
+            let candidate = if pattern.contains('/') {
+                relative
+            } else {
+                basename
+            };
+            let candidate = secret_path_text(candidate)?;
+            let matcher = glob::Pattern::new(&pattern)
+                .map_err(|_| "cannot inspect a search ignore override")?;
+            if matcher.matches_with(
+                &candidate,
+                glob::MatchOptions {
+                    case_sensitive: false,
+                    require_literal_separator: true,
+                    require_literal_leading_dot: false,
+                },
+            ) {
+                return Ok(false);
+            }
+        }
+    }
+    repository_ignores(repo, &real_root.join(relative))
+}
+
 fn search_root_matches(
     pattern: &str,
     root: &Path,
     home: Option<&Path>,
+    tool: Option<(&str, &[String])>,
+    read: &mut usize,
 ) -> Result<bool, &'static str> {
+    if pattern == "*" && secret_path_spelling(&secret_path_text(root)?, home, Some(false)) {
+        return Ok(true);
+    }
     let patterns = crate::hooks::git_guard::brace_expand(pattern)
         .ok_or("cannot inspect every search-glob brace alternative")?;
-    let paths = match crate::hooks::git_guard::secret_search_paths(root) {
-        Ok(paths) => paths,
-        Err(why) => return uncertain_glob(pattern, root, home, why),
+    let patterns: Vec<_> = patterns
+        .iter()
+        .filter(|pattern| !pattern.starts_with('!'))
+        .map(|pattern| pattern.trim_start_matches('/').to_ascii_lowercase())
+        .collect();
+    let patterns = if patterns.is_empty() {
+        vec!["*".into()]
+    } else {
+        patterns
     };
-    for path in paths {
-        let text = match secret_path_text(&path) {
-            Ok(text) => text,
-            Err(why) => return uncertain_glob(pattern, root, home, why),
+    let ignore = search_ignore_repository(root, tool)?;
+    let real_root = if ignore.is_some() {
+        Some(
+            crate::portable_path::canonicalize(root)
+                .map_err(|_| "cannot resolve the search root for ignore matching")?,
+        )
+    } else {
+        None
+    };
+    let explicit_patterns: Vec<_> = tool
+        .and_then(|(name, args)| {
+            let rest = args.get(1..).unwrap_or_default();
+            super::search_pattern::path_values(name, rest, &vec![false; rest.len()], false)
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(at, value, glob)| {
+            *glob
+                && tool.is_some_and(|(_, args)| {
+                    positive_selector(args.get(1..).unwrap_or_default(), *at, value)
+                })
+        })
+        .map(|(_, value, _)| value.to_ascii_lowercase())
+        .collect();
+    let paths = crate::hooks::git_guard::secret_search_paths(root, read, |path| {
+        let Some(repo) = &ignore else {
+            return Ok(false);
         };
-        if !secret_path_spelling(&text, home, Some(false)) {
+        search_path_ignored(
+            path,
+            root,
+            real_root.as_deref().unwrap_or(root),
+            repo,
+            &explicit_patterns,
+        )
+    })?;
+    for path in paths {
+        if !real_secret_path(&path, home)? {
             continue;
         }
         let relative = path.strip_prefix(root).unwrap_or(&path);
         for pattern in &patterns {
-            let pattern = pattern.trim_start_matches('/').to_ascii_lowercase();
             let candidate = if pattern.contains('/') {
                 relative
             } else {
                 Path::new(path.file_name().unwrap_or(std::ffi::OsStr::new("")))
             };
-            let name = match secret_path_text(candidate) {
-                Ok(name) => name,
-                Err(why) => return uncertain_glob(&pattern, root, home, why),
-            };
-            // The candidate is an actual name, not another glob language.
-            // Keep literal backslashes and brackets in that name as data.
-            // Only actual secret candidates reach this parse. An unsupported
-            // selector cannot clear one; its parse error must refuse.
-            let matcher = glob::Pattern::new(&pattern)
+            let name = secret_path_text(candidate)?;
+            let matcher = glob::Pattern::new(pattern)
                 .map_err(|_| "cannot inspect the search glob's syntax")?;
             if matcher.matches_with(
                 &name,
@@ -512,12 +1027,16 @@ fn file_operands<'a>(
     args: &'a [String],
     expands: Option<&[bool]>,
     line: &str,
+    cwd: &Path,
 ) -> Vec<(usize, &'a str, bool)> {
     if matches!(
         name,
         "echo"
             | "printf"
             | "print"
+            // tee's filenames are outputs. The shell's input redirections
+            // are separate cat operands emitted by outward::visit.
+            | "tee"
             | "alias"
             | "unalias"
             | "export"
@@ -532,8 +1051,31 @@ fn file_operands<'a>(
             | "typeset"
             | "readonly"
             | "unset"
+            | "getln"
+            | "read"
+            | "readarray"
+            | "mapfile"
     ) {
         return Vec::new();
+    }
+    let mut git_start = 0;
+    let mut git_root = None;
+    let mut global_files = Vec::new();
+    if name == "git" {
+        if let Some((sub, tail)) =
+            crate::hooks::git_guard::git_subcommand(args.get(1..).unwrap_or_default())
+        {
+            git_start = args.len() - tail.len() - 1;
+            global_files = git_global_files(args, git_start);
+            if matches!(
+                sub,
+                "status" | "log" | "rev-parse" | "branch" | "for-each-ref" | "ls-files"
+            ) {
+                global_files.extend(git_metadata_paths(tail, git_start));
+                return global_files;
+            }
+            git_root = git_pathspec_root(sub, tail, &args[1..git_start], cwd);
+        }
     }
     let rest = args.get(1..).unwrap_or_default();
     let literal: Vec<_> = (1..args.len())
@@ -548,15 +1090,127 @@ fn file_operands<'a>(
     }
     // A parser that cannot read an option clears no argument as search text.
     let patterns = super::search_pattern::pattern_words(name, rest, &literal, configured);
-    rest.iter()
+    let mut paths: Vec<_> = rest
+        .iter()
         .enumerate()
-        .filter(|(at, _)| !patterns.contains(at))
+        .filter(|(at, word)| {
+            !patterns.contains(at)
+                && *at >= git_start
+                && !directory_option(name, rest, *at)
+                && !git_root.as_deref().is_some_and(|root| {
+                    Path::new(word).is_absolute()
+                        && !Path::new(word).starts_with(root)
+                        && crate::portable_path::canonicalize(Path::new(word))
+                            .is_ok_and(|path| !path.starts_with(root))
+                })
+        })
         .flat_map(|(at, word)| {
+            let mut values = super::arguments::argument_values(word);
+            if matches!(name, "curl" | "wget") {
+                values.extend(values.clone().into_iter().filter_map(|value| {
+                    value
+                        .strip_prefix(['@', '<'])
+                        .map(|file| file.split(';').next().unwrap_or(file))
+                }));
+            }
+            values.into_iter().map(move |value| (at + 1, value, false))
+        })
+        .collect();
+    paths.extend(global_files);
+    paths
+}
+
+fn git_global_files(args: &[String], end: usize) -> Vec<(usize, &str, bool)> {
+    let mut files = Vec::new();
+    let mut at = 1;
+    while at < end {
+        let word = &args[at];
+        if matches!(word.as_str(), "-C" | "--work-tree") {
+            at += 2;
+            continue;
+        }
+        if word.starts_with("--work-tree=") || word.starts_with("-C") {
+            at += 1;
+            continue;
+        }
+        files.extend(
             super::arguments::argument_values(word)
                 .into_iter()
-                .map(move |value| (at + 1, value, false))
+                .map(|value| (at, value, false)),
+        );
+        at += 1;
+    }
+    files
+}
+
+fn git_metadata_paths(args: &[String], start: usize) -> Vec<(usize, &str, bool)> {
+    args.iter()
+        .enumerate()
+        .filter_map(|(at, word)| {
+            // Keep explicit named paths protected under AC-6. Namespace words
+            // and unknown xargs streams remain metadata arguments.
+            (word.contains('/') || word.starts_with('.')).then_some((
+                start + at + 1,
+                word.as_str(),
+                false,
+            ))
         })
         .collect()
+}
+
+/// One ordinary diff operand is a repository pathspec. Two paths can
+/// implicitly enable --no-index and keep real-file judgments. Retargeted
+/// or unresolved repositories earn no exemption.
+fn git_pathspec_root(
+    sub: &str,
+    tail: &[String],
+    globals: &[String],
+    cwd: &Path,
+) -> Option<std::path::PathBuf> {
+    if sub != "diff"
+        || tail.iter().any(|arg| arg == "--no-index")
+        || tail.iter().filter(|arg| !arg.starts_with('-')).count() != 1
+        || globals.iter().any(|arg| {
+            arg == "-C"
+                || arg.starts_with("-C")
+                || arg.starts_with("--git-dir")
+                || arg.starts_with("--work-tree")
+        })
+    {
+        return None;
+    }
+    crate::hooks::repo::open(cwd)
+        .ok()
+        .flatten()
+        .and_then(|repo| repo.workdir().map(Path::to_path_buf))
+}
+
+/// A destination directory is not a source-file operand. Writer protection
+/// judges it separately; a reader's redirections remain explicit operands.
+fn directory_option(name: &str, args: &[String], at: usize) -> bool {
+    let (long, short) = match name {
+        "curl" => ("--output-dir", ""),
+        "wget" => ("--directory-prefix", "-P"),
+        "tar" | "make" | "gmake" => ("--directory", "-C"),
+        _ => return false,
+    };
+    args[at].starts_with(&format!("{long}="))
+        || (!short.is_empty() && args[at].starts_with(short) && args[at].len() > short.len())
+        || at
+            .checked_sub(1)
+            .and_then(|before| args.get(before))
+            .is_some_and(|arg| arg == long || !short.is_empty() && arg == short)
+}
+
+/// Bounded shell readings shared by leaf and ancestor comparisons.
+fn secret_pattern_readings(word: &str) -> Option<Vec<String>> {
+    let mut readings = crate::hooks::git_guard::word_readings(word)?;
+    // Keep the existing conservative singleton-brace reading too. Shell
+    // options can give braces meanings beyond the default comma grammar.
+    if word.contains('{') && !word.contains([',', '$']) {
+        readings.push(word.replace(['{', '}'], ""));
+    }
+    Some(readings)
 }
 
 /// Compare complete glob languages rather than their literal prefixes. The
@@ -568,14 +1222,9 @@ fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
                 .strip_prefix(word.trim_end_matches('/'))
                 .is_some_and(|tail| tail.starts_with('/'));
     }
-    let Some(mut readings) = crate::hooks::git_guard::word_readings(word) else {
+    let Some(readings) = secret_pattern_readings(word) else {
         return true;
     };
-    // Keep the existing conservative singleton-brace reading too. Shell
-    // options can give braces meanings beyond the default comma grammar.
-    if word.contains('{') && !word.contains([',', '$']) {
-        readings.push(word.replace(['{', '}'], ""));
-    }
     readings.iter().any(|reading| {
         let intersects =
             |left: &str, right: &str| super::pattern::glob_intersects(left, right).unwrap_or(true);
@@ -615,6 +1264,124 @@ mod tests {
     }
 
     #[test]
+    fn tsk1002_review2_b02_home_ancestor_spellings_agree() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let home = temp.path().join("home");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/auth.json"), "fake secret fixture").unwrap();
+        let wrong: Vec<_> = [
+            "cat ~",
+            "cat ~/",
+            "cat \"$HOME/\"",
+            "grep -r token ~",
+            "rg token ~/",
+            "cp -r ~ out",
+        ]
+        .into_iter()
+        .filter(|command| !glob_fixture_read(command, &root, &home))
+        .collect();
+        assert!(
+            wrong.is_empty(),
+            "home ancestor reads were allowed: {wrong:?}"
+        );
+    }
+
+    #[test]
+    fn tsk1002_review2_b05_file_rule_siblings_remain_available() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let home = temp.path().join("home");
+        std::fs::create_dir(&root).unwrap();
+        for directory in [".claude/skills/fixture", ".claude/sessions", ".cargo/bin"] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for file in [
+            ".claude/skills/fixture/SKILL.md",
+            ".claude/sessions/fixture.jsonl",
+            ".cargo/bin/cargo-fixture",
+        ] {
+            std::fs::write(home.join(file), "ordinary or fake secret fixture").unwrap();
+        }
+        let cases = [
+            ("cat ~/.claude/skills/*/SKILL.md", false),
+            ("ls ~/.cargo/bin/*", false),
+            ("cat ~/.claude/sessions/*", true),
+        ];
+        let wrong: Vec<_> = cases
+            .into_iter()
+            .filter(|(command, refuse)| glob_fixture_read(command, &root, &home) != *refuse)
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "file and directory rules differ: {wrong:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tsk1002_review2_b08_unreadable_recursive_root_refuses_with_remedy() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let saved = std::fs::metadata(&locked).unwrap().permissions();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read_dir(&locked).is_err();
+        let violations = evaluate(
+            "rg token locked",
+            &SecuritySection::default(),
+            PolicyLevel::Block,
+            root,
+            root,
+            Some(root),
+        );
+        std::fs::set_permissions(&locked, saved).unwrap();
+        if !unreadable {
+            eprintln!("permissions do not make this directory unreadable on this host");
+            return;
+        }
+        assert!(
+            violations.iter().any(|v| v.rule == "security.secret_reads"
+                && v.remedy.to_ascii_lowercase().contains("narrow")),
+            "recursive root inspection must fail closed with a narrowing remedy: {violations:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tsk1002_review_f09_unverified_search_names_narrowing() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let saved = std::fs::metadata(&locked).unwrap().permissions();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read_dir(&locked).is_err();
+        let violations = evaluate(
+            "rg -g 'id_*' token locked",
+            &SecuritySection::default(),
+            PolicyLevel::Block,
+            root,
+            root,
+            Some(root),
+        );
+        std::fs::set_permissions(&locked, saved).unwrap();
+        if !unreadable {
+            eprintln!("permissions do not make this directory unreadable on this host");
+            return;
+        }
+        assert!(
+            violations.iter().any(|v| v.rule == "security.secret_reads"
+                && v.remedy.to_ascii_lowercase().contains("narrow")),
+            "unverified search must name the narrowing remedy: {violations:?}"
+        );
+    }
+
+    #[test]
     fn tsk1002_glob_expansion_uses_actual_matches() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
@@ -641,7 +1408,7 @@ mod tests {
         let root = temp.path().join("repo");
         let home = temp.path().join("home");
         std::fs::create_dir(&root).unwrap();
-        for store in [".ssh", ".codex", ".aws", ".gnupg", ".config/gh"] {
+        for store in [".ssh", ".aws", ".gnupg"] {
             std::fs::create_dir_all(home.join(store)).unwrap();
             let command = format!("cat $HOME/{store}/*.rs");
             assert!(
@@ -1046,7 +1813,7 @@ mod tests {
         for command in [
             "rg '^/etc/.*' docs",
             "grep -e '^/etc/.*' docs",
-            "rg --files | xargs rg '^/etc/.*'",
+            "echo docs/a.md | xargs rg '^/etc/.*'",
             "cat 'id_rs?'",
             "cat \"~/.codex/auth.*\"",
         ] {
@@ -1054,6 +1821,9 @@ mod tests {
         }
         for command in [
             "cat etc/.*",
+            // F4: search text stays data, but an external filename stream
+            // cannot certify the files the child will open.
+            "rg --files | xargs rg '^/etc/.*'",
             "cat id_rs?",
             "cat ~/.codex/auth.*",
             "rg x ~/.codex/*",
@@ -1601,9 +2371,9 @@ mod tests {
         );
     }
 
-    /// The integrity judge can use a safe enclosing prefix. AC-8's secret
-    /// check separately refuses incomplete intersecting expansions; an escape
-    /// or held checkout still reports the integrity entry budget.
+    /// Integrity still needs a safe prefix past 4096 entries. B10's larger
+    /// secret-read budget fully verifies 5000 ordinary matches; escapes and
+    /// held checkouts retain the integrity entry-budget refusal.
     #[test]
     fn interpreter_large_glob_requires_a_safe_prefix() {
         let repo = repo();
@@ -1619,10 +2389,7 @@ mod tests {
                 integrity_refusal(&findings)
                     .is_some_and(|v| v.message.contains("more than 4096 entries"))
             } else {
-                integrity_refusal(&findings).is_none()
-                    && findings.iter().any(|v| {
-                        v.rule == "security.secret_reads" && v.message.contains("cannot verify")
-                    })
+                findings.is_empty()
             };
             if !correct {
                 wrong.push(format!("{command}: refuse={refuse}: {findings:?}"));
@@ -1946,6 +2713,19 @@ mod tests {
     #[test]
     fn ordinary_interpreter_arguments_stay_allowed() {
         let repo = repo();
+        let supplied = judge_in(
+            &repo,
+            &repo.root,
+            &repo.root,
+            "ls | xargs python3 edit.py",
+            PolicyLevel::Block,
+        );
+        assert!(
+            supplied
+                .iter()
+                .any(|finding| finding.rule == "security.secret_reads"),
+            "{supplied:?}"
+        );
         assert_allowed(
             &repo,
             &[
@@ -1974,7 +2754,7 @@ mod tests {
                 "find . -name '*.py' -exec python3 -m py_compile {} +",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
-                "ls | xargs python3 edit.py",
+                "echo notes.txt | xargs python3 edit.py",
                 "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
                 "cd src && python3 app.py settings.json",
@@ -2170,13 +2950,26 @@ mod tests {
                 level,
             );
             for command in [
-                "ls | xargs python3 tool.py",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "find src -exec python3 tool.py {} \\;",
             ] {
                 let findings = judge_in(&repo, &repo.root, &repo.root, command, level);
                 assert!(findings.is_empty(), "{level:?}: {command}: {findings:?}");
             }
+            let findings = judge_in(
+                &repo,
+                &repo.root,
+                &repo.root,
+                "ls | xargs python3 tool.py",
+                level,
+            );
+            assert!(findings
+                .iter()
+                .any(|finding| finding.rule == "security.secret_reads"));
+            assert!(
+                findings.iter().all(|finding| !finding.level_fixed),
+                "{findings:?}"
+            );
         }
     }
 
@@ -2219,7 +3012,13 @@ mod tests {
             authority: 0,
         };
         LINE_READS.with(|reads| reads.set(none));
-        assert!(judge_in(&repo, &repo.root, &repo.root, &line, PolicyLevel::Block).is_empty());
+        let findings = judge_in(&repo, &repo.root, &repo.root, &line, PolicyLevel::Block);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "security.secret_reads"),
+            "{findings:?}"
+        );
         // Each of the five calls asks for both readings, and one enforcement
         // reading and one authority reading answer all of them.
         assert_eq!(

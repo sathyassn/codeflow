@@ -8840,11 +8840,11 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     }
     let out = exec_guard_contract_3(&root, "python3 tool.py many/*");
     let err = String::from_utf8_lossy(&out.stderr);
-    // AC-8: the integrity judge can use a safe enclosing prefix, but an
-    // incomplete secret-file expansion must still refuse.
-    if out.status.code() != Some(2) || !err.contains("security.secret_reads") {
+    // The secret reader uses the larger search budget: 5000 ordinary
+    // matches can be verified completely without replacing them by a prefix.
+    if !out.status.success() {
         wrong.push(format!(
-            "should refuse the unverified secret-file glob: {err}"
+            "should allow the completely verified ordinary glob: {err}"
         ));
     }
     let payload = serde_json::json!({
@@ -9331,9 +9331,25 @@ fn guards_read_a_search_pattern_as_text() {
     for command in &allowed {
         for hook in ["exec-guard", "git-guard"] {
             let out = run(hook, command);
-            if out.status.code() != Some(0) {
-                let err = String::from_utf8_lossy(&out.stderr);
-                wrong.push(format!("{hook} should allow: {command}: {err}"));
+            // F4 tightens unknown filename streams without turning the
+            // child's search text into a path. Literal input remains usable.
+            let unknown_files = hook == "exec-guard" && command.starts_with("rg --files | xargs ");
+            let expected = if unknown_files { 2 } else { 0 };
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(expected)
+                || unknown_files
+                    && (!err.contains("security.secret_reads") || !err.contains("cannot verify"))
+            {
+                wrong.push(format!("{hook} expected {expected}: {command}: {err}"));
+            }
+            if unknown_files {
+                let literal = command.replacen("rg --files", "printf '%s\\n' docs/a.md", 1);
+                let out = run(hook, &literal);
+                if !out.status.success() {
+                    wrong.push(format!(
+                        "{hook} literal input should allow: {literal}: {out:?}"
+                    ));
+                }
             }
         }
     }
@@ -10564,6 +10580,176 @@ fn gnu_prefixed_programs_share_the_plain_verdict() {
 
 #[path = "support/guard_cases.rs"]
 mod guard_cases;
+
+#[path = "support/guard_review_cases.rs"]
+mod guard_review_cases;
+
+#[path = "support/guard_review2_cases.rs"]
+mod guard_review2_cases;
+
+fn review_guard_cases(finding: u8) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    let home = tmp.path().join("home");
+    std::fs::create_dir(&root).unwrap();
+    enforced_repo(&root);
+    guard_review_cases::seed(&root, &home);
+    if finding >= 21 {
+        guard_review2_cases::seed(finding, &root, &home);
+    }
+    if finding == 13 {
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::write(root.join(".git/hooks/pre-commit"), "# planted fixture\n").unwrap();
+    }
+    #[cfg(unix)]
+    if finding == 8 {
+        guard_review_cases::seed_links(&root, &home);
+    }
+    let mut wrong = Vec::new();
+    for &(_, owner, command, refuse) in guard_review_cases::CASES
+        .iter()
+        .chain(guard_review2_cases::CASES)
+        .filter(|c| c.0 == finding)
+    {
+        let line = guard_review_cases::render(command, &root, &home);
+        for guard in ["git-guard", "exec-guard"] {
+            let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
+                "tool_input":{"command":line}})
+            .to_string();
+            let output = run_with_stdin(
+                expansion_codeflow()
+                    .args(["hook", guard, "--contract", "3"])
+                    .current_dir(&root)
+                    .env("HOME", &home)
+                    .env("USERPROFILE", &home)
+                    .env_remove("CDPATH"),
+                &payload,
+            );
+            let code = output.status.code();
+            if !matches!(code, Some(0 | 2))
+                || (!refuse && code != Some(0))
+                || (refuse && guard == owner && code != Some(2))
+            {
+                wrong.push(format!(
+                    "F{finding}: {guard}: expected refuse={refuse}, owner={owner}: {line:?}: {output:?}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn tsk1002_review_f01_heredoc_code_and_data() {
+    review_guard_cases(1);
+}
+
+#[test]
+fn tsk1002_review_f02_process_substitution_commands() {
+    review_guard_cases(2);
+}
+
+#[test]
+fn tsk1002_review_f03_substitution_output_expands_tilde() {
+    review_guard_cases(3);
+}
+
+#[test]
+fn tsk1002_review_f04_xargs_input_becomes_operands() {
+    review_guard_cases(4);
+}
+
+#[test]
+fn tsk1002_review_f05_transfer_data_file_prefixes() {
+    review_guard_cases(5);
+}
+
+#[test]
+fn tsk1002_review_f06_interpreter_aliases_and_bodies() {
+    review_guard_cases(6);
+}
+
+#[cfg(windows)]
+#[test]
+fn tsk1002_review_f07_windows_path_spellings() {
+    review_guard_cases(7);
+}
+
+#[cfg(unix)]
+#[test]
+fn tsk1002_review_f08_glob_and_search_symlink_targets() {
+    review_guard_cases(8);
+}
+
+#[test]
+fn tsk1002_review_f09_search_ignores_and_overrides() {
+    review_guard_cases(9);
+}
+
+#[test]
+fn tsk1002_r12_make_stdin_is_code() {
+    review_guard_cases(12);
+}
+
+#[test]
+fn tsk1002_r12_redirect_globs_use_existing_matches() {
+    review_guard_cases(13);
+}
+
+#[test]
+fn tsk1002_r12_code_data_and_operand_roles() {
+    review_guard_cases(14);
+}
+
+#[test]
+fn tsk1002_review2_b01_unquoted_heredoc_substitutions() {
+    review_guard_cases(21);
+}
+
+#[test]
+fn tsk1002_review2_b02_home_store_ancestor_spellings() {
+    review_guard_cases(22);
+}
+
+#[test]
+fn tsk1002_review2_b03_dotglob_secret_reads() {
+    review_guard_cases(23);
+}
+
+#[test]
+fn tsk1002_review2_b04_substitution_and_xargs_netrc() {
+    review_guard_cases(24);
+}
+
+#[test]
+fn tsk1002_review2_b05_file_rules_do_not_deny_public_siblings() {
+    review_guard_cases(25);
+}
+
+#[test]
+fn tsk1002_review2_b07_physical_cd_follows_same_line_links() {
+    review_guard_cases(27);
+}
+
+#[test]
+fn tsk1002_review2_b08_recursive_readers_inspect_roots() {
+    review_guard_cases(28);
+}
+
+#[test]
+fn tsk1002_review2_b09_gh_uses_action_table_rules() {
+    review_guard_cases(29);
+}
+
+#[test]
+fn tsk1002_review2_b10_flat_globs_use_search_budget() {
+    review_guard_cases(30);
+}
+
+#[test]
+fn tsk1002_review2_b11_deno_eval_code() {
+    review_guard_cases(31);
+}
 
 fn guard_classification_cases(ac: u8) {
     let tmp = tempfile::tempdir().unwrap();

@@ -503,7 +503,7 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "printf '%s\\n' README | xargs ls",
     "xargs -I{} echo {}",
     "xargs git status",
-    "git diff --name-only | xargs git add",
+    "echo README.md | xargs git add",
     "gtimeout 5 git status",
     "flock /tmp/l git status",
     "parallel echo ::: hi",
@@ -723,7 +723,7 @@ const ROUND_20: &[&str] = &[
 const ROUND_20_CONTROLS: &[&str] = &[
     "unzip -uod ./vendor payload.zip",
     "tar -x --no-mac-metadata -C ./vendor -f payload.tar",
-    "tar -czf/tmp/box.tar -C $HOME .",
+    "tar -czf/tmp/box.tar -C ./src .",
 ];
 
 /// Round 21: options the table called known that move files, the order of
@@ -956,6 +956,19 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if outputs.iter().any(|o| !o.status.success()) {
                 wrong.push(format!("{harness}: refused control {command}"));
+            }
+        }
+        // F4 and B8 supersede the old controls for unknown xargs file
+        // input and a recursive archive of the complete home directory.
+        for command in [
+            "git diff --name-only | xargs git add",
+            "tar -czf/tmp/box.tar -C $HOME .",
+        ] {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !refused_with(&outputs, "security.secret_reads") {
+                wrong.push(format!(
+                    "{harness}: unverified or home-recursive read allowed: {command}"
+                ));
             }
         }
         // Unread shell code names no startup file, but both guards refuse it

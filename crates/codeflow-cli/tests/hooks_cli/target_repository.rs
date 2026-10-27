@@ -89,6 +89,281 @@ fn refused(out: &Output) -> bool {
         && String::from_utf8_lossy(&out.stderr).contains("git.hook_integrity")
 }
 
+/// Issue #342 commands are classified from a linked task worktree. None of
+/// the payloads run, including the absolute temporary destinations.
+#[test]
+fn tsk1002_issue342_resolved_write_regressions() {
+    let f = Fixture::new();
+    assert!(f.linked.join(".git").is_file());
+    for directory in ["build", "dst", "tests"] {
+        std::fs::create_dir(f.linked.join(directory)).unwrap();
+    }
+    for file in ["build/a.txt", "dst/ordinary.txt", "tests/old.txt"] {
+        std::fs::write(f.linked.join(file), "ordinary fixture\n").unwrap();
+    }
+    for line in [
+        r#"L=/private/tmp/sp; echo x | tee $L/run.log | grep -E "^a""#,
+        r#"L=/private/tmp/sp; python3 tools/run.py 2>&1 | tee $L/run.log | grep -E "SURVIVED|MISSING|^[0-9]+/""#,
+        r#"D=tests; rm $D/old.txt && grep -n "^TSK-123" README.md"#,
+        "D=dst; cp build/a.txt $D/*",
+        "D=/private/tmp/sp; cp build/a.txt $D/*",
+    ] {
+        let out = f.command(&f.linked, "git-guard", line);
+        assert_eq!(out.status.code(), Some(0), "{line}: {out:?}");
+    }
+    for line in [
+        r#"L=.codeflow; echo x | tee $L/policy.json | grep -E "^a""#,
+        "D=.codeflow; touch $D/*",
+        "D=.codeflow; cp build/a.txt $D/*",
+    ] {
+        let out = f.command(&f.linked, "git-guard", line);
+        assert!(refused(&out), "{line}: {out:?}");
+    }
+}
+
+#[test]
+fn tsk1002_r12_tee_destinations_are_writes() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for program in [
+        "tee",
+        "gtee",
+        "command tee",
+        "command -p tee",
+        "builtin tee",
+        "env tee",
+        "timeout 5 tee",
+        "nohup tee",
+    ] {
+        let line = format!(
+            r#"echo x | {program} "$TMPDIR/run.log" | grep -E "SURVIVED|MISSING|^[0-9]+/""#
+        );
+        for guard in ["git-guard", "exec-guard"] {
+            let out = f.command(&f.linked, guard, &line);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("{guard}: {line}: {out:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn tsk1002_issue342_tee_keeps_write_and_input_read_protection() {
+    let f = Fixture::new();
+    for line in [
+        r#"echo x | tee ".codeflow/policy.json""#,
+        r#"echo x | gtee ".git/config""#,
+        r#"echo x | tee "$TMPDIR/.git/config""#,
+    ] {
+        let out = f.command(&f.linked, "git-guard", line);
+        assert!(refused(&out), "{line}: {out:?}");
+    }
+    for line in [
+        r#"tee "$TMPDIR/run.log" < "$HOME/.ssh/id_rsa""#,
+        r#"gtee "$TMPDIR/run.log" < "$HOME/.ssh/id_rsa""#,
+        r#"tee "$TMPDIR/run.log" <(cat "$HOME/.ssh/id_rsa")"#,
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("security.secret_reads"),
+            "{line}: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn tsk1002_r13_home_catalog_globs_and_named_metadata_paths() {
+    let f = Fixture::new();
+    let home = f.temp.path();
+    for directory in [".codex", ".claude/skills"] {
+        std::fs::create_dir_all(home.join(directory)).unwrap();
+    }
+    std::fs::write(home.join(".codex/auth.json"), "fake secret\n").unwrap();
+    std::fs::write(home.join(".codex/public.rs"), "ordinary fixture\n").unwrap();
+    std::fs::write(home.join(".claude/skills/public.md"), "ordinary fixture\n").unwrap();
+    for line in ["cat ~/.codex/auth.*", "cat ~/.codex/auth.{json}"] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("security.secret_reads"));
+    }
+    std::fs::remove_file(home.join(".codex/auth.json")).unwrap();
+    let out = f.command(&f.linked, "exec-guard", "cat ~/.codex/auth.*");
+    assert_eq!(out.status.code(), Some(2), "absent home rule: {out:?}");
+    for line in [
+        "cat ~/.codex/*.rs",
+        "cat ~/.claude/skills/*.md",
+        "cat '~/.codex/auth.*'",
+        "git -C . status",
+        "git log -- HOME",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        assert_eq!(out.status.code(), Some(0), "{line}: {out:?}");
+    }
+    let root = shell_path(&f.root);
+    let line = format!("HOME='{root}'; git status -- ~/.claude/settings.json");
+    let out = f.command(&f.linked, "exec-guard", &line);
+    assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("security.secret_reads"));
+}
+
+#[test]
+fn tsk1002_r13_linked_search_honors_ignored_build_roots() {
+    let f = Fixture::new();
+    std::fs::write(f.linked.join(".gitignore"), "/target/\n").unwrap();
+    std::fs::create_dir(f.linked.join("target")).unwrap();
+    std::fs::write(f.linked.join("target/id_rsa.rs"), "fake secret\n").unwrap();
+    std::fs::write(f.linked.join("public.rs"), "ordinary fixture\n").unwrap();
+    for line in ["rg -g '*.rs' foo .", "rg -g '*.rs' foo ./"] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        assert_eq!(out.status.code(), Some(0), "{line}: {out:?}");
+    }
+    for line in [
+        "rg --no-ignore -g '*.rs' foo .",
+        "rg -g '*.rs' foo target",
+        "rg -g '*' foo .",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("security.secret_reads"));
+    }
+}
+
+#[test]
+fn tsk1002_r13_redirect_globs_protect_possible_hook_targets() {
+    let f = Fixture::new();
+    let commands = [
+        "printf x > .gi?/hooks/pre-commit",
+        "printf x > .git/hook[s]/pre-commit",
+    ];
+    let hook = f.root.join(".git/hooks/pre-commit");
+    assert!(!hook.exists());
+    for line in commands {
+        let out = f.command(&f.root, "git-guard", line);
+        assert!(refused(&out), "prospective hook: {line}: {out:?}");
+    }
+    std::fs::write(&hook, "# planted fixture\n").unwrap();
+    for line in commands {
+        let out = f.command(&f.root, "git-guard", line);
+        assert!(refused(&out), "existing hook: {line}: {out:?}");
+    }
+    for line in [
+        "printf x > src/hook[s]/pre-commit",
+        "printf x > '.gi?/hooks/pre-commit'",
+        "printf x > '.git/hook[s]/pre-commit'",
+        "cat .gi?/hooks/pre-commit",
+    ] {
+        let out = f.command(&f.root, "git-guard", line);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "literal/read control: {line}: {out:?}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(&hook).unwrap();
+        std::os::unix::fs::symlink("pre-commit", &hook).unwrap();
+        for line in commands {
+            let out = f.command(&f.root, "git-guard", line);
+            assert!(refused(&out), "unexpandable hook: {line}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn tsk1002_r14_redirect_terminal_escapes_do_not_crash() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for line in [
+        r"printf x > .git/config\",
+        r"printf x > .codeflow/policy.json\",
+        r#"printf x > ".git/config\"#,
+        r#"printf x > ".codeflow/policy.json\"#,
+    ] {
+        let out = f.command(&f.linked, "git-guard", line);
+        if !refused(&out) {
+            wrong.push(format!("protected incomplete target: {line:?}: {out:?}"));
+        }
+    }
+    for line in [r"printf x > ordinary\", r#"printf x > "ordinary\"#] {
+        let out = f.command(&f.linked, "git-guard", line);
+        if !matches!(out.status.code(), Some(0 | 2)) {
+            wrong.push(format!("incomplete target crashed: {line:?}: {out:?}"));
+        }
+    }
+    for line in [r"printf x > ordinary\\", r"printf x > 'ordinary\'"] {
+        let out = f.command(&f.linked, "git-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("complete literal target: {line:?}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn tsk1002_r14_home_file_globs_keep_public_siblings() {
+    let f = Fixture::new();
+    let project = f.temp.path().join(".claude/projects/fixture");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("notes.md"), "ordinary fixture\n").unwrap();
+    std::fs::write(project.join("trace.jsonl"), "fake private trace\n").unwrap();
+    std::fs::create_dir(project.join("nested")).unwrap();
+    std::fs::write(project.join("nested/notes.md"), "ordinary nested fixture\n").unwrap();
+    std::fs::write(project.join("nested/trace.jsonl"), "fake nested trace\n").unwrap();
+    let mut wrong = Vec::new();
+    for (line, refuse) in [
+        ("cat ~/.claude/projects/*/*.md", false),
+        ("cat ~/.claude/projects/**/*.md", false),
+        ("shopt -s globstar; cat ~/.claude/projects/**/*.md", false),
+        ("cat ~/.claude/projects/*/notes.md", false),
+        ("cat ~/.claude/projects/*/*.jsonl", true),
+        ("cat ~/.claude/projects/**/*.jsonl", true),
+        ("shopt -s globstar; cat ~/.claude/projects/**/*.jsonl", true),
+        ("cat ~/.claude/projects/*/*", true),
+        ("cat ~/.codex/auth.*", true),
+        ("cat ~/.codex/auth.{json}", true),
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        let expected = Some(if refuse { 2 } else { 0 });
+        if out.status.code() != expected
+            || refuse && !String::from_utf8_lossy(&out.stderr).contains("security.secret_reads")
+        {
+            wrong.push(format!("{line}: expected {expected:?}: {out:?}"));
+        }
+    }
+    let selected_secret = project.join("id_rsa.md");
+    std::fs::write(&selected_secret, "fake private Markdown name\n").unwrap();
+    let selectors = [
+        "cat ~/.claude/projects/*/*.md",
+        "cat ~/.claude/projects/**/*.md",
+        "shopt -s globstar; cat ~/.claude/projects/**/*.md",
+    ];
+    for line in selectors {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(2)
+            || !String::from_utf8_lossy(&out.stderr).contains("security.secret_reads")
+        {
+            wrong.push(format!("selected secret name: {line}: {out:?}"));
+        }
+    }
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(&selected_secret).unwrap();
+        std::os::unix::fs::symlink("trace.jsonl", project.join("renamed.md")).unwrap();
+        for line in selectors {
+            let out = f.command(&f.linked, "exec-guard", line);
+            if out.status.code() != Some(2)
+                || !String::from_utf8_lossy(&out.stderr).contains("security.secret_reads")
+            {
+                wrong.push(format!("selected secret link: {line}: {out:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 fn target_journey(location: &str, route: &str) {
     let f = Fixture::new();
     target_journey_in(&f, location, route);
@@ -261,8 +536,26 @@ fn repair2_xargs_guarded_verbs() {
     for hook in ["git-guard", "exec-guard"] {
         for command in ["git diff --name-only | xargs git add", "xargs git status"] {
             let out = f.command(&f.root, hook, command);
-            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+            let unknown_files = hook == "exec-guard" && command.contains("xargs git add");
+            assert_eq!(
+                out.status.code(),
+                Some(if unknown_files { 2 } else { 0 }),
+                "{hook} {command}: {out:?}"
+            );
+            if unknown_files {
+                let diagnostic = String::from_utf8_lossy(&out.stderr);
+                assert!(
+                    diagnostic.contains("security.secret_reads")
+                        && diagnostic.contains("cannot verify")
+                );
+            }
         }
+        let out = f.command(&f.root, hook, "echo README.md | xargs git add");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "literal file input: {hook}: {out:?}"
+        );
         for tail in [
             "",
             "config",

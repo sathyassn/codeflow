@@ -24,6 +24,28 @@ pub(crate) struct Command {
 struct Position {
     state: State,
     stack: Vec<PathBuf>,
+    scripts: Vec<(PathBuf, String)>,
+}
+
+fn script_states(states: &[Position]) -> Vec<(PathBuf, String)> {
+    let mut paths = Vec::new();
+    for (path, body) in states.iter().flat_map(|state| &state.scripts) {
+        if paths.iter().any(|(prior, _)| prior == path) {
+            continue;
+        }
+        let body = if states.iter().all(|state| {
+            state
+                .scripts
+                .iter()
+                .any(|(other, value)| other == path && value == body)
+        }) {
+            body.clone()
+        } else {
+            "__unresolved_shell_code".into()
+        };
+        paths.push((path.clone(), body));
+    }
+    paths
 }
 
 /// Resolve both supported shell readings. Pipeline tails may run in the caller
@@ -91,6 +113,7 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
             vec![Position {
                 state,
                 stack: Vec::new(),
+                scripts: Vec::new(),
             }],
             dialect,
             &mut reading,
@@ -556,6 +579,10 @@ fn bound(states: &mut Vec<Position>) {
     }
     *states = unique;
     if states.len() > 64 {
+        let scripts = script_states(states)
+            .into_iter()
+            .map(|(path, _)| (path, "__unresolved_shell_code".into()))
+            .collect();
         let mut state = State {
             world: Some(TOO_MANY_STATES),
             ..State::default()
@@ -566,6 +593,7 @@ fn bound(states: &mut Vec<Position>) {
         *states = vec![Position {
             state,
             stack: Vec::new(),
+            scripts,
         }];
     }
 }
@@ -759,6 +787,11 @@ fn walk(
             );
             if open == "{" {
                 states = nested;
+            } else {
+                let scripts = script_states(&nested);
+                for state in &mut states {
+                    state.scripts.clone_from(&scripts);
+                }
             }
             at += usize::from(at < tokens.len());
         } else if matches!(tokens[at], Tok::Op(_)) {
@@ -801,7 +834,9 @@ fn walk(
                 }) {
                     let mut command = consumer.clone();
                     command.text = format!("{} | {}", producer.text, command.text);
-                    command.input_code.clone_from(&producer.stdout);
+                    if command.input_code.is_none() {
+                        command.input_code.clone_from(&producer.stdout);
+                    }
                     if crate::security::outward::reads_stdin_code(&consumer.text) {
                         command
                             .unresolved
@@ -857,7 +892,11 @@ fn walk(
                     }];
                 }
                 pipeline.get_or_insert_with(|| before.clone());
+                let scripts = script_states(&states);
                 states = before;
+                for state in &mut states {
+                    state.scripts.clone_from(&scripts);
+                }
             }
             "&" => {
                 states.clone_from(&list_start);
@@ -922,6 +961,35 @@ fn unresolved_word(word: &Word) -> String {
     } else {
         word.raw.clone()
     }
+}
+
+fn substitution_bodies(word: &Word, depth: usize) -> Vec<String> {
+    if depth >= 8 {
+        return vec!["__unresolved_shell_code".into()];
+    }
+    let mut bodies = Vec::new();
+    for part in &word.parts {
+        match part {
+            Part::Subst { body, .. } | Part::ProcSubst(body) => bodies.push(body.clone()),
+            Part::Param {
+                body, braced: true, ..
+            } => {
+                if let Ok((tokens, _)) = lex(body) {
+                    for token in tokens {
+                        if let Tok::Word(word)
+                        | Tok::Redir {
+                            target: Some(word), ..
+                        } = token
+                        {
+                            bodies.extend(substitution_bodies(&word, depth + 1));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    bodies
 }
 
 fn resolve(run: &mut Run<'_>, word: &Word, ctx: Ctx, unresolved: &mut Vec<String>) -> String {
@@ -1023,6 +1091,30 @@ fn simple(
     reparses: &mut Reparses,
     piped: bool,
 ) -> Position {
+    // Expansions execute even when their enclosing word is only data. A
+    // subshell's assignments and directory changes do not escape its scope.
+    for token in tokens {
+        let word = match token {
+            Tok::Word(word)
+            | Tok::Redir {
+                target: Some(word), ..
+            } => Some(word),
+            Tok::Redir {
+                heredoc: Some(index),
+                ..
+            } => docs
+                .get(*index)
+                .filter(|doc| !doc.quoted)
+                .map(|doc| &doc.body),
+            _ => None,
+        };
+        if let Some(word) = word {
+            for body in substitution_bodies(word, 0) {
+                let after = reparse(&body, position.clone(), dialect, output, depth, reparses);
+                position.scripts = after.scripts;
+            }
+        }
+    }
     position
         .state
         .vars
@@ -1057,6 +1149,7 @@ fn simple(
     let mut unresolved = Vec::new();
     let mut text = Vec::new();
     let mut bodies = Vec::new();
+    let mut doc_input = None;
     let mut doc_headers = Vec::new();
     for token in tokens {
         match token {
@@ -1087,6 +1180,7 @@ fn simple(
                         doc.body.raw.clone()
                     });
                     let header = format!("{op}'{}'", doc.delimiter);
+                    doc_input = Some(body.clone());
                     doc_headers.push(header.clone());
                     text.push(header);
                     bodies.push(format!("{body}\n{}", doc.delimiter));
@@ -1114,6 +1208,13 @@ fn simple(
             text.push_str(&body);
         }
     }
+    if cfg!(windows)
+        && crate::hooks::git_guard::strip_launchers(&header_words)
+            .is_some_and(|(program, _)| crate::security::unresolved::writer_name(program) == "cmd")
+    {
+        // cmd's native body uses backslashes as separators, not shell escapes.
+        text = text.replace('\\', "/");
+    }
     let words = crate::hooks::git_guard::command_argv(&text);
     let launched = crate::hooks::git_guard::strip_launchers(&words);
     if launched.is_some_and(|(program, _)| position.state.aliases.contains_key(program)) {
@@ -1122,17 +1223,57 @@ fn simple(
         text = "__unresolved_shell_code".into();
         unresolved.push("an alias defined earlier on this line".into());
     }
-    let stdout = launched
-        .filter(|(program, _)| matches!(*program, "echo" | "printf" | "print"))
-        .and_then(|_| {
-            run.approx.set(false);
-            let captured = run.capture(&text).0;
-            if run.approx.get() {
-                None
-            } else {
-                captured.ok().and_then(|value| value.exact())
+    let stdout = if launched.is_some_and(|(program, args)| {
+        program == "cat" && args.iter().all(|arg| matches!(arg.as_str(), "-" | "--"))
+    }) {
+        doc_input.clone()
+    } else {
+        launched
+            .filter(|(program, _)| matches!(*program, "echo" | "printf" | "print"))
+            .and_then(|_| {
+                run.approx.set(false);
+                let captured = run.capture(&text).0;
+                if run.approx.get() {
+                    None
+                } else {
+                    captured.ok().and_then(|value| value.exact())
+                }
+            })
+    };
+    let input_code = doc_input
+        .clone()
+        .or_else(|| crate::security::outward::here_string(&text));
+    if let Some(dir) = &position.state.directory {
+        let mut targets = crate::hooks::git_guard::redirect_writes(&text).targets;
+        if let Some((program, args)) = launched {
+            if let Some(effects) = crate::security::unresolved::writer_effects(program, args, &[]) {
+                targets.extend(effects.writes);
+                targets.extend(effects.copy.and_then(|copy| copy.dest));
             }
-        });
+        }
+        let literal_cat = launched.is_some_and(|(program, _)| program == "cat")
+            && tokens
+                .iter()
+                .filter(|token| matches!(token, Tok::Word(_)))
+                .count()
+                == 1
+            && !tokens
+                .iter()
+                .any(|token| matches!(token, Tok::Redir { op, .. } if op.contains(">>")));
+        for target in targets {
+            let path = lexical_join(dir, Path::new(&target));
+            if doc_input.is_none() && !position.scripts.iter().any(|(prior, _)| prior == &path) {
+                continue;
+            }
+            position.scripts.retain(|(prior, _)| prior != &path);
+            let body = doc_input
+                .as_ref()
+                .filter(|_| literal_cat)
+                .cloned()
+                .unwrap_or_else(|| "__unresolved_shell_code".into());
+            position.scripts.push((path, body));
+        }
+    }
     let unread_script_word = unresolved
         .iter()
         .find(|word| word.as_str() != "process substitution")
@@ -1142,7 +1283,7 @@ fn simple(
         cwd: position.state.directory.clone(),
         unresolved,
         stdout,
-        input_code: None,
+        input_code,
         links: Vec::new(),
         checkouts: Vec::new(),
     });
@@ -1160,6 +1301,16 @@ fn simple(
         Some(eval_body(args))
     } else if let Some((name, args)) = reader {
         crate::hooks::git_guard::shell_inline_code(name, args)
+            .or_else(|| {
+                let file = args.iter().find(|arg| !arg.starts_with('-'))?;
+                let dir = position.state.directory.as_ref()?;
+                let path = lexical_join(dir, Path::new(file));
+                position
+                    .scripts
+                    .iter()
+                    .find(|(prior, _)| prior == &path)
+                    .map(|(_, code)| code.clone())
+            })
             .or_else(|| crate::security::outward::here_string(&text))
             .or_else(|| {
                 tokens.iter().find_map(|token| match token {
@@ -1221,6 +1372,7 @@ fn simple(
         }
         let script = crate::hooks::git_guard::launched_script(&words, &script);
         let after = reparse(&script, position.clone(), dialect, output, depth, reparses);
+        position.scripts.clone_from(&after.scripts);
         return if current_shell { after } else { position };
     }
     let directory_values =
@@ -1239,6 +1391,36 @@ fn simple(
         }
     }
     if let Some((program, args)) = launched {
+        if matches!(program, "cd" | "chdir" | "pushd")
+            && args
+                .iter()
+                .any(|arg| arg.starts_with('-') && arg.contains('P'))
+        {
+            // Planned links are not on disk yet. Retain their kernel reading
+            // before a physical cd consumes parent components.
+            let links = position_effects(output.clone())
+                .last()
+                .map(|step| step.links.clone())
+                .unwrap_or_default();
+            if let (Some(dir), Some(target)) = (
+                position.state.directory.as_ref(),
+                args.iter().find(|arg| !arg.starts_with('-')),
+            ) {
+                match linked_paths(target, dir, &links) {
+                    Ok(paths) if paths.len() == 1 => {
+                        position.state.directory = paths.into_iter().next();
+                        set_pwd(&mut position.state);
+                        return position;
+                    }
+                    Ok(paths) if paths.is_empty() => {}
+                    _ => {
+                        position.state.directory = None;
+                        set_pwd(&mut position.state);
+                        return position;
+                    }
+                }
+            }
+        }
         match program {
             "cd" | "chdir" | "pushd" => change_directory(&mut position, program, args),
             "popd" if !args.is_empty() => {
@@ -1307,6 +1489,7 @@ fn reparse(
                 states.remove(0)
             } else {
                 let mut unknown = position.clone();
+                unknown.scripts = script_states(&states);
                 unknown.state.directory = None;
                 unknown.state.world = Some("shell code has several reachable states");
                 unknown.stack.clear();
@@ -1759,7 +1942,14 @@ mod tests {
     fn non_utf8_shell_paths_remain_unresolved() {
         use std::os::unix::ffi::OsStringExt;
         let path = PathBuf::from(std::ffi::OsString::from_vec(b"/project-\xff".to_vec()));
-        for step in commands("probe $PWD $HOME $(pwd)", &path, Some(&path)) {
+        let steps = commands("probe $PWD $HOME $(pwd)", &path, Some(&path));
+        assert!(steps.iter().any(|step| step.text == "pwd"));
+        let parents: Vec<_> = steps
+            .into_iter()
+            .filter(|step| step.text.starts_with("probe "))
+            .collect();
+        assert_eq!(parents.len(), 1);
+        for step in parents {
             assert_eq!(step.cwd.as_ref(), Some(&path));
             assert_eq!(step.unresolved.len(), 3);
         }

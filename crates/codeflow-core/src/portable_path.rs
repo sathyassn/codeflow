@@ -70,6 +70,39 @@ pub fn slashed(path: &Path) -> String {
     }
 }
 
+/// Win32 accepts backslash separators and ignores trailing dots and spaces
+/// in ordinary path components. Verbatim drive prefixes retain the same
+/// protected-name judgment. Other hosts retain those literal bytes.
+#[must_use]
+pub(crate) fn filesystem_spelling(text: &str) -> String {
+    if !cfg!(windows) {
+        return text.to_owned();
+    }
+    let bytes = text.as_bytes();
+    let text = if bytes
+        .get(..4)
+        .is_some_and(|prefix| matches!(prefix, [b'/' | b'\\', b'/' | b'\\', b'?', b'/' | b'\\']))
+        && bytes.get(4).is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(5) == Some(&b':')
+        && bytes.get(6).is_some_and(|c| matches!(c, b'/' | b'\\'))
+    {
+        &text[4..]
+    } else {
+        text
+    };
+    text.replace('\\', "/")
+        .split('/')
+        .map(|part| {
+            if matches!(part, "." | "..") {
+                part
+            } else {
+                part.trim_end_matches(['.', ' '])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// The user's home directory as the guards and doctor read it: the first
 /// of [`user_homes`].
 #[must_use]
@@ -274,12 +307,14 @@ mod tests {
                 without_verbatim(PathBuf::from(path)),
                 PathBuf::from(r"C:\Users\a\b.txt")
             );
+            assert_eq!(filesystem_spelling(path), "C:/Users/a/b.txt");
         }
         assert_eq!(
             without_verbatim(PathBuf::from(r"\\?\UNC\server\share\x")),
             PathBuf::from(r"\\?\UNC\server\share\x")
         );
         assert_eq!(slashed(Path::new(r"nested\AGENTS.md")), "nested/AGENTS.md");
+        assert_eq!(filesystem_spelling(r".git\config. "), ".git/config");
     }
 
     #[cfg(unix)]

@@ -2444,6 +2444,33 @@ impl Run<'_> {
 
     #[allow(clippy::too_many_lines)] // one pass over a word's parts
     fn word(&mut self, word: &Word, ctx: Ctx) -> Eval {
+        // Builtin output emulation must apply the same leading tilde as the
+        // operand reader. Keep the home prefix quoted and the tail's glob
+        // syntax active. Unknown/named homes retain the unresolved reading.
+        if let Some(tail) = word
+            .plain()
+            .and_then(|raw| raw.strip_prefix('~'))
+            .filter(|tail| tail.is_empty() || tail.starts_with('/'))
+        {
+            if let Some(Var::Scalar(home)) = self.state.vars.get("HOME") {
+                if let Some(home) = home.exact() {
+                    let expanded = Word {
+                        raw: word.raw.clone(),
+                        parts: vec![
+                            Part::Lit {
+                                text: home,
+                                quoted: true,
+                            },
+                            Part::Lit {
+                                text: tail.into(),
+                                quoted: false,
+                            },
+                        ],
+                    };
+                    return self.word(&expanded, ctx);
+                }
+            }
+        }
         let mut online = false;
         let mut loose = false;
         let mut globbed = false;

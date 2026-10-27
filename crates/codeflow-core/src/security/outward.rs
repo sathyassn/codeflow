@@ -203,6 +203,7 @@ pub(crate) struct Unwrapped {
     /// or brace pattern; `None` when the parse that reached it lost that.
     pub(crate) expands: Option<Vec<bool>>,
     pub(crate) cwd: Option<PathBuf>,
+    pub(crate) links: Vec<super::composed::paths::Link>,
 }
 
 pub(crate) fn unwrapped_commands(command: &str, cwd: &Path, home: Option<&Path>) -> Vec<Unwrapped> {
@@ -388,11 +389,36 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             visit_literal(&step.text, step.cwd.as_deref(), depth, out);
             for command in &mut out.commands[first_command..] {
                 command.unresolved.extend(step.unresolved.iter().cloned());
+                command.links.clone_from(&step.links);
+            }
+            // xargs turns stdin text into child operands, not code. Unknown
+            // producers and argument files cannot certify those operands.
+            let (supplied, replacement) = xargs_input(&step, &out.commands[first_command..]);
+            for command in &mut out.commands[first_command..] {
+                if matches!(command.supplier, Some(Supplier::Xargs)) {
+                    apply_xargs_input(
+                        &mut command.args,
+                        &mut command.unresolved,
+                        supplied.as_deref(),
+                        replacement.as_deref(),
+                    );
+                    // Resolved stdin text is already shell output; it must not
+                    // acquire a second round of shell glob expansion.
+                    command.expands = Some(vec![false; command.args.len()]);
+                }
             }
             for call in &mut out.calls[first_call..] {
                 call.unresolved.extend(step.unresolved.iter().cloned());
                 call.links.clone_from(&step.links);
                 call.checkouts.clone_from(&step.checkouts);
+                if matches!(call.supplier, Some(Supplier::Xargs)) {
+                    apply_xargs_input(
+                        &mut call.args,
+                        &mut call.unresolved,
+                        supplied.as_deref(),
+                        replacement.as_deref(),
+                    );
+                }
                 if call.code.is_empty() {
                     if let Some(code) = &step.input_code {
                         call.code = vec![code.clone()];
@@ -404,6 +430,182 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         }
     } else {
         visit_literal(command, cwd, depth, out);
+    }
+}
+
+/// xargs input has quote/backslash handling, but no shell comments,
+/// substitutions or glob expansion. Unknown input modes remain unverified.
+fn xargs_words(input: &str, split_blanks: bool) -> Option<Vec<String>> {
+    if input.contains('\0') {
+        return None;
+    }
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut started = false;
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        if !split_blanks && !started && quote.is_none() && matches!(ch, ' ' | '\t') {
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            let next = chars.next()?;
+            if next == '\n' || quote == Some('"') && !matches!(next, '"' | '\\') {
+                return None;
+            }
+            word.push(next);
+            started = true;
+        } else if matches!(ch, '\'' | '"') {
+            if quote == Some(ch) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(ch);
+            } else {
+                word.push(ch);
+            }
+            started = true;
+        } else if quote.is_none() && (ch == '\n' || split_blanks && ch.is_ascii_whitespace()) {
+            if started {
+                if !split_blanks && word.ends_with(|ch: char| ch.is_ascii_whitespace()) {
+                    return None;
+                }
+                words.push(std::mem::take(&mut word));
+                started = false;
+            }
+        } else {
+            word.push(ch);
+            started = true;
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if started {
+        if !split_blanks && word.ends_with(|ch: char| ch.is_ascii_whitespace()) {
+            return None;
+        }
+        words.push(word);
+    }
+    Some(words)
+}
+
+fn xargs_input(
+    step: &super::composed::paths::Command,
+    commands: &[Unwrapped],
+) -> (Option<Vec<String>>, Option<String>) {
+    let Some(command) = commands.iter().find(|command| {
+        command
+            .args
+            .first()
+            .is_some_and(|name| crate::hooks::git_guard::launcher_name(name) == "xargs")
+    }) else {
+        return (None, None);
+    };
+    let rest = &command.args[1..];
+    let Some(end) = skip_launcher_options("xargs", rest) else {
+        return (None, None);
+    };
+    let mut at = 0;
+    let mut delimiter = None;
+    let mut replacement = None;
+    let mut verified = true;
+    while at < end {
+        let arg = &rest[at];
+        at += 1;
+        if arg == "--" {
+            break;
+        }
+        if arg == "--replace" {
+            replacement = Some("{}".into());
+            continue;
+        }
+        let (option, attached) = if arg.starts_with("--") {
+            arg.split_once('=')
+                .map_or((arg.as_str(), None), |(key, value)| (key, Some(value)))
+        } else if arg.len() > 2 {
+            (&arg[..2], Some(&arg[2..]))
+        } else {
+            (arg.as_str(), None)
+        };
+        let Some(valued) = launcher_option("xargs", option) else {
+            verified = false;
+            break;
+        };
+        let value = if valued {
+            if let Some(value) = attached {
+                Some(value)
+            } else {
+                let value = rest.get(at).map(String::as_str);
+                at += 1;
+                value
+            }
+        } else {
+            attached
+        };
+        match option {
+            "-0" | "--null" => delimiter = Some('\0'),
+            "-a" | "--arg-file" => verified = false,
+            "-I" | "--replace" => replacement = value.map(str::to_owned),
+            "-d" | "--delimiter" => {
+                delimiter = value.and_then(|value| match value {
+                    "\\n" => Some('\n'),
+                    "\\0" => Some('\0'),
+                    "\\t" => Some('\t'),
+                    _ => {
+                        let mut chars = value.chars();
+                        let first = chars.next()?;
+                        chars.next().is_none().then_some(first)
+                    }
+                });
+                verified &= delimiter.is_some();
+            }
+            _ => {}
+        }
+    }
+    verified &= replacement.as_ref().is_none_or(|value| !value.is_empty());
+    let supplied = step
+        .input_code
+        .as_deref()
+        .filter(|_| verified)
+        .and_then(|input| {
+            if let Some(delimiter) = delimiter {
+                Some(
+                    input
+                        .split(delimiter)
+                        .filter(|word| !word.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                )
+            } else {
+                xargs_words(input, replacement.is_none())
+            }
+        });
+    (supplied, replacement)
+}
+
+fn apply_xargs_input(
+    args: &mut Vec<String>,
+    unresolved: &mut Vec<String>,
+    input: Option<&[String]>,
+    replacement: Option<&str>,
+) {
+    if let Some(input) = input {
+        if input.is_empty() {
+            return;
+        }
+        if let Some(replacement) = replacement.filter(|value| !value.is_empty()) {
+            let template = args.clone();
+            args.clear();
+            for word in input {
+                args.extend(template.iter().map(|arg| arg.replace(replacement, word)));
+            }
+        } else {
+            args.extend_from_slice(input);
+        }
+    } else {
+        let unknown = "__unverified_xargs_input".to_string();
+        args.push(unknown.clone());
+        unresolved.push(unknown);
     }
 }
 
@@ -455,6 +657,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
             // reader. Keep their cwd alongside the unwrapped command's cwd.
             for (source, expands) in crate::hooks::git_guard::redirect_reads(&segment) {
                 out.commands.push(Unwrapped {
+                    links: Vec::new(),
                     args: vec!["cat".to_string(), source],
                     unresolved: Vec::new(),
                     supplier: out.supplier.clone(),
@@ -660,12 +863,10 @@ fn launcher_options(launcher: &str) -> Option<(&'static [&'static str], &'static
                 "-a",
                 "--arg-file",
                 "--delimiter",
-                "--eof",
                 "--max-lines",
                 "--max-args",
                 "--max-procs",
                 "--max-chars",
-                "--replace",
                 "--process-slot-var",
             ],
             &[
@@ -675,6 +876,8 @@ fn launcher_options(launcher: &str) -> Option<(&'static [&'static str], &'static
                 "-p",
                 "-x",
                 "--null",
+                "--replace",
+                "--eof",
                 "--no-run-if-empty",
                 "--verbose",
                 "--interactive",
@@ -1044,7 +1247,9 @@ fn argv(
         return;
     };
     let name = crate::hooks::git_guard::launcher_name(program);
+    let command_at = out.commands.len();
     out.commands.push(Unwrapped {
+        links: Vec::new(),
         args: args.to_vec(),
         unresolved: Vec::new(),
         supplier: out.supplier.clone(),
@@ -1161,12 +1366,10 @@ fn argv(
                 "-a",
                 "--arg-file",
                 "--delimiter",
-                "--eof",
                 "--max-lines",
                 "--max-args",
                 "--max-procs",
                 "--max-chars",
-                "--replace",
             ],
         )),
         name if crate::hooks::git_guard::is_shell(name) => {
@@ -1239,6 +1442,12 @@ fn argv(
         }
     };
     if let Some(inner) = inner {
+        if name != "xargs" {
+            // The child receives these operands. Recording the wrapper as
+            // a second file reader loses the child's input/output roles.
+            // xargs itself can read an argument file and keeps that check.
+            out.commands.remove(command_at);
+        }
         let outer = if name == "xargs" {
             out.supplier.replace(Supplier::Xargs)
         } else {
@@ -1417,8 +1626,114 @@ pub(crate) fn interpreter_family(name: &str) -> Option<&'static str> {
         "nodejs" => Some("nodejs"),
         "perl" => Some("perl"),
         "ruby" => Some("ruby"),
+        "powershell" | "pwsh" => Some("powershell"),
+        "cmd" => Some("cmd"),
+        "osascript" => Some("osascript"),
+        "deno" => Some("deno"),
+        "make" | "gmake" => Some("make"),
         _ => None,
     }
+}
+
+fn make_stdin_code(args: &[String]) -> bool {
+    args.iter().enumerate().any(|(at, arg)| {
+        let file = if matches!(arg.as_str(), "-f" | "--file" | "--makefile") {
+            args.get(at + 1).map(String::as_str)
+        } else {
+            arg.strip_prefix("--file=")
+                .or_else(|| arg.strip_prefix("--makefile="))
+                .or_else(|| arg.strip_prefix("-f").filter(|value| !value.is_empty()))
+        };
+        file.is_some_and(|file| {
+            matches!(file, "-" | "/dev/stdin" | "/dev/fd/0" | "/proc/self/fd/0")
+        })
+    })
+}
+
+fn make_inline_code(args: &[String]) -> Vec<String> {
+    args.iter()
+        .enumerate()
+        .filter_map(|(at, arg)| {
+            if arg == "--eval" {
+                args.get(at + 1).cloned()
+            } else {
+                arg.strip_prefix("--eval=").map(str::to_owned)
+            }
+        })
+        .collect()
+}
+
+fn record_extended_interpreter(
+    name: &str,
+    rest: &[String],
+    patterns: Option<&[bool]>,
+    cwd: Option<&Path>,
+    out: &mut Parsed,
+) -> bool {
+    if !matches!(name, "powershell" | "cmd" | "osascript" | "deno" | "make") {
+        return false;
+    }
+    let first = out.code.len();
+    if matches!(name, "powershell" | "cmd") {
+        if let Some(mut code) = crate::hooks::git_guard::shell_inline_code(name, rest) {
+            if cfg!(windows) {
+                code = code.replace('\\', "/");
+                if let Some(home) = out.home.as_deref() {
+                    code = code.replace("%USERPROFILE%", &crate::portable_path::slashed(home));
+                }
+            }
+            if name == "powershell" && code == "-" {
+                out.stdin_interpreter += 1;
+            } else {
+                out.code.push(code);
+            }
+        }
+    } else if name == "deno" {
+        if let Some(at) = rest.iter().position(|arg| arg == "eval") {
+            if let Some(code) = rest[at + 1..].iter().find(|arg| !arg.starts_with('-')) {
+                out.code.push(code.clone());
+            }
+        }
+    } else if name == "make" {
+        out.code.extend(make_inline_code(rest));
+        out.stdin_interpreter += usize::from(make_stdin_code(rest));
+    } else {
+        for pair in rest.windows(2).filter(|pair| pair[0] == "-e") {
+            let words = command_argv(&pair[1]);
+            for sequence in words.windows(4) {
+                if sequence[..3]
+                    .iter()
+                    .zip(["do", "shell", "script"])
+                    .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
+                {
+                    out.code.push(sequence[3].clone());
+                }
+            }
+        }
+    }
+    out.calls.push(InterpreterCall {
+        positional_source: out.positional_source,
+        unresolved: Vec::new(),
+        links: Vec::new(),
+        checkouts: Vec::new(),
+        // Make targets and directory flags are not arguments to its recipe
+        // commands. Its code and named input files have separate judgments.
+        args: if name == "make" {
+            Vec::new()
+        } else {
+            rest.to_vec()
+        },
+        patterns: if name == "make" {
+            Vec::new()
+        } else {
+            patterns.map_or_else(|| vec![true; rest.len()], <[bool]>::to_vec)
+        },
+        cwd: cwd.map(Path::to_path_buf),
+        chdir: Vec::new(),
+        code: out.code[first..].to_vec(),
+        supplier: out.supplier.clone(),
+    });
+    true
 }
 
 fn record_interpreter(
@@ -1429,6 +1744,9 @@ fn record_interpreter(
     out: &mut Parsed,
 ) {
     if let Some(name) = interpreter_family(name) {
+        if record_extended_interpreter(name, rest, patterns, cwd, out) {
+            return;
+        }
         let flag = if name.starts_with("python") {
             "-c"
         } else {
@@ -2098,6 +2416,31 @@ enum Program {
 /// Where an interpreter family of `family` takes its program from, read by
 /// the same option grammar as [`interpreter_arguments`].
 fn family_program(family: &str, rest: &[String]) -> Program {
+    if family == "make" {
+        return if make_stdin_code(rest) {
+            Program::Stdin
+        } else if make_inline_code(rest).is_empty() {
+            Program::Script
+        } else {
+            Program::Inline
+        };
+    }
+    if matches!(family, "powershell" | "cmd" | "osascript" | "deno") {
+        if family == "powershell"
+            && crate::hooks::git_guard::shell_inline_code(family, rest).as_deref() == Some("-")
+        {
+            return Program::Stdin;
+        }
+        return if (matches!(family, "powershell" | "cmd")
+            && crate::hooks::git_guard::shell_inline_code(family, rest).is_some())
+            || (family == "osascript" && rest.iter().any(|arg| arg == "-e"))
+            || (family == "deno" && rest.iter().any(|arg| arg == "eval"))
+        {
+            Program::Inline
+        } else {
+            Program::Script
+        };
+    }
     let mut at = 0;
     while let Some(word) = rest.get(at) {
         at += 1;

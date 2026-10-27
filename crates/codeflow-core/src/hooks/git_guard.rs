@@ -997,7 +997,7 @@ fn evaluate_report_with_runners(
         // expansion or heredoc would instead rejudge resolved values or data.
         let integrity = if expanded_operands
             && (unresolved_word(segment)
-                || command.contains("<<")
+                || segment.contains("<<")
                 || script_reader(&command_argv(segment)).is_some())
         {
             None
@@ -2010,20 +2010,24 @@ fn integrity_write_in_dirs(
 /// command that is not proven to only read and has a pattern among its
 /// words or write targets: the guard reads patterns with the default
 /// options, so it refuses (TSK-216 round 16).
+pub(crate) fn dot_glob_option(line: &str) -> Option<&'static str> {
+    let folded: String = line
+        .chars()
+        .filter(|c| *c != '_')
+        .collect::<String>()
+        .to_lowercase();
+    ["dotglob", "globignore", "globdots"]
+        .into_iter()
+        .find(|option| folded.contains(option))
+}
+
 fn dot_glob_option_violation(
     tokens: &[String],
     redirects: &Redirects,
     level: PolicyLevel,
     line: &str,
 ) -> Option<Violation> {
-    let folded: String = line
-        .chars()
-        .filter(|c| *c != '_')
-        .collect::<String>()
-        .to_lowercase();
-    let option = ["dotglob", "globignore", "globdots"]
-        .into_iter()
-        .find(|option| folded.contains(option))?;
+    let option = dot_glob_option(line)?;
     if read_only_program(tokens) {
         return None;
     }
@@ -2842,6 +2846,7 @@ fn unknown_tilde_rest(word: &str) -> Option<&str> {
 /// bounds the expanded candidate list. At the limit, only a pattern proved
 /// contained in an unprotected directory can use that directory instead.
 const GLOB_ENTRY_LIMIT: usize = 4096;
+pub(crate) const SECRET_ENTRY_LIMIT: usize = 65_536;
 
 /// Why a glob expansion stopped before it read every entry.
 #[derive(Debug, PartialEq, Eq)]
@@ -3049,12 +3054,29 @@ impl WordGlob {
     /// joined as written, so a symbolic link in them is resolved by the
     /// caller's file-system-aware check.
     fn expand(&self) -> Result<Vec<PathBuf>, GlobStop> {
+        self.expand_with_limit(GLOB_ENTRY_LIMIT)
+    }
+
+    /// Whole-component `**` can recurse while retaining the remaining leaf
+    /// selector. Other conservative syntax still needs the broader reading.
+    fn standard_globstar(&self) -> bool {
+        self.pattern
+            .components()
+            .skip(self.literal)
+            .all(|component| {
+                let name = crate::git::GitName::from_os_str(component.as_os_str());
+                name.rule_text()
+                    .is_ok_and(|text| text == "**" || !conservative_glob(text))
+            })
+    }
+
+    fn expand_with_limit(&self, limit: usize) -> Result<Vec<PathBuf>, GlobStop> {
         let mut read = 0;
         if !self.conservative {
-            return expand_components(&self.pattern, self.literal, false, false, &mut read);
+            return expand_components(&self.pattern, self.literal, false, false, &mut read, limit);
         }
         let prefix = self.prefix();
-        let mut found = every_path_below(&prefix, &mut read)?;
+        let mut found = every_path_below_with_limit(&prefix, &mut read, limit)?;
         if self
             .pattern
             .components()
@@ -3067,6 +3089,7 @@ impl WordGlob {
                 true,
                 true,
                 &mut read,
+                limit,
             )?);
         }
         Ok(found)
@@ -3103,15 +3126,38 @@ impl WordGlob {
 /// Secret reads cannot replace an incomplete expansion with a safe prefix:
 /// a secret leaf may be the entry beyond the budget.
 pub(crate) fn secret_glob_paths(word: &str, cwd: &Path) -> Result<Vec<PathBuf>, &'static str> {
-    WordGlob::new(word, cwd)
-        .expand()
-        .map_err(|stop| stop.reason())
+    let glob = WordGlob::new(word, cwd);
+    let paths = if glob.conservative && glob.standard_globstar() {
+        // Recursive expansion includes the one-level Bash reading when
+        // globstar is off, without selecting unrelated leaf suffixes.
+        expand_components(
+            &glob.pattern,
+            glob.literal,
+            false,
+            false,
+            &mut 0,
+            SECRET_ENTRY_LIMIT,
+        )
+    } else {
+        glob.expand_with_limit(SECRET_ENTRY_LIMIT)
+    };
+    paths.map_err(|stop| match stop {
+        GlobStop::TooManyEntries => "cannot inspect every glob path: more than 65536 entries",
+        GlobStop::Unreadable => stop.reason(),
+    })
 }
 
 /// Search tools walk recursively, so their file selectors use a larger but
 /// finite metadata budget. File contents are never opened here.
-pub(crate) fn secret_search_paths(root: &Path) -> Result<Vec<PathBuf>, &'static str> {
-    every_path_below_with_limit(root, &mut 0, 65_536).map_err(|stop| match stop {
+pub(crate) fn secret_search_paths(
+    root: &Path,
+    read: &mut usize,
+    skip: impl Fn(&Path) -> Result<bool, &'static str>,
+) -> Result<Vec<PathBuf>, &'static str> {
+    every_path_below_filtered(root, read, SECRET_ENTRY_LIMIT, &|path| {
+        skip(path).map_err(|_| GlobStop::Unreadable)
+    })
+    .map_err(|stop| match stop {
         GlobStop::TooManyEntries => "cannot inspect every search path: more than 65536 entries",
         GlobStop::Unreadable => stop.reason(),
     })
@@ -3204,14 +3250,19 @@ fn glob_directory(dir: &Path) -> Result<Option<std::fs::ReadDir>, GlobStop> {
 /// Every path at or below `dir`, at every depth: names that start with `.`
 /// are included and linked directories are entered, each real directory
 /// once.
-fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobStop> {
-    every_path_below_with_limit(dir, read, GLOB_ENTRY_LIMIT)
-}
-
 fn every_path_below_with_limit(
     dir: &Path,
     read: &mut usize,
     limit: usize,
+) -> Result<Vec<PathBuf>, GlobStop> {
+    every_path_below_filtered(dir, read, limit, &|_| Ok(false))
+}
+
+fn every_path_below_filtered(
+    dir: &Path,
+    read: &mut usize,
+    limit: usize,
+    skip: &impl Fn(&Path) -> Result<bool, GlobStop>,
 ) -> Result<Vec<PathBuf>, GlobStop> {
     let mut found = vec![dir.to_path_buf()];
     let mut pending = vec![dir.to_path_buf()];
@@ -3232,6 +3283,9 @@ fn every_path_below_with_limit(
                 return Err(GlobStop::TooManyEntries);
             }
             let path = dir.join(entry.file_name());
+            if skip(&path)? {
+                continue;
+            }
             match crate::absence::is_kind(&path, true) {
                 Some(true) => pending.push(path.clone()),
                 Some(false) => {}
@@ -3259,7 +3313,14 @@ pub(crate) fn startup_glob_paths(
         let text = part.as_os_str().to_string_lossy();
         text.len() > 1 && text.chars().all(|c| c == '*')
     });
-    match expand_components(&base.join(pattern), literal, false, match_hidden, &mut 0) {
+    match expand_components(
+        &base.join(pattern),
+        literal,
+        false,
+        match_hidden,
+        &mut 0,
+        GLOB_ENTRY_LIMIT,
+    ) {
         // Preserve the startup reader's recursive-glob boundary. A single
         // ordinary component can use its prefix when no class path or
         // anywhere-protected name lies there and no link escapes it.
@@ -3286,6 +3347,7 @@ fn expand_components(
     every_name: bool,
     match_hidden: bool,
     read: &mut usize,
+    limit: usize,
 ) -> Result<Vec<PathBuf>, GlobStop> {
     let options = glob::MatchOptions {
         case_sensitive: false,
@@ -3316,7 +3378,7 @@ fn expand_components(
                 for entry in entries {
                     let entry = entry.map_err(|_| GlobStop::Unreadable)?;
                     *read += 1;
-                    if *read > GLOB_ENTRY_LIMIT {
+                    if *read > limit {
                         return Err(GlobStop::TooManyEntries);
                     }
                     let name = entry.file_name();
@@ -3350,7 +3412,7 @@ fn expand_components(
             for entry in entries {
                 let entry = entry.map_err(|_| GlobStop::Unreadable)?;
                 *read += 1;
-                if *read > GLOB_ENTRY_LIMIT {
+                if *read > limit {
                     return Err(GlobStop::TooManyEntries);
                 }
                 let name = entry.file_name();
@@ -3962,11 +4024,14 @@ pub(crate) fn redirect_writes(segment: &str) -> Redirects {
             .collect();
         return Redirects {
             targets: Vec::new(),
+            patterns: Vec::new(),
             unread,
         };
     }
+    let (targets, patterns) = redirect_targets(&joined);
     Redirects {
-        targets: redirect_targets(&joined),
+        targets,
+        patterns,
         unread: Vec::new(),
     }
 }
@@ -3976,6 +4041,8 @@ pub(crate) fn redirect_writes(segment: &str) -> Redirects {
 pub(crate) struct Redirects {
     /// The targets of its write redirections, read as written.
     pub(crate) targets: Vec<String>,
+    /// Whether the shell may expand each target as a pathname pattern.
+    patterns: Vec<bool>,
     /// Every word of a command whose quoting the reader does not read:
     /// any of them may be a write target, so each is judged by name.
     pub(crate) unread: Vec<String>,
@@ -4052,9 +4119,10 @@ fn join_continuations(text: &str) -> String {
     out
 }
 
-fn redirect_targets(segment: &str) -> Vec<String> {
+fn redirect_targets(segment: &str) -> (Vec<String>, Vec<bool>) {
     let chars: Vec<char> = segment.chars().collect();
     let mut targets = Vec::new();
+    let mut patterns = Vec::new();
     let (mut single, mut double) = (false, false);
     let mut i = 0;
     while i < chars.len() {
@@ -4073,13 +4141,21 @@ fn redirect_targets(segment: &str) -> Vec<String> {
                 // reading too (TSK-216 round 17).
                 i = if numeric_range(&target) { after } else { end };
                 if writes(&target) {
+                    let raw: String = chars[after..end].iter().collect();
+                    patterns.push(
+                        command_argv_patterns(&raw)
+                            .1
+                            .first()
+                            .copied()
+                            .unwrap_or(true),
+                    );
                     targets.push(target);
                 }
             }
             _ => {}
         }
     }
-    targets
+    (targets, patterns)
 }
 
 /// The redirection operator starting at `at`: whether it writes the target
@@ -4134,8 +4210,11 @@ fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
             '\'' if !double => single = !single,
             '"' if !single => double = !double,
             '\\' if !single => {
-                i += 1;
-                if let Some(&escaped) = chars.get(i) {
+                // An incomplete escape contributes no character, but its
+                // cursor still ends at the input boundary. Keep the known
+                // target prefix for conservative integrity inspection.
+                if let Some(&escaped) = chars.get(i + 1) {
+                    i += 1;
                     word.push(escaped);
                 }
             }
@@ -5812,13 +5891,50 @@ fn wrapper_write_violation(
     None
 }
 
-/// Block a Bash write/remove that would disarm or falsify the enforcement
-/// plane: a redirect into, or a mutating command targeting, the hook shims
-/// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
-/// (`.codeflow/policy.json`, `.codeflow/project.toml`). Reads (`cat`, a `cp`
-/// *from* an integrity path) stay allowed. `redirects` are the targets the
-/// command's redirections write ([`redirect_writes`]); a command run by
-/// `xargs` or `find -exec` has none.
+/// A redirect's literal or expanded target, including a possible protected
+/// target whose leaf does not exist yet. Quoted glob characters stay literal.
+fn redirect_integrity_path(
+    redirects: &Redirects,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<String> {
+    let redirected = redirects
+        .targets
+        .iter()
+        .enumerate()
+        .find_map(|(at, target)| {
+            if !redirects.patterns.get(at).copied().unwrap_or(true)
+                && has_glob(target)
+                && !unresolved_word(target)
+            {
+                return token_integrity_path_literal(target, cwd, payload_cwd);
+            }
+            token_integrity_path(target, cwd, payload_cwd).or_else(|| {
+                if !has_glob(target) {
+                    return None;
+                }
+                // A missing leaf cannot certify a redirect into a protected
+                // directory selected by a glob. Keep the prospective spelling
+                // protected, including before the hook file exists.
+                let path = integrity_shell_path(target, cwd);
+                let relative = path.strip_prefix(payload_cwd).ok()?;
+                let name = crate::git::GitName::from_os_str(relative.as_os_str());
+                let Ok(text) = name.rule_text() else {
+                    return Some("cannot inspect the redirect glob's path spelling".into());
+                };
+                word_could_name(text).map(str::to_owned)
+            })
+        });
+    redirected.or_else(|| {
+        redirects
+            .unread
+            .iter()
+            .find_map(|t| token_integrity_path(t, cwd, payload_cwd))
+    })
+}
+
+/// Block writes that would disarm the enforcement plane. Reads (`cat`, a
+/// cp source) keep their separate judgment. A find/xargs child has no redirects.
 fn integrity_write_violation(
     tokens: &[String],
     redirects: &Redirects,
@@ -5827,12 +5943,7 @@ fn integrity_write_violation(
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
-    if let Some(p) = redirects
-        .targets
-        .iter()
-        .chain(&redirects.unread)
-        .find_map(|t| token_integrity_path(t, cwd, payload_cwd))
-    {
+    if let Some(p) = redirect_integrity_path(redirects, cwd, payload_cwd) {
         return Some(hook_integrity_violation(
             level,
             format!("redirect would overwrite the integrity path `{p}`"),
@@ -7500,6 +7611,18 @@ pub(crate) fn has_shell_code_option(args: &[String]) -> bool {
 pub(crate) fn shell_inline_code(program: &str, args: &[String]) -> Option<String> {
     let mut bodies = Vec::new();
     let program = program.strip_suffix(".exe").unwrap_or(program);
+    if matches!(program, "powershell" | "pwsh" | "cmd") {
+        return args
+            .iter()
+            .position(|arg| {
+                if program == "cmd" {
+                    arg.eq_ignore_ascii_case("/c") || arg.eq_ignore_ascii_case("/k")
+                } else {
+                    arg.eq_ignore_ascii_case("-command") || arg.eq_ignore_ascii_case("-c")
+                }
+            })
+            .map(|at| args[at + 1..].join(" "));
+    }
     if program.trim_end_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-')) == "fish" {
         let mut at = 0;
         while let Some(arg) = args.get(at) {
@@ -13315,6 +13438,8 @@ pub(crate) fn is_shell(name: &str) -> bool {
             | "csh"
             | "tcsh"
             | "pwsh"
+            | "powershell"
+            | "cmd"
     )
 }
 
@@ -13327,7 +13452,7 @@ fn is_identifier(s: &str) -> bool {
 }
 
 /// Find the git subcommand, skipping global flags (`git -C path commit …`).
-pub(super) fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
+pub(crate) fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     let mut idx = 0;
     while idx < args.len() {
         let t = &args[idx];
@@ -14061,7 +14186,11 @@ mod tests {
         std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("tree/broken"))
             .unwrap();
         assert_eq!(
-            super::every_path_below(&dir.path().join("tree"), &mut 0),
+            super::every_path_below_with_limit(
+                &dir.path().join("tree"),
+                &mut 0,
+                super::GLOB_ENTRY_LIMIT
+            ),
             Err(super::GlobStop::Unreadable)
         );
         assert!(super::glob_reach("tree/*(D)", dir.path(), dir.path()).is_some());
@@ -16760,6 +16889,64 @@ mod tests {
                 "{segment}"
             );
         }
+    }
+
+    #[test]
+    fn tsk1002_r14_redirect_terminal_escapes_stay_in_bounds() {
+        for (raw, target) in [
+            (r"notes\", "notes"),
+            (r#""notes\"#, "notes"),
+            (r".git/config\", ".git/config"),
+            (r#"".codeflow/policy.json\"#, ".codeflow/policy.json"),
+            (r"notes-λ.txt\", "notes-λ.txt"),
+            (r"notes\\", r"notes\"),
+            (r"'notes\'", r"notes\"),
+        ] {
+            let chars: Vec<_> = raw.chars().collect();
+            let (word, end) = redirect_word(&chars, 0);
+            assert_eq!(end, chars.len(), "{raw:?}");
+            assert_eq!(word, target, "{raw:?}");
+            let read = redirect_writes(&format!("printf x > {raw}"));
+            assert_eq!(read.targets, [target], "{raw:?}");
+            assert_eq!(read.patterns.len(), 1, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn tsk1002_r15_globstar_keeps_its_leaf_selector() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        std::fs::create_dir_all(root.join("one/two")).unwrap();
+        for file in [
+            "top.md",
+            "one/notes.md",
+            "one/private.jsonl",
+            "one/two/nested.md",
+            "one/two/private.jsonl",
+        ] {
+            std::fs::write(root.join(file), "ordinary or fake private fixture\n").unwrap();
+        }
+        for (pattern, expected) in [
+            ("*/*.md", vec!["one/notes.md"]),
+            (
+                "**/*.md",
+                vec!["top.md", "one/notes.md", "one/two/nested.md"],
+            ),
+            (
+                "**/*.jsonl",
+                vec!["one/private.jsonl", "one/two/private.jsonl"],
+            ),
+        ] {
+            let mut actual = secret_glob_paths(pattern, root).unwrap();
+            let mut expected: Vec<_> = expected.into_iter().map(|path| root.join(path)).collect();
+            actual.sort();
+            expected.sort();
+            assert_eq!(actual, expected, "{pattern}");
+        }
+        // Unmodeled qualifiers retain the conservative private candidate.
+        assert!(secret_glob_paths("**/*.md(D)", root)
+            .unwrap()
+            .contains(&root.join("one/private.jsonl")));
     }
 
     /// From a directory the guard cannot determine, a word is read by its

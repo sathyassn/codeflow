@@ -94,19 +94,9 @@ fn installed_hooks_refuse_secret_path_spellings_without_execution() {
     }
 }
 
-/// Exercise the OS with paths from the installed denyRead list, without
-/// invoking a guard. This is a native macOS primitive test, not a claim that
-/// any running harness adopted the generated profile. Linux/WSL and Windows
-/// need their own native evidence; they do not run this Seatbelt fixture.
 #[cfg(target_os = "macos")]
-#[test]
-fn native_macos_sandbox_denies_stores_and_workspace_hard_secrets() {
+fn native_secret_read_profile(settings: &Value, home: &std::path::Path) -> (String, Vec<PathBuf>) {
     use std::fmt::Write as _;
-    let project = Project::new();
-    let settings: Value =
-        serde_json::from_slice(&std::fs::read(project.root.join(".claude/settings.json")).unwrap())
-            .unwrap();
-    let home = project.home.canonicalize().unwrap();
     let mut profile = String::from("(version 1)(allow default)");
     let mut paths = Vec::new();
     for store in settings["sandbox"]["filesystem"]["denyRead"]
@@ -135,6 +125,22 @@ fn native_macos_sandbox_denies_stores_and_workspace_hard_secrets() {
         .unwrap();
         paths.push(file);
     }
+    (profile, paths)
+}
+
+/// Exercise the OS with paths from the installed denyRead list, without
+/// invoking a guard. This is a native macOS primitive test, not a claim that
+/// any running harness adopted the generated profile. Linux/WSL and Windows
+/// need their own native evidence; they do not run this Seatbelt fixture.
+#[cfg(target_os = "macos")]
+#[test]
+fn native_macos_sandbox_denies_stores_and_leaves_workspace_files_readable() {
+    let project = Project::new();
+    let settings: Value =
+        serde_json::from_slice(&std::fs::read(project.root.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    let home = project.home.canonicalize().unwrap();
+    let (profile, paths) = native_secret_read_profile(&settings, &home);
     for path in &paths {
         success(&Command::new("/bin/cat").arg(path).output().unwrap());
         for spelling in [
@@ -156,18 +162,12 @@ fn native_macos_sandbox_denies_stores_and_workspace_hard_secrets() {
             );
         }
     }
-    // Model the file-tool rule in addition to the store-root denyRead list.
+    // File-tool rules are a separate plane from native store-root denies.
     assert!(settings["permissions"]["deny"]
         .as_array()
         .unwrap()
         .iter()
         .any(|rule| rule == "Read(**/id_rsa*)"));
-    write!(
-        profile,
-        "(deny file-read* (regex {}))",
-        serde_json::to_string(".*/id_rsa[^/]*$").unwrap()
-    )
-    .unwrap();
     let key = project.root.join("id_rsa");
     std::fs::write(&key, "planted fixture\n").unwrap();
     let out = Command::new("/usr/bin/sandbox-exec")
@@ -175,8 +175,8 @@ fn native_macos_sandbox_denies_stores_and_workspace_hard_secrets() {
         .arg(&key)
         .output()
         .unwrap();
-    assert!(!out.status.success(), "sandbox read workspace id_rsa");
-    assert!(out.stdout.is_empty(), "sandbox leaked workspace fixture");
+    success(&out);
+    assert_eq!(out.stdout, b"planted fixture\n");
     for name in ["README.md", ".env"] {
         let path = project.root.join(name);
         std::fs::write(&path, "ordinary fixture\n").unwrap();
@@ -190,8 +190,78 @@ fn native_macos_sandbox_denies_stores_and_workspace_hard_secrets() {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn tsk1002_review2_b06_native_store_profile_leaves_workspace_key_readable() {
+    let project = Project::new();
+    let settings: Value =
+        serde_json::from_slice(&std::fs::read(project.root.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    assert!(settings["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|rule| rule == "Read(**/id_rsa*)"));
+    let (profile, _) = native_secret_read_profile(&settings, &project.home.canonicalize().unwrap());
+    let key = project.root.join("id_rsa");
+    let contents = "fake workspace key fixture\n";
+    std::fs::write(&key, contents).unwrap();
+    let native = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", &profile, "/bin/cat"])
+        .arg(&key)
+        .output()
+        .unwrap();
+    success(&native);
+    assert_eq!(native.stdout, contents.as_bytes());
+    for harness in ["claude", "codex", "grok"] {
+        project.shell(harness, "cat id_rsa", Some("security.secret_reads"));
+    }
+}
+
 #[path = "../support/guard_cases.rs"]
 mod guard_cases;
+
+#[path = "../support/guard_review_cases.rs"]
+mod guard_review_cases;
+
+#[test]
+fn tsk1002_review_installed_hooks_refuse_executable_inputs() {
+    let project = Project::new();
+    guard_review_cases::seed(&project.root, &project.home);
+    #[cfg(unix)]
+    guard_review_cases::seed_links(&project.root, &project.home);
+    let mut wrong = Vec::new();
+    // One representative per mechanism through each installed hook route;
+    // hooks_cli covers the complete payload table and native Windows names.
+    for harness in ["claude", "codex", "grok"] {
+        for finding in [1, 2, 3, 4, 5, 6, 8, 9] {
+            #[cfg(not(unix))]
+            if finding == 8 {
+                continue;
+            }
+            let &(_, owner, command, refuse) = guard_review_cases::CASES
+                .iter()
+                .find(|c| c.0 == finding)
+                .unwrap();
+            let line = guard_review_cases::render(command, &project.root, &project.home);
+            let outputs = project.replay(harness, "Bash", json!({"command":line}));
+            let expected_rule = if owner == "git-guard" || finding == 6 {
+                "git.hook_integrity"
+            } else {
+                "security.secret_reads"
+            };
+            let refused = outputs.iter().any(|out| {
+                out.status.code() == Some(2)
+                    && String::from_utf8_lossy(&out.stderr).contains(expected_rule)
+            });
+            if (refuse && !refused) || (!refuse && outputs.iter().any(|out| !out.status.success()))
+            {
+                wrong.push(format!("{harness}: F{finding}: {line:?}: {outputs:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
 
 #[test]
 fn tsk1002_ac14_installed_hooks_classify_every_planted_case() {

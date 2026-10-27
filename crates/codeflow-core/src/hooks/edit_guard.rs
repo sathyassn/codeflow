@@ -520,6 +520,17 @@ fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> 
                 result.pop();
             }
             Component::Normal(part) => {
+                let name = crate::git::GitName::from_os_str(part);
+                let spelling = if cfg!(windows) {
+                    Some(crate::portable_path::filesystem_spelling(
+                        name.rule_text().map_err(|_| {
+                            EditError("cannot normalize a Windows path component as text".into())
+                        })?,
+                    ))
+                } else {
+                    None
+                };
+                let part = spelling.as_deref().map_or(part, std::ffi::OsStr::new);
                 // A normal component can look like a drive prefix when read
                 // alone (`quoted/C:/tail` on Windows). Pushing it directly
                 // would discard the preceding path. Keep it relative, even
