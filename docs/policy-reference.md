@@ -348,6 +348,27 @@ file and 50 candidate fingerprints, with a five-second time budget. A
 limit warning asks for manual review of the remainder. These limits apply
 only to diagnostics; gitleaks still reads the complete trusted ignore file.
 
+## The Outcome adoption marker
+
+Task and epic records state one value line under `## Outcome`, in the form
+"after this merges, <who> can <do what>" (TSK-435). The rule binds by record
+identity, never by a date, through a marker of two top-level keys in
+`.codeflow/project.toml`:
+
+```toml
+outcome_required_since = "<the project's HEAD when the marker was written>"
+outcome_present_uids = ["<uid of each task and epic record present then>"]
+```
+
+`outcome_present_uids` is the marker; `outcome_required_since` records where
+the project stood and is left out when the project has no commit yet.
+
+- **Who writes it?** The first `codeflow update` of a release that has the section writes it once, listing every task and epic record in the working tree at that moment, committed or not. A fresh `codeflow init` writes it with no records listed. Neither ever rewrites a marker that is present.
+- **What does `validate --docs` do with it?** A complete, cancelled or archived record is never flagged. An open record that states its Outcome is clean. An open record without a filled section is refused when its uid is not listed, and warned about when it is listed or has no uid. A marker that cannot be read refuses an open record without the section.
+- **What about a project with no marker?** Every open record without the section warns and nothing is refused; `codeflow doctor --check config` warns that the marker is missing and names `codeflow update` as the step that writes it.
+- **What stays valid?** No existing record is edited. A record made by an older release, even on the morning of the upgrade, is listed, so it warns until it is next amended. The "Outcome:" sentence some older records carry in their Description stays valid for them.
+- **And an epic's Deliverables?** An open epic whose uid is not listed warns when its `## Deliverables` section names nothing.
+
 ## Where a new key goes
 
 A new policy key lives in the schema registry and the code default only. It

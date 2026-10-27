@@ -432,6 +432,9 @@ fn update_writes(
     if let Some(note) = record_work_records_baseline(root)? {
         report.notes.push(note);
     }
+    if let Some(note) = record_outcome_marker(root)? {
+        report.notes.push(note);
+    }
     // The brownfield hook choice stays visible until the adopter makes it.
     if super::detect::configured_hooks_path(root)?.as_deref()
         == Some(super::detect::CODEFLOW_HOOKS_PATH)
@@ -610,6 +613,62 @@ fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldE
     write_record(root, PROJECT_TOML, next.as_bytes())?;
     Ok(Some(format!(
         "recorded {BASELINE_KEY} = {head}: work-record rules apply to records changed after this commit"
+    )))
+}
+
+/// The Outcome section's adoption marker (TSK-435): written once, by the
+/// first `update` (or `init`) of a release that has the section, as the
+/// top-level `outcome_present_uids`, the `uid` of every task and epic
+/// record in the working tree, committed or not, and
+/// `outcome_required_since`, the project's `HEAD` when it has one. Those
+/// records only warn without the section; every later record must state
+/// it. A marker already present, in any shape, is left as written.
+pub(crate) fn record_outcome_marker(root: &Path) -> Result<Option<String>, ScaffoldError> {
+    use crate::workgraph::outcome::{present_uids, with_marker, MARKER_KEY};
+    let path = ProjectState::path(root);
+    let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
+    let table: toml::Table = toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+        what: path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    if table.contains_key(MARKER_KEY) {
+        return Ok(None);
+    }
+    let uids = present_uids(root).map_err(ScaffoldError::Git)?;
+    let head = match crate::hooks::repo::open(root)
+        .map_err(|error| ScaffoldError::Git(format!("cannot read the repository: {error}")))?
+    {
+        None => None,
+        Some(repo) => match repo.head() {
+            Ok(head) => Some(
+                head.peel_to_commit()
+                    .map_err(|error| {
+                        ScaffoldError::Git(format!("cannot read the adoption commit: {error}"))
+                    })?
+                    .id()
+                    .to_string(),
+            ),
+            // A repository with no commit yet: the marker has no commit.
+            Err(error) if error.code() == git2::ErrorCode::UnbornBranch => None,
+            Err(error) => {
+                return Err(ScaffoldError::Git(format!(
+                    "cannot read the adoption HEAD: {error}"
+                )))
+            }
+        },
+    };
+    let next =
+        super::state::state_text(&with_marker(table, head.as_deref(), &uids)).map_err(|e| {
+            ScaffoldError::InvalidState {
+                what: path.display().to_string(),
+                detail: e.to_string(),
+            }
+        })?;
+    write_record(root, PROJECT_TOML, next.as_bytes())?;
+    Ok(Some(format!(
+        "recorded {MARKER_KEY} with {} present record(s){}: they warn without an `## Outcome` section, and every later open task or epic must state one",
+        uids.len(),
+        head.map(|head| format!(" at {head}")).unwrap_or_default()
     )))
 }
 

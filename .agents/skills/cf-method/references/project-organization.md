@@ -630,10 +630,12 @@ Shared engineering, security, testing, design, and review doctrine stays in
 `AGENTS.md` and the relevant skills. Repeating it in every task creates stale
 checklist theater. A record instantiates only what is specific:
 
-- outcome, audience where relevant, scope, and non-goals;
+- outcome, audience where relevant, scope, and non-goals, with the value
+  line under `## Outcome`;
 - affected capabilities, surfaces, interfaces, and direct dependencies;
 - each task's deliverables and their homes as paths in the project's
-  structure (`## Deliverables`), and the homes an epic's tasks write;
+  structure (`## Deliverables`), and an epic's own `## Deliverables` with
+  the homes its tasks write;
 - testable acceptance criteria and selected evidence;
 - producer and reviewer for non-trivial work;
 - task-specific risk, recovery, test-data, or environment requirements, in

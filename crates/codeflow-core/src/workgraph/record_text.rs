@@ -597,6 +597,22 @@ pub fn names_deliverables(body: &str) -> bool {
         || section_markdown(body, "## Description").is_some_and(|text| names_path(&text))
 }
 
+/// Whether an epic names what it delivers: its `## Deliverables` section
+/// has a substantive entry, read as [`names_deliverables`] reads a task's.
+/// An epic has no Description, so a path elsewhere never counts.
+#[must_use]
+pub fn epic_names_deliverables(body: &str) -> bool {
+    section_markdown(body, "## Deliverables").is_some_and(|text| has_entry(&text))
+}
+
+/// Whether a record states its Outcome (TSK-435): its `## Outcome` section
+/// has a substantive line. Comments never count, so the section as the
+/// template writes it, holding only its comment, states nothing.
+#[must_use]
+pub fn states_outcome(body: &str) -> bool {
+    section_markdown(body, "## Outcome").is_some_and(|text| has_entry(&text))
+}
+
 /// The Markdown of a section as written, with its comment lines blank;
 /// inline HTML stays, so a placeholder such as `<path>` is still seen.
 fn section_markdown(body: &str, heading: &str) -> Option<String> {

@@ -663,8 +663,12 @@ pub fn validate_task(
     }
 
     warns.extend(deliverables_warning(&data, &body_text));
-
     let repo_root = record_repo_root(path);
+    let (outcome_errors, outcome_warnings) =
+        outcome_findings(&data, &body_text, repo_root.as_deref(), false);
+    errs.extend(outcome_errors);
+    warns.extend(outcome_warnings);
+
     errs.extend(awaiting_selection_errors(
         &data,
         &body_text,
@@ -703,6 +707,64 @@ fn deliverables_warning(
         message: "open task names no deliverables: no filled `## Deliverables` section and no path in its Description".into(),
         clearing: &crate::remedy::TASK_DELIVERABLES,
     })
+}
+
+/// The Outcome rule (TSK-435) for one task or epic, and an epic's
+/// Deliverables: a record whose status is terminal is never flagged; an
+/// open record that states its Outcome is clean. Otherwise the project's
+/// adoption marker decides: a record created after adoption (its uid not
+/// listed) is refused, a record present at adoption or one with no uid
+/// warns, a project with no marker warns, and a marker that cannot be
+/// read refuses. An epic created after adoption also warns when it names
+/// no Deliverables.
+fn outcome_findings(
+    data: &HashMap<String, serde_yaml::Value>,
+    body: &str,
+    repo_root: Option<&Path>,
+    epic: bool,
+) -> (Vec<ValidationError>, Vec<ValidationWarning>) {
+    use crate::workgraph::outcome::{Adoption, MARKER_KEY};
+    use crate::workgraph::record_text::{epic_names_deliverables, states_outcome};
+
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    if matches!(
+        get_string_field(data, "status").as_str(),
+        "complete" | "cancelled" | "archived"
+    ) {
+        return (errors, warnings);
+    }
+    let adoption = repo_root.map_or(Adoption::Unmarked, Adoption::of);
+    let uid = get_string_field(data, "uid");
+    let later = matches!(&adoption, Adoption::Marked(present) if !uid.is_empty() && !present.contains(&uid));
+    if !states_outcome(body) {
+        let warn = || ValidationWarning {
+            field: "outcome".into(),
+            message: "open record has no filled `## Outcome` section".into(),
+            clearing: &crate::remedy::RECORD_OUTCOME,
+        };
+        match &adoption {
+            Adoption::Unreadable(why) => errors.push(ValidationError {
+                field: "outcome".into(),
+                message: format!(
+                    "cannot tell whether this record must state its `## Outcome`: {why}; fix `{MARKER_KEY}` in .codeflow/project.toml or add the section"
+                ),
+            }),
+            _ if later => errors.push(ValidationError {
+                field: "outcome".into(),
+                message: "record created after this project adopted the `## Outcome` section has none filled; add one line under `## Outcome`: after this merges, <who> can <do what>".into(),
+            }),
+            _ => warnings.push(warn()),
+        }
+    }
+    if epic && later && !epic_names_deliverables(body) {
+        warnings.push(ValidationWarning {
+            field: "deliverables".into(),
+            message: "open epic names no deliverables: no filled `## Deliverables` section".into(),
+            clearing: &crate::remedy::EPIC_DELIVERABLES,
+        });
+    }
+    (errors, warnings)
 }
 
 /// The repository root of a record under `project-management/`.
@@ -867,6 +929,12 @@ pub fn validate_epic(
         });
     }
 
+    let body_text = String::from_utf8_lossy(&body);
+    let (outcome_errors, outcome_warnings) =
+        outcome_findings(&data, &body_text, record_repo_root(path).as_deref(), true);
+    errs.extend(outcome_errors);
+    warns.extend(outcome_warnings);
+
     Ok((errs, warns))
 }
 
@@ -954,6 +1022,9 @@ pub(crate) fn open_questions(
 }
 
 #[cfg(test)]
+mod outcome_tests;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn r21_frontmatter_refuses_undecodable_target_identity() {
@@ -1016,6 +1087,9 @@ depends_on: []
 ## Description
 Some description
 
+## Outcome
+after this merges, a tester can check the task
+
 ## Deliverables
 - the change: `crates/codeflow-core/src/`
 
@@ -1035,6 +1109,9 @@ priority: "high"
 ---
 ## Summary
 Summary
+
+## Outcome
+after this merges, a tester can check the epic
 
 ## Acceptance Criteria
 Criteria

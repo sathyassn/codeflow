@@ -184,6 +184,11 @@ fn init_writes(
         ),
     };
     state.store(root)?;
+    // The Outcome section's adoption marker (TSK-435): a fresh project lists
+    // no record, so every record it creates must state its Outcome.
+    if let Some(note) = super::update::record_outcome_marker(root)? {
+        report.notes.push(note);
+    }
 
     // Phase 2: install manifest entries for this tier + preset.
     let mut installed = InstalledManifest::load_or_default(root, &opts.binary_version)?;

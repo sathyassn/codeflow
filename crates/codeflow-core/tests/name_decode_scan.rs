@@ -628,6 +628,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
+    // Body bytes come from strict parse_frontmatter; the Outcome and Deliverables sections are read from already validated UTF-8, never lossy record identities.
+    (
+        "codeflow-core/src/validate/mod.rs",
+        "validate_epic",
+        "from_utf8_lossy",
+        1,
+        "format-contract",
+    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/validate/portal.rs",

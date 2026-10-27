@@ -1702,6 +1702,24 @@ fn check_config(opts: &Options) -> CheckResult {
         };
     }
 
+    // The Outcome section's adoption marker (TSK-435): without it every
+    // record missing the section only warns, so say how to write it.
+    let root = Path::new(&opts.project_dir);
+    // A project with no state file has nothing for `update` to mark.
+    let stateless = crate::absence::proven_absent(&root.join(crate::scaffold::state::PROJECT_TOML))
+        .unwrap_or(false);
+    if !stateless
+        && crate::workgraph::outcome::Adoption::of(root)
+            == crate::workgraph::outcome::Adoption::Unmarked
+    {
+        return CheckResult {
+            name: "config".into(),
+            status: Status::Warn(remedy::DOCTOR_OUTCOME_MARKER.remedy()),
+            message: "all .codeflow/ JSON files are valid; .codeflow/project.toml has no `outcome_present_uids` marker, so a task or epic without an `## Outcome` section only warns".into(),
+            duration: start.elapsed(),
+        };
+    }
+
     CheckResult {
         name: "config".into(),
         status: Status::Pass,
