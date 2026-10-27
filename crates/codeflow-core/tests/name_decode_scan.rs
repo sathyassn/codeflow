@@ -263,7 +263,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // process output shown to a person, never compared
     (
         "codeflow-core/src/doctor/mod.rs",
-        "run_captured",
+        "run_captured_with",
         "from_utf8_lossy",
         2,
         "display",
@@ -1521,6 +1521,89 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-452: doctor's preflight report only prints evidence and decides
     // nothing. A missing or misread catalog, settings file or PATH entry is
     // printed as unavailable, never as configured or observed.
+    // TSK-1003: the trusted folders for a holder record's dir come from the
+    // project folder; a project outside any repository simply adds no git
+    // worktrees, which only shows more folders as unknown.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "trusted_dirs",
+        "obtain-absent:Repository::discover",
+        1,
+        "display",
+    ),
+    // TSK-1003: a dir value and the trusted folders are compared without
+    // trailing path separators, as text; it only decides whether a folder
+    // the gate trusts is shown.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "trimmed_dir",
+        "trim_end_matches",
+        1,
+        "display",
+    ),
+    // TSK-1003: a probe whose stdout is not UTF-8 is unavailable to a
+    // caller that judges the whole output, never decoded lossily for it.
+    (
+        "crates/codeflow-core/src/doctor/mod.rs",
+        "run_captured_with",
+        "obtain-absent:from_utf8",
+        1,
+        "format-contract",
+    ),
+    // TSK-1003: an unreadable Codex config reports the builder profile line
+    // unavailable and runs nothing. Codex's refusal text is trimmed only to
+    // print it. Its version line and feature table are read by their
+    // format: a line that does not fit makes the line unavailable, never
+    // accepted.
+    (
+        "crates/codeflow-cli/src/cmd/doctor.rs",
+        "codex_builder_line",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "load",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "load",
+        "trim",
+        2,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "cli_version",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "feature_table",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "cli_version",
+        "trim",
+        2,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "feature_table",
+        "trim",
+        1,
+        "format-contract",
+    ),
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
         "find_on_path",
@@ -3890,7 +3973,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // A non-string schema_version becomes unsupported version Err; the empty placeholder is never an accepted default. run_gate propagates UnsupportedSchemaVersion as TestingError.
     (
         "crates/codeflow-core/src/testing/config/mod.rs",
-        "load_test_config",
+        "parse_test_config",
         "obtain-absent:as_str",
         1,
         "unproven",
@@ -4082,7 +4165,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Displays a holder snapshot and start time only; neither admission nor process-group identity uses these values.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
-        "gate_lock_status",
+        "holder_status",
         "lines",
         1,
         "display",
@@ -4090,10 +4173,18 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Displays empty records and a numeric start time; this query never acquires or reclaims a lock.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
-        "gate_lock_status",
+        "holder_status",
         "trim",
         2,
         "display",
+    ),
+    // TSK-1003: the holder record is parsed by its exact LF-separated key=value format; any line outside it refuses the whole record, so only parsed fields are shown.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "parse_record",
+        "split_terminator",
+        1,
+        "format-contract",
     ),
     // Explicit LF records and exact decimal group= values preserve the lock format; whitespace cannot change a process group identity.
     (
@@ -6616,7 +6707,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
-    ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor never runs it."),
+    ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
@@ -6647,7 +6738,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/absence.rs", "refuses_name", "ErrorKind::InvalidFilename", 2, "A refused name proves no entry only where the kind is the platform's refusal of the name: on Windows only raw codes 123 and 161 (windows_error_refuses_name), never 206, the legacy MAX_PATH limit a long-path-aware process can pass; on Unix ENAMETOOLONG, the kernel's refusal."),
     ("crates/codeflow-core/src/absence.rs", "refuses_name", "ErrorKind::NotADirectory", 1, "A component that is not a directory holds no entry; the caller reads every other error as a failure."),
     ("crates/codeflow-core/src/absence.rs", "symlink_metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; other errors propagate."),
-    ("crates/codeflow-core/src/bounded_file.rs", "read_bounded_regular_with_hook", "is_file", 1, "Type check on symlink_metadata obtained with its error propagated; false returns an InvalidData error."),
+    ("crates/codeflow-core/src/bounded_file.rs", "read_bounded_regular_with_hooks", "is_file", 1, "Type check on symlink_metadata obtained with its error propagated; false returns an InvalidData error."),
+    ("crates/codeflow-core/src/bounded_file.rs", "reopened_identity", "is_file", 2, "Windows only, on no-follow metadata and on a handle reopened with the reparse-point flag, errors propagated: a path that is not a regular file returns no identity and read_opened_regular refuses it; a reopened handle that is not a regular file refuses with InvalidData (TSK-1020)."),
     ("crates/codeflow-core/src/bounded_file.rs", "read_opened_regular", "is_file", 2, "Both check metadata of the opened file obtained with errors propagated; false refuses with InvalidData."),
     ("crates/codeflow-core/src/bounded_file/confined.rs", "open_locked", "is_dir", 1, "Type check on the opened handle's metadata, obtained with its error propagated; a mismatch returns invalid()."),
     ("crates/codeflow-core/src/bounded_file/confined.rs", "open_locked", "is_file", 1, "Type check on the opened handle's metadata, obtained with its error propagated; a mismatch returns invalid()."),
@@ -6794,6 +6886,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/contained.rs", "Tree::write_with_hook", "is_file", 1, "Type check on metadata from platform::metadata with errors propagated."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "ErrorKind::NotFound", 1, "A no-follow stat not finding the leaf in the held parent proves it missing; the create then opens without following links, and other errors propagate."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "is_file", 3, "Type checks on metadata obtained with propagated errors (platform::metadata and the opened file's metadata on each platform)."),
+    ("crates/codeflow-core/src/contained.rs", "platform::create_read_only", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular lock file is refused, never read as absent."),
+    ("crates/codeflow-core/src/contained.rs", "platform::open_regular", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_dir", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_file", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),
     ("crates/codeflow-core/src/scaffold/pr_template.rs", "automation_notes", "is_file", 1, "The result only adds Dependabot or Renovate report notes on init; the function is read-only and feeds no decision."),
@@ -6819,6 +6913,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_all_checks", "exists", 1, "False returns a Fail config-exists check, so an unreadable path is never passed; a present config is then loaded by load_test_config, which refuses a dangling leaf."),
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_target_checks", "exists", 1, "Only picks Pass or Warn text for a coverage exception path; exceptions are matched by path name in threshold evaluation and never read from disk."),
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_target_checks", "is_dir", 1, "False yields a Fail cwd-exists check, so an unreadable or dangling target directory is reported failing, never passed."),
+    ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "ErrorKind::NotFound", 1, "Only a NotFound from symlink_metadata on the named path becomes ConfigNotFound, a refusal; every other error refuses as unreadable (TSK-1020)."),
+    ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "is_file", 1, "Read from symlink_metadata after links are refused; false refuses the named config as not regular, and the bounded no-follow reader rechecks the opened file (TSK-1020)."),
     ("crates/codeflow-core/src/testing/gate.rs", "copy_evidence", "is_dir", 1, "The entry file_type acquisition propagates errors before choosing recursive versus file copy."),
     ("crates/codeflow-core/src/testing/runner/mod.rs", "run_owed_target", "exists", 4, "One guards removing a stale report that feeds only the display summary; one false fails the target; two pick evidence copies, and the gate rereads the original paths."),
     ("crates/codeflow-core/src/testing/setup/detect.rs", "detect_go", "try_exists", 1, "try_exists propagates metadata errors; only a dangling go.mod link reads false, which only drops a proposed target from a starting config the tool could not build anyway."),

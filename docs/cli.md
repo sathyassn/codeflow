@@ -209,6 +209,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--since <SINCE>` | Compare the entire candidate delta with a recorded green base. Without --since, full mode executes every target. Default: the merge base of HEAD and the task's declared integration target. An unproven base conservatively runs every target. |
 | | `--all` | Run every target, including the binary determinism check at epic close. With `--only`, the named targets keep that full-strength check. |
 | | `--only <TARGET>...` | Run only these targets and their prerequisites, comma separated or repeated, to split one gate across parallel CI jobs. A limited run is never recorded as complete evidence, and an unknown name is refused before any target starts. |
+| | `--config <PATH>` | Read the targets from this test config file instead of `.codeflow/test-config.json`, with no fallback to it or to stack detection; targets still run in this repository. A missing path, a symbolic link or a file that is not regular or readable is refused before any target starts. |
 | `codeflow test setup` | | Configure `.codeflow/test-config.json` using root detection, an embedded template, or an appended target. Safe auto-detection is the default |
 | | `--list-templates` | List the test-config templates embedded in this binary. |
 | | `--template <NAME>` | Write an embedded test-config template by name. |
