@@ -370,6 +370,64 @@ fn a_blocked_reopened_task_and_its_epic_close_in_one_valid_sequence() {
         "the archive is chronological:\n{archive}"
     );
 
+    // Negative controls (TSK-340 review round 1): an archived block that no
+    // completion made, and an archived result rewritten by hand, are
+    // refused by the verb and by CI.
+    let todo_record = git(&root, &["show", &format!("{refixed}:{TASK}")]) + "\n";
+    let invented = format!(
+        "\n```yaml\nacceptance_superseded:\n  reason: invented\n  reviewed: {}\n  review: session:sequence@sha256:02\n  criteria:\n    AC-1: verified | invented\n    AC-2: verified | invented\n  journey: verified | invented\n  not_verified: none\n  follow_ups: none: invented\n  verdict: approved\n```\n",
+        "f".repeat(40)
+    );
+    let again_inner = std::fs::read_to_string(&again_block).unwrap();
+    for (fault, record, reason) in [
+        (
+            "invented",
+            format!("{}{invented}", todo_record.trim_end_matches('\n')),
+            "is not the active block of any completion",
+        ),
+        (
+            "rewritten",
+            todo_record.replacen(
+                "AC-1: verified | first run",
+                "AC-1: waived | not-a-commit",
+                1,
+            ),
+            "acceptance_superseded",
+        ),
+    ] {
+        let branch = format!("task/TSK-001-{fault}-archive");
+        git(&root, &["switch", "-q", "-c", &branch, &refixed]);
+        std::fs::write(root.join(TASK), &record).unwrap();
+        commit(&root, "docs(records): edit the archive by hand");
+        fails(
+            &status(
+                &root,
+                "task",
+                "TSK-001",
+                &["complete", "--acceptance", &again_block],
+            ),
+            &format!("the verb on an {fault} archive"),
+            reason,
+        );
+        std::fs::write(
+            root.join(TASK),
+            format!(
+                "{}\n```yaml\n{again_inner}```\n",
+                record
+                    .replacen("status: todo", "status: complete", 1)
+                    .trim_end_matches('\n')
+            ),
+        )
+        .unwrap();
+        commit(&root, "chore: complete TSK-001 by hand");
+        fails(
+            &task_ci(&root, &branch, "TSK-001"),
+            &format!("CI on an {fault} archive"),
+            reason,
+        );
+    }
+    git(&root, &["switch", "-q", again]);
+
     let note = "plan/epic-note";
     git(&root, &["switch", "-q", "-c", note, LINE]);
     edit(
@@ -841,5 +899,109 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
         &task_ci(&root, landed, "TSK-002"),
         "its pull request",
         named,
+    );
+}
+
+/// Issue #217, comment of 2026-10-26: the two-base shape. Two tasks are
+/// complete on `main` through a checkpoint; the line reopens and completes
+/// each again through its own task pull request, with reviews that exist
+/// only on the line; the second fix merges the line after its review, so
+/// the other task's records-only completion arrives after that review;
+/// then the line merges `main`. `task status`, each task pull request's
+/// `codeflow ci` and the line's pull request into `main` accept both, and
+/// a tampered archive or a product edit after the review stays refused.
+#[test]
+#[allow(clippy::too_many_lines)] // One fixture keeps the two-base sequence and its controls in order.
+fn two_tasks_complete_on_main_are_completed_again_on_the_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let main = planned_project(&root, true);
+    for (task, file) in [("TSK-001", "src/first.rs"), ("TSK-002", "src/second.rs")] {
+        let branch = format!("task/{task}-work");
+        git(&root, &["switch", "-q", "-c", &branch, LINE]);
+        ok(&codeflow(&root, &["work", "start", task]), "work start");
+        write(&root, file, "pub fn added() {}\n");
+        let reviewed = commit(&root, "feat: add a function");
+        let first = task_block(dir.path(), task, &reviewed, "verified | first run");
+        ok(
+            &status(&root, "task", task, &["complete", "--acceptance", &first]),
+            "complete",
+        );
+        commit(&root, "chore: complete the task");
+        ok(&task_ci(&root, &branch, task), "task PR CI");
+        merge(&root, LINE, &branch, "chore: land the task");
+    }
+    host_merge(&root, &main, LINE);
+
+    // Each task reopens and completes again on the line; the second fix
+    // merges the line, which now holds the first fix, after its review.
+    let fixes = [
+        ("TSK-001", "src/first.rs", "task/TSK-001-again"),
+        ("TSK-002", "src/second.rs", "task/TSK-002-again"),
+    ];
+    for (task, file, branch) in fixes {
+        git(&root, &["switch", "-q", "-c", branch, LINE]);
+        ok(
+            &status(&root, "task", task, &["todo", "--reason", "line regression"]),
+            "reopen on the line",
+        );
+        commit(&root, "chore: reopen on the line");
+        ok(&codeflow(&root, &["work", "start", task]), "work start");
+        write(&root, file, "pub fn fixed() {}\n");
+        let reviewed = commit(&root, "fix: repair on the line");
+        let again = task_block(dir.path(), &format!("{task}-again"), &reviewed, "verified | line run");
+        ok(
+            &status(&root, "task", task, &["complete", "--acceptance", &again]),
+            "complete on the line",
+        );
+        commit(&root, "chore: complete on the line");
+        ok(&task_ci(&root, branch, task), "each fix PR before either lands");
+        git(&root, &["switch", "-q", LINE]);
+    }
+    merge(&root, LINE, "task/TSK-001-again", "chore: land the first fix");
+    git(&root, &["switch", "-q", "task/TSK-002-again"]);
+    git(&root, &["merge", "-q", "--no-ff", LINE, "-m", "chore: merge the line"]);
+    let merged = git(&root, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        git(&root, &["rev-list", "--count", "--parents", "-1", "--merges", &merged]),
+        "1",
+        "the line merge is a real merge"
+    );
+    ok(
+        &task_ci(&root, "task/TSK-002-again", "TSK-002"),
+        "the second fix PR after the other task's completion arrived",
+    );
+
+    // Negative control: a product edit after the review.
+    git(&root, &["switch", "-q", "-c", "task/TSK-002-late", &merged]);
+    write(&root, "src/second.rs", "pub fn unreviewed() {}\n");
+    commit(&root, "feat: change after the review");
+    fails(
+        &task_ci(&root, "task/TSK-002-late", "TSK-002"),
+        "a product edit after the review",
+        "src/second.rs changed",
+    );
+    merge(&root, LINE, "task/TSK-002-again", "chore: land the second fix");
+
+    // `main` moves on, and the line merges it.
+    git(&root, &["switch", "-q", "-c", "docs/main-note", &main]);
+    write(&root, "docs/note.md", "# Note\n\nMain moved on.\n");
+    commit(&root, "docs: add a note on main");
+    host_merge(&root, &main, "docs/main-note");
+    git(&root, &["switch", "-q", LINE]);
+    git(&root, &["merge", "-q", "--no-ff", &main, "-m", "chore: merge main into the line"]);
+    let synced = git(&root, &["rev-parse", "HEAD"]);
+    ok(&line_ci(&root, &main), "the line into main after the sync");
+
+    // Negative control: a planning pull request that rewrites an archived
+    // result.
+    git(&root, &["switch", "-q", "-c", "plan/tamper-two-base", &synced]);
+    edit(&root, TASK, "AC-1: verified | first run", "AC-1: waived | not-a-commit");
+    commit(&root, "docs(records): edit the archive by hand");
+    fails(
+        &planning_ci(&root, "plan/tamper-two-base"),
+        "a rewritten archive on the line",
+        "acceptance_superseded",
     );
 }

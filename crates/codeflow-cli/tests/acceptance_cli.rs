@@ -2593,6 +2593,67 @@ fn a_completion_reopened_in_its_own_range_stacks_a_clean_line_merge() {
     }
 }
 
+/// TSK-340 review round 1: the clean target merge that a reopening range
+/// may now stack after its review never brings in a waiver the review did
+/// not see. The target amends AC-1 and restores it after the review; the
+/// fix branch merges it cleanly and names the amendment as its waiver. The
+/// verb and CI refuse it, for a reopen of a landed completion and for one
+/// made inside its own range (R-60).
+#[test]
+fn a_clean_line_merge_never_brings_a_late_target_waiver() {
+    for in_range in [false, true] {
+        let (dir, archived) = if in_range {
+            reopened_in_its_own_range()
+        } else {
+            let (dir, _, archived) = one_pr_fix();
+            (dir, archived)
+        };
+        let root = dir.path();
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        git(root, &["switch", "main"]);
+        let path = record_path("TSK-001");
+        let on_main = std::fs::read_to_string(root.join(&path)).unwrap();
+        write(
+            root,
+            &path,
+            &on_main.replacen("shall work.", "shall mostly work.", 1),
+        );
+        let amendment = commit(root, "docs(records): amend TSK-001 AC-1");
+        write(root, &path, &on_main);
+        commit(root, "docs(records): restore TSK-001 AC-1");
+        git(root, &["switch", "task/TSK-001-fix"]);
+        git(
+            root,
+            &["merge", "--no-ff", "-m", "chore: merge line", "main"],
+        );
+        let waiver = block(
+            &reviewed,
+            &[
+                &format!("AC-1: waived | {amendment}"),
+                "AC-2: verified | journey",
+            ],
+            "verified | journey",
+            "none: done",
+        );
+        let closeout = format!("{archived}{waiver}");
+        write(
+            root,
+            &path,
+            &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+        );
+        let verb = status_complete(root, "TSK-001");
+        complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+        for result in [verb, ci(root, "task/TSK-001-fix", "TSK-001")] {
+            assert_blocks(
+                &result,
+                &format!("a late target waiver (in range: {in_range})"),
+                &["AC-1 waiver", "which the reviewed commit does not contain"],
+            );
+        }
+    }
+}
+
 /// Amend AC-1 on the fix branch, restore it, review a fix and complete with
 /// AC-1 waived by that own-branch amendment; returns the verb and CI.
 fn waive_by_own_amendment(root: &Path, archived: &str) -> [(i32, String); 2] {
