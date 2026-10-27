@@ -125,16 +125,17 @@ each batch.
   Each reopen appends the block it supersedes to one chronological
   archive, so the record reads the same against the line and against
   `main`. Archived blocks stay byte for byte (only a validated redaction
-  rewords one), and each block the range archives must be the active
-  block of a completion the range's history made. A reopening pull
+  rewords one), and the blocks the range archives are every completion
+  its history made, in order, none missing, each with real provenance (a
+  reviewed commit and waiver commits it contains). An archived
+  completion is not judged again: reopening is how a completion that
+  failed its binding is repaired. A reopening pull
   request takes the same clean target merge after its review as any task
   pull request, and the same per-commit walk: a post-review edit to any
-  other path, even one reverted later, needs a new review. In a task pull
-  request a waiver names an amendment the reviewed commit contains, on
-  the target as in the branch, so a merge after the review never brings
-  one in; only a completion made after the task landed may waive a later
-  planning amendment of its line. A
-  completion's span ends at the completion, and the epic's Closeout rides its own
+  other path, even one reverted later, needs a new review. A waiver names
+  an amendment the reviewed commit contains, on the target as in the
+  branch, so no merge after the review, whichever way its parents run,
+  brings one in. A completion's span ends at the completion, and the epic's Closeout rides its own
   planning pull request, since a completion commit changes only its own
   record. A reopen of a landed completion keeps its criteria, so its
   waiver names a planning commit on the target; a reopen of a completion
