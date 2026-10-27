@@ -1993,6 +1993,17 @@ mod tests {
                 "z; timeout 5 \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
                 "z; builtin command python3 /abs/read_dir.py \"$PWD/src/..\"",
                 "z; env -u X \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                // C11-1, C11-2, SR7-1: a launcher whose options are not
+                // parsed, or an unmodeled wrapper, keeps its words as
+                // operands, and that finding is never skipped.
+                "z; builtin command ${P:-python3} /abs/read_dir.py \"$PWD/src/..\"",
+                "z; builtin command \"$P\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; env -S \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; env -S \"python3 /abs/read_dir.py $PWD/src/..\"",
+                "z; env env -S \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; command env -S \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; builtin command ${P:-python3} /abs/read_dir.py \"$PWD/src/..\"; python3 -V",
+                "z; env -S \"python3 /abs/read_dir.py $PWD/src/..\"; python3 -V",
                 // C10-2: `~` after a command that may change `HOME`.
                 "z; python3 x.py ~/settings.json",
                 "z\npython3 x.py ~/settings.json",
@@ -2010,6 +2021,13 @@ mod tests {
             &repo,
             &[
                 "x=café; python3 x.py notes.txt",
+                // Ordinary commands with expansions stay allowed (round 11).
+                "echo \"$HOME\"",
+                "echo $PATH",
+                "ls ~",
+                "git log --since=\"$D\" --oneline",
+                "grep -rn \"$PAT\" src",
+                "cargo test -p \"$CRATE\"",
                 "printf -v p %s notes.txt; python3 x.py notes.txt",
                 "p=notes.txt; python3 x.py \"$p\"",
             ],

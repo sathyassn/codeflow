@@ -102,7 +102,15 @@ pub(crate) fn evaluate(
     // never saw (TSK-397 security review SR2-1).
     let lexed = super::shell_lex::lex(line);
     let opaque = opaque || lexed.opaque || lexed.current_shell;
-    if calls.is_empty() && !runs && !opaque && outward::interpreter_bodies(line).is_empty() {
+    // The lexer's possible calls are read before any early return, so its
+    // findings are never skipped (TSK-397 Codex review round 11).
+    let reading = outward::read_line(&lexed);
+    if calls.is_empty()
+        && !runs
+        && !opaque
+        && reading.operands.is_empty()
+        && outward::interpreter_bodies(line).is_empty()
+    {
         return Vec::new();
     }
     let line_dirs = outward::line_directories(line, payload_cwd, home);
@@ -124,7 +132,6 @@ pub(crate) fn evaluate(
     // no variable is trusted, `HOME` included, since a function the line
     // runs may change it (TSK-397 Codex review rounds 8 to 10).
     if line_dirs.unknown {
-        let reading = outward::read_line(&lexed);
         if let Some(word) = reading.derived.as_ref() {
             reaches.push(Reach::Enforcement(format!(
                 "an interpreter argument `{}` is filled in at run time on a line where the guard cannot follow the directory",

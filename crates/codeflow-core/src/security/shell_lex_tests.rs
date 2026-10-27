@@ -3,8 +3,8 @@
 //! where another guard check would still refuse the whole line (security
 //! review SR6-4).
 
-use super::{lex, Token};
-use crate::security::outward::read_line;
+use super::{lex, Token, WRAPPERS};
+use crate::security::outward::{read_line, LEXER_LAUNCHERS, MODELED_LAUNCHERS};
 
 fn word(line: &str, command: usize, at: usize) -> Token {
     lex(line).commands[command][at].clone()
@@ -36,6 +36,7 @@ fn unmodeled_constructs_are_opaque() {
         "x <<`x`\n`x`",
         "x \"$(( '1' ))\"",
         "x \"$((echo 1) )\"",
+        "x $((echo 1) )",
         "x \"$(( \\\\ ))\"",
         "x \"${x:-'}'}\"",
         "x 'unclosed",
@@ -120,4 +121,57 @@ fn a_header_returns_to_command_position() {
         assert!(read_line(&lex(line)).moves, "{line}");
     }
     assert!(!read_line(&lex("for x in a b; do python3 r.py \"$x\"; done")).moves);
+}
+
+/// Every launcher the guard models, in either reader, and every GNU-prefixed
+/// name it maps to one, is a wrapper: a launcher added later cannot be
+/// missed (TSK-397 Codex review round 11).
+#[test]
+fn every_modeled_launcher_is_a_wrapper() {
+    for name in LEXER_LAUNCHERS.iter().chain(MODELED_LAUNCHERS) {
+        assert!(WRAPPERS.contains(name), "{name}");
+        let prefixed = format!("g{name}");
+        if crate::hooks::git_guard::launcher_name(&prefixed) == *name {
+            assert!(WRAPPERS.contains(&prefixed.as_str()), "{prefixed}");
+        }
+    }
+    for name in [
+        "builtin",
+        "sudo",
+        "doas",
+        "eval",
+        "noglob",
+        "nocorrect",
+        "-",
+    ] {
+        assert!(WRAPPERS.contains(&name), "{name}");
+    }
+}
+
+/// C11-1, SR7-1: under each wrapper kind, an expanded program name or a
+/// split command string keeps every remaining word as an operand, at the
+/// top level and nested.
+#[test]
+fn wrappers_keep_expanded_names_and_split_strings() {
+    for line in [
+        "builtin command ${P:-python3} r.py \"$PWD\"",
+        "builtin command \"$P\" r.py \"$PWD\"",
+        "env -S \"${P:-python3}\" r.py \"$PWD\"",
+        "env -S \"python3 r.py $PWD\"",
+        "env env -S \"${P:-python3}\" r.py \"$PWD\"",
+        "command env -S \"${P:-python3}\" r.py \"$PWD\"",
+        "/usr/bin/env -S \"python3 r.py $PWD\"",
+        "sudo \"$P\" r.py \"$PWD\"",
+        "eval \"$P\" r.py \"$PWD\"",
+        "genv -S \"python3 r.py $PWD\"",
+    ] {
+        let reading = read_line(&lex(line));
+        assert!(reading.moves, "{line}");
+        assert!(reading.derived.is_some(), "{line}: {reading:?}");
+    }
+    // An ordinary command keeps its words to itself.
+    for line in ["echo \"$HOME\"", "ls ~", "cargo test -p \"$CRATE\""] {
+        let reading = read_line(&lex(line));
+        assert!(reading.operands.is_empty(), "{line}: {reading:?}");
+    }
 }

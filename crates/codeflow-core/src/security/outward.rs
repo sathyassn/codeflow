@@ -1020,6 +1020,26 @@ const HOOK_VARIABLES: &[&str] = &[
     "zshexit_functions",
 ];
 
+/// The launchers [`read_line`] reads through by their own option grammar,
+/// by their base name (a path or GNU-prefixed name maps to it). Every one
+/// must also be in the lexer's wrapper list, which a test asserts.
+pub(crate) const LEXER_LAUNCHERS: &[&str] = &[
+    "command",
+    "exec",
+    "nohup",
+    "nice",
+    "stdbuf",
+    "time",
+    "xargs",
+    "caffeinate",
+    "xcrun",
+    "ionice",
+    "timeout",
+    "env",
+    "noglob",
+    "nocorrect",
+];
+
 /// What the shell runs on a lexed line: whether any command may move it
 /// somewhere the guard cannot follow, and each interpreter call's operands.
 /// A program word counts only when fully unquoted and literal, and only an
@@ -1029,9 +1049,10 @@ const HOOK_VARIABLES: &[&str] = &[
 pub(crate) fn read_line(lexed: &super::shell_lex::Lexed) -> super::shell_lex::Reading {
     let launcher = |program: &str, rest: &[String]| -> Option<usize> {
         let name = crate::hooks::git_guard::launcher_name(program);
+        if !LEXER_LAUNCHERS.contains(&name) {
+            return None;
+        }
         match name {
-            "command" | "exec" | "nohup" | "nice" | "stdbuf" | "time" | "xargs" | "caffeinate"
-            | "xcrun" | "ionice" => skip_launcher_options(name, rest),
             "timeout" => skip_launcher_options(name, rest).map(|from| from + 1),
             "env" => env_options(
                 rest,
@@ -1039,7 +1060,7 @@ pub(crate) fn read_line(lexed: &super::shell_lex::Lexed) -> super::shell_lex::Re
                 &mut Vec::new(),
             ),
             "noglob" | "nocorrect" => Some(0),
-            _ => None,
+            _ => skip_launcher_options(name, rest),
         }
     };
     super::shell_lex::read(
@@ -1383,7 +1404,7 @@ fn argv(
 }
 
 /// The launchers `argv` unwraps, read by their bare name.
-const MODELED_LAUNCHERS: &[&str] = &[
+pub(crate) const MODELED_LAUNCHERS: &[&str] = &[
     "env",
     "command",
     "builtin",

@@ -717,6 +717,47 @@ const RESERVED: &[&str] = &[
     "[[", "]]",
 ];
 
+/// Every program name that runs another program from its operands, as far
+/// as the guard knows names: each modeled launcher
+/// ([`super::outward::LEXER_LAUNCHERS`], [`super::outward::MODELED_LAUNCHERS`])
+/// and its GNU-prefixed form,
+/// `builtin`, `sudo`, `doas`, `eval` and the zsh precommands. Where launcher
+/// traversal stops at one of these (an option it does not parse, such as
+/// `env -S`, or a wrapper it does not model), the remaining words are judged
+/// as an interpreter's possible operands. An unknown function used as a
+/// wrapper is outside this list by construction: command text cannot name
+/// it, and the PR states it as a residual (TSK-397 Codex review round 11).
+const WRAPPERS: &[&str] = &[
+    "builtin",
+    "command",
+    "exec",
+    "nohup",
+    "nice",
+    "timeout",
+    "stdbuf",
+    "time",
+    "env",
+    "xargs",
+    "caffeinate",
+    "xcrun",
+    "ionice",
+    "setsid",
+    "unbuffer",
+    "noglob",
+    "nocorrect",
+    "-",
+    "sudo",
+    "doas",
+    "eval",
+    "genv",
+    "gtimeout",
+    "gnice",
+    "gnohup",
+    "gstdbuf",
+    "gtime",
+    "gxargs",
+];
+
 /// Reserved words whose whole simple command is a header, not a command
 /// that runs: `for NAME in ...`, `select`, `case WORD in`.
 const HEADERS: &[&str] = &["for", "select", "case"];
@@ -829,14 +870,20 @@ pub(crate) fn read(
             }
             Program::Stopped(remaining, depth) => {
                 reading.moves = true;
-                // Traversal stopped where an interpreter may still run: inside
-                // a launcher, at a quoted, escaped or expanded word, or before
-                // a later word that names one (`builtin command python3`).
-                // Every remaining word is then judged as its operand; none is
-                // dropped (TSK-397 Codex review rounds 9 and 10).
-                let stop_plain = remaining.first().is_some_and(Token::plain);
-                let later = remaining[1..].iter().any(|w| interpreter(&w.text));
-                if depth > 0 || !stop_plain || later {
+                // Traversal stopped where a program may run an interpreter
+                // with the words after it: inside a launcher, at a quoted or
+                // expanded word, or at a launcher or wrapper whose options it
+                // does not parse (`env -S`, `builtin command`). Every
+                // remaining word is judged as a possible operand there; none
+                // is dropped (TSK-397 Codex review rounds 9 to 11).
+                let stop = remaining.first();
+                if depth > 0
+                    || stop.is_some_and(|w| {
+                        !w.plain()
+                            || WRAPPERS.contains(&w.text.as_str())
+                            || WRAPPERS.contains(&crate::hooks::git_guard::launcher_name(&w.text))
+                    })
+                {
                     reading
                         .operands
                         .extend(remaining[1..].iter().filter(|w| !w.redirect).cloned());
