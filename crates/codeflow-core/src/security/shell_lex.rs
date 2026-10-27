@@ -301,7 +301,16 @@ impl Lexer {
             }
             '$' => self.dollar(token, false),
             _ => {
-                if c == '~' {
+                // A shell expands a tilde only at the start of a word, after
+                // `=` or `:` in an assignment or a zsh argument, or where
+                // brace or array syntax starts a new word; `HEAD~3` is text.
+                if c == '~'
+                    && token
+                        .text
+                        .chars()
+                        .last()
+                        .is_none_or(|p| matches!(p, '=' | ':' | '(' | '{' | ','))
+                {
                     let start = self.at;
                     let mut end = start;
                     while self.chars.get(end).is_some_and(|c| {
@@ -721,12 +730,28 @@ const RESERVED: &[&str] = &[
 /// as the guard knows names: each modeled launcher
 /// ([`super::outward::LEXER_LAUNCHERS`], [`super::outward::MODELED_LAUNCHERS`])
 /// and its GNU-prefixed form,
-/// `builtin`, `sudo`, `doas`, `eval` and the zsh precommands. Where launcher
+/// `builtin`, `sudo`, `doas`, `eval`, the zsh precommands, every wrapper
+/// git-guard recognises (`PREFIX_LAUNCHERS`, `COMMAND_CARRIERS`, which a
+/// test asserts) and the standard Linux and macOS wrappers. Where launcher
 /// traversal stops at one of these (an option it does not parse, such as
 /// `env -S`, or a wrapper it does not model), the remaining words are judged
 /// as an interpreter's possible operands. An unknown function used as a
 /// wrapper is outside this list by construction: command text cannot name
 /// it, and the PR states it as a residual (TSK-397 Codex review round 11).
+/// Whether `word`, followed by `rest`, runs a program it is given: a name in
+/// [`WRAPPERS`], directly or by its path or GNU prefix. `find` runs one only
+/// through an action that executes (`-exec`, `-execdir`, `-ok`, `-okdir`),
+/// so `find "$D" -delete` keeps no operands.
+fn wraps(word: &Token, rest: &[Token]) -> bool {
+    let name = crate::hooks::git_guard::launcher_name(&word.text);
+    if name == "find" {
+        return rest
+            .iter()
+            .any(|w| matches!(w.text.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"));
+    }
+    WRAPPERS.contains(&word.text.as_str()) || WRAPPERS.contains(&name)
+}
+
 const WRAPPERS: &[&str] = &[
     "builtin",
     "command",
@@ -756,6 +781,19 @@ const WRAPPERS: &[&str] = &[
     "gstdbuf",
     "gtime",
     "gxargs",
+    "arch",
+    "script",
+    "chrt",
+    "taskset",
+    "flock",
+    "setpriv",
+    "firejail",
+    "unshare",
+    "nsenter",
+    "watch",
+    "taskpolicy",
+    "find",
+    "parallel",
 ];
 
 /// Reserved words whose whole simple command is a header, not a command
@@ -809,6 +847,7 @@ pub(crate) fn read(
     launcher: &dyn Fn(&str, &[String]) -> Option<usize>,
     interpreter: &dyn Fn(&str) -> bool,
     hides: &dyn Fn(&[String]) -> bool,
+    calls: &dyn Fn(&[String]) -> bool,
     hook_variables: &[&str],
 ) -> Reading {
     let mut reading = Reading::default();
@@ -840,6 +879,16 @@ pub(crate) fn read(
             }
             if word.plain() && RESERVED.contains(&word.text.as_str()) {
                 at += 1;
+                // The `time` keyword takes bash's `-p` and `--` before the
+                // command it times (C12-2).
+                if word.text == "time" {
+                    while command
+                        .get(at)
+                        .is_some_and(|w| w.plain() && matches!(w.text.as_str(), "-p" | "--"))
+                    {
+                        at += 1;
+                    }
+                }
                 continue;
             }
             if let Some(name) = word.assignment() {
@@ -871,22 +920,24 @@ pub(crate) fn read(
             Program::Stopped(remaining, depth) => {
                 reading.moves = true;
                 // Traversal stopped where a program may run an interpreter
-                // with the words after it: inside a launcher, at a quoted or
-                // expanded word, or at a launcher or wrapper whose options it
-                // does not parse (`env -S`, `builtin command`). Every
-                // remaining word is judged as a possible operand there; none
-                // is dropped (TSK-397 Codex review rounds 9 to 11).
-                let stop = remaining.first();
+                // with the words after it. The remaining words are judged as
+                // possible operands when any of these holds, a union that
+                // only ever adds (TSK-397 Codex review rounds 9 to 12): the
+                // stop is inside a launcher or at a non-plain word; it is at
+                // a wrapper name; a later word names an interpreter; or the
+                // command walk sees an interpreter call in the command.
+                let texts: Vec<String> = command.iter().map(|w| w.text.clone()).collect();
+                let after = remaining.iter().skip(1);
                 if depth > 0
-                    || stop.is_some_and(|w| {
-                        !w.plain()
-                            || WRAPPERS.contains(&w.text.as_str())
-                            || WRAPPERS.contains(&crate::hooks::git_guard::launcher_name(&w.text))
-                    })
+                    || remaining
+                        .first()
+                        .is_some_and(|w| !w.plain() || wraps(w, &remaining[1..]))
+                    || after.clone().any(|w| interpreter(&w.text))
+                    || calls(&texts)
                 {
                     reading
                         .operands
-                        .extend(remaining[1..].iter().filter(|w| !w.redirect).cloned());
+                        .extend(after.filter(|w| !w.redirect).cloned());
                 }
             }
         }

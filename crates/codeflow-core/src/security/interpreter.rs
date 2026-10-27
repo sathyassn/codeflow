@@ -2011,6 +2011,22 @@ mod tests {
                 "x=$PWD; z; python3 /abs/r.py $=x/src/..",
                 "x=$PWD; z; python3 /abs/r.py $^x/src/..",
                 "for x do cd ..; done; python3 x.py settings.json",
+                // C12-1: `arch`, `script` and `find -exec` carry the
+                // interpreter, literal or expanded.
+                "z; arch -arm64 python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; arch -arm64 \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; /usr/bin/arch -arm64 python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; /usr/bin/arch -arm64 \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; script -q /abs/typescript python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; script -q /abs/typescript \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; find . -prune -exec python3 /abs/read_dir.py \"$PWD/src/..\" \\;",
+                "z; find . -prune -exec \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\" \\;",
+                // C12-2: the `time` keyword and its options.
+                "z; time -p python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; time -p \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; time -p -- python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; time -p env python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; time -p nice -n 5 env \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
                 // C9-3: non-ASCII words.
                 "é; python3 x.py settings.json",
                 "export x=é; python3 x.py settings.json",

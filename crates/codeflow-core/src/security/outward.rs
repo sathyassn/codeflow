@@ -1068,6 +1068,14 @@ pub(crate) fn read_line(lexed: &super::shell_lex::Lexed) -> super::shell_lex::Re
         &launcher,
         &|word| program_is_interpreter(word),
         &|rest| hides_a_directory_change(rest),
+        // A call the walk resolves; one it reports unresolved (a shell's
+        // `-c "$CMD"` read without the line's assignments) is judged by the
+        // walk's own rule on the whole line.
+        &|words| {
+            interpreter_calls_with_home(&words.join(" "), Path::new("/"), None)
+                .iter()
+                .any(|call| call.unresolved.is_empty())
+        },
         HOOK_VARIABLES,
     )
 }

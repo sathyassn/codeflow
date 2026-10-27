@@ -25,6 +25,11 @@ fn a_tilde_is_seen_after_equals_and_colons() {
     assert_eq!(word("export x=~+", 0, 1).tilde.as_deref(), Some("~+"));
     assert_eq!(word("a=(~+)", 0, 0).tilde.as_deref(), Some("~+"));
     assert_eq!(word("'~+'", 0, 0).tilde, None);
+    assert_eq!(word("--dir=~/x", 0, 0).tilde.as_deref(), Some("~"));
+    assert_eq!(word("{a,~/x}", 0, 0).tilde.as_deref(), Some("~"));
+    // Mid-word, a tilde is text (`git rebase HEAD~3`).
+    assert_eq!(word("HEAD~3", 0, 0).tilde, None);
+    assert_eq!(word("a~/x", 0, 0).tilde, None);
 }
 
 /// SR5-3 to SR5-5: constructs the lexer does not model are opaque.
@@ -143,8 +148,12 @@ fn every_modeled_launcher_is_a_wrapper() {
         "noglob",
         "nocorrect",
         "-",
-    ] {
-        assert!(WRAPPERS.contains(&name), "{name}");
+    ]
+    .iter()
+    .chain(crate::hooks::git_guard::PREFIX_LAUNCHERS)
+    .chain(crate::hooks::git_guard::COMMAND_CARRIERS)
+    {
+        assert!(WRAPPERS.contains(name), "{name}");
     }
 }
 
@@ -174,4 +183,41 @@ fn wrappers_keep_expanded_names_and_split_strings() {
         let reading = read_line(&lex(line));
         assert!(reading.operands.is_empty(), "{line}: {reading:?}");
     }
+}
+
+/// C12-1, C12-2: `arch`, `script` and `find -exec` wrappers, and the `time`
+/// keyword with its options, keep the operands (TSK-397 Codex review round
+/// 12).
+#[test]
+fn wrappers_and_the_time_keyword_keep_operands() {
+    for line in [
+        r#"arch -arm64 python3 r.py "$PWD""#,
+        r#"arch -arm64 "${P:-python3}" r.py "$PWD""#,
+        r#"/usr/bin/arch -arm64 python3 r.py "$PWD""#,
+        r#"script -q t python3 r.py "$PWD""#,
+        r#"script -q t "${P:-python3}" r.py "$PWD""#,
+        r#"find . -prune -exec python3 r.py "$PWD" \;"#,
+        r#"find . -prune -exec "${P:-python3}" r.py "$PWD" \;"#,
+        r#"chrt 1 "$P" r.py "$PWD""#,
+        r#"taskset 1 "$P" r.py "$PWD""#,
+        r#"time -p python3 r.py "$PWD""#,
+        r#"time -p "${P:-python3}" r.py "$PWD""#,
+        r#"time -p -- python3 r.py "$PWD""#,
+        r#"time -p env python3 r.py "$PWD""#,
+        r#"time -p nice -n 5 env "$P" r.py "$PWD""#,
+        r#"time python3 r.py "$PWD""#,
+    ] {
+        let reading = read_line(&lex(line));
+        assert!(reading.derived.is_some(), "{line}: {reading:?}");
+    }
+    // `find` without an executing action runs no program.
+    for line in [r#"find "$D" -delete"#, r#"find $D -name "$N" -print"#] {
+        let reading = read_line(&lex(line));
+        assert!(reading.operands.is_empty(), "{line}: {reading:?}");
+    }
+    let timed = read_line(&lex("time -p env python3 r.py notes.txt"));
+    assert!(
+        timed.operands.iter().any(|w| w.text == "notes.txt"),
+        "{timed:?}"
+    );
 }
