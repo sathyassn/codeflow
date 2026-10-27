@@ -834,7 +834,9 @@ fn tsk189_start_prefers_fetched_line_without_local_upstream() {
 /// A bare origin for `root`, holding `main`, which tracks it.
 fn with_origin(root: &Path) -> tempfile::TempDir {
     let remote = tempfile::tempdir().unwrap();
-    git(remote.path(), &["init", "-q", "--bare"]);
+    // The remote advertises `main` as its default branch, as a hosted one
+    // does; `task status` reads the default from that advertisement.
+    git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
     git(
         root,
         &["remote", "add", "origin", remote.path().to_str().unwrap()],
@@ -987,7 +989,14 @@ fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
     let remote = tempfile::tempdir().unwrap();
     let origin = remote.path().join("origin.git");
     let reftable = Command::new("git")
-        .args(["init", "-q", "--bare", "--ref-format=reftable"])
+        .args([
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            "--ref-format=reftable",
+        ])
         .arg(&origin)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -998,7 +1007,10 @@ fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
         // Only a case-sensitive filesystem holds `MAIN` beside `main` in a
         // files-backend origin; this git cannot make the forgery elsewhere.
         assert!(!insensitive, "git cannot create a reftable origin here");
-        git(remote.path(), &["init", "-q", "--bare", "origin.git"]);
+        git(
+            remote.path(),
+            &["init", "-q", "--bare", "-b", "main", "origin.git"],
+        );
     }
     git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
     commit_record(root, "TSK-003", &record_on("TSK-003", "main", "[]"));
@@ -1073,9 +1085,18 @@ fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
 /// case-sensitive filesystem can hold two spellings, so the fallback is
 /// refused where the git directory folds names.
 fn case_sensitive_origin(remote: &Path, insensitive: bool) -> std::path::PathBuf {
+    // Its default branch is `main`, which `task status` reads from what the
+    // remote advertises (TSK-340).
     let origin = remote.join("origin.git");
     let reftable = Command::new("git")
-        .args(["init", "-q", "--bare", "--ref-format=reftable"])
+        .args([
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            "--ref-format=reftable",
+        ])
         .arg(&origin)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -1084,7 +1105,10 @@ fn case_sensitive_origin(remote: &Path, insensitive: bool) -> std::path::PathBuf
         .success();
     if !reftable {
         assert!(!insensitive, "git cannot create a reftable origin here");
-        git(remote, &["init", "-q", "--bare", "origin.git"]);
+        git(
+            remote,
+            &["init", "-q", "--bare", "-b", "main", "origin.git"],
+        );
     }
     origin
 }

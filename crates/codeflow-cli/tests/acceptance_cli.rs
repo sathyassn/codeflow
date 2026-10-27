@@ -1805,6 +1805,9 @@ fn task_status_refuses_without_the_remote_tracking_target() {
         ],
     );
     git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    // `origin` holds and advertises `main`, but this clone never fetched it.
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
     write(
         root,
         &record_path("TSK-001"),
@@ -2006,16 +2009,42 @@ fn an_unrecorded_integration_line_earns_no_authority() {
     }
 }
 
-/// TSK-340 review round 6: `task status` settles the default target before
-/// it reads any tip, and never falls back to another name. With
-/// `origin/HEAD` naming `main` and `origin/main` missing, a fetched
-/// `origin/master` holding a side merge of the review refuses, naming the
-/// fetch; with both `origin/main` and `origin/master` and no `origin/HEAD`,
-/// it refuses as ambiguous; a repository whose only default is `master`
-/// completes.
+/// `task status <id> complete` with extra arguments.
+fn status_complete_args(root: &Path, id: &str, extra: &[&str]) -> (i32, String) {
+    let mut args = vec!["task", "status", id, "complete"];
+    args.extend_from_slice(extra);
+    let out = codeflow().args(&args).current_dir(root).output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// TSK-340 review rounds 6 and 7: `task status` takes the default target
+/// from what `origin` advertises, never from a local `origin/HEAD`, and
+/// never falls back to another name. Each refusal case holds a side merge
+/// of the review that only a wrong default would trust:
+/// - `origin` advertises `main`, `origin/main` is not fetched, and a fetched
+///   `origin/master` holds the side merge: refused, naming the fetch;
+/// - a local `origin/HEAD` steered to a fetched `origin/auxiliary` holding
+///   the side merge: refused, since `origin` still advertises `main`;
+/// - `origin` cannot be asked: refused, naming the `--base` to pass;
+/// - with that `--base` pinned, the same unreachable clone binds a valid
+///   completion; and a repository whose only default is `master` completes.
 #[test]
-fn the_default_target_is_settled_before_any_tip() {
-    for case in ["missing main", "ambiguous", "master default"] {
+#[allow(clippy::too_many_lines)] // One fixture per default-selection case.
+fn the_default_target_is_what_origin_advertises() {
+    for case in [
+        "missing main",
+        "local head steering",
+        "unreachable",
+        "unreachable with base",
+        "master default",
+    ] {
         let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
         let root = dir.path();
         if case == "master default" {
@@ -2057,30 +2086,64 @@ fn the_default_target_is_settled_before_any_tip() {
             continue;
         }
         let _remote = with_origin(root, "main");
-        let (reviewed, side) = side_merge(root);
-        git(root, &["update-ref", "refs/remotes/origin/master", &side]);
-        if case == "ambiguous" {
-            // A fetch may have recorded `origin/HEAD`; this case has none.
-            git(root, &["remote", "set-head", "origin", "-d"]);
-        }
-        if case == "missing main" {
+        if case.starts_with("unreachable") {
+            // A clean, reviewed completion: only the default is in question.
+            git(root, &["branch", "--unset-upstream", "main"]);
             git(
                 root,
                 &[
-                    "symbolic-ref",
-                    "refs/remotes/origin/HEAD",
-                    "refs/remotes/origin/main",
+                    "remote",
+                    "set-url",
+                    "origin",
+                    root.join("no-such-remote.git").to_str().unwrap(),
                 ],
             );
-            git(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
-            // No configured upstream either: only `origin/HEAD` names main.
-            git(root, &["branch", "--unset-upstream", "main"]);
+            let reviewed = code_change(root, "task/TSK-001-work", "pub fn work() {}\n");
+            write(
+                root,
+                &record_path("TSK-001"),
+                &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
+            );
+            if case == "unreachable" {
+                let verb = status_complete(root, "TSK-001");
+                assert_ne!(verb.0, 0, "{case}: {}", verb.1);
+                assert!(
+                    verb.1.contains("--base origin/<default> --into <default>"),
+                    "{case}: {}",
+                    verb.1
+                );
+            } else {
+                let verb = status_complete_args(
+                    root,
+                    "TSK-001",
+                    &["--base", "origin/main", "--into", "main"],
+                );
+                assert_eq!(verb.0, 0, "{case}: {}", verb.1);
+            }
+            continue;
         }
-        // The record names `master`, the name a fallback would pick.
+        let (reviewed, side) = side_merge(root);
         let declared = if case == "missing main" {
+            git(root, &["update-ref", "refs/remotes/origin/master", &side]);
+            git(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+            git(root, &["branch", "--unset-upstream", "main"]);
             "master"
         } else {
-            "main"
+            {
+                git(
+                    root,
+                    &["update-ref", "refs/remotes/origin/auxiliary", &side],
+                );
+                git(
+                    root,
+                    &[
+                        "symbolic-ref",
+                        "refs/remotes/origin/HEAD",
+                        "refs/remotes/origin/auxiliary",
+                    ],
+                );
+                "main"
+            }
         };
         write(
             root,
@@ -2095,7 +2158,7 @@ fn the_default_target_is_settled_before_any_tip() {
         let needle = if case == "missing main" {
             "git fetch origin main"
         } else {
-            "git remote set-head origin --auto"
+            "src/side.rs"
         };
         assert!(verb.1.contains(needle), "{case}: {}", verb.1);
     }
