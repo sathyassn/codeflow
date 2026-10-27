@@ -375,35 +375,6 @@ fn epic_binding(repo_root: &Path, epic: &RecordView) -> Vec<String> {
     .collect()
 }
 
-/// The merge base of `HEAD` with the task's target: the range a record-only
-/// amendment waiver may name (TSK-184), as the task's pull request names it
-/// on its `Task:` line, whatever its branch is called (TSK-340, issue
-/// #278). On the target branch itself there is no pull request, so there
-/// is no own range. The binder withholds the route from a range that
-/// reopens a landed completion.
-fn own_range_base(
-    repo_root: &Path,
-    repo: &git2::Repository,
-    task: &RecordView,
-    head: git2::Oid,
-) -> Option<git2::Oid> {
-    let target =
-        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-            .ok()
-            .flatten()?;
-    let on_target = repo.head().ok().is_some_and(|reference| {
-        reference.is_branch()
-            && crate::git::name::reference_shorthand(&reference).bytes()
-                == super::work_start::logical_target(&target).as_bytes()
-    });
-    if on_target {
-        return None;
-    }
-    // The pinned target, never a local branch a requester can move.
-    let target = pinned_tip(repo, &target).ok().flatten()?;
-    history::merge_base(repo, head, target).ok()
-}
-
 /// The binding of a completion to the reviewed commit (R-60), with the
 /// working tree over `HEAD` as the completion: the verb runs where the
 /// reviewed result is checked out, and applies the judge CI applies.
@@ -426,20 +397,10 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             task.id
         )];
     };
-    // A task without a declared target belongs to the default one.
-    let default_name = match super::work_start::resolve_work_target(repo_root, None) {
-        Ok(name) => name,
-        Err(error) => return vec![error.to_string()],
-    };
-    // The default target is pinned to its remote-tracking ref, as the
-    // task's target is (TSK-340 review round 4): the waiver check reads
-    // "on the target" from it, and a local branch never supplies that.
-    let default_target = match default_name
-        .as_deref()
-        .map(|name| pinned_tip(&repo, name))
-        .transpose()
-    {
-        Ok(target) => target.flatten(),
+    // One qualified set of receiving lines and one anchor, carried through
+    // both binding attempts (TSK-340 review round 5).
+    let qualified = match qualify(repo_root, &repo, task, head) {
+        Ok(qualified) => qualified,
         Err(error) => {
             return vec![format!(
                 "{}: {}: {error}",
@@ -448,6 +409,7 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             )]
         }
     };
+    let default_target = qualified.default;
     let landing = super::acceptance::Landing::Worktree {
         head,
         changed: &changed,
@@ -461,14 +423,17 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     // The reviewed-span check applies on every branch. Only when direct binding fails does the
     // branch decide: a release branch binds a direct completion to its head
     // (SPC-013 R-120), and any other branch also takes a landing merge.
-    let at_head = super::acceptance::bind_completion(
+    let at_head = super::acceptance::bind_completion_with_amendment(
         &repo,
         task,
         graph,
         landing,
         default_target,
         super::acceptance::Transport::Direct,
+        qualified.base,
         None,
+        &qualified.run.stacking(),
+        &qualified.run.criteria(),
     )
     .findings;
     if at_head.is_empty() {
@@ -495,11 +460,6 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             // amendment commit of its range (TSK-184). The binder withholds
             // it from a range that reopens a landed completion, as it does
             // for CI (TSK-340).
-            let own_range_base = own_range_base(repo_root, &repo, task, head);
-            let run = match verb_authorities(repo_root, &repo, task) {
-                Ok(run) => run,
-                Err(error) => return vec![error],
-            };
             shown(
                 super::acceptance::bind_completion_with_amendment(
                     &repo,
@@ -508,10 +468,10 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
                     landing,
                     default_target,
                     super::acceptance::Transport::TaskLanding,
-                    None,
-                    own_range_base,
-                    &run.stacking(),
-                    &run.criteria(),
+                    qualified.base,
+                    qualified.base,
+                    &qualified.run.stacking(),
+                    &qualified.run.criteria(),
                 )
                 .findings,
             )
@@ -542,69 +502,135 @@ fn target_commit(
         .transpose()
 }
 
-/// The target tips a clean merge after the review, or a task landing, may
-/// come from when the verb binds a completion. The verb has no run base, so
-/// it pins the task's target and the default target to their
-/// remote-tracking refs ([`pinned_tip`]); a local branch never supplies the
-/// authority in a clone with remotes (TSK-340 review round 4). It is a
-/// local preview: CI judges the same chain against its own pinned base
-/// (TSK-220).
-fn verb_authorities(
+/// The receiving lines `task status` binds against, settled once from
+/// what a requester cannot move (TSK-340 review round 5).
+struct Qualified {
+    /// The default target's tip and, when it qualifies, the declared
+    /// target's tip: landing, stacking and waiver authority.
+    run: super::acceptance::RunBases,
+    /// The default target's tip.
+    default: Option<git2::Oid>,
+    /// The range anchor: the merge-base of `HEAD` with the qualified
+    /// target, or `None` on the target branch itself.
+    base: Option<git2::Oid>,
+}
+
+/// Settle the verb's receiving lines. In a clone with remotes, a tip is
+/// read only from `origin`'s remote-tracking ref: neither
+/// `branch.<name>.remote` nor a missing `origin` selects another source,
+/// and a missing ref refuses, naming the fetch. A clone with no remotes at
+/// all has only local branches. The default target is the conventional
+/// one (`main`, else `master`). The declared target adds a tip only when
+/// it qualifies by policy read at the default target (a protected branch,
+/// or an `integration/` line, which hosts protect); a name the record
+/// alone supplies never does. The anchor is the merge-base with the
+/// qualified declared target, else the default.
+fn qualify(
     repo_root: &Path,
     repo: &git2::Repository,
     task: &RecordView,
-) -> Result<super::acceptance::RunBases, String> {
-    let declared =
-        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-            .map_err(|error| error.to_string())?;
-    let default = super::work_start::resolve_work_target(repo_root, None)
-        .map_err(|error| error.to_string())?;
-    let mut tips = Vec::new();
-    for name in [declared, default].into_iter().flatten() {
-        tips.extend(pinned_tip(repo, &name)?);
+    head: git2::Oid,
+) -> Result<Qualified, String> {
+    let default = ["main", "master"].into_iter().find_map(|name| {
+        receiving_tip(repo, name)
+            .ok()
+            .flatten()
+            .map(|tip| (name, tip))
+    });
+    let default = match default {
+        Some(found) => Some(found),
+        None => receiving_tip(repo, "main")?.map(|tip| ("main", tip)),
+    };
+    let declared = task
+        .integration_target
+        .as_deref()
+        .filter(|target| !target.is_empty())
+        .map(super::work_start::logical_target);
+    let protected = |name: &str| -> Result<bool, String> {
+        if name.starts_with("integration/") {
+            return Ok(true);
+        }
+        let Some((_, tip)) = default else {
+            return Ok(false);
+        };
+        let text = crate::hooks::landed_policy::policy_text_at(repo_root, &tip.to_string())?;
+        let listed = text
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|policy| policy.get("git")?.get("protected_branches").cloned())
+            .and_then(|names| serde_json::from_value::<Vec<String>>(names).ok())
+            .unwrap_or_else(|| vec!["main".into(), "master".into()]);
+        Ok(listed.iter().any(|listed| listed == name))
+    };
+    let mut target = default.map(|(_, tip)| tip);
+    let mut target_name = default.map(|(name, _)| name.to_string());
+    if let Some(name) = declared {
+        if default.is_some_and(|(default, _)| default == name) || protected(name)? {
+            let Some(tip) = receiving_tip(repo, name)? else {
+                return Err(format!(
+                    "the target `{name}` does not resolve here; fetch it (`git fetch origin {name}`)"
+                ));
+            };
+            target = Some(tip);
+            target_name = Some(name.to_string());
+        }
     }
-    Ok(super::acceptance::RunBases::new(tips))
+    let on_target = repo.head().ok().is_some_and(|reference| {
+        reference.is_branch()
+            && target_name.as_deref().is_some_and(|name| {
+                crate::git::name::reference_shorthand(&reference).bytes() == name.as_bytes()
+            })
+    });
+    let base = match target {
+        Some(tip) if !on_target => Some(
+            history::merge_base(repo, head, tip)
+                .map_err(|error| format!("cannot read the merge-base with the target: {error}"))?,
+        ),
+        _ => None,
+    };
+    Ok(Qualified {
+        run: super::acceptance::RunBases::new(
+            default.map(|(_, tip)| tip).into_iter().chain(target),
+        ),
+        default: default.map(|(_, tip)| tip),
+        base,
+    })
 }
 
-/// The tip of `name` as the remote the clone fetches it from holds it:
-/// `refs/remotes/<remote>/<branch>`, the remote being the branch's
-/// configured one or else `origin`. A clone where neither exists (no
-/// remotes, or only remotes that do not carry the target, such as a review
-/// remote) has the local branch as its only copy, so that is the target. A
-/// clone whose target remote lacks the remote-tracking ref refuses, naming
-/// the fetch to run.
-fn pinned_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid>, String> {
+/// The tip of the branch `name` as the clone's receiving source holds it.
+/// A clone with no remotes has only local branches. Otherwise the source
+/// is `origin`'s remote-tracking ref; a clone with remotes but no `origin`,
+/// or whose `origin` lacks the ref, refuses and names what to set up.
+fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid>, String> {
     let remotes = repo
         .remotes()
         .map_err(|error| format!("cannot read the remotes: {error}"))?;
-    if remotes.is_empty() {
-        return target_commit(repo, Some(name));
-    }
-    let branch = super::work_start::logical_target(name);
-    let config = repo
-        .config()
-        .map_err(|error| format!("cannot read the git config: {error}"))?;
-    let known = |name: &str| {
-        remotes
+    let reference = if remotes.is_empty() {
+        format!("refs/heads/{name}")
+    } else {
+        let origin = remotes
             .iter()
-            .any(|remote| matches!(remote, Ok(Some(remote)) if remote == name))
+            .any(|remote| matches!(remote, Ok(Some("origin"))));
+        if !origin {
+            return Err(format!(
+                "this clone has remotes but no `origin`, so the target `{name}` has no receiving source; add the remote that carries it as `origin` and fetch it (`git fetch origin {name}`)"
+            ));
+        }
+        format!("refs/remotes/origin/{name}")
     };
-    let configured = config
-        .get_string(&format!("branch.{branch}.remote"))
-        .ok()
-        .filter(|remote| known(remote));
-    let Some(remote) = configured.or_else(|| known("origin").then(|| "origin".to_string())) else {
-        return target_commit(repo, Some(name));
-    };
-    let reference = format!("refs/remotes/{remote}/{branch}");
     match repo.find_reference(&reference) {
         Ok(found) => found
             .peel_to_commit()
             .map(|commit| Some(commit.id()))
             .map_err(|error| format!("cannot read {reference}: {error}")),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => Err(format!(
-            "the target `{branch}` has no remote-tracking ref {reference} here, and a local branch is never the target's authority; fetch it (`git fetch {remote} {branch}`) and run this again"
-        )),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            if reference.starts_with("refs/heads/") {
+                Ok(None)
+            } else {
+                Err(format!(
+                    "the target `{name}` has no remote-tracking ref {reference} here, and a local branch is never the target's authority; fetch it (`git fetch origin {name}`) and run this again"
+                ))
+            }
+        }
         Err(error) => Err(format!("cannot read {reference}: {error}")),
     }
 }
