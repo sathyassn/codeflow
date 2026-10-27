@@ -1,48 +1,50 @@
-"""Run the anchored-document grader in its managed, locked venv (TSK-445).
+"""Run the anchored-document grader in a content-named, locked venv (TSK-445).
 
 `check.py` parses narrative Markdown with markdown-it-py, pinned with its
 dependency mdurl by version and wheel SHA-256 in `requirements.txt` beside
-this file. `ensure()` never accepts a parser that happens to import: the
-grader always runs inside its managed venv, `target/anchored-venv` (or
-`$CODEFLOW_ANCHORED_VENV`), which holds exactly the pinned versions.
+this file. `ensure()` never accepts a parser that merely imports: the grader
+always runs inside a managed venv that holds exactly the pins.
 
-- Outside that venv, it prepares the venv and runs the current script again
-  there.
-- The venv is rebuilt when it is missing, when it was built from another
-  requirements file (a digest stamp records which), or when its installed
-  versions differ from the pins.
-- Only a directory this helper created is ever removed: it writes an
-  ownership marker naming the directory before it builds the venv, and a
-  rebuild deletes only a directory, not a symlink, whose marker names it.
-  An existing directory without that marker, or a symlinked target, is
-  refused and left untouched.
-- Installs use `--only-binary=:all: --require-hashes --no-deps`, so no
-  source package is built. A failed install, or a version that still differs
-  afterwards, stops the run; it never falls back to another parser.
+- The venv lives under a managed root, `target/` (or `$CODEFLOW_ANCHORED_VENV`,
+  the root to build under), in a directory named by its content: the
+  SHA-256 of `requirements.txt`, the Python implementation and version, and
+  the machine. Changed pins or another Python give another name.
+- A missing venv is built in a fresh private directory beside it
+  (`tempfile.mkdtemp`), installed with `--only-binary=:all: --require-hashes
+  --no-deps`, verified, then moved into place with one `os.rename`.
+- An existing venv of that name is used when it is valid: a real directory,
+  not a symlink, whose stamp names the same requirements and Python and
+  whose installed versions are the pins.
+- Nothing is ever deleted. A stale venv keeps its old name and goes unused.
+  A path of the managed name that is not a valid managed venv is refused and
+  left as it is. If the name appears while a build runs, the build is left
+  in its own directory and the run stops. Old venvs and builds are removed
+  by hand (README "Grading anchored present documents").
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
-import re
-import shutil
+import platform
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 REQUIREMENTS = HERE / "requirements.txt"
-STAMP = "codeflow-anchored-requirements.sha256"
-OWNER = "codeflow-anchored-venv.owner"
+STAMP = "codeflow-anchored-venv.json"
 INSTALL = ["--only-binary=:all:", "--require-hashes", "--no-deps"]
-SETUP = (f"python3 -m venv target/anchored-venv && target/anchored-venv/bin/pip install "
-         f"{' '.join(INSTALL)} -r {REQUIREMENTS.relative_to(ROOT)}")
+REMEDY = ("run the grader again (it builds the venv itself), set CODEFLOW_ANCHORED_VENV to another root "
+          "to build under, or remove the path by hand after checking what it holds")
 
 
 def pins() -> dict[str, str]:
     """The pinned distributions, as {name: version}."""
+    import re
     return dict(re.findall(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)", REQUIREMENTS.read_text(encoding="utf-8"), re.M))
 
 
@@ -50,39 +52,30 @@ def digest() -> str:
     return hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest()
 
 
+def python_tag() -> str:
+    return f"{sys.implementation.name}{sys.version_info.major}.{sys.version_info.minor}-{platform.machine() or 'any'}"
+
+
+def stamp_data() -> dict[str, str]:
+    return {"requirements_sha256": digest(), "python": python_tag(), "pins": json.dumps(pins(), sort_keys=True)}
+
+
+def root() -> Path:
+    """The managed root to build under, absolute and not resolved."""
+    return Path(os.path.abspath(os.environ.get("CODEFLOW_ANCHORED_VENV", ROOT / "target")))
+
+
 def venv_path() -> Path:
-    """The managed venv's path as configured, made absolute but not resolved,
-    so a symlinked target is seen as one."""
-    return Path(os.path.abspath(os.environ.get("CODEFLOW_ANCHORED_VENV", ROOT / "target" / "anchored-venv")))
-
-
-def owner_text(venv: Path) -> str:
-    return f"codeflow anchored venv (evals/qualification/anchored/markdown_env.py)\n{venv}\n"
-
-
-def owned(venv: Path) -> bool:
-    """Whether this helper created the directory: a real directory, not a
-    symlink, holding a marker that names it."""
-    marker = venv / OWNER
-    return (venv.is_dir() and not venv.is_symlink() and marker.is_file() and not marker.is_symlink()
-            and marker.read_text(encoding="utf-8") == owner_text(venv))
-
-
-def refuse_unowned(venv: Path) -> None:
-    if venv.is_symlink():
-        sys.exit(f"markdown_env: {venv} is a symlink; the managed venv must be a directory this helper created. "
-                 "Nothing was changed.")
-    if venv.exists() and not owned(venv):
-        sys.exit(f"markdown_env: {venv} exists and was not created by this helper (no {OWNER} marker naming it); "
-                 "it is left untouched. Point CODEFLOW_ANCHORED_VENV at a new path or remove it yourself.")
+    """The managed venv for these pins and this Python."""
+    return root() / f"anchored-venv-{digest()[:16]}-{python_tag()}"
 
 
 def interpreter(venv: Path) -> Path:
     return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
-def installed(python: Path) -> dict[str, str]:
-    """The pinned distributions' versions as the venv's interpreter sees them."""
+def installed(python: Path) -> dict[str, str | None]:
+    """The pinned distributions' versions as a venv's interpreter sees them."""
     probe = ("import importlib.metadata as m, json, sys\n"
              "out = {}\n"
              "for name in sys.argv[1:]:\n"
@@ -90,49 +83,69 @@ def installed(python: Path) -> dict[str, str]:
              "    except m.PackageNotFoundError: out[name] = None\n"
              "print(json.dumps(out))")
     result = subprocess.run([str(python), "-I", "-c", probe, *pins()], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        return {}
-    import json
-    return json.loads(result.stdout)
+    return json.loads(result.stdout) if result.returncode == 0 else {}
 
 
-def current(venv: Path) -> bool:
-    if not owned(venv):
-        return False
-    python = interpreter(venv)
+def valid(venv: Path) -> bool:
+    """A real directory, not a symlink, stamped for these pins and this
+    Python, whose interpreter sees exactly the pinned versions."""
     stamp = venv / STAMP
-    return (python.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == digest()
-            and installed(python) == pins())
+    if venv.is_symlink() or not venv.is_dir() or stamp.is_symlink() or not stamp.is_file():
+        return False
+    try:
+        if json.loads(stamp.read_text(encoding="utf-8")) != stamp_data():
+            return False
+    except (OSError, ValueError):
+        return False
+    return interpreter(venv).exists() and installed(interpreter(venv)) == pins()
 
 
-def prepare(venv: Path) -> Path:
-    """Build or rebuild the managed venv; returns its interpreter."""
-    refuse_unowned(venv)
-    if current(venv):
-        return interpreter(venv)
-    # The base interpreter, resolved before a stale venv is removed: the
-    # caller may be running from inside that venv.
+def create(build: Path) -> None:
+    """Create a venv in the empty build directory from the base interpreter."""
     base = os.path.realpath(getattr(sys, "_base_executable", sys.executable))
-    if venv.exists():
-        shutil.rmtree(venv)  # owned: refuse_unowned() returned
-    venv.mkdir(parents=True)
-    (venv / OWNER).write_text(owner_text(venv), encoding="utf-8")
-    subprocess.run([base, "-m", "venv", str(venv)], check=True)
-    python = interpreter(venv)
-    subprocess.run([str(python), "-m", "pip", "install", "--quiet", "--disable-pip-version-check", *INSTALL,
-                    "-r", str(REQUIREMENTS)], check=True)
-    found = installed(python)
+    subprocess.run([base, "-m", "venv", str(build)], check=True)
+
+
+def install(build: Path) -> None:
+    subprocess.run([str(interpreter(build)), "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
+                    *INSTALL, "-r", str(REQUIREMENTS)], check=True)
+
+
+def build(venv: Path) -> None:
+    """Build the venv in a fresh private directory and move it into place.
+    Never deletes: a failed or raced build stays in its own directory."""
+    venv.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{venv.name}.build-", dir=venv.parent))
+    create(staging)
+    install(staging)
+    found = installed(interpreter(staging))
     if found != pins():
-        sys.exit(f"markdown_env: the managed venv holds {found}, not the pins {pins()}; run `{SETUP}`")
-    (venv / STAMP).write_text(digest() + "\n", encoding="utf-8")
-    return python
+        sys.exit(f"markdown_env: the build at {staging} holds {found}, not the pins {pins()}; nothing was "
+                 f"moved into place. {REMEDY}.")
+    (staging / STAMP).write_text(json.dumps(stamp_data(), sort_keys=True) + "\n", encoding="utf-8")
+    if os.path.lexists(venv):
+        sys.exit(f"markdown_env: {venv} appeared while the venv was built; it is left as it is and the build "
+                 f"stays at {staging}. {REMEDY}.")
+    try:
+        os.rename(staging, venv)
+    except OSError as error:
+        sys.exit(f"markdown_env: could not move the build at {staging} to {venv} ({error}); nothing was "
+                 f"removed. {REMEDY}.")
 
 
 def ensure() -> None:
     venv = venv_path()
-    if Path(sys.prefix).resolve() == venv.resolve() and current(venv):
+    if Path(sys.prefix).resolve() == venv.resolve() and valid(venv):
         return
-    python = prepare(venv)
+    if os.path.lexists(venv) and not valid(venv):
+        sys.exit(f"markdown_env: {venv} exists but is not a valid managed venv for these pins; it is left as "
+                 f"it is. {REMEDY}.")
+    if not os.path.lexists(venv):
+        build(venv)
+    if not valid(venv):
+        sys.exit(f"markdown_env: {venv} is not a valid managed venv after the build; it is left as it is. "
+                 f"{REMEDY}.")
+    python = interpreter(venv)
     os.execv(str(python), [str(python), "-B", *sys.argv])
 
 
