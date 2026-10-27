@@ -2164,6 +2164,29 @@ fn the_default_target_is_what_origin_advertises() {
     }
 }
 
+/// TSK-340 review round 8: `--base` and `--into` pin a task completion's
+/// receiving target; `epic status` does not take them, so it refuses them
+/// rather than ignoring them.
+#[test]
+fn epic_status_takes_no_receiving_target() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    for flags in [
+        &["--base", "main"][..],
+        &["--base", "main", "--into", "main"][..],
+    ] {
+        let mut args = vec!["epic", "status", "EPC-001", "complete"];
+        args.extend_from_slice(flags);
+        let out = codeflow().args(&args).current_dir(root).output().unwrap();
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert_ne!(out.status.code(), Some(0), "{flags:?}: {said}");
+        assert!(
+            said.contains("unexpected argument '--base'"),
+            "{flags:?}: {said}"
+        );
+    }
+}
+
 /// TSK-340 review round 2: reversing the merge parents manufactures no
 /// landing authority. The review lies on a task branch; `main` amends and
 /// restores AC-1; a branch from that `main` merges the review as its second
