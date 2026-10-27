@@ -99,6 +99,15 @@ pub struct StatusDetails {
     /// `journey`, `not_verified`, `follow_ups` and `verdict`.
     #[arg(long, value_name = "FILE")]
     pub acceptance: Option<PathBuf>,
+    /// The receiving target's tip a task completion binds against, such as
+    /// `origin/main`, in place of the default branch `origin` advertises;
+    /// needed when `origin` cannot be asked.
+    #[arg(long, value_name = "REF")]
+    pub base: Option<String>,
+    /// The receiving target's branch name; defaults to the branch `--base`
+    /// names.
+    #[arg(long, value_name = "BRANCH", requires = "base")]
+    pub into: Option<String>,
 }
 
 /// Arguments for `codeflow task`.
@@ -805,6 +814,8 @@ fn run_status(
         scope: details.scope.clone(),
         by,
         acceptance,
+        base: details.base.clone(),
+        into: details.into.clone(),
     };
     let root = match super::repo_root() {
         Ok(root) => root,

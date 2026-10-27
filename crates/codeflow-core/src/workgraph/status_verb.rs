@@ -36,6 +36,12 @@ pub struct StatusChange {
     pub by: Option<String>,
     /// An acceptance block (the text between the fences) to add on completion.
     pub acceptance: Option<String>,
+    /// The receiving target's tip to bind a completion against (`--base`),
+    /// in place of what `origin` advertises (TSK-340).
+    pub base: Option<String>,
+    /// The receiving target's branch name (`--into`); with `--base` and no
+    /// `--into`, the branch `--base` names.
+    pub into: Option<String>,
 }
 
 /// A written status change.
@@ -176,7 +182,7 @@ pub fn set_status(
     }
     let mut warnings = verdict.warnings;
     if change.target == "complete" {
-        bind_completion_of(repo_root, kind, &graph, &after, &mut warnings)?;
+        bind_completion_of(repo_root, kind, &graph, &after, change, &mut warnings)?;
     }
     replace_if_unchanged(repo_root, &record.path, digest.as_slice(), &proposed)?;
     Ok(VerbOutcome {
@@ -254,6 +260,7 @@ fn bind_completion_of(
     kind: RecordKind,
     graph: &Graph,
     after: &RecordView,
+    change: &StatusChange,
     warnings: &mut Vec<crate::remedy::Finding>,
 ) -> Result<(), VerbError> {
     if kind == RecordKind::Task {
@@ -274,7 +281,7 @@ fn bind_completion_of(
             &graph.with(after.clone()),
         )
         .map_err(|e| VerbError::Refused(vec![e]))?;
-        let findings = binding(repo_root, &graph.with(after.clone()), after);
+        let findings = binding(repo_root, &graph.with(after.clone()), after, change);
         if !frozen.is_empty() {
             // The binding's own refusals follow the frozen criteria, so a
             // waiver the reopen cannot take is named with them (issue #278).
@@ -378,7 +385,12 @@ fn epic_binding(repo_root: &Path, epic: &RecordView) -> Vec<String> {
 /// The binding of a completion to the reviewed commit (R-60), with the
 /// working tree over `HEAD` as the completion: the verb runs where the
 /// reviewed result is checked out, and applies the judge CI applies.
-fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
+fn binding(
+    repo_root: &Path,
+    graph: &Graph,
+    task: &RecordView,
+    change: &StatusChange,
+) -> Vec<String> {
     let Ok(repo) = git2::Repository::discover(repo_root) else {
         return vec!["cannot open the repository to bind the acceptance block".into()];
     };
@@ -399,7 +411,7 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     };
     // One qualified set of receiving lines and one anchor, carried through
     // both binding attempts (TSK-340 review round 5).
-    let qualified = match qualify(repo_root, &repo, task, head) {
+    let qualified = match qualify(repo_root, &repo, task, head, change) {
         Ok(qualified) => qualified,
         Err(error) => {
             return vec![format!(
@@ -530,11 +542,9 @@ fn qualify(
     repo: &git2::Repository,
     task: &RecordView,
     head: git2::Oid,
+    change: &StatusChange,
 ) -> Result<Qualified, String> {
-    let default = match default_name(repo)? {
-        Some(name) => receiving_tip(repo, &name)?.map(|tip| (name, tip)),
-        None => None,
-    };
+    let default = default_target(repo_root, repo, change)?;
     let default = default.as_ref().map(|(name, tip)| (name.as_str(), *tip));
     let declared = task
         .integration_target
@@ -618,72 +628,73 @@ fn epic_line_at(repo: &git2::Repository, tip: git2::Oid, line: &str) -> Result<b
         }))
 }
 
-/// Which branch is the default target, settled before any tip is read
-/// (TSK-340 review round 6). A clone with no remotes uses its local `main`,
-/// else `master`. Otherwise `origin/HEAD` names it when present; without
-/// it, exactly one of `origin/main` and `origin/master` must exist: both is
-/// ambiguous and refuses, naming `git remote set-head origin --auto`, and
-/// neither refuses, naming the fetch. A missing ref for the chosen name
-/// then refuses in [`receiving_tip`]; nothing falls back to another name.
-fn default_name(repo: &git2::Repository) -> Result<Option<String>, String> {
+/// The default target's name and tip, settled before any other tip is
+/// read (TSK-340 review rounds 6 and 7). An explicit `--base` (with
+/// `--into`, else the branch `--base` names) is the operator's pin. A clone
+/// with no remotes uses its local `main`, else `master`. Otherwise the name
+/// is what `origin` itself advertises as its default branch, asked with
+/// the bounded, non-interactive query the pre-push destination check uses:
+/// a local `origin/HEAD` or branch configuration never names it. The tip is
+/// the fetched `origin/<name>`. A remote that cannot be asked, advertises no
+/// default, or whose default is not fetched refuses, naming the `--base`
+/// to pass or the fetch to run; nothing falls back to another name.
+fn default_target(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    change: &StatusChange,
+) -> Result<Option<(String, git2::Oid)>, String> {
+    if let Some(base) = change.base.as_deref() {
+        let tip = repo
+            .revparse_single(base)
+            .and_then(|object| object.peel_to_commit())
+            .map_err(|error| format!("`--base {base}` does not name a commit here: {error}"))?
+            .id();
+        let name = change
+            .into
+            .clone()
+            .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
+        return Ok(Some((name, tip)));
+    }
     let remotes = repo
         .remotes()
         .map_err(|error| format!("cannot read the remotes: {error}"))?;
-    let exists = |reference: &str| match repo.find_reference(reference) {
-        Ok(_) => Ok(true),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(false),
-        Err(error) => Err(format!("cannot read {reference}: {error}")),
-    };
     if remotes.is_empty() {
         for name in ["main", "master"] {
-            if exists(&format!("refs/heads/{name}"))? {
-                return Ok(Some(name.to_string()));
+            if let Some(tip) = receiving_tip(repo, name)? {
+                return Ok(Some((name.to_string(), tip)));
             }
         }
         return Ok(None);
     }
+    let pass_base = "pass the default target instead: `--base origin/<default> --into <default>`";
     if !remotes
         .iter()
         .any(|remote| matches!(remote, Ok(Some("origin"))))
     {
-        return Err(
-            "this clone has remotes but no `origin`, so the default target has no receiving source; add the remote that carries it as `origin` and fetch it (`git fetch origin`)".into(),
-        );
+        return Err(format!(
+            "this clone has remotes but no `origin`, so the default target has no receiving source; add the remote that carries it as `origin`, or {pass_base}"
+        ));
     }
-    match repo.find_reference("refs/remotes/origin/HEAD") {
-        Ok(head) => {
-            // The symbolic target as bytes, read as rule text only when it is
-            // valid text (issue 79): another name refuses below.
-            let named = head
-                .symbolic_target_bytes()
-                .map(crate::git::GitName::from_bytes)
-                .and_then(|name| {
-                    name.rule_text()
-                        .ok()
-                        .and_then(|text| text.strip_prefix("refs/remotes/origin/"))
-                        .map(str::to_string)
-                });
-            let Some(target) = named else {
-                return Err(
-                    "`origin/HEAD` does not name a branch of `origin`; repair it (`git remote set-head origin --auto`)".into(),
-                );
-            };
-            return Ok(Some(target));
-        }
-        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
-        Err(error) => return Err(format!("cannot read origin/HEAD: {error}")),
-    }
-    let main = exists("refs/remotes/origin/main")?;
-    let master = exists("refs/remotes/origin/master")?;
-    match (main, master) {
-        (true, false) => Ok(Some("main".into())),
-        (false, true) => Ok(Some("master".into())),
-        (true, true) => Err(
-            "both `origin/main` and `origin/master` exist and `origin/HEAD` does not say which is the default target; set it (`git remote set-head origin --auto`)".into(),
-        ),
-        (false, false) => Err(
-            "no default target is fetched here: neither `origin/main` nor `origin/master` exists; fetch the default branch (`git fetch origin main`) or set `origin/HEAD` (`git remote set-head origin --auto`)".into(),
-        ),
+    let url = repo
+        .find_remote("origin")
+        .map_err(|error| format!("cannot read the remote `origin`: {error}"))?
+        .url_bytes()
+        .to_vec();
+    let Ok(url) = String::from_utf8(url) else {
+        return Err(format!("the URL of `origin` is not text; {pass_base}"));
+    };
+    let destination = super::release_line::ask_destination(repo_root, Some(&url))
+        .map_err(|why| format!("{why}; {pass_base}"))?;
+    let Some((name, _)) = destination.default else {
+        return Err(format!(
+            "`origin` advertises no default branch; {pass_base}"
+        ));
+    };
+    match receiving_tip(repo, &name)? {
+        Some(tip) => Ok(Some((name, tip))),
+        None => Err(format!(
+            "`origin` advertises `{name}` as its default branch, which is not fetched here; fetch it (`git fetch origin {name}`)"
+        )),
     }
 }
 
