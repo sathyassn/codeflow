@@ -100,7 +100,8 @@ pub(crate) fn evaluate(
     // A current-shell substitution's body is code the splitter does not
     // keep whole, so every word on the line may belong to a call the guard
     // never saw (TSK-397 security review SR2-1).
-    let opaque = opaque || outward::current_shell_substitution(line);
+    let lexed = super::shell_lex::lex(line);
+    let opaque = opaque || lexed.opaque || lexed.current_shell;
     if calls.is_empty() && !runs && !opaque && outward::interpreter_bodies(line).is_empty() {
         return Vec::new();
     }
@@ -116,15 +117,27 @@ pub(crate) fn evaluate(
         line_authority: HashMap::new(),
     };
     let mut reaches = Vec::new();
-    // The parser fills `$PWD`, `$(pwd)` and a backquoted `pwd` with the
-    // directory its walk believes the shell is in. Where the line may have
-    // moved the shell somewhere the guard cannot follow, any operand built
-    // from them names that unknown directory, whatever follows it (`$PWD/src/..`),
-    // so a line that spells one refuses (TSK-397 Codex review round 7).
-    if line_dirs.unknown && names_the_shell_directory(line) {
-        reaches.push(Reach::Enforcement(
-            "an interpreter argument is built from the shell's working directory (`$PWD`, `$(pwd)`) on a line where the guard cannot follow it".to_string(),
-        ));
+    // Where the line may have moved the shell somewhere the guard cannot
+    // follow, a value filled in at run time can be derived from that
+    // directory (`$PWD/src/..`, `$( pwd)`, `~+`), whatever its spelling.
+    // So an interpreter operand holding a command or arithmetic
+    // substitution, an expansion that is not a plain variable the line
+    // assigns, or a tilde prefix other than `~` with a known home refuses
+    // (TSK-397 Codex review round 8).
+    if line_dirs.unknown {
+        let reading = outward::read_line(&lexed);
+        let without_home = || {
+            reading.operands.iter().find(|word| {
+                home.is_none()
+                    && (word.tilde.is_some() || word.params.iter().any(|name| name == "HOME"))
+            })
+        };
+        if let Some(word) = reading.derived.as_ref().or_else(without_home) {
+            reaches.push(Reach::Enforcement(format!(
+                "an interpreter argument `{}` is filled in at run time on a line where the guard cannot follow the directory",
+                word.text
+            )));
+        }
     }
     for call in &calls {
         reaches.extend(call_reaches(call, &line_dirs, &mut facts));
@@ -1276,23 +1289,10 @@ fn unreadable_reach(
     )))
 }
 
-/// Whether a line, as the shell's lexer reads it, spells the shell's
-/// working directory: `$PWD`, `${PWD`, `$(pwd` or a backquoted `pwd`.
-fn names_the_shell_directory(line: &str) -> bool {
-    let line = outward::lex_normalized(line);
-    ["$PWD", "${PWD", "$(pwd", "`pwd"]
-        .iter()
-        .any(|form| line.contains(form))
-}
-
 /// Whether an operand names the directory it is used from or an ancestor:
-/// `.`, `./`, `..`, `x/..`, `../..`, or `$PWD`, `${PWD}`, `$(pwd)` or a
-/// backquoted `pwd` in place of `.`, and `~` when the home is unknown.
+/// `.`, `./`, `..`, `x/..`, `../..`, and `~` when the home is unknown.
 fn names_the_directory_or_above(value: &str, home_known: bool) -> bool {
     let mut value = value.to_string();
-    for here in ["${PWD}", "$PWD", "$(pwd)", "`pwd`"] {
-        value = value.replace(here, ".");
-    }
     if !home_known && (value == "~" || value.starts_with("~/")) {
         value.replace_range(..1, ".");
     }

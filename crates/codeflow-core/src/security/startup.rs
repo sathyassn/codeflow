@@ -2362,7 +2362,11 @@ fn checkout_config_violation(name: &str, args: &[String], line: &Line<'_>) -> Op
 /// assignment, function, subscript or expansion appears anywhere, so
 /// nothing on the line can rebind those names.
 fn only_directory_builtins(text: &str) -> bool {
-    let text = crate::security::outward::lex_normalized(text);
+    let lexed = crate::security::shell_lex::lex(text);
+    if lexed.opaque || lexed.current_shell {
+        return false;
+    }
+    let text = lexed.text;
     if text.contains([
         '|', '(', ')', '{', '}', '<', '>', '`', '\'', '\\', '#', '[', '=',
     ]) || text.replace("&&", "").contains('&')

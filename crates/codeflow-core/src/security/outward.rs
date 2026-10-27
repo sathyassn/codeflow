@@ -569,7 +569,7 @@ impl DirSet {
 /// Whether the line names the shell's `cd` search path, in bash or zsh
 /// spelling.
 fn mentions_cdpath(command: &str) -> bool {
-    let command = &lex_normalized(command);
+    let command = &super::shell_lex::lex(command).text;
     // Read the line as the shell would spell a name: quotes and
     // backslashes removed and parameter expansions dropped, so `CD''PATH`,
     // `CD\PATH` and `CD${E}PATH` count (TSK-397 Grok review finding 3).
@@ -644,8 +644,8 @@ pub(crate) enum DirChange {
 ///
 /// This is the modelled grammar the command walk follows. Whether a command
 /// may also move the shell somewhere the guard cannot see is a separate
-/// question, [`shell_may_move`], which `line_directories` asks of every
-/// step (TSK-397).
+/// question, [`read_line`], which `line_directories` asks of the line
+/// (TSK-397).
 pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChange> {
     let mut found = Vec::new();
     launcher_changes(words, home, 0, &mut found);
@@ -1007,8 +1007,9 @@ fn cd_destination(
 }
 
 /// Shell variables whose value is code the shell runs on its own: bash's
-/// `PROMPT_COMMAND` and the zsh hook arrays, matched in the line's text
-/// in every assignment spelling by [`hides_shell_state`].
+/// `PROMPT_COMMAND` and the zsh hook arrays. A plain assignment to one is
+/// read by [`read_line`]; an array or subscript spelling is a program word
+/// there, which is unknown anyway.
 const HOOK_VARIABLES: &[&str] = &[
     "PROMPT_COMMAND",
     "precmd_functions",
@@ -1019,136 +1020,35 @@ const HOOK_VARIABLES: &[&str] = &[
     "zshexit_functions",
 ];
 
-/// Whether the line's text holds shell state the command walk never hands
-/// to [`dir_changes`]: an assignment to a hook variable, in any spelling
-/// (`chpwd_functions=(f)`, `precmd_functions+=(f)`,
-/// `PROMPT_COMMAND[0]=...`), or a current-shell command substitution
-/// (`${ cd x; }`, `${| cd x; }`), which runs in this shell during
-/// expansion wherever it appears: quoted, in an assignment, a redirection
-/// or a heredoc. The token's presence decides; its contents are not read
-/// (TSK-397 Codex review rounds 4 and 6).
-fn hides_shell_state(command: &str) -> bool {
-    let command = &lex_normalized(command);
-    current_shell_substitution(command)
-        || HOOK_VARIABLES.iter().any(|name| {
-            command.match_indices(name).any(|(at, _)| {
-                let before = command[..at].chars().next_back();
-                let starts = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
-                let after = command[at + name.len()..].chars().next();
-                starts && matches!(after, Some('=' | '+' | '['))
-            })
-        })
-}
-
-/// The line as the shell's lexer reads it before anything else: a
-/// backslash-newline outside single quotes is removed, so `"$\` and a
-/// newline then `{ cmd; }` is `${ cmd; }` (TSK-397 Codex review round 7).
-/// Every raw-text check reads this form.
-pub(crate) fn lex_normalized(command: &str) -> String {
-    let mut out = String::with_capacity(command.len());
-    let mut chars = command.chars().peekable();
-    let (mut single, mut double) = (false, false);
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' if !double => {
-                single = !single;
-                out.push(c);
-            }
-            '"' if !single => {
-                double = !double;
-                out.push(c);
-            }
-            '\\' if !single => match chars.next() {
-                Some('\n') => {}
-                Some(next) => {
-                    out.push(c);
-                    out.push(next);
-                }
-                None => out.push(c),
-            },
-            _ => out.push(c),
+/// What the shell runs on a lexed line: whether any command may move it
+/// somewhere the guard cannot follow, and each interpreter call's operands.
+/// A program word counts only when fully unquoted and literal, and only an
+/// interpreter or a modeled launcher read through its own option grammar
+/// (`nice -n 5`, `timeout 5`, `env -u X`, `command -p`) is known not to
+/// move the shell; any other word may be a shell function (TSK-397).
+pub(crate) fn read_line(lexed: &super::shell_lex::Lexed) -> super::shell_lex::Reading {
+    let launcher = |program: &str, rest: &[String]| -> Option<usize> {
+        let name = crate::hooks::git_guard::launcher_name(program);
+        match name {
+            "command" | "exec" | "nohup" | "nice" | "stdbuf" | "time" | "xargs" | "caffeinate"
+            | "xcrun" | "ionice" => skip_launcher_options(name, rest),
+            "timeout" => skip_launcher_options(name, rest).map(|from| from + 1),
+            "env" => env_options(
+                rest,
+                &|operand| directory_operand(operand, None),
+                &mut Vec::new(),
+            ),
+            "noglob" | "nocorrect" => Some(0),
+            _ => None,
         }
-    }
-    out
-}
-
-/// Whether the line holds a current-shell command substitution: `${`
-/// followed by a blank, a newline or `|` (`${ cmd; }`, `${| cmd; }`),
-/// anywhere, quoted or not. Its body runs in this shell during expansion,
-/// and the splitter does not keep it whole, so the line is code the guard
-/// cannot read (TSK-397 security review SR2-1).
-pub(crate) fn current_shell_substitution(command: &str) -> bool {
-    let command = lex_normalized(command);
-    command.match_indices("${").any(|(at, _)| {
-        command[at + 2..]
-            .chars()
-            .next()
-            .is_some_and(|c| matches!(c, '|' | ' ' | '\t' | '\n'))
-    })
-}
-
-/// Whether one simple command may move the shell somewhere the guard
-/// cannot follow (TSK-397). Where a command leaves the shell depends on
-/// state the guard cannot see: shell functions and aliases (zoxide's `z`,
-/// a `cd` wrapper, zsh `autoload` and the `functions` table), hooks such as
-/// zsh `chpwd`, and the shell's `HOME`, `CDPATH`, `PWD` and directory
-/// stack. So only an interpreter call, reached through the modeled
-/// launchers and their options (`nice -n 5`, `timeout 5`, `xargs`), is
-/// known not to; every other command may, including a shell directory
-/// change in any form and a word the shell expands into `cd`. An
-/// assignment-only command changes nothing here; a hook assignment is read
-/// from the line's text ([`hides_shell_state`]).
-pub(crate) fn shell_may_move(words: &[String]) -> bool {
-    launched_interpreter(words, 0).is_none_or(hides_a_directory_change)
-}
-
-/// The arguments of the interpreter a simple command runs, read from
-/// command position through the modeled launchers' own option grammar
-/// (`nice -n 5`, `timeout 5`, `env -u X`, `command -p`), or `None` when
-/// anything else runs. No word is skipped by its shape: a word at command
-/// position that is neither a modeled launcher nor an interpreter may be a
-/// shell function (TSK-397 Codex review round 7). An assignment-only
-/// command runs nothing.
-fn launched_interpreter(words: &[String], depth: usize) -> Option<&[String]> {
-    if depth > 8 {
-        return None;
-    }
-    let assignment = |word: &str| {
-        word.split_once('=').is_some_and(|(name, _)| {
-            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        })
     };
-    let at = words
-        .iter()
-        .position(|word| word != "!" && !assignment(word))
-        .unwrap_or(words.len());
-    let Some(program) = words.get(at) else {
-        return Some(&[]);
-    };
-    let rest = &words[at + 1..];
-    if program_is_interpreter(program) {
-        return Some(rest);
-    }
-    if crate::hooks::git_guard::unresolved_word(program)
-        || crate::hooks::git_guard::has_glob(program)
-        || program.contains(['{', '}'])
-    {
-        return None;
-    }
-    let name = crate::hooks::git_guard::launcher_name(program);
-    let from = match name {
-        "command" | "exec" | "nohup" | "nice" | "stdbuf" | "time" | "xargs" | "caffeinate"
-        | "xcrun" | "ionice" => skip_launcher_options(name, rest)?,
-        "timeout" => skip_launcher_options(name, rest)? + 1,
-        "env" => env_options(
-            rest,
-            &|operand| directory_operand(operand, None),
-            &mut Vec::new(),
-        )?,
-        "noglob" | "nocorrect" => 0,
-        _ => return None,
-    };
-    launched_interpreter(rest.get(from..)?, depth + 1)
+    super::shell_lex::read(
+        lexed,
+        &launcher,
+        &|word| program_is_interpreter(word),
+        &|rest| hides_a_directory_change(rest),
+        HOOK_VARIABLES,
+    )
 }
 
 /// Whether `word`, as written, names an interpreter (`python3`,
@@ -1185,9 +1085,18 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
     // parser does not read (`+=`, `export`, `declare`, arrays, `read`,
     // `printf -v`), and its search paths may not be enumerable, so the
     // directory a later `cd` reaches is unknown (TSK-397 review F2).
+    // Whether anything on the line may move the shell somewhere the guard
+    // cannot follow is read from the shell's own lexing of the line
+    // (TSK-397): an opaque construct, a current-shell substitution, a
+    // `CDPATH` mention, or any command that is not a fully unquoted,
+    // literal interpreter call through the modeled launchers.
+    let lexed = super::shell_lex::lex(command);
     let mut set = DirSet {
         dirs: vec![cwd.to_path_buf()],
-        unknown: mentions_cdpath(command) || hides_shell_state(command),
+        unknown: lexed.opaque
+            || lexed.current_shell
+            || mentions_cdpath(&lexed.text)
+            || read_line(&lexed).moves,
     };
     // The shared walk supplies the directory before each command. Apply the
     // legacy launcher reader locally, rather than combining every change with
@@ -1207,9 +1116,6 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
         for segment in expand_commands(&step.text) {
             let mut words = command_argv(&segment);
             strip_reserved_words(&mut words);
-            if shell_may_move(&words) {
-                local.unknown = true;
-            }
             for change in dir_changes(&words, home) {
                 local.change(&change);
             }

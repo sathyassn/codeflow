@@ -1850,6 +1850,62 @@ mod tests {
         );
     }
 
+    /// Codex review round 8 and security review round 4: one lexer with the
+    /// shell's own states reads every word. A quoted or escaped word is
+    /// never `!`, a reserved word or an assignment, a digit-led name is not
+    /// an assignment, `$'...'` keeps its escaped quote, and any operand
+    /// filled in at run time refuses where the directory is unknown.
+    #[test]
+    fn the_shell_lexer_decides_command_position_and_taint() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                // C8-2, SR4-1: command position.
+                "1=x python3; python3 x.py settings.json",
+                "\"a=b\" python3; python3 x.py settings.json",
+                "a\\=b python3; python3 x.py settings.json",
+                "'s=x' python3; python3 x.py settings.json",
+                "s\\=x python3; python3 x.py settings.json",
+                "\"!\" python3; python3 x.py settings.json",
+                "'!' python3; python3 x.py settings.json",
+                "\"then\" python3; python3 x.py settings.json",
+                "\\then python3; python3 x.py settings.json",
+                "\"do\" python3; python3 x.py settings.json",
+                "'do' python3; python3 x.py settings.json",
+                "\"if\" python3; python3 x.py settings.json",
+                "'if' python3; python3 x.py settings.json",
+                "\"while\" python3; python3 x.py settings.json",
+                // C8-1, SR4-2: ANSI-C quoting before a continuation.
+                "v=$'\\''; python3 x.py settings.json \"$\\\n{ cd ./hidden; }\"",
+                "v=$'\\''; v=\"$\\\n{ cd ./hidden; }\"; python3 x.py settings.json",
+                "v=$'\\''; python3 x.py settings.json > \"$\\\n{ cd ./hidden; printf %s x; }\"",
+                "v=$'\\''; python3 x.py settings.json <<EOF\n$\\\n{ cd ./hidden; }\nEOF",
+                "v=$'a\\'b'; python3 x.py settings.json \"$\\\n{ cd ./hidden; }\"",
+                // C8-3, SR4-3: values derived from the working directory.
+                "z; python3 /abs/read_dir.py \"$( pwd)/src/..\"",
+                "z; python3 /abs/read_dir.py \"$(command pwd)/src/..\"",
+                "z; python3 /abs/read_dir.py \"$(builtin pwd)/src/..\"",
+                "z; python3 /abs/read_dir.py \"` pwd`/src/..\"",
+                "z; python3 /abs/read_dir.py ~+",
+                "z; python3 /abs/read_dir.py ~0",
+                "z; python3 /abs/read_dir.py ~+/src/..",
+                "z; python3 /abs/read_dir.py ~-",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "python3 x.py notes.txt",
+                "nice -n 5 python3 x.py settings.json",
+                "X=1 python3 x.py settings.json",
+                "z; python3 x.py notes.txt",
+            ],
+        );
+    }
+
     /// Codex review round 3 finding 1: a `cd` function or a zsh `chpwd`
     /// hook in the shell moves it after `cd ./src`. The real shells land in
     /// `.claude`, and the guard refuses the line.
