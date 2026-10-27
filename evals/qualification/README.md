@@ -609,30 +609,34 @@ python3 -B evals/qualification/anchored/check.py \
   retry-review-opens-with-the-whole <document.json>
 ```
 
-The venv lives under `target/` (or under `$CODEFLOW_ANCHORED_VENV`, which
-names the root to build under) as `anchored-venv-<requirements hash>-<python>`.
-It is built in a private directory beside that name with
-`--only-binary=:all: --require-hashes --no-deps`, verified, and moved into
-place in one rename; a matching venv is reused. The helper never deletes
-anything: a pin change or another Python gets a new name and the old venv
-stays unused, and a path at the managed name that is not a valid managed
-venv is refused and left as it is. Remove old `anchored-venv-*` directories
-and stray `.anchored-venv-*.build-*` directories by hand after checking what
-they hold.
+The venv lives under the fixed root `target/anchored/` in this repository,
+as `anchored-venv-<requirements hash>-<python>`; there is no override, and
+`CODEFLOW_ANCHORED_VENV`, which once moved the root, is refused if set. The
+venv is built with copied interpreters (`venv --copies`) in a private
+directory beside that name with `--only-binary=:all: --require-hashes
+--no-deps`, verified, and moved into place in one rename; a matching venv
+is reused. The helper never deletes anything: a pin change or another
+Python gets a new name and the old venv stays unused, and a path at the
+managed name that is not a valid managed venv is refused and left as it is.
+Remove old `anchored-venv-*` directories and stray
+`.anchored-venv-*.build-*` directories by hand after checking what they
+hold.
 
 Threat model: the helper is a developer and evaluator convenience, not a
 security boundary.
 
-- In scope: other users (the build happens inside a `tempfile.mkdtemp`
-  directory, mode 0700), accidental collisions at the managed name, and
-  stale or mismatched environments. Against other users the root must be
-  yours: before trusting or running anything under it, the helper requires
-  the root and the managed venv directory to be real directories owned by
-  the current user and not writable by group or others, and refuses
-  anything else before its interpreter runs. The default `target/` passes;
-  a shared or world-writable `CODEFLOW_ANCHORED_VENV` root is refused. On
-  Windows, with no equivalent check here, a configured root outside the
-  repository is refused.
+- In scope: other users, accidental collisions at the managed name, and
+  stale or mismatched environments.
+- The chain rule, checked before anything under the root runs: every path
+  from the repository root to the interpreter file (the repository,
+  `target/`, `target/anchored/`, the venv, `bin/` or `Scripts/`, the
+  interpreter) and the paths Python reads at start (`pyvenv.cfg` and the
+  `lib/` or `Lib/` directories down to `site-packages/`) must each be owned
+  by you, not writable by group or others, and not a symlink. On POSIX each
+  is opened without following a link and checked on the open file. On
+  Windows each path's resolved real path must lie inside the repository and
+  none may be a reparse point (a symlink or junction). Anything else is
+  refused before its interpreter runs.
 - Checked cheaply: before each build step the staging directory must still
   be the one the helper created (same device and inode, symlinks not
   followed), or the build stops.
