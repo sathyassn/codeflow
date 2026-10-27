@@ -1,0 +1,11 @@
+id = "TSK-1026"
+uid = "03d9f379-3f97-4cf8-9567-4af95e7b9d91"
+kind = "TSK"
+title = "The managed CI cancels superseded runs and skips a proven repeat"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-27T20:46:22Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
