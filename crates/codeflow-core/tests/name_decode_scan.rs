@@ -3890,7 +3890,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // A non-string schema_version becomes unsupported version Err; the empty placeholder is never an accepted default. run_gate propagates UnsupportedSchemaVersion as TestingError.
     (
         "crates/codeflow-core/src/testing/config/mod.rs",
-        "load_test_config",
+        "parse_test_config",
         "obtain-absent:as_str",
         1,
         "unproven",
@@ -6820,6 +6820,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_all_checks", "exists", 1, "False returns a Fail config-exists check, so an unreadable path is never passed; a present config is then loaded by load_test_config, which refuses a dangling leaf."),
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_target_checks", "exists", 1, "Only picks Pass or Warn text for a coverage exception path; exceptions are matched by path name in threshold evaluation and never read from disk."),
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_target_checks", "is_dir", 1, "False yields a Fail cwd-exists check, so an unreadable or dangling target directory is reported failing, never passed."),
+    ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "ErrorKind::NotFound", 1, "Only a NotFound from symlink_metadata on the named path becomes ConfigNotFound, a refusal; every other error refuses as unreadable (TSK-1020)."),
+    ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "is_file", 1, "Read from symlink_metadata after links are refused; false refuses the named config as not regular, and the bounded no-follow reader rechecks the opened file (TSK-1020)."),
     ("crates/codeflow-core/src/testing/gate.rs", "copy_evidence", "is_dir", 1, "The entry file_type acquisition propagates errors before choosing recursive versus file copy."),
     ("crates/codeflow-core/src/testing/runner/mod.rs", "run_owed_target", "exists", 4, "One guards removing a stale report that feeds only the display summary; one false fails the target; two pick evidence copies, and the gate rereads the original paths."),
     ("crates/codeflow-core/src/testing/setup/detect.rs", "detect_go", "try_exists", 1, "try_exists propagates metadata errors; only a dangling go.mod link reads false, which only drops a proposed target from a starting config the tool could not build anyway."),
