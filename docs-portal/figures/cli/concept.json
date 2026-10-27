@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "What can the binary do, and which commands are never typed by hand?",
-    "idea": "Twenty-eight subcommands sit in six jobs, and three of them are run for you by the settings presets, the git hooks and CI.",
+    "idea": "Twenty-nine subcommands sit in six jobs, and three of them are run for you by the settings presets, the git hooks and CI.",
     "title": "The command surface, by job",
     "kicker": "Command reference",
-    "caption": "You type twenty-five of the commands; hook, git-hook and ci are called by the wiring that init installs.",
+    "caption": "You type twenty-six of the commands; hook, git-hook and ci are called by the wiring that init installs.",
     "states": [
       {
         "name": "typed",
@@ -514,6 +514,23 @@
           ]
         },
         {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 528,
+          "cy": 185,
+          "r": 7,
+          "id": "g3c4"
+        },
+        {
+          "text": "follow",
+          "x": 544,
+          "y": 190,
+          "style": "mono",
+          "for": [
+            "g3c4"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 16,
@@ -617,7 +634,7 @@
       "marks": "same",
       "reason": "Each job stays one row of the same marks at phone width; its subcommands wrap under the job name instead of changing form.",
       "width": 360,
-      "height": 426,
+      "height": 454,
       "draw": [
         {
           "text": "Scaffold",
@@ -1076,31 +1093,48 @@
           ]
         },
         {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 110,
+          "cy": 357,
+          "r": 7,
+          "id": "g3c4"
+        },
+        {
+          "text": "follow",
+          "x": 124,
+          "y": 362,
+          "style": "mono",
+          "for": [
+            "g3c4"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 348,
+          "y1": 376,
           "x2": 352,
-          "y2": 348
+          "y2": 376
         },
         {
           "text": "Delegate",
           "x": 8,
-          "y": 372,
+          "y": 400,
           "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
           "cx": 110,
-          "cy": 367,
+          "cy": 395,
           "r": 7,
           "id": "g4c0"
         },
         {
           "text": "delegate",
           "x": 124,
-          "y": 372,
+          "y": 400,
           "style": "mono",
           "for": [
             "g4c0"
@@ -1110,14 +1144,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 218,
-          "cy": 367,
+          "cy": 395,
           "r": 7,
           "id": "g4c1"
         },
         {
           "text": "models",
           "x": 232,
-          "y": 372,
+          "y": 400,
           "style": "mono",
           "for": [
             "g4c1"
@@ -1127,28 +1161,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 386,
+          "y1": 414,
           "x2": 352,
-          "y2": 386
+          "y2": 414
         },
         {
           "text": "Present",
           "x": 8,
-          "y": 410,
+          "y": 438,
           "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
           "cx": 110,
-          "cy": 405,
+          "cy": 433,
           "r": 7,
           "id": "g5c0"
         },
         {
           "text": "portal",
           "x": 124,
-          "y": 410,
+          "y": 438,
           "style": "mono",
           "for": [
             "g5c0"
@@ -1158,14 +1192,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 201,
-          "cy": 405,
+          "cy": 433,
           "r": 7,
           "id": "g5c1"
         },
         {
           "text": "present",
           "x": 215,
-          "y": 410,
+          "y": 438,
           "style": "mono",
           "for": [
             "g5c1"
@@ -1197,7 +1231,7 @@
         ],
         [
           "Remember",
-          "`orient`, `status`, `recall`, `report`",
+          "`orient`, `status`, `recall`, `report`, `follow`",
           "none"
         ],
         [

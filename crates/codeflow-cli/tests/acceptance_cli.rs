@@ -27,7 +27,13 @@ fn codeflow() -> Command {
         .env_remove("BITBUCKET_PR_ID")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
+        .env_remove("GIT_INDEX_FILE")
+        // A caller's agent session must not judge fixture commits.
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CODEX_CI")
+        .env_remove("GROK_SESSION_ID");
     cmd
 }
 
@@ -40,6 +46,11 @@ fn git_out(dir: &Path, args: &[&str]) -> String {
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CODEX_CI")
+        .env_remove("GROK_SESSION_ID")
         .output()
         .expect("git runs");
     assert!(

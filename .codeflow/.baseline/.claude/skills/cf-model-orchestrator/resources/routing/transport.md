@@ -29,8 +29,11 @@ Any host may drive any reachable Herdr server (`herdr status server` reports
 `cf-herdr`'s rules: its own tabs only, unique `cf-` names, a `cwd` check
 before every send, and never the operator's panes.
 
-When the preferred seat cannot run, use these in order and record the
-fallback as such:
+Whether a seat can run is changeable state: probe it live before each
+routing decision (`.codeflow/rules/workflow-discipline.md` "Check
+changeable state live"; the orchestrator's "Degrade legibly" says when a
+seat is recorded unavailable). When the preferred seat cannot run, use these in order and
+record the fallback as such:
 
 1. From a Claude Code host to Codex only: the official Codex plugin, an
    optional fallback under `cf-delegate`'s qualified native fallback.
@@ -54,12 +57,17 @@ work. This table is the one home of these flags:
 | Seat | Production and building | Consult and review |
 |---|---|---|
 | Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |
-| Codex | `--ask-for-approval never -c default_permissions="cf-builder"`, no `--sandbox` flag, from the main checkout root | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |
+| Codex | `--ask-for-approval never -c 'permissions.cf-builder.description="CodeFlow builder seat"' -c default_permissions="cf-builder"`, no `--sandbox` flag, from the main checkout root | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |
 | Grok | Not qualified; no Grok seat builds (ADR-0075 D3, below) | `--permission-mode auto`, launched in its own task worktree |
 
 The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05: a
-sandbox that cannot write shell startup files, never full access. A builder
-reports a failed push and the caller pushes. The Grok builder posture is ADR-0075 D3:
+sandbox that cannot write shell startup files, never full access. Codex
+0.163 and later load config at startup without the project file, so the
+description override gives that load a `cf-builder` profile that grants
+nothing, and the session load merges it into the project's profile;
+without it the seat stops with "failed to load workspace requirements".
+`codeflow doctor --preflight` reports whether the installed Codex accepts
+these overrides. A builder reports a failed push and the caller pushes. The Grok builder posture is ADR-0075 D3:
 `--always-approve --sandbox cf-guard-worktree`, launched in its own task
 worktree after a separate step saves folder trust for that exact directory,
 with readiness judged by the hooks that load. ADR-0075 still lists as

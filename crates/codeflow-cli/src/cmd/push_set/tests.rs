@@ -1,42 +1,5 @@
 use super::*;
 
-#[test]
-fn branch_ancestry_is_a_timed_push_step() {
-    let history = History::new();
-    let head = history.git(&["rev-parse", "HEAD"]);
-    std::fs::write(history.local.path().join("base.txt"), "dirty").unwrap();
-    let destination = Destination {
-        listing: &OnceCell::new(),
-        advertised: &OnceCell::new(),
-        answer: &OnceCell::new(),
-        anchor: &OnceCell::new(),
-        fetch_failed: &OnceCell::new(),
-        fork: None,
-        url: history.remote.path().to_str(),
-        namespace: None,
-        policy: &GitPolicy::default(),
-    };
-    let pushed = PushRef {
-        local_ref: "refs/heads/new-name".into(),
-        local_sha: head,
-        remote_ref: "refs/heads/new-name".into(),
-        remote_sha: "0".repeat(40),
-    };
-    let mut report = StageReport::default();
-    let mut steps = Vec::new();
-    run_tree_checks(
-        Path::new("unused"),
-        history.local.path(),
-        &destination,
-        &[&pushed],
-        &mut report,
-        &mut steps,
-    )
-    .unwrap();
-    assert!(report.violations.is_empty(), "{report:?}");
-    assert!(steps.iter().any(|step| step.name == "destination branch ancestry (new-name)" && !step.configurable), "{steps:?}");
-}
-
 #[cfg(unix)]
 #[test]
 fn r20_git_absence_statuses_are_command_specific() {

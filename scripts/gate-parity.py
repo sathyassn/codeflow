@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Compare the local instrumented Rust suite with the Windows raw referee.
 
-Windows independently runs fmt, nextest (in partitions), doctests, clippy and
-rustdoc. Unix-only journeys and the ignored read benchmark remain Linux-only.
+Windows independently runs nextest (in partitions), doctests, clippy and
+rustdoc; formatting is platform independent, so only Linux runs fmt
+(TSK-449). Unix-only journeys and the ignored read benchmark remain Linux-only.
 Node versions, coordinator-owned binary paths and the parts of the split
 Linux full gate, its coverage shards and their report are also checked.
 """
@@ -168,8 +169,13 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
     runs = [norm(r) for r in re.findall(r"^\s*run:\s*(codeflow test .+?)\s*$", gate, re.M)]
     if runs != [PART_RUN]:
         problems.append(f"the gates job must run exactly `{PART_RUN}` once; it runs {runs}")
+    release = jobs.get("gates-release", "")
     parts = re.findall(r"^\s*only:\s*(\S+)\s*$", gate, re.M)
-    named = [n for part in parts for n in part.split(",") if n]
+    release_parts = re.findall(r"^\s*only:\s*(\S+)\s*$", release, re.M)
+    landing = [n for part in parts for n in part.split(",") if n]
+    released = [n for part in release_parts for n in part.split(",") if n]
+    named = landing + released
+    problems.extend(release_job_problems(release, gate, workflow, released))
     owed = {
         t["name"] for t in cfg.get("targets", [])
         if applicable(t) and t.get("modes", {}).get("full")
@@ -180,7 +186,8 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
     by_coverage = requires_closure(cfg, set(COVERAGE_TARGETS))
     missing = sorted(owed - requires_closure(cfg, set(named)) - by_coverage)
     if missing:
-        problems.append(f"no gate part or coverage job runs these full-mode targets: {missing}")
+        problems.append(f"no gate part, release part or coverage job runs these full-mode targets: {missing}; "
+                        "the hosted landing gate and the schedule and release path both leave them out")
     twice = sorted({n for n in named if named.count(n) > 1})
     if twice:
         problems.append(f"more than one gate part names: {twice}")
@@ -208,13 +215,14 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
         if norm_job(text) != norm_job(expected):
             problems.append(
                 f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
-                "`if: always()`, need the reuse, gates and "
+                "`if: always()` except on a draft, need the reuse, gates and "
                 "coverage jobs, and fail unless each of them succeeded or the reuse decision named a "
                 "run and all of them were skipped; any other form could let a skipped, failed or "
                 "cancelled part read as passed. Expected:\n" + expected)
-    if "    needs: reuse" not in [l.rstrip() for l in gate.splitlines()]:
-        problems.append("the gates job must need exactly the reuse job (`needs: reuse`), whose output its "
-                        "condition reads")
+    if "    needs: [reuse, gates-build]" not in [l.rstrip() for l in gate.splitlines()]:
+        problems.append("the gates job must need exactly the reuse job, whose output its condition reads, "
+                        "and the build job (`needs: [reuse, gates-build]`)")
+    problems.extend(build_job_problems(jobs, gate))
     problems.extend(reuse_job_problems(jobs))
     line = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
     guarded = GATES_IF.match(line.group(1)) if line else None
@@ -428,10 +436,11 @@ REUSE_JOB = """\
 # substring check would let an inserted second success path through. It
 # passes only when every Windows job succeeded, or when the reuse decision
 # named a run and every Windows job was skipped. Verdicts run on every
-# event, including when gate selection skips the work.
+# event but a draft pull request, which ends them neutral (TSK-449),
+# including when gate selection skips the work.
 WINDOWS_VERDICT = "windows"
 WINDOWS_VERDICT_JOB = """\
-    if: always()
+    if: ${{{{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
     name: windows
     needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
@@ -454,7 +463,7 @@ WINDOWS_VERDICT_JOB = """\
             exit 0
           fi
           if [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ]; then
-            echo "::error::the Windows gates did not run; draft integration pull requests and bases outside main, master or integration/** cannot supply a passing verdict"
+            echo "::error::the Windows gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
             exit 1
           fi
           if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
@@ -481,6 +490,28 @@ def windows_verdict_problems(workflow: str) -> list[str]:
     return []
 
 
+# TSK-449 AC-5: the release binary the gate parts run is built once, by the
+# `gates-build` job under the gates job's own condition, and each part
+# fetches it; no other job of the workflow builds the release binary.
+BUILD_STEP = "cargo build --release -p codeflow-cli"
+
+
+def build_job_problems(jobs: dict[str, str], gate: str) -> list[str]:
+    problems = []
+    build = jobs.get("gates-build", "")
+    builds = [name for name, text in jobs.items() if "cargo build --release" in text]
+    if builds != ["gates-build"]:
+        problems.append(f"only the gates-build job may build the release binary; found {builds}")
+    if f"run: {BUILD_STEP}" not in build or "name: codeflow-release" not in build:
+        problems.append(f"the gates-build job must run `{BUILD_STEP}` and keep it as the codeflow-release artifact")
+    condition = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
+    if not condition or f"    if: {condition.group(1)}" not in build.splitlines():
+        problems.append("the gates-build job must run under exactly the gates job's condition")
+    if "name: codeflow-release" not in gate or 'echo "$RUNNER_TEMP/codeflow-bin" >> "$GITHUB_PATH"' not in gate:
+        problems.append("each gate part must fetch the codeflow-release build and put it on PATH")
+    return problems
+
+
 def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
     if norm_job(jobs.get("reuse", "")) != norm_job(REUSE_JOB):
         return ["the `reuse` job must be exactly this, so only a push can reuse a verdict, its token stays "
@@ -491,11 +522,12 @@ def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
 # The one accepted form of the verdict job. A substring check let a false
 # condition, a forgiven exit or `continue-on-error` through (TSK-203 review),
 # so the job must match this text exactly, apart from blank lines, comments
-# and trailing spaces. Every event must receive a verdict.
+# and trailing spaces. Every event but a draft pull request must receive a
+# verdict; a draft's verdicts are skipped, which is neutral (TSK-449).
 VERDICT_JOB = """\
-    if: always()
+    if: ${{{{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
     name: codeflow gates
-    needs: [reuse, gates, gates-coverage, gates-coverage-report]
+    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -503,21 +535,26 @@ VERDICT_JOB = """\
         shell: bash
         env:
           PARTS: ${{{{ needs.gates.result }}}}
+          RELEASE: ${{{{ needs.gates-release.result }}}}
           SHARDS: ${{{{ needs.gates-coverage.result }}}}
           REPORT: ${{{{ needs.gates-coverage-report.result }}}}
           REUSE: ${{{{ needs.reuse.result }}}}
           REUSED: ${{{{ needs.reuse.outputs.run }}}}
         run: |
-          if [ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+          if [ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
             exit 0
           fi
           if [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]; then
-            echo "::error::the Linux gates did not run; draft integration pull requests and bases outside main, master or integration/** cannot supply a passing verdict"
+            echo "::error::the Linux gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
             exit 1
           fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
             echo "::error::the full gate concluded parts=${{PARTS}} coverage shards=${{SHARDS}} coverage report=${{REPORT}}; see the codeflow gates jobs"
+            exit 1
+          fi
+          if [ "$RELEASE" != success ] && [ "$RELEASE" != skipped ]; then
+            echo "::error::the release parts concluded ${{RELEASE}}; see the codeflow gates (release) jobs"
             exit 1
           fi
           echo "every part of the full gate passed"
@@ -553,6 +590,40 @@ GATE_STEP = """\
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
         run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
 """
+
+
+# TSK-449 AC-4: the release-tier targets run in gates-release, never in the
+# hosted landing gate. That job takes the gates job's form, runs on the
+# release candidate (a ready pull request into main or master), pushes to
+# main or master, the schedule and manual runs, and never on a pull request
+# into integration/**.
+RELEASE_TARGETS = ("prose-exhaustive", "read-benchmark", "present-browser", "present-binary-delta")
+RELEASE_IF = ("${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && "
+              "!github.event.pull_request.draft && contains(fromJSON('[\"main\",\"master\"]'), "
+              "github.event.pull_request.base.ref) || github.event_name == 'push' && "
+              "contains(fromJSON('[\"refs/heads/main\",\"refs/heads/master\"]'), github.ref) || "
+              "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}")
+
+
+def release_job_problems(release: str, gate: str, workflow: str, released: list[str]) -> list[str]:
+    if not release:
+        return ["the workflow must have the gates-release job that runs the release-tier targets"]
+    problems = []
+    condition = re.search(r"^ {4}if:\s*(.+?)\s*$", release, re.M)
+    if not condition or condition.group(1) != RELEASE_IF:
+        problems.append(f"the gates-release job's condition must be exactly `if: {RELEASE_IF}`, so it runs on "
+                        "the release path and never on a pull request into integration/**")
+    if "    needs: [reuse, gates-build]" not in [line.rstrip() for line in release.splitlines()]:
+        problems.append("the gates-release job must need exactly `[reuse, gates-build]`")
+    if sorted(released) != sorted(RELEASE_TARGETS):
+        problems.append(f"the gates-release parts must name exactly {sorted(RELEASE_TARGETS)}; found {sorted(released)}")
+    landing = re.findall(r"^\s*only:\s*(\S+)\s*$", gate, re.M)
+    early = sorted(set(RELEASE_TARGETS) & {n for part in landing for n in part.split(",")})
+    if early:
+        problems.append(f"the landing gate parts name release-tier targets {early}; they run in gates-release")
+    problems.extend(problem.replace("the gates job", "the gates-release job")
+                    for problem in gate_step_problems(release, workflow))
+    return problems
 
 
 def gate_step_problems(gate: str, workflow: str = "") -> list[str]:
@@ -1184,9 +1255,9 @@ def playwright_problems(workflow: str) -> list[str]:
             lines = norm_job(step)
             if "playwright" not in "\n".join(lines).lower():
                 continue
-            if name != "gates":
-                problems.append(f"job '{name}' has a Playwright step ({lines[0].strip()}); only the gates job's "
-                                "present part launches a browser")
+            if name != "gates-release":
+                problems.append(f"job '{name}' has a Playwright step ({lines[0].strip()}); only the gates-release "
+                                "job's present part launches a browser (TSK-449)")
                 continue
             found.append(lines)
     pinned = [norm_job(step) for step in PLAYWRIGHT_STEPS]
@@ -1223,9 +1294,15 @@ def main() -> int:
     return status
 
 
+def windows_owed(local: set[str]) -> set[str]:
+    """The local Rust commands Windows must also run: all but fmt, whose
+    result does not depend on the platform (TSK-449)."""
+    return {cmd for cmd in local if not cmd.startswith("cargo fmt ")}
+
+
 def rust_parity() -> int:
     notes: list[str] = []
-    local = local_rust_commands(json.loads(repository_text(CONFIG)), notes)
+    local = windows_owed(local_rust_commands(json.loads(repository_text(CONFIG)), notes))
     ci = ci_rust_job_commands(repository_text(WORKFLOW))
     if not ci:
         print("gate-parity: could not find the Windows jobs' cargo commands; "

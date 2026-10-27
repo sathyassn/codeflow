@@ -9,7 +9,7 @@
 // so the two cannot drift apart; a state named on a mark or legend entry must
 // be one its figure declares. Identifiers are held to their character set, not
 // a length: the declaration envelope already bounds them.
-import { ENTITY_ID, entityLabel, FAMILIES, SHAPE_CLASSES, TEXT_CLASSES } from "./figure-grammar.mjs";
+import { ENTITY_ID, entityLabel, FAMILIES, SHAPE_CLASSES, TEXT_CLASSES, TONES } from "./figure-grammar.mjs";
 
 const HTML = "http://www.w3.org/1999/xhtml";
 const SVG = "http://www.w3.org/2000/svg";
@@ -24,6 +24,8 @@ const KEBAB = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const KEBABS = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?: [a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/u;
 const DECLARED_STATE = "data-state";
 const ENTITY = "data-cf-entity";
+// A companion or accent tone the grammar writes on a mark group and its key.
+const TONE = "data-cf-tone";
 // An entity label is already collapsed and cut (SPC-014 B2), and never empty.
 const ENTITY_LABEL = (value: string): boolean => value.length > 0 && entityLabel(value) === value && !/[\u0000-\u001f\u007f]/u.test(value);
 const PATH_DATA = /^[MLHVCQZz0-9., -]{1,4096}$/u;
@@ -65,7 +67,7 @@ const ALLOWED: Record<string, Record<string, Check>> = {
   [`${HTML} p`]: { class: exactly("cf-fig-title", "cf-fig-description") },
   [`${HTML} span`]: { class: exactly("cf-fig-number", "cf-fig-name", "cf-fig-kicker") },
   [`${HTML} ul`]: { class: exactly("cf-legend"), "aria-label": exactly("Legend") },
-  [`${HTML} li`]: { [DECLARED_STATE]: KEBAB, "data-cf-wide": exactly(""), [ENTITY]: ENTITY_ID, "data-cf-entity-label": ENTITY_LABEL },
+  [`${HTML} li`]: { [DECLARED_STATE]: KEBAB, "data-cf-wide": exactly(""), [ENTITY]: ENTITY_ID, "data-cf-entity-label": ENTITY_LABEL, [TONE]: exactly(...TONES) },
   [`${HTML} figcaption`]: { class: exactly("cf-fig-caption") },
   [`${HTML} details`]: { class: exactly("cf-fig-details") },
   [`${HTML} summary`]: {},
@@ -95,7 +97,7 @@ const ALLOWED: Record<string, Record<string, Check>> = {
     patternUnits: exactly("userSpaceOnUse"),
     patternTransform: exactly("rotate(45)"),
   },
-  [`${SVG} g`]: { [DECLARED_STATE]: KEBAB, id: ID, "data-cf-value": JS_NUMBER, [ENTITY]: ENTITY_ID, "data-cf-entity-label": ENTITY_LABEL },
+  [`${SVG} g`]: { [DECLARED_STATE]: KEBAB, id: ID, "data-cf-value": JS_NUMBER, [ENTITY]: ENTITY_ID, "data-cf-entity-label": ENTITY_LABEL, [TONE]: exactly(...TONES) },
   [`${SVG} text`]: {
     class: textClass,
     ...coordinates("x", "y"),

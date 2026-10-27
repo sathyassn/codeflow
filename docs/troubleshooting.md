@@ -111,12 +111,12 @@ Quick gates can run light targets while another gate holds the lock. Declare
 mode use `execution.quick_default_class`, which accepts `"light"` (the
 default) or `"heavy"`. A project with substantial undeclared quick suites
 can set it to `"heavy"` and set `execution.heavy_wait_seconds` to a bounded
-wait for both interactive and pre-push runs. An explicit target declaration
+wait. An explicit target declaration
 takes precedence. When there are no quick targets and quick falls back to
 essential, undeclared targets are heavy. Heavy quick targets wait up to
 `execution.heavy_wait_seconds` (default zero), then refuse if the lock is
-still held. The result names the light targets that ran. Pre-push uses the
-same admission for its configured quick targets.
+still held. The result names the light targets that ran. Pre-push runs no
+quick target, so it never waits for the lock.
 
 Read the holder's process, worktree, mode and start time with
 `codeflow test --lock-status`. This reads both records without taking a
@@ -162,6 +162,25 @@ Work one check at a time, starting with the `FAIL` lines.
 The fix worked when that check prints `ok`, or when a full run exits 0 with no
 `FAIL` line. After a completed trust step the `codex` and `grok` checks
 report a note, since doctor cannot see a live harness run.
+
+## A cancelled standalone task has no planning anchor
+
+If a standalone task was cancelled before its record reached the target,
+record the decision in a `plan/` pull request. On the task branch, run
+`codeflow task status TSK-NNN cancelled --reason <why> --scope <where it went>`.
+Cut the planning branch from the target and copy only the cancelled record
+onto it, retaining the Closeout's `- cancelled:` and `- scope:` lines. Set
+`Task: TSK-NNN` in the PR body. The range must stay inside
+`project-management/`; it must not bring the abandoned product commits.
+
+`codeflow ci` and pre-push accept this planning amendment without a
+`codeflow work start` claim and report its task under `no epic`. This route
+requires the record to be absent from the merge-base. An active task still
+uses its own task branch and `work start`; a record already on the target
+uses the ordinary task status route. A push has no `Task:` line yet, so
+pre-push refuses only a new cancelled record without its reason or scope,
+or a path a planning amendment cannot carry; the pull request check judges
+the rest.
 
 ## A push is blocked by a quick target
 

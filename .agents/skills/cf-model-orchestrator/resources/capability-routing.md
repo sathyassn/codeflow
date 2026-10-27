@@ -6,8 +6,11 @@ Claude-led design, plan approval, evidence gates, or safety boundary.
 
 The session-level routing read is the seat section of `SKILL.md` ("Seats and
 routing": the seat table, roles, primary-owned routing, review and
-degradation), read once per session and rechecked explicitly when a tool,
-binding, permission or selector changed. The plan's assignment line and route
+degradation). Its instructions are read once per session and reread when a
+tool, binding, permission or selector changes. Reading them is not checking
+availability: whether a seat can run is probed live before each routing
+decision, as `.codeflow/rules/workflow-discipline.md` "Check changeable
+state live" says. The plan's assignment line and route
 readiness live in the quality contract's plan section. The sections below are
 read on their trigger. Each section is the one home for its duties.
 

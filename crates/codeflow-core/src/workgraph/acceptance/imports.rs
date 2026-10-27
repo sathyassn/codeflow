@@ -174,7 +174,7 @@ fn compute_imports(
             let Some(landed) = landed else {
                 continue;
             };
-            if is_ancestor_or_same(repo, landed, anchor)? {
+            if !is_new_import(repo, record, landed, anchor, head)? {
                 continue;
             }
             let result = prove_record(repo, record, &home, tip, default_tip, landed, base, head)
@@ -284,11 +284,192 @@ fn refuse_unpublished(
         return Ok(());
     }
     if let Some(landing) = matching_landing(repo, record, local, head, Some(base))? {
-        if !is_ancestor_or_same(repo, landing, published)? {
+        if !is_ancestor_or_same(repo, landing, published)?
+            && !is_shared_planning(repo, record, landing, head)?
+        {
             return Err(format!("{}: blocks come from target history on home `{home}`, but its exact record exists only on unpublished local history; land the reviewed work through the home's pull request, fetch the configured remote for `{home}`, then merge that published result", record.id));
         }
     }
     Ok(())
+}
+
+/// A landing the shared anchor already holds, or shared planning
+/// provenance, supplies no new import.
+fn is_new_import(
+    repo: &Repository,
+    record: &RecordView,
+    landed: Oid,
+    anchor: Oid,
+    head: Oid,
+) -> Result<bool, String> {
+    Ok(!is_ancestor_or_same(repo, landed, anchor)?
+        && !is_shared_planning(repo, record, landed, head)?)
+}
+
+/// Whether `landing` is shared planning provenance rather than an import
+/// (TSK-1004): an admissible planning landing that introduced this task
+/// record in a permitted state, carried on the receiving head's own
+/// first-parent chain with the record unchanged at every step since. Two lines that branch from one planning merge both hold it,
+/// and each line's own range answers for it, as it would for a planning
+/// merge of its own.
+///
+/// Shared ancestry alone never qualifies. A version that changes an
+/// existing record (a completion, evidence or a criteria change) is not an
+/// introduction, so it still needs published home authority. Any record
+/// state it cannot read, a renamed copy included, answers no.
+fn is_shared_planning(
+    repo: &Repository,
+    record: &RecordView,
+    landing: Oid,
+    head: Oid,
+) -> Result<bool, String> {
+    // The state is judged once, at the landing, by identity: the head holds
+    // the same version, which the walk below proves.
+    if record.kind != RecordKind::Task {
+        return Ok(false);
+    }
+    let Some(first) = admissible_planning_landing(repo, landing)? else {
+        return Ok(false);
+    };
+    if !permitted_at(repo, landing, record) {
+        return Ok(false);
+    }
+    let uid = record_uid(&record.content);
+    if !matches!(
+        presence_at(
+            repo,
+            first,
+            &record.id,
+            uid.as_deref(),
+            &own_file_name(record)
+        ),
+        Presence::Absent
+    ) {
+        return Ok(false);
+    }
+    // Bind to the receiver's own first-parent chain, by commit identity:
+    // the record must be this exact version at every commit from the head
+    // back to the landing, so the receiving line has not changed it since.
+    let mut at = head;
+    loop {
+        if record_at(repo, at, record)?.is_none_or(|own| own.content != record.content) {
+            return Ok(false);
+        }
+        if at == landing {
+            return Ok(true);
+        }
+        match first_parent(repo, at)? {
+            Some(parent) if is_ancestor_or_same(repo, landing, parent)? => at = parent,
+            _ => return Ok(false),
+        }
+    }
+}
+
+/// The first parent of `landing` when it is an admissible planning landing
+/// (TSK-1004): a merge whose tree is the clean merge of its parents, and
+/// whose change from its first parent passes the planning-amendment
+/// admissibility check, touches only records and plans (both names of a
+/// rename) and holds only regular, non-executable files on each side.
+///
+/// # Errors
+/// A commit, tree, diff or policy that cannot be read is an error, which
+/// the caller reports as a refusal: unread history never admits a landing.
+fn admissible_planning_landing(repo: &Repository, landing: Oid) -> Result<Option<Oid>, String> {
+    use super::super::amendment::{landing_problem, project_at};
+    use super::super::classify::{amendment_path, AmendmentPath};
+    let commit = repo
+        .find_commit(landing)
+        .map_err(|error| error.to_string())?;
+    let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
+    let [first, _] = parents.as_slice() else {
+        return Ok(None);
+    };
+    if !is_clean_remerge(repo, &commit).map_err(|error| error.to_string())?
+        || landing_problem(repo, Some(*first), landing)
+            .map_err(|error| error.to_string())?
+            .is_some()
+    {
+        return Ok(None);
+    }
+    let project = project_at(repo, *first)?;
+    let tree = |oid: Oid| {
+        repo.find_commit(oid)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.to_string())
+    };
+    let diff = repo
+        .diff_tree_to_tree(Some(&tree(*first)?), Some(&tree(landing)?), None)
+        .map_err(|error| error.to_string())?;
+    for delta in diff.deltas() {
+        // The side a delta adds or deletes holds no entry; every other side does.
+        let sides = match delta.status() {
+            git2::Delta::Added => vec![delta.new_file()],
+            git2::Delta::Deleted => vec![delta.old_file()],
+            _ => vec![delta.old_file(), delta.new_file()],
+        };
+        for file in sides {
+            let name = crate::git::GitName::from_bytes(file.path_bytes().unwrap_or_default());
+            let path = name.rule_text().map_err(|odd| odd.display().to_string())?;
+            let regular = i32::from(file.mode()) == 0o100_644;
+            if !regular || amendment_path(path, &project) != Some(AmendmentPath::Record) {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(*first))
+}
+
+/// Whether `landed` moved the task's declared home as reviewed planning
+/// (TSK-1004 AC-5): the head under check made the move itself, on its own
+/// first-parent history, through an admissible planning landing, and the
+/// task is in a permitted state at the landing and at its first parent.
+/// It answers only the home-change question; every other proof still runs.
+///
+/// # Errors
+/// Unreadable history is an error, never a planning move.
+fn is_planning_move(
+    repo: &Repository,
+    record: &RecordView,
+    landed: Oid,
+    parent: Oid,
+    head: Oid,
+) -> Result<bool, String> {
+    Ok(on_home_chain(repo, landed, head)?
+        && admissible_planning_landing(repo, landed)? == Some(parent)
+        && permitted_at(repo, landed, record)
+        && permitted_at(repo, parent, record))
+}
+
+/// Whether the task `record` names is in a permitted state at `at`: exactly
+/// one task record there carries its id or uid, every task record there
+/// parses, and that record states `todo` or `blocked` and holds no
+/// acceptance block, active, superseded or malformed.
+fn permitted_at(repo: &Repository, at: Oid, record: &RecordView) -> bool {
+    let Ok(entries) = super::task_entries(repo, at) else {
+        return false;
+    };
+    let uid = record_uid(&record.content);
+    let mut found = Vec::new();
+    for (path, blob) in entries {
+        let Ok(blob) = repo.find_blob(blob) else {
+            return false;
+        };
+        let Ok(content) = std::str::from_utf8(blob.content()) else {
+            return false;
+        };
+        let Ok(task) = RecordView::parse(RecordKind::Task, &path, content) else {
+            return false;
+        };
+        if super::is_same_task(&task, &record.id, uid.as_deref()) {
+            found.push(task);
+        }
+    }
+    let [task] = found.as_slice() else {
+        return false;
+    };
+    matches!(task.status.as_str(), "todo" | "blocked")
+        && task.active_blocks().is_empty()
+        && task.superseded_blocks().is_empty()
 }
 
 /// A line cannot supply import authority to its own current or historical head.
@@ -609,7 +790,8 @@ fn verify_record_home(
                             .as_deref()
                             .map_or(home, super::super::work_start::logical_target)
                 })
-            }) {
+            }) && !is_planning_move(repo, record, landed, *parent, head)?
+            {
                 return Err("the landing changes the task's declared home".into());
             }
         }

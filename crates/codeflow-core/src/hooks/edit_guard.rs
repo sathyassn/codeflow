@@ -490,6 +490,25 @@ pub(crate) fn normalize_case(
 // `"`) is kept the same way. Broken links and permissions are errors, not an
 // implicit allow.
 pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
+    let key = (path.to_path_buf(), resolve);
+    if let Some(cached) = NORMALIZED.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .and_then(|paths| paths.get(&key).cloned())
+    }) {
+        return cached;
+    }
+    let result = normalize_uncached(path, resolve);
+    NORMALIZED.with(|cache| {
+        if let Some(paths) = cache.borrow_mut().as_mut() {
+            paths.insert(key, result.clone());
+        }
+    });
+    result
+}
+
+fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
     let path = crate::portable_path::without_verbatim(path.to_path_buf());
     let mut result = PathBuf::new();
     for component in path.components() {
@@ -517,32 +536,50 @@ pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditErro
                     result.push(part);
                 }
                 if resolve {
-                    if crate::absence::cannot_exist(&result).map_err(|e| {
-                        EditError(format!("cannot inspect {}: {e}", result.display()))
-                    })? {
-                        continue;
-                    }
-                    match std::fs::symlink_metadata(&result) {
-                        Ok(metadata) if metadata.file_type().is_symlink() => {
-                            result = crate::portable_path::canonicalize(&result).map_err(|e| {
-                                EditError(format!("cannot resolve {}: {e}", result.display()))
-                            })?;
-                        }
-                        Ok(metadata) => {
-                            normalize_case(&mut result, &metadata).map_err(EditError)?;
-                        }
-                        Err(e) => {
-                            return Err(EditError(format!(
-                                "cannot inspect {}: {e}",
-                                result.display()
-                            )))
-                        }
-                    }
+                    result = resolved_component(result)?;
                 }
             }
         }
     }
     Ok(result)
+}
+
+/// Branch alternatives commonly share all but their last component. Resolve
+/// those prefixes once in the same invocation snapshot as complete operands.
+fn resolved_component(mut path: PathBuf) -> Result<PathBuf, EditError> {
+    let key = (path.clone(), true);
+    if let Some(cached) = NORMALIZED.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .and_then(|paths| paths.get(&key).cloned())
+    }) {
+        return cached;
+    }
+    let result = (|| {
+        if crate::absence::cannot_exist(&path)
+            .map_err(|e| EditError(format!("cannot inspect {}: {e}", path.display())))?
+        {
+            return Ok(path);
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                crate::portable_path::canonicalize(&path)
+                    .map_err(|e| EditError(format!("cannot resolve {}: {e}", path.display())))
+            }
+            Ok(metadata) => {
+                normalize_case(&mut path, &metadata).map_err(EditError)?;
+                Ok(path)
+            }
+            Err(e) => Err(EditError(format!("cannot inspect {}: {e}", path.display()))),
+        }
+    })();
+    NORMALIZED.with(|cache| {
+        if let Some(paths) = cache.borrow_mut().as_mut() {
+            paths.insert(key, result.clone());
+        }
+    });
+    result
 }
 
 pub(crate) const AUTHORITY_PATH: &str = "remote-tracking policy metadata";
@@ -664,6 +701,9 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
             (PathBuf::from("packed-refs"), false),
             (PathBuf::from("config"), false),
             (PathBuf::from("config.worktree"), false),
+            // The coordination ledger (ADR-0086): CodeFlow writes it from
+            // inside its own process; an agent's direct edit is refused.
+            (PathBuf::from("codeflow/coord"), true),
         ];
         if let Ok(names) = repo.worktrees() {
             // OS text rule (issue 79, `docs/architecture.md`): the names are kept
@@ -909,7 +949,11 @@ pub(super) fn registration_at(admin: &Path) -> Result<super::repo::CheckedRegist
     })
 }
 
+type NormalizedCache = std::collections::HashMap<(PathBuf, bool), Result<PathBuf, EditError>>;
+
 thread_local! {
+    static NORMALIZED: std::cell::RefCell<Option<NormalizedCache>> =
+        const { std::cell::RefCell::new(None) };
     static REGISTRATIONS: std::cell::RefCell<Option<RegistrationCache>> =
         const { std::cell::RefCell::new(None) };
     static PROTECTED: std::cell::RefCell<Option<ProtectedCache>> =
@@ -919,7 +963,9 @@ thread_local! {
 }
 
 /// While alive, each repository's enforcement paths are read and resolved
-/// once on this thread. One guard evaluation judges many words against the
+/// once on this thread. Normalized operands share that snapshot too, including
+/// errors; dropping the outer scope discards it before the next command.
+/// One guard evaluation judges many words against the
 /// same repository, which the command being judged has not changed yet
 /// (TSK-216 round 16).
 pub struct RepoFactsScope {
@@ -939,6 +985,7 @@ impl RepoFactsScope {
             outer
         });
         if outer {
+            NORMALIZED.with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             super::repo::TARGET_ROOTS
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             REGISTRATIONS
@@ -952,6 +999,7 @@ impl RepoFactsScope {
 impl Drop for RepoFactsScope {
     fn drop(&mut self) {
         if self.outer {
+            NORMALIZED.with(|cache| *cache.borrow_mut() = None);
             super::repo::TARGET_ROOTS.with(|cache| *cache.borrow_mut() = None);
             REGISTRATIONS.with(|cache| *cache.borrow_mut() = None);
             PROTECTED.with(|cache| *cache.borrow_mut() = None);
@@ -1879,6 +1927,38 @@ mod tests {
         Some((dir, admin))
     }
 
+    /// TSK-422 AC-8: an agent's direct edit of the coordination ledger is
+    /// refused under the reach rule, in the main checkout and through a
+    /// linked worktree, while `CodeFlow`'s other state beside it is not.
+    #[test]
+    fn the_coordination_ledger_is_refused_to_a_direct_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let common = repo.commondir().to_path_buf();
+        for file in [
+            "events.jsonl",
+            "counters.json",
+            "coord.lock",
+            "status/a.json",
+        ] {
+            let target = common.join("codeflow/coord").join(file);
+            assert!(
+                repository_authority_target(&target, dir.path(), false),
+                "{file}"
+            );
+        }
+        assert!(repository_authority_target(
+            &common.join("codeflow"),
+            dir.path(),
+            true
+        ));
+        assert!(!repository_authority_target(
+            &common.join("codeflow/registry-state.json"),
+            dir.path(),
+            false
+        ));
+    }
+
     /// Review finding on issue 79: a worktree whose folder name is not valid
     /// UTF-8 used to drop out of the protected list, leaving its
     /// `config.worktree` editable.
@@ -1972,6 +2052,32 @@ mod r22_tests {
     fn r22_normalized_missing_optional_path_is_allowed() {
         let dir = tempfile::tempdir().unwrap();
         assert!(normalized(&dir.path().join("missing/new.txt"), true).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_snapshot_ends_with_the_guard_invocation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = normalized(temp.path(), true).unwrap();
+        let target = root.join("alias");
+        let first = root.join("first");
+        let second = root.join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        std::os::unix::fs::symlink(&first, &target).unwrap();
+        {
+            let _outer = RepoFactsScope::enter();
+            {
+                let _nested = RepoFactsScope::enter();
+                assert_eq!(normalized(&target, true).unwrap(), first);
+            }
+            std::fs::remove_file(&target).unwrap();
+            std::os::unix::fs::symlink(&second, &target).unwrap();
+            // Nested checks share one snapshot, even if the filesystem changes.
+            assert_eq!(normalized(&target, true).unwrap(), first);
+        }
+        let _next = RepoFactsScope::enter();
+        assert_eq!(normalized(&target, true).unwrap(), second);
     }
 
     #[test]

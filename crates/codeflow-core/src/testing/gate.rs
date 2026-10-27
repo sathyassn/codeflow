@@ -9,7 +9,9 @@
 
 use std::path::Path;
 
-use crate::testing::config::{self, load_test_config, ExecutionConfig, TargetConfig};
+use crate::testing::config::{
+    self, load_named_test_config, load_test_config, ExecutionConfig, TargetConfig,
+};
 use crate::testing::coverage::FileCoverage;
 use crate::testing::delivery;
 pub use crate::testing::delivery::{matches as inputs_match, GateOptions};
@@ -191,10 +193,38 @@ fn run_gate_resolved(
             mode.to_string()
         }
     };
+    if let Some(named) = &options.config {
+        let (config, bytes) = load_named_test_config(named)?;
+        if config.targets.is_empty() {
+            return Ok(GateOutcome::NoTargets {
+                reason: format!("{} defines no targets", named.display()),
+            });
+        }
+        let effective = resolve(&config.targets);
+        // Diagnostics name the config this run read, never the default
+        // path it ignored (TSK-1020 review 1).
+        let default = project_dir.join(TEST_CONFIG_PATH);
+        return run_configured(
+            project_dir,
+            mode,
+            options,
+            (config.targets, config.execution, effective),
+            &delivery::digest(&bytes),
+        )
+        .map_err(|error| match error {
+            TestingError::ConfigInvalid { path, message } if path == default => {
+                TestingError::ConfigInvalid {
+                    path: named.clone(),
+                    message,
+                }
+            }
+            other => other,
+        });
+    }
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 
     let has_config = !crate::absence::proven_absent(&config_path)?;
-    let (mut targets, execution, effective_mode) = if has_config {
+    let (targets, execution, effective_mode) = if has_config {
         let config = load_test_config(&config_path)?;
         if config.targets.is_empty() {
             return Ok(GateOutcome::NoTargets {
@@ -221,6 +251,25 @@ fn run_gate_resolved(
     } else {
         delivery::digest(&serde_json::to_vec(&(&targets, &execution))?)
     };
+    run_configured(
+        project_dir,
+        mode,
+        options,
+        (targets, execution, effective_mode),
+        &config_digest,
+    )
+}
+
+/// Select and run `targets` from a loaded config whose evidence binds to
+/// `config_digest`.
+#[allow(clippy::too_many_lines)]
+fn run_configured(
+    project_dir: &Path,
+    mode: &str,
+    options: &GateOptions,
+    (mut targets, execution, effective_mode): (Vec<TargetConfig>, ExecutionConfig, String),
+    config_digest: &str,
+) -> Result<GateOutcome, TestingError> {
     delivery::check_only(project_dir, &targets, &effective_mode, &options.only)?;
     let home = crate::registry::codeflow_home();
     let selection = delivery::select(
@@ -230,7 +279,7 @@ fn run_gate_resolved(
         &effective_mode,
         options,
         home.as_deref(),
-        &config_digest,
+        config_digest,
     );
     for target in &targets {
         let reason = selection.reasons.get(&target.name).map_or_else(
@@ -594,8 +643,13 @@ fn copy_evidence(from: &Path, to: &Path) -> Result<(), TestingError> {
 /// defines the mode (after the `quick` alias) uses the cargo runner or names
 /// `cargo` in its command, or, with no config, a Rust stack is detected. An
 /// unreadable config reads as `false`; [`run_gate`] reports that error itself.
+/// `named` is the config a caller names with `--config`, read instead.
 #[must_use]
-pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
+pub fn gate_uses_cargo(project_dir: &Path, mode: &str, named: Option<&Path>) -> bool {
+    if let Some(named) = named {
+        return load_named_test_config(named)
+            .is_ok_and(|(config, _)| any_cargo(&config.targets, mode));
+    }
     let config_path = project_dir.join(TEST_CONFIG_PATH);
     let Ok(absent) = crate::absence::proven_absent(&config_path) else {
         return false; // The actual gate reports this obtaining error.
@@ -611,7 +665,12 @@ pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
             Err(_) => return false,
         }
     };
-    let effective = resolve_mode(mode, &targets);
+    any_cargo(&targets, mode)
+}
+
+/// Whether an enabled target that defines `mode` runs cargo.
+fn any_cargo(targets: &[TargetConfig], mode: &str) -> bool {
+    let effective = resolve_mode(mode, targets);
     targets
         .iter()
         .filter(|t| t.enabled)

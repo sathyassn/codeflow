@@ -36,6 +36,7 @@ pub mod document;
 pub mod entity;
 pub mod error;
 pub mod export;
+mod figure_rules;
 pub mod form;
 mod fuzzy;
 pub mod limits;
