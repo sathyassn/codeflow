@@ -1437,13 +1437,25 @@ mod tests {
                 "PROMPT_COMMAND[0]='builtin cd ./hidden'; python3 x.py settings.json",
                 "precmd_functions+=(f); python3 x.py settings.json",
                 "chpwd_functions=(f); python3 x.py settings.json",
+                // SF-6: a loop runs its condition again after its body.
+                "while python3 /tmp/w.py settings.json; do cd .claude; done",
+                "until python3 /tmp/w.py settings.json; do cd .claude; done",
+                "while python3 w.py settings.json; do builtin cd .claude; done",
+                "while python3 w.py settings.json; do pushd .claude; done",
+                "while python3 w.py settings.json; do z .claude; done",
+                "while python3 w.py settings.json { cd .claude }",
+                "while python3 x.py settings.json; do cd ./hidden || break; done",
+                "while command python3 w.py settings.json; do builtin cd .claude; done",
+                // Codex review round 5: a current-shell substitution runs
+                // during expansion, before the interpreter starts.
+                "python3 x.py settings.json ${ cd ./hidden; }",
+                "python3 x.py settings.json <<EOF\n${ cd ./hidden; }\nEOF",
             ],
         );
         assert_allowed(
             &repo,
             &[
                 "python3 x.py settings.json",
-                "python3 x.py settings.json; ls",
                 "make && python3 x.py notes.txt",
                 "cd web && node build.js",
             ],

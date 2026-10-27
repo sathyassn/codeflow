@@ -533,6 +533,12 @@ fn a_directory_change_is_not_a_write() {
     for command in [
         "cd ~ && cd \"$p\" && echo x >> .zshrc",
         "cd \"$p\" && echo x >> ~/.zshrc",
+        // Security review SF-7: through an exec-style launcher or as a path,
+        // `cd` is the first `cd` file on `PATH`, which may write anything.
+        "env cd ~/.zshrc",
+        "timeout 5 cd ~/.zshrc",
+        "exec cd ~/.zshrc",
+        "/usr/bin/cd ~/.zshrc",
     ] {
         let found = f.judge(command);
         assert!(refused(&found), "{command}");

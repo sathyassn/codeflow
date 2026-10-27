@@ -2354,6 +2354,21 @@ fn checkout_config_violation(name: &str, args: &[String], line: &Line<'_>) -> Op
     crate::hooks::git_guard::checkout_config_write(rest, line.integrity)
 }
 
+/// Whether a simple command is the shell's own `cd`, `chdir`, `pushd` or
+/// `popd`: that word exactly, at command position after assignments and
+/// `builtin` or `command` only.
+fn shell_directory_builtin(tokens: &[String]) -> bool {
+    tokens
+        .iter()
+        .find(|word| {
+            let assignment = word.split_once('=').is_some_and(|(name, _)| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+            !assignment && !matches!(word.as_str(), "builtin" | "command")
+        })
+        .is_some_and(|word| matches!(word.as_str(), "cd" | "chdir" | "pushd" | "popd"))
+}
+
 /// The writes one simple command makes.
 fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     let noun = line.noun();
@@ -2374,14 +2389,19 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     if let Some(finding) = segment_redirect_violation(segment, line, &dirs) {
         return Some(finding);
     }
-    let (program, args) = strip_launchers(&tokens)?;
-    let name = basename(program);
-    // A directory change writes nothing. Where it lands is the line's
-    // directory question, which makes a later relative write unknown;
-    // its own operand is never a write (issue 342, TSK-397).
-    if matches!(name, "cd" | "chdir" | "pushd" | "popd") {
+    // A shell directory change writes nothing. Where it lands is the
+    // line's directory question, which makes a later relative write
+    // unknown; its own operand is never a write (issue 342, TSK-397). Only
+    // the builtin counts: the bare word at command position, after
+    // assignments, `builtin` or `command`. Through an exec-style launcher
+    // (`env cd`, `timeout 5 cd`, `exec cd`) or as a path (`/usr/bin/cd`)
+    // the word runs the first `cd` file on `PATH`, which may write
+    // anything, so it keeps the write judgment (security review SF-7).
+    if shell_directory_builtin(&tokens) {
         return None;
     }
+    let (program, args) = strip_launchers(&tokens)?;
+    let name = basename(program);
     if let Some(finding) = checkout_config_violation(name, args, line) {
         return Some(finding);
     }

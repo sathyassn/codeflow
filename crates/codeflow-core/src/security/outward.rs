@@ -883,7 +883,7 @@ fn program_is_interpreter(word: &str) -> bool {
         && interpreter_family(word.rsplit('/').next().unwrap_or(word)).is_some()
 }
 
-/// Whether the words after an unmodeled program hold a directory-change
+/// Whether the words after an interpreter call hold a directory-change
 /// token: `cd`, `chdir`, `pushd` or `popd`, or `-C` or `--chdir` in any
 /// spelling after an env-like word.
 fn hides_a_directory_change(rest: &[String]) -> bool {
@@ -912,25 +912,14 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
         dirs: vec![cwd.to_path_buf()],
         unknown: mentions_cdpath(command),
     };
-    // Only what runs before the last interpreter call can move it; a
-    // command after it changes nothing the guard judges. A line with no
-    // interpreter call is read in full.
-    let segments: Vec<Vec<String>> = expand_commands(command)
-        .iter()
-        .map(|segment| {
-            let mut words = command_argv(segment);
-            strip_reserved_words(&mut words);
-            words
-        })
-        .collect();
-    let last = segments
-        .iter()
-        .rposition(|words| words.iter().any(|word| program_is_interpreter(word)));
-    for words in segments
-        .iter()
-        .take(last.map_or(segments.len(), |last| last + 1))
-    {
-        for change in dir_changes(words, home) {
+    // Every segment is read, the ones after the last interpreter call
+    // included: a loop runs its condition again after its body (`while
+    // python3 w.py f; do cd .claude; done`), so text order is not run
+    // order (TSK-397 security review SF-6).
+    for segment in expand_commands(command) {
+        let mut words = command_argv(&segment);
+        strip_reserved_words(&mut words);
+        for change in dir_changes(&words, home) {
             set.change(&change);
         }
     }
