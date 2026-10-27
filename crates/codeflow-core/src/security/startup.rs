@@ -2376,6 +2376,12 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     }
     let (program, args) = strip_launchers(&tokens)?;
     let name = basename(program);
+    // A directory change writes nothing. Where it lands is the line's
+    // directory question, which makes a later relative write unknown;
+    // its own operand is never a write (issue 342, TSK-397).
+    if matches!(name, "cd" | "chdir" | "pushd" | "popd") {
+        return None;
+    }
     if let Some(finding) = checkout_config_violation(name, args, line) {
         return Some(finding);
     }

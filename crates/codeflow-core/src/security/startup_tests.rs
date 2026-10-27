@@ -515,6 +515,34 @@ fn unresolved_targets_fail_closed_near_the_class() {
     }
 }
 
+/// Issue 342 (TSK-397): a directory change writes nothing, so its own
+/// unresolved operand is never judged as a startup-file write, even from
+/// `/` or the home. A relative write after it is still judged.
+#[test]
+fn a_directory_change_is_not_a_write() {
+    let f = Fixture::new();
+    for command in [
+        "cd / && for p in /.nofollow/tmp /.resolve/1/2; do cd \"$p\" && pwd -P; done",
+        "cd ~ && cd \"$p\"",
+        "cd / && pushd \"$p\"",
+        "cd H && popd",
+    ] {
+        let found = f.judge(command);
+        assert!(!refused(&found), "{command}: {found:?}");
+    }
+    for command in [
+        "cd ~ && cd \"$p\" && echo x >> .zshrc",
+        "cd \"$p\" && echo x >> ~/.zshrc",
+    ] {
+        let found = f.judge(command);
+        assert!(refused(&found), "{command}");
+        assert!(
+            found.iter().all(|v| !v.message.contains("`cd` takes")),
+            "{command}: {found:?}"
+        );
+    }
+}
+
 /// Placing programs refuse in or into the home, `/etc` or a startup
 /// directory, and pass elsewhere.
 #[test]
