@@ -99,6 +99,12 @@ pub struct StatusDetails {
     /// `journey`, `not_verified`, `follow_ups` and `verdict`.
     #[arg(long, value_name = "FILE")]
     pub acceptance: Option<PathBuf>,
+}
+
+/// The receiving target a task completion binds against, given in place
+/// of what `origin` advertises. Only `task status` takes it.
+#[derive(Debug, Clone, Default, Args)]
+pub struct TaskTarget {
     /// The receiving target's tip a task completion binds against, such as
     /// `origin/main`, in place of the default branch `origin` advertises;
     /// needed when `origin` cannot be asked.
@@ -169,6 +175,8 @@ pub enum TaskCommand {
         status: TaskStatusArg,
         #[command(flatten)]
         details: StatusDetails,
+        #[command(flatten)]
+        target: TaskTarget,
     },
 }
 
@@ -222,7 +230,14 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
                 EpicStatusArg::Cancelled => "cancelled",
                 EpicStatusArg::Archived => "archived",
             };
-            return run_status(RecordKind::Epic, id, target, details, None);
+            return run_status(
+                RecordKind::Epic,
+                id,
+                target,
+                details,
+                &TaskTarget::default(),
+                None,
+            );
         }
     };
     let root = match super::repo_root() {
@@ -335,14 +350,15 @@ pub fn run_task(args: &TaskArgs) -> i32 {
             id,
             status,
             details,
+            target: pin,
         } => {
-            let target = match status {
+            let status_target = match status {
                 TaskStatusArg::Todo => "todo",
                 TaskStatusArg::Blocked => "blocked",
                 TaskStatusArg::Complete => "complete",
                 TaskStatusArg::Cancelled => "cancelled",
             };
-            return run_status(RecordKind::Task, id, target, details, None);
+            return run_status(RecordKind::Task, id, status_target, details, pin, None);
         }
     };
     if epic
@@ -724,6 +740,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
                 id,
                 target,
                 &StatusDetails::default(),
+                &TaskTarget::default(),
                 by.clone(),
             );
         }
@@ -782,6 +799,7 @@ fn run_status(
     id: &str,
     target: &str,
     details: &StatusDetails,
+    pin: &TaskTarget,
     by: Option<String>,
 ) -> i32 {
     let acceptance = match &details.acceptance {
@@ -814,8 +832,8 @@ fn run_status(
         scope: details.scope.clone(),
         by,
         acceptance,
-        base: details.base.clone(),
-        into: details.into.clone(),
+        base: pin.base.clone(),
+        into: pin.into.clone(),
     };
     let root = match super::repo_root() {
         Ok(root) => root,

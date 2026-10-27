@@ -133,6 +133,11 @@ pub fn set_status(
         target: change.target.clone(),
         allowed: allowed_text,
     };
+    if kind != RecordKind::Task && (change.base.is_some() || change.into.is_some()) {
+        return Err(VerbError::Refused(vec![
+            "`--base` and `--into` apply only to a task completion".into(),
+        ]));
+    }
     let written = allowed.contains(&change.target.as_str());
     if !written && !judged_only(kind, &change.target) {
         return Err(vocabulary_error());
