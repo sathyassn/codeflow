@@ -920,7 +920,9 @@ fn spawn_prepared(
     // The target's process group (its pid, set above) outlives this process
     // if the gate is killed; the full-gate lock stays held while it runs.
     #[cfg(unix)]
-    crate::testing::gate_guard::target_group_started(child.id());
+    if let Err(error) = crate::testing::gate_guard::target_group_started(child.id()) {
+        progress!("[codeflow test] warning: {error}");
+    }
     // On Windows the target's tree ends with this process instead: the job
     // is closed when the gate exits or is killed, so the lock never frees
     // while a target of the gate runs.
@@ -992,7 +994,9 @@ fn spawn_prepared(
     let stdout = join_reader(stdout_reader);
     let stderr = join_reader(stderr_reader);
     #[cfg(unix)]
-    crate::testing::gate_guard::target_group_finished(child.id());
+    if let Err(error) = crate::testing::gate_guard::target_group_finished(child.id()) {
+        progress!("[codeflow test] warning: {error}");
+    }
 
     #[cfg(unix)]
     let signal = {

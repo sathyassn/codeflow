@@ -263,7 +263,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // process output shown to a person, never compared
     (
         "codeflow-core/src/doctor/mod.rs",
-        "run_captured",
+        "run_captured_with",
         "from_utf8_lossy",
         2,
         "display",
@@ -1521,6 +1521,89 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-452: doctor's preflight report only prints evidence and decides
     // nothing. A missing or misread catalog, settings file or PATH entry is
     // printed as unavailable, never as configured or observed.
+    // TSK-1003: the trusted folders for a holder record's dir come from the
+    // project folder; a project outside any repository simply adds no git
+    // worktrees, which only shows more folders as unknown.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "trusted_dirs",
+        "obtain-absent:Repository::discover",
+        1,
+        "display",
+    ),
+    // TSK-1003: a dir value and the trusted folders are compared without
+    // trailing path separators, as text; it only decides whether a folder
+    // the gate trusts is shown.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "trimmed_dir",
+        "trim_end_matches",
+        1,
+        "display",
+    ),
+    // TSK-1003: a probe whose stdout is not UTF-8 is unavailable to a
+    // caller that judges the whole output, never decoded lossily for it.
+    (
+        "crates/codeflow-core/src/doctor/mod.rs",
+        "run_captured_with",
+        "obtain-absent:from_utf8",
+        1,
+        "format-contract",
+    ),
+    // TSK-1003: an unreadable Codex config reports the builder profile line
+    // unavailable and runs nothing. Codex's refusal text is trimmed only to
+    // print it. Its version line and feature table are read by their
+    // format: a line that does not fit makes the line unavailable, never
+    // accepted.
+    (
+        "crates/codeflow-cli/src/cmd/doctor.rs",
+        "codex_builder_line",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "load",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "load",
+        "trim",
+        2,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "cli_version",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "feature_table",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "cli_version",
+        "trim",
+        2,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "feature_table",
+        "trim",
+        1,
+        "format-contract",
+    ),
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
         "find_on_path",
@@ -4082,7 +4165,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Displays a holder snapshot and start time only; neither admission nor process-group identity uses these values.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
-        "gate_lock_status",
+        "holder_status",
         "lines",
         1,
         "display",
@@ -4090,10 +4173,18 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Displays empty records and a numeric start time; this query never acquires or reclaims a lock.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
-        "gate_lock_status",
+        "holder_status",
         "trim",
         2,
         "display",
+    ),
+    // TSK-1003: the holder record is parsed by its exact LF-separated key=value format; any line outside it refuses the whole record, so only parsed fields are shown.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "parse_record",
+        "split_terminator",
+        1,
+        "format-contract",
     ),
     // Explicit LF records and exact decimal group= values preserve the lock format; whitespace cannot change a process group identity.
     (
@@ -6632,7 +6723,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
-    ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor never runs it."),
+    ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
@@ -6811,6 +6902,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/contained.rs", "Tree::write_with_hook", "is_file", 1, "Type check on metadata from platform::metadata with errors propagated."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "ErrorKind::NotFound", 1, "A no-follow stat not finding the leaf in the held parent proves it missing; the create then opens without following links, and other errors propagate."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "is_file", 3, "Type checks on metadata obtained with propagated errors (platform::metadata and the opened file's metadata on each platform)."),
+    ("crates/codeflow-core/src/contained.rs", "platform::create_read_only", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular lock file is refused, never read as absent."),
+    ("crates/codeflow-core/src/contained.rs", "platform::open_regular", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_dir", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_file", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),
     ("crates/codeflow-core/src/scaffold/pr_template.rs", "automation_notes", "is_file", 1, "The result only adds Dependabot or Renovate report notes on init; the function is read-only and feeds no decision."),
