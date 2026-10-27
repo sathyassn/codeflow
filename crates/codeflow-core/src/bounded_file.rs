@@ -174,11 +174,13 @@ fn read_opened_regular(
     Ok(bytes)
 }
 
-/// A file's identity, read from a handle this module opened. On Unix it is
+/// A file's identity, read from a handle the caller opened. On Unix it is
 /// the device and inode. On Windows it is the volume serial number and the
 /// full 128-bit file id from `GetFileInformationByHandleEx(FileIdInfo)`:
 /// the 64-bit file index is not unique on `ReFS` (TSK-1020 review 4). A call
-/// that fails, or an all-zero id, refuses: no identity is never a match.
+/// that fails, or a zero id on any platform, refuses: no identity is never a
+/// match. Every production file-identity check that holds an opened handle
+/// compares this type (TSK-1021).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FileIdentity {
     volume: u64,
@@ -192,10 +194,7 @@ impl FileIdentity {
         {
             use std::os::unix::fs::MetadataExt;
             let metadata = file.metadata()?;
-            Ok(Self {
-                volume: metadata.dev(),
-                id: u128::from(metadata.ino()),
-            })
+            Self::from_device_and_inode(metadata.dev(), metadata.ino())
         }
         #[cfg(windows)]
         {
@@ -229,21 +228,38 @@ impl FileIdentity {
         }
     }
 
+    /// The identity a Unix `fstat` returned, refused when the inode is zero,
+    /// which names no file reliably.
+    #[cfg_attr(not(any(unix, test)), allow(dead_code))]
+    pub(crate) fn from_device_and_inode(device: u64, inode: u64) -> std::io::Result<Self> {
+        if inode == 0 {
+            return Err(no_reliable_identity());
+        }
+        Ok(Self {
+            volume: device,
+            id: u128::from(inode),
+        })
+    }
+
     /// The identity a `FileIdInfo` query returned, refused when the id is all
     /// zero, which names no file reliably.
     #[cfg_attr(not(any(windows, test)), allow(dead_code))]
-    fn from_file_id_info(volume: u64, identifier: [u8; 16]) -> std::io::Result<Self> {
+    pub(crate) fn from_file_id_info(volume: u64, identifier: [u8; 16]) -> std::io::Result<Self> {
         if identifier == [0; 16] {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "the file system gave no reliable file identity",
-            ));
+            return Err(no_reliable_identity());
         }
         Ok(Self {
             volume,
             id: u128::from_le_bytes(identifier),
         })
     }
+}
+
+fn no_reliable_identity() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "the file system gave no reliable file identity",
+    )
 }
 
 /// Whether two metadata name the same file: device and inode on Unix. Other
@@ -488,6 +504,17 @@ mod identity_tests {
         );
         let error = FileIdentity::from_file_id_info(9, [0; 16]).expect_err("no reliable identity");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    /// TSK-1021 AC-4: a zero id refuses on Unix as on Windows.
+    #[test]
+    fn a_zero_inode_is_no_identity() {
+        let error = FileIdentity::from_device_and_inode(9, 0).expect_err("no reliable identity");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let one = FileIdentity::from_device_and_inode(9, 1).unwrap();
+        assert_eq!(one, FileIdentity::from_device_and_inode(9, 1).unwrap());
+        assert_ne!(one, FileIdentity::from_device_and_inode(10, 1).unwrap());
+        assert_ne!(one, FileIdentity::from_device_and_inode(9, 2).unwrap());
     }
 
     #[test]

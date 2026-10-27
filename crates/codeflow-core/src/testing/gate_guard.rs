@@ -56,6 +56,7 @@
 //! gates apart, so [`check_cargo_target_dir`] returns a warning, never a
 //! refusal.
 
+use crate::bounded_file::FileIdentity;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
@@ -736,11 +737,13 @@ fn open_lock_file(path: &Path) -> std::io::Result<File> {
 /// file swapped for another regular file splits coordination: a later gate
 /// would lock the new file. The lock folder is an advisory coordination
 /// boundary, not a security boundary, so a swap after this check still
-/// splits it; the check closes the window while the lock is taken.
+/// splits it; the check closes the window while the lock is taken. Both
+/// identities are read from handles this module opened, the held one and the
+/// anchored no-follow reopen, and an identity that cannot be read refuses.
 fn same_lock_file(path: &Path, file: &File) -> std::io::Result<()> {
     let (anchor, relative) = lock_anchor(path)?;
     let current = crate::contained::Tree::open(anchor)?.open_regular(&relative)?;
-    if same_file::Handle::from_file(current)? == same_file::Handle::from_file(file.try_clone()?)? {
+    if FileIdentity::of(&current)? == FileIdentity::of(file)? {
         Ok(())
     } else {
         Err(std::io::Error::other(
@@ -1408,6 +1411,21 @@ mod tests {
         assert!(same_lock_file(&path, &file).is_err());
         let fresh = open_lock_file(&path).unwrap();
         assert!(same_lock_file(&path, &fresh).is_ok());
+    }
+
+    /// TSK-1021 AC-1: the check compares the identity of the held handle
+    /// with the anchored reopen on every platform: the lock path's own file
+    /// passes, a handle on another file is refused.
+    #[test]
+    fn a_lock_check_compares_file_identities() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("locks").join(LOCK_FILE);
+        let other = tmp.path().join("other").join(LOCK_FILE);
+        let file = open_lock_file(&path).unwrap();
+        let elsewhere = open_lock_file(&other).unwrap();
+        assert!(same_lock_file(&path, &file).is_ok());
+        let error = same_lock_file(&path, &elsewhere).expect_err("another file");
+        assert!(error.to_string().contains("another file"), "{error}");
     }
 
     /// TSK-1003 round four, the review's interleaving: the lock entry is a
