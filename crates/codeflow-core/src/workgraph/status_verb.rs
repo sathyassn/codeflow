@@ -546,10 +546,9 @@ fn qualify(
         .as_deref()
         .filter(|target| !target.is_empty())
         .map(super::work_start::logical_target);
+    // Only data at the default target's tip names a receiving line; a
+    // name's shape (an `integration/` prefix) earns nothing.
     let protected = |name: &str| -> Result<bool, String> {
-        if name.starts_with("integration/") {
-            return Ok(true);
-        }
         let Some((_, tip)) = default else {
             return Ok(false);
         };
@@ -559,7 +558,10 @@ fn qualify(
             .and_then(|policy| policy.get("git")?.get("protected_branches").cloned())
             .and_then(|names| serde_json::from_value::<Vec<String>>(names).ok())
             .unwrap_or_else(|| vec!["main".into(), "master".into()]);
-        Ok(listed.iter().any(|listed| listed == name))
+        if listed.iter().any(|listed| listed == name) {
+            return Ok(true);
+        }
+        epic_line_at(repo, tip, name)
     };
     let mut target = default.map(|(_, tip)| tip);
     let mut target_name = default.map(|(name, _)| name.to_string());
@@ -594,6 +596,31 @@ fn qualify(
         default: default.map(|(_, tip)| tip),
         base,
     })
+}
+
+/// Whether the records at `tip` name `line` as an epic's integration line,
+/// as `check_epic_line` binds a landing line: the epic the line's name
+/// carries exists there, neither cancelled nor archived, and a task of
+/// that epic there declares exactly this line. Epic records carry no line
+/// field, so their tasks at the trusted tip are the record of it.
+fn epic_line_at(repo: &git2::Repository, tip: git2::Oid, line: &str) -> Result<bool, String> {
+    let Ok(epic_id) = super::line_adoption::epic_id(line) else {
+        return Ok(false);
+    };
+    let graph = Graph::from_revision(repo, &tip.to_string())?;
+    let open = graph
+        .records
+        .get(epic_id)
+        .is_some_and(|epic| !matches!(epic.status.as_str(), "cancelled" | "archived"));
+    Ok(open
+        && graph.records.values().any(|task| {
+            task.kind == RecordKind::Task
+                && task.epic_id.as_deref() == Some(epic_id)
+                && task
+                    .integration_target
+                    .as_deref()
+                    .is_some_and(|target| super::work_start::logical_target(target) == line)
+        }))
 }
 
 /// The tip of the branch `name` as the clone's receiving source holds it.
