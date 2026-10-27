@@ -297,6 +297,7 @@ outcome_present_uids = [
     "9c064a0b-b277-433a-9da2-2596b550f356",
     "9c59a8bf-91d6-4a8b-83a0-e258a3acbef9",
     "9c7a5c97-a07a-4a88-965b-35c3d1876323",
+    "9caf5adf-3f15-4993-84cc-1c0eb30d34a1",
     "9d3e9801-51fa-4c4b-ad70-1e5f8c25bc42",
     "9ed7ad8b-3dc3-4116-9f7b-99fc1ea10f35",
     "9efe68b5-5a3e-4bc4-955d-dbdbf5d0328b",
@@ -492,7 +493,7 @@ outcome_present_uids = [
     "ff6f4af1-dbfa-4c89-b150-55e9a3495e16",
     "ffab40f2-aa62-45c1-a161-93523a27479e",
 ]
-outcome_required_since = "9929f6d356f33b048f414458c162004b131e98f1"
+outcome_required_since = "f256b903aa023e44e4c9c63d98ba36f53f9936f2"
 permission_preset = "default"
 policy_armed = true
 product_one_liner = "The AI-development discipline layer you install into any repo"
