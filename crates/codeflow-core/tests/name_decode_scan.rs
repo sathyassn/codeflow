@@ -6821,7 +6821,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/model_catalog/scan.rs", "scan", "is_dir", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/model_catalog/scan.rs", "scan", "is_file", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/model_qualification.rs", "load_bindings", "is_dir", 1, "Absence is proven first; a directory check that fails returns Err, so an unreadable directory refuses and is never read as empty."),
-    ("crates/codeflow-core/src/model_qualification.rs", "read_bounded_json", "is_file", 2, "Type checks on metadata obtained with errors propagated; false returns Err."),
+    ("crates/codeflow-core/src/model_qualification.rs", "read_bounded_json_with_hook", "is_file", 2, "Type checks on metadata obtained with errors propagated; false returns Err."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_dir", 1, "Type check on entry.file_type(), whose error propagates out of load_skill_tree to its callers."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_file", 1, "Type check on entry.file_type(), whose error propagates; a regular file is then read with its error propagated."),
     ("crates/codeflow-core/src/bounded_file.rs", "read_regular", "is_file", 1, "Type check on std::fs::metadata with its error propagated, so a missing path or dangling link keeps NotFound for the caller; a non-regular file is refused with InvalidInput before it is opened, so a fifo never blocks."),
