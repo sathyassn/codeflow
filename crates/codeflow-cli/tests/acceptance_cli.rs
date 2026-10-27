@@ -1763,7 +1763,12 @@ fn a_waiver_off_the_pinned_target_is_refused() {
             &path,
             &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
         );
-        let verb = status_complete(root, "TSK-001");
+        // Pinned, the verb judges the waiver against `origin/main`.
+        let verb = status_complete_args(
+            root,
+            "TSK-001",
+            &["--base", "origin/main", "--into", "main"],
+        );
         complete(root, "TSK-001", OWN_JOURNEY, &closeout);
         for (surface, result) in [
             ("verb", verb),
@@ -1813,7 +1818,11 @@ fn task_status_refuses_without_the_remote_tracking_target() {
         &record_path("TSK-001"),
         &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
     );
-    let verb = status_complete(root, "TSK-001");
+    let verb = status_complete_args(
+        root,
+        "TSK-001",
+        &["--base", "origin/main", "--into", "main"],
+    );
     assert_ne!(verb.0, 0, "{}", verb.1);
     assert!(verb.1.contains("git fetch origin main"), "{}", verb.1);
 }
@@ -1866,12 +1875,24 @@ fn local_config_selects_no_receiving_source() {
         );
         let verb = status_complete(root, "TSK-001");
         assert_ne!(verb.0, 0, "{case}: {}", verb.1);
-        let needle = if case == "no origin" {
-            "no `origin`"
-        } else {
-            "src/side.rs"
-        };
-        assert!(verb.1.contains(needle), "{case}: {}", verb.1);
+        assert!(
+            verb.1.contains("--base origin/<name> --into <name>"),
+            "{case}: {}",
+            verb.1
+        );
+        if case == "configured upstream" {
+            let pinned = status_complete_args(
+                root,
+                "TSK-001",
+                &["--base", "origin/main", "--into", "main"],
+            );
+            assert_ne!(pinned.0, 0, "{case} pinned: {}", pinned.1);
+            assert!(
+                pinned.1.contains("src/side.rs"),
+                "{case} pinned: {}",
+                pinned.1
+            );
+        }
     }
 }
 
@@ -1913,7 +1934,11 @@ fn moving_the_local_target_does_not_move_the_anchor() {
             &record_path("TSK-001"),
             &task("TSK-001", "todo", OWN_JOURNEY, &format!("{reopened}{done}")),
         );
-        let verb = status_complete(root, "TSK-001");
+        let verb = status_complete_args(
+            root,
+            "TSK-001",
+            &["--base", "origin/main", "--into", "main"],
+        );
         if dropped {
             assert_ne!(verb.0, 0, "dropped archive: {}", verb.1);
             assert!(verb.1.contains("is missing"), "{}", verb.1);
@@ -2024,112 +2049,97 @@ fn status_complete_args(root: &Path, id: &str, extra: &[&str]) -> (i32, String) 
     )
 }
 
-/// TSK-340 review rounds 6 and 7: `task status` takes the default target
-/// from what `origin` advertises, never from a local `origin/HEAD`, and
-/// never falls back to another name. Each refusal case holds a side merge
-/// of the review that only a wrong default would trust:
-/// - `origin` advertises `main`, `origin/main` is not fetched, and a fetched
-///   `origin/master` holds the side merge: refused, naming the fetch;
-/// - a local `origin/HEAD` steered to a fetched `origin/auxiliary` holding
-///   the side merge: refused, since `origin` still advertises `main`;
-/// - `origin` cannot be asked: refused, naming the `--base` to pass;
-/// - with that `--base` pinned, the same unreachable clone binds a valid
-///   completion; and a repository whose only default is `master` completes.
+/// `task status <id> complete` with extra arguments and environment.
+fn status_complete_env(
+    root: &Path,
+    id: &str,
+    extra: &[&str],
+    env: &[(&str, &str)],
+) -> (i32, String) {
+    let mut args = vec!["task", "status", id, "complete"];
+    args.extend_from_slice(extra);
+    let mut command = codeflow();
+    command.args(&args).current_dir(root);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let out = command.output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// TSK-340, operator decision of 2026-10-27: local `task status` grants no
+/// landing, stacking or waiver authority in a clone with remotes without
+/// explicit `--base` and `--into`. Each probe of Codex's rounds 4 to 8
+/// steers a side merge of the review towards authority: a shadowing local
+/// `main`, a declared `auxiliary` target, a local `origin/HEAD`, and a
+/// rogue remote reached through `url.insteadOf`, `remote.origin.url`,
+/// `core.sshCommand` or `GIT_SSH_COMMAND`. Unpinned, each refuses and
+/// names the pins; pinned to `origin/main`, each refuses naming the
+/// unreviewed file. A valid completion passes pinned and unpinned, and a
+/// clone with no remotes still completes.
 #[test]
-#[allow(clippy::too_many_lines)] // One fixture per default-selection case.
-fn the_default_target_is_what_origin_advertises() {
-    for case in [
-        "missing main",
-        "local head steering",
-        "unreachable",
-        "unreachable with base",
-        "master default",
-    ] {
+#[allow(clippy::too_many_lines)] // One fixture per probe, sharing the side merge.
+fn local_task_status_needs_pins_for_authority() {
+    let pins = ["--base", "origin/main", "--into", "main"];
+    let names_pins = "--base origin/<name> --into <name>";
+    let probes = [
+        "local main shadow",
+        "declared auxiliary",
+        "origin/HEAD steering",
+        "insteadOf",
+        "remote.origin.url",
+        "core.sshCommand",
+        "GIT_SSH_COMMAND",
+    ];
+    for probe in probes {
         let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
         let root = dir.path();
-        if case == "master default" {
-            git(root, &["branch", "-m", "main", "master"]);
-            let path = record_path("TSK-001");
-            let text = std::fs::read_to_string(root.join(&path)).unwrap();
-            write(
-                root,
-                &path,
-                &text.replace("integration_target: main", "integration_target: master"),
-            );
-            commit(root, "docs(records): target master");
-            let origin = root.join(".git").join("fixture-origin.git");
-            git(
-                root,
-                &[
-                    "init",
-                    "-q",
-                    "--bare",
-                    "-b",
-                    "master",
-                    origin.to_str().unwrap(),
-                ],
-            );
-            git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
-            git(root, &["push", "-q", "origin", "master"]);
-            git(root, &["fetch", "-q", "origin"]);
-            git(root, &["switch", "-c", "task/TSK-001-work", "master"]);
-            write(root, "src/lib.rs", "pub fn work() {}\n");
-            let reviewed = commit(root, "feat: the work");
-            write(
-                root,
-                &path,
-                &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed))
-                    .replace("integration_target: main", "integration_target: master"),
-            );
-            let verb = status_complete(root, "TSK-001");
-            assert_eq!(verb.0, 0, "{case}: {}", verb.1);
-            continue;
-        }
         let _remote = with_origin(root, "main");
-        if case.starts_with("unreachable") {
-            // A clean, reviewed completion: only the default is in question.
-            git(root, &["branch", "--unset-upstream", "main"]);
+        let (reviewed, side) = side_merge(root);
+        let mut declared = "main";
+        let mut env: Vec<(&str, String)> = Vec::new();
+        // A rogue remote advertising `aux` as its default, holding the side
+        // merge, which this clone has also "fetched" as `origin/aux`.
+        let rogue = root.join(".git").join("rogue.git");
+        let rogue_path = rogue.to_str().unwrap().to_string();
+        let rogue_remote = |root: &Path| {
+            git(root, &["init", "-q", "--bare", "-b", "aux", &rogue_path]);
             git(
                 root,
-                &[
-                    "remote",
-                    "set-url",
-                    "origin",
-                    root.join("no-such-remote.git").to_str().unwrap(),
-                ],
+                &["push", "-q", &rogue_path, &format!("{side}:refs/heads/aux")],
             );
-            let reviewed = code_change(root, "task/TSK-001-work", "pub fn work() {}\n");
-            write(
-                root,
-                &record_path("TSK-001"),
-                &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
-            );
-            if case == "unreachable" {
-                let verb = status_complete(root, "TSK-001");
-                assert_ne!(verb.0, 0, "{case}: {}", verb.1);
-                assert!(
-                    verb.1.contains("--base origin/<default> --into <default>"),
-                    "{case}: {}",
-                    verb.1
-                );
-            } else {
-                let verb = status_complete_args(
-                    root,
-                    "TSK-001",
-                    &["--base", "origin/main", "--into", "main"],
-                );
-                assert_eq!(verb.0, 0, "{case}: {}", verb.1);
-            }
-            continue;
-        }
-        let (reviewed, side) = side_merge(root);
-        let declared = if case == "missing main" {
-            git(root, &["update-ref", "refs/remotes/origin/master", &side]);
-            git(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
-            git(root, &["branch", "--unset-upstream", "main"]);
-            "master"
-        } else {
+            git(root, &["update-ref", "refs/remotes/origin/aux", &side]);
+        };
+        let fake_ssh = root.join(".git").join("fake-ssh.sh");
+        let ssh_script = |path: &Path| {
+            std::fs::write(
+                path,
+                format!("#!/bin/sh\nexec git-upload-pack '{rogue_path}'\n"),
+            )
+            .unwrap();
+            #[cfg(unix)]
             {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        };
+        match probe {
+            "local main shadow" => git(root, &["branch", "-f", "main", &side]),
+            "declared auxiliary" => {
+                git(
+                    root,
+                    &["update-ref", "refs/remotes/origin/auxiliary", &side],
+                );
+                declared = "auxiliary";
+            }
+            "origin/HEAD steering" => {
                 git(
                     root,
                     &["update-ref", "refs/remotes/origin/auxiliary", &side],
@@ -2142,9 +2152,40 @@ fn the_default_target_is_what_origin_advertises() {
                         "refs/remotes/origin/auxiliary",
                     ],
                 );
-                "main"
             }
-        };
+            "insteadOf" => {
+                rogue_remote(root);
+                let url = git_out(root, &["remote", "get-url", "origin"]);
+                git(
+                    root,
+                    &["config", &format!("url.{rogue_path}.insteadOf"), &url],
+                );
+            }
+            "remote.origin.url" => {
+                rogue_remote(root);
+                git(root, &["remote", "set-url", "origin", &rogue_path]);
+            }
+            _ => {
+                rogue_remote(root);
+                ssh_script(&fake_ssh);
+                git(
+                    root,
+                    &[
+                        "remote",
+                        "set-url",
+                        "origin",
+                        "ssh://example.invalid/repo.git",
+                    ],
+                );
+                let command = fake_ssh.to_str().unwrap().to_string();
+                if probe == "core.sshCommand" {
+                    git(root, &["config", "core.sshCommand", &command]);
+                } else {
+                    env.push(("GIT_SSH_COMMAND", command));
+                }
+            }
+        }
+        git(root, &["branch", "--unset-upstream", "main"]);
         write(
             root,
             &record_path("TSK-001"),
@@ -2153,15 +2194,57 @@ fn the_default_target_is_what_origin_advertises() {
                 &format!("integration_target: {declared}"),
             ),
         );
-        let verb = status_complete(root, "TSK-001");
-        assert_ne!(verb.0, 0, "{case}: {}", verb.1);
-        let needle = if case == "missing main" {
-            "git fetch origin main"
-        } else {
-            "src/side.rs"
-        };
-        assert!(verb.1.contains(needle), "{case}: {}", verb.1);
+        let env: Vec<(&str, &str)> = env
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
+        let unpinned = status_complete_env(root, "TSK-001", &[], &env);
+        assert_ne!(unpinned.0, 0, "{probe} unpinned: {}", unpinned.1);
+        assert!(
+            unpinned.1.contains(names_pins),
+            "{probe} unpinned: {}",
+            unpinned.1
+        );
+        if probe == "local main shadow" {
+            // Pinned to `origin/main`, a moved local `main` is irrelevant.
+            git(root, &["branch", "-f", "main", "origin/main"]);
+        }
+        let pinned = status_complete_env(root, "TSK-001", &pins, &env);
+        assert_ne!(pinned.0, 0, "{probe} pinned: {}", pinned.1);
+        assert!(
+            pinned.1.contains("src/side.rs"),
+            "{probe} pinned: {}",
+            pinned.1
+        );
     }
+
+    // A valid completion passes pinned and unpinned.
+    for pinned in [true, false] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let _remote = with_origin(root, "main");
+        let reviewed = code_change(root, "task/TSK-001-work", "pub fn work() {}\n");
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
+        );
+        let extra: &[&str] = if pinned { &pins } else { &[] };
+        let verb = status_complete_args(root, "TSK-001", extra);
+        assert_eq!(verb.0, 0, "valid (pinned: {pinned}): {}", verb.1);
+    }
+
+    // A clone with no remotes completes against its local `main`.
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, "task/TSK-001-work", "pub fn work() {}\n");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
+    );
+    let verb = status_complete(root, "TSK-001");
+    assert_eq!(verb.0, 0, "no remotes: {}", verb.1);
 }
 
 /// TSK-340 review round 8: `--base` and `--into` pin a task completion's
@@ -3663,7 +3746,12 @@ fn a_clean_merge_of_the_moved_target_keeps_the_binding() {
         &standalone("TSK-001", "todo", "main", &valid_block(&reviewed_here)),
     );
     assert_passes(
-        &status_complete(root, "TSK-001"),
+        // A clone with remotes grants stacking authority only with pins.
+        &status_complete_args(
+            root,
+            "TSK-001",
+            &["--base", "origin/main", "--into", "main"],
+        ),
         "the verb after a clean merge of origin/main",
     );
     commit(root, "docs(records): complete the task");
@@ -5140,7 +5228,11 @@ fn a_configured_upstream_on_another_remote_holds_the_task() {
     let [verb, ci] =
         complete_reopen_complete(root, &path, &shape, "refs/remotes/upstream/main", false);
     assert_ne!(verb.0, 0, "upstream verb: {}", verb.1);
-    assert!(verb.1.contains("no `origin`"), "upstream verb: {}", verb.1);
+    assert!(
+        verb.1.contains("--base origin/<name> --into <name>"),
+        "upstream verb: {}",
+        verb.1
+    );
     let wrong = wrongly_accepted(
         "upstream",
         [(1, "reopened task keeps its criteria".into()), ci],
