@@ -1,0 +1,11 @@
+id = "TSK-1022"
+uid = "9caf5adf-3f15-4993-84cc-1c0eb30d34a1"
+kind = "TSK"
+title = "Deleting a configured secret store is refused"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-27T13:18:26Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
