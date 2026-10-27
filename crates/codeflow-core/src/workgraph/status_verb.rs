@@ -399,8 +399,9 @@ fn own_range_base(
     if on_target {
         return None;
     }
-    let target = repo.revparse_single(&target).ok()?.peel_to_commit().ok()?;
-    history::merge_base(repo, head, target.id()).ok()
+    // The pinned target, never a local branch a requester can move.
+    let target = pinned_tip(repo, &target).ok().flatten()?;
+    history::merge_base(repo, head, target).ok()
 }
 
 /// The binding of a completion to the reviewed commit (R-60), with the
@@ -430,9 +431,22 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
         Ok(name) => name,
         Err(error) => return vec![error.to_string()],
     };
-    let default_target = match target_commit(&repo, default_name.as_deref()) {
-        Ok(target) => target,
-        Err(error) => return vec![error],
+    // The default target is pinned to its remote-tracking ref, as the
+    // task's target is (TSK-340 review round 4): the waiver check reads
+    // "on the target" from it, and a local branch never supplies that.
+    let default_target = match default_name
+        .as_deref()
+        .map(|name| pinned_tip(&repo, name))
+        .transpose()
+    {
+        Ok(target) => target.flatten(),
+        Err(error) => {
+            return vec![format!(
+                "{}: {}: {error}",
+                super::acceptance::BINDING_RULE,
+                task.id
+            )]
+        }
     };
     let landing = super::acceptance::Landing::Worktree {
         head,
@@ -554,9 +568,11 @@ fn verb_authorities(
 
 /// The tip of `name` as the remote the clone fetches it from holds it:
 /// `refs/remotes/<remote>/<branch>`, the remote being the branch's
-/// configured one or `origin`. A clone with no remotes has only local
-/// branches, so its local branch is the target. A clone with remotes whose
-/// remote-tracking ref is missing refuses, naming the fetch to run.
+/// configured one or else `origin`. A clone where neither exists (no
+/// remotes, or only remotes that do not carry the target, such as a review
+/// remote) has the local branch as its only copy, so that is the target. A
+/// clone whose target remote lacks the remote-tracking ref refuses, naming
+/// the fetch to run.
 fn pinned_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid>, String> {
     let remotes = repo
         .remotes()
@@ -568,15 +584,18 @@ fn pinned_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid>, 
     let config = repo
         .config()
         .map_err(|error| format!("cannot read the git config: {error}"))?;
-    let remote = config
+    let known = |name: &str| {
+        remotes
+            .iter()
+            .any(|remote| matches!(remote, Ok(Some(remote)) if remote == name))
+    };
+    let configured = config
         .get_string(&format!("branch.{branch}.remote"))
         .ok()
-        .filter(|remote| {
-            remotes
-                .iter()
-                .any(|known| matches!(known, Ok(Some(known)) if known == remote))
-        })
-        .unwrap_or_else(|| "origin".to_string());
+        .filter(|remote| known(remote));
+    let Some(remote) = configured.or_else(|| known("origin").then(|| "origin".to_string())) else {
+        return target_commit(repo, Some(name));
+    };
     let reference = format!("refs/remotes/{remote}/{branch}");
     match repo.find_reference(&reference) {
         Ok(found) => found

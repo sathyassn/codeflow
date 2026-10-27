@@ -5073,14 +5073,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // An unresolved target gives None, and waiver_problem then refuses an own-range waiver as not on the target; nothing is allowed by the fold.
-    (
-        "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
-        "obtain-absent:peel_to_commit",
-        1,
-        "unproven",
-    ),
     // Generated acceptance block text has its trailing render newline removed before insertion in a new Markdown fence; fields were validated separately.
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",

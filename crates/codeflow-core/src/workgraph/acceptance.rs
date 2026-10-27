@@ -743,11 +743,22 @@ pub(crate) fn bind_completion_with_amendment(
         }
         Err(error) => bind(format!("{}: {error}", task.id)),
     }
+    // "On the target" means on a receiving line the run pins (its bases,
+    // a verified line head, a release import's attributed source), never a
+    // target the record declares resolved through a ref (TSK-340 review
+    // round 4).
+    let pinned = stacking.landing_tips();
     for (id, result) in &block.criteria {
         if result.outcome == "waived" {
-            if let Some(problem) =
-                waiver_problem(repo, task, id, &result.evidence, landing, target, own_route)
-            {
+            if let Some(problem) = waiver_problem(
+                repo,
+                task,
+                id,
+                &result.evidence,
+                landing,
+                &pinned,
+                own_route,
+            ) {
                 bind(format!("{}: {id} waiver {problem}", task.id));
             }
         }
@@ -2614,7 +2625,7 @@ fn waiver_problem(
     id: &str,
     evidence: &str,
     landing: Landing<'_>,
-    target_tip: Option<Oid>,
+    pinned: &[Oid],
     own_range: OwnRange,
 ) -> Option<String> {
     let Some(amendment) = commit_of(repo, evidence) else {
@@ -2630,13 +2641,17 @@ fn waiver_problem(
             "names the pull request head; a waiver is a planning amendment on the target".into(),
         );
     }
-    let Some(tip) = target_tip else {
-        return Some("cannot be checked: the target does not resolve here".into());
-    };
-    let off_target = match is_ancestor_or_same(repo, amendment, tip) {
-        Ok(contains) => !contains,
-        Err(error) => return Some(error),
-    };
+    if pinned.is_empty() {
+        return Some("cannot be checked: this run pins no target".into());
+    }
+    let mut off_target = true;
+    for tip in pinned {
+        match is_ancestor_or_same(repo, amendment, *tip) {
+            Ok(true) => off_target = false,
+            Ok(false) => {}
+            Err(error) => return Some(error),
+        }
+    }
     if off_target {
         // Without the task's own range (a line, a release range, a range
         // that reopens a landed completion), the target route is the only
