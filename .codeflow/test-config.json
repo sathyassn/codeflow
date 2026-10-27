@@ -329,10 +329,10 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py && python3 -B evals/qualification/anchored/test_check.py && python3 -B evals/qualification/anchored/test_markdown_env.py"
+          "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py && python3 -I -S -B evals/qualification/anchored/test_check.py && python3 -I -S -B evals/qualification/anchored/test_markdown_env.py"
         },
         "full": {
-          "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py && python3 -B evals/qualification/anchored/test_check.py && python3 -B evals/qualification/anchored/test_markdown_env.py"
+          "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py && python3 -I -S -B evals/qualification/anchored/test_check.py && python3 -I -S -B evals/qualification/anchored/test_markdown_env.py"
         }
       },
       "requires": [

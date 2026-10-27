@@ -598,54 +598,56 @@ parts, and the fixture's grading note states both:
   `evals/model-artifacts/method-controls/controls.json` record which part
   fails each faulty answer (`caught_by`).
 
-`check.py` parses Markdown with markdown-it-py, pinned with mdurl by version
-and wheel SHA-256 in `anchored/requirements.txt` (the source packages'
-hashes are kept for audit only in `anchored/requirements-sdist-audit.txt`).
-It always runs inside a venv that `markdown_env.py` manages; there is no
-manual setup. Run the grader and it builds what it needs:
+`check.py` parses Markdown with markdown-it-py and mdurl, pure Python and
+pinned by version and wheel SHA-256 in `anchored/requirements.txt` (the
+source packages' hashes are kept for audit only in
+`anchored/requirements-sdist-audit.txt`). There is no venv and no install
+step. Run the grader isolated and it fetches what it needs:
 
 ```sh
-python3 -B evals/qualification/anchored/check.py \
+python3 -I -S -B evals/qualification/anchored/check.py \
   retry-review-opens-with-the-whole <document.json>
 ```
 
-The venv lives under the fixed root `target/anchored/` in this repository,
-as `anchored-venv-<requirements hash>-<python>`; there is no override, and
-`CODEFLOW_ANCHORED_VENV`, which once moved the root, is refused if set. The
-venv is built with copied interpreters (`venv --copies`) in a private
-directory beside that name with `--only-binary=:all: --require-hashes
---no-deps`, verified, and moved into place in one rename; a matching venv
-is reused. The helper never deletes anything: a pin change or another
-Python gets a new name and the old venv stays unused, and a path at the
-managed name that is not a valid managed venv is refused and left as it is.
-Remove old `anchored-venv-*` directories and stray
-`.anchored-venv-*.build-*` directories by hand after checking what they
-hold.
+`-I` ignores every `PYTHON*` variable, the user site and the script's own
+directory; `-S` skips `site`, so no `.pth` file, `sitecustomize` or
+`usercustomize` is read. The grader refuses any other start. `markdown_env.py`
+fetches each pinned wheel from the package index by its SHA-256, checks it,
+unpacks it with `zipfile` into `target/anchored/<requirements hash>/lib` (in a
+private directory moved into place with one rename, with a stamp recording
+every file's SHA-256), verifies it, and puts that directory first on
+`sys.path`. The root is fixed; `CODEFLOW_ANCHORED_VENV`, which once moved it,
+is refused if set. The helper never deletes anything: a pin change gets a new
+directory and the old one stays unused, and a path at the managed name that
+is not a valid build is refused and left as it is. Remove old builds under
+`target/anchored/` by hand after checking what they hold.
 
 Threat model: the helper is a developer and evaluator convenience, not a
 security boundary.
 
-- In scope: other users, accidental collisions at the managed name, and
-  stale or mismatched environments.
-- The chain rule, checked before anything under the root runs: every path
-  from the repository root to the interpreter file (the repository,
-  `target/`, `target/anchored/`, the venv, `bin/` or `Scripts/`, the
-  interpreter) and the paths Python reads at start (`pyvenv.cfg` and the
-  `lib/` or `Lib/` directories down to `site-packages/`) must each be owned
-  by you, not writable by group or others, and not a symlink. On POSIX each
-  is opened without following a link and checked on the open file. On
-  Windows each path's resolved real path must lie inside the repository and
-  none may be a reparse point (a symlink or junction). Anything else is
-  refused before its interpreter runs.
-- Checked cheaply: before each build step the staging directory must still
-  be the one the helper created (same device and inode, symlinks not
-  followed), or the build stops.
+- Trusted bootstrap: the interpreter that runs `check.py` and its standard
+  library, like any system tool, and this repository's own source. Only the
+  downloaded code is the helper's to verify.
+- In scope: other users, accidental collisions at the managed name, stale or
+  mismatched builds, and tampering with the unpacked files.
+- The chain rule, checked before the parser is imported: every path from
+  the repository root to the `lib` directory, the stamp, and every directory
+  and file under `lib` must be owned by you, not writable by group or
+  others, and not a symlink. On POSIX each is opened without following a
+  link and checked on the open file. On Windows each path's resolved real
+  path must lie inside the repository and none may be a reparse point. Every
+  file must also match the SHA-256 recorded from its verified wheel, and no
+  file may be added.
+- Checked cheaply during a build: before each step the staging directory
+  must still be the one the helper created (same device and inode, symlinks
+  not followed), or the build stops.
 - Out of scope: a concurrent process running as the same user, which can
   already write these files directly.
 - Residual: the final `os.rename` replaces an empty directory created at the
   managed name in the instant before the move; a directory with content, a
   file or a symlink there makes it fail with nothing removed.
 
-The `model-eval-kit` test target, which CI runs, takes the same path: its
-checker tests and the suite test run `check.py`. `check.py` prints the
-parser versions it ran with. A failed install stops the run.
+The `model-eval-kit` test target, which CI runs, runs the checker tests and
+the helper tests isolated, and the suite test runs `check.py` isolated with
+no inherited environment. `check.py` prints the parser versions it ran
+with. A failed fetch or check stops the run.

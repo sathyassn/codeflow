@@ -1,9 +1,8 @@
 # The anchored-document grader's Markdown parser (check.py, TSK-445):
 # markdown-it-py and its one dependency, mdurl, pinned by version and the
-# SHA-256 of their wheels. Wheels only: install with
-# `pip install --only-binary=:all: --require-hashes --no-deps -r <this file>`,
-# so no source package is built and no build backend runs.
-# markdown_env.py installs exactly this into the grader's managed venv.
+# SHA-256 of their wheels. markdown_env.py downloads exactly these wheels,
+# checks each SHA-256 and unpacks them with zipfile, so no source package is
+# built, no build backend runs and no installer is involved.
 # Licences, both MIT, carried in each wheel's dist-info: markdown-it-py,
 # Copyright (c) 2020 ExecutableBookProject, with markdown-it's Copyright (c)
 # 2014 Vitaly Puzrin, Alex Kocharin; mdurl, Copyright (c) 2015 Vitaly Puzrin,

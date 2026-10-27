@@ -1801,11 +1801,13 @@ class SuiteContractTests(unittest.TestCase):
 
         # TSK-445: the anchor comes first, so the order signals are read by
         # the checker the qualification grades with. It runs as its own
-        # process, which installs its pinned parser when it is missing.
+        # isolated process (-I -S, no inherited environment), which unpacks
+        # and verifies its pinned parser when it is missing.
         def anchored_check(case_id: str, answer: Path) -> dict:
             result = subprocess.run(
-                [sys.executable, "-B", str(ROOT / "evals/qualification/anchored/check.py"), case_id, str(answer)],
-                capture_output=True, text=True, check=False)
+                [sys.executable, "-I", "-S", "-B", str(ROOT / "evals/qualification/anchored/check.py"), case_id,
+                 str(answer)],
+                capture_output=True, text=True, check=False, env={})
             self.assertEqual(0, result.returncode, result.stderr)
             read = json.loads(result.stdout)
             # The parser it ran with is the pinned one, whatever this

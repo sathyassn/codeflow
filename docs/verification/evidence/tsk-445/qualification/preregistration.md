@@ -25,8 +25,9 @@ Registered before any trial launched, 2026-10-26T20:16:03Z.
 - Order: sequential, retry case then migration case, candidate arm first
   in each pair.
 - Grading: the present document the subject opened (its stored revision),
-  in two parts. Exact: `evals/qualification/anchored/check.py`, run in its
-  managed venv with the parser pinned in `anchored/requirements.txt`,
+  in two parts. Exact: `evals/qualification/anchored/check.py`, run isolated
+  (`python3 -I -S -B`) with the verified wheels pinned in
+  `anchored/requirements.txt`,
   settles structure (anchor, sections, figure order, one ask, no question
   titles, code left out) and that the retry mechanism's named states and
   transitions, a label with a duration and a label with a failure count are

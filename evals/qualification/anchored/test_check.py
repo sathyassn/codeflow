@@ -1,13 +1,17 @@
 """Controls for check.py (TSK-445): an anchored document passes; one missing
 its anchor, its governing figure or a drawn part of the mechanism fails; and
-Markdown written differently but read the same grades the same."""
+Markdown written differently but read the same grades the same.
+
+Run isolated, as the grader runs: python3 -I -S -B test_check.py"""
 
 import copy
 import json
+import sys
 import unittest
 from pathlib import Path
 
-import markdown_env
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import markdown_env  # noqa: E402
 
 markdown_env.ensure()
 from check import MIGRATION, RETRY, check  # noqa: E402
@@ -201,9 +205,14 @@ class CommittedControls(unittest.TestCase):
 
 
 class ManagedParser(unittest.TestCase):
-    def test_runs_with_the_pinned_parser_in_its_managed_venv(self):
+    def test_runs_isolated_with_the_verified_parser(self):
+        import markdown_it
+        import mdurl
+        self.assertTrue(markdown_env.isolated())
         self.assertEqual(markdown_env.pins(), markdown_env.versions())
-        self.assertEqual(markdown_env.venv_path().resolve(), Path(__import__("sys").prefix).resolve())
+        lib = markdown_env.lib_path().resolve()
+        for module in (markdown_it, mdurl):
+            self.assertIn(lib, Path(module.__file__).resolve().parents)
 
 
 if __name__ == "__main__":

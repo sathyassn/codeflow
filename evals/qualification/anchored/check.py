@@ -19,10 +19,10 @@ grading note. It prints what it read
 see it, and the parser versions it ran with.
 
 The parser is pinned in requirements.txt beside this file; markdown_env.py
-runs this script in a managed venv built from those pins, named by their
-hash, and never deletes anything.
+unpacks the verified wheels into a content-named directory and puts it on
+sys.path. Run the checker isolated: `python3 -I -S -B check.py ...`.
 
-Usage: python3 -B check.py <case-id> <document.json>
+Usage: python3 -I -S -B check.py <case-id> <document.json>
 Prints one JSON object: {"signals": [...], "violations": [...], "parser":
 {...}}, with "readings" for the retry case.
 """
