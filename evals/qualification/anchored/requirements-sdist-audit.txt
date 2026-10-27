@@ -1,0 +1,8 @@
+# Audit record only, never installed: the SHA-256 of the source packages of
+# the same releases as requirements.txt, from PyPI's release metadata, so a
+# reviewer can rebuild a wheel and compare. requirements.txt installs wheels
+# only (--only-binary=:all:).
+markdown-it-py==4.0.0 \
+    --hash=sha256:cb0a2b4aa34f932c007117b194e945bd74e0ec24133ceb5bac59009cda1cb9f3
+mdurl==0.1.2 \
+    --hash=sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba

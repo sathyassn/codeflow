@@ -1,16 +1,15 @@
 # The anchored-document grader's Markdown parser (check.py, TSK-445):
-# markdown-it-py and its one dependency, mdurl, each pinned by version and
-# SHA-256 (wheel and source). Install with
-# `python3 -m pip install --require-hashes --no-deps -r evals/qualification/anchored/requirements.txt`,
-# or let markdown_env.ensure() install them into target/anchored-venv.
+# markdown-it-py and its one dependency, mdurl, pinned by version and the
+# SHA-256 of their wheels. Wheels only: install with
+# `pip install --only-binary=:all: --require-hashes --no-deps -r <this file>`,
+# so no source package is built and no build backend runs.
+# markdown_env.py installs exactly this into the grader's managed venv.
 # Licences, both MIT, carried in each wheel's dist-info: markdown-it-py,
 # Copyright (c) 2020 ExecutableBookProject, with markdown-it's Copyright (c)
 # 2014 Vitaly Puzrin, Alex Kocharin; mdurl, Copyright (c) 2015 Vitaly Puzrin,
 # Alex Kocharin, Copyright (c) 2021 Taneli Hukkinen, with Node's url notice
 # (Copyright Joyent, Inc. and other Node contributors).
 markdown-it-py==4.0.0 \
-    --hash=sha256:87327c59b172c5011896038353a81343b6754500a08cd7a4973bb48c6d578147 \
-    --hash=sha256:cb0a2b4aa34f932c007117b194e945bd74e0ec24133ceb5bac59009cda1cb9f3
+    --hash=sha256:87327c59b172c5011896038353a81343b6754500a08cd7a4973bb48c6d578147
 mdurl==0.1.2 \
-    --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
-    --hash=sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba
+    --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8
