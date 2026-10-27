@@ -6974,6 +6974,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/workgraph/layout.rs", "task_dir_has_record", "is_file", 1, "Type check on entry.file_type() with errors mapped to Unreadable."),
     ("crates/codeflow-core/src/workgraph/layout.rs", "task_record_files", "is_dir", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/workgraph/lifecycle.rs", "recorded_baseline", "ErrorKind::NotFound", 1, "Gives the empty baseline only after proven_absent confirms the file is missing."),
+    ("crates/codeflow-core/src/workgraph/lifecycle.rs", "project_table_in", "ErrorKind::NotFound", 1, "Reads no Outcome marker only after proven_absent confirms project.toml is missing; every other read error refuses."),
     ("crates/codeflow-core/src/workgraph/light_paths.rs", "next_adr_id", "ErrorKind::NotFound", 1, "Starts at ADR-0001 only after proven_absent confirms the directory is missing."),
     ("crates/codeflow-core/src/workgraph/record_template.rs", "load", "ErrorKind::NotFound", 1, "Uses the embedded template only when proven_absent confirms the project template is missing; otherwise it refuses."),
     ("crates/codeflow-core/src/workgraph/history_graph.rs", "snapshot", "is_file", 1, "Metadata from the opened cache must be a regular file; every other file type refuses, never means absent."),

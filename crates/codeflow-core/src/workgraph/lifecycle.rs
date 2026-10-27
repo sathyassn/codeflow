@@ -670,6 +670,46 @@ pub fn recorded_baseline(repo_root: &Path) -> Result<Vec<String>, String> {
     baseline_entries(Some(&config))
 }
 
+/// A commit's `.codeflow/project.toml`, parsed; `None` when the commit has
+/// no such file. A file that is not valid UTF-8 or TOML is an error.
+fn project_table_at(repo: &Repository, commit: git2::Oid) -> Result<Option<toml::Table>, String> {
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    let entry = match tree.get_path(Path::new(".codeflow/project.toml")) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| error.to_string())?;
+    let text = std::str::from_utf8(blob.content()).map_err(|error| error.to_string())?;
+    text.parse::<toml::Table>()
+        .map(Some)
+        .map_err(|error| format!(".codeflow/project.toml at {commit}: {error}"))
+}
+
+/// The working tree's `.codeflow/project.toml`, parsed; `None` when it is
+/// proven absent.
+fn project_table_in(repo_root: &Path) -> Result<Option<toml::Table>, String> {
+    let path = repo_root.join(".codeflow/project.toml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(&path).map_err(|error| error.to_string())? =>
+        {
+            return Ok(None)
+        }
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    text.parse::<toml::Table>()
+        .map(Some)
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
+
 /// The baseline entries recorded in a commit's `.codeflow/project.toml`.
 fn baseline_at(repo: &Repository, commit: git2::Oid) -> Result<Vec<String>, String> {
     let tree = repo
@@ -2077,6 +2117,21 @@ fn judge_range_against(
     }
     verdict.warnings.extend(baseline.warning());
     verdict.errors.extend(baseline.errors());
+    // The Outcome adoption marker is judged by the target's file, never by
+    // anything the change itself controls (TSK-435).
+    let target_state = project_table_at(&repo, target_commit)?;
+    let head_state = match head {
+        Some(head) => match resolve_commit(&repo, head)? {
+            Some(commit) => project_table_at(&repo, commit)?,
+            None => None,
+        },
+        None => project_table_in(repo_root)?,
+    };
+    verdict.errors.extend(
+        super::outcome::marker_change_errors(target_state.as_ref(), head_state.as_ref())
+            .into_iter()
+            .map(|error| format!(".codeflow/project.toml: {error}")),
+    );
     for record in after.records.values() {
         if brought.is_some_and(|brought| brought.backfills.contains(&record.id)) {
             // A `uid` backfill landed on a line was judged there.

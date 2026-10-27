@@ -130,6 +130,49 @@ pub fn with_marker(
     table
 }
 
+/// The refusals for a change to the marker, judged against the trusted
+/// target (TSK-435): `target` and `head` are the parsed
+/// `.codeflow/project.toml` at the target tip and at the change's head,
+/// `None` where the file is absent. A target with no marker admits any head
+/// marker: that is the adoption write. Once the target has a marker, the
+/// head's list may only keep or drop uids the target lists; a uid the
+/// change adds, a removed or reshaped marker, or a target marker that
+/// cannot be read is refused, so a change cannot list its own record as
+/// present to turn the Outcome refusal into a warning.
+#[must_use]
+pub fn marker_change_errors(
+    target: Option<&toml::Table>,
+    head: Option<&toml::Table>,
+) -> Vec<String> {
+    let at = |table: Option<&toml::Table>| table.map_or(Adoption::Unmarked, Adoption::in_table);
+    let base = match at(target) {
+        Adoption::Unmarked => return Vec::new(),
+        Adoption::Unreadable(why) => {
+            return vec![format!(
+                "the target's {MARKER_KEY} cannot be read, so no change to it can be judged: {why}"
+            )]
+        }
+        Adoption::Marked(base) => base,
+    };
+    match at(head) {
+        Adoption::Unmarked => vec![format!(
+            "this change removes {MARKER_KEY}, which the target records; the marker stays once written, and dropping it would turn every Outcome refusal into a warning"
+        )],
+        Adoption::Unreadable(why) => vec![format!("this change leaves {MARKER_KEY} unreadable: {why}")],
+        Adoption::Marked(head) => {
+            let added: Vec<&str> = head.difference(&base).map(String::as_str).collect();
+            if added.is_empty() {
+                Vec::new()
+            } else {
+                vec![format!(
+                    "this change adds uids to {MARKER_KEY} that the target does not list ({}); the list names only records present when the project adopted the Outcome section, so a record made later states its Outcome instead",
+                    added.join(", ")
+                )]
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +218,31 @@ mod tests {
         assert_eq!(Adoption::in_table(&back), Adoption::Marked(uids));
         assert_eq!(back["outcome_required_since"].as_str(), Some("abc"));
         assert_eq!(back["appended"].as_integer(), Some(1));
+    }
+
+    fn table(text: &str) -> toml::Table {
+        toml::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn a_change_may_keep_or_drop_listed_uids_but_never_add_one() {
+        let base = table("outcome_present_uids = [\"a\", \"b\"]\n");
+        let same = table("x = 1\noutcome_present_uids = [\"b\", \"a\"]\n");
+        let dropped = table("outcome_present_uids = [\"a\"]\n");
+        let added = table("outcome_present_uids = [\"a\", \"b\", \"mine\"]\n");
+        let removed = table("tier = \"full\"\n");
+        assert!(marker_change_errors(Some(&base), Some(&same)).is_empty());
+        assert!(marker_change_errors(Some(&base), Some(&dropped)).is_empty());
+        let refused = marker_change_errors(Some(&base), Some(&added));
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].contains("(mine)"), "{refused:?}");
+        assert_eq!(marker_change_errors(Some(&base), Some(&removed)).len(), 1);
+        assert_eq!(marker_change_errors(Some(&base), None).len(), 1);
+        // The adoption write: a target with no marker admits any list.
+        assert!(marker_change_errors(Some(&removed), Some(&added)).is_empty());
+        assert!(marker_change_errors(None, Some(&added)).is_empty());
+        // A target marker that cannot be read refuses.
+        let broken = table("outcome_present_uids = \"x\"\n");
+        assert_eq!(marker_change_errors(Some(&broken), Some(&same)).len(), 1);
     }
 }
