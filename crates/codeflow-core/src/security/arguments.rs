@@ -116,6 +116,16 @@ pub(crate) fn evaluate(
         line_authority: HashMap::new(),
     };
     let mut reaches = Vec::new();
+    // The parser fills `$PWD`, `$(pwd)` and a backquoted `pwd` with the
+    // directory its walk believes the shell is in. Where the line may have
+    // moved the shell somewhere the guard cannot follow, any operand built
+    // from them names that unknown directory, whatever follows it (`$PWD/src/..`),
+    // so a line that spells one refuses (TSK-397 Codex review round 7).
+    if line_dirs.unknown && names_the_shell_directory(line) {
+        reaches.push(Reach::Enforcement(
+            "an interpreter argument is built from the shell's working directory (`$PWD`, `$(pwd)`) on a line where the guard cannot follow it".to_string(),
+        ));
+    }
     for call in &calls {
         reaches.extend(call_reaches(call, &line_dirs, &mut facts));
     }
@@ -751,18 +761,6 @@ fn call_reaches(
             if outward::descriptor_program(value) {
                 continue;
             }
-            // The parser fills `$PWD`, `$(pwd)` and a backquoted `pwd` with
-            // the directory its walk believes the shell is in. Where the line
-            // may have moved the shell somewhere the guard cannot follow,
-            // that value, or an ancestor of it, names an unknown directory
-            // (TSK-397 security review SR2-2).
-            if dirs.contains(&None) && names_a_listed_directory(value, &dirs) {
-                found.push(Reach::Enforcement(format!(
-                    "an interpreter argument `{}` names the directory it runs in, which the guard cannot follow on this line",
-                    git_guard::shown_word(value)
-                )));
-                continue;
-            }
             // One finding per value is enough; its strongest is kept on
             // merge, and a fixed authority finding is never hidden because
             // every authority reach is judged before any enforcement one.
@@ -1278,15 +1276,13 @@ fn unreadable_reach(
     )))
 }
 
-/// Whether an absolute operand is one of the listed directories or an
-/// ancestor of one.
-fn names_a_listed_directory(value: &str, dirs: &[Option<PathBuf>]) -> bool {
-    let value = Path::new(value.trim_end_matches('/'));
-    value.is_absolute()
-        && dirs
-            .iter()
-            .flatten()
-            .any(|dir| dir.starts_with(value) || dir == value)
+/// Whether a line, as the shell's lexer reads it, spells the shell's
+/// working directory: `$PWD`, `${PWD`, `$(pwd` or a backquoted `pwd`.
+fn names_the_shell_directory(line: &str) -> bool {
+    let line = outward::lex_normalized(line);
+    ["$PWD", "${PWD", "$(pwd", "`pwd"]
+        .iter()
+        .any(|form| line.contains(form))
 }
 
 /// Whether an operand names the directory it is used from or an ancestor:

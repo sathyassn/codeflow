@@ -1810,6 +1810,18 @@ mod tests {
                 "python3 x.py ${ cd ./hidden; } settings.json",
                 "python3 x.py settings.json${ cd ./hidden; }",
                 "python3 x.py settings.json <<< \"${ cd ./hidden; }\"",
+                // Codex review round 7: no word is skipped by its shape, a
+                // continuation does not hide `${`, and a `$PWD` form refuses
+                // whatever follows it.
+                "s python3; python3 x.py settings.json",
+                "123 python3; python3 x.py settings.json",
+                "s -n 5 python3; python3 x.py settings.json",
+                "python3 x.py settings.json \"$\\\n{ cd ./hidden; }\"",
+                "v=\"$\\\n{ cd ./hidden; }\"; python3 x.py settings.json",
+                "python3 x.py settings.json > \"$\\\n{ cd ./hidden; }\"",
+                "z; python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; python3 /abs/read_dir.py ${PWD}/src/..",
+                "z; python3 /abs/read_dir.py $(pwd)/src/..",
                 // Security review SR2-2: from a directory the guard cannot
                 // follow, `.` or an ancestor may be a protected directory.
                 "while python3 /abs/w.py .; do cd ./hidden || break; done",
@@ -1830,6 +1842,9 @@ mod tests {
             &[
                 "python3 x.py settings.json",
                 "make && python3 x.py notes.txt",
+                "nice -n 5 python3 x.py settings.json",
+                "timeout 5 node x.js settings.json",
+                "env -u X python3 x.py settings.json",
                 "cd web && node build.js",
             ],
         );

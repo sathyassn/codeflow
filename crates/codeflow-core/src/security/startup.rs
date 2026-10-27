@@ -2354,51 +2354,49 @@ fn checkout_config_violation(name: &str, args: &[String], line: &Line<'_>) -> Op
     crate::hooks::git_guard::checkout_config_write(rest, line.integrity)
 }
 
-/// Whether a simple command is certainly the shell's own `cd`, `pushd`
-/// or `popd`, a strict allowlist (TSK-397 Codex review round 6): that word
-/// exactly, at command position after assignments or `builtin` only, on a
-/// line with nothing that can rebind the name or change how builtins
-/// resolve. `chdir` is never exempt, since bash has no such builtin, and
-/// `command cd` is not, since it may run an external `cd`.
-fn shell_directory_builtin(tokens: &[String], text: &str) -> bool {
-    let word = tokens.iter().find(|word| {
-        let assignment = word.split_once('=').is_some_and(|(name, _)| {
-            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        });
-        !assignment && word.as_str() != "builtin"
-    });
-    word.is_some_and(|word| matches!(word.as_str(), "cd" | "pushd" | "popd"))
-        && !rebinds_builtins(text)
-}
-
-/// Whether a line holds anything that can rebind a command name or change
-/// how builtins resolve: `enable`, `disable`, `alias`, `unalias`, `hash`,
-/// `eval`, `source`, `.`, `emulate`, `setopt`, `unsetopt`, `function`, or a
-/// function definition's `()`.
-fn rebinds_builtins(text: &str) -> bool {
-    text.contains("()")
-        || text
-            .split(|c: char| {
-                matches!(c, ' ' | '\t' | '\n' | '\r')
-                    || matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}')
-            })
-            .any(|word| {
-                matches!(
-                    word,
-                    "enable"
-                        | "disable"
-                        | "alias"
-                        | "unalias"
-                        | "hash"
-                        | "eval"
-                        | "source"
-                        | "."
-                        | "emulate"
-                        | "setopt"
-                        | "unsetopt"
-                        | "function"
-                )
-            })
+/// Whether the whole line is nothing but the shell's own directory
+/// changes, the minimal shape the issue 342 exemption trusts (TSK-397
+/// Codex review round 7): every simple command is a bare, unquoted `cd`,
+/// `pushd` or `popd`, joined only by `&&`, `;` or newlines, and each
+/// argument is a literal or a plain `"$var"`. No other command,
+/// assignment, function, subscript or expansion appears anywhere, so
+/// nothing on the line can rebind those names.
+fn only_directory_builtins(text: &str) -> bool {
+    let text = crate::security::outward::lex_normalized(text);
+    if text.contains([
+        '|', '(', ')', '{', '}', '<', '>', '`', '\'', '\\', '#', '[', '=',
+    ]) || text.replace("&&", "").contains('&')
+    {
+        return false;
+    }
+    let argument = |word: &str| {
+        let literal = |w: &str| {
+            !w.is_empty()
+                && w.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(c, '/' | '.' | '_' | '-' | '~' | '+' | ':' | '@' | ',')
+                })
+        };
+        let plain_var = word
+            .strip_prefix("\"$")
+            .and_then(|w| w.strip_suffix('"'))
+            .is_some_and(|name| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+        literal(word) || plain_var
+    };
+    let mut any = false;
+    for command in text.split("&&").flat_map(|part| part.split([';', '\n'])) {
+        let mut words = command.split([' ', '\t']).filter(|word| !word.is_empty());
+        let Some(program) = words.next() else {
+            continue;
+        };
+        if !matches!(program, "cd" | "pushd" | "popd") || !words.all(argument) {
+            return false;
+        }
+        any = true;
+    }
+    any
 }
 
 /// The writes one simple command makes.
@@ -2421,15 +2419,12 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     if let Some(finding) = segment_redirect_violation(segment, line, &dirs) {
         return Some(finding);
     }
-    // A shell directory change writes nothing. Where it lands is the
-    // line's directory question, which makes a later relative write
-    // unknown; its own operand is never a write (issue 342, TSK-397). Only
-    // the builtin counts: the bare word at command position, after
-    // assignments, `builtin` or `command`. Through an exec-style launcher
-    // (`env cd`, `timeout 5 cd`, `exec cd`) or as a path (`/usr/bin/cd`)
-    // the word runs the first `cd` file on `PATH`, which may write
-    // anything, so it keeps the write judgment (security review SF-7).
-    if shell_directory_builtin(&tokens, line.text) {
+    // The shell's own directory change writes nothing (issue 342,
+    // TSK-397), but a launcher, a path, a rebinding or an external `cd`
+    // can run a file that does. So the exemption holds only for a line made
+    // of nothing but bare `cd`, `pushd` and `popd` builtins; anything else
+    // keeps the write judgment (Codex review round 7).
+    if only_directory_builtins(line.text) {
         return None;
     }
     let (program, args) = strip_launchers(&tokens)?;

@@ -569,6 +569,7 @@ impl DirSet {
 /// Whether the line names the shell's `cd` search path, in bash or zsh
 /// spelling.
 fn mentions_cdpath(command: &str) -> bool {
+    let command = &lex_normalized(command);
     // Read the line as the shell would spell a name: quotes and
     // backslashes removed and parameter expansions dropped, so `CD''PATH`,
     // `CD\PATH` and `CD${E}PATH` count (TSK-397 Grok review finding 3).
@@ -1027,6 +1028,7 @@ const HOOK_VARIABLES: &[&str] = &[
 /// or a heredoc. The token's presence decides; its contents are not read
 /// (TSK-397 Codex review rounds 4 and 6).
 fn hides_shell_state(command: &str) -> bool {
+    let command = &lex_normalized(command);
     current_shell_substitution(command)
         || HOOK_VARIABLES.iter().any(|name| {
             command.match_indices(name).any(|(at, _)| {
@@ -1038,12 +1040,45 @@ fn hides_shell_state(command: &str) -> bool {
         })
 }
 
+/// The line as the shell's lexer reads it before anything else: a
+/// backslash-newline outside single quotes is removed, so `"$\` and a
+/// newline then `{ cmd; }` is `${ cmd; }` (TSK-397 Codex review round 7).
+/// Every raw-text check reads this form.
+pub(crate) fn lex_normalized(command: &str) -> String {
+    let mut out = String::with_capacity(command.len());
+    let mut chars = command.chars().peekable();
+    let (mut single, mut double) = (false, false);
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !double => {
+                single = !single;
+                out.push(c);
+            }
+            '"' if !single => {
+                double = !double;
+                out.push(c);
+            }
+            '\\' if !single => match chars.next() {
+                Some('\n') => {}
+                Some(next) => {
+                    out.push(c);
+                    out.push(next);
+                }
+                None => out.push(c),
+            },
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Whether the line holds a current-shell command substitution: `${`
 /// followed by a blank, a newline or `|` (`${ cmd; }`, `${| cmd; }`),
 /// anywhere, quoted or not. Its body runs in this shell during expansion,
 /// and the splitter does not keep it whole, so the line is code the guard
 /// cannot read (TSK-397 security review SR2-1).
 pub(crate) fn current_shell_substitution(command: &str) -> bool {
+    let command = lex_normalized(command);
     command.match_indices("${").any(|(at, _)| {
         command[at + 2..]
             .chars()
@@ -1064,40 +1099,56 @@ pub(crate) fn current_shell_substitution(command: &str) -> bool {
 /// assignment-only command changes nothing here; a hook assignment is read
 /// from the line's text ([`hides_shell_state`]).
 pub(crate) fn shell_may_move(words: &[String]) -> bool {
+    launched_interpreter(words, 0).is_none_or(hides_a_directory_change)
+}
+
+/// The arguments of the interpreter a simple command runs, read from
+/// command position through the modeled launchers' own option grammar
+/// (`nice -n 5`, `timeout 5`, `env -u X`, `command -p`), or `None` when
+/// anything else runs. No word is skipped by its shape: a word at command
+/// position that is neither a modeled launcher nor an interpreter may be a
+/// shell function (TSK-397 Codex review round 7). An assignment-only
+/// command runs nothing.
+fn launched_interpreter(words: &[String], depth: usize) -> Option<&[String]> {
+    if depth > 8 {
+        return None;
+    }
     let assignment = |word: &str| {
         word.split_once('=').is_some_and(|(name, _)| {
             !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         })
     };
-    let Some(at) = words.iter().position(|word| program_is_interpreter(word)) else {
-        return words.iter().any(|word| word != "!" && !assignment(word));
+    let at = words
+        .iter()
+        .position(|word| word != "!" && !assignment(word))
+        .unwrap_or(words.len());
+    let Some(program) = words.get(at) else {
+        return Some(&[]);
     };
-    let launched = words[..at].iter().all(|word| {
-        word == "!"
-            || assignment(word)
-            || word.starts_with('-')
-            || word
-                .chars()
-                .all(|c| c.is_ascii_digit() || matches!(c, '.' | 's' | 'm' | 'h' | 'd'))
-            || matches!(
-                crate::hooks::git_guard::launcher_name(word),
-                "command"
-                    | "exec"
-                    | "nohup"
-                    | "nice"
-                    | "timeout"
-                    | "stdbuf"
-                    | "time"
-                    | "env"
-                    | "xargs"
-                    | "caffeinate"
-                    | "xcrun"
-                    | "ionice"
-                    | "noglob"
-                    | "nocorrect"
-            )
-    });
-    !launched || hides_a_directory_change(&words[at + 1..])
+    let rest = &words[at + 1..];
+    if program_is_interpreter(program) {
+        return Some(rest);
+    }
+    if crate::hooks::git_guard::unresolved_word(program)
+        || crate::hooks::git_guard::has_glob(program)
+        || program.contains(['{', '}'])
+    {
+        return None;
+    }
+    let name = crate::hooks::git_guard::launcher_name(program);
+    let from = match name {
+        "command" | "exec" | "nohup" | "nice" | "stdbuf" | "time" | "xargs" | "caffeinate"
+        | "xcrun" | "ionice" => skip_launcher_options(name, rest)?,
+        "timeout" => skip_launcher_options(name, rest)? + 1,
+        "env" => env_options(
+            rest,
+            &|operand| directory_operand(operand, None),
+            &mut Vec::new(),
+        )?,
+        "noglob" | "nocorrect" => 0,
+        _ => return None,
+    };
+    launched_interpreter(rest.get(from..)?, depth + 1)
 }
 
 /// Whether `word`, as written, names an interpreter (`python3`,

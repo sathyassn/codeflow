@@ -521,12 +521,7 @@ fn unresolved_targets_fail_closed_near_the_class() {
 #[test]
 fn a_directory_change_is_not_a_write() {
     let f = Fixture::new();
-    for command in [
-        "cd / && for p in /.nofollow/tmp /.resolve/1/2; do cd \"$p\" && pwd -P; done",
-        "cd ~ && cd \"$p\"",
-        "cd / && pushd \"$p\"",
-        "cd H && popd",
-    ] {
+    for command in ["cd ~ && cd \"$p\"", "cd / && pushd \"$p\"", "cd H && popd"] {
         let found = f.judge(command);
         assert!(!refused(&found), "{command}: {found:?}");
     }
@@ -540,12 +535,9 @@ fn a_directory_change_is_not_a_write() {
         "exec cd ~/.zshrc",
         "/usr/bin/cd ~/.zshrc",
     ] {
-        let found = f.judge(command);
-        assert!(refused(&found), "{command}");
-        assert!(
-            found.iter().all(|v| !v.message.contains("`cd` takes")),
-            "{command}: {found:?}"
-        );
+        // A line with any other command keeps the normal write judgment,
+        // so the `cd` operand itself may be the reason (Codex round 7).
+        assert!(refused(&f.judge(command)), "{command}");
     }
     // Codex review round 6: an external `cd`, or a line that can rebind
     // the name, keeps the write judgment of the `cd` operand itself.
@@ -568,6 +560,17 @@ fn a_directory_change_is_not_a_write() {
         ("chdir \"$p\"", true),
         ("enable -n cd; cd \"$p\"", true),
         ("disable cd; cd \"$p\"", true),
+        // Codex review round 7 and security review SR3-1: a quoted, escaped
+        // or expanded rebinding, or a function table entry.
+        ("\"enable\" -n cd; cd \"$p\"", true),
+        ("\\enable -n cd; cd \"$p\"", true),
+        ("en'able' -n cd; cd \"$p\"", true),
+        ("a=enable; \"$a\" -n cd; cd \"$p\"", true),
+        ("\"disable\" cd; cd \"$p\"", true),
+        ("functions[cd]='/x/cd \"$@\"'; cd \"$p\"", true),
+        // The exemption covers only a line of bare directory builtins, so
+        // a loop around `cd "$p"` is judged as a write again.
+        ("for p in /a /b; do cd \"$p\" && pwd -P; done", true),
         // Security review SR2-3: the unresolved operand through a launcher
         // or a path keeps the write judgment too.
         ("env cd \"$p\"", true),
