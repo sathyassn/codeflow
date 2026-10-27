@@ -101,17 +101,19 @@ pub struct StatusDetails {
     pub acceptance: Option<PathBuf>,
 }
 
-/// The receiving target a task completion binds against, given in place
-/// of what `origin` advertises. Only `task status` takes it.
+/// The receiving target a task completion binds against: the pins local
+/// `task status` needs to grant authority in a clone with remotes. Only
+/// `task status` takes them.
 #[derive(Debug, Clone, Default, Args)]
 pub struct TaskTarget {
     /// The receiving target's tip a task completion binds against, such as
-    /// `origin/main`, in place of the default branch `origin` advertises;
-    /// needed when `origin` cannot be asked.
-    #[arg(long, value_name = "REF")]
+    /// `origin/main`. In a clone with remotes, `task status` grants landing,
+    /// stacking and waiver authority only with `--base` and `--into`; hosted
+    /// CI pins its own base and is the authority.
+    #[arg(long, value_name = "REF", requires = "into")]
     pub base: Option<String>,
-    /// The receiving target's branch name; defaults to the branch `--base`
-    /// names.
+    /// The receiving target's branch name, such as `main`; given with
+    /// `--base`.
     #[arg(long, value_name = "BRANCH", requires = "base")]
     pub into: Option<String>,
 }

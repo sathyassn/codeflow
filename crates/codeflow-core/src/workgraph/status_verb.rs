@@ -387,6 +387,20 @@ fn epic_binding(repo_root: &Path, epic: &RecordView) -> Vec<String> {
     .collect()
 }
 
+/// Whether the clone has any remote; an unreadable remote list refuses,
+/// since it decides whether the receiving target must be pinned.
+fn has_remotes(repo: &git2::Repository, task: &RecordView) -> Result<bool, Vec<String>> {
+    repo.remotes()
+        .map(|remotes| !remotes.is_empty())
+        .map_err(|error| {
+            vec![format!(
+                "{}: {}: cannot read the remotes: {error}",
+                super::acceptance::BINDING_RULE,
+                task.id
+            )]
+        })
+}
+
 /// The binding of a completion to the reviewed commit (R-60), with the
 /// working tree over `HEAD` as the completion: the verb runs where the
 /// reviewed result is checked out, and applies the judge CI applies.
@@ -414,6 +428,13 @@ fn binding(
             task.id
         )];
     };
+    let remoted = match has_remotes(&repo, task) {
+        Ok(remoted) => remoted,
+        Err(refused) => return refused,
+    };
+    if remoted && change.base.is_none() {
+        return unpinned_binding(&repo, graph, task, head, &changed);
+    }
     // One qualified set of receiving lines and one anchor, carried through
     // both binding attempts (TSK-340 review round 5).
     let qualified = match qualify(repo_root, &repo, task, head, change) {
@@ -549,7 +570,7 @@ fn qualify(
     head: git2::Oid,
     change: &StatusChange,
 ) -> Result<Qualified, String> {
-    let default = default_target(repo_root, repo, change)?;
+    let default = default_target(repo, change)?;
     let default = default.as_ref().map(|(name, tip)| (name.as_str(), *tip));
     let declared = task
         .integration_target
@@ -633,31 +654,28 @@ fn epic_line_at(repo: &git2::Repository, tip: git2::Oid, line: &str) -> Result<b
         }))
 }
 
-/// The default target's name and tip, settled before any other tip is
-/// read (TSK-340 review rounds 6 and 7). An explicit `--base` (with
-/// `--into`, else the branch `--base` names) is the operator's pin. A clone
-/// with no remotes uses its local `main`, else `master`. Otherwise the name
-/// is what `origin` itself advertises as its default branch, asked with
-/// the bounded, non-interactive query the pre-push destination check uses:
-/// a local `origin/HEAD` or branch configuration never names it. The tip is
-/// the fetched `origin/<name>`. A remote that cannot be asked, advertises no
-/// default, or whose default is not fetched refuses, naming the `--base`
-/// to pass or the fetch to run; nothing falls back to another name.
+/// The default target's name and tip for a pinned or remoteless run
+/// (TSK-340, operator decision of 2026-10-27). Explicit `--base` and
+/// `--into` are the operator's pin. A clone with no remotes uses its local
+/// `main`, else `master`. A clone with remotes and no pins is bound by
+/// [`unpinned_binding`] instead and never reaches here; nothing local
+/// chooses its default for authority.
 fn default_target(
-    repo_root: &Path,
     repo: &git2::Repository,
     change: &StatusChange,
 ) -> Result<Option<(String, git2::Oid)>, String> {
     if let Some(base) = change.base.as_deref() {
-        let tip = repo
-            .revparse_single(base)
-            .and_then(|object| object.peel_to_commit())
-            .map_err(|error| format!("`--base {base}` does not name a commit here: {error}"))?
-            .id();
         let name = change
             .into
             .clone()
             .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
+        let tip = repo
+            .revparse_single(base)
+            .and_then(|object| object.peel_to_commit())
+            .map_err(|error| {
+                format!("`--base {base}` does not name a commit here ({error}); fetch it (`git fetch origin {name}`)")
+            })?
+            .id();
         return Ok(Some((name, tip)));
     }
     let remotes = repo
@@ -671,36 +689,58 @@ fn default_target(
         }
         return Ok(None);
     }
-    let pass_base = "pass the default target instead: `--base origin/<default> --into <default>`";
-    if !remotes
-        .iter()
-        .any(|remote| matches!(remote, Ok(Some("origin"))))
-    {
-        return Err(format!(
-            "this clone has remotes but no `origin`, so the default target has no receiving source; add the remote that carries it as `origin`, or {pass_base}"
-        ));
+    // A clone with remotes binds only against explicit pins: the caller
+    // never reaches here without them (TSK-340, operator decision of
+    // 2026-10-27).
+    Err(UNPINNED.into())
+}
+
+/// Why local `task status` in a clone with remotes grants no authority
+/// without explicit pins (operator decision, 2026-10-27).
+const UNPINNED: &str = "local `task status` grants no landing, stacking or waiver authority in a clone with remotes unless the receiving target is pinned, because any process in this clone can change the git settings that would otherwise decide it; pass `--base origin/<name> --into <name>` (hosted CI pins its own base and is the authority)";
+
+/// The binding of a completion in a clone with remotes and no pins: only
+/// the reviewed span itself, with no receiving line, no landing, no target
+/// merge and no waiver authority, and no anchor read from any ref (the
+/// record's declared target is set aside, so the history below `HEAD` is
+/// the only evidence). A refusal names the pins that would let the
+/// receiving lines be judged.
+fn unpinned_binding(
+    repo: &git2::Repository,
+    graph: &Graph,
+    task: &RecordView,
+    head: git2::Oid,
+    changed: &[crate::git::GitName],
+) -> Vec<String> {
+    let mut view = task.clone();
+    view.integration_target = None;
+    let none = super::acceptance::RunBases::new(None);
+    let findings = super::acceptance::bind_completion_with_amendment(
+        repo,
+        &view,
+        graph,
+        super::acceptance::Landing::Worktree { head, changed },
+        None,
+        super::acceptance::Transport::Direct,
+        None,
+        None,
+        &none.stacking(),
+        &none.criteria(),
+    )
+    .findings;
+    if findings.is_empty() {
+        return Vec::new();
     }
-    let url = repo
-        .find_remote("origin")
-        .map_err(|error| format!("cannot read the remote `origin`: {error}"))?
-        .url_bytes()
-        .to_vec();
-    let Ok(url) = String::from_utf8(url) else {
-        return Err(format!("the URL of `origin` is not text; {pass_base}"));
-    };
-    let destination = super::release_line::ask_destination(repo_root, Some(&url))
-        .map_err(|why| format!("{why}; {pass_base}"))?;
-    let Some((name, _)) = destination.default else {
-        return Err(format!(
-            "`origin` advertises no default branch; {pass_base}"
-        ));
-    };
-    match receiving_tip(repo, &name)? {
-        Some(tip) => Ok(Some((name, tip))),
-        None => Err(format!(
-            "`origin` advertises `{name}` as its default branch, which is not fetched here; fetch it (`git fetch origin {name}`)"
-        )),
-    }
+    let mut refused: Vec<String> = findings
+        .into_iter()
+        .map(|finding| format!("{}: {}", finding.rule, finding.message))
+        .collect();
+    refused.push(format!(
+        "{}: {}: {UNPINNED}",
+        super::acceptance::BINDING_RULE,
+        task.id
+    ));
+    refused
 }
 
 /// The tip of the branch `name` as the clone's receiving source holds it.
