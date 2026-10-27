@@ -203,7 +203,7 @@ class CommittedControls(unittest.TestCase):
 class ManagedParser(unittest.TestCase):
     def test_runs_with_the_pinned_parser_in_its_managed_venv(self):
         self.assertEqual(markdown_env.pins(), markdown_env.versions())
-        self.assertEqual(markdown_env.venv_path(), Path(__import__("sys").prefix).resolve())
+        self.assertEqual(markdown_env.venv_path().resolve(), Path(__import__("sys").prefix).resolve())
 
 
 if __name__ == "__main__":
