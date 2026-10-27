@@ -49,8 +49,10 @@ class RetryCase(unittest.TestCase):
         self.assertEqual(result["violations"], [])
         for signal in ("anchor_lines_before_any_figure", "orienting_figure_names_the_parts",
                        "retry_mechanism_carried_by_a_figure", "sections_titled_in_plain_words",
-                       "terms_drawn_before_use", "one_ask", "unmeasured_outage_stated"):
+                       "terms_drawn_before_use", "one_ask"):
             self.assertIn(signal, result["signals"])
+        # The stated uncertainty is judged (rubric J2), never read by keyword.
+        self.assertNotIn("unmeasured_outage_stated", result["signals"])
 
     def test_missing_anchor_fails(self):
         result = check(RETRY, {"blocks": [DEFINITIONS, figure("life", "state"), DECISION]})
@@ -76,17 +78,22 @@ class RetryCase(unittest.TestCase):
                                   and "requeue" not in item.get("for", [])]
         self.assertNotIn("retry_mechanism_carried_by_a_figure", check(RETRY, document)["signals"])
 
-    def test_wrong_facts_fail_and_an_equivalent_notation_passes(self):
-        # Codex round 3 mutations of the passing control, committed as controls.
-        for name in ("retry/faulty-backoff-90s.json", "retry/faulty-second-failure.json"):
+    def test_values_are_read_for_the_judge_not_judged(self):
+        # The checker reads durations to seconds and failure counts so the
+        # judge can see them; whether they are right is the judged rubric.
+        notations = ("retry/passing.json", "retry/passing-compact-durations.json", "retry/passing-30-sec.json",
+                     "retry/passing-half-minute.json", "retry/passing-one-minute.json")
+        for name in notations:
             with self.subTest(name=name):
                 result = check(RETRY, control(RETRY, name))
-                self.assertNotIn("retry_mechanism_carried_by_a_figure", result["signals"])
-                self.assertIn("fact_invented", result["violations"])
-        measured = check(RETRY, control(RETRY, "retry/faulty-outage-measured.json"))
-        self.assertNotIn("unmeasured_outage_stated", measured["signals"])
-        compact = check(RETRY, control(RETRY, "retry/passing-compact-durations.json"))
-        self.assertEqual(compact, check(RETRY, control(RETRY, "retry/passing.json")))
+                self.assertIn("retry_mechanism_carried_by_a_figure", result["signals"])
+                self.assertEqual([30.0, 60.0, 300.0], result["readings"]["life.wide"]["seconds"])
+        wrong = check(RETRY, control(RETRY, "retry/faulty-backoff-90s.json"))
+        self.assertIn("retry_mechanism_carried_by_a_figure", wrong["signals"])
+        self.assertEqual([30.0, 90.0, 300.0], wrong["readings"]["life.wide"]["seconds"])
+        self.assertEqual([2], check(RETRY, control(RETRY, "retry/faulty-second-failure.json"))["readings"]["life.narrow"]["fail_counts"])
+        self.assertNotIn("fact_invented", wrong["violations"])
+        self.assertNotIn("unmeasured_outage_stated", wrong["signals"])
 
     def test_question_title_fails(self):
         result = check(RETRY, {"blocks": [ANCHOR, section("whole", "Will it hold?"), figure("whole", "flow"), DECISION]})
@@ -154,13 +161,24 @@ class MigrationCase(unittest.TestCase):
 
 
 class CommittedControls(unittest.TestCase):
-    """The signals check.py reads agree with the committed control answers:
-    for the retry case, every signal it records; for the migration case, the
-    order and ask signals (its facts stay with the judged grade)."""
+    """The checker's output is the exact part of every committed control.
+    For the retry case, a control's signals are that output plus its
+    `judged` signals, and a faulty control's `caught_by` names the part that
+    fails it. For the migration case only the order and ask signals are read
+    (its facts are judged)."""
 
     MIGRATION_READ = {
         "anchor_then_governing_comparison", "one_ask", "narrative_first_text_cards_ask_last",
         "question_form_section_title", "more_than_one_ask",
+    }
+    RETRY_REQUIRED = {
+        "anchor_lines_before_any_figure", "orienting_figure_names_the_parts",
+        "retry_mechanism_carried_by_a_figure", "sections_titled_in_plain_words",
+        "terms_drawn_before_use", "one_ask",
+    }
+    RETRY_PROHIBITED = {
+        "definitions_paragraph_before_any_figure", "question_form_section_title",
+        "table_as_main_carrier", "more_than_one_ask",
     }
 
     def test_controls_agree(self):
@@ -172,9 +190,20 @@ class CommittedControls(unittest.TestCase):
                     found = set(result["signals"]) | set(result["violations"])
                     recorded = set(entry["signals"])
                     if case == MIGRATION:
-                        found &= self.MIGRATION_READ
-                        recorded &= self.MIGRATION_READ
-                    self.assertEqual(recorded, found)
+                        self.assertEqual(recorded & self.MIGRATION_READ, found & self.MIGRATION_READ)
+                        continue
+                    self.assertEqual(recorded - set(entry["judged"]), found)
+                    exact_fails = bool(self.RETRY_REQUIRED - found or self.RETRY_PROHIBITED & found)
+                    if entry["role"] == "passing":
+                        self.assertFalse(exact_fails)
+                    else:
+                        self.assertEqual(entry["caught_by"] == "exact", exact_fails)
+
+
+class ManagedParser(unittest.TestCase):
+    def test_runs_with_the_pinned_parser_in_its_managed_venv(self):
+        self.assertEqual(markdown_env.pins(), markdown_env.versions())
+        self.assertEqual(markdown_env.venv_path(), Path(__import__("sys").prefix).resolve())
 
 
 if __name__ == "__main__":

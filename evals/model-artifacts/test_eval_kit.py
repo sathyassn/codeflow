@@ -1807,7 +1807,12 @@ class SuiteContractTests(unittest.TestCase):
                 [sys.executable, "-B", str(ROOT / "evals/qualification/anchored/check.py"), case_id, str(answer)],
                 capture_output=True, text=True, check=False)
             self.assertEqual(0, result.returncode, result.stderr)
-            return json.loads(result.stdout)
+            read = json.loads(result.stdout)
+            # The parser it ran with is the pinned one, whatever this
+            # interpreter has installed.
+            requirements = (ROOT / "evals/qualification/anchored/requirements.txt").read_text(encoding="utf-8")
+            self.assertEqual(dict(re.findall(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)", requirements, re.M)), read["parser"])
+            return read
 
         for entry in controls["cases"]["migration-review-leads-with-the-picture"]:
             document = json.loads((directory / entry["answer"]).read_text(encoding="utf-8"))

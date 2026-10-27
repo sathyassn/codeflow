@@ -579,27 +579,41 @@ primary closes peer tabs the subject left open, as it closes the trial tab.
 
 `anchored/check.py` grades the present document a subject opened for the
 `retry-review-opens-with-the-whole` and
-`migration-review-leads-with-the-picture` cases (TSK-445). It parses
-narrative Markdown with markdown-it-py, pinned with mdurl by version and
-SHA-256 in `anchored/requirements.txt`. On the evaluator host and a
-developer machine, install the pins once:
+`migration-review-leads-with-the-picture` cases (TSK-445). Grading has two
+parts, and the fixture's grading note states both:
+
+- **Exact, by `check.py`:** structure (the anchor, sections, figure order,
+  one ask counted through nested blocks, no question titles, code left out)
+  and the presence of every drawn element the retry mechanism needs at both
+  widths (its labelled states and transitions, a labelled wait with a
+  duration, a labelled failure count). It reads durations to seconds and
+  failure counts for the judge, and judges no meaning with them.
+- **Judged, by the rubric in the fixture's grading note:** whether each
+  value, count and transition matches the source, any negation or added
+  claim (`fact_invented`), and whether the right thing is stated as not
+  measured (`unmeasured_outage_stated`). The evaluator applies it to every
+  trial; the committed controls in
+  `evals/model-artifacts/method-controls/controls.json` record which part
+  fails each faulty answer (`caught_by`).
+
+`check.py` parses Markdown with markdown-it-py, pinned with mdurl by version
+and wheel SHA-256 in `anchored/requirements.txt` (the source packages'
+hashes are kept for audit only in `anchored/requirements-sdist-audit.txt`).
+It always runs inside its managed venv, `target/anchored-venv` (or
+`$CODEFLOW_ANCHORED_VENV`): `markdown_env.py` builds it, rebuilds it when its
+requirements stamp or installed versions differ from the pins, and runs the
+script there, never with a parser that merely imports. On the evaluator host
+or a developer machine the same venv can be built by hand:
 
 ```sh
 python3 -m venv target/anchored-venv
-target/anchored-venv/bin/pip install --require-hashes --no-deps \
-  -r evals/qualification/anchored/requirements.txt
-target/anchored-venv/bin/python -B evals/qualification/anchored/check.py \
+target/anchored-venv/bin/pip install --only-binary=:all: --require-hashes \
+  --no-deps -r evals/qualification/anchored/requirements.txt
+python3 -B evals/qualification/anchored/check.py \
   retry-review-opens-with-the-whole <document.json>
 ```
 
-Run any other way, `check.py` and its tests install the same pins into
-`target/anchored-venv` (or `$CODEFLOW_ANCHORED_VENV`) with
-`--require-hashes --no-deps` and run again there; the `model-eval-kit` test
-target, which CI runs, takes that path. A failed install stops the run.
-
-The checker reads structure (the anchor, sections, nested asks, titles) and
-the retry facts exactly: the 30 and 60 second backoff and the 5 minute
-visibility timeout in any usual notation, the dead-letter step after the
-third failure, the lost lease, the requeue, and the outage named as not
-measured. The migration case's facts (downtime, cost, evidence) stay with
-a judged grade.
+The `model-eval-kit` test target, which CI runs, takes the same path: its
+checker tests and the suite test run `check.py`, which prepares the venv.
+`check.py` prints the parser versions it ran with. A failed install, or a
+version that still differs afterwards, stops the run.

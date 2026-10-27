@@ -71,6 +71,14 @@ fn retry_review_answers_are_valid_and_the_passing_one_is_anchored() {
         "retry/faulty-backoff-90s.json",
         "retry/faulty-second-failure.json",
         "retry/faulty-outage-measured.json",
+        "retry/passing-30-sec.json",
+        "retry/passing-half-minute.json",
+        "retry/passing-one-minute.json",
+        "retry/passing-per-failure-backoffs.json",
+        "retry/faulty-no-operator-requeue.json",
+        "retry/faulty-not-unmeasured.json",
+        "retry/faulty-cache-unmeasured.json",
+        "retry/faulty-max-attempts.json",
     ] {
         let blocks = answer(name);
         assert_eq!(asks(&blocks), 1, "{name}");

@@ -114,8 +114,9 @@ test("every figure in a committed method answer validates and re-derives its fac
     }
   }
   // TSK-445 adds the figure-first migration answer (1) and the retry
-  // answers (two passing and five faulty: 2 each, the definitions-first 1).
-  assert.equal(count, 21);
+  // answers (2 figures each, the definitions-first answer 1, the
+  // no-figure answer none: 16 answers, 31 figures).
+  assert.equal(count, 37);
 });
 
 test("the guide page and display answers adapt, and the class rules grade the guide page", { timeout: 300_000 }, async () => {
