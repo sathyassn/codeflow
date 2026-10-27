@@ -30,7 +30,7 @@ pub struct TestArgs {
 
     /// Read recorded lock holders and their start times without running targets.
     /// Records are snapshots; admission still checks the OS lock and live target groups.
-    #[arg(long, conflicts_with_all = ["mode", "strict", "since", "all", "only"])]
+    #[arg(long, conflicts_with_all = ["mode", "strict", "since", "all", "only", "config"])]
     pub lock_status: bool,
 
     /// Exit non-zero when no targets executed or candidate evidence skipped a target.
@@ -62,6 +62,14 @@ pub struct TestArgs {
         conflicts_with = "since"
     )]
     pub only: Vec<String>,
+
+    /// Read the targets from this test config file instead of
+    /// `.codeflow/test-config.json`, with no fallback to it or to stack
+    /// detection; targets still run in this repository. A missing path, a
+    /// symbolic link or a file that is not regular or readable is refused
+    /// before any target starts.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -95,10 +103,21 @@ pub struct SetupArgs {
     pub add_target: bool,
 }
 
+/// A gate flag that `codeflow test setup` cannot honour.
+fn setup_conflict(args: &TestArgs) -> Option<&'static str> {
+    if args.lock_status {
+        Some("--lock-status")
+    } else if args.config.is_some() {
+        Some("--config (setup writes .codeflow/test-config.json)")
+    } else {
+        None
+    }
+}
+
 pub fn run(args: &TestArgs) -> i32 {
     if let Some(TestCommand::Setup(setup_args)) = &args.command {
-        if args.lock_status {
-            eprintln!("codeflow test: --lock-status cannot be combined with setup");
+        if let Some(flag) = setup_conflict(args) {
+            eprintln!("codeflow test: {flag} cannot be combined with setup");
             return 2;
         }
         return run_setup(setup_args);
@@ -114,7 +133,7 @@ pub fn run(args: &TestArgs) -> i32 {
     if args.lock_status {
         return print_lock_status(&root);
     }
-    let _lock = match guard_gate(&root, &args.mode) {
+    let _lock = match guard_gate(&root, &args.mode, args.config.as_deref()) {
         Ok(lock) => lock,
         Err(message) => {
             eprintln!("codeflow test: refused: {message}");
@@ -129,6 +148,7 @@ pub fn run(args: &TestArgs) -> i32 {
             since: args.since.clone(),
             all: args.all,
             only: args.only.clone(),
+            config: args.config.clone(),
         },
     ) {
         Ok(GateOutcome::NoTargets { reason }) => {
@@ -238,8 +258,12 @@ fn evidence_suffix(executed: usize, skipped: usize, complete: bool) -> &'static 
 /// warns about a `CARGO_TARGET_DIR` outside the worktree, and essential or full mode
 /// takes the machine-wide gate lock (held until the returned value drops) or
 /// refuses naming the gate that holds it.
-fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, String> {
-    if gate_uses_cargo(root, mode) {
+fn guard_gate(
+    root: &std::path::Path,
+    mode: &str,
+    config: Option<&std::path::Path>,
+) -> Result<Option<GateLock>, String> {
+    if gate_uses_cargo(root, mode, config) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
         let value = std::env::var_os("CARGO_TARGET_DIR");
         if let Some(warning) = check_cargo_target_dir(root, &cwd, value.as_deref()) {
