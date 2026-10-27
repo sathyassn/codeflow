@@ -14,6 +14,8 @@ use std::time::Instant;
 mod drain_pipe;
 #[path = "test_gate_cli/evidence.rs"]
 mod evidence;
+#[path = "test_gate_cli/named_config.rs"]
+mod named_config;
 #[path = "support/own_repository.rs"]
 mod own_repository;
 use drain_pipe::{drain_lines, drain_pipe};
