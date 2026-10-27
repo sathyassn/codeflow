@@ -212,6 +212,9 @@ fn a_fifo_at_the_named_path_is_refused_promptly() {
         .status()
         .unwrap();
     assert!(made.success());
+    // Output goes to files, not pipes, so waiting on the child cannot block
+    // on an undrained pipe.
+    let log = side.path().join("out.log");
     let mut child = super::command(
         dir.path(),
         home.path(),
@@ -224,21 +227,23 @@ fn a_fifo_at_the_named_path_is_refused_promptly() {
             fifo.to_str().unwrap(),
         ],
     )
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
+    .stdout(std::fs::File::create(&log).unwrap())
+    .stderr(std::fs::File::options().append(true).open(&log).unwrap())
     .spawn()
     .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while child.try_wait().unwrap().is_none() {
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
         if std::time::Instant::now() > deadline {
             let _ = child.kill();
             panic!("codeflow test --config <fifo> did not return within 20 s");
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let out = child.wait_with_output().unwrap();
-    let text = format!("{}{}", stdout(&out), stderr(&out));
-    assert!(!out.status.success(), "{text}");
+    };
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(!status.success(), "{text}");
     assert!(text.contains("not a regular file"), "{text}");
     assert_no_target_ran(dir.path(), &text);
 }
