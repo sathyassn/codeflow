@@ -74,23 +74,57 @@ fn read_bounded_regular_with_hooks(
     }
     before_open()?;
     let file = options.open(path)?;
-    // After the read the path is checked with a no-follow lstat only, never
-    // opened again: a second open by path would block on a fifo swapped in
-    // after the first (TSK-1020 review 2). On Unix the identity is the
-    // descriptor's device and inode against the lstat's; Windows has no
-    // path fifos and keeps a handle comparison opened with the reparse flag.
+    // After the read the path is checked again without following a link.
+    // On Unix that is a no-follow lstat only, never a second open by path,
+    // which would block on a fifo swapped in after the first (TSK-1020
+    // review 2): identity is the descriptor's device and inode against the
+    // lstat's. Windows has no path fifos; there the path is reopened with
+    // the reparse-point flag and no access rights, so a link swapped in
+    // after the lstat is opened as itself and refused, never followed, and
+    // identity is compared between handles this function opened (review 3).
     read_opened_regular(&file, maximum_bytes, after_open, || {
-        let after = std::fs::symlink_metadata(path)?;
-        #[cfg(unix)]
-        let linked = None;
-        #[cfg(not(unix))]
-        let linked = if after.file_type().is_symlink() || !after.is_file() {
-            None
-        } else {
-            Some(same_file::Handle::from_path(path)?)
-        };
-        Ok((after, linked))
+        reopened_identity(path, || Ok(()))
     })
+}
+
+/// The path's state after the read: its no-follow metadata and, on
+/// Windows, the identity of a handle reopened on it without following a
+/// reparse point. `before_reopen` runs between the two, where a test swaps
+/// the path.
+#[cfg_attr(not(windows), allow(clippy::unnecessary_wraps))]
+fn reopened_identity(
+    path: &Path,
+    before_reopen: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<(std::fs::Metadata, Option<same_file::Handle>)> {
+    let after = std::fs::symlink_metadata(path)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        if after.file_type().is_symlink() || !after.is_file() {
+            return Ok((after, None));
+        }
+        before_reopen()?;
+        let reopened = std::fs::OpenOptions::new()
+            .access_mode(0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)?;
+        let current = reopened.metadata()?;
+        if current.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !current.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "file changed while it was being read",
+            ));
+        }
+        Ok((after, Some(same_file::Handle::from_file(reopened)?)))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = before_reopen;
+        Ok((after, None))
+    }
 }
 
 fn read_opened_regular(
@@ -117,12 +151,14 @@ fn read_opened_regular(
             "file grew beyond its byte limit",
         ));
     }
-    // The descriptor's own identity after the read, then the path's.
+    // The held descriptor's own identity after the read, then the path's.
     let held = file.metadata()?;
+    let held_identity = same_file::Handle::from_file(file.try_clone()?)?;
     let (after, linked_identity) = after_read()?;
     if after.file_type().is_symlink()
         || !after.is_file()
         || !same_inode(&opened, &held)
+        || held_identity != opened_identity
         || !same_inode(&opened, &after)
         || linked_identity.is_some_and(|linked| linked != opened_identity)
         || opened.len() != held.len()
@@ -321,5 +357,35 @@ mod tests {
         let file = dir.path().join("file");
         std::fs::write(&file, b"bytes").unwrap();
         assert_eq!(read_bounded_regular(&file, 1024).unwrap(), b"bytes");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::reopened_identity;
+
+    /// TSK-1020 review 3: a link swapped in between the no-follow metadata
+    /// read and the reopen is opened as itself and refused, never followed
+    /// to the file it names.
+    #[test]
+    fn a_link_swapped_in_before_the_reopen_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let other = dir.path().join("other.json");
+        std::fs::write(&path, b"{}").unwrap();
+        std::fs::write(&other, b"{}").unwrap();
+        let (_, identity) = reopened_identity(&path, || Ok(())).unwrap();
+        assert_eq!(
+            identity.unwrap(),
+            same_file::Handle::from_path(&path).unwrap(),
+            "a regular file reopens as itself"
+        );
+        let swapped = path.clone();
+        let error = reopened_identity(&path, || {
+            std::fs::remove_file(&swapped)?;
+            std::os::windows::fs::symlink_file(&other, &swapped)
+        })
+        .expect_err("a link is refused, not followed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
     }
 }
