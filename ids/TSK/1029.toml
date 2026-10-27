@@ -1,0 +1,11 @@
+id = "TSK-1029"
+uid = "00312d22-298c-49af-a45d-ef73f58a4f83"
+kind = "TSK"
+title = "The Claude compaction point is a documented project choice"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-27T20:47:34Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
