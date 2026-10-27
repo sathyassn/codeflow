@@ -152,8 +152,11 @@ def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
 
 # TSK-203: the Linux full gate runs as matrix parts, each
 # `codeflow test --mode full --strict --all --only <targets>`, behind one
-# aggregate check named `codeflow gates`.
-PART_RUN = "codeflow test --mode full --strict --all --only ${{ matrix.only }}"
+# aggregate check named `codeflow gates`. TSK-1001: the command is the base's
+# driver with the base's test config, and `$only` is the part's targets that
+# config defines.
+PART_RUN = '"$driver/codeflow" test --mode full --strict --all --only "$only" --config "$driver/test-config.json"'
+PART_LINE_RUN = re.compile(r'^\s*(?:run:\s*)?((?:codeflow|"\$driver/codeflow") test .+?)\s*$', re.M)
 VERDICT = "codeflow gates"
 
 
@@ -176,7 +179,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
     jobs = workflow_jobs(workflow)
     gate = jobs.get("gates", "")
     problems: list[str] = []
-    runs = [norm(r) for r in re.findall(r"^\s*run:\s*(codeflow test .+?)\s*$", gate, re.M)]
+    runs = [norm(r) for r in PART_LINE_RUN.findall(gate)]
     if runs != [PART_RUN]:
         problems.append(f"the gates job must run exactly `{PART_RUN}` once; it runs {runs}")
     release = jobs.get("gates-release", "")
@@ -229,13 +232,14 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
                 "coverage jobs, and fail unless each of them succeeded or the reuse decision named a "
                 "run and all of them were skipped; any other form could let a skipped, failed or "
                 "cancelled part read as passed. Expected:\n" + expected)
-    if "    needs: [reuse, gates-build]" not in [l.rstrip() for l in gate.splitlines()]:
+    if "    needs: [reuse, gates-build, judge-build]" not in [l.rstrip() for l in gate.splitlines()]:
         problems.append("the gates job must need exactly the reuse job, whose output its condition reads, "
-                        "and the build job (`needs: [reuse, gates-build]`)")
+                        "the build job and the driver job (`needs: [reuse, gates-build, judge-build]`)")
     problems.extend(build_job_problems(jobs, gate))
     problems.extend(reuse_job_problems(jobs))
     line = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
     problems.extend(selection_job_problems(jobs, line.group(1) if line else "<the gates job's condition>"))
+    problems.extend(driver_job_problems(jobs, line.group(1) if line else "<the gates job's condition>"))
     guarded = GATES_IF.match(line.group(1)) if line else None
     problems.extend(coverage_job_problems(cfg, jobs, guarded.group(1) if guarded else ""))
     return problems
@@ -614,6 +618,64 @@ SELECTION_JOB = """\
 """
 
 
+# TSK-1001 and TSK-1020: the gate parts run the base revision's codeflow
+# with the base's test config (`codeflow test --config`). This job builds
+# that driver from the base checkout with no cache a pull request run could
+# have written, and reports the driver's and the config's digests, which the
+# gate step checks before it runs them.
+DRIVER_JOB = """\
+    if: {condition}
+    name: gate driver
+    needs: reuse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      driver: ${{{{ steps.keep.outputs.driver }}}}
+      config: ${{{{ steps.keep.outputs.config }}}}
+    steps:
+      # A pull request's base commit; any other event's own, protected commit.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{{{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}}}
+          persist-credentials: false
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build the base's codeflow
+        run: cargo build --locked -p codeflow-cli
+      - name: Keep the driver and the base's test config
+        id: keep
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! target/debug/codeflow test --help | grep -q -- '--config <PATH>'; then
+            echo "::error::the base's codeflow has no \\`codeflow test --config\\`, so it cannot run the base's test config against this pull request; the base needs TSK-1020"
+            exit 1
+          fi
+          driver="$RUNNER_TEMP/codeflow-gate-driver"
+          mkdir -p "$driver"
+          cp target/debug/codeflow "$driver/codeflow"
+          cp .codeflow/test-config.json "$driver/test-config.json"
+          echo "driver=$(sha256sum "$driver/codeflow" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "config=$(sha256sum "$driver/test-config.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Keep the driver for the gate parts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-gate-driver
+          path: ${{{{ runner.temp }}}}/codeflow-gate-driver
+          retention-days: 1
+          if-no-files-found: error
+
+"""
+
+
+def driver_job_problems(jobs: dict[str, str], condition: str) -> list[str]:
+    expected = DRIVER_JOB.format(condition=condition)
+    if norm_job(jobs.get("judge-build", "")) != norm_job(expected):
+        return ["the `judge-build` job must be exactly this, so the gate's driver and test config come from "
+                "the base revision in a job that runs no pull request code:\n" + expected]
+    return []
+
+
 def selection_job_problems(jobs: dict[str, str], condition: str) -> list[str]:
     expected = SELECTION_JOB.format(condition=condition)
     if norm_job(jobs.get("judge", "")) != norm_job(expected):
@@ -703,7 +765,23 @@ GATE_STEP = """\
         shell: bash
         env:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
-        run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
+          ONLY: ${{ matrix.only }}
+          DRIVER_SHA256: ${{ needs.judge-build.outputs.driver }}
+          CONFIG_SHA256: ${{ needs.judge-build.outputs.config }}
+        run: |
+          set -euo pipefail
+          driver="$RUNNER_TEMP/codeflow-gate-driver"
+          printf '%s  %s\\n%s  %s\\n' "$DRIVER_SHA256" "$driver/codeflow" "$CONFIG_SHA256" "$driver/test-config.json" | sha256sum -c --quiet -
+          chmod 755 "$driver/codeflow"
+          only=$(python3 -I -B -c 'import json, sys
+          known = {t["name"] for t in json.load(open(sys.argv[1]))["targets"]}
+          wanted = sys.argv[2].split(",")
+          for name in wanted:
+              if name not in known:
+                  print(f"::notice::{name} is not in the base test config, so this gate does not run it", file=sys.stderr)
+          print(",".join(name for name in wanted if name in known))' "$driver/test-config.json" "$ONLY")
+          test -n "$only" || { echo "::error::no target of this part is in the base test config"; exit 1; }
+          "$driver/codeflow" test --mode full --strict --all --only "$only" --config "$driver/test-config.json"
 """
 
 
@@ -728,8 +806,8 @@ def release_job_problems(release: str, gate: str, workflow: str, released: list[
     if not condition or condition.group(1) != RELEASE_IF:
         problems.append(f"the gates-release job's condition must be exactly `if: {RELEASE_IF}`, so it runs on "
                         "the release path and never on a pull request into integration/**")
-    if "    needs: [reuse, gates-build]" not in [line.rstrip() for line in release.splitlines()]:
-        problems.append("the gates-release job must need exactly `[reuse, gates-build]`")
+    if "    needs: [reuse, gates-build, judge-build]" not in [line.rstrip() for line in release.splitlines()]:
+        problems.append("the gates-release job must need exactly `[reuse, gates-build, judge-build]`")
     if sorted(released) != sorted(RELEASE_TARGETS):
         problems.append(f"the gates-release parts must name exactly {sorted(RELEASE_TARGETS)}; found {sorted(released)}")
     landing = re.findall(r"^\s*only:\s*(\S+)\s*$", gate, re.M)
@@ -812,7 +890,7 @@ def shared_install_problems(cfg: dict) -> list[str]:
 WITH_NODE = re.compile(r'^python3 -B scripts/with-node\.py (\S+) "([^"]+)"$')
 RUNS_NODE = re.compile(r"(^|[\s;&|(])(npm|npx|node)\s")
 EXACT_VERSION = re.compile(r"^v?(\d+\.\d+\.\d+)$")
-FULL_GATE = re.compile(r"^\s*run:\s*codeflow test --mode full\b", re.M)
+FULL_GATE = re.compile(r'^\s*(?:run:\s*)?(?:codeflow|"\$driver/codeflow") test --mode full\b', re.M)
 
 
 def with_node_parts(cmd: str) -> tuple[str | None, str]:

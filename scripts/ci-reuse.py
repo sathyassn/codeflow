@@ -222,9 +222,10 @@ def trusted_files_problem(git, base: str, head: str, paths: list[str]) -> str | 
     run's jobs, job names and verdict logic are the base's. The gate's
     selection (coverage shards, Windows partitions, journey map) and its
     coverage floors come from the base as well: codeflow-ci unpacks those
-    judge files from the base revision and runs them from there. The code
-    under test, the test targets' commands and the `codeflow` built from it
-    are the pull request's, which the gate tests rather than trusts."""
+    judge files from the base revision and runs them from there, and the
+    gate parts run the base's codeflow with the base's test config. The
+    code under test is the pull request's, which the gate tests rather
+    than trusts."""
     if not paths:
         return "no trusted file was named; admission binds the workflow file and the verdict script"
     for path in paths:

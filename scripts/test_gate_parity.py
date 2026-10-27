@@ -508,9 +508,13 @@ class GatePartControls(unittest.TestCase):
                             "more than one gate part", "rust-format")
 
     def test_a_part_with_less_strictness_is_refused(self):
-        for weaker in ("codeflow test --mode full --all --only ${{ matrix.only }}",
-                       "codeflow test --mode full --strict --only ${{ matrix.only }}",
-                       "codeflow test --mode essential --strict --all --only ${{ matrix.only }}"):
+        run = parity.PART_RUN
+        for weaker in (run.replace(" --strict", ""), run.replace(" --all", ""),
+                       run.replace("--mode full", "--mode essential"),
+                       # TSK-1001: the pull request's own config, or its own codeflow, is refused.
+                       run.replace(' --config "$driver/test-config.json"', ""),
+                       run.replace('--config "$driver/test-config.json"', "--config .codeflow/test-config.json"),
+                       run.replace('"$driver/codeflow" test', "codeflow test")):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
