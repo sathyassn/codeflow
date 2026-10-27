@@ -11,6 +11,25 @@ use std::process::Output;
 
 use super::{body, codeflow, commit, edit, fails, git, ok, EPIC, LINE, SECOND, TASK};
 
+/// Complete TSK-001 by hand with the block in `block_file`, commit, and
+/// return its task PR's CI on `branch`.
+fn hand_complete_ci(root: &Path, branch: &str, block_file: &str) -> Output {
+    let record = std::fs::read_to_string(root.join(TASK)).unwrap();
+    let inner = std::fs::read_to_string(block_file).unwrap();
+    std::fs::write(
+        root.join(TASK),
+        format!(
+            "{}\n```yaml\n{inner}```\n",
+            record
+                .replacen("status: todo", "status: complete", 1)
+                .trim_end_matches('\n')
+        ),
+    )
+    .unwrap();
+    commit(root, "chore: complete TSK-001 by hand");
+    task_ci(root, branch, "TSK-001")
+}
+
 /// TSK-001's acceptance block with both criteria verified at `reviewed`.
 fn task_block(dir: &Path, name: &str, reviewed: &str, ac1: &str) -> String {
     let body = format!(
@@ -383,7 +402,7 @@ fn a_blocked_reopened_task_and_its_epic_close_in_one_valid_sequence() {
         (
             "invented",
             format!("{}{invented}", todo_record.trim_end_matches('\n')),
-            "is not the active block of any completion",
+            "is not a completion this range made",
         ),
         (
             "rewritten",
@@ -426,6 +445,104 @@ fn a_blocked_reopened_task_and_its_epic_close_in_one_valid_sequence() {
             reason,
         );
     }
+    git(&root, &["switch", "-q", again]);
+
+    // Negative controls (TSK-340 review round 2): the archive is every
+    // completion the range made, in order, each bound where it was made.
+    // A temporary completion with a forged review, archived by a reopen,
+    // is refused; so is an archive that drops a completion the range made.
+    git(
+        &root,
+        &["switch", "-q", "-c", "task/TSK-001-laundered", &refixed],
+    );
+    let forged = format!(
+        "acceptance:\n  reviewed: {}\n  review: session:sequence@sha256:03\n  criteria:\n    AC-1: waived | not-a-commit\n    AC-2: verified | invented\n  journey: verified | invented\n  not_verified: none\n  follow_ups: none: invented\n  verdict: approved\n",
+        "f".repeat(40)
+    );
+    std::fs::write(
+        root.join(TASK),
+        format!(
+            "{}\n```yaml\n{forged}```\n",
+            todo_record
+                .replacen("status: todo", "status: complete", 1)
+                .trim_end_matches('\n')
+        ),
+    )
+    .unwrap();
+    commit(&root, "chore: complete TSK-001 with a forged review");
+    ok(
+        &status(&root, "task", "TSK-001", &["todo", "--reason", "launder"]),
+        "reopen the forged completion",
+    );
+    let laundered = commit(&root, "chore: reopen TSK-001");
+    let after_launder = task_block(dir.path(), "launder", &laundered, "verified | re-reviewed");
+    fails(
+        &status(
+            &root,
+            "task",
+            "TSK-001",
+            &["complete", "--acceptance", &after_launder],
+        ),
+        "a laundered forged completion",
+        "has no real provenance",
+    );
+    fails(
+        &hand_complete_ci(&root, "task/TSK-001-laundered", &after_launder),
+        "CI on a laundered forged completion",
+        "has no real provenance",
+    );
+
+    git(
+        &root,
+        &["switch", "-q", "-c", "task/TSK-001-dropped", &refixed],
+    );
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-001",
+            &["complete", "--acceptance", &again_block],
+        ),
+        "an intermediate completion",
+    );
+    commit(&root, "chore: complete TSK-001");
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-001",
+            &["todo", "--reason", "one more fix"],
+        ),
+        "reopen the intermediate completion",
+    );
+    commit(&root, "chore: reopen TSK-001");
+    let reopened_record = std::fs::read_to_string(root.join(TASK)).unwrap();
+    let last = reopened_record
+        .rfind("```yaml\nacceptance_superseded:")
+        .unwrap();
+    let end = last + 3 + reopened_record[last + 3..].find("```\n").unwrap() + 4;
+    std::fs::write(
+        root.join(TASK),
+        format!("{}{}", &reopened_record[..last], &reopened_record[end..]),
+    )
+    .unwrap();
+    let dropped = commit(&root, "docs(records): drop the intermediate archive");
+    let after_drop = task_block(dir.path(), "drop", &dropped, "verified | re-reviewed");
+    fails(
+        &status(
+            &root,
+            "task",
+            "TSK-001",
+            &["complete", "--acceptance", &after_drop],
+        ),
+        "a dropped completion",
+        "is missing",
+    );
+    fails(
+        &hand_complete_ci(&root, "task/TSK-001-dropped", &after_drop),
+        "CI on a dropped completion",
+        "is missing",
+    );
     git(&root, &["switch", "-q", again]);
 
     let note = "plan/epic-note";

@@ -1391,6 +1391,10 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
             "the task branch's head",
             "strictly before the reviewed revision",
         ),
+        (
+            "merged into the task after the review",
+            "which the reviewed commit does not contain",
+        ),
     ] {
         let dir = line_repo(&["TSK-001"]);
         let root = dir.path();
@@ -1410,6 +1414,14 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
                 amend(root, "plan/narrow");
                 let amendment = land(root, "plan/narrow");
                 git(root, &["switch", "task/TSK-001-work"]);
+                (reviewed, amendment)
+            }
+            "merged into the task after the review" => {
+                let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+                amend(root, "plan/narrow");
+                let amendment = land(root, "plan/narrow");
+                git(root, &["switch", "task/TSK-001-work"]);
+                git(root, &["merge", "--no-ff", "-m", "merge: line", LINE]);
                 (reviewed, amendment)
             }
             _ => {
@@ -1452,11 +1464,13 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
     }
 }
 
-/// A late completion cut exactly at the amendment merge completes: the
-/// verb's `HEAD` is the completion's parent, so naming it as the waiver's
-/// amendment is not naming the head.
+/// A late completion cut exactly at the amendment merge does not waive by
+/// that amendment (TSK-340 review round 2): the review predates it, and a
+/// waiver names an amendment the reviewed commit contains, whatever the
+/// merge topology after the review. Naming the head itself is still not the
+/// refusal: the verb's `HEAD` is the completion's parent.
 #[test]
-fn a_completion_cut_at_the_amendment_merge_binds() {
+fn a_completion_cut_at_the_amendment_merge_needs_an_amendment_the_review_saw() {
     let dir = line_repo(&["TSK-001"]);
     let root = dir.path();
     let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
@@ -1474,12 +1488,90 @@ fn a_completion_cut_at_the_amendment_merge_binds() {
             &waived_block(&reviewed, &amendment),
         ),
     );
+    let needles = ["AC-1 waiver", "which the reviewed commit does not contain"];
     let verb = status_complete(root, "TSK-001");
-    assert_eq!(verb.0, 0, "the verb: {}", verb.1);
-    commit(root, "docs(records): complete TSK-001");
-    let result = ci_on(root, LINE, "plan/complete-tsk001", "");
-    assert_passes(&result, "the completion pull request");
-    assert!(binding_lines(&result).is_empty(), "{}", result.1);
+    assert_blocks(&verb, "the verb", &needles);
+    assert!(
+        !verb.1.contains("names the pull request head"),
+        "{}",
+        verb.1
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended_task("TSK-001", "complete", &waived_block(&reviewed, &amendment)),
+    );
+    commit(root, "docs(records): complete TSK-001 by hand");
+    assert_blocks(
+        &ci_on(root, LINE, "plan/complete-tsk001", ""),
+        "the completion pull request",
+        &needles,
+    );
+}
+
+/// TSK-340 review round 2: reversing the merge parents manufactures no
+/// landing authority. The review lies on a task branch; `main` amends and
+/// restores AC-1; a branch from that `main` merges the review as its second
+/// parent and completes with the amendment as the waiver. The verb and CI
+/// refuse it, as they refuse the ordinary orientation.
+#[test]
+fn reversed_merge_parents_grant_no_waiver() {
+    for reversed in [true, false] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+        git(root, &["switch", "main"]);
+        let path = record_path("TSK-001");
+        let on_main = std::fs::read_to_string(root.join(&path)).unwrap();
+        write(
+            root,
+            &path,
+            &on_main.replacen("shall work.", "shall mostly work.", 1),
+        );
+        let amendment = commit(root, "docs(records): amend TSK-001 AC-1");
+        write(root, &path, &on_main);
+        commit(root, "docs(records): restore TSK-001 AC-1");
+        let branch = "task/TSK-001-reversed";
+        if reversed {
+            git(root, &["switch", "-c", branch, "main"]);
+            git(
+                root,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-m",
+                    "chore: merge the review",
+                    "task/TSK-001-review",
+                ],
+            );
+        } else {
+            git(root, &["switch", "-c", branch, "task/TSK-001-review"]);
+            git(
+                root,
+                &["merge", "--no-ff", "-m", "chore: merge main", "main"],
+            );
+        }
+        let waiver = block(
+            &reviewed,
+            &[
+                &format!("AC-1: waived | {amendment}"),
+                "AC-2: verified | journey",
+            ],
+            "verified | journey",
+            "none: done",
+        );
+        write(root, &path, &task("TSK-001", "todo", OWN_JOURNEY, &waiver));
+        let verb = status_complete(root, "TSK-001");
+        complete(root, "TSK-001", OWN_JOURNEY, &waiver);
+        for result in [verb, ci(root, branch, "TSK-001")] {
+            assert_ne!(result.0, 0, "reversed: {reversed}: {}", result.1);
+            assert!(
+                result.1.contains("AC-1 waiver"),
+                "reversed: {reversed}: {}",
+                result.1
+            );
+        }
+    }
 }
 
 #[test]
@@ -3153,6 +3245,13 @@ fn reopen_with_criteria(root: &Path, id: &str, old: &str, criteria: &str) -> [(i
 fn a_task_new_in_its_range_may_change_criteria_on_reopen() {
     let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
     let root = dir.path();
+    // The record is in the reviewed commit, so its first completion binds
+    // where it was made (TSK-340 validates archived completions).
+    write(
+        root,
+        &record_path("TSK-002"),
+        &new_standalone(&task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n")),
+    );
     let reviewed = code_change(root, "task/TSK-002-new", "pub fn initial() {}\n");
     let old = fix_block(&reviewed);
     let record = new_standalone(&task("TSK-002", "complete", OWN_JOURNEY, &old));
