@@ -5,7 +5,8 @@ Registered before any trial launched, 2026-10-26T20:16:03Z.
 - Kind: focused diagnostic of an instruction change (explanation-method pack
   cases), not a canary or full suite; one native trial per case and arm.
 - Suite: sha256:8f39d76721c552debd496941313328865b4b0f995852b3ae54bf1f030becd15f at d9b5954e9,
-  re-registered as sha256:7bd8b3eae964b65d4fc721fe80bb0a5eb0a3c05cc80917c244711251fa6a567b after
+  re-registered as sha256:7bd8b3eae964b65d4fc721fe80bb0a5eb0a3c05cc80917c244711251fa6a567b (confirmed
+  unchanged at 201b471eb) after
   the review rounds (anchor wording, then the exact and judged split in the
   retry fixture's grading note). The
   candidate binary is rebuilt at the head the trials run on, and its digest
@@ -13,8 +14,12 @@ Registered before any trial launched, 2026-10-26T20:16:03Z.
 - Cases: retry-review-opens-with-the-whole (CF-METH-004, CF-PRES-004) and
   migration-review-leads-with-the-picture (CF-METH-004, CF-PRES-004).
 - One variable: the CodeFlow revision the fixture is scaffolded with.
-  - Qualifying arm, candidate: d9b5954e9 (TSK-445 head), binary
-    sha256 7c80dddb89bffb5aa6545cc53762af73e34a9f0ff0f229c58d8f08fc614df0fa.
+  - Qualifying arm, candidate: 201b471eb (the TSK-445 head Codex approved),
+    binary `codeflow 3.2.0 source=201b471eb4e82c89f35bf80037c821983ceef60b
+    dirty=false`, sha256
+    df38eedab280c7a6c924a92c73570960c1eb40953cba87210e9b92dfaf05b57f, built
+    2026-10-27 into `target/qual/` before any trial. (The first registration
+    named d9b5954e9; no trial ran on it.)
   - Comparison arm, baseline: 0f08dd7f8 (integration line before TSK-445),
     binary sha256 70426e4eead8ff8f7bed53a7686154303f995c635fca2f408a7832540f066e49.
 - Fixed: harness Claude Code 2.1.294 in a Herdr tab
