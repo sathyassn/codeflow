@@ -1551,6 +1551,120 @@ fn a_side_branch_merge_of_the_review_is_no_landing() {
     }
 }
 
+/// TSK-340 review round 4: with base, head and `--into` pinned, no ref the
+/// requester controls makes a side-branch merge of the review a landing.
+/// The clone has `origin`; `origin/main` is the pinned base. Moving the
+/// local `main` onto the side merge, fetching an `origin/auxiliary` branch
+/// at it, or declaring that branch as the task's target, each leaves the
+/// refusal standing in CI, and the verb judges `origin/main`, never the
+/// moved local branch.
+#[test]
+#[allow(clippy::too_many_lines)] // One fixture per spoof keeps base, head and --into pinned.
+fn no_requester_ref_turns_a_side_branch_merge_into_a_landing() {
+    for spoof in ["local main", "fetched auxiliary", "declared auxiliary"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let origin = root.parent().unwrap().join(format!(
+            "origin-{}.git",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        git(
+            root,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
+        git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(root, &["push", "-q", "origin", "main"]);
+        git(root, &["fetch", "-q", "origin"]);
+        let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+        let branch = "task/TSK-001-side";
+        git(root, &["switch", "-c", branch, "main"]);
+        write(root, "src/side.rs", "pub fn unreviewed() {}\n");
+        commit(root, "feat: add unreviewed product");
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "chore: merge the review",
+                "task/TSK-001-review",
+            ],
+        );
+        let side = head(root);
+        let done = fix_block(&reviewed);
+        let declared = if spoof == "declared auxiliary" {
+            "auxiliary"
+        } else {
+            "main"
+        };
+        let record = |status: &str, closeout: &str| {
+            task("TSK-001", status, OWN_JOURNEY, closeout).replace(
+                "integration_target: main",
+                &format!("integration_target: {declared}"),
+            )
+        };
+        match spoof {
+            "local main" => git(root, &["branch", "-f", "main", &side]),
+            _ => git(
+                root,
+                &["update-ref", "refs/remotes/origin/auxiliary", &side],
+            ),
+        }
+        write(root, &record_path("TSK-001"), &record("todo", &done));
+        let verb = status_complete(root, "TSK-001");
+        write(root, &record_path("TSK-001"), &record("complete", &done));
+        commit(root, "docs(records): record the acceptance");
+        let out = codeflow()
+            .args([
+                "ci",
+                "--base",
+                "origin/main",
+                "--head",
+                "HEAD",
+                "--branch",
+                branch,
+                "--into",
+                "main",
+                "--pr-body",
+                &with_reviews(
+                    root,
+                    "HEAD",
+                    "## Summary\nA change.\n\n- one change\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n",
+                ),
+            ])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let ci = (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        );
+        let mut results = vec![("ci", ci)];
+        if spoof == "local main" {
+            results.push(("verb", verb));
+        }
+        for (surface, result) in results {
+            assert_ne!(result.0, 0, "{spoof} ({surface}): {}", result.1);
+            assert!(
+                result.1.contains("work.acceptance_binding") && result.1.contains("src/side.rs"),
+                "{spoof} ({surface}): {}",
+                result.1
+            );
+        }
+    }
+}
+
 /// TSK-340 review round 2: reversing the merge parents manufactures no
 /// landing authority. The review lies on a task branch; `main` amends and
 /// restores AC-1; a branch from that `main` merges the review as its second
