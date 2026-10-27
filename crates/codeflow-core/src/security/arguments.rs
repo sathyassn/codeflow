@@ -120,19 +120,12 @@ pub(crate) fn evaluate(
     // Where the line may have moved the shell somewhere the guard cannot
     // follow, a value filled in at run time can be derived from that
     // directory (`$PWD/src/..`, `$( pwd)`, `~+`), whatever its spelling.
-    // So an interpreter operand holding a command or arithmetic
-    // substitution, an expansion that is not a plain variable the line
-    // assigns, or a tilde prefix other than `~` with a known home refuses
-    // (TSK-397 Codex review round 8).
+    // So an operand holding any expansion, substitution or tilde refuses:
+    // no variable is trusted, `HOME` included, since a function the line
+    // runs may change it (TSK-397 Codex review rounds 8 to 10).
     if line_dirs.unknown {
         let reading = outward::read_line(&lexed);
-        let without_home = || {
-            reading.operands.iter().find(|word| {
-                home.is_none()
-                    && (word.tilde.is_some() || word.params.iter().any(|name| name == "HOME"))
-            })
-        };
-        if let Some(word) = reading.derived.as_ref().or_else(without_home) {
+        if let Some(word) = reading.derived.as_ref() {
             reaches.push(Reach::Enforcement(format!(
                 "an interpreter argument `{}` is filled in at run time on a line where the guard cannot follow the directory",
                 word.text

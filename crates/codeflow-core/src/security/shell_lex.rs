@@ -495,9 +495,20 @@ impl Lexer {
                 token.text.push('$');
                 token.text.push(c);
             }
-            _ => {
+            // A `$` is literal only before a blank, the end of input or the
+            // closing quote. Anything else (zsh `$=x`, `$^x`) may expand, so
+            // it is complex (TSK-397 security review SR6-1).
+            next => {
                 token.text.push('$');
-                if !in_double && !token.quoted && token.plain_prefix + 1 == token.text.len() {
+                let literal = match next {
+                    None | Some(' ' | '\t' | '\n') => true,
+                    Some('"') => in_double,
+                    _ => false,
+                };
+                if !literal {
+                    token.complex = true;
+                } else if !in_double && !token.quoted && token.plain_prefix + 1 == token.text.len()
+                {
                     token.plain_prefix += 1;
                 }
             }
@@ -717,36 +728,41 @@ pub(crate) struct Reading {
     /// any program word that is not a fully unquoted, literal interpreter
     /// or modeled launcher, a function definition, or a hook assignment.
     pub(crate) moves: bool,
-    /// The operands of each interpreter call, in order.
+    /// The words judged as interpreter operands, in order: an interpreter
+    /// call's operands, and every word after the point where launcher
+    /// traversal stopped on a command that may still run an interpreter.
     pub(crate) operands: Vec<Token>,
-    /// The first interpreter operand whose value may be derived from the
-    /// working directory, judged with the assignments made before it.
+    /// The first operand whose value may be derived from the working
+    /// directory.
     pub(crate) derived: Option<Token>,
-    /// The line assigns `HOME` in some form, so its value is unknown.
-    pub(crate) home_assigned: bool,
 }
 
 impl Reading {
     /// Whether a value may be derived from the working directory. No
-    /// variable is trusted: any parameter expansion counts except `$HOME`
-    /// on a line that never assigns `HOME`, and so do a command,
-    /// arithmetic or special expansion and a tilde prefix other than `~`
-    /// (TSK-397 Codex review round 9).
-    pub(crate) fn tainted(&self, word: &Token) -> bool {
-        word.complex
-            || word
-                .params
-                .iter()
-                .any(|name| name != "HOME" || self.home_assigned)
-            || word.tilde.as_deref().is_some_and(|prefix| prefix != "~")
+    /// variable is trusted, `HOME` included, and so neither is any tilde:
+    /// a function the line runs may change `HOME` (TSK-397 Codex review
+    /// rounds 9 and 10). The check applies only once the directory is
+    /// unknown.
+    pub(crate) fn tainted(word: &Token) -> bool {
+        word.complex || !word.params.is_empty() || word.tilde.is_some()
     }
+}
+
+/// Where launcher traversal ends.
+enum Program<'a> {
+    /// A modeled interpreter runs with these operands.
+    Interpreter(&'a [Token]),
+    /// Traversal stopped at the first of these words, at this launcher
+    /// depth: a word that is not plain, an option the grammar does not
+    /// know, or a program that is neither a launcher nor an interpreter.
+    Stopped(&'a [Token], usize),
 }
 
 /// Read a lexed line's commands. `launcher` returns where a modeled
 /// launcher's command starts within the words after it, or `None` when the
 /// word is not one or its options are not known; `interpreter` says whether
-/// a plain word names an interpreter; `hides` whether an interpreter's
-/// operands hold a directory-change token.
+/// a word names an interpreter; `hides` whether an interpreter's operands
+/// hold a directory-change token.
 pub(crate) fn read(
     lexed: &Lexed,
     launcher: &dyn Fn(&str, &[String]) -> Option<usize>,
@@ -754,15 +770,7 @@ pub(crate) fn read(
     hides: &dyn Fn(&[String]) -> bool,
     hook_variables: &[&str],
 ) -> Reading {
-    let mut reading = Reading {
-        home_assigned: lexed.commands.iter().flatten().any(|word| {
-            word.text == "HOME"
-                || ["HOME=", "HOME+=", "HOME["]
-                    .iter()
-                    .any(|prefix| word.text.starts_with(prefix))
-        }),
-        ..Reading::default()
-    };
+    let mut reading = Reading::default();
     for command in &lexed.commands {
         let mut at = 0;
         let mut header = false;
@@ -772,6 +780,20 @@ pub(crate) fn read(
                 continue;
             }
             if word.plain() && HEADERS.contains(&word.text.as_str()) {
+                // A `for` or `select` header ends at `do`, and the words
+                // after it are in command position again (SR6-2). Without
+                // a `do` in this command the header runs nothing.
+                let resume = (word.text != "case")
+                    .then(|| {
+                        command[at + 1..]
+                            .iter()
+                            .position(|w| w.plain() && w.text == "do")
+                    })
+                    .flatten();
+                if let Some(offset) = resume {
+                    at += offset + 2;
+                    continue;
+                }
                 header = true;
                 break;
             }
@@ -795,52 +817,65 @@ pub(crate) fn read(
         if rest.is_empty() {
             continue;
         }
-        if let Some(operands) = program_operands(rest, launcher, interpreter, 0) {
-            let texts: Vec<String> = operands.iter().map(|w| w.text.clone()).collect();
-            if hides(&texts) {
-                reading.moves = true;
-            }
-            for word in operands.iter().filter(|w| !w.redirect) {
-                if reading.derived.is_none() && reading.tainted(word) {
-                    reading.derived = Some(word.clone());
+        match program_operands(rest, launcher, interpreter, 0) {
+            Program::Interpreter(operands) => {
+                let texts: Vec<String> = operands.iter().map(|w| w.text.clone()).collect();
+                if hides(&texts) {
+                    reading.moves = true;
                 }
-                reading.operands.push(word.clone());
+                reading
+                    .operands
+                    .extend(operands.iter().filter(|w| !w.redirect).cloned());
             }
-        } else {
-            reading.moves = true;
-            // A quoted, escaped or expanded program word may still be an
-            // interpreter, so its operands are judged as one's are; they are
-            // never dropped (TSK-397 Codex review round 9).
-            if rest.first().is_some_and(|program| !program.plain()) {
-                for word in rest[1..].iter().filter(|w| !w.redirect) {
-                    if reading.derived.is_none() && reading.tainted(word) {
-                        reading.derived = Some(word.clone());
-                    }
-                    reading.operands.push(word.clone());
+            Program::Stopped(remaining, depth) => {
+                reading.moves = true;
+                // Traversal stopped where an interpreter may still run: inside
+                // a launcher, at a quoted, escaped or expanded word, or before
+                // a later word that names one (`builtin command python3`).
+                // Every remaining word is then judged as its operand; none is
+                // dropped (TSK-397 Codex review rounds 9 and 10).
+                let stop_plain = remaining.first().is_some_and(Token::plain);
+                let later = remaining[1..].iter().any(|w| interpreter(&w.text));
+                if depth > 0 || !stop_plain || later {
+                    reading
+                        .operands
+                        .extend(remaining[1..].iter().filter(|w| !w.redirect).cloned());
                 }
             }
         }
     }
+    reading.derived = reading
+        .operands
+        .iter()
+        .find(|w| Reading::tainted(w))
+        .cloned();
     reading
 }
 
-/// The operands of the interpreter a command runs from its program word,
-/// through modeled launchers, or `None` when anything else runs.
+/// Follow a command from its program word through modeled launchers.
 fn program_operands<'a>(
     words: &'a [Token],
     launcher: &dyn Fn(&str, &[String]) -> Option<usize>,
     interpreter: &dyn Fn(&str) -> bool,
     depth: usize,
-) -> Option<&'a [Token]> {
-    let program = words.first()?;
+) -> Program<'a> {
+    let Some(program) = words.first() else {
+        return Program::Interpreter(&[]);
+    };
     if depth > 8 || program.redirect || !program.plain() {
-        return None;
+        return Program::Stopped(words, depth);
     }
     let rest = &words[1..];
     if interpreter(&program.text) {
-        return Some(rest);
+        return Program::Interpreter(rest);
     }
     let texts: Vec<String> = rest.iter().map(|w| w.text.clone()).collect();
-    let from = launcher(&program.text, &texts)?;
-    program_operands(rest.get(from..)?, launcher, interpreter, depth + 1)
+    match launcher(&program.text, &texts).and_then(|from| rest.get(from..)) {
+        Some(inner) => program_operands(inner, launcher, interpreter, depth + 1),
+        None => Program::Stopped(words, depth),
+    }
 }
+
+#[cfg(test)]
+#[path = "shell_lex_tests.rs"]
+mod tests;

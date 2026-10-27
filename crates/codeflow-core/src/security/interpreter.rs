@@ -1944,7 +1944,15 @@ mod tests {
                 "python3 x.py settings.json $'\\'' \"$\\\n{ cd ./src/lnk; }\"",
             ],
         );
-        assert_allowed(&repo, &["z; python3 /abs/r.py ~/notes.txt"]);
+        // Codex review round 10: a function may change `HOME`, so even a
+        // plain `~` is untrusted once the directory is unknown.
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &["z; python3 /abs/r.py ~/notes.txt"],
+        );
+        assert_allowed(&repo, &["python3 /abs/r.py ~/notes.txt"]);
     }
 
     /// Codex review round 9: no variable is trusted once the directory is
@@ -1977,6 +1985,21 @@ mod tests {
                 "printf -v p '%s%s' 'no' 'tes.txt'; python3 tool.py \"$p\"",
                 "export a=notes.txt; python3 tool.py \"$a\"",
                 "x=notes.txt; z; python3 /abs/r.py \"$x\"",
+                // C10-1: a launcher wrapping a quoted interpreter name, or
+                // an unsupported wrapper, keeps the operands judged.
+                "z; env \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; command \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; nice -n 5 \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; timeout 5 \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                "z; builtin command python3 /abs/read_dir.py \"$PWD/src/..\"",
+                "z; env -u X \"python3\" /abs/read_dir.py \"$PWD/src/..\"",
+                // C10-2: `~` after a command that may change `HOME`.
+                "z; python3 x.py ~/settings.json",
+                "z\npython3 x.py ~/settings.json",
+                // SR6-1, SR6-2.
+                "x=$PWD; z; python3 /abs/r.py $=x/src/..",
+                "x=$PWD; z; python3 /abs/r.py $^x/src/..",
+                "for x do cd ..; done; python3 x.py settings.json",
                 // C9-3: non-ASCII words.
                 "é; python3 x.py settings.json",
                 "export x=é; python3 x.py settings.json",
