@@ -436,7 +436,10 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
 /// xargs input has quote/backslash handling, but no shell comments,
 /// substitutions or glob expansion. Unknown input modes remain unverified.
 fn xargs_words(input: &str, split_blanks: bool) -> Option<Vec<String>> {
-    if input.contains('\0') {
+    // Windows path separators and xargs escape syntax can give different
+    // filenames. Do not certify a path after silently deleting separators.
+    // Explicit delimiters bypass this parser and preserve the supplied bytes.
+    if input.contains('\0') || cfg!(windows) && input.contains('\\') {
         return None;
     }
     let mut words = Vec::new();
@@ -2685,6 +2688,19 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn tsk1002_ci1_native_xargs_escapes_are_unverified() {
+        for input in [r"C:\home\.codex\auth.json", r"\\server\home\auth.json"] {
+            assert!(super::xargs_words(input, true).is_none(), "{input}");
+            assert!(super::xargs_words(input, false).is_none(), "{input}");
+        }
+        assert_eq!(
+            super::xargs_words("C:/home/notes.md\n", true),
+            Some(vec!["C:/home/notes.md".to_string()])
+        );
+    }
+
     #[test]
     fn interpreter_bodies_remove_shell_quotes_once() {
         for command in [

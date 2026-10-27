@@ -3595,7 +3595,7 @@ impl Run<'_> {
                         }
                         Some(_) => {}
                         None => {
-                            for name in ["printf", "echo", "print"] {
+                            for name in ["printf", "echo", "print", "true", "false", ":"] {
                                 self.state.functions.insert(name.to_string(), Vec::new());
                             }
                         }

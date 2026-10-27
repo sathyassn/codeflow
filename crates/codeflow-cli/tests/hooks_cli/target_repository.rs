@@ -51,16 +51,37 @@ impl Fixture {
         Self { temp, root, linked }
     }
 
+    fn guard_command(&self, cwd: &Path, hook: &str) -> Command {
+        let mut cmd = expansion_codeflow();
+        cmd.args(["hook", hook, "--contract", "3"])
+            .current_dir(cwd)
+            .env("HOME", self.temp.path())
+            .env("USERPROFILE", self.temp.path())
+            .env("SHELL", "/bin/zsh");
+        cmd
+    }
+
     fn command(&self, cwd: &Path, hook: &str, command: &str) -> Output {
         run_with_stdin(
-            expansion_codeflow()
-                .args(["hook", hook, "--contract", "3"])
-                .current_dir(cwd)
-                .env("HOME", self.temp.path())
-                .env("USERPROFILE", self.temp.path())
-                .env("SHELL", "/bin/zsh"),
+            &mut self.guard_command(cwd, hook),
             &guard_payload(command, cwd),
         )
+    }
+
+    fn command_with_tmpdir(
+        &self,
+        cwd: &Path,
+        hook: &str,
+        command: &str,
+        tmpdir: Option<&Path>,
+    ) -> Output {
+        let mut cmd = self.guard_command(cwd, hook);
+        if let Some(tmpdir) = tmpdir {
+            cmd.env("TMPDIR", tmpdir);
+        } else {
+            cmd.env_remove("TMPDIR");
+        }
+        run_with_stdin(&mut cmd, &guard_payload(command, cwd))
     }
 
     fn write(&self, cwd: &Path, route: &str, target: &Path) -> Output {
@@ -132,6 +153,8 @@ fn tsk1002_issue342_resolved_write_regressions() {
 #[test]
 fn tsk1002_r12_tee_destinations_are_writes() {
     let f = Fixture::new();
+    let tmpdir = f.temp.path().join("logs");
+    std::fs::create_dir(&tmpdir).unwrap();
     let mut wrong = Vec::new();
     for program in [
         "tee",
@@ -147,13 +170,56 @@ fn tsk1002_r12_tee_destinations_are_writes() {
             r#"echo x | {program} "$TMPDIR/run.log" | grep -E "SURVIVED|MISSING|^[0-9]+/""#
         );
         for guard in ["git-guard", "exec-guard"] {
-            let out = f.command(&f.linked, guard, &line);
+            let out = f.command_with_tmpdir(&f.linked, guard, &line, Some(&tmpdir));
             if out.status.code() != Some(0) {
-                wrong.push(format!("{guard}: {line}: {out:?}"));
+                wrong.push(format!("known TMPDIR: {guard}: {line}: {out:?}"));
+            }
+            let out = f.command_with_tmpdir(&f.linked, guard, &line, None);
+            let expected = Some(if guard == "git-guard" { 2 } else { 0 });
+            if out.status.code() != expected || guard == "git-guard" && !refused(&out) {
+                wrong.push(format!("absent TMPDIR: {guard}: {line}: {out:?}"));
             }
         }
     }
+    let out = f.command_with_tmpdir(
+        &f.linked,
+        "git-guard",
+        "echo x | tee \"$TMPDIR/.codeflow/policy.json\"",
+        Some(&f.linked),
+    );
+    assert!(refused(&out), "TMPDIR inside the checkout: {out:?}");
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[cfg(windows)]
+#[test]
+fn tsk1002_ci1_windows_home_streams_stay_guarded() {
+    let f = Fixture::new();
+    std::fs::create_dir(f.temp.path().join(".codex")).unwrap();
+    std::fs::write(
+        f.temp.path().join(".codex/auth.json"),
+        "fake private fixture\n",
+    )
+    .unwrap();
+    std::fs::write(f.temp.path().join("notes.md"), "ordinary fixture\n").unwrap();
+    for line in [
+        "echo ~/.codex/auth.json | xargs cat",
+        "echo ~/.codex/auth.json | xargs -I{} cat {}",
+        "xargs cat <<< ~/.codex/auth.json",
+        "printf '%s\\0' ~/.codex/auth.json | xargs -0 cat",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("security.secret_reads"));
+    }
+    let public = codeflow_core::portable_path::slashed(&f.temp.path().join("notes.md"));
+    for line in [
+        format!("printf '%s\\n' '{public}' | xargs cat"),
+        "printf '%s\\0' \"$HOME/notes.md\" | xargs -0 cat".to_string(),
+    ] {
+        let out = f.command(&f.linked, "exec-guard", &line);
+        assert_eq!(out.status.code(), Some(0), "{line}: {out:?}");
+    }
 }
 
 #[test]

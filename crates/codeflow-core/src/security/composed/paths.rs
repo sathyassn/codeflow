@@ -598,6 +598,28 @@ fn bound(states: &mut Vec<Position>) {
     }
 }
 
+/// Only unredirected, unshadowed literal builtins have a proven status here.
+/// Other commands retain both success and failure paths.
+fn literal_status(tokens: &[Tok], states: &[Position]) -> Option<bool> {
+    let [Tok::Word(word)] = tokens else {
+        return None;
+    };
+    let name = word.plain()?;
+    let success = match name {
+        "true" | ":" => true,
+        "false" => false,
+        _ => return None,
+    };
+    (!states.is_empty()
+        && states.iter().all(|position| {
+            position.state.world.is_none()
+                && position.state.changed.is_empty()
+                && !position.state.functions.contains_key(name)
+                && !position.state.aliases.contains_key(name)
+        }))
+    .then_some(success)
+}
+
 #[allow(clippy::too_many_lines)] // Scope and separators are handled in one token walk.
 fn walk(
     tokens: &[Tok],
@@ -758,6 +780,7 @@ fn walk(
         }
         let before = states.clone();
         let first_output = output.len();
+        let mut exit_success = None;
         if matches!(plain(&tokens[at]), Some("(" | "{")) {
             let open = plain(&tokens[at]).unwrap_or_default();
             let close = if open == "(" { ")" } else { "}" };
@@ -808,6 +831,9 @@ fn walk(
             if start == at {
                 at += 1;
                 continue;
+            }
+            if pipeline.is_none() {
+                exit_success = literal_status(&tokens[start..at], &states);
             }
             states = states
                 .into_iter()
@@ -903,18 +929,25 @@ fn walk(
                 pipeline = None;
             }
             "||" => {
-                // Only failure enters the next alternative. Preserve changed
-                // variables as well as directories on the successful branch;
-                // unchanged alternatives collapse instead of doubling state.
-                if states != before {
-                    alternatives.extend(states);
-                    states = before;
-                    states.append(&mut failures);
-                    bound(&mut alternatives);
+                // Success skips the next alternative even when no variable
+                // changed. A literal false has no successful branch.
+                match exit_success {
+                    Some(false) => {}
+                    Some(true) => alternatives.append(&mut states),
+                    None => {
+                        alternatives.extend(states);
+                        states = before;
+                    }
                 }
+                states.append(&mut failures);
+                bound(&mut alternatives);
             }
             "&&" => {
-                failures.extend(before.clone());
+                match exit_success {
+                    Some(false) => failures.append(&mut states),
+                    Some(true) => {}
+                    None => failures.extend(before.clone()),
+                }
                 bound(&mut failures);
                 states.append(&mut alternatives);
             }
@@ -1747,6 +1780,45 @@ mod tests {
     }
 
     #[test]
+    fn literal_statuses_rejoin_only_reachable_and_or_paths() {
+        for line in [
+            "false || D=build && probe $D",
+            "false && D=private || D=build; probe $D",
+            "D=build; true || D=private; probe $D",
+            "D=build; : || D=private; probe $D",
+            "D=build; false && D=private; probe $D",
+            "false || true || D=private; D=build; probe $D",
+        ] {
+            let steps = probes(line);
+            assert_eq!(steps.len(), 1, "{line}: {steps:?}");
+            assert!(steps[0].unresolved.is_empty(), "{line}: {steps:?}");
+            assert_eq!(values(line), [vec!["build".to_string()]], "{line}");
+        }
+        assert!(probes("false && probe private").is_empty());
+        assert!(probes("true || probe private").is_empty());
+        for line in [
+            "D=private; unknown || D=public && probe $D",
+            "D=private; true || D=public && probe $D",
+            "D=private; unknown && false || probe $D",
+            "D=private; unknown || false && probe $D",
+            "D=private; alias false=true; false || D=public && probe $D",
+            "D=private; false() { true; }; false || D=public && probe $D",
+            "D=private; enable -n false; false || D=public && probe $D",
+            "D=private; disable $name; false || D=public && probe $D",
+            "D=private; alias $definition; false || D=public && probe $D",
+            "D=private; false 2>/dev/null || D=public && probe $D",
+            "D=private; unknown | false || D=public && probe $D",
+        ] {
+            assert!(
+                values(line).contains(&vec!["private".into()])
+                    || probes(line).iter().any(|step| !step.unresolved.is_empty()),
+                "success must remain reachable or unverified: {line}: {:?}",
+                probes(line)
+            );
+        }
+    }
+
+    #[test]
     fn directory_alternatives_are_unique_and_rejoin_and_or_lists() {
         let chain = (0..10)
             .map(|i| format!("cd d{i}"))
@@ -1955,7 +2027,7 @@ mod tests {
         }
     }
 
-    /// Only pwd and assignments execute. The native shell's directory must be
+    /// Only builtins execute. The native shell's directory must be
     /// one of the static readings, including Bash lastpipe and zsh pipelines.
     #[cfg(unix)]
     #[test]
@@ -1979,6 +2051,12 @@ mod tests {
                 "(cd docs)",
                 "cd docs || true",
                 "cd missing || true",
+                "false || cd docs && true",
+                "false && cd missing || cd docs",
+                "cd docs && true || cd missing",
+                "cd docs && false || true",
+                "true || cd missing && cd docs",
+                "false || true || cd missing",
                 "cd docs & wait",
                 "printf x | cd docs",
                 "PWD=/elsewhere",

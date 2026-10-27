@@ -13,6 +13,16 @@ pub(crate) fn evaluate(
     home: Option<&Path>,
 ) -> Vec<Violation> {
     let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+    // A rooted Windows home without a drive inherits the caller's drive.
+    // Keep absolute homes unchanged so kernel link/parent semantics survive.
+    let resolved_home = home.map(|home| {
+        if cfg!(windows) && home.has_root() && !home.is_absolute() {
+            cwd.join(home)
+        } else {
+            home.to_path_buf()
+        }
+    });
+    let home = resolved_home.as_deref();
     // Position-scoped arguments carry more precise provenance than the broad
     // literal scan below. Keep their finding first when both name one path.
     let mut violations = super::arguments::evaluate(command, integrity, cwd, root, home);
@@ -1034,9 +1044,12 @@ fn file_operands<'a>(
         "echo"
             | "printf"
             | "print"
-            // tee's filenames are outputs. The shell's input redirections
-            // are separate cat operands emitted by outward::visit.
+            // These operands are written or removed, not read for contents.
+            // Input redirections are separate cat operands from outward::visit.
             | "tee"
+            | "rm"
+            | "rmdir"
+            | "unlink"
             | "alias"
             | "unalias"
             | "export"
@@ -1239,6 +1252,101 @@ fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn tsk1002_ci1_and_or_paths_preserve_reader_verdicts() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        std::fs::create_dir(root.join("build")).unwrap();
+        std::fs::write(root.join("public.txt"), "ordinary fixture").unwrap();
+        for command in [
+            "false || D=build && find $D -delete",
+            "false || D=public.txt && cat $D",
+            "false && D=~/.codex/auth.json || D=public.txt; cat $D",
+            "D=public.txt; true || D=~/.codex/auth.json; cat $D",
+        ] {
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(findings.is_empty(), "{command}: {findings:?}");
+        }
+        for command in [
+            "false || D=~/.codex/auth.json && cat $D",
+            "D=~/.codex/auth.json; true || D=public.txt && cat $D",
+            "D=~/.codex/auth.json; unknown || D=public.txt && cat $D",
+            "D=~/.codex/auth.json; alias false=true; false || D=public.txt && cat $D",
+            "D=~/.codex/auth.json; false() { true; }; false || D=public.txt && cat $D",
+            "false || find build -files0-from ~/.codex/auth.json -delete",
+            "false || find build -exec cat ~/.codex/auth.json \\;",
+        ] {
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "input still reads: {command}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tsk1002_ci1_removal_operands_are_not_content_reads() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        for command in [
+            "trap 'D=/' DEBUG; trap - DEBUG; D=build; rm -rf \"$D\"",
+            "ls ./build | xargs rm -rf",
+            "rm -rf ~",
+            "grm -f ~/.codex/auth.json",
+            "unlink ~/.codex/auth.json",
+            "rmdir ~/.ssh",
+        ] {
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(findings.is_empty(), "{command}: {findings:?}");
+        }
+        for command in ["cat ~/.ssh/id_rsa", "rm build < ~/.ssh/id_rsa"] {
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "input still reads: {command}: {findings:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tsk1002_ci1_rooted_home_globs_use_the_callers_drive() {
+        let fixture = tempfile::tempdir().unwrap();
+        let rooted: PathBuf = fixture
+            .path()
+            .join("home")
+            .components()
+            .filter(|part| !matches!(part, std::path::Component::Prefix(_)))
+            .collect();
+        let forward = crate::portable_path::slashed(&rooted);
+        for home in [rooted.as_path(), Path::new(&forward)] {
+            let findings = evaluate(
+                "cat ~/.codex/auth.*",
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                fixture.path(),
+                fixture.path(),
+                Some(home),
+            );
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "{home:?}: {findings:?}"
+            );
+            let ordinary = evaluate(
+                "cat ~/.codex/*.rs",
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                fixture.path(),
+                fixture.path(),
+                Some(home),
+            );
+            assert!(
+                !ordinary.iter().any(|v| v.rule == "security.secret_reads"),
+                "ordinary sibling: {home:?}: {ordinary:?}"
+            );
+        }
+    }
     fn check(code: &str, levels: &SecuritySection) -> Vec<Violation> {
         evaluate(
             code,

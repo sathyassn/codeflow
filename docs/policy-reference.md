@@ -271,8 +271,13 @@ substitution bodies are executable commands too. Static echo/printf output
 retains tilde expansion. Literal pipeline or here-string input to xargs is
 judged as child operands; unverified program input or argument files refuse
 for children that can read files. Known text-only children remain available.
-`tee` filenames are write destinations and receive write checks; input
-redirections still receive secret-read checks.
+`tee` filenames are write destinations; `rm`, `rmdir` and `unlink` operands
+are removal targets. They receive write/deletion checks rather than content-read
+checks. Input redirections still receive secret-read checks.
+On Windows, backslashes in undelimited xargs input remain unverified because
+they may be native path separators or xargs escapes. Use forward-slash path
+data or an explicit delimiter such as `-0` to preserve the selected paths.
+Rooted Windows homes without a drive inherit the command directory's drive.
 PowerShell aliases, cmd /c, AppleScript's do shell script and deno eval join
 the inline-code checks. Makefiles supplied on stdin or through `make --eval`
 are code too.
