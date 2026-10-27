@@ -1,0 +1,11 @@
+id = "TSK-1025"
+uid = "9f53a8d9-dd29-4038-927b-0c76cf718b30"
+kind = "TSK"
+title = "A standalone task files its own follow-up record in its pull request"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-27T20:45:53Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
