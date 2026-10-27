@@ -843,6 +843,36 @@ fn with_origin(root: &Path) -> tempfile::TempDir {
     remote
 }
 
+/// Give a fixture with no `origin` one inside its own `.git`, holding
+/// `main`, and say whether it was added: `task status` reads the target
+/// from `origin`'s remote-tracking ref in a clone with remotes (TSK-340),
+/// and these fixtures configure a review remote. The caller removes it
+/// after the verb, so the rest of the fixture keeps its remotes.
+fn ensure_origin(root: &Path) -> bool {
+    if git(root, &["remote"])
+        .lines()
+        .any(|remote| remote == "origin")
+    {
+        return false;
+    }
+    let origin = root.join(".git").join("fixture-origin.git");
+    git(
+        root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["fetch", "-q", "origin"]);
+    true
+}
+
 /// A standalone record on `line` with `deps`.
 fn record_on(id: &str, line: &str, deps: &str) -> String {
     record(id, deps).replace(
@@ -875,6 +905,8 @@ fn tsk381_a_landed_research_pin_is_met_after_its_line_is_deleted() {
     let consumer = "integration/consumer-line";
     git(root, &["switch", "-qc", producer]);
     commit_record(root, "TSK-003", &record_on("TSK-003", producer, "[]"));
+    // The line is on origin before its task completes there (TSK-340).
+    git(root, &["push", "-q", "-u", "origin", producer]);
     let pin = complete(root, "TSK-003", "src/findings.rs");
     git(root, &["push", "-q", "-u", "origin", producer]);
     git(root, &["switch", "-qc", consumer, "main"]);
@@ -1188,7 +1220,13 @@ fn tsk381_a_differently_spelled_line_does_not_land_a_research_pin() {
     );
     git(root, &["push", "-q", "-u", "origin", "main"]);
     git(root, &["switch", "-qc", "integration/producer-line"]);
+    // `task status` reads the target from `origin`'s remote-tracking ref
+    // (TSK-340); the fixture records it as fetched for the completion only,
+    // leaving origin's real branches as the test needs them.
+    let tracking = "refs/remotes/origin/integration/producer-line";
+    git(root, &["update-ref", tracking, "HEAD"]);
     let pin = complete(root, "TSK-003", "src/findings.rs");
+    git(root, &["update-ref", "-d", tracking]);
     git(
         root,
         &[
@@ -1764,6 +1802,7 @@ fn reviewed_predecessor(root: &Path, branch: &str) -> (String, String) {
     let reviewed = git(root, &["rev-parse", "HEAD"]);
     let evidence = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(evidence.path(), format!("acceptance:\n  reviewed: {reviewed}\n  review: https://example.test/pr/1#review\n  criteria:\n    AC-1: verified | journey\n    AC-2: verified | unit\n  journey: verified | journey\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n")).unwrap();
+    let added = ensure_origin(root);
     succeeds(&cli(
         root,
         &[
@@ -1776,6 +1815,9 @@ fn reviewed_predecessor(root: &Path, branch: &str) -> (String, String) {
         ],
         None,
     ));
+    if added {
+        git(root, &["remote", "remove", "origin"]);
+    }
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "docs: record the acceptance"]);
     let tip = git(root, &["rev-parse", "HEAD"]);

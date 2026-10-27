@@ -1650,11 +1650,9 @@ fn no_requester_ref_turns_a_side_branch_merge_into_a_landing() {
                 String::from_utf8_lossy(&out.stderr)
             ),
         );
-        let mut results = vec![("ci", ci)];
-        if spoof == "local main" {
-            results.push(("verb", verb));
-        }
-        for (surface, result) in results {
+        // The verb refuses every spoof too (TSK-340 review round 5): it
+        // never takes a target the record names as a receiving line.
+        for (surface, result) in [("ci", ci), ("verb", verb)] {
             assert_ne!(result.0, 0, "{spoof} ({surface}): {}", result.1);
             assert!(
                 result.1.contains("work.acceptance_binding") && result.1.contains("src/side.rs"),
@@ -1815,6 +1813,115 @@ fn task_status_refuses_without_the_remote_tracking_target() {
     let verb = status_complete(root, "TSK-001");
     assert_ne!(verb.0, 0, "{}", verb.1);
     assert!(verb.1.contains("git fetch origin main"), "{}", verb.1);
+}
+
+/// A side branch from `main` with unreviewed product that merges a reviewed
+/// task head as its second parent; returns the reviewed commit and the
+/// merge.
+fn side_merge(root: &Path) -> (String, String) {
+    let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+    git(root, &["switch", "-c", "task/TSK-001-side", "main"]);
+    write(root, "src/side.rs", "pub fn unreviewed() {}\n");
+    commit(root, "feat: add unreviewed product");
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the review",
+            "task/TSK-001-review",
+        ],
+    );
+    (reviewed, head(root))
+}
+
+/// TSK-340 review round 5: local git configuration selects no receiving
+/// source for `task status`. With `branch.main.remote` set to a review
+/// remote whose fetched `main` is the side merge, the verb still reads
+/// `origin/main` and refuses; with a review remote and no `origin`, it
+/// refuses and names the remote to set up.
+#[test]
+fn local_config_selects_no_receiving_source() {
+    for case in ["configured upstream", "no origin"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let _remote = (case == "configured upstream").then(|| with_origin(root, "main"));
+        let (reviewed, side) = side_merge(root);
+        git(
+            root,
+            &["remote", "add", "review", "https://example.test/review.git"],
+        );
+        if case == "configured upstream" {
+            git(root, &["update-ref", "refs/remotes/review/main", &side]);
+            git(root, &["config", "branch.main.remote", "review"]);
+        }
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
+        );
+        let verb = status_complete(root, "TSK-001");
+        assert_ne!(verb.0, 0, "{case}: {}", verb.1);
+        let needle = if case == "no origin" {
+            "no `origin`"
+        } else {
+            "src/side.rs"
+        };
+        assert!(verb.1.contains(needle), "{case}: {}", verb.1);
+    }
+}
+
+/// TSK-340 review round 5: `task status` anchors once, on the receiving
+/// source. A landed task is fixed in one pull request: complete, reopen,
+/// complete again with the same block. The verb accepts it whatever the
+/// local `main` points at, and refuses it with the reopen's archive entry
+/// deleted.
+#[test]
+fn moving_the_local_target_does_not_move_the_anchor() {
+    for dropped in [false, true] {
+        let (dir, _, archived) = one_pr_fix();
+        let root = dir.path();
+        let _remote = with_origin(root, "main");
+        git(root, &["switch", "task/TSK-001-fix"]);
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        let done = fix_block(&reviewed);
+        complete(root, "TSK-001", OWN_JOURNEY, &format!("{archived}{done}"));
+        let again = done.replace(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: same review again\n",
+        );
+        let reopened = if dropped {
+            archived.clone()
+        } else {
+            format!("{archived}{again}")
+        };
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &reopened),
+        );
+        commit(root, "docs: reopen the task again");
+        // Only the local target moves, onto the reviewed fix.
+        git(root, &["branch", "-f", "main", &reviewed]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &format!("{reopened}{done}")),
+        );
+        let verb = status_complete(root, "TSK-001");
+        if dropped {
+            assert_ne!(verb.0, 0, "dropped archive: {}", verb.1);
+            assert!(verb.1.contains("is missing"), "{}", verb.1);
+        } else {
+            assert_eq!(
+                verb.0, 0,
+                "valid repeat with a moved local main: {}",
+                verb.1
+            );
+        }
+    }
 }
 
 /// TSK-340 review round 2: reversing the merge parents manufactures no
@@ -4738,8 +4845,10 @@ fn wrongly_accepted(case: &str, results: [(i32, String); 2], needle: &str) -> Ve
 }
 
 /// The target's tip on a configured upstream of another remote holds the
-/// landed task, while the local target branch is stale: the verb reads that
-/// upstream as CI does (TSK-217, issue #67).
+/// landed task, while the local target branch is stale. CI pinned to that
+/// upstream refuses the changed criteria (TSK-217, issue #67); the verb
+/// never takes `branch.main.remote` as a receiving source, so in a clone
+/// with no `origin` it refuses and names the remote to set up (TSK-340).
 #[test]
 fn a_configured_upstream_on_another_remote_holds_the_task() {
     let dir = repo(&[], "");
@@ -4765,9 +4874,15 @@ fn a_configured_upstream_on_another_remote_holds_the_task() {
     git(root, &["config", "branch.main.merge", "refs/heads/main"]);
     git(root, &["branch", "-f", "main", &early]);
     let shape = |record: String| standalone_one(&record);
-    let results =
+    let [verb, ci] =
         complete_reopen_complete(root, &path, &shape, "refs/remotes/upstream/main", false);
-    let wrong = wrongly_accepted("upstream", results, "reopened task keeps its criteria");
+    assert_ne!(verb.0, 0, "upstream verb: {}", verb.1);
+    assert!(verb.1.contains("no `origin`"), "upstream verb: {}", verb.1);
+    let wrong = wrongly_accepted(
+        "upstream",
+        [(1, "reopened task keeps its criteria".into()), ci],
+        "reopened task keeps its criteria",
+    );
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
 
