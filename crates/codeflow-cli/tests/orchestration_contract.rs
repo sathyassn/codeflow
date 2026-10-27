@@ -1540,9 +1540,35 @@ fn records_and_planning_name_deliverables_and_homes() {
     let plan = normalize_whitespace(&read("assets/base/agents/skills/cf-plan/SKILL.md"));
     assert!(
         plan.contains(
-            "Before materializing records, check that every task names its deliverables and their homes (checklist item 6) against the project's structure authority"
+            "that every task names its deliverables and their homes (checklist item 6) against the project's structure authority"
         ),
         "cf-plan lost the deliverables check"
+    );
+    // TSK-435: the value line lives under `## Outcome` in both templates,
+    // and both skills name it there; an epic carries its own Deliverables.
+    assert!(
+        plan.contains(
+            "check that every epic and task states its value line under `## Outcome` (checklist item 2)"
+        ),
+        "cf-plan lost the Outcome check"
+    );
+    assert!(
+        method.contains("Its home is the record's `## Outcome` section"),
+        "cf-method lost the Outcome home"
+    );
+    for (name, template) in [("task", &task), ("epic", &epic)] {
+        assert!(
+            template.contains("\"after this merges, <who> can <do what>\""),
+            "{name} template lost the Outcome comment"
+        );
+    }
+    let raw_epic = read("assets/base/pm/epic.md.tmpl");
+    let at = |heading: &str| raw_epic.find(heading).unwrap_or(usize::MAX);
+    assert!(
+        at("\n## Summary\n") < at("\n## Outcome\n")
+            && at("\n## Outcome\n") < at("\n## Deliverables\n")
+            && at("\n## Deliverables\n") < at("\n## Acceptance Criteria\n"),
+        "the epic template carries Summary, Outcome, Deliverables, criteria in order"
     );
 }
 
