@@ -943,28 +943,66 @@ fn two_tasks_complete_on_main_are_completed_again_on_the_line() {
     for (task, file, branch) in fixes {
         git(&root, &["switch", "-q", "-c", branch, LINE]);
         ok(
-            &status(&root, "task", task, &["todo", "--reason", "line regression"]),
+            &status(
+                &root,
+                "task",
+                task,
+                &["todo", "--reason", "line regression"],
+            ),
             "reopen on the line",
         );
         commit(&root, "chore: reopen on the line");
         ok(&codeflow(&root, &["work", "start", task]), "work start");
         write(&root, file, "pub fn fixed() {}\n");
         let reviewed = commit(&root, "fix: repair on the line");
-        let again = task_block(dir.path(), &format!("{task}-again"), &reviewed, "verified | line run");
+        let again = task_block(
+            dir.path(),
+            &format!("{task}-again"),
+            &reviewed,
+            "verified | line run",
+        );
         ok(
             &status(&root, "task", task, &["complete", "--acceptance", &again]),
             "complete on the line",
         );
         commit(&root, "chore: complete on the line");
-        ok(&task_ci(&root, branch, task), "each fix PR before either lands");
+        ok(
+            &task_ci(&root, branch, task),
+            "each fix PR before either lands",
+        );
         git(&root, &["switch", "-q", LINE]);
     }
-    merge(&root, LINE, "task/TSK-001-again", "chore: land the first fix");
+    merge(
+        &root,
+        LINE,
+        "task/TSK-001-again",
+        "chore: land the first fix",
+    );
     git(&root, &["switch", "-q", "task/TSK-002-again"]);
-    git(&root, &["merge", "-q", "--no-ff", LINE, "-m", "chore: merge the line"]);
+    git(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            LINE,
+            "-m",
+            "chore: merge the line",
+        ],
+    );
     let merged = git(&root, &["rev-parse", "HEAD"]);
     assert_eq!(
-        git(&root, &["rev-list", "--count", "--parents", "-1", "--merges", &merged]),
+        git(
+            &root,
+            &[
+                "rev-list",
+                "--count",
+                "--parents",
+                "-1",
+                "--merges",
+                &merged
+            ]
+        ),
         "1",
         "the line merge is a real merge"
     );
@@ -982,7 +1020,12 @@ fn two_tasks_complete_on_main_are_completed_again_on_the_line() {
         "a product edit after the review",
         "src/second.rs changed",
     );
-    merge(&root, LINE, "task/TSK-002-again", "chore: land the second fix");
+    merge(
+        &root,
+        LINE,
+        "task/TSK-002-again",
+        "chore: land the second fix",
+    );
 
     // `main` moves on, and the line merges it.
     git(&root, &["switch", "-q", "-c", "docs/main-note", &main]);
@@ -990,14 +1033,32 @@ fn two_tasks_complete_on_main_are_completed_again_on_the_line() {
     commit(&root, "docs: add a note on main");
     host_merge(&root, &main, "docs/main-note");
     git(&root, &["switch", "-q", LINE]);
-    git(&root, &["merge", "-q", "--no-ff", &main, "-m", "chore: merge main into the line"]);
+    git(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            &main,
+            "-m",
+            "chore: merge main into the line",
+        ],
+    );
     let synced = git(&root, &["rev-parse", "HEAD"]);
     ok(&line_ci(&root, &main), "the line into main after the sync");
 
     // Negative control: a planning pull request that rewrites an archived
     // result.
-    git(&root, &["switch", "-q", "-c", "plan/tamper-two-base", &synced]);
-    edit(&root, TASK, "AC-1: verified | first run", "AC-1: waived | not-a-commit");
+    git(
+        &root,
+        &["switch", "-q", "-c", "plan/tamper-two-base", &synced],
+    );
+    edit(
+        &root,
+        TASK,
+        "AC-1: verified | first run",
+        "AC-1: waived | not-a-commit",
+    );
     commit(&root, "docs(records): edit the archive by hand");
     fails(
         &planning_ci(&root, "plan/tamper-two-base"),
