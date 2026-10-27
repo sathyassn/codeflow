@@ -74,19 +74,30 @@ fn read_bounded_regular_with_hooks(
     }
     before_open()?;
     let file = options.open(path)?;
-    read_opened_regular(file, maximum_bytes, after_open, || {
-        Ok((
-            std::fs::symlink_metadata(path)?,
-            same_file::Handle::from_path(path)?,
-        ))
+    // After the read the path is checked with a no-follow lstat only, never
+    // opened again: a second open by path would block on a fifo swapped in
+    // after the first (TSK-1020 review 2). On Unix the identity is the
+    // descriptor's device and inode against the lstat's; Windows has no
+    // path fifos and keeps a handle comparison opened with the reparse flag.
+    read_opened_regular(&file, maximum_bytes, after_open, || {
+        let after = std::fs::symlink_metadata(path)?;
+        #[cfg(unix)]
+        let linked = None;
+        #[cfg(not(unix))]
+        let linked = if after.file_type().is_symlink() || !after.is_file() {
+            None
+        } else {
+            Some(same_file::Handle::from_path(path)?)
+        };
+        Ok((after, linked))
     })
 }
 
 fn read_opened_regular(
-    file: std::fs::File,
+    file: &std::fs::File,
     maximum_bytes: u64,
     after_open: impl FnOnce() -> std::io::Result<()>,
-    after_read: impl FnOnce() -> std::io::Result<(std::fs::Metadata, same_file::Handle)>,
+    after_read: impl FnOnce() -> std::io::Result<(std::fs::Metadata, Option<same_file::Handle>)>,
 ) -> std::io::Result<Vec<u8>> {
     let opened = file.metadata()?;
     if !opened.is_file() || opened.len() > maximum_bytes {
@@ -106,10 +117,15 @@ fn read_opened_regular(
             "file grew beyond its byte limit",
         ));
     }
+    // The descriptor's own identity after the read, then the path's.
+    let held = file.metadata()?;
     let (after, linked_identity) = after_read()?;
     if after.file_type().is_symlink()
         || !after.is_file()
-        || opened_identity != linked_identity
+        || !same_inode(&opened, &held)
+        || !same_inode(&opened, &after)
+        || linked_identity.is_some_and(|linked| linked != opened_identity)
+        || opened.len() != held.len()
         || opened.len() != bytes.len() as u64
         || opened.len() != after.len()
         || !stable_metadata(&opened, &after)?
@@ -120,6 +136,21 @@ fn read_opened_regular(
         ));
     }
     Ok(bytes)
+}
+
+/// Whether two metadata name the same file: device and inode on Unix. Other
+/// platforms compare handles instead, so this holds there.
+fn same_inode(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        left.dev() == right.dev() && left.ino() == right.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (left, right);
+        true
+    }
 }
 
 fn stable_metadata(left: &std::fs::Metadata, right: &std::fs::Metadata) -> std::io::Result<bool> {
@@ -216,6 +247,49 @@ mod tests {
         .expect_err("a fifo is not a regular file");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
         assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
+    }
+
+    /// Reads a regular file and, after the first open, replaces the path
+    /// with `swap`'s result. The read must refuse at once (TSK-1020 review 2).
+    fn refuses_a_swap_after_the_open(swap: fn(&Path)) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let fifo = dir.path().join("pipe");
+        let swapped = path.clone();
+        let started = std::time::Instant::now();
+        let error = within_the_bound(&fifo, move || {
+            read_bounded_regular_with_hooks(
+                &swapped,
+                1024,
+                || Ok(()),
+                || {
+                    std::fs::remove_file(&swapped)?;
+                    swap(&swapped);
+                    Ok(())
+                },
+            )
+        })
+        .expect_err("the path no longer names the opened file");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+        assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_fifo_swapped_in_after_the_open_is_refused_promptly() {
+        refuses_a_swap_after_the_open(|path| {
+            make_fifo(&path.with_file_name("pipe"));
+            std::fs::rename(path.with_file_name("pipe"), path).unwrap();
+        });
+    }
+
+    #[test]
+    fn a_link_to_a_fifo_swapped_in_after_the_open_is_refused_promptly() {
+        refuses_a_swap_after_the_open(|path| {
+            let fifo = path.with_file_name("pipe");
+            make_fifo(&fifo);
+            std::os::unix::fs::symlink(&fifo, path).unwrap();
+        });
     }
 
     #[test]

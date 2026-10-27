@@ -175,9 +175,12 @@ impl ConfinedRoot {
             let parent = self.directory(relative.parent().ok_or_else(invalid)?)?;
             let leaf = components.last().ok_or_else(invalid)?.as_os_str();
             let file = open_at(&parent.file, leaf, false)?;
-            super::read_opened_regular(file, maximum_bytes, after_open, || {
+            super::read_opened_regular(&file, maximum_bytes, after_open, || {
                 let linked = open_at(&parent.file, leaf, false)?;
-                Ok((linked.metadata()?, same_file::Handle::from_file(linked)?))
+                Ok((
+                    linked.metadata()?,
+                    Some(same_file::Handle::from_file(linked)?),
+                ))
             })
         }
         #[cfg(windows)]
@@ -190,9 +193,12 @@ impl ConfinedRoot {
             let open =
                 || windows::open_relative(handle, leaf, FILE_GENERIC_READ, FILE_OPEN, Some(false));
             let file = open()?;
-            let result = super::read_opened_regular(file, maximum_bytes, after_open, || {
+            let result = super::read_opened_regular(&file, maximum_bytes, after_open, || {
                 let linked = open()?;
-                Ok((linked.metadata()?, same_file::Handle::from_file(linked)?))
+                Ok((
+                    linked.metadata()?,
+                    Some(same_file::Handle::from_file(linked)?),
+                ))
             });
             drop(parent);
             result
