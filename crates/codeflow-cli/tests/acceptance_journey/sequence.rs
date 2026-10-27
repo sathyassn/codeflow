@@ -121,7 +121,7 @@ fn merge(root: &Path, into: &str, branch: &str, message: &str) {
 /// The operator's merge of `branch` into the protected `main`, as the host
 /// makes it: the local hooks, which refuse an agent's merge there, do not
 /// run.
-fn host_merge(root: &Path, main: &str, branch: &str) {
+pub(super) fn host_merge(root: &Path, main: &str, branch: &str) {
     let hooks = root.join(".git/no-hooks");
     std::fs::create_dir_all(&hooks).unwrap();
     let path = format!("core.hooksPath={}", hooks.display());

@@ -1924,6 +1924,88 @@ fn moving_the_local_target_does_not_move_the_anchor() {
     }
 }
 
+/// TSK-340 review round 5, the coordinator's follow-up: an `integration/`
+/// name earns no authority. TSK-001 declares `integration/EPC-009-rogue`,
+/// which no epic or policy at `main` names. The verb refuses a side-branch
+/// landing on it, a clean merge of it after the review, and a waiver whose
+/// batched amendment was made on it.
+#[test]
+fn an_unrecorded_integration_line_earns_no_authority() {
+    const ROGUE: &str = "integration/EPC-009-rogue";
+    for case in ["landing", "stacking", "waiver"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let path = record_path("TSK-001");
+        let rogue_task = |status: &str, closeout: &str| {
+            task("TSK-001", status, OWN_JOURNEY, closeout).replace(
+                "integration_target: main",
+                &format!("integration_target: {ROGUE}"),
+            )
+        };
+        write(root, &path, &rogue_task("todo", "Pending.\n"));
+        commit(root, "docs(records): target the rogue line");
+        let (reviewed, waiver) = match case {
+            "landing" => {
+                let (reviewed, side) = side_merge(root);
+                git(root, &["branch", ROGUE, &side]);
+                (reviewed, None)
+            }
+            "stacking" => {
+                let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+                git(root, &["switch", "-c", ROGUE, "main"]);
+                write(root, "src/rogue.rs", "pub fn unreviewed() {}\n");
+                commit(root, "feat: unreviewed line work");
+                git(root, &["switch", "task/TSK-001-review"]);
+                git(
+                    root,
+                    &["merge", "--no-ff", "-m", "chore: merge the line", ROGUE],
+                );
+                (reviewed, None)
+            }
+            _ => {
+                git(root, &["switch", "-c", ROGUE, "main"]);
+                let on_line = std::fs::read_to_string(root.join(&path)).unwrap();
+                write(
+                    root,
+                    &path,
+                    &on_line.replacen("shall work.", "shall mostly work.", 1),
+                );
+                let epic = "project-management/epics/EPC-001.md";
+                let epic_text = std::fs::read_to_string(root.join(epic)).unwrap();
+                write(
+                    root,
+                    epic,
+                    &epic_text.replace("An outcome.", "An amended outcome."),
+                );
+                let amendment = commit(root, "docs(records): batched amendment");
+                write(root, &path, &on_line);
+                commit(root, "docs(records): restore TSK-001 AC-1");
+                git(root, &["switch", "-c", "task/TSK-001-review", ROGUE]);
+                write(root, "src/lib.rs", "pub fn work() {}\n");
+                (commit(root, "feat: the work"), Some(amendment))
+            }
+        };
+        let ac1 = waiver.map_or("AC-1: verified | unit".to_string(), |by| {
+            format!("AC-1: waived | {by}")
+        });
+        let done = block(
+            &reviewed,
+            &[&ac1, "AC-2: verified | journey"],
+            "verified | journey",
+            "none: done",
+        );
+        write(root, &path, &rogue_task("todo", &done));
+        let verb = status_complete(root, "TSK-001");
+        assert_ne!(verb.0, 0, "{case}: {}", verb.1);
+        let needle = match case {
+            "landing" => "src/side.rs",
+            "stacking" => "src/rogue.rs",
+            _ => "AC-1 waiver",
+        };
+        assert!(verb.1.contains(needle), "{case}: {}", verb.1);
+    }
+}
+
 /// TSK-340 review round 2: reversing the merge parents manufactures no
 /// landing authority. The review lies on a task branch; `main` amends and
 /// restores AC-1; a branch from that `main` merges the review as its second

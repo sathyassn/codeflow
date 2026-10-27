@@ -193,6 +193,7 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
         &codeflow(&root, &["init", "--yes", "--full"]),
         "init --full",
     );
+    let main = git(&root, &["branch", "--show-current"]);
     git(&root, &["switch", "-q", "-c", LINE]);
 
     // Plan: an epic and two tasks; the first has a journey criterion, the
@@ -231,6 +232,10 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
     )
     .unwrap();
     commit(&root, "chore: plan the acceptance journey");
+    // The plan also lands on `main`, so the records at the default target
+    // name the line its tasks target (TSK-340: only base records qualify a
+    // line for `task status`).
+    sequence::host_merge(&root, &main, "plan/acceptance");
     git(&root, &["switch", "-q", LINE]);
     git(
         &root,
