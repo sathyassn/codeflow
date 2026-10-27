@@ -201,13 +201,25 @@ fn run_gate_resolved(
             });
         }
         let effective = resolve(&config.targets);
+        // Diagnostics name the config this run read, never the default
+        // path it ignored (TSK-1020 review 1).
+        let default = project_dir.join(TEST_CONFIG_PATH);
         return run_configured(
             project_dir,
             mode,
             options,
             (config.targets, config.execution, effective),
             &delivery::digest(&bytes),
-        );
+        )
+        .map_err(|error| match error {
+            TestingError::ConfigInvalid { path, message } if path == default => {
+                TestingError::ConfigInvalid {
+                    path: named.clone(),
+                    message,
+                }
+            }
+            other => other,
+        });
     }
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 

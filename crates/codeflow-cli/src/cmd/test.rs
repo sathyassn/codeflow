@@ -151,31 +151,7 @@ pub fn run(args: &TestArgs) -> i32 {
             config: args.config.clone(),
         },
     ) {
-        Ok(GateOutcome::NoTargets { reason }) => {
-            // AC #7: no stack = loud no-op. The banner is unmissable in both
-            // modes. Default exits 0 (bootstrap/early-setup stays green);
-            // `--strict` exits non-zero so a scripted/unattended caller cannot
-            // mistake "ran nothing" for "passed".
-            eprintln!("==============================================================");
-            eprintln!(
-                "WARNING: codeflow test had nothing to run — {reason}.",
-                reason = crate::cmd::shown(&reason)
-            );
-            eprintln!("test gate: executed 0; skipped 0; not complete");
-            eprintln!("         No tests were executed. This is NOT a green test run.");
-            eprintln!("         Configure .codeflow/test-config.json or add a");
-            eprintln!("         supported stack (cargo, vitest/jest, go, pytest).");
-            if args.strict {
-                eprintln!("         --strict: exiting non-zero so no script reads this as green.");
-            }
-            eprintln!("==============================================================");
-            // Distinct from a failed gate (exit 1): 2 == "nothing ran".
-            if args.strict {
-                2
-            } else {
-                0
-            }
-        }
+        Ok(GateOutcome::NoTargets { reason }) => nothing_ran(args, &reason),
         Ok(GateOutcome::Completed {
             results,
             passed,
@@ -251,6 +227,42 @@ fn evidence_suffix(executed: usize, skipped: usize, complete: bool) -> &'static 
         ""
     } else {
         "; not full-gate evidence"
+    }
+}
+
+/// The loud no-op of a run with nothing to execute (AC #7): a banner in
+/// every mode, exit 0 by default (bootstrap stays green) and 2 under
+/// `--strict`, so a scripted caller never reads "ran nothing" as passed.
+fn nothing_ran(args: &TestArgs, reason: &str) -> i32 {
+    // AC #7: no stack = loud no-op. The banner is unmissable in both
+    // modes. Default exits 0 (bootstrap/early-setup stays green);
+    // `--strict` exits non-zero so a scripted/unattended caller cannot
+    // mistake "ran nothing" for "passed".
+    eprintln!("==============================================================");
+    eprintln!(
+        "WARNING: codeflow test had nothing to run — {reason}.",
+        reason = crate::cmd::shown(&reason)
+    );
+    eprintln!("test gate: executed 0; skipped 0; not complete");
+    eprintln!("         No tests were executed. This is NOT a green test run.");
+    if let Some(config) = &args.config {
+        eprintln!(
+            "         Add a target for this mode to {}, the config --config names.",
+            crate::cmd::shown(&config.display().to_string())
+        );
+    } else {
+        eprintln!("         Configure .codeflow/test-config.json or add a");
+        eprintln!("         supported stack (cargo, vitest/jest, go, pytest).");
+    }
+    if args.strict {
+        eprintln!("         --strict: exiting non-zero so no script reads this as green.");
+    }
+    eprintln!("==============================================================");
+    // Distinct from a failed gate (exit 1): 2 == "nothing ran".
+    if args.strict {
+        2
+    } else {
+        0
     }
 }
 

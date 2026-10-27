@@ -6,10 +6,21 @@ use std::path::Path;
 
 use super::{repo, run, stderr};
 
-/// The repository's own config: one target that fails if it ever runs.
-const OWN: &str = r#"{"schema_version":"1.0","targets":[{"name":"own","runner":"custom","modes":{"quick":{"command":"exit 7"}}}]}"#;
-/// The named config: one target that passes.
-const NAMED: &str = r#"{"schema_version":"1.0","targets":[{"name":"named","runner":"custom","modes":{"quick":{"command":"echo named ran"}}}]}"#;
+/// The repository's own config: one target that leaves `own-ran.txt` and
+/// fails, so a run that falls back to it is seen on disk.
+const OWN: &str = r#"{"schema_version":"1.0","targets":[{"name":"own","runner":"custom","modes":{"quick":{"command":"echo own> own-ran.txt && exit 7"}}}]}"#;
+/// The named config: one target that leaves `named-ran.txt` and passes.
+const NAMED: &str = r#"{"schema_version":"1.0","targets":[{"name":"named","runner":"custom","modes":{"quick":{"command":"echo named> named-ran.txt"}}}]}"#;
+
+/// No target of either config ran: neither sentinel exists.
+fn assert_no_target_ran(dir: &Path, text: &str) {
+    for sentinel in ["own-ran.txt", "named-ran.txt"] {
+        assert!(
+            !dir.join(sentinel).exists(),
+            "{sentinel} exists: a target ran: {text}"
+        );
+    }
+}
 
 fn stdout(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
@@ -37,6 +48,9 @@ fn the_named_config_is_the_only_config_read() {
     assert!(out.status.success(), "{text}");
     assert!(text.contains("target named: ok"), "{text}");
     assert!(!text.contains("target own"), "{text}");
+    assert!(dir.path().join("named-ran.txt").exists(), "{text}");
+    assert!(!dir.path().join("own-ran.txt").exists(), "{text}");
+    std::fs::remove_file(dir.path().join("named-ran.txt")).unwrap();
     // Without the option the repository's own config still drives the run.
     let own = run(
         dir.path(),
@@ -46,6 +60,8 @@ fn the_named_config_is_the_only_config_read() {
     let text = format!("{}{}", stdout(&own), stderr(&own));
     assert!(!own.status.success(), "{text}");
     assert!(text.contains("target own: FAILED"), "{text}");
+    assert!(dir.path().join("own-ran.txt").exists(), "{text}");
+    std::fs::remove_file(dir.path().join("own-ran.txt")).unwrap();
     // With no repository config, and a stack detection would find, the named
     // config is still the only input.
     std::fs::remove_file(dir.path().join(".codeflow/test-config.json")).unwrap();
@@ -85,6 +101,7 @@ fn assert_refused(dir: &Path, home: &Path, path: &Path, needle: &str) {
     assert!(!text.contains("target "), "a target ran: {text}");
     assert!(!text.contains("selected "), "a target was selected: {text}");
     assert!(text.contains(needle), "{needle}: {text}");
+    assert_no_target_ran(dir, &text);
 }
 
 #[test]
@@ -120,6 +137,110 @@ fn a_named_path_it_cannot_trust_is_refused_before_any_target() {
     let invalid = side.path().join("invalid.json");
     std::fs::write(&invalid, "{ not json").unwrap();
     assert_refused(dir.path(), home.path(), &invalid, "invalid test config");
+}
+
+#[test]
+fn diagnostics_name_the_config_the_run_read() {
+    // TSK-1020 review 1: with --config, the remedy and the error name that
+    // file, never the repository config the run ignores.
+    let dir = repo(OWN);
+    let home = tempfile::tempdir().unwrap();
+    let side = tempfile::tempdir().unwrap();
+    let empty = side.path().join("empty.json");
+    std::fs::write(&empty, r#"{"schema_version":"1.0","targets":[]}"#).unwrap();
+    let out = run(
+        dir.path(),
+        home.path(),
+        &[
+            "test",
+            "--mode",
+            "quick",
+            "--strict",
+            "--config",
+            empty.to_str().unwrap(),
+        ],
+    );
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(
+        text.contains(&format!("{} defines no targets", empty.display())),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "Add a target for this mode to {}",
+            empty.display()
+        )),
+        "{text}"
+    );
+    assert!(!text.contains(".codeflow/test-config.json"), "{text}");
+    assert_no_target_ran(dir.path(), &text);
+    let named = named_config(side.path());
+    let out = run(
+        dir.path(),
+        home.path(),
+        &[
+            "test",
+            "--mode",
+            "quick",
+            "--strict",
+            "--only",
+            "absent",
+            "--config",
+            named.to_str().unwrap(),
+        ],
+    );
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("absent"), "{text}");
+    assert!(text.contains(&named.display().to_string()), "{text}");
+    assert!(!text.contains(".codeflow/test-config.json"), "{text}");
+    assert_no_target_ran(dir.path(), &text);
+}
+
+/// A fifo planted at the named path is refused promptly, with no target
+/// started: an open of a fifo with no writer would otherwise wait forever.
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_the_named_path_is_refused_promptly() {
+    let dir = repo(OWN);
+    let home = tempfile::tempdir().unwrap();
+    let side = tempfile::tempdir().unwrap();
+    let fifo = side.path().join("pipe.json");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let mut child = super::command(
+        dir.path(),
+        home.path(),
+        &[
+            "test",
+            "--mode",
+            "quick",
+            "--strict",
+            "--config",
+            fifo.to_str().unwrap(),
+        ],
+    )
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .spawn()
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("codeflow test --config <fifo> did not return within 20 s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let out = child.wait_with_output().unwrap();
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("not a regular file"), "{text}");
+    assert_no_target_ran(dir.path(), &text);
 }
 
 #[test]

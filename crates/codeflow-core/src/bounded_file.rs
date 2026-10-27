@@ -39,6 +39,17 @@ pub(crate) fn read_bounded_regular_with_hook(
     maximum_bytes: u64,
     after_open: impl FnOnce() -> std::io::Result<()>,
 ) -> std::io::Result<Vec<u8>> {
+    read_bounded_regular_with_hooks(path, maximum_bytes, || Ok(()), after_open)
+}
+
+/// [`read_bounded_regular_with_hook`] with a hook between the path check and
+/// the open, where a test swaps the path.
+fn read_bounded_regular_with_hooks(
+    path: &Path,
+    maximum_bytes: u64,
+    before_open: impl FnOnce() -> std::io::Result<()>,
+    after_open: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<Vec<u8>> {
     let before = std::fs::symlink_metadata(path)?;
     if before.file_type().is_symlink() || !before.is_file() || before.len() > maximum_bytes {
         return Err(std::io::Error::new(
@@ -48,16 +59,20 @@ pub(crate) fn read_bounded_regular_with_hook(
     }
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
+    // Non-blocking on Unix: a path swapped for a FIFO after the check above
+    // opens at once and the descriptor's type check refuses it, instead of
+    // the open waiting for a writer. A regular file reads the same either way.
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
+    before_open()?;
     let file = options.open(path)?;
     read_opened_regular(file, maximum_bytes, after_open, || {
         Ok((
@@ -122,7 +137,7 @@ fn stable_metadata(left: &std::fs::Metadata, right: &std::fs::Metadata) -> std::
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{read_bounded_regular, read_regular};
+    use super::{read_bounded_regular, read_bounded_regular_with_hooks, read_regular};
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
     use std::sync::mpsc::{channel, RecvTimeoutError};
@@ -171,6 +186,34 @@ mod tests {
         let path = fifo.clone();
         let error = within_the_bound(&fifo, move || read_bounded_regular(&path, 1024))
             .expect_err("a fifo is not a regular file");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+        assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_regular_file_swapped_for_a_fifo_before_the_open_is_refused_promptly() {
+        // TSK-1020 review 1: the path passes the regular-file check, then is
+        // replaced by a fifo with no writer before the open. The open must
+        // not wait for a writer; the descriptor's type check refuses it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let fifo = path.clone();
+        let swapped = path.clone();
+        let started = std::time::Instant::now();
+        let error = within_the_bound(&fifo, move || {
+            read_bounded_regular_with_hooks(
+                &swapped,
+                1024,
+                || {
+                    std::fs::remove_file(&swapped)?;
+                    make_fifo(&swapped);
+                    Ok(())
+                },
+                || Ok(()),
+            )
+        })
+        .expect_err("a fifo is not a regular file");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
         assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
     }
