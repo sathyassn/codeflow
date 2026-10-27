@@ -618,6 +618,19 @@ pub(crate) fn bind_completion_with_amendment(
                 .map(|message| finding(BINDING_RULE, format!("{}: {message}", task.id))),
         );
     }
+    match archive_problem(
+        repo,
+        task,
+        reopen.as_ref().map(|(_, old)| old),
+        anchor,
+        landing,
+    ) {
+        Ok(None) => {}
+        Ok(Some(problem)) => {
+            findings.push(finding(BINDING_RULE, format!("{}: {problem}", task.id)));
+        }
+        Err(error) => findings.push(finding(BINDING_RULE, format!("{}: {error}", task.id))),
+    }
     let mut bind = |message: String| findings.push(finding(BINDING_RULE, message));
     match commit_of(repo, &block.reviewed) {
         None => bind(format!(
@@ -707,11 +720,23 @@ pub(crate) fn bind_completion_with_amendment(
     } else {
         OwnRange::LandedReopen
     };
+    // A landing merge carried the review: the completion is made on the
+    // line after the task landed, where a later planning amendment may be
+    // waived. Anywhere else, and when the binding failed, the review must
+    // contain the amendment.
+    let late_target = proof.is_some_and(|proof: CompletionProof| proof.landing_merge.is_some());
     for (id, result) in &block.criteria {
         if result.outcome == "waived" {
-            if let Some(problem) =
-                waiver_problem(repo, task, id, &result.evidence, landing, target, own_route)
-            {
+            if let Some(problem) = waiver_problem(
+                repo,
+                task,
+                id,
+                &result.evidence,
+                landing,
+                target,
+                own_route,
+                late_target,
+            ) {
                 bind(format!("{}: {id} waiver {problem}", task.id));
             }
         }
@@ -721,6 +746,120 @@ pub(crate) fn bind_completion_with_amendment(
         proof: proof.filter(|_| findings.is_empty()),
         findings,
     }
+}
+
+/// Why the record's archive is not one this history made, if it is not
+/// (TSK-340). The blocks the reference record archived (the reopened
+/// completion, or the record at the anchor) stay byte for byte; the first
+/// block the range archives is the reference's active one, which
+/// `reopen_problems` checks; and every later archived block must be the
+/// active block of a completed version of this record that the range's
+/// history holds, in the order the history completed them. A block no
+/// completion of the range ever held, such as one naming a commit that
+/// does not exist, is refused.
+fn archive_problem(
+    repo: &Repository,
+    task: &RecordView,
+    reopened: Option<&RecordView>,
+    anchor: Option<Oid>,
+    landing: Landing<'_>,
+) -> Result<Option<String>, String> {
+    let archive = task.superseded_blocks();
+    if archive.is_empty() {
+        return Ok(None);
+    }
+    let at_anchor = match (reopened, anchor) {
+        (None, Some(anchor)) => record_at(repo, anchor, task)?,
+        _ => None,
+    };
+    let reference = reopened.or(at_anchor.as_ref());
+    let kept = reference
+        .map(RecordView::superseded_blocks)
+        .unwrap_or_default();
+    if archive.len() < kept.len()
+        || kept
+            .iter()
+            .zip(&archive)
+            .any(|(old, new)| old.inner != new.inner)
+    {
+        // A validated redaction is judged by its own rule; reopen_problems
+        // names the reordered or rewritten archive.
+        if reopened.is_none()
+            && reference.is_none_or(|old| super::redaction::preserves(old, task).is_err())
+        {
+            return Ok(Some(
+                "the `acceptance_superseded:` blocks the anchored record archived stay unchanged and first".into(),
+            ));
+        }
+        return Ok(None);
+    }
+    // The first block the range archives is the reference's own active
+    // block: `reopen_problems` checks it for a reopen, and here it is the
+    // completion the anchor already held.
+    let reference_active = reference.and_then(active_block).map(|block| {
+        let mut block = block;
+        block.superseded = true;
+        block
+    });
+    let first_is_reference = archive.get(kept.len()).is_some_and(|block| {
+        block.parsed.as_ref().is_ok_and(|parsed| {
+            reference_active.as_ref().is_some_and(|active| {
+                let mut parsed = parsed.clone();
+                parsed.reason = None;
+                *active == parsed
+            })
+        })
+    });
+    let start = kept.len() + usize::from(reopened.is_some() || first_is_reference);
+    if archive.len() <= start {
+        return Ok(None);
+    }
+    let normal = |block: &AcceptanceBlock| {
+        let mut block = block.clone();
+        block.superseded = false;
+        block.reason = None;
+        block
+    };
+    let _judgment = history::judgment();
+    let unreadable =
+        |error: git2::Error| format!("cannot read the history of {}: {error}", task.path);
+    let mut walk = history::revwalk(repo).map_err(unreadable)?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)
+        .map_err(unreadable)?;
+    walk.push(landing.commit()).map_err(unreadable)?;
+    if let Some(anchor) = anchor {
+        walk.hide(anchor).map_err(unreadable)?;
+    }
+    let mut completed: Vec<AcceptanceBlock> = Vec::new();
+    for oid in walk {
+        let oid = oid.map_err(unreadable)?;
+        if let Some(record) = record_at(repo, oid, task)? {
+            if record.status == "complete" {
+                if let Some(active) = active_block(&record) {
+                    if !completed.contains(&active) {
+                        completed.push(active);
+                    }
+                }
+            }
+        }
+    }
+    let mut after = 0;
+    for block in &archive[start..] {
+        let Ok(parsed) = &block.parsed else {
+            return Ok(Some("an archived acceptance block does not parse".into()));
+        };
+        let wanted = normal(parsed);
+        match completed[after..].iter().position(|held| *held == wanted) {
+            Some(found) => after += found + 1,
+            None => {
+                return Ok(Some(format!(
+                    "the archived acceptance block reviewed at {} is not the active block of any completion in this range's history; a reopen archives only a completion that was made",
+                    parsed.reviewed
+                )))
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Where a reopening task pull request left the completion `old` that the
@@ -2295,6 +2434,7 @@ enum OwnRange {
 /// Why a waiver's commit is not the planning amendment for this record and
 /// criterion on the target, if it is not.
 #[allow(clippy::too_many_lines)] // Read the waiver's target, range and record proofs in one refusal path.
+#[allow(clippy::too_many_arguments)] // The waiver, its completion and the two routes it may take.
 fn waiver_problem(
     repo: &Repository,
     task: &RecordView,
@@ -2303,6 +2443,7 @@ fn waiver_problem(
     landing: Landing<'_>,
     target_tip: Option<Oid>,
     own_range: OwnRange,
+    late_target: bool,
 ) -> Option<String> {
     let Some(amendment) = commit_of(repo, evidence) else {
         return Some(format!(
@@ -2382,6 +2523,28 @@ fn waiver_problem(
             "names {}, which the completion does not contain; rebase onto the amendment",
             evidence.trim()
         ));
+    }
+    if !off_target && !late_target {
+        // R-60 (TSK-340 review): in the reviewed span a waiver is an
+        // amendment the review saw. A planning amendment on the target
+        // counts only when the reviewed commit contains it, so a clean merge
+        // of the target after the review never brings a later amendment in
+        // as a waiver. Only a completion after the task's landing merge
+        // (`late_target`) may name an amendment the line made later.
+        let reviewed = active_block(task).and_then(|block| commit_of(repo, &block.reviewed));
+        let seen = match reviewed
+            .map(|reviewed| is_ancestor_or_same(repo, amendment, reviewed))
+            .transpose()
+        {
+            Ok(seen) => seen.unwrap_or(false), // No review cannot authorize a waiver.
+            Err(error) => return Some(error),
+        };
+        if !seen {
+            return Some(format!(
+                "names {}, which the reviewed commit does not contain; a waiver names a planning amendment made before the review",
+                evidence.trim()
+            ));
+        }
     }
     let Ok(commit) = repo.find_commit(amendment) else {
         return Some(format!("names {}, which cannot be read", evidence.trim()));

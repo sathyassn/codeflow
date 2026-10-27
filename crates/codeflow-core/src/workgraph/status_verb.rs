@@ -477,10 +477,10 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     match super::release_line::checkout_scope(repo_root, into) {
         Ok(scope) if scope.release() => shown(at_head),
         Ok(_) => {
-            // On the task's own branch, a waiver may name a record-only
-            // amendment commit in the pull request's own range (TSK-184).
-            // The binder withholds it from a range that reopens the task,
-            // as it does for CI.
+            // In the task's own pull request, a waiver may name a record-only
+            // amendment commit of its range (TSK-184). The binder withholds
+            // it from a range that reopens a landed completion, as it does
+            // for CI (TSK-340).
             let own_range_base = own_range_base(repo_root, &repo, task, head);
             let run = match verb_authorities(repo_root, &repo, task, default_target) {
                 Ok(run) => run,

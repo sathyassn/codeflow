@@ -1096,11 +1096,17 @@ pub(super) fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -
         .unwrap_or_default();
     let superseded = after.superseded_blocks();
     let old_active = before.and_then(|record| record.active_blocks().into_iter().next());
+    // An archived block stays byte for byte; only a validated redaction
+    // (`redaction::preserves`) may reword it, keeping its provenance.
+    let redacted = before.is_some_and(|old| super::redaction::preserves(old, after).is_ok());
     let in_order = superseded.len() >= old_archive.len()
-        && old_archive
-            .iter()
-            .zip(&superseded)
-            .all(|(old, new)| same_provenance(old, new));
+        && old_archive.iter().zip(&superseded).all(|(old, new)| {
+            if redacted {
+                same_provenance(old, new)
+            } else {
+                old.inner == new.inner
+            }
+        });
     let kept = superseded.len() > old_archive.len()
         && superseded.iter().all(|block| block.parsed.is_ok())
         && old_active
@@ -1108,7 +1114,7 @@ pub(super) fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -
             .is_none_or(|old| same_block_content(old, &superseded[old_archive.len()]));
     if !in_order {
         problems.push(
-            "the `acceptance_superseded:` blocks stay in chronological order with their reviewed commit, review and reason; a reopen appends the block it archives after them"
+            "the `acceptance_superseded:` blocks stay as they were archived, in chronological order and unchanged (only a validated redaction rewords one); a reopen appends the block it archives after them"
                 .into(),
         );
     } else if !kept {
@@ -1120,9 +1126,9 @@ pub(super) fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -
     problems
 }
 
-/// Whether an archived block keeps its provenance: the reviewed commit, the
-/// review reference and the reopen reason. A redaction may reword evidence
-/// but never these (`redaction::preserves`).
+/// Whether a redacted archived block keeps its provenance: the reviewed
+/// commit, the review reference and the reopen reason. A redaction may
+/// reword evidence but never these (`redaction::preserves`).
 fn same_provenance(old: &FencedAcceptance, new: &FencedAcceptance) -> bool {
     match (&old.parsed, &new.parsed) {
         (Ok(old), Ok(new)) => {
