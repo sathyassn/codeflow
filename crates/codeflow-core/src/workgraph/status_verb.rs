@@ -482,7 +482,7 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             // it from a range that reopens a landed completion, as it does
             // for CI (TSK-340).
             let own_range_base = own_range_base(repo_root, &repo, task, head);
-            let run = match verb_authorities(repo_root, &repo, task, default_target) {
+            let run = match verb_authorities(repo_root, &repo, task) {
                 Ok(run) => run,
                 Err(error) => return vec![error],
             };
@@ -528,27 +528,66 @@ fn target_commit(
         .transpose()
 }
 
-/// The target tips a clean merge after the review may come from when the
-/// verb binds a completion. The verb has no run base, so it reads the
-/// task's target as `work start` anchors it, beside the default target. It
-/// is a local preview: CI judges the same chain against its own base
+/// The target tips a clean merge after the review, or a task landing, may
+/// come from when the verb binds a completion. The verb has no run base, so
+/// it pins the task's target and the default target to their
+/// remote-tracking refs ([`pinned_tip`]); a local branch never supplies the
+/// authority in a clone with remotes (TSK-340 review round 4). It is a
+/// local preview: CI judges the same chain against its own pinned base
 /// (TSK-220).
 fn verb_authorities(
     repo_root: &Path,
     repo: &git2::Repository,
     task: &RecordView,
-    default_target: Option<git2::Oid>,
 ) -> Result<super::acceptance::RunBases, String> {
-    Ok(super::acceptance::RunBases::new(
-        target_commit(
-            repo,
-            super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-                .map_err(|error| error.to_string())?
-                .as_deref(),
-        )?
-        .into_iter()
-        .chain(default_target),
-    ))
+    let declared =
+        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+            .map_err(|error| error.to_string())?;
+    let default = super::work_start::resolve_work_target(repo_root, None)
+        .map_err(|error| error.to_string())?;
+    let mut tips = Vec::new();
+    for name in [declared, default].into_iter().flatten() {
+        tips.extend(pinned_tip(repo, &name)?);
+    }
+    Ok(super::acceptance::RunBases::new(tips))
+}
+
+/// The tip of `name` as the remote the clone fetches it from holds it:
+/// `refs/remotes/<remote>/<branch>`, the remote being the branch's
+/// configured one or `origin`. A clone with no remotes has only local
+/// branches, so its local branch is the target. A clone with remotes whose
+/// remote-tracking ref is missing refuses, naming the fetch to run.
+fn pinned_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid>, String> {
+    let remotes = repo
+        .remotes()
+        .map_err(|error| format!("cannot read the remotes: {error}"))?;
+    if remotes.is_empty() {
+        return target_commit(repo, Some(name));
+    }
+    let branch = super::work_start::logical_target(name);
+    let config = repo
+        .config()
+        .map_err(|error| format!("cannot read the git config: {error}"))?;
+    let remote = config
+        .get_string(&format!("branch.{branch}.remote"))
+        .ok()
+        .filter(|remote| {
+            remotes
+                .iter()
+                .any(|known| matches!(known, Ok(Some(known)) if known == remote))
+        })
+        .unwrap_or_else(|| "origin".to_string());
+    let reference = format!("refs/remotes/{remote}/{branch}");
+    match repo.find_reference(&reference) {
+        Ok(found) => found
+            .peel_to_commit()
+            .map(|commit| Some(commit.id()))
+            .map_err(|error| format!("cannot read {reference}: {error}")),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Err(format!(
+            "the target `{branch}` has no remote-tracking ref {reference} here, and a local branch is never the target's authority; fetch it (`git fetch {remote} {branch}`) and run this again"
+        )),
+        Err(error) => Err(format!("cannot read {reference}: {error}")),
+    }
 }
 
 /// Replace the record at `relative` (a `/`-separated path beneath

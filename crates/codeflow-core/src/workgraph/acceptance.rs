@@ -339,7 +339,7 @@ mod authority {
         /// head.
         #[must_use]
         pub fn stacking(&self) -> StackingTips {
-            StackingTips(self.0.clone())
+            StackingTips(self.0.clone(), Vec::new())
         }
 
         /// The bases that alone may supply a reopened task's criteria.
@@ -357,11 +357,29 @@ mod authority {
     /// `with_own_line` or a verified import's home extends it. It never
     /// supplies criteria.
     #[derive(Clone, Debug, Default)]
-    pub struct StackingTips(Vec<Oid>);
+    pub struct StackingTips(Vec<Oid>, Vec<Oid>);
 
     impl StackingTips {
         pub(super) fn tips(&self) -> &[Oid] {
             &self.0
+        }
+
+        /// The receiving lines a task landing merge may sit on: these tips
+        /// and any verified source line a caller added for landings only
+        /// ([`Self::with_landing_line`]), which never stacks a clean merge.
+        pub(super) fn landing_tips(&self) -> Vec<Oid> {
+            self.0.iter().chain(&self.1).copied().collect()
+        }
+
+        /// These tips, and `tip` as a receiving line for task landings only:
+        /// a verified source line (a release import's attributed source).
+        /// It adds no clean-merge stacking authority.
+        #[must_use]
+        pub fn with_landing_line(mut self, tip: Oid) -> Self {
+            if !self.1.contains(&tip) {
+                self.1.push(tip);
+            }
+            self
         }
 
         /// These tips and a planning or line range's own head, for a task that
@@ -674,20 +692,16 @@ pub(crate) fn bind_completion_with_amendment(
                     (true, Transport::TaskLanding) => Carried::ReopenedStack,
                     (true, Transport::Direct) => Carried::Transport(Transport::Direct),
                 };
-                // The task's declared target, as this clone resolves it, is
-                // a receiving line too: a landing merge on its first-parent
-                // line is line work (TSK-340 review round 3).
-                let receiving = match target {
-                    Some(tip) => stacking.clone().with_line_head(tip),
-                    None => stacking.clone(),
-                };
+                // Receiving authority is the run's pinned bases and verified
+                // line heads only: a target the record declares, resolved
+                // through a ref, never adds one (TSK-340 review round 4).
                 match binding_source(
                     repo,
                     task,
                     landing,
                     reviewed,
                     carried,
-                    &receiving,
+                    stacking,
                     default_target,
                     anchor,
                 ) {
@@ -1663,7 +1677,7 @@ fn untrusted_landing(
     reviewed: Oid,
     receiving: &StackingTips,
 ) -> Option<String> {
-    let tips = receiving.tips();
+    let tips = receiving.landing_tips();
     (!tips
         .iter()
         .any(|tip| is_first_parent_ancestor(repo, merge, *tip)))
@@ -5341,7 +5355,10 @@ mod tests {
             let task =
                 RecordView::parse(RecordKind::Task, ADOPTION_TASK, &self.read(ADOPTION_TASK))
                     .unwrap();
-            bind_completion(
+            // The run pins the line the completion is made on (TSK-340:
+            // only a pinned or verified line receives a landing).
+            let run = RunBases::new([self.base, self.merge]);
+            bind_completion_with_amendment(
                 &repo,
                 &task,
                 &Graph::default(),
@@ -5349,6 +5366,9 @@ mod tests {
                 Some(self.base),
                 Transport::TaskLanding,
                 None, // This fixture completes on its checked-out branch, without a PR range.
+                None,
+                &run.stacking(),
+                &run.criteria(),
             )
         }
     }
