@@ -421,29 +421,42 @@ fn read_bounded_record(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub(crate) fn read_bounded_json(path: &Path, label: &str) -> Result<Vec<u8>, String> {
-    read_bounded_json_with_hook(path, label, || ())
+    read_bounded_json_with_hook(path, label, |_| ())
 }
 
-/// [`read_bounded_json`] with a hook between the open and the reopen, where
-/// a test replaces the file.
+/// The step [`read_bounded_json`] takes next when its test hook runs, where
+/// a test changes the path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NextStep {
+    /// The first open, after the first no-follow `lstat`.
+    Open,
+    /// The reopen, after the first open.
+    Reopen,
+    /// The final no-follow `lstat`, after the reopen.
+    FinalStat,
+}
+
+/// [`read_bounded_json`] with a hook before each [`NextStep`].
 fn read_bounded_json_with_hook(
     path: &Path,
     label: &str,
-    before_reopen: impl FnOnce(),
+    mut hook: impl FnMut(NextStep),
 ) -> Result<Vec<u8>, String> {
     let initial = std::fs::symlink_metadata(path)
         .map_err(|error| format!("stat {}: {error}", path.display()))?;
     if initial.file_type().is_symlink() {
         return Err(format!("refusing symlinked {label} {}", path.display()));
     }
+    hook(NextStep::Open);
     let file = open_without_reparse_follow(path)
         .map_err(|error| format!("open {}: {error}", path.display()))?;
     let opened = file
         .metadata()
         .map_err(|error| format!("inspect open {}: {error}", path.display()))?;
-    before_reopen();
+    hook(NextStep::Reopen);
     let current_file = open_without_reparse_follow(path)
         .map_err(|error| format!("reopen {}: {error}", path.display()))?;
+    hook(NextStep::FinalStat);
     let current = std::fs::symlink_metadata(path)
         .map_err(|error| format!("stat {}: {error}", path.display()))?;
     if current.file_type().is_symlink() {
@@ -453,12 +466,14 @@ fn read_bounded_json_with_hook(
         return Err(format!("{label} is not a regular file: {}", path.display()));
     }
     // Both identities come from the handles opened above; an identity that
-    // cannot be read refuses (TSK-1021).
+    // cannot be read refuses (TSK-1021). On Unix the opened handle must also
+    // be the file the final no-follow `lstat` names, so a link swapped in for
+    // the opens and swapped back before the `lstat` is refused.
     let opened_identity = FileIdentity::of(&file)
         .map_err(|error| format!("identify open {}: {error}", path.display()))?;
     let current_identity = FileIdentity::of(&current_file)
         .map_err(|error| format!("identify reopened {}: {error}", path.display()))?;
-    if opened_identity != current_identity {
+    if opened_identity != current_identity || !names_the_opened_file(opened_identity, &current) {
         return Err(format!(
             "{label} changed while opening; retry: {}",
             path.display()
@@ -494,9 +509,37 @@ fn open_without_reparse_follow(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-#[cfg(not(windows))]
+/// Opens without following a final link and, on Unix, without blocking on a
+/// fifo: the type is then checked on the opened handle.
+#[cfg(unix)]
+fn open_without_reparse_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn open_without_reparse_follow(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
+}
+
+/// Whether the no-follow `lstat` of the path names the opened file: its
+/// device and inode on Unix, where a zero inode refuses. Windows has no ids
+/// in path metadata; there the reparse-point opens refuse a link instead.
+#[cfg(unix)]
+fn names_the_opened_file(opened: FileIdentity, current: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    FileIdentity::from_device_and_inode(current.dev(), current.ino())
+        .is_ok_and(|current| current == opened)
+}
+
+#[cfg(not(unix))]
+fn names_the_opened_file(_opened: FileIdentity, _current: &std::fs::Metadata) -> bool {
+    true
 }
 
 pub(crate) fn validate_binding(
@@ -967,24 +1010,84 @@ mod tests {
         let path = dir.path().join("binding.json");
         std::fs::write(&path, b"{}").unwrap();
         assert_eq!(
-            read_bounded_json_with_hook(&path, "binding", || ()).unwrap(),
+            read_bounded_json_with_hook(&path, "binding", |_| ()).unwrap(),
             b"{}"
         );
     }
 
     /// TSK-1021 AC-2: a file replaced between the open and the reopen, with
-    /// the same length and contents, is refused.
+    /// the same length and contents, is refused. The original is renamed
+    /// aside while its handle is open, which Windows allows where deleting
+    /// the name would leave it pending.
     #[test]
     fn a_bounded_record_replaced_after_the_open_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("binding.json");
+        let aside = dir.path().join("aside.json");
         std::fs::write(&path, b"{}").unwrap();
-        let error = read_bounded_json_with_hook(&path, "binding", || {
-            std::fs::remove_file(&path).unwrap();
-            std::fs::write(&path, b"{}").unwrap();
+        let error = read_bounded_json_with_hook(&path, "binding", |point| {
+            if point == NextStep::Reopen {
+                std::fs::rename(&path, &aside).unwrap();
+                std::fs::write(&path, b"{}").unwrap();
+            }
         })
         .expect_err("a replaced file");
-        assert!(error.contains("changed while opening"), "{error}");
+        assert!(error.contains("binding changed while opening"), "{error}");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod bounded_json_unix_tests {
+    use super::{read_bounded_json, read_bounded_json_with_hook, NextStep};
+
+    /// TSK-1021 SEC-1: a link swapped in before the first open and swapped
+    /// back before the final `lstat` is never followed, so the outside file
+    /// is not read.
+    #[test]
+    fn a_link_swapped_in_for_the_opens_and_back_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binding.json");
+        let aside = dir.path().join("aside.json");
+        let outside = dir.path().join("outside.json");
+        std::fs::write(&path, b"{}").unwrap();
+        std::fs::write(&outside, b"{\"secret\":1}").unwrap();
+        let result = read_bounded_json_with_hook(&path, "binding", |point| match point {
+            NextStep::Open => {
+                std::fs::rename(&path, &aside).unwrap();
+                std::os::unix::fs::symlink(&outside, &path).unwrap();
+            }
+            NextStep::Reopen => {}
+            NextStep::FinalStat => {
+                std::fs::remove_file(&path).unwrap();
+                std::fs::rename(&aside, &path).unwrap();
+            }
+        });
+        assert!(
+            result.is_err(),
+            "the outside file was read: {:?}",
+            result.map(String::from_utf8)
+        );
+    }
+
+    /// TSK-1021 SEC-1 advisory: a fifo at the path is refused at once, never
+    /// waited on for a writer.
+    #[test]
+    fn a_fifo_record_is_refused_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binding.json");
+        let name = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str()))
+            .unwrap();
+        // SAFETY: a NUL-terminated path the test owns.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(read_bounded_json(&path, "binding"));
+        });
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the read blocked on the fifo");
+        let error = result.expect_err("a fifo is not a record");
+        assert!(error.contains("not a regular file"), "{error}");
     }
 }
 
