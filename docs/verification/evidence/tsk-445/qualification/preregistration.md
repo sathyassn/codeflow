@@ -5,7 +5,7 @@ Registered before any trial launched, 2026-10-26T20:16:03Z.
 - Kind: focused diagnostic of an instruction change (explanation-method pack
   cases), not a canary or full suite; one native trial per case and arm.
 - Suite: sha256:8f39d76721c552debd496941313328865b4b0f995852b3ae54bf1f030becd15f at d9b5954e9,
-  re-registered as sha256:e4f242b278ffe7a69710ad8f8df6d3b034633b9fb4387b1c21978df0272ecafd after
+  re-registered as sha256:7bd8b3eae964b65d4fc721fe80bb0a5eb0a3c05cc80917c244711251fa6a567b after
   the review rounds (anchor wording, then the exact and judged split in the
   retry fixture's grading note). The
   candidate binary is rebuilt at the head the trials run on, and its digest
@@ -28,11 +28,11 @@ Registered before any trial launched, 2026-10-26T20:16:03Z.
   in two parts. Exact: `evals/qualification/anchored/check.py`, run in its
   managed venv with the parser pinned in `anchored/requirements.txt`,
   settles structure (anchor, sections, figure order, one ask, no question
-  titles, code left out) and that every element the retry mechanism needs
-  is drawn and labelled at both widths; it reads values for the judge and
-  judges none. Judged: the evaluator, Claude Opus 5.5, applies the rubric in
-  the fixture's grading note (J1 facts: values, counts, which transition
-  they belong to, negations and added claims; J2 the uncertainty statement)
+  titles, code left out) and that the retry mechanism's named states and
+  transitions, a label with a duration and a label with a failure count are
+  drawn at both widths; it reads values for the judge and judges none. Judged: the evaluator, Claude Opus 5.5, applies the rubric in
+  the fixture's grading note (J1 facts: that the backoff wait is drawn and
+  labelled, values, counts, which transition they belong to, negations and added claims; J2 the uncertainty statement)
   and the migration fixture's facts (downtime, cost, evidence), and checks
   that each figure is legible. The other-lineage grading pass is owed to
   the primary.

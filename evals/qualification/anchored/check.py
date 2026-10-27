@@ -201,8 +201,10 @@ def has_any(text: str, words: tuple[str, ...]) -> bool:
 
 def figure_draws_mechanism(figure: dict) -> bool:
     """Every required element is drawn and labelled at both widths: the
-    states and transitions RETRY_MECHANISM names, a labelled wait with a
-    duration, and a labelled failure count. Presence only."""
+    states and transitions RETRY_MECHANISM names, at least one label with a
+    duration, and a label with a failure count. Presence only: whether a
+    duration labels the backoff wait (and not only the timeout) is judged,
+    rubric J1."""
     if figure.get("family") not in ("state", "flow"):
         return False
     for composition in ("wide", "narrow"):

@@ -584,12 +584,14 @@ parts, and the fixture's grading note states both:
 
 - **Exact, by `check.py`:** structure (the anchor, sections, figure order,
   one ask counted through nested blocks, no question titles, code left out)
-  and the presence of every drawn element the retry mechanism needs at both
-  widths (its labelled states and transitions, a labelled wait with a
-  duration, a labelled failure count). It reads durations to seconds and
+  and the presence of the drawn elements the retry mechanism names at both
+  widths (its labelled states and transitions, at least one label with a
+  duration, a label with a failure count). That the backoff wait itself is
+  drawn and labelled is judged. It reads durations to seconds and
   failure counts for the judge, and judges no meaning with them.
-- **Judged, by the rubric in the fixture's grading note:** whether each
-  value, count and transition matches the source, any negation or added
+- **Judged, by the rubric in the fixture's grading note:** whether the
+  backoff wait is drawn and labelled, whether each value, count and
+  transition matches the source, any negation or added
   claim (`fact_invented`), and whether the right thing is stated as not
   measured (`unmeasured_outage_stated`). The evaluator applies it to every
   trial; the committed controls in
@@ -602,7 +604,11 @@ hashes are kept for audit only in `anchored/requirements-sdist-audit.txt`).
 It always runs inside its managed venv, `target/anchored-venv` (or
 `$CODEFLOW_ANCHORED_VENV`): `markdown_env.py` builds it, rebuilds it when its
 requirements stamp or installed versions differ from the pins, and runs the
-script there, never with a parser that merely imports. On the evaluator host
+script there, never with a parser that merely imports. It writes an
+ownership marker into a directory it creates and removes only a directory
+that carries that marker; an existing directory without it, or a symlinked
+target, is refused and left untouched, so point `CODEFLOW_ANCHORED_VENV` at
+a new path. On the evaluator host
 or a developer machine the same venv can be built by hand:
 
 ```sh
