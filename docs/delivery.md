@@ -126,7 +126,9 @@ each batch.
   archive, so the record reads the same against the line and against
   `main`. Archived blocks stay byte for byte (only a validated redaction
   rewords one), and the blocks the range archives are every completion
-  its history made, in order, none missing, each with real provenance (a
+  its history made, in order, none missing (each completion is an
+  occurrence, so an identical block completed again after a reopen
+  counts twice), each with real provenance (a
   reviewed commit and waiver commits it contains). An archived
   completion is not judged again: reopening is how a completion that
   failed its binding is repaired. A reopening pull
