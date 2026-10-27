@@ -109,7 +109,7 @@ class NeverDeletes(Scratch):
             markdown_env.build(target)
         builds = [p for p in self.root.iterdir() if p.name.startswith(f".{target.name}.build-")]
         self.assertEqual(1, len(builds), "the build stays in its own directory")
-        self.assertTrue((builds[0] / markdown_env.STAMP).is_file())
+        self.assertTrue((builds[0] / "venv" / markdown_env.STAMP).is_file())
 
     def test_a_directory_swapped_in_during_the_build_survives(self) -> None:
         self.assert_raced_build_keeps(canary)
@@ -152,6 +152,60 @@ class NeverDeletes(Scratch):
         target = self.swap_after_the_last_check(lambda t: t.symlink_to(real, target_is_directory=True))
         self.assertTrue(target.is_symlink())
         self.assertEqual("keep me\n", (real / "canary.txt").read_text(encoding="utf-8"))
+
+
+class StagingIdentity(Scratch):
+    """A staging directory swapped for another directory or a symlink before
+    a build step is refused, and the replacement is left untouched (the
+    threat model's cheap check; a same-user process is out of scope)."""
+
+    def swap_before(self, step: str, replacement: str) -> None:
+        unrelated = self.root / "unrelated"
+        canary(unrelated)
+        before = snapshot(unrelated)
+
+        def pause(at: str) -> None:
+            if at != step:
+                return
+            staging = next(self.root.glob(".anchored-venv-*.build-*")) / "venv"
+            staging.rename(staging.with_name("moved-aside"))
+            if replacement == "symlink":
+                staging.symlink_to(unrelated, target_is_directory=True)
+            else:
+                canary(staging)
+
+        def create(staging: Path) -> None:
+            (staging / "bin").mkdir()
+            (staging / "bin" / "python").write_text("", encoding="utf-8")
+
+        target = markdown_env.venv_path()
+        with mock.patch.object(markdown_env, "pause", pause), mock.patch.object(markdown_env, "create", create), \
+                mock.patch.object(markdown_env, "install", lambda staging: None), \
+                mock.patch.object(markdown_env, "installed", lambda python: markdown_env.pins()), \
+                self.assertRaises(SystemExit) as refused:
+            markdown_env.build(target)
+        self.assertIn(f"before {step}", str(refused.exception))
+        self.assertEqual(before, snapshot(unrelated))
+        self.assertFalse(os.path.lexists(target))
+        staging = next(self.root.glob(".anchored-venv-*.build-*")) / "venv"
+        if replacement == "directory":
+            self.assertEqual({"canary.txt": b"keep me\n", "inner/data.json": b"{}\n"}, snapshot(staging))
+        else:
+            self.assertTrue(staging.is_symlink())
+
+    def test_a_swap_before_creation_is_refused(self) -> None:
+        for replacement in ("directory", "symlink"):
+            with self.subTest(replacement=replacement):
+                self.swap_before("create", replacement)
+                shutil.rmtree(self.root)  # this test's own scratch only
+                self.root.mkdir()
+
+    def test_a_swap_before_stamping_is_refused(self) -> None:
+        for replacement in ("directory", "symlink"):
+            with self.subTest(replacement=replacement):
+                self.swap_before("stamp", replacement)
+                shutil.rmtree(self.root)  # this test's own scratch only
+                self.root.mkdir()
 
 
 class ContentNamed(Scratch):

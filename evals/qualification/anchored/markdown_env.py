@@ -20,6 +20,23 @@ always runs inside a managed venv that holds exactly the pins.
   left as it is. If the name appears while a build runs, the build is left
   in its own directory and the run stops. Old venvs and builds are removed
   by hand (README "Grading anchored present documents").
+
+Threat model. This helper is a developer and evaluator convenience, not a
+security boundary.
+
+- In scope: other users (the build directory is made by `tempfile.mkdtemp`,
+  mode 0700, and the venv is built inside it), accidental collisions at the
+  managed name, and stale or mismatched environments.
+- Checked cheaply: before each build step the staging directory must still
+  be the directory the helper created (same device and inode, read without
+  following symlinks); otherwise the build is refused.
+- Out of scope: a concurrent process running as the same user. It can
+  already write these files directly, so the identity check catches
+  interference but does not claim to defeat it.
+- Residual: `os.rename` replaces an empty directory created at the managed
+  name in the instant between the last check and the move. A directory with
+  content, a file or a symlink there makes the rename fail, and nothing is
+  removed.
 """
 
 from __future__ import annotations
@@ -28,6 +45,7 @@ import hashlib
 import json
 import os
 import platform
+import stat
 import subprocess
 import sys
 import tempfile
@@ -101,7 +119,7 @@ def valid(venv: Path) -> bool:
 
 
 def create(build: Path) -> None:
-    """Create a venv in the empty build directory from the base interpreter."""
+    """Create a venv in the empty staging directory from the base interpreter."""
     base = os.path.realpath(getattr(sys, "_base_executable", sys.executable))
     subprocess.run([base, "-m", "venv", str(build)], check=True)
 
@@ -111,18 +129,45 @@ def install(build: Path) -> None:
                     *INSTALL, "-r", str(REQUIREMENTS)], check=True)
 
 
+def pause(step: str) -> None:
+    """A no-op before each identity check; tests replace it to interfere."""
+
+
+def identity(path: Path) -> tuple[int, int] | None:
+    try:
+        info = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return None
+    return (info.st_dev, info.st_ino) if stat.S_ISDIR(info.st_mode) else None
+
+
 def build(venv: Path) -> None:
-    """Build the venv in a fresh private directory and move it into place.
-    Never deletes: a failed or raced build stays in its own directory."""
+    """Build the venv in a private directory and move it into place. Never
+    deletes: a failed or raced build stays in its own directory."""
     venv.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{venv.name}.build-", dir=venv.parent))
+    parent = Path(tempfile.mkdtemp(prefix=f".{venv.name}.build-", dir=venv.parent))
+    staging = parent / "venv"
+    os.mkdir(staging, 0o700)
+    created = identity(staging)
+
+    def still_ours(step: str) -> None:
+        pause(step)
+        if identity(staging) != created:
+            sys.exit(f"markdown_env: {staging} is no longer the directory this helper created (before {step}); "
+                     f"the build stops and nothing was removed. {REMEDY}.")
+
+    still_ours("create")
     create(staging)
+    still_ours("install")
     install(staging)
+    still_ours("verify")
     found = installed(interpreter(staging))
     if found != pins():
         sys.exit(f"markdown_env: the build at {staging} holds {found}, not the pins {pins()}; nothing was "
                  f"moved into place. {REMEDY}.")
+    still_ours("stamp")
     (staging / STAMP).write_text(json.dumps(stamp_data(), sort_keys=True) + "\n", encoding="utf-8")
+    still_ours("rename")
     if os.path.lexists(venv):
         sys.exit(f"markdown_env: {venv} appeared while the venv was built; it is left as it is and the build "
                  f"stays at {staging}. {REMEDY}.")

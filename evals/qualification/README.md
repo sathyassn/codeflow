@@ -620,6 +620,21 @@ venv is refused and left as it is. Remove old `anchored-venv-*` directories
 and stray `.anchored-venv-*.build-*` directories by hand after checking what
 they hold.
 
+Threat model: the helper is a developer and evaluator convenience, not a
+security boundary.
+
+- In scope: other users (the build happens inside a `tempfile.mkdtemp`
+  directory, mode 0700), accidental collisions at the managed name, and
+  stale or mismatched environments.
+- Checked cheaply: before each build step the staging directory must still
+  be the one the helper created (same device and inode, symlinks not
+  followed), or the build stops.
+- Out of scope: a concurrent process running as the same user, which can
+  already write these files directly.
+- Residual: the final `os.rename` replaces an empty directory created at the
+  managed name in the instant before the move; a directory with content, a
+  file or a symlink there makes it fail with nothing removed.
+
 The `model-eval-kit` test target, which CI runs, takes the same path: its
 checker tests and the suite test run `check.py`. `check.py` prints the
 parser versions it ran with. A failed install stops the run.
