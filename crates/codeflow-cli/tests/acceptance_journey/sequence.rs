@@ -448,7 +448,7 @@ fn a_blocked_reopened_task_and_its_epic_close_in_one_valid_sequence() {
     git(&root, &["switch", "-q", again]);
 
     // Negative controls (TSK-340 review round 2): the archive is every
-    // completion the range made, in order, each bound where it was made.
+    // completion the range made, in order, each with real provenance.
     // A temporary completion with a forged review, archived by a reopen,
     // is refused; so is an archive that drops a completion the range made.
     git(
@@ -541,6 +541,84 @@ fn a_blocked_reopened_task_and_its_epic_close_in_one_valid_sequence() {
     fails(
         &hand_complete_ci(&root, "task/TSK-001-dropped", &after_drop),
         "CI on a dropped completion",
+        "is missing",
+    );
+    git(&root, &["switch", "-q", again]);
+
+    // TSK-340 review round 3: a completion is an occurrence, not a block's
+    // content. Completing, reopening and completing again with the same
+    // block is two completions: the archive the reopen wrote is accepted,
+    // and deleting it is refused, by the verb and by CI.
+    git(
+        &root,
+        &["switch", "-q", "-c", "task/TSK-001-repeat", &refixed],
+    );
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-001",
+            &["complete", "--acceptance", &again_block],
+        ),
+        "a first completion with a block",
+    );
+    commit(&root, "chore: complete TSK-001");
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-001",
+            &["todo", "--reason", "same review again"],
+        ),
+        "reopen it",
+    );
+    let repeat_reopen = commit(&root, "chore: reopen TSK-001");
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-001",
+            &["complete", "--acceptance", &again_block],
+        ),
+        "the same block again, archive kept",
+    );
+    commit(&root, "chore: complete TSK-001 with the same block");
+    ok(
+        &task_ci(&root, "task/TSK-001-repeat", "TSK-001"),
+        "CI on a repeated block with its archive",
+    );
+    git(
+        &root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "task/TSK-001-repeat-dropped",
+            &repeat_reopen,
+        ],
+    );
+    let repeated = std::fs::read_to_string(root.join(TASK)).unwrap();
+    let last = repeated.rfind("```yaml\nacceptance_superseded:").unwrap();
+    let end = last + 3 + repeated[last + 3..].find("```\n").unwrap() + 4;
+    std::fs::write(
+        root.join(TASK),
+        format!("{}{}", &repeated[..last], &repeated[end..]),
+    )
+    .unwrap();
+    commit(&root, "docs(records): drop the repeated block's archive");
+    fails(
+        &status(
+            &root,
+            "task",
+            "TSK-001",
+            &["complete", "--acceptance", &again_block],
+        ),
+        "the same block again, archive deleted",
+        "is missing",
+    );
+    fails(
+        &hand_complete_ci(&root, "task/TSK-001-repeat-dropped", &again_block),
+        "CI on a repeated block with its archive deleted",
         "is missing",
     );
     git(&root, &["switch", "-q", again]);

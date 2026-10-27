@@ -1509,6 +1509,48 @@ fn a_completion_cut_at_the_amendment_merge_needs_an_amendment_the_review_saw() {
     );
 }
 
+/// TSK-340 review round 3: merge shape alone proves no landing. The review
+/// lies on a task branch; a separate branch from `main` adds unreviewed
+/// product and merges the review as its second parent, then completes with
+/// that review and no waiver. The merge is on no first-parent line this
+/// run trusts, so its first-parent work is not line work: the verb and CI
+/// refuse it.
+#[test]
+fn a_side_branch_merge_of_the_review_is_no_landing() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+    let branch = "task/TSK-001-side";
+    git(root, &["switch", "-c", branch, "main"]);
+    write(root, "src/side.rs", "pub fn unreviewed() {}\n");
+    commit(root, "feat: add unreviewed product");
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the review",
+            "task/TSK-001-review",
+        ],
+    );
+    let done = fix_block(&reviewed);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &done),
+    );
+    let verb = status_complete(root, "TSK-001");
+    complete(root, "TSK-001", OWN_JOURNEY, &done);
+    for result in [verb, ci(root, branch, "TSK-001")] {
+        assert_blocks(
+            &result,
+            "a side-branch merge of the review",
+            &["work.acceptance_binding", "TSK-001", "src/side.rs"],
+        );
+    }
+}
+
 /// TSK-340 review round 2: reversing the merge parents manufactures no
 /// landing authority. The review lies on a task branch; `main` amends and
 /// restores AC-1; a branch from that `main` merges the review as its second
@@ -3245,8 +3287,9 @@ fn reopen_with_criteria(root: &Path, id: &str, old: &str, criteria: &str) -> [(i
 fn a_task_new_in_its_range_may_change_criteria_on_reopen() {
     let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
     let root = dir.path();
-    // The record is in the reviewed commit, so its first completion binds
-    // where it was made (TSK-340 validates archived completions).
+    // The record is in the reviewed commit, as a task introduced in its own
+    // range is when it completes, so the fixture's first completion is a
+    // structurally valid one (the task is still absent from the target).
     write(
         root,
         &record_path("TSK-002"),
