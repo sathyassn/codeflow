@@ -601,25 +601,25 @@ parts, and the fixture's grading note states both:
 `check.py` parses Markdown with markdown-it-py, pinned with mdurl by version
 and wheel SHA-256 in `anchored/requirements.txt` (the source packages'
 hashes are kept for audit only in `anchored/requirements-sdist-audit.txt`).
-It always runs inside its managed venv, `target/anchored-venv` (or
-`$CODEFLOW_ANCHORED_VENV`): `markdown_env.py` builds it, rebuilds it when its
-requirements stamp or installed versions differ from the pins, and runs the
-script there, never with a parser that merely imports. It writes an
-ownership marker into a directory it creates and removes only a directory
-that carries that marker; an existing directory without it, or a symlinked
-target, is refused and left untouched, so point `CODEFLOW_ANCHORED_VENV` at
-a new path. On the evaluator host
-or a developer machine the same venv can be built by hand:
+It always runs inside a venv that `markdown_env.py` manages; there is no
+manual setup. Run the grader and it builds what it needs:
 
 ```sh
-python3 -m venv target/anchored-venv
-target/anchored-venv/bin/pip install --only-binary=:all: --require-hashes \
-  --no-deps -r evals/qualification/anchored/requirements.txt
 python3 -B evals/qualification/anchored/check.py \
   retry-review-opens-with-the-whole <document.json>
 ```
 
+The venv lives under `target/` (or under `$CODEFLOW_ANCHORED_VENV`, which
+names the root to build under) as `anchored-venv-<requirements hash>-<python>`.
+It is built in a private directory beside that name with
+`--only-binary=:all: --require-hashes --no-deps`, verified, and moved into
+place in one rename; a matching venv is reused. The helper never deletes
+anything: a pin change or another Python gets a new name and the old venv
+stays unused, and a path at the managed name that is not a valid managed
+venv is refused and left as it is. Remove old `anchored-venv-*` directories
+and stray `.anchored-venv-*.build-*` directories by hand after checking what
+they hold.
+
 The `model-eval-kit` test target, which CI runs, takes the same path: its
-checker tests and the suite test run `check.py`, which prepares the venv.
-`check.py` prints the parser versions it ran with. A failed install, or a
-version that still differs afterwards, stops the run.
+checker tests and the suite test run `check.py`. `check.py` prints the
+parser versions it ran with. A failed install stops the run.

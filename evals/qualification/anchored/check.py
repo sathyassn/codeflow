@@ -8,16 +8,19 @@ with), so emphasis, list markers and code blocks read as a reader sees them.
 Figures are read from their declarations: the words a composition draws, its
 marks and its states.
 
-The checker settles structure and the presence of every drawn element the
-retry mechanism needs, at both widths. It never judges meaning: whether a
-value, count or transition matches RETRY.md, whether a sentence negates
-what it names, and whether the outage is the thing stated as not measured
-are the judged rubric in the fixture's grading note. It prints what it read
+The checker settles structure and, at both widths, the presence of the
+retry mechanism's named states and transitions, at least one label with a
+duration and a label with a failure count. It never judges meaning: whether
+the backoff wait is drawn, whether a value, count or transition matches
+RETRY.md, whether a sentence negates what it names, and whether the outage
+is the thing stated as not measured are the judged rubric in the fixture's
+grading note. It prints what it read
 (durations in seconds, numbers and ordinals next to "fail") so the judge can
 see it, and the parser versions it ran with.
 
 The parser is pinned in requirements.txt beside this file; markdown_env.py
-installs the pins with `--require-hashes --no-deps` when they are missing.
+runs this script in a managed venv built from those pins, named by their
+hash, and never deletes anything.
 
 Usage: python3 -B check.py <case-id> <document.json>
 Prints one JSON object: {"signals": [...], "violations": [...], "parser":
