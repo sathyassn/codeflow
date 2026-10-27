@@ -10437,10 +10437,11 @@ fn shell_expansions_round_four_review_matrix() {
         std::fs::write(root.join(file), "print(1)\n").unwrap();
     }
     let mut failures = Vec::new();
-    // Accepted cost (TSK-397): `eval "echo $PWD"` and
-    // `eval -- "rm -rf $PWD/build"` refuse under exec-guard. `eval`
-    // re-parses the expanded text, so a directory name holding `;` could run
-    // code, and the guard cannot follow the directory on such a line.
+    // Accepted cost (TSK-397): `eval "echo $PWD"`,
+    // `eval -- "rm -rf $PWD/build"` and `eval - 'rm -rf $PWD/build'` refuse
+    // under exec-guard. `eval` parses its text again, expanding `$PWD`
+    // there, so a directory name holding `;` could run code, and the guard
+    // cannot follow the directory on such a line.
     for (matrix, source) in [
         (
             "ordinary",

@@ -707,15 +707,17 @@ fn launcher_options(launcher: &str) -> Option<(&'static [&'static str], &'static
                 "-a",
                 "--arg-file",
                 "--delimiter",
-                "--eof",
-                "--max-lines",
                 "--max-args",
                 "--max-procs",
                 "--max-chars",
-                "--replace",
                 "--process-slot-var",
             ],
+            // GNU's `--replace`, `--eof` and `--max-lines` take a value
+            // only attached with `=`; bare, they consume nothing.
             &[
+                "--replace",
+                "--eof",
+                "--max-lines",
                 "-0",
                 "-r",
                 "-t",
@@ -1317,12 +1319,9 @@ fn argv(
                 "-a",
                 "--arg-file",
                 "--delimiter",
-                "--eof",
-                "--max-lines",
                 "--max-args",
                 "--max-procs",
                 "--max-chars",
-                "--replace",
             ],
         )),
         name if crate::hooks::git_guard::is_shell(name) => {

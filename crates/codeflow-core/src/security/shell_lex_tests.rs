@@ -30,6 +30,9 @@ fn a_tilde_is_seen_after_equals_and_colons() {
     // Mid-word, a tilde is text (`git rebase HEAD~3`).
     assert_eq!(word("HEAD~3", 0, 0).tilde, None);
     assert_eq!(word("a~/x", 0, 0).tilde, None);
+    // C13-3: after a blank inside an array literal.
+    assert_eq!(word("a=(x ~+)", 0, 0).tilde.as_deref(), Some("~+"));
+    assert_eq!(word("a=(x\t~/y)", 0, 0).tilde.as_deref(), Some("~"));
 }
 
 /// SR5-3 to SR5-5: constructs the lexer does not model are opaque.
@@ -220,4 +223,25 @@ fn wrappers_and_the_time_keyword_keep_operands() {
         timed.operands.iter().any(|w| w.text == "notes.txt"),
         "{timed:?}"
     );
+}
+
+/// C13-2: a glob, brace expansion or zsh `=cmd` makes a word non-literal.
+#[test]
+fn expanded_program_words_are_not_literal() {
+    for text in ["python{3..3}", "pyth?n3", "pyth[o]n3", "py*", "=python3"] {
+        assert!(!word(text, 0, 0).literal(), "{text}");
+    }
+    assert!(word("python3", 0, 0).literal());
+    for line in [
+        r#"=python3 r.py "$PWD""#,
+        r#"nice =python3 r.py "$PWD""#,
+        r#"python{3..3} r.py "$PWD""#,
+        r#"nice -n $N rg "$PWD""#,
+        r#"xargs strace "$P" r.py "$PWD""#,
+    ] {
+        let reading = read_line(&lex(line));
+        assert!(reading.derived.is_some(), "{line}: {reading:?}");
+    }
+    let plain = read_line(&lex(r#"xargs -n 1 rg "$HOME/x""#));
+    assert!(plain.operands.is_empty(), "{plain:?}");
 }

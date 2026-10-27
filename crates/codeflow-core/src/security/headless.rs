@@ -151,12 +151,11 @@ fn classify(argv: &[String], depth: usize) -> Found {
                     "-a",
                     "--arg-file",
                     "--delimiter",
-                    "--eof",
-                    "--max-lines",
-                    "--max-rest",
+                    // GNU's `--replace`, `--eof` and `--max-lines` take a
+                    // value only attached with `=`; bare, none.
+                    "--max-args",
                     "--max-procs",
                     "--max-chars",
-                    "--replace",
                 ],
             ),
             "find" => return find_exec(rest, depth),
@@ -942,6 +941,11 @@ mod tests {
             "shopt -s expand_aliases\nalias peer='claude -p'\npeer x",
             "peer() { claude -p x; }; peer",
             "printf x | xargs claude -p",
+            // GNU's optional values: bare, they consume nothing.
+            "printf x | xargs --replace claude -p x",
+            "printf x | xargs --eof claude -p x",
+            "printf x | xargs --max-lines claude -p x",
+            "printf x | xargs --max-args 1 claude -p x",
             r"find . -maxdepth 0 -exec claude -p x \;",
             "timeout 5 claude -p x",
             "nice -n 1 claude -p x",

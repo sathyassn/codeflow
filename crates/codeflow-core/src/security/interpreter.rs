@@ -1958,6 +1958,63 @@ mod tests {
     /// Codex review round 9: no variable is trusted once the directory is
     /// unknown, a quoted or expanded interpreter name keeps its operands
     /// judged, and non-ASCII input is read without a panic.
+    /// Round 13 (C13-1 to C13-3, SR8-1 to SR8-3): launcher stops, literal
+    /// program words, array tildes and `eval` text.
+    #[test]
+    fn launcher_stops_and_literal_words_keep_operands() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                // C13-1, SR8-1: a stop inside a launcher keeps its words unless it is a
+                // literal program known not to run its operands, after literal
+                // launcher options.
+                r#"z; nice -n $N rg "$PWD/src/..""#,
+                // N="5 python3 /abs/read_last.py"; z; nice -n $N rg "$PWD/src/.."
+                r#"z; timeout $N rg "$PWD/src/..""#,
+                r#"z; env -u $N rg "$PWD/src/..""#,
+                r#"z; nice -n $=N rg "$PWD/src/..""#,
+                r#"z; timeout $=N rg "$PWD/src/..""#,
+                r#"z; env -u $=N rg "$PWD/src/..""#,
+                r#"z; xargs strace "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; nice strace "$P" /abs/r.py "$PWD/src/..""#,
+                r#"rg --files | xargs strace "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; strace "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; uv run "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; nice gdb --args "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; xargs --replace python3 /abs/read_last.py "$PWD/src/..""#,
+                r#"z; xargs --eof python3 /abs/read_last.py "$PWD/src/..""#,
+                r#"z; xargs --max-lines python3 /abs/read_last.py "$PWD/src/..""#,
+                // C13-2, SR8-2: a program word from brace expansion, a glob or zsh
+                // `=cmd` is not literal.
+                r#"z; python{3..3} /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; /abs/bin/probe-pyth?n3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; /abs/bin/pyth[o]n3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; =python3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; nice python{3..3} /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; nice /abs/bin/probe-pyth?n3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; nice =python3 /abs/read_dir.py "$PWD/src/..""#,
+                // C13-3, SR8-3: a tilde after a blank in an array literal.
+                r#"z; a=(ordinary ~+/settings.json); python3 /abs/read_arg.py "${a[1]}""#,
+                r#"z; a=(ordinary ~+/settings.json); python3 /abs/read_arg.py "${a[2]}""#,
+                // eval parses single-quoted text again.
+                r#"z; eval 'python3 /abs/r.py "$PWD/src/.."'"#,
+                r#"z; eval 'nice "$P" /abs/r.py "$PWD/src/.."'"#,
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "rg --files | xargs rg \"$HOME/x\"",
+                "rg --files | xargs -n 1 rg \"$HOME/x\"",
+                "rg --files | xargs --replace=X grep -l X \"$HOME/x\"",
+                "eval 'ls src'",
+            ],
+        );
+    }
+
     #[test]
     fn no_variable_is_trusted_and_no_operand_is_dropped() {
         let repo = repo();
