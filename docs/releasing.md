@@ -168,6 +168,19 @@ Concurrency:
   workflow. Operate one deliberate publication at a time. If runs overlap, the
   no-clobber and partial-attempt checks remain the safety boundary.
 
+### Merge admission
+
+`commit standards` in `codeflow-policy.yml` admits a ready pull request
+only on a successful `codeflow-ci` run at its exact head, whose signed
+provenance names that pull request and base (`scripts/ci-reuse.py admit`,
+TSK-1001). The run is trusted only when the pull request leaves every file
+on the admission trusted-file list as the base has it:
+`.github/workflows/codeflow-ci.yml`, `scripts/ci-reuse.py` and
+`scripts/requirements-admission.txt`, and any file later added to that
+list. A pull request that changes one of them is refused automatic
+admission and needs a human merge: the operator merges it, never an agent.
+The refusal says so.
+
 ### codeflow's own releases
 
 - The version source of truth is the reviewed impact annotations next to the

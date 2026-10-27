@@ -413,6 +413,7 @@ class AdmissionTests(unittest.TestCase):
             with self.subTest(path=path):
                 reason = self.refused(AdmissionApi(jobs={77: noop}), git=FilesGit({path: b"jobs: no-op"}))
                 self.assertIn(f"the pull request changes {path}", reason)
+                self.assertIn("this pull request needs a human merge, by the operator, never by an agent", reason)
         reason = self.refused(AdmissionApi(), git=FilesGit(missing={(HEAD, WORKFLOW)}))
         self.assertIn(f"cannot read {WORKFLOW}", reason)
         with self.assertRaises(reuse.Skip):
