@@ -851,7 +851,7 @@ mod platform {
     use std::os::windows::ffi::OsStringExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Wdk::Storage::FileSystem::{
-        FileRenameInformation, NtSetInformationFile, FILE_CREATE, FILE_OPEN,
+        FileRenameInformation, NtSetInformationFile, FILE_CREATE, FILE_OPEN, FILE_OPEN_IF,
         FILE_RENAME_INFORMATION,
     };
     use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
@@ -899,12 +899,17 @@ mod platform {
     }
 
     pub(super) fn create_read_only(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
-        let file = match open(parent, leaf, FILE_GENERIC_READ, true) {
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                open(parent, leaf, FILE_GENERIC_READ, false)?
-            }
-            result => result?,
-        };
+        // Open-or-create in one call, with read access only: `FILE_CREATE`
+        // would add `DELETE` access, and a handle holding it without
+        // `FILE_SHARE_DELETE` makes every later open of the lock fail with a
+        // sharing violation (TSK-1003, hosted run 40419008471).
+        let file = open_relative(
+            parent.ancestors.last().ok_or_else(invalid)?,
+            leaf,
+            FILE_GENERIC_READ,
+            FILE_OPEN_IF,
+            Some(false),
+        )?;
         if !file.metadata()?.is_file() {
             return Err(invalid());
         }

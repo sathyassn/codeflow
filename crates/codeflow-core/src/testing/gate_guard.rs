@@ -328,10 +328,13 @@ pub(crate) mod interleave {
         static STEP: RefCell<Option<Step>> = const { RefCell::new(None) };
     }
 
+    // Only the Unix interleaving tests set a step.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn set(step: impl FnMut(Point) + 'static) {
         STEP.with(|cell| *cell.borrow_mut() = Some(Box::new(step)));
     }
 
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn clear() {
         STEP.with(|cell| *cell.borrow_mut() = None);
     }
@@ -833,7 +836,7 @@ fn trusted_dirs(project_dir: &Path) -> Vec<String> {
     }
     let mut out: Vec<String> = dirs
         .iter()
-        .map(|dir| trimmed_dir(&dir.display().to_string()).to_string())
+        .map(|dir| trimmed_dir(&dir.display().to_string()).into_owned())
         .filter(|dir| !dir.is_empty())
         .collect();
     out.sort();
@@ -841,9 +844,16 @@ fn trusted_dirs(project_dir: &Path) -> Vec<String> {
     out
 }
 
-/// `dir` without trailing path separators, compared as text only.
-fn trimmed_dir(dir: &str) -> &str {
-    dir.trim_end_matches(['/', '\\'])
+/// `dir` without trailing path separators, compared as text only. On
+/// Windows, where git lists worktrees with `/` and paths display with `\\`,
+/// both are compared as `/`.
+fn trimmed_dir(dir: &str) -> std::borrow::Cow<'_, str> {
+    let trimmed = dir.trim_end_matches(['/', '\\']);
+    if cfg!(windows) {
+        std::borrow::Cow::Owned(trimmed.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(trimmed)
+    }
 }
 
 /// The modes a holder record names.
@@ -890,7 +900,7 @@ fn parse_record(text: &str, trusted: &[String]) -> Result<String, String> {
                     return Err("a dir value is empty or holds a control character".to_string());
                 }
                 let value = trimmed_dir(value);
-                if let Some(dir) = trusted.iter().find(|dir| dir.as_str() == value) {
+                if let Some(dir) = trusted.iter().find(|dir| dir.as_str() == value.as_ref()) {
                     dir.clone()
                 } else {
                     // Not a folder the gate trusts: shown as unknown, never
@@ -932,7 +942,26 @@ fn holder_record(project_dir: &Path, mode: &str) -> String {
 fn write_record(lock: &Path, text: &str) -> std::io::Result<()> {
     let record = record_path(lock);
     let (anchor, relative) = lock_anchor(&record)?;
-    crate::contained::Tree::open(anchor)?.write(&relative, text.as_bytes())
+    let tree = crate::contained::Tree::open(anchor)?;
+    // On Windows a rename over a record another process is reading fails
+    // with a sharing violation until that brief read ends; retry a few
+    // times before reporting it.
+    let mut attempts = 0;
+    loop {
+        match tree.write(&relative, text.as_bytes()) {
+            Err(error) if cfg!(windows) && attempts < 20 && is_sharing_violation(&error) => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Windows `ERROR_SHARING_VIOLATION` (32) or `ERROR_ACCESS_DENIED` (5),
+/// which a rename over an open file reports.
+fn is_sharing_violation(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(5 | 32))
 }
 
 /// Render a holder record as `pid N in DIR, started S s ago`.
@@ -1062,7 +1091,7 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains(&format!("in {}", work.display())),
+            message.contains(&format!("in {}", trimmed_dir(&work.display().to_string()))),
             "{message}"
         );
         assert!(message.contains("one heavy gate"), "{message}");
