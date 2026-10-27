@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use git2::{Oid, Repository};
 
+use crate::bounded_file::FileIdentity;
+
 struct Entry {
     oid: Oid,
     tree: Oid,
@@ -25,16 +27,14 @@ fn word(bytes: &[u8], offset: usize) -> Result<u32, String> {
 }
 
 /// Unix ctime detects in-place writes even when mtime and the trailer are restored.
-/// Off Unix, identity retains size, mtime and the trailer (or full manifest),
-/// together with the path stored in `File`; inode, device and ctime are unavailable.
+/// On every platform the opened handle's `FileIdentity` detects a file replaced
+/// by another with the same size, mtime and contents (TSK-1021); off Unix,
+/// ctime is unavailable.
 #[derive(Debug, PartialEq, Eq)]
 struct Identity {
     size: u64,
     modified: std::time::SystemTime,
-    #[cfg(unix)]
-    inode: u64,
-    #[cfg(unix)]
-    device: u64,
+    file: FileIdentity,
     #[cfg(unix)]
     changed_seconds: i64,
     #[cfg(unix)]
@@ -82,10 +82,8 @@ fn identity(path: &Path, graph: bool) -> Result<Option<Identity>, String> {
         Ok(Identity {
             size: metadata.len(),
             modified: metadata.modified()?,
-            #[cfg(unix)]
-            inode: std::os::unix::fs::MetadataExt::ino(&metadata),
-            #[cfg(unix)]
-            device: std::os::unix::fs::MetadataExt::dev(&metadata),
+            // A failed identity read reports the file as changed.
+            file: FileIdentity::of(&file)?,
             #[cfg(unix)]
             changed_seconds: std::os::unix::fs::MetadataExt::ctime(&metadata),
             #[cfg(unix)]
@@ -410,6 +408,37 @@ mod tests {
         assert_eq!(before.ino(), after.ino());
         assert_eq!(before.modified().unwrap(), after.modified().unwrap());
         assert_eq!(&std::fs::read(&path).unwrap()[20..], &[0; 20]);
+        assert!(verified
+            .check()
+            .unwrap_err()
+            .contains("commit-graph changed"));
+    }
+
+    /// TSK-1021 AC-6: a file replaced by another with the same size, mtime
+    /// and contents is detected by the opened handle's identity, on every
+    /// platform.
+    #[test]
+    fn replacement_refuses_even_when_size_mtime_and_contents_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("commit-graph");
+        std::fs::write(&path, [0; 40]).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut verified = Verified::default();
+        verified.read(&path, true).unwrap();
+        verified.check().unwrap();
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&replacement, [0; 40]).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(after.len(), 40);
+        assert_eq!(after.modified().unwrap(), modified);
+        assert_eq!(std::fs::read(&path).unwrap(), [0; 40]);
         assert!(verified
             .check()
             .unwrap_err()

@@ -11,6 +11,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bounded_file::FileIdentity;
+
 const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 const HARNESS_CATALOG: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -419,6 +421,16 @@ fn read_bounded_record(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub(crate) fn read_bounded_json(path: &Path, label: &str) -> Result<Vec<u8>, String> {
+    read_bounded_json_with_hook(path, label, || ())
+}
+
+/// [`read_bounded_json`] with a hook between the open and the reopen, where
+/// a test replaces the file.
+fn read_bounded_json_with_hook(
+    path: &Path,
+    label: &str,
+    before_reopen: impl FnOnce(),
+) -> Result<Vec<u8>, String> {
     let initial = std::fs::symlink_metadata(path)
         .map_err(|error| format!("stat {}: {error}", path.display()))?;
     if initial.file_type().is_symlink() {
@@ -429,6 +441,7 @@ pub(crate) fn read_bounded_json(path: &Path, label: &str) -> Result<Vec<u8>, Str
     let opened = file
         .metadata()
         .map_err(|error| format!("inspect open {}: {error}", path.display()))?;
+    before_reopen();
     let current_file = open_without_reparse_follow(path)
         .map_err(|error| format!("reopen {}: {error}", path.display()))?;
     let current = std::fs::symlink_metadata(path)
@@ -439,7 +452,13 @@ pub(crate) fn read_bounded_json(path: &Path, label: &str) -> Result<Vec<u8>, Str
     if !opened.is_file() || !current.is_file() {
         return Err(format!("{label} is not a regular file: {}", path.display()));
     }
-    if !same_file_identity(&file, &opened, &current_file, &current) {
+    // Both identities come from the handles opened above; an identity that
+    // cannot be read refuses (TSK-1021).
+    let opened_identity = FileIdentity::of(&file)
+        .map_err(|error| format!("identify open {}: {error}", path.display()))?;
+    let current_identity = FileIdentity::of(&current_file)
+        .map_err(|error| format!("identify reopened {}: {error}", path.display()))?;
+    if opened_identity != current_identity {
         return Err(format!(
             "{label} changed while opening; retry: {}",
             path.display()
@@ -478,58 +497,6 @@ fn open_without_reparse_follow(path: &Path) -> std::io::Result<std::fs::File> {
 #[cfg(not(windows))]
 fn open_without_reparse_follow(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
-}
-
-#[cfg(unix)]
-fn same_file_identity(
-    _opened_file: &std::fs::File,
-    opened: &std::fs::Metadata,
-    _current_file: &std::fs::File,
-    current: &std::fs::Metadata,
-) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    opened.dev() == current.dev() && opened.ino() == current.ino()
-}
-
-#[cfg(windows)]
-fn same_file_identity(
-    opened_file: &std::fs::File,
-    _opened: &std::fs::Metadata,
-    current_file: &std::fs::File,
-    _current: &std::fs::Metadata,
-) -> bool {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-    };
-
-    fn identity(file: &std::fs::File) -> Option<(u32, u32, u32)> {
-        let mut info = BY_HANDLE_FILE_INFORMATION::default();
-        // SAFETY: `file` owns a live OS handle for the duration of the call,
-        // and `info` is a valid writable output buffer of the required type.
-        let succeeded =
-            unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &raw mut info) };
-        (succeeded != 0).then_some((
-            info.dwVolumeSerialNumber,
-            info.nFileIndexHigh,
-            info.nFileIndexLow,
-        ))
-    }
-
-    identity(opened_file)
-        .zip(identity(current_file))
-        .is_some_and(|(opened, current)| opened == current)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn same_file_identity(
-    _opened_file: &std::fs::File,
-    opened: &std::fs::Metadata,
-    _current_file: &std::fs::File,
-    current: &std::fs::Metadata,
-) -> bool {
-    opened.len() == current.len() && opened.modified().ok() == current.modified().ok()
 }
 
 pub(crate) fn validate_binding(
@@ -990,6 +957,34 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    /// TSK-1021 AC-2: the opened handle and the reopened one name the same
+    /// file, compared by `FileIdentity` on every platform.
+    #[test]
+    fn a_bounded_record_reads_when_its_path_still_names_the_opened_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binding.json");
+        std::fs::write(&path, b"{}").unwrap();
+        assert_eq!(
+            read_bounded_json_with_hook(&path, "binding", || ()).unwrap(),
+            b"{}"
+        );
+    }
+
+    /// TSK-1021 AC-2: a file replaced between the open and the reopen, with
+    /// the same length and contents, is refused.
+    #[test]
+    fn a_bounded_record_replaced_after_the_open_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binding.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let error = read_bounded_json_with_hook(&path, "binding", || {
+            std::fs::remove_file(&path).unwrap();
+            std::fs::write(&path, b"{}").unwrap();
+        })
+        .expect_err("a replaced file");
+        assert!(error.contains("changed while opening"), "{error}");
     }
 }
 
