@@ -100,8 +100,6 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--revisit <REVISIT>` | The event that revisits the blocker. |
 | | `--scope <SCOPE>` | Where a cancelled record's scope went. |
 | | `--acceptance <FILE>` | A file holding the acceptance block to add to the Closeout on completion: the YAML between the fences, starting with a top-level `acceptance:` key that holds `reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`. |
-| | `--base <REF>` | The receiving target's tip a task completion binds against, such as `origin/main`, in place of the default branch `origin` advertises; needed when `origin` cannot be asked. |
-| | `--into <BRANCH>` | The receiving target's branch name; defaults to the branch `--base` names. |
 | `codeflow spec new <TITLE>` | | Allocate the next `SPC-NNN`, scaffold it, and link the consuming work item |
 | | `--for <EPC-NNN\|TSK-NNN>...` | Epic or task that consumes this specification; repeat the flag (or separate ids with commas) for several consumers. Required. |
 | | `<TITLE>` | Specification title. |
