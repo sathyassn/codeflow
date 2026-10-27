@@ -3973,7 +3973,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // A non-string schema_version becomes unsupported version Err; the empty placeholder is never an accepted default. run_gate propagates UnsupportedSchemaVersion as TestingError.
     (
         "crates/codeflow-core/src/testing/config/mod.rs",
-        "load_test_config",
+        "parse_test_config",
         "obtain-absent:as_str",
         1,
         "unproven",
@@ -6738,7 +6738,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/absence.rs", "refuses_name", "ErrorKind::InvalidFilename", 2, "A refused name proves no entry only where the kind is the platform's refusal of the name: on Windows only raw codes 123 and 161 (windows_error_refuses_name), never 206, the legacy MAX_PATH limit a long-path-aware process can pass; on Unix ENAMETOOLONG, the kernel's refusal."),
     ("crates/codeflow-core/src/absence.rs", "refuses_name", "ErrorKind::NotADirectory", 1, "A component that is not a directory holds no entry; the caller reads every other error as a failure."),
     ("crates/codeflow-core/src/absence.rs", "symlink_metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; other errors propagate."),
-    ("crates/codeflow-core/src/bounded_file.rs", "read_bounded_regular_with_hook", "is_file", 1, "Type check on symlink_metadata obtained with its error propagated; false returns an InvalidData error."),
+    ("crates/codeflow-core/src/bounded_file.rs", "read_bounded_regular_with_hooks", "is_file", 1, "Type check on symlink_metadata obtained with its error propagated; false returns an InvalidData error."),
+    ("crates/codeflow-core/src/bounded_file.rs", "reopened_identity", "is_file", 2, "Windows only, on no-follow metadata and on a handle reopened with the reparse-point flag, errors propagated: a path that is not a regular file returns no identity and read_opened_regular refuses it; a reopened handle that is not a regular file refuses with InvalidData (TSK-1020)."),
     ("crates/codeflow-core/src/bounded_file.rs", "read_opened_regular", "is_file", 2, "Both check metadata of the opened file obtained with errors propagated; false refuses with InvalidData."),
     ("crates/codeflow-core/src/bounded_file/confined.rs", "open_locked", "is_dir", 1, "Type check on the opened handle's metadata, obtained with its error propagated; a mismatch returns invalid()."),
     ("crates/codeflow-core/src/bounded_file/confined.rs", "open_locked", "is_file", 1, "Type check on the opened handle's metadata, obtained with its error propagated; a mismatch returns invalid()."),
@@ -6913,6 +6914,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_all_checks", "exists", 1, "False returns a Fail config-exists check, so an unreadable path is never passed; a present config is then loaded by load_test_config, which refuses a dangling leaf."),
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_target_checks", "exists", 1, "Only picks Pass or Warn text for a coverage exception path; exceptions are matched by path name in threshold evaluation and never read from disk."),
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_target_checks", "is_dir", 1, "False yields a Fail cwd-exists check, so an unreadable or dangling target directory is reported failing, never passed."),
+    ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "ErrorKind::NotFound", 1, "Only a NotFound from symlink_metadata on the named path becomes ConfigNotFound, a refusal; every other error refuses as unreadable (TSK-1020)."),
+    ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "is_file", 1, "Read from symlink_metadata after links are refused; false refuses the named config as not regular, and the bounded no-follow reader rechecks the opened file (TSK-1020)."),
     ("crates/codeflow-core/src/testing/gate.rs", "copy_evidence", "is_dir", 1, "The entry file_type acquisition propagates errors before choosing recursive versus file copy."),
     ("crates/codeflow-core/src/testing/runner/mod.rs", "run_owed_target", "exists", 4, "One guards removing a stale report that feeds only the display summary; one false fails the target; two pick evidence copies, and the gate rereads the original paths."),
     ("crates/codeflow-core/src/testing/setup/detect.rs", "detect_go", "try_exists", 1, "try_exists propagates metadata errors; only a dangling go.mod link reads false, which only drops a proposed target from a starting config the tool could not build anyway."),
