@@ -1,0 +1,11 @@
+id = "TSK-1024"
+uid = "8bc1531a-77d5-4bcf-85b7-aa74bae1cfe3"
+kind = "TSK"
+title = "git-guard allows read-only git commands it cannot place"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-27T20:45:20Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
