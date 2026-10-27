@@ -1665,6 +1665,158 @@ fn no_requester_ref_turns_a_side_branch_merge_into_a_landing() {
     }
 }
 
+/// `codeflow ci` with `--base origin/main --into main` pinned.
+fn ci_pinned(root: &Path, branch: &str, id: &str) -> (i32, String) {
+    let out = codeflow()
+        .args([
+            "ci",
+            "--base",
+            "origin/main",
+            "--head",
+            "HEAD",
+            "--branch",
+            branch,
+            "--into",
+            "main",
+            "--pr-body",
+            &with_reviews(
+                root,
+                "HEAD",
+                &format!(
+                    "## Summary\nA change.\n\n- one change\n\nTask: {id}\n\n## Changes\n- one\n\n## Testing\n- test\n"
+                ),
+            ),
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// TSK-340 review round 4: "on the target" is the pinned target, never a
+/// branch the requester controls. A landed task is reopened in a fix pull
+/// request; its waiver names an AC-1 amendment (amended, then restored)
+/// made on the local `main` or on a fetched `origin/auxiliary`, neither of
+/// which `origin/main` holds. The verb and CI refuse it, naming the
+/// planning commit on the target a reopened task's waiver needs.
+#[test]
+fn a_waiver_off_the_pinned_target_is_refused() {
+    for source in ["local main", "fetched auxiliary"] {
+        let (dir, _, archived) = one_pr_fix();
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        let _remote = with_origin(root, "main");
+        let start = if source == "local main" {
+            "main"
+        } else {
+            "origin/main"
+        };
+        git(root, &["switch", "-C", "amend/off-target", start]);
+        let path = record_path("TSK-001");
+        let on_main = std::fs::read_to_string(root.join(&path)).unwrap();
+        write(
+            root,
+            &path,
+            &on_main.replacen("shall work.", "shall mostly work.", 1),
+        );
+        let amendment = commit(root, "docs(records): amend TSK-001 AC-1");
+        write(root, &path, &on_main);
+        let restored = commit(root, "docs(records): restore TSK-001 AC-1");
+        if source == "local main" {
+            git(root, &["branch", "-f", "main", &restored]);
+        } else {
+            git(
+                root,
+                &["update-ref", "refs/remotes/origin/auxiliary", &restored],
+            );
+        }
+        git(root, &["switch", "task/TSK-001-fix"]);
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "chore: merge the amendment",
+                &restored,
+            ],
+        );
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        let waiver = block(
+            &reviewed,
+            &[
+                &format!("AC-1: waived | {amendment}"),
+                "AC-2: verified | journey",
+            ],
+            "verified | journey",
+            "none: done",
+        );
+        let closeout = format!("{archived}{waiver}");
+        write(
+            root,
+            &path,
+            &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+        );
+        let verb = status_complete(root, "TSK-001");
+        complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+        for (surface, result) in [
+            ("verb", verb),
+            ("ci", ci_pinned(root, "task/TSK-001-fix", "TSK-001")),
+        ] {
+            assert_blocks(
+                &result,
+                &format!("a waiver from {source} ({surface})"),
+                &[
+                    "AC-1 waiver",
+                    "a reopened task's waiver must name a planning commit on the target",
+                ],
+            );
+        }
+    }
+}
+
+/// TSK-340 review round 4: `task status` pins the target to its
+/// remote-tracking ref. A clone with `origin` but no `origin/main` refuses
+/// the completion and names the fetch to run.
+#[test]
+fn task_status_refuses_without_the_remote_tracking_target() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    let origin = root.parent().unwrap().join(format!(
+        "origin-{}.git",
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    git(
+        root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
+    );
+    let verb = status_complete(root, "TSK-001");
+    assert_ne!(verb.0, 0, "{}", verb.1);
+    assert!(verb.1.contains("git fetch origin main"), "{}", verb.1);
+}
+
 /// TSK-340 review round 2: reversing the merge parents manufactures no
 /// landing authority. The review lies on a task branch; `main` amends and
 /// restores AC-1; a branch from that `main` merges the review as its second
@@ -2782,11 +2934,16 @@ fn an_own_range_waiver_is_the_target_amendment_once_the_task_lands() {
             BRANCH,
         ],
     );
-    let landed = codeflow_core::workgraph::acceptance::pull_request_findings(
+    // The line's judge pins the receiving line it judges (TSK-340): the
+    // range's own head, as a verified line, holds the landed amendment.
+    let landed = codeflow_core::workgraph::acceptance::pull_request_findings_judged(
         root,
         &before,
         "main",
         &codeflow_core::workgraph::acceptance::Criteria::Amendable,
+        None,
+        Some("main"),
+        &[],
     )
     .unwrap();
     assert!(
