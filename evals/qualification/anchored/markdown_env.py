@@ -10,7 +10,9 @@ with `zipfile` into a content-named directory, and puts that directory on
 - The grader runs as `python3 -I -S -B check.py ...`. `-I` ignores every
   `PYTHON*` variable, the user site and the script's own directory; `-S`
   skips `site`, so no `.pth` file, `sitecustomize` or `usercustomize` is
-  read. `ensure()` refuses to run under any other start, so no path through
+  read. `-B` is optional: `ensure()` turns bytecode writing off before the
+  verified packages are imported, so no `.pyc` lands beside them.
+  `ensure()` refuses to run under any other start, so no path through
   this code runs with the caller's Python environment. Its only imports
   outside the standard library are the two pinned packages, from the
   directory it verified.
@@ -66,7 +68,7 @@ import sys
 import tempfile
 import urllib.request
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
 HERE = Path(__file__).resolve().parent
@@ -235,17 +237,37 @@ def fetch(name: str, version: str, sha256: str) -> bytes:
     return data
 
 
+def entry_problem(name: str) -> str | None:
+    """Why a wheel entry name may not be unpacked, read under both POSIX and
+    Windows rules, or None."""
+    if not name or "\\" in name or ":" in name:
+        return "has a backslash, a colon or no name"
+    for flavour in (PurePosixPath, PureWindowsPath):
+        path = flavour(name)
+        if path.is_absolute() or path.drive or path.root or ".." in path.parts:
+            return "is absolute, rooted, drive-qualified or climbs out"
+    return None
+
+
 def unpack(wheel: bytes, lib: Path) -> None:
     """Unpack a verified wheel into lib, every entry confined to it, files
     0644 and directories 0755, no links."""
+    base = lib.resolve()
+    seen: set[str] = set()
     with zipfile.ZipFile(io.BytesIO(wheel)) as archive:
         for info in archive.infolist():
-            name = PurePosixPath(info.filename)
-            if name.is_absolute() or ".." in name.parts or "\\" in info.filename:
-                raise SystemExit(f"markdown_env: wheel entry {info.filename} escapes its directory")
+            if entry_problem(info.filename):
+                raise SystemExit(f"markdown_env: wheel entry {info.filename!r} {entry_problem(info.filename)}")
+            if info.filename in seen:
+                raise SystemExit(f"markdown_env: wheel entry {info.filename!r} appears twice")
+            seen.add(info.filename)
             if stat.S_ISLNK(info.external_attr >> 16):
-                raise SystemExit(f"markdown_env: wheel entry {info.filename} is a link")
+                raise SystemExit(f"markdown_env: wheel entry {info.filename!r} is a link")
+            name = PurePosixPath(info.filename)
             target = lib.joinpath(*name.parts)
+            resolved = target.resolve()
+            if resolved != base and base not in resolved.parents:
+                raise SystemExit(f"markdown_env: wheel entry {info.filename!r} resolves outside {lib}")
             if info.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
@@ -331,6 +353,9 @@ def ensure() -> None:
     reason = build_problem(target)
     if reason:
         refuse(f"{target} is not a valid build of the pinned parser: {reason}; it is left as it is")
+    # No bytecode is written beside the verified files, however the grader
+    # was started: a .pyc there would make the next run refuse the build.
+    sys.dont_write_bytecode = True
     sys.path.insert(0, str(lib_path(target)))
 
 

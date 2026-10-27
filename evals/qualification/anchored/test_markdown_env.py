@@ -169,6 +169,15 @@ class IsolatedStart(Scratch):
         self.assertIn("was added or removed", result.stderr)
         self.assertEqual([], [str(mark) for mark in marks if mark.exists()])
 
+    def test_a_start_without_dash_b_writes_no_bytecode_and_the_next_run_passes(self) -> None:
+        first = self.grade(flags=("-I", "-S"))
+        self.assertEqual(0, first.returncode, first.stderr)
+        lib = self.env.lib_path()
+        self.assertEqual([], [str(p) for p in lib.rglob("*") if p.suffix == ".pyc" or p.name == "__pycache__"])
+        second = self.grade(flags=("-I", "-S"))
+        self.assertEqual(0, second.returncode, second.stderr)
+        self.assertIsNone(self.env.build_problem(self.env.build_path()))
+
     def test_a_start_without_isolation_is_refused(self) -> None:
         result = self.grade(flags=("-B",))
         self.assertNotEqual(0, result.returncode)
@@ -209,6 +218,38 @@ class Integrity(Scratch):
                 self.assertRaises(SystemExit) as refused:
             self.real_fetch(name, version, sha256)
         self.assertIn("does not match its pinned SHA-256", str(refused.exception))
+
+    def wheel(self, names: list[str]) -> bytes:
+        import io
+        import warnings
+        import zipfile
+        buffer = io.BytesIO()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # zipfile warns on a duplicate name
+            with zipfile.ZipFile(buffer, "w") as archive:
+                for name in names:
+                    archive.writestr(name, "x = 1\n")
+        return buffer.getvalue()
+
+    def test_drive_qualified_rooted_and_backslash_names_are_refused_on_any_system(self) -> None:
+        # Codex round 11: names read under Windows rules as well as POSIX.
+        for name in ("C:../x", "D:x", "\\x", "\\server\\share\\x", "C:\\x", "/x", "a/../../x", "a\\..\\x"):
+            with self.subTest(name=name):
+                self.assertIsNotNone(self.env.entry_problem(name))
+                lib = self.outside / f"lib-{abs(hash(name))}"
+                lib.mkdir()
+                with self.assertRaises(SystemExit):
+                    self.env.unpack(self.wheel([name]), lib)
+                self.assertEqual([], list(lib.iterdir()))
+        self.assertFalse((self.outside / "x").exists())
+        self.assertIsNone(self.env.entry_problem("markdown_it/__init__.py"))
+
+    def test_a_duplicate_wheel_entry_is_refused(self) -> None:
+        lib = self.outside / "lib"
+        lib.mkdir()
+        with self.assertRaises(SystemExit) as refused:
+            self.env.unpack(self.wheel(["pkg/a.py", "pkg/a.py"]), lib)
+        self.assertIn("appears twice", str(refused.exception))
 
     def test_a_wheel_entry_escaping_its_directory_is_refused(self) -> None:
         import io

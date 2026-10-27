@@ -611,7 +611,12 @@ python3 -I -S -B evals/qualification/anchored/check.py \
 
 `-I` ignores every `PYTHON*` variable, the user site and the script's own
 directory; `-S` skips `site`, so no `.pth` file, `sitecustomize` or
-`usercustomize` is read. The grader refuses any other start. `markdown_env.py`
+`usercustomize` is read. The grader refuses any other start. `-B` is
+optional: the helper turns bytecode writing off before it imports the
+verified packages, so no `.pyc` lands beside them. Wheel entries are read
+under both POSIX and Windows path rules: a drive, colon, backslash, rooted or
+climbing name, an entry resolving outside `lib`, or a duplicate entry is
+refused. `markdown_env.py`
 fetches each pinned wheel from the package index by its SHA-256, checks it,
 unpacks it with `zipfile` into `target/anchored/<requirements hash>/lib` (in a
 private directory moved into place with one rename, with a stamp recording
