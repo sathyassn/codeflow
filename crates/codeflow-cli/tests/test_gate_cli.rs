@@ -1196,6 +1196,43 @@ fn a_tracked_path_that_is_not_utf8_does_not_stop_the_gate() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("test gate: passed"));
 }
 
+/// A target that runs until a `release` file appears, on every platform.
+fn held_until_released_anywhere(mode: &str) -> tempfile::TempDir {
+    let command = if cfg!(windows) {
+        r#"powershell -NoProfile -NonInteractive -Command \"while (-not (Test-Path release)) { Start-Sleep -Milliseconds 50 }\""#
+    } else {
+        "while ! test -f release; do sleep 0.01; done"
+    };
+    repo(&format!(
+        r#"{{"schema_version":"1.0","targets":[{{"name":"holder","runner":"custom","timeout_seconds":120,"modes":{{"{mode}":{{"command":"{command}"}}}}}}]}}"#
+    ))
+}
+
+/// TSK-1021 AC-1 (journey), on Linux, macOS and Windows: the built binary
+/// takes the gate lock only after the lock path's file and the locked handle
+/// compare equal by `FileIdentity`; a second gate is refused naming the
+/// holder, and once the holder ends the next gate takes the lock again.
+#[test]
+fn a_gate_takes_the_lock_through_the_identity_check_and_refuses_a_contender() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = held_until_released_anywhere("essential");
+    let (mut holder, rx, _stdout) = spawn(command(
+        repo.path(),
+        home.path(),
+        &["test", "--mode", "essential"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+    let contender = run(repo.path(), home.path(), &["test", "--mode", "essential"]);
+    let error = stderr(&contender);
+    assert_eq!(contender.status.code(), Some(1), "{error}");
+    assert!(error.contains(&format!("pid {}", holder.id())), "{error}");
+    std::fs::write(repo.path().join("release"), "").unwrap();
+    assert!(holder.wait().unwrap().success(), "the holder's gate passes");
+    let next = run(repo.path(), home.path(), &["test", "--mode", "essential"]);
+    assert!(next.status.success(), "{}", stderr(&next));
+    assert!(String::from_utf8_lossy(&next.stdout).contains("test gate: passed"));
+}
+
 #[cfg(unix)]
 fn held_until_released(mode: &str) -> tempfile::TempDir {
     repo(&format!(
