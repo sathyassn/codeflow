@@ -237,7 +237,7 @@
   [
     "eval \"echo $PWD\"",
     0,
-    0
+    2
   ],
   [
     "eval \"$(direnv hook bash)\"",

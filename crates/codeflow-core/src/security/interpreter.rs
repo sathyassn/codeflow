@@ -2021,6 +2021,8 @@ mod tests {
                 "z; script -q /abs/typescript \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
                 "z; find . -prune -exec python3 /abs/read_dir.py \"$PWD/src/..\" \\;",
                 "z; find . -prune -exec \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\" \\;",
+                // C12-1: a run-time program under a parsed launcher.
+                "rg --files | xargs \"$P\" /abs/r.py \"$PWD/src/..\"",
                 // C12-2: the `time` keyword and its options.
                 "z; time -p python3 /abs/read_dir.py \"$PWD/src/..\"",
                 "z; time -p \"${P:-python3}\" /abs/read_dir.py \"$PWD/src/..\"",
@@ -2046,6 +2048,15 @@ mod tests {
                 "cargo test -p \"$CRATE\"",
                 "printf -v p %s notes.txt; python3 x.py notes.txt",
                 "p=notes.txt; python3 x.py \"$p\"",
+                // A plain program through a parsed launcher is the program
+                // that runs (round 12).
+                "rg --files | xargs rg \"$HOME/x\"",
+                "rg --files | xargs grep \"$HOME/x\"",
+                "rg --files | xargs egrep \"$HOME/x\"",
+                "rg --files | xargs fgrep \"$HOME/x\"",
+                "rg --files | xargs ag \"$HOME/x\"",
+                "D=build && find $D -delete",
+                "! command git rebase -x 'cargo test' HEAD~3",
             ],
         );
         // C9-4: a NUL byte refuses before anything is read.

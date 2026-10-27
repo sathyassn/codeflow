@@ -87,7 +87,7 @@
   [
     "eval -- \"rm -rf $PWD/build\"",
     0,
-    0
+    2
   ],
   [
     "bash -c -- 'rm -rf .worktrees/w'",

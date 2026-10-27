@@ -923,16 +923,20 @@ pub(crate) fn read(
                 // with the words after it. The remaining words are judged as
                 // possible operands when any of these holds, a union that
                 // only ever adds (TSK-397 Codex review rounds 9 to 12): the
-                // stop is inside a launcher or at a non-plain word; it is at
-                // a wrapper name; a later word names an interpreter; or the
-                // command walk sees an interpreter call in the command.
+                // stop is a non-plain word; it is a wrapper name (a launcher
+                // whose options do not parse stops at its own name); inside
+                // a launcher, it is an option or a redirection; a later word
+                // names an interpreter; or the command walk sees an
+                // interpreter call in the command. A plain program reached
+                // through a fully parsed launcher (`xargs rg`) is the
+                // program that runs, so its words take the normal path.
                 let texts: Vec<String> = command.iter().map(|w| w.text.clone()).collect();
                 let after = remaining.iter().skip(1);
-                if depth > 0
-                    || remaining
-                        .first()
-                        .is_some_and(|w| !w.plain() || wraps(w, &remaining[1..]))
-                    || after.clone().any(|w| interpreter(&w.text))
+                if remaining.first().is_some_and(|w| {
+                    !w.plain()
+                        || wraps(w, &remaining[1..])
+                        || (depth > 0 && (w.redirect || w.text.starts_with('-')))
+                }) || after.clone().any(|w| interpreter(&w.text))
                     || calls(&texts)
                 {
                     reading
