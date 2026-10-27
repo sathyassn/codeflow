@@ -531,16 +531,11 @@ fn qualify(
     task: &RecordView,
     head: git2::Oid,
 ) -> Result<Qualified, String> {
-    let default = ["main", "master"].into_iter().find_map(|name| {
-        receiving_tip(repo, name)
-            .ok()
-            .flatten()
-            .map(|tip| (name, tip))
-    });
-    let default = match default {
-        Some(found) => Some(found),
-        None => receiving_tip(repo, "main")?.map(|tip| ("main", tip)),
+    let default = match default_name(repo)? {
+        Some(name) => receiving_tip(repo, &name)?.map(|tip| (name, tip)),
+        None => None,
     };
+    let default = default.as_ref().map(|(name, tip)| (name.as_str(), *tip));
     let declared = task
         .integration_target
         .as_deref()
@@ -621,6 +616,75 @@ fn epic_line_at(repo: &git2::Repository, tip: git2::Oid, line: &str) -> Result<b
                     .as_deref()
                     .is_some_and(|target| super::work_start::logical_target(target) == line)
         }))
+}
+
+/// Which branch is the default target, settled before any tip is read
+/// (TSK-340 review round 6). A clone with no remotes uses its local `main`,
+/// else `master`. Otherwise `origin/HEAD` names it when present; without
+/// it, exactly one of `origin/main` and `origin/master` must exist: both is
+/// ambiguous and refuses, naming `git remote set-head origin --auto`, and
+/// neither refuses, naming the fetch. A missing ref for the chosen name
+/// then refuses in [`receiving_tip`]; nothing falls back to another name.
+fn default_name(repo: &git2::Repository) -> Result<Option<String>, String> {
+    let remotes = repo
+        .remotes()
+        .map_err(|error| format!("cannot read the remotes: {error}"))?;
+    let exists = |reference: &str| match repo.find_reference(reference) {
+        Ok(_) => Ok(true),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(false),
+        Err(error) => Err(format!("cannot read {reference}: {error}")),
+    };
+    if remotes.is_empty() {
+        for name in ["main", "master"] {
+            if exists(&format!("refs/heads/{name}"))? {
+                return Ok(Some(name.to_string()));
+            }
+        }
+        return Ok(None);
+    }
+    if !remotes
+        .iter()
+        .any(|remote| matches!(remote, Ok(Some("origin"))))
+    {
+        return Err(
+            "this clone has remotes but no `origin`, so the default target has no receiving source; add the remote that carries it as `origin` and fetch it (`git fetch origin`)".into(),
+        );
+    }
+    match repo.find_reference("refs/remotes/origin/HEAD") {
+        Ok(head) => {
+            // The symbolic target as bytes, read as rule text only when it is
+            // valid text (issue 79): another name refuses below.
+            let named = head
+                .symbolic_target_bytes()
+                .map(crate::git::GitName::from_bytes)
+                .and_then(|name| {
+                    name.rule_text()
+                        .ok()
+                        .and_then(|text| text.strip_prefix("refs/remotes/origin/"))
+                        .map(str::to_string)
+                });
+            let Some(target) = named else {
+                return Err(
+                    "`origin/HEAD` does not name a branch of `origin`; repair it (`git remote set-head origin --auto`)".into(),
+                );
+            };
+            return Ok(Some(target));
+        }
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(format!("cannot read origin/HEAD: {error}")),
+    }
+    let main = exists("refs/remotes/origin/main")?;
+    let master = exists("refs/remotes/origin/master")?;
+    match (main, master) {
+        (true, false) => Ok(Some("main".into())),
+        (false, true) => Ok(Some("master".into())),
+        (true, true) => Err(
+            "both `origin/main` and `origin/master` exist and `origin/HEAD` does not say which is the default target; set it (`git remote set-head origin --auto`)".into(),
+        ),
+        (false, false) => Err(
+            "no default target is fetched here: neither `origin/main` nor `origin/master` exists; fetch the default branch (`git fetch origin main`) or set `origin/HEAD` (`git remote set-head origin --auto`)".into(),
+        ),
+    }
 }
 
 /// The tip of the branch `name` as the clone's receiving source holds it.
