@@ -1,0 +1,11 @@
+id = "TSK-1021"
+uid = "98f8002b-d3bf-4b53-a3ab-62fc4b0963b8"
+kind = "TSK"
+title = "File identity checks use the 128-bit FileIdentity everywhere"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-27T07:34:09Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
