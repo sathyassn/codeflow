@@ -1,0 +1,11 @@
+id = "TSK-1055"
+uid = "f172c7f7-3696-4185-98d1-be5fe18ed8b3"
+kind = "TSK"
+title = "Text rules relax only where each protected effect is attested"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T19:16:01Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
