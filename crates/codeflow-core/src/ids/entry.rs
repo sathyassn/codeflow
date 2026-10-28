@@ -151,7 +151,7 @@ pub fn record_id_from_path(path: &str) -> Option<RegId> {
         let rest = stem.strip_prefix("ADR-")?;
         let number: String = rest.chars().take_while(char::is_ascii_digit).collect();
         let tail = &rest[number.len()..];
-        if number.len() != 4 || !(tail.is_empty() || tail.starts_with('-')) {
+        if number.len() < 4 || !(tail.is_empty() || tail.starts_with('-')) {
             return None;
         }
         return RegId::parse(&format!("ADR-{number}"));
@@ -454,6 +454,15 @@ mod tests {
         assert_eq!(
             id("docs/decisions/ADR-0072-shared-id-registry.md").as_deref(),
             Some("ADR-0072")
+        );
+        assert_eq!(
+            id("docs/decisions/ADR-10000-after-the-fourth-digit.md").as_deref(),
+            Some("ADR-10000")
+        );
+        assert_eq!(id("docs/decisions/ADR-072-too-short.md"), None);
+        assert_eq!(
+            id("project-management/tasks/TSK-1000.md").as_deref(),
+            Some("TSK-1000")
         );
         assert_eq!(
             id("project-management/feedback/FB-012.md").as_deref(),

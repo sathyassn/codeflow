@@ -298,15 +298,15 @@ pub fn next_adr_id(repo_root: &Path) -> Result<String, StoreError> {
     Ok(format!("ADR-{:04}", highest + 1))
 }
 
-fn adr_number(name: &[u8]) -> Option<u32> {
-    name.strip_prefix(b"ADR-")?
-        .get(..4)?
-        .iter()
-        .try_fold(0, |value, digit| {
-            digit
-                .is_ascii_digit()
-                .then(|| value * 10 + u32::from(*digit - b'0'))
-        })
+/// The number an `ADR-NNNN` file name starts with: every digit after the
+/// prefix, at least four, so `ADR-10000` reads as 10000 and not 1000.
+fn adr_number(name: &[u8]) -> Option<u64> {
+    let rest = name.strip_prefix(b"ADR-")?;
+    let digits = rest.iter().take_while(|byte| byte.is_ascii_digit()).count();
+    if digits < 4 {
+        return None;
+    }
+    std::str::from_utf8(&rest[..digits]).ok()?.parse().ok()
 }
 
 /// Write the next ADR from `template` with `status: proposed` (R-36),
@@ -454,6 +454,10 @@ mod tests {
         assert_eq!(adr_number(b"ADR-0042-\xff.md"), Some(42));
         assert_eq!(adr_number(b"not-an-adr"), None);
         assert_eq!(adr_number(b"ADR-nope.md"), None);
+        assert_eq!(adr_number(b"ADR-9999-last-four-digit.md"), Some(9999));
+        assert_eq!(adr_number(b"ADR-10000-first-five-digit.md"), Some(10000));
+        assert_eq!(adr_number(b"ADR-123456.md"), Some(123_456));
+        assert_eq!(adr_number(b"ADR-123-too-short.md"), None);
     }
 
     #[test]
