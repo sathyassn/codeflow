@@ -1,0 +1,11 @@
+id = "TSK-1030"
+uid = "b9d02764-0238-4f1a-9f61-73a4c397ff6f"
+kind = "TSK"
+title = "The shipped instructions say what belongs in a repository"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T00:06:07Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
