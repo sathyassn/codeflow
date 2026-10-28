@@ -671,12 +671,14 @@ fn write_dest(root: &Path, entry: &ManifestEntry, content: &str) -> Result<(), S
 }
 
 /// Append the patch for `dest` to the `--diff` export. Every caller goes
-/// through here, so a JSON or TOML file's secret-bearing values (an `env`,
-/// headers, a key named like a token) are redacted on both sides first, and
-/// a side that does not parse is withheld (TSK-1029, `diff_redact`).
-fn push_diff(diffs: &mut String, dest: &str, old: &str, new: &str) {
+/// through here, so the export shows only what CodeFlow wrote: `shipped`
+/// holds the old baseline (when recorded) and the new rendering, and every
+/// project value or line outside them is redacted on both sides; a format
+/// with no redaction rule, or a side that does not parse, is withheld
+/// (TSK-1029, `diff_redact`).
+fn push_diff(diffs: &mut String, dest: &str, old: &str, new: &str, shipped: &[&str]) {
     use std::fmt::Write;
-    match super::diff_redact::sides_for(dest, old, new) {
+    match super::diff_redact::sides_for(dest, old, new, shipped) {
         super::diff_redact::DiffSides::Show(old, new) => {
             let patch = diffy::create_patch(&old, &new);
             let _ = write!(diffs, "=== {dest}\n{patch}\n");
@@ -684,11 +686,17 @@ fn push_diff(diffs: &mut String, dest: &str, old: &str, new: &str) {
         super::diff_redact::DiffSides::Withheld => {
             let _ = writeln!(
                 diffs,
-                "=== {dest}\n(content withheld: the file did not parse, and it can hold \
-                 secret values)\n"
+                "=== {dest}\n(content withheld: the diff shows only values CodeFlow wrote, \
+                 and this file's format has no rule for finding them or it did not parse)\n"
             );
         }
     }
+}
+
+/// The shipped versions of a file: its recorded baseline, when there is
+/// one, and the new rendering.
+fn shipped_versions<'a>(baseline: Option<&'a str>, rendered: &'a str) -> Vec<&'a str> {
+    baseline.into_iter().chain([rendered]).collect()
 }
 
 /// Update's step for a whole managed file, from the file on disk (`None`
@@ -845,14 +853,26 @@ fn update_entry(
                     write_dest(root, entry, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(diffs, &entry.dest, old, &rendered);
+                    push_diff(
+                        diffs,
+                        &entry.dest,
+                        old,
+                        &rendered,
+                        &shipped_versions(base.as_deref(), &rendered),
+                    );
                     report.file(&entry.dest, Action::Changed);
                 }
                 ManagedStep::Force => {
                     write_dest(root, entry, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(diffs, &entry.dest, old, &rendered);
+                    push_diff(
+                        diffs,
+                        &entry.dest,
+                        old,
+                        &rendered,
+                        &shipped_versions(base.as_deref(), &rendered),
+                    );
                     report.file_with_notes(
                         &entry.dest,
                         Action::Forced,
@@ -887,7 +907,13 @@ fn update_entry(
                     // on the following update.
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(diffs, &entry.dest, old, &merged);
+                    push_diff(
+                        diffs,
+                        &entry.dest,
+                        old,
+                        &merged,
+                        &shipped_versions(base.as_deref(), &rendered),
+                    );
                     report.file_with_notes(
                         &entry.dest,
                         Action::Merged,
@@ -950,13 +976,20 @@ fn update_entry(
                     report.file_with_notes(&entry.dest, Action::Unchanged, lines);
                 } else {
                     write_dest(root, entry, &merged)?;
-                    push_diff(diffs, &entry.dest, &current, &merged);
+                    push_diff(
+                        diffs,
+                        &entry.dest,
+                        &current,
+                        &merged,
+                        &shipped_versions(previous.as_deref(), &rendered),
+                    );
                     report.file_with_notes(&entry.dest, Action::Merged, lines);
                 }
             }
             format @ (RegionFormat::Markdown | RegionFormat::Hash) => {
                 let block = region::extract_block(&rendered, format)
                     .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
+                let previous = Baseline::read(root, &entry.dest)?;
                 record(installed, entry, hash::sha256_hex(block.as_bytes()));
                 Baseline::write(root, &entry.dest, &block)?;
                 if !exists {
@@ -976,7 +1009,13 @@ fn update_entry(
                     BlockOutcome::Unchanged => report.file(&entry.dest, Action::Unchanged),
                     BlockOutcome::Replaced => {
                         write_dest(root, entry, &next)?;
-                        push_diff(diffs, &entry.dest, &current, &next);
+                        push_diff(
+                            diffs,
+                            &entry.dest,
+                            &current,
+                            &next,
+                            &shipped_versions(previous.as_deref(), &block),
+                        );
                         report.file_with_notes(
                             &entry.dest,
                             Action::Changed,
@@ -988,7 +1027,13 @@ fn update_entry(
                     }
                     BlockOutcome::Appended => {
                         write_dest(root, entry, &next)?;
-                        push_diff(diffs, &entry.dest, &current, &next);
+                        push_diff(
+                            diffs,
+                            &entry.dest,
+                            &current,
+                            &next,
+                            &shipped_versions(previous.as_deref(), &block),
+                        );
                         report.file_with_notes(
                             &entry.dest,
                             Action::Merged,
@@ -1050,8 +1095,10 @@ fn sync_user_owned_json(
         std::fs::read_to_string(&dest_path).map_err(|e| ScaffoldError::io(&dest_path, e))?;
     let mut user: serde_json::Value = serde_json::from_str(&current_text)?;
     let new_default: serde_json::Value = serde_json::from_str(rendered)?;
-    let old_default: Option<serde_json::Value> = Baseline::read(root, &entry.dest)?
-        .map(|t| serde_json::from_str(&t))
+    let old_default_text = Baseline::read(root, &entry.dest)?;
+    let old_default: Option<serde_json::Value> = old_default_text
+        .as_deref()
+        .map(serde_json::from_str)
         .transpose()?;
 
     let mut added: Vec<String> = vec![];
@@ -1151,7 +1198,13 @@ fn sync_user_owned_json(
         text
     };
     write_file(&dest_path, next.as_bytes())?;
-    push_diff(diffs, &entry.dest, &current_text, &next);
+    push_diff(
+        diffs,
+        &entry.dest,
+        &current_text,
+        &next,
+        &shipped_versions(old_default_text.as_deref(), rendered),
+    );
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
 }

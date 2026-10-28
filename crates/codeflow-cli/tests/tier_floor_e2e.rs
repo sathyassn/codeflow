@@ -1302,6 +1302,113 @@ fn update_diff_never_shows_an_env_value() {
     }
 }
 
+/// Run `codeflow update` with `extra` flags and `--diff`, and return its
+/// stdout, its stderr and the diff file.
+fn update_with_diff(tmp: &Path, root: &Path, extra: &[&str]) -> [String; 3] {
+    let diff_file = tmp.join("update.diff");
+    let mut args = vec!["update"];
+    args.extend_from_slice(extra);
+    args.extend(["--diff", diff_file.to_str().expect("utf-8 path")]);
+    let out = codeflow(root, &args);
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "update failed: {stdout}\n{stderr}");
+    let diff = std::fs::read_to_string(&diff_file).expect("diff file");
+    [stdout, stderr, diff]
+}
+
+/// TSK-1029 review 02: a project field CodeFlow does not own never reaches
+/// the `--diff` file, whatever its name is spelled like and whatever type
+/// its value has.
+#[test]
+fn update_diff_never_shows_a_project_api_key_value() {
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    const NUMBER: i64 = 271_828;
+    let (tmp, root) = project();
+    init(&root, "--minimal");
+    roll_back_compaction(&root, "50", &serde_json::json!({}));
+    // The project's fields go right after `env`, so the changed env line
+    // has them as patch context.
+    let mut settings = serde_json::Map::new();
+    for (key, value) in read_json(&root, CLAUDE_SETTINGS).as_object().unwrap() {
+        settings.insert(key.clone(), value.clone());
+        if key == "env" {
+            settings.insert("api-key".into(), serde_json::json!(SECRET));
+            settings.insert("api key".into(), serde_json::json!(NUMBER));
+            settings.insert(
+                "projectTools".into(),
+                serde_json::json!({
+                    "httpHeaders": {"Authorization": SECRET},
+                    "http-headers": {"X-Trace": NUMBER},
+                    "api.key": [SECRET],
+                }),
+            );
+        }
+    }
+    write_json(&root, CLAUDE_SETTINGS, &settings.into());
+
+    let outputs = update_with_diff(tmp.path(), &root, &[]);
+    assert_eq!(
+        read_json(&root, CLAUDE_SETTINGS)["api-key"],
+        SECRET,
+        "the update dropped a project field"
+    );
+    assert!(
+        outputs[2].contains("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
+        "the diff does not name the migrated key:\n{}",
+        outputs[2]
+    );
+    for (name, text) in ["stdout", "stderr", "diff"].iter().zip(&outputs) {
+        assert!(
+            !text.contains(SECRET),
+            "{name} shows a project value:\n{text}"
+        );
+        assert!(
+            !text.contains(&NUMBER.to_string()),
+            "{name} shows a project number:\n{text}"
+        );
+    }
+}
+
+/// TSK-1029 review 02: `update --force --diff` over a managed workflow the
+/// project edited shows CodeFlow's own lines and hides the project's
+/// values; a workflow that no longer parses is withheld whole.
+#[test]
+fn update_force_diff_hides_project_values_in_a_managed_workflow() {
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    const WORKFLOW: &str = ".github/workflows/codeflow-ci.yml";
+    for malformed in [false, true] {
+        let (tmp, root) = project();
+        init(&root, "--minimal");
+        let shipped = read(&root, WORKFLOW);
+        let edited = if malformed {
+            format!("{shipped}\nenv: [\n  RELEASE_NOTE: {SECRET}\n")
+        } else {
+            format!("{shipped}\nenv:\n  RELEASE_NOTE: {SECRET}\n")
+        };
+        std::fs::write(root.join(WORKFLOW), edited).expect("edit workflow");
+
+        let outputs = update_with_diff(tmp.path(), &root, &["--force"]);
+        assert_eq!(read(&root, WORKFLOW), shipped, "--force did not restore");
+        let diff = &outputs[2];
+        assert!(diff.contains(&format!("=== {WORKFLOW}")), "{diff}");
+        if malformed {
+            assert!(diff.contains("content withheld"), "{diff}");
+        } else {
+            assert!(
+                diff.contains("-env:\n-  RELEASE_NOTE: <redacted>\n"),
+                "{diff}"
+            );
+        }
+        for (name, text) in ["stdout", "stderr", "diff"].iter().zip(&outputs) {
+            assert!(
+                !text.contains(SECRET),
+                "{name} shows a project value:\n{text}"
+            );
+        }
+    }
+}
+
 /// TSK-1029 review: when the shipped default changes and the project keeps
 /// its own value, the update says so by key, even when nothing else in the
 /// settings changes; the next update, with nothing new shipped, is quiet.
