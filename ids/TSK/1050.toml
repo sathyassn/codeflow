@@ -1,0 +1,11 @@
+id = "TSK-1050"
+uid = "3865f9b5-65ff-4cdb-a4a6-bf02931d511f"
+kind = "TSK"
+title = "The guard opens each repository once per hook call"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T10:57:47Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
