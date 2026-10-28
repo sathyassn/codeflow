@@ -26,8 +26,8 @@ an operator still has to decide.
 
 | Harness | What the shipped preset enables | What stays gated |
 |---|---|---|
-| Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests, ask rules for destructive source-control operations, `Edit` denies and sandbox write denies for the shell startup files; cross-family seats pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; an unsandboxed retry only when the native configuration permits it, auto-classified for a trusted installed tool that needs host state such as `herdr` or the official Codex plugin; the guards judge the retried command under the same policy, a retry never lifts a destructive, privileged, publishing, secret-read or enforcement-file refusal, and a delegated seat that runs sandboxed denies the retry natively; auto mode and classifier policy are never taken from the repository, so project `acceptEdits` remains the ordinary fallback (ADR-0026, ADR-0029) |
-| Codex | Guarded workspace permission profile (no `sandbox_mode` key), live search, reviewer-subagent escalation review, workspace key-file denies, the current primary seat's configured fallback, the default secret-bearing environment filter, `approval_policy = "never"`, `model_reasoning_effort = "high"`, shell startup files read only; a builder seat runs the `cf-builder` profile and a reviewer the `cf-guard` profile, so no seat runs without the OS sandbox (ADR-0075 D1 as amended on 2026-10-05) | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
+| Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests, ask rules for destructive source-control operations, `Edit` denies and sandbox write denies for the shell startup files; a status line showing model, version, output style, folder, branch and context use, and no `effortLevel` (ADR-0087); cross-family seats pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; an unsandboxed retry only when the native configuration permits it, auto-classified for a trusted installed tool that needs host state such as `herdr` or the official Codex plugin; the guards judge the retried command under the same policy, a retry never lifts a destructive, privileged, publishing, secret-read or enforcement-file refusal, and a delegated seat that runs sandboxed denies the retry natively; auto mode and classifier policy are never taken from the repository, so project `acceptEdits` remains the ordinary fallback (ADR-0026, ADR-0029) |
+| Codex | Guarded workspace permission profile (no `sandbox_mode` key), live search, reviewer-subagent escalation review, workspace key-file denies, the current primary seat's configured fallback, the default secret-bearing environment filter, `approval_policy = "never"`, no `model_reasoning_effort` (effort is each person's, ADR-0087), shell startup files read only; a builder seat runs the `cf-builder` profile and a reviewer the `cf-guard` profile, so no seat runs without the OS sandbox (ADR-0075 D1 as amended on 2026-10-05) | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
 | Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload; Grok's `workspace` sandbox leaves the home, and so its shell startup files, unwritable | The hooks load only after the one-time `/hooks-trust` (or `--trust`); the doctor check reports structural wiring, not trust state (ADR-0054) |
 
 The unsandboxed retry for Claude Code works as follows.
@@ -144,6 +144,31 @@ Authenticated command-line tools must be able to read their own configuration.
 | Subprocess scrub | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` is a user/managed hardening option only after proving the project's hooks and stdio MCPs do not require those provider credentials |
 | Auto mode | Claude deliberately ignores repository requests for auto mode and classifier policy, so a Codex-hosted peer launches interactively with `--permission-mode auto` and CLI-scoped `autoMode.classifyAllShell`; `/cf-customize` can offer the equivalent user default but never writes it without approval |
 | Codex review approvals | `auto_review` is configured but is not a human authorization path, and it does not pause for that subagent. Use `on-request` and `approvals_reviewer = "user"` only on a consult/no-edit lane when policy requires a human decision |
+
+### Shared and personal settings
+
+The shared files carry team policy; a few keys are each person's choice. The
+scaffold ships a status line and leaves effort to each person (ADR-0087).
+`cf-customize`'s `references/personal-settings.md` has the full guide.
+
+| Key | Shipped in the shared file | Where a person sets their own |
+|---|---|---|
+| Claude `statusLine` | a `jq` line: model name and id, version, output style, folder, branch, context used with a green, yellow or red percentage; without `jq`, folder and branch | `.claude/settings.local.json` |
+| Claude `effortLevel` | none | `~/.claude/settings.json`, `.claude/settings.local.json`, or `--effort` at launch |
+| Codex `model_reasoning_effort` | none | `~/.codex/config.toml`, or `-c model_reasoning_effort=...` at launch |
+
+- Claude Code reads managed settings, then command-line flags, then
+  `.claude/settings.local.json`, then the shared `.claude/settings.json`, then
+  `~/.claude/settings.json`; a key the shared file sets hides the user file's.
+- Codex reads flags and profiles, then a trusted project's
+  `.codex/config.toml`, then `~/.codex/config.toml`. It has no untracked
+  per-project file.
+- `.claude/settings.local.json` is gitignored and per checkout, so it does
+  not follow into a new worktree; copy it in, or keep effort in the user file.
+- `codeflow update` moves a value still equal to the one it recorded as
+  shipped, keeps and reports a value the project changed, keeps a key the
+  project deleted deleted, and removes a key it no longer ships only while
+  the key still holds the recorded value.
 
 ### Hosting the duo from either seat
 
