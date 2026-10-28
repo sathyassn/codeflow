@@ -841,11 +841,11 @@ impl Verdict {
     }
 
     fn sort(&mut self) {
-        self.errors.sort();
+        self.errors.sort_by(|a, b| crate::ids::compare_ids(a, b));
         self.errors.dedup();
-        self.warnings.sort();
+        self.warnings.sort_by(Finding::by_text);
         self.warnings.dedup();
-        self.notices.sort();
+        self.notices.sort_by(Finding::by_text);
         self.notices.dedup();
     }
 }

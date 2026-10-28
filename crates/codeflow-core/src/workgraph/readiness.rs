@@ -766,6 +766,17 @@ fn read_tips(
     Ok(tips)
 }
 
+/// Order entries by state, then by task id number (`TSK-999` before
+/// `TSK-1000`), and the landed branch names the same way.
+fn sort_by_state_then_id(out: &mut Backlog) {
+    out.entries.sort_by(|left, right| {
+        left.state
+            .cmp(&right.state)
+            .then_with(|| crate::ids::compare_ids(&left.task_id, &right.task_id))
+    });
+    out.landed.sort_by(|a, b| crate::ids::compare_ids(a, b));
+}
+
 /// Compute the backlog from the last-fetched refs. Makes no network call.
 ///
 /// # Errors
@@ -874,9 +885,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
             });
         }
     }
-    out.entries
-        .sort_by(|left, right| (left.state, &left.task_id).cmp(&(right.state, &right.task_id)));
-    out.landed.sort();
+    sort_by_state_then_id(&mut out);
     out.landed.dedup();
     Ok(out)
 }
@@ -2132,6 +2141,25 @@ mod tests {
         let tree = repo.head().unwrap().peel_to_tree().unwrap();
         let records = records_from_tree(&repo, &tree).unwrap();
         validate_anchored_task(&repo, &records, id, "main")
+    }
+
+    /// `work next` lists ready tasks by id number, so TSK-1000 follows
+    /// TSK-999 and TSK-10000 follows TSK-1000.
+    #[test]
+    fn backlog_lists_tasks_by_id_number_past_three_digits() {
+        let dir = repo();
+        let root = dir.path();
+        for id in ["TSK-10000", "TSK-1000", "TSK-999", "TSK-100"] {
+            task(root, id, "todo", "[]", "");
+        }
+        commit(root, "tasks");
+        let backlog = backlog(root).unwrap();
+        let ids: Vec<&str> = backlog
+            .entries
+            .iter()
+            .map(|entry| entry.task_id.as_str())
+            .collect();
+        assert_eq!(ids, ["TSK-100", "TSK-999", "TSK-1000", "TSK-10000"]);
     }
 
     fn state(root: &Path, id: &str) -> Option<NotReady> {

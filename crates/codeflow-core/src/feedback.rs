@@ -271,7 +271,7 @@ pub fn item_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
             files.push(path);
         }
     }
-    files.sort();
+    files.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(files)
 }
 
@@ -989,9 +989,17 @@ pub fn lint(root: &Path) -> Lint {
             ));
         }
     }
-    lint.errors
-        .sort_by(|a, b| (&a.path, a.line, &a.message).cmp(&(&b.path, b.line, &b.message)));
+    sort_findings(&mut lint.errors);
     lint
+}
+
+/// Findings by file (FB-999 before FB-1000), then line, then message.
+fn sort_findings(findings: &mut [LintFinding]) {
+    findings.sort_by(|a, b| {
+        crate::ids::compare_ids(&a.path, &b.path)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.message.cmp(&b.message))
+    });
 }
 
 /// One item's structure, each finding pushed to `errors`.
@@ -1166,7 +1174,11 @@ pub fn grouped<'a>(items: &'a [Item], topics: &[String]) -> Vec<(String, Vec<&'a
     groups
         .into_iter()
         .map(|((_, topic), mut members)| {
-            members.sort_by(|a, b| (!a.is_open(), &a.id).cmp(&(!b.is_open(), &b.id)));
+            members.sort_by(|a, b| {
+                (!a.is_open())
+                    .cmp(&!b.is_open())
+                    .then_with(|| crate::ids::compare_ids(&a.id, &b.id))
+            });
             (topic, members)
         })
         .collect()
@@ -1271,6 +1283,74 @@ mod tests {
             "{error}"
         );
         assert!(items.is_err(), "{items:?}");
+    }
+
+    fn bare_item(id: &str, status: &str) -> Item {
+        Item {
+            path: format!("{FEEDBACK_DIR}/{id}.md"),
+            id: id.to_string(),
+            uid: String::new(),
+            title: String::new(),
+            topic: "process".to_string(),
+            also: Vec::new(),
+            source: "chat".to_string(),
+            status: status.to_string(),
+            placed_in: Vec::new(),
+            supersedes: None,
+            superseded_by: None,
+            confirmed_by: None,
+            external_refs: Vec::new(),
+            created: String::new(),
+            verbatim: String::new(),
+            reading: String::new(),
+            placement: String::new(),
+            closure: String::new(),
+        }
+    }
+
+    /// Ids past 999 list after 999 in a group: open items first, then by
+    /// number, not by text.
+    #[test]
+    fn lint_findings_order_by_file_number_past_three_digits() {
+        let finding = |id: &str, line: usize| LintFinding {
+            path: format!("{FEEDBACK_DIR}/{id}.md"),
+            line,
+            message: "m".to_string(),
+        };
+        let mut findings = vec![
+            finding("FB-10000", 1),
+            finding("FB-1000", 2),
+            finding("FB-999", 9),
+            finding("FB-999", 3),
+        ];
+        sort_findings(&mut findings);
+        let shown: Vec<(String, usize)> = findings
+            .iter()
+            .map(|f| (f.path.rsplit('/').next().unwrap().to_string(), f.line))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("FB-999.md".to_string(), 3),
+                ("FB-999.md".to_string(), 9),
+                ("FB-1000.md".to_string(), 2),
+                ("FB-10000.md".to_string(), 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn grouped_items_order_by_id_number_past_three_digits() {
+        let items = [
+            bare_item("FB-10000", "received"),
+            bare_item("FB-1000", "received"),
+            bare_item("FB-999", "received"),
+            bare_item("FB-2000", "closed"),
+            bare_item("FB-998", "closed"),
+        ];
+        let groups = grouped(&items, &[]);
+        let ids: Vec<&str> = groups[0].1.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(ids, ["FB-999", "FB-1000", "FB-10000", "FB-998", "FB-2000"]);
     }
 
     const TEMPLATE: &str = include_str!("../../../assets/base/pm/feedback.md.tmpl");
