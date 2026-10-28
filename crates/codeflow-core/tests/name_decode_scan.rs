@@ -4638,7 +4638,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "waiver_problem",
         "trim",
-        9,
+        10,
         "display",
     ),
     // Normalizes human-authored standalone explanation and rejects an empty narrative; task identity and integration target are separate exact fields.

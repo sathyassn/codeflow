@@ -2616,6 +2616,15 @@ enum OwnRange {
     LandedReopen,
 }
 
+/// What "on the target" requires of a waiver's commit (TSK-340 AC-7, issue
+/// #354): a receiving line the run pins holds it, never a ref this clone can
+/// move.
+const ON_TARGET: &str = "on the target means a receiving line this run pins holds the commit (the pull request's base in `codeflow ci`, `--base` in `task status`)";
+
+/// The sanctioned route to a waiver a refusal names (TSK-340 AC-7): the
+/// planning amendment R-60 accepts, which the review must contain.
+const WAIVER_ROUTE: &str = "amend the criterion through a planning pull request into the target, merge the target into this branch before the review, and name that planning commit";
+
 /// Why a waiver's commit is not the planning amendment for this record and
 /// criterion on the target, if it is not.
 #[allow(clippy::too_many_lines)] // Read the waiver's target, range and record proofs in one refusal path.
@@ -2642,7 +2651,10 @@ fn waiver_problem(
         );
     }
     if pinned.is_empty() {
-        return Some("cannot be checked: this run pins no target".into());
+        return Some(format!(
+            "names {}, which cannot be checked: this run pins no target; {ON_TARGET}",
+            evidence.trim()
+        ));
     }
     let mut off_target = true;
     for tip in pinned {
@@ -2660,13 +2672,13 @@ fn waiver_problem(
             OwnRange::Base(base) => base,
             OwnRange::None => {
                 return Some(format!(
-                    "names {}, which is not on the target",
+                    "names {}, which is not on the target; {ON_TARGET}; {WAIVER_ROUTE}",
                     evidence.trim()
                 ))
             }
             OwnRange::LandedReopen => {
                 return Some(format!(
-                    "names {}, which is not on the target; a reopened task's waiver must name a planning commit on the target that amends this criterion",
+                    "names {}, which is not on the target; a reopened task's waiver must name a planning commit on the target that amends this criterion, since a completion of it landed and its criteria are frozen; {ON_TARGET}; {WAIVER_ROUTE}",
                     evidence.trim()
                 ))
             }
