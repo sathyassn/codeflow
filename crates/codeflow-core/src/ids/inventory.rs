@@ -146,6 +146,7 @@ pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
         max = max.max(max_seq_in(
             z_fields(&listing).iter().map(String::as_str),
             kind,
+            REF_REMEDY,
         )?);
     }
     Ok(max)
@@ -164,7 +165,7 @@ pub fn max_seq_in_worktree(root: &Path, kind: Kind) -> Result<u64, IdsError> {
             IdsError::Invalid(format!("cannot inventory work records before issuing an ID: {error}; restore readable record directories, then retry"))
         })?;
     }
-    max_seq_in(paths.iter().map(String::as_str), kind)
+    max_seq_in(paths.iter().map(String::as_str), kind, WORKTREE_REMEDY)
 }
 
 fn collect_files(
@@ -202,13 +203,25 @@ fn collect_files(
     Ok(())
 }
 
-fn max_seq_in<'a>(paths: impl Iterator<Item = &'a str>, kind: Kind) -> Result<u64, IdsError> {
+/// What can be done about a record name past `u64::MAX`, by where it was read.
+const WORKTREE_REMEDY: &str = "rename or remove that record file, then retry";
+const REF_REMEDY: &str =
+    "it is a record on another branch or ref: rename or remove it there, or delete that ref, then retry";
+
+fn max_seq_in<'a>(
+    paths: impl Iterator<Item = &'a str>,
+    kind: Kind,
+    remedy: &str,
+) -> Result<u64, IdsError> {
     let mut max = 0;
     for id in paths
         .filter_map(record_id_from_path)
         .filter(|id| id.kind() == kind)
     {
-        if let Some(seq) = id.try_seq()? {
+        if let Some(seq) = id
+            .try_seq()
+            .map_err(|error| IdsError::Invalid(format!("{error}; {remedy}")))?
+        {
             max = max.max(seq);
         }
     }

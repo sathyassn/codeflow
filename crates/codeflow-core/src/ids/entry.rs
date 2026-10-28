@@ -132,7 +132,8 @@ impl RegId {
     /// # Errors
     ///
     /// Returns an error for a number above `u64::MAX`, so a high-water mark
-    /// that includes it is refused, never understated.
+    /// that includes it is refused, never understated. The message names the
+    /// id only; the caller adds what can be done about it where the id lives.
     pub fn try_seq(&self) -> Result<Option<u64>, crate::ids::IdsError> {
         if self.is_legacy() {
             return Ok(None);
@@ -141,7 +142,7 @@ impl RegId {
             Ok(value) => Ok(Some(value)),
             Err(error) if *error.kind() == std::num::IntErrorKind::PosOverflow => {
                 Err(crate::ids::IdsError::Invalid(format!(
-                    "{self} has a number above {}, so the next id cannot be chosen; rename or remove it",
+                    "{self} has a number above {}, so the next id cannot be chosen",
                     u64::MAX
                 )))
             }

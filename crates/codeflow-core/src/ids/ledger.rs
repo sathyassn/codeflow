@@ -348,7 +348,11 @@ impl Ledger {
     pub fn max_seq(&self, kind: Kind) -> Result<u64, IdsError> {
         let mut max = 0;
         for id in self.ids().filter(|id| id.kind() == kind) {
-            if let Some(seq) = id.try_seq()? {
+            if let Some(seq) = id.try_seq().map_err(|error| {
+                IdsError::Invalid(format!(
+                    "{error}. It is in the registry history, which holds every id ever issued and cannot be edited by renaming or removing a file, so the {kind} id sequence is exhausted until an operator repairs the registry branch"
+                ))
+            })? {
                 max = max.max(seq);
             }
         }

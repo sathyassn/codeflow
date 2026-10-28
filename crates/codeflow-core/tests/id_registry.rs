@@ -758,7 +758,7 @@ fn a_number_an_invalid_commit_introduced_is_never_issued_again() {
 
 const PAST_U64: &str = "18446744073709551616";
 
-fn assert_out_of_range(result: Result<issue::Reservation, IdsError>, from: &str) {
+fn assert_out_of_range(result: Result<issue::Reservation, IdsError>, from: &str, remedy: &str) {
     match result {
         Err(IdsError::Invalid(message)) => {
             assert!(
@@ -766,6 +766,13 @@ fn assert_out_of_range(result: Result<issue::Reservation, IdsError>, from: &str)
                 "{from}: {message}"
             );
             assert!(message.contains(PAST_U64), "{from}: {message}");
+            // The recovery names what can be done where the id lives.
+            assert!(message.contains(remedy), "{from}: {message}");
+            if from == "registry" {
+                assert!(!message.contains("rename or remove"), "{from}: {message}");
+            } else {
+                assert!(!message.contains("exhausted"), "{from}: {message}");
+            }
         }
         other => panic!("{from}: expected an out-of-range refusal, got {other:?}"),
     }
@@ -777,7 +784,11 @@ fn a_number_past_u64_in_the_worktree_is_refused_not_skipped() {
     let a = world.clone_as("a", "a@example.test");
     task(&a, "one").unwrap();
     write_record(&a, &format!("TSK-{PAST_U64}"), None);
-    assert_out_of_range(task(&a, "blocked"), "worktree");
+    assert_out_of_range(
+        task(&a, "blocked"),
+        "worktree",
+        "rename or remove that record file",
+    );
     // Removing the name lets issue go on from the true high-water mark.
     std::fs::remove_file(
         a.join("project-management/tasks")
@@ -800,7 +811,11 @@ fn a_number_past_u64_on_another_ref_is_refused_not_skipped() {
         .join("project-management/tasks")
         .join(format!("TSK-{PAST_U64}.md"))
         .exists());
-    assert_out_of_range(task(&a, "blocked"), "ref");
+    assert_out_of_range(
+        task(&a, "blocked"),
+        "ref",
+        "rename or remove it there, or delete that ref",
+    );
 }
 
 #[test]
@@ -821,7 +836,11 @@ fn a_number_past_u64_in_the_registry_history_is_refused_not_skipped() {
     );
     git(&work, &["push", "-q", "origin", "reg:codeflow/registry"]);
     assert!(world.remote_ledger().max_seq(Kind::Tsk).is_err());
-    assert_out_of_range(task(&a, "blocked"), "registry");
+    assert_out_of_range(
+        task(&a, "blocked"),
+        "registry",
+        "the TSK id sequence is exhausted until an operator repairs the registry branch",
+    );
 }
 
 #[test]
