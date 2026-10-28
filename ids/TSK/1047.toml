@@ -1,0 +1,11 @@
+id = "TSK-1047"
+uid = "42564dd0-0fa3-4e29-86eb-b9d2cdea86b8"
+kind = "TSK"
+title = "Work start refuses a base that is not the live tip of the task's line or a declared predecessor"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T04:18:07Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
