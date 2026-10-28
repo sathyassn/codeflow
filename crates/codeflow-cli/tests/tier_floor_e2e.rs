@@ -1147,7 +1147,7 @@ const CLAUDE_SETTINGS_BASELINE: &str = ".codeflow/.baseline/.claude/settings.jso
 fn shipped_compaction_env() -> serde_json::Value {
     serde_json::json!({
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
-        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "35"
     })
 }
 
