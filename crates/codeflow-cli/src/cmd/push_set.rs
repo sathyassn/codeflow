@@ -298,7 +298,7 @@ fn run_ci_ranges(
             args.extend(["--branch", branch, "--run-level", &running]);
             // Range boundaries can be unnamed merge bases. Pass destination
             // intent separately so CI does not infer it from coincident refs.
-            let into = ci_target(root, r, branch, &judged, policy, report)?;
+            let into = ci_target(root, r, branch, &judged, destination, report)?;
             let into_arg = into.map(|target| format!("--into={target}"));
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
@@ -338,24 +338,39 @@ fn run_ci_ranges(
 }
 
 /// The target the hook hands `codeflow ci`: the branch's declared target
-/// when the same judgement `codeflow ci` makes accepts it, otherwise the
-/// destination's default.
+/// when it may bound the push's range ([`declared_bounds`]), otherwise the
+/// destination's default. The range and every check that reads the
+/// target, the Outcome marker among them, use the same one, so a
+/// declaration the range rejected never names the target the change is
+/// judged against.
 fn ci_target(
     root: &Path,
     pushed: &PushRef,
     branch: &str,
     judged: &Judged,
-    policy: &GitPolicy,
+    destination: &Destination<'_>,
     report: &mut StageReport,
 ) -> Result<Option<String>, String> {
     use super::ci::Declared;
+    let policy = destination.policy;
+    let mut dropped = false;
     let declared = match super::ci::judged_declared_target(
         root,
         branch,
         &pushed.local_sha,
         &policy.protected_branches,
     )? {
-        Some(Declared::Eligible(target)) => Some(target),
+        Some(Declared::Eligible(target)) if declared_bounds(root, destination, &target) => {
+            Some(target)
+        }
+        Some(Declared::Eligible(target)) => {
+            dropped = true;
+            report.status.push(format!(
+                "declared target '{}' is a protected branch other than the destination's default; the check uses the destination's default target",
+                display_text(&target)
+            ));
+            None
+        }
         Some(Declared::Rejected { target, reason }) => {
             report.status.push(format!(
                 "declared target '{target}' {reason}; the check uses the destination's default target"
@@ -365,6 +380,15 @@ fn ci_target(
         None => None,
     };
     let target = declared.or_else(|| match judged {
+        // A protected declaration the range set aside used to name the
+        // target itself; where the destination's default is no stable line,
+        // the hook hands none, and `codeflow ci` reads that default from
+        // the advertisement, as the range did.
+        Judged::Target { target, .. }
+            if dropped && !codeflow_core::workgraph::is_stable_work_target(target) =>
+        {
+            None
+        }
         Judged::Target { target, .. } => Some(target.clone()),
         _ => None,
     });
@@ -1361,6 +1385,24 @@ fn range_base(
 /// Match the pull request's base without excluding any destination-missing
 /// commit: the selected base is either an advertised tip or its ancestor.
 /// Line rewrites and unavailable eligible targets retain the historical fallback.
+/// Whether an eligible declared target may bound a push's range and name
+/// the target its checks read: an unprotected line may; a protected branch
+/// only when the destination advertises it as its default branch's tip.
+/// Both the range ([`target_base`]) and the target handed to `codeflow ci`
+/// ([`ci_target`]) ask this, so they never disagree.
+fn declared_bounds(root: &Path, destination: &Destination<'_>, target: &str) -> bool {
+    if !destination.policy.branch_is_protected(target) {
+        return true;
+    }
+    let Advertised::Tips(tips) = destination.advertised(root) else {
+        return false;
+    };
+    matches!(destination.answer(root), Ok(Ok(answer)) if answer
+        .default
+        .as_ref()
+        .is_some_and(|(_, tip)| tips.branches.get(target) == Some(&tip.to_string())))
+}
+
 fn target_base(
     root: &Path,
     r: &PushRef,
@@ -1398,10 +1440,7 @@ fn target_base(
         };
         let target = match declared {
             super::ci::Declared::Eligible(target)
-                if !policy.branch_is_protected(&target)
-                    || default.is_some_and(|(_, tip)| {
-                        tips.branches.get(&target) == Some(&tip.to_string())
-                    }) =>
+                if declared_bounds(root, destination, &target) =>
             {
                 target
             }

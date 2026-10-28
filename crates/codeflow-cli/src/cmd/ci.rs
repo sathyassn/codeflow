@@ -635,7 +635,13 @@ pub fn run(args: &CiArgs) -> i32 {
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     if scope_ready {
-        let target_tip = target_tip(&root, &line_target, &names, &environment);
+        let target_tip = target_tip(
+            &root,
+            &line_target,
+            args.into.as_deref(),
+            &names,
+            &environment,
+        );
         record_checks(
             &root,
             &base_candidates,
@@ -1246,44 +1252,55 @@ fn record_checks(
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
 }
 
-/// The ref the shipped GitLab and Bitbucket jobs fetch the target into.
-const FETCHED_TARGET: &str = "refs/codeflow/target";
-
 /// The tip of `target`, the branch the range lands on, which the Outcome
 /// adoption marker is judged against (TSK-435). It comes from an identity
 /// the change cannot choose, never from `--base`, which the pre-push hook
-/// sets to a merge-base and any caller can set to any commit:
+/// sets to a merge-base and any caller can set to any commit, and never
+/// from a ref the change's author can write without a fetch:
 ///
-/// - the destination's advertisement the pre-push hook hands over, where a
-///   branch the destination does not advertise is proven absent
-///   (`Ok(None)`: there is no list to keep);
+/// - the destination's advertisement the pre-push hook hands over, for the
+///   target the hook names with `--into` (`handed`), by the same rule that
+///   bounds the push's range, else the destination's default branch; a
+///   declaration the range rejected never names it, and a destination with
+///   no branch holds no list (`Ok(None)`);
 /// - the hosting platform's target commit (GitLab
 ///   `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, Bitbucket
 ///   `BITBUCKET_PR_DESTINATION_COMMIT`);
-/// - `refs/codeflow/target`, where the shipped GitLab and Bitbucket jobs
-///   fetch the target branch when the platform names no commit;
-/// - otherwise the target branch's remote-tracking ref, then its local
-///   branch, as GitHub's checkout and a local run hold them.
+/// - otherwise the target's remote-tracking ref, which GitHub's checkout
+///   and the shipped GitLab and Bitbucket jobs fetch, then its local
+///   branch; the git guard keeps agents from moving either for a
+///   protected branch.
 ///
-/// A repository with no `origin` holds every branch it has, so a target it
-/// lacks is absent (`Ok(None)`). Otherwise a tip that cannot be resolved is
-/// an error, and the marker check refuses.
+/// A repository with no `origin` holds every branch it has, so a target
+/// it lacks is absent (`Ok(None)`). Any other target with no tip from
+/// these sources, including one the destination does not advertise, is an
+/// error, and the check refuses.
 fn target_tip(
     root: &Path,
     target: &str,
+    handed: Option<&str>,
     names: &Names<'_>,
     environment: &BTreeMap<String, String>,
 ) -> Result<Option<String>, String> {
-    let branch = named_branch(target).unwrap_or_else(|| target.to_string());
     if let (Some(url), Some(listed)) = (names.destination, names.advertisement) {
         let destination = codeflow_core::workgraph::release_line::from_advertisement(url, listed)?;
+        let branch = match handed {
+            Some(handed) => named_branch(handed).unwrap_or_else(|| handed.to_string()),
+            None => match &destination.default {
+                Some((name, _)) => name.clone(),
+                None => return Ok(None),
+            },
+        };
+        let shown = codeflow_core::git::display_text(&branch);
         let advertised = destination
             .heads
             .iter()
             .chain(destination.default.iter())
             .any(|(name, _)| *name == branch);
         if !advertised {
-            return Ok(None);
+            return Err(format!(
+                "the destination does not advertise the target branch '{shown}', so no trusted list exists to judge the marker against"
+            ));
         }
         return codeflow_core::workgraph::release_line::advertised_tip_here(
             root,
@@ -1302,8 +1319,11 @@ fn target_tip(
                 .ok_or_else(|| format!("{key} '{sha}' names no commit here"));
         }
     }
-    let mut anchors = vec![FETCHED_TARGET.to_string()];
-    anchors.extend(base_refs(&branch));
+    let branch = named_branch(target).unwrap_or_else(|| target.to_string());
+    let anchors = [
+        format!("refs/remotes/origin/{branch}"),
+        format!("refs/heads/{branch}"),
+    ];
     if let Some(tip) = resolve_base(root, &anchors)? {
         return Ok(Some(tip));
     }

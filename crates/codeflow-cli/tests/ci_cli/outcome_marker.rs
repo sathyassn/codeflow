@@ -1,9 +1,10 @@
 //! The Outcome adoption marker is judged in every tier (TSK-435): a pull
 //! request may not add a uid to `outcome_present_uids` that its target
 //! does not list, also in a minimal or standard project that keeps only
-//! epics, or no records yet, where no other record rule runs. The target
-//! is the range's base: a `--baseline-from` commit, which the pre-push
-//! hook takes from the pushed branch's own earlier tip, never governs it.
+//! epics, or no records yet, where no other record rule runs. The list is
+//! judged at the target's tip, from a source the change cannot set: never
+//! `--base`, the pushed branch's own earlier tip, a ref outside the target
+//! branch's own refs, or a declared target the range rejected.
 
 use std::path::Path;
 
@@ -311,6 +312,12 @@ fn rewrite_marker(dir: &Path, uids: Option<&[&str]>) {
 /// now, through the hooks `init` installed, and return the push's exit
 /// code and output.
 fn push_to_trunk_copy(dir: &Path) -> (Option<i32>, String) {
+    push_branch_to_trunk_copy(dir, "feat/x")
+}
+
+/// Make `origin` a bare copy of `trunk` as it stands now, holding no other
+/// branch, and fetch it.
+fn trunk_copy_as_origin(dir: &Path) -> tempfile::TempDir {
     let remote = tempfile::tempdir().unwrap();
     let bare = remote.path().join("origin.git");
     let bare = bare.to_str().unwrap();
@@ -318,12 +325,27 @@ fn push_to_trunk_copy(dir: &Path) -> (Option<i32>, String) {
         .bare()
         .branch("trunk")
         .run();
-    // The copy stands for the target alone, so the pushed branch is new to it.
-    git(Path::new(bare), &["update-ref", "-d", "refs/heads/feat/x"]);
+    let branches = std::process::Command::new("git")
+        .args(["for-each-ref", "--format=%(refname)", "refs/heads"])
+        .current_dir(bare)
+        .output()
+        .unwrap();
+    for name in String::from_utf8_lossy(&branches.stdout).lines() {
+        if name != "refs/heads/trunk" {
+            git(Path::new(bare), &["update-ref", "-d", name]);
+        }
+    }
     git(dir, &["remote", "add", "origin", bare]);
     git(dir, &["fetch", "-q", "origin"]);
+    remote
+}
+
+/// Push `branch` from `dir` to a bare copy of `trunk`, as
+/// [`push_to_trunk_copy`] pushes `feat/x`.
+fn push_branch_to_trunk_copy(dir: &Path, branch: &str) -> (Option<i32>, String) {
+    let _remote = trunk_copy_as_origin(dir);
     let out = super::git_command(dir)
-        .args(["push", "origin", "feat/x"])
+        .args(["push", "origin", branch])
         .env_remove("CODEFLOW_PR_BODY")
         .output()
         .expect("git push runs");
@@ -401,4 +423,67 @@ fn a_push_that_leaves_the_marker_alone_passes_after_the_target_adopted() {
     commit_all(root, "feat: add notes");
     let (code, out) = push_to_trunk_copy(root);
     assert_eq!(code, Some(0), "{out}");
+}
+
+/// A ref the change's author can write without a fetch never stands for
+/// the target: `refs/codeflow/target` set at the head, with the target's
+/// real tip at `origin/trunk`, still judges the head's list against
+/// `origin/trunk`.
+#[test]
+fn a_target_ref_at_the_head_does_not_judge_the_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    adopted(root, "standard", false);
+    let mine = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    list(root, mine);
+    commit_all(root, "chore: list a record");
+    let _remote = trunk_copy_as_origin(root);
+    git(root, &["update-ref", "refs/codeflow/target", "HEAD"]);
+    let out = run_in(
+        root,
+        &[
+            "ci", "--base", "trunk", "--head", "HEAD", "--branch", "feat/x", "--into", "trunk",
+        ],
+    );
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_ne!(out.status.code(), Some(0), "{all}");
+    assert!(
+        all.contains("adds uids to outcome_present_uids") && all.contains(mine),
+        "{all}"
+    );
+}
+
+/// Pre-push: a task record declaring a protected target the destination
+/// does not advertise (`master`) cannot bound the range, which uses the
+/// destination's default (`trunk`). The marker is judged against that same
+/// target, so the record cannot list itself.
+#[test]
+fn a_rejected_declared_target_does_not_judge_the_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    adopted(root, "standard", false);
+    let branch = "task/TSK-001-repair";
+    git(root, &["checkout", "-q", "-b", branch]);
+    let mine = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    let tasks = root.join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    std::fs::write(
+        tasks.join("TSK-001.md"),
+        format!(
+            "---\nid: TSK-001\nuid: {mine}\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: master\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-10-28\n---\n\n# TSK-001: repair\n\n## Description\n\nRepair `src/lib.rs`.\n\n## Outcome\n\nAfter this merges, maintainers can rely on the repair.\n\n## Acceptance Criteria\n\n- AC-1 repair verified\n"
+        ),
+    )
+    .unwrap();
+    list(root, mine);
+    commit_all(root, "chore: plan and list a repair");
+    let (code, out) = push_branch_to_trunk_copy(root, branch);
+    assert_ne!(code, Some(0), "{out}");
+    assert!(
+        out.contains("adds uids to outcome_present_uids") && out.contains(mine),
+        "{out}"
+    );
 }
