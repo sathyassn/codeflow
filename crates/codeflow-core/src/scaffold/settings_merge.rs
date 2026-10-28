@@ -31,16 +31,21 @@
 //!   keeps its value, and an `env` that is not an object of strings is
 //!   reported and left untouched.
 //!
-//! - **plain top-level keys** (`statusLine`, `$schema`, `attribution` and
-//!   the like) — merged against the recorded baseline (TSK-1028): a value
-//!   still equal to the one codeflow recorded moves to the new shipped
+//! - **personal preference keys** ([`PREFERENCE_KEYS`]: `statusLine`,
+//!   `effortLevel`) — merged against the recorded baseline (TSK-1028): a
+//!   value still equal to the one codeflow recorded moves to the new shipped
 //!   value, a value the project changed stays, a shipped key the project
 //!   removed stays removed, and a key this preset no longer ships is removed
 //!   while it still holds the recorded value. With no recorded baseline, a
 //!   missing key is added and every existing value stays.
+//! - **every other shipped top-level key** (`$schema`, and `attribution`
+//!   and `includeCoAuthoredBy`, which keep the host from adding the AI
+//!   attribution project policy forbids) — added whenever the project lacks
+//!   it, a removal included, and never changed once present.
 //!
-//! Every key the preset does not ship stays verbatim. Every mutation is
-//! reported.
+//! A key this preset does not ship stays verbatim, except a preference key
+//! the recorded baseline holds as shipped with the same value, which is
+//! retired. Every mutation is reported.
 
 use serde_json::{Map, Value};
 
@@ -219,6 +224,7 @@ fn merge(
                 previous
                     .as_ref()
                     .filter(|_| kind == Previous::Recorded)
+                    .filter(|_| PREFERENCE_KEYS.contains(&key.as_str()))
                     .and_then(|value| value.get(key)),
                 inc_val,
                 report,
@@ -239,13 +245,17 @@ fn merge(
         .map_err(ScaffoldError::from)
 }
 
-/// The top-level keys merged by their own rules; every other shipped key is
-/// a plain value merged by [`merge_top_level_key`].
-const STRUCTURED_KEYS: [&str; 4] = ["hooks", "permissions", "sandbox", "env"];
+/// The top-level keys that are each person's preference, not policy
+/// (TSK-1028, ADR-0087): update moves, keeps or retires them against the
+/// recorded baseline. Every other plain key, such as the attribution
+/// controls, is restored whenever a project lacks it, so a deletion never
+/// weakens what it guarantees.
+pub const PREFERENCE_KEYS: [&str; 2] = ["statusLine", "effortLevel"];
 
 /// Merge one shipped top-level value such as `statusLine` (TSK-1028).
 /// `shipped_before` is the value the recorded baseline holds for this key,
-/// `None` when there is no recorded baseline or it lacks the key.
+/// `None` when there is no recorded baseline, it lacks the key, or the key
+/// is not one of [`PREFERENCE_KEYS`].
 ///
 /// - A value equal to the one the baseline recorded is still codeflow's, so
 ///   it moves to the new shipped value.
@@ -286,10 +296,10 @@ fn merge_top_level_key(
     }
 }
 
-/// Retire the plain top-level keys the recorded baseline carried and this
+/// Retire the [`PREFERENCE_KEYS`] the recorded baseline carried and this
 /// preset no longer ships, such as `effortLevel` (TSK-1028): a value still
 /// equal to the recorded one is removed, a value the project changed stays.
-/// Both are reported.
+/// Both are reported. No other key is ever retired here.
 fn retire_top_level_keys(
     cur: &mut Map<String, Value>,
     baseline: &Map<String, Value>,
@@ -297,7 +307,7 @@ fn retire_top_level_keys(
     report: &mut Vec<String>,
 ) {
     for (key, shipped_before) in baseline {
-        if STRUCTURED_KEYS.contains(&key.as_str()) || incoming.contains_key(key) {
+        if !PREFERENCE_KEYS.contains(&key.as_str()) || incoming.contains_key(key) {
             continue;
         }
         match cur.get(key) {
@@ -1021,6 +1031,69 @@ mod tests {
             merge_settings_from_baseline("{}", Some(NEW_TOP_LEVEL), NEW_TOP_LEVEL, &mut again)
                 .unwrap();
         assert!(serde_json::from_str::<Value>(&twice).unwrap()["effortLevel"].is_null());
+    }
+
+    /// The shipped default preset, the recorded baseline of a fresh install.
+    const SHIPPED: &str = include_str!("../../../../assets/base/settings/default.json");
+
+    /// Review of PR 368: a deleted attribution control, or any other
+    /// security key, comes back on update even with a recorded baseline;
+    /// only the preference keys keep a project's deletion.
+    #[test]
+    fn deleted_security_keys_are_restored_with_a_recorded_baseline() {
+        let shipped: Value = serde_json::from_str(SHIPPED).unwrap();
+        for key in [
+            "attribution",
+            "includeCoAuthoredBy",
+            "hooks",
+            "sandbox",
+            "$schema",
+        ] {
+            let mut current = shipped.clone();
+            current.as_object_mut().unwrap().shift_remove(key);
+            let mut report = vec![];
+            let merged = merge_settings_from_baseline(
+                &current.to_string(),
+                Some(SHIPPED),
+                SHIPPED,
+                &mut report,
+            )
+            .unwrap();
+            let merged: Value = serde_json::from_str(&merged).unwrap();
+            assert_eq!(merged[key], shipped[key], "{key} was not restored");
+            assert!(
+                !report.iter().any(|line| line.contains("stays unset")),
+                "{key}: {report:?}"
+            );
+        }
+        assert_eq!(PREFERENCE_KEYS, ["statusLine", "effortLevel"]);
+    }
+
+    /// A security key a later preset stopped shipping is never retired by
+    /// the preference rule, even while it holds the recorded value.
+    #[test]
+    fn only_preference_keys_are_retired() {
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(SHIPPED, Some(SHIPPED), NEW_TOP_LEVEL, &mut report)
+                .unwrap();
+        let merged: Value = serde_json::from_str(&merged).unwrap();
+        let shipped: Value = serde_json::from_str(SHIPPED).unwrap();
+        for key in [
+            "$schema",
+            "attribution",
+            "includeCoAuthoredBy",
+            "hooks",
+            "permissions",
+            "sandbox",
+            "env",
+        ] {
+            assert_eq!(merged[key], shipped[key], "{key} was retired");
+        }
+        assert!(
+            !report.iter().any(|line| line.contains("no longer ships")),
+            "{report:?}"
+        );
     }
 
     #[test]
