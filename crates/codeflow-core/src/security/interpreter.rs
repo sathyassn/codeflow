@@ -125,6 +125,12 @@ fn code_reads_where_calls_run(
 ) -> Vec<Violation> {
     let mut violations = Vec::new();
     for call in outward::interpreter_calls_with_home(command, cwd, home) {
+        // Only the call's own directory option counts as unknown here; a
+        // line whose directory is already unknown is judged elsewhere, and
+        // env's own unknown change refuses as an unverifiable operand.
+        if call.cwd.is_none() {
+            continue;
+        }
         let dir = call.cwd.clone().and_then(|start| {
             call.chdir.iter().try_fold(start, |dir, change| {
                 match outward::directory_operand(change, home) {
@@ -258,14 +264,8 @@ fn secret_reads(
                 if glob && recursive.is_some() {
                     continue;
                 }
-                // A reader in a directory the guard cannot establish (an
-                // `env -C "$D"`) refuses a relative operand that could name
-                // a secret there (TSK-1002 review 03).
-                let secret = if unwrapped.cwd.is_none() && relative_may_name_secret(value) {
-                    Err("cannot establish the reader's working directory")
-                } else {
-                    inspect_operand(&line, &unwrapped, (at, value, glob), reader_cwd, home)
-                };
+                let secret =
+                    inspect_operand(&line, &unwrapped, (at, value, glob), reader_cwd, home);
                 if secret.as_ref().map_or(true, |value| *value) {
                     violations.push(Violation::new(
                         "security.secret_reads",
@@ -299,6 +299,9 @@ fn inspect_operand(
     home: Option<&Path>,
 ) -> Result<bool, &'static str> {
     let (at, value, glob) = operand;
+    if value == outward::UNVERIFIED_ENV_DIRECTORY {
+        return Err("cannot establish the directory env runs the command in");
+    }
     if value == "__unverified_transfer_input" {
         return Err("cannot establish a transfer option's quoted input filename");
     }

@@ -1477,7 +1477,14 @@ fn simple(
         if let Some((program, args)) = launched {
             if let Some(effects) = crate::security::unresolved::writer_effects(program, args, &[]) {
                 targets.extend(effects.writes);
-                targets.extend(effects.copy.and_then(|copy| copy.dest));
+                // A link names an existing file rather than writing a body;
+                // the line's links are judged as links (`linked_script`).
+                if !matches!(
+                    crate::security::unresolved::writer_name(program),
+                    "ln" | "link"
+                ) {
+                    targets.extend(effects.copy.and_then(|copy| copy.dest));
+                }
             }
             // The writers that write their operands, as the git guard
             // judges them: every operand may be a file run later.

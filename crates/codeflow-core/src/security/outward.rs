@@ -210,6 +210,11 @@ pub(crate) struct Unwrapped {
     pub(crate) links: Vec<super::composed::paths::Link>,
 }
 
+/// The operand that stands for a command run in a directory env moves to
+/// but the guard cannot establish (`env -C "$D"`); the secret-read check
+/// refuses it as cannot-verify (TSK-1002 review 03).
+pub(crate) const UNVERIFIED_ENV_DIRECTORY: &str = "__unverified_env_directory";
+
 pub(crate) fn unwrapped_commands(command: &str, cwd: &Path, home: Option<&Path>) -> Vec<Unwrapped> {
     let mut parsed = Parsed {
         resolve_shell: true,
@@ -1369,6 +1374,14 @@ fn argv(
                     depth + 1,
                     out,
                 );
+                // env's own directory change the guard cannot establish,
+                // where the line's directory is known: the command reads
+                // relative names there, so it is read as one unverifiable
+                // file operand.
+                if dir.is_none() && cwd.is_some() {
+                    let marker = ["cat".to_string(), UNVERIFIED_ENV_DIRECTORY.to_string()];
+                    argv(&marker, None, cwd, depth + 1, out);
+                }
             }
             skip_env(rest)
         }
