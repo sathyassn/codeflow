@@ -73,8 +73,9 @@ description: Land finished work (docs and capability updates, then a PR through 
    beyond the PR head, or a line that fails the proof, a workspace root
    branch included, gets no such binding. Run without a PR body on an
    `integration/` line that fails the proof, `codeflow ci` judges the line
-   as frozen task work and prints why, unless the range carries only what a
-   planning amendment may, which it judges as one.
+   as frozen task work, unless it is the workspace root branch or the range
+   carries only what a planning amendment may; when the selected criteria
+   are frozen, it prints why.
 7. After opening, follow
    [references/pr-evidence.md](references/pr-evidence.md), "After opening":
    no polling by default. Only where the adopted policy requires hosted
