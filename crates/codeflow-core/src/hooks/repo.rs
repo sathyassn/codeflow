@@ -510,6 +510,8 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
         // Main and linked checkouts share the complete protection set. Open
         // each discovered owner first, so deduplication cannot hide a broken
         // pointer or a disagreement with its registration.
+        #[cfg(test)]
+        OWNER_OPENS.with(|opens| opens.set(opens.get() + 1));
         let opened = match open(&root) {
             Ok(repo) => repo,
             Err(error) if could_enforce(target, &root) => {
@@ -754,6 +756,8 @@ pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 thread_local! {
     static VALIDATION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times [`read_target_roots`] opened a discovered owner.
+    static OWNER_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Both pointers must agree: the registration names a checkout containing
@@ -1501,5 +1505,77 @@ mod r16_obtaining_regressions {
         }
         std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
         assert!(super::open(dir.path()).is_err());
+    }
+}
+
+/// TSK-1050: one guard evaluation opens each repository once.
+#[cfg(test)]
+mod owner_opens {
+    use super::OWNER_OPENS;
+    use crate::hooks::edit_guard::RepoFactsScope;
+    use std::path::Path;
+
+    fn opens() -> usize {
+        OWNER_OPENS.with(std::cell::Cell::get)
+    }
+
+    fn ask(session: &Path, words: std::ops::Range<usize>) {
+        for word in words {
+            let target = session.join(format!("d{word}/x"));
+            assert!(super::target_roots(&target, session).is_ok());
+        }
+    }
+
+    /// Owner lookups for many targets in one repository open it once per
+    /// scope, a new scope opens it again, and no scope caches nothing.
+    #[test]
+    fn each_owner_is_opened_once_per_guard_evaluation() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        for _ in 0..2 {
+            let _scope = RepoFactsScope::enter();
+            OWNER_OPENS.with(|count| count.set(0));
+            ask(dir.path(), 0..1);
+            let first = opens();
+            assert!(first >= 1, "the first lookup in a scope opens its owner");
+            ask(dir.path(), 1..16);
+            assert_eq!(opens(), first, "later targets reuse the opened owner");
+        }
+        OWNER_OPENS.with(|count| count.set(0));
+        ask(dir.path(), 0..1);
+        let one = opens();
+        ask(dir.path(), 0..1);
+        assert_eq!(opens(), 2 * one, "outside a scope every lookup opens again");
+    }
+
+    /// An owner that cannot be opened fails the same way for every target
+    /// it could protect, and is still skipped for an ordinary target, in
+    /// any order inside a scope and exactly as outside one: the scope keeps
+    /// the failed open, and each target decides what the failure means.
+    #[test]
+    fn a_broken_owner_fails_closed_for_every_protected_target_in_a_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+        let roots = |word: &str| super::target_roots(&dir.path().join(word), dir.path());
+        let words = [
+            ".claude/settings.json",
+            "src/a.rs",
+            ".git/config",
+            "notes.txt",
+            ".claude/hooks/x",
+        ];
+        let unscoped: Vec<_> = words.iter().map(|word| roots(word)).collect();
+        for (word, result) in words.iter().zip(&unscoped) {
+            assert_eq!(result.is_err(), word.starts_with('.'), "{word}: {result:?}");
+        }
+        let _scope = RepoFactsScope::enter();
+        OWNER_OPENS.with(|count| count.set(0));
+        for _ in 0..2 {
+            for (word, expected) in words.iter().zip(&unscoped) {
+                assert_eq!(&roots(word), expected, "{word}");
+            }
+        }
+        assert!(opens() <= 2, "the broken owner is opened once per spelling");
     }
 }
