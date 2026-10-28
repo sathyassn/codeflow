@@ -197,9 +197,9 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         .extend(docs.issues.into_iter().map(|issue| issue.to_string()));
     report.notes = docs.notes;
     report.warnings.extend(docs.warnings);
-    report.issues.sort();
+    report.issues.sort_by(|a, b| crate::ids::compare_ids(a, b));
     report.issues.dedup();
-    report.warnings.sort();
+    report.warnings.sort_by(crate::remedy::Finding::by_text);
     report.warnings.dedup();
     report
 }
