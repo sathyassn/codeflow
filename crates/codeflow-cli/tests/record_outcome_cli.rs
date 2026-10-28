@@ -1,8 +1,9 @@
 //! Records state their Outcome and epics their Deliverables (TSK-435),
-//! through the real binary: `task new` and `epic new` write the sections,
-//! and `validate --docs` refuses a record created after the project
-//! adopted the section without one, warns for an open record present at
-//! adoption, and never reads a closed one.
+//! through the real binary: `task new` and `epic new` write the sections;
+//! `update` marks the records an older release made as present at
+//! adoption; `validate --docs` refuses a record created after that without
+//! an Outcome, warns for an open record present at adoption, and never
+//! reads a closed one.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -34,6 +35,8 @@ fn git(dir: &Path, args: &[&str]) {
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
+        // The fixture commits as the adopter's human would.
+        .env_remove("CLAUDECODE")
         .current_dir(dir)
         .output()
         .expect("git runs");
@@ -93,22 +96,6 @@ fn in_order(record: &str, headings: &[&str]) {
     );
 }
 
-/// The marker listing `uids` as present at adoption.
-fn mark(root: &Path, uids: &[&str]) {
-    let mut state: toml::Table = toml::from_str(&read(root, ".codeflow/project.toml")).unwrap();
-    let mut marker = toml::Table::new();
-    marker.insert(
-        "outcome_present_uids".into(),
-        toml::Value::Array(uids.iter().map(|uid| toml::Value::from(*uid)).collect()),
-    );
-    state.extend(marker);
-    write(
-        root,
-        ".codeflow/project.toml",
-        &toml::to_string(&state).unwrap(),
-    );
-}
-
 const OUTCOME_LINE: &str = "after this merges, an adopter can ship the thing";
 
 /// `record` with its Outcome comment followed by `OUTCOME_LINE`.
@@ -159,47 +146,95 @@ fn new_records_carry_an_outcome_and_epics_their_deliverables() {
     }
 }
 
-/// AC-2, AC-3, AC-6: with the marker listing the records present at
-/// adoption, a record `task new` makes later is refused until it states its
-/// Outcome, and refused again when the line is removed; the listed open
-/// record warns once, also when it was made the morning of the upgrade;
-/// the closed record says nothing.
+/// Three records the previous release made: `codeflow 3.1.0 task new` wrote
+/// each, and `codeflow 3.1.0 task status TSK-002 cancelled` closed the
+/// second. They are kept byte for byte as that release wrote them.
+const PREVIOUS_RELEASE: [(&str, &str); 3] = [
+    ("TSK-001", include_str!("fixtures/outcome-3.1.0/TSK-001.md")),
+    ("TSK-002", include_str!("fixtures/outcome-3.1.0/TSK-002.md")),
+    ("TSK-003", include_str!("fixtures/outcome-3.1.0/TSK-003.md")),
+];
+
+fn head_commit(dir: &Path) -> String {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// How many `validate --docs` lines warn that `id` has no Outcome.
+fn outcome_warnings(out: &str, id: &str) -> usize {
+    out.lines()
+        .filter(|line| {
+            line.contains("warning")
+                && line.contains(&format!("{id}.md"))
+                && line.contains("`## Outcome`")
+        })
+        .count()
+}
+
+/// The `validate --docs` lines that refuse a record for its Outcome.
+fn outcome_errors(out: &str) -> Vec<&str> {
+    out.lines()
+        .filter(|line| line.contains("error:") && line.contains("outcome:"))
+        .collect()
+}
+
+/// AC-2, AC-3, AC-6 (journey): an adopter holds three records the previous
+/// release made, one closed and one made the morning of the upgrade and
+/// not yet committed. `update` records exactly their uids and the `HEAD`
+/// it ran at, once. A record `task new` makes afterwards is refused until
+/// its author states its Outcome, validates once it does, and is refused
+/// again when the line is removed; each older open record warns once and
+/// the closed one says nothing.
 #[test]
-fn validate_refuses_a_later_record_and_warns_for_older_ones() {
+fn update_marks_previous_release_records_and_later_ones_need_an_outcome() {
     let dir = repo();
     let root = dir.path();
     let init = codeflow(root, &["init", "--yes", "--full"]);
     assert!(init.status.success(), "{}", text(&init));
-    for title in ["Older open", "Older closed", "Made this morning"] {
-        let made = codeflow(
-            root,
-            &[
-                "task",
-                "new",
-                "--standalone-reason",
-                "test",
-                "--into",
-                "main",
-                title,
-            ],
-        );
-        assert!(made.status.success(), "{}", text(&made));
+    // The previous release wrote no marker.
+    let state_file = ".codeflow/project.toml";
+    let mut state: toml::Table = toml::from_str(&read(root, state_file)).unwrap();
+    assert!(state.remove("outcome_present_uids").is_some());
+    state.remove("outcome_required_since");
+    write(root, state_file, &toml::to_string(&state).unwrap());
+    for (id, record) in &PREVIOUS_RELEASE[..2] {
+        write(root, &format!("project-management/tasks/{id}.md"), record);
     }
-    let closed = read(root, "project-management/tasks/TSK-002.md")
-        .replace("status: todo ", "status: cancelled ")
-        .replace(
-            "## Closeout\n",
-            "## Closeout\n\n- cancelled: superseded\n- scope: dropped\n",
-        );
-    write(root, "project-management/tasks/TSK-002.md", &closed);
-    let present: Vec<String> = ["TSK-001", "TSK-002", "TSK-003"]
+    git(root, &["switch", "-q", "-c", "chore/adopt"]);
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "chore: adopt codeflow"]);
+    let (id, record) = PREVIOUS_RELEASE[2];
+    write(root, &format!("project-management/tasks/{id}.md"), record);
+    let head = head_commit(root);
+
+    let update = codeflow(root, &["update"]);
+    assert!(update.status.success(), "{}", text(&update));
+    let state: toml::Table = toml::from_str(&read(root, state_file)).unwrap();
+    let listed: std::collections::BTreeSet<&str> = state["outcome_present_uids"]
+        .as_array()
+        .unwrap()
         .iter()
-        .map(|id| uid(&read(root, &format!("project-management/tasks/{id}.md"))))
+        .map(|uid| uid.as_str().unwrap())
         .collect();
-    mark(
-        root,
-        &present.iter().map(String::as_str).collect::<Vec<_>>(),
+    let made: Vec<String> = PREVIOUS_RELEASE
+        .iter()
+        .map(|(_, record)| uid(record))
+        .collect();
+    assert_eq!(listed, made.iter().map(String::as_str).collect());
+    assert_eq!(
+        state["outcome_required_since"].as_str(),
+        Some(head.as_str())
     );
+    let marked = read(root, state_file);
+    let again = codeflow(root, &["update"]);
+    assert!(again.status.success(), "{}", text(&again));
+    assert_eq!(read(root, state_file), marked, "the marker is written once");
+
     let later = codeflow(
         root,
         &[
@@ -213,31 +248,28 @@ fn validate_refuses_a_later_record_and_warns_for_older_ones() {
         ],
     );
     assert!(later.status.success(), "{}", text(&later));
+    let warned_once = |out: &str| {
+        for (id, warnings) in [
+            ("TSK-001", 1),
+            ("TSK-002", 0),
+            ("TSK-003", 1),
+            ("TSK-004", 0),
+        ] {
+            assert_eq!(outcome_warnings(out, id), warnings, "{id}:\n{out}");
+        }
+    };
 
     let refused = codeflow(root, &["validate", "--docs"]);
     let out = text(&refused);
     assert!(!refused.status.success(), "{out}");
-    let errors: Vec<&str> = out
-        .lines()
-        .filter(|line| line.contains("outcome:") && !line.contains("warning"))
-        .collect();
+    let errors = outcome_errors(&out);
     assert_eq!(errors.len(), 1, "{out}");
     assert!(
         errors[0].contains("project-management/tasks/TSK-004.md")
             && errors[0].contains("`## Outcome`"),
         "{out}"
     );
-    for (id, warnings) in [("TSK-001", 1), ("TSK-003", 1), ("TSK-002", 0)] {
-        let count = out
-            .lines()
-            .filter(|line| {
-                line.contains("warning")
-                    && line.contains(&format!("{id}.md"))
-                    && line.contains("`## Outcome`")
-            })
-            .count();
-        assert_eq!(count, warnings, "{id}:\n{out}");
-    }
+    warned_once(&out);
 
     let record = read(root, "project-management/tasks/TSK-004.md");
     write(
@@ -247,22 +279,17 @@ fn validate_refuses_a_later_record_and_warns_for_older_ones() {
     );
     let clean = codeflow(root, &["validate", "--docs"]);
     let out = text(&clean);
-    assert!(
-        !out.lines()
-            .any(|line| line.contains("TSK-004.md") && line.contains("outcome")),
-        "{out}"
-    );
+    assert!(clean.status.success(), "{out}");
+    assert!(outcome_errors(&out).is_empty(), "{out}");
+    warned_once(&out);
 
     write(root, "project-management/tasks/TSK-004.md", &record);
-    let again = codeflow(root, &["validate", "--docs"]);
-    let out = text(&again);
-    assert!(!again.status.success(), "{out}");
-    assert!(
-        out.lines().any(|line| line.contains("TSK-004.md")
-            && line.contains("`## Outcome`")
-            && !line.contains("warning")),
-        "{out}"
-    );
+    let removed = codeflow(root, &["validate", "--docs"]);
+    let out = text(&removed);
+    assert!(!removed.status.success(), "{out}");
+    let errors = outcome_errors(&out);
+    assert_eq!(errors.len(), 1, "{out}");
+    assert!(errors[0].contains("TSK-004.md"), "{out}");
 }
 
 /// AC-6: a fresh `init` project lists no record, so a record `task new`
@@ -305,7 +332,9 @@ fn a_fresh_init_project_refuses_a_record_without_an_outcome() {
         "project-management/tasks/TSK-001.md",
         &filled(&record),
     );
-    let out = text(&codeflow(root, &["validate", "--docs"]));
+    let clean = codeflow(root, &["validate", "--docs"]);
+    let out = text(&clean);
+    assert!(clean.status.success(), "{out}");
     assert!(
         !out.lines()
             .any(|line| line.contains("TSK-001.md") && line.contains("outcome")),
