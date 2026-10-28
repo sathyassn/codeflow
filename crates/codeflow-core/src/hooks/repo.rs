@@ -1614,10 +1614,11 @@ mod owner_opens {
     }
 
     /// A repository with one commit at the physical path of a new
-    /// directory, so every spelling of a target names one owner.
+    /// directory, spelled as git writes it (no Windows verbatim prefix), so
+    /// every spelling of a target names one owner.
     fn repository() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = crate::portable_path::canonicalize(dir.path()).unwrap();
         let repo = git2::Repository::init(&root).unwrap();
         let tree = repo.treebuilder(None).unwrap().write().unwrap();
         let tree = repo.find_tree(tree).unwrap();
