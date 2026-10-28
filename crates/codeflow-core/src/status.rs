@@ -788,7 +788,7 @@ fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
             );
         }
     }
-    for (task_id, branches) in &backlog.conflicts {
+    for (task_id, branches) in crate::ids::sorted_by_id(&backlog.conflicts) {
         let _ = writeln!(
             out,
             "  conflict: {task_id} is carried by {} (claims are advisory; settle one owner)",
@@ -799,7 +799,7 @@ fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
         // In display form already, as the backlog holds it.
         let _ = writeln!(out, "  landed: {branch}");
     }
-    for (epic, progress) in &backlog.epics {
+    for (epic, progress) in crate::ids::sorted_by_id(&backlog.epics) {
         let _ = writeln!(
             out,
             "  epic {epic}: {}/{} complete, {} cancelled",

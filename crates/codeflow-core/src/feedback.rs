@@ -271,7 +271,7 @@ pub fn item_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
             files.push(path);
         }
     }
-    files.sort();
+    files.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(files)
 }
 
@@ -1166,7 +1166,11 @@ pub fn grouped<'a>(items: &'a [Item], topics: &[String]) -> Vec<(String, Vec<&'a
     groups
         .into_iter()
         .map(|((_, topic), mut members)| {
-            members.sort_by(|a, b| (!a.is_open(), &a.id).cmp(&(!b.is_open(), &b.id)));
+            members.sort_by(|a, b| {
+                (!a.is_open())
+                    .cmp(&!b.is_open())
+                    .then_with(|| crate::ids::compare_ids(&a.id, &b.id))
+            });
             (topic, members)
         })
         .collect()
@@ -1271,6 +1275,45 @@ mod tests {
             "{error}"
         );
         assert!(items.is_err(), "{items:?}");
+    }
+
+    fn bare_item(id: &str, status: &str) -> Item {
+        Item {
+            path: format!("{FEEDBACK_DIR}/{id}.md"),
+            id: id.to_string(),
+            uid: String::new(),
+            title: String::new(),
+            topic: "process".to_string(),
+            also: Vec::new(),
+            source: "chat".to_string(),
+            status: status.to_string(),
+            placed_in: Vec::new(),
+            supersedes: None,
+            superseded_by: None,
+            confirmed_by: None,
+            external_refs: Vec::new(),
+            created: String::new(),
+            verbatim: String::new(),
+            reading: String::new(),
+            placement: String::new(),
+            closure: String::new(),
+        }
+    }
+
+    /// Ids past 999 list after 999 in a group: open items first, then by
+    /// number, not by text.
+    #[test]
+    fn grouped_items_order_by_id_number_past_three_digits() {
+        let items = [
+            bare_item("FB-10000", "received"),
+            bare_item("FB-1000", "received"),
+            bare_item("FB-999", "received"),
+            bare_item("FB-2000", "closed"),
+            bare_item("FB-998", "closed"),
+        ];
+        let groups = grouped(&items, &[]);
+        let ids: Vec<&str> = groups[0].1.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(ids, ["FB-999", "FB-1000", "FB-10000", "FB-998", "FB-2000"]);
     }
 
     const TEMPLATE: &str = include_str!("../../../assets/base/pm/feedback.md.tmpl");
