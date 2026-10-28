@@ -336,7 +336,7 @@ Upgrade the binary once, then run `codeflow update` in each repository.
    rejects the policy file, which blocks every commit until you upgrade (for
    example `git.policy_characters`, ADR-0067).
 2. Run `codeflow update` in the repository. Add `--diff <FILE>` to write the
-   report with redacted diffs (`docs/cli.md`).
+   report and each change, never showing the project's values (`docs/cli.md`).
 3. Resolve each `<name>.new`, move it over the live file, then rerun `codeflow update`.
 
 | Case | What `update` does |

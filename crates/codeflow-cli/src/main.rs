@@ -122,10 +122,12 @@ enum Command {
     },
     /// Refresh managed scaffold files (3-way merge; never clobbers).
     Update {
-        /// Write the report plus unified diffs of applied changes to a file.
-        /// A diff shows only values and lines the shipped scaffold holds; the
-        /// project's own become `<redacted>` placeholders, and a file in a
-        /// format with no redaction rule, or that does not parse, is withheld.
+        /// Write the report plus each applied change to a file. The export
+        /// never shows a value, key name or line from the project's files or
+        /// the recorded baseline: JSON, TOML and YAML list the changed key
+        /// paths with the shipped value and a marker for the project's side;
+        /// text shows the shipped lines written and counts the rest; any
+        /// other format, or a file that does not parse, is withheld.
         #[arg(long, value_name = "FILE")]
         diff: Option<PathBuf>,
         /// Replace user-modified managed files instead of merging.

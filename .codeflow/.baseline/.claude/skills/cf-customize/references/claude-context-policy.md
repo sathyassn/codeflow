@@ -101,14 +101,15 @@ baseline, update adds the keys only when the project has no `env` at all; an
 existing `env` is left as it is and the update report names the keys it did
 not add. Add them by hand if the project wants them. An `env` that is not an
 object of strings is a reported configuration error, and update leaves it
-untouched. Update reports key names, never values, and the patch that
-`codeflow update --diff` writes shows every `env` value as `<redacted>`
-(`<redacted: changed>` where the update changed it). That patch shows only
-what CodeFlow wrote: in JSON, TOML and YAML a value appears only at a key
-CodeFlow ships, never under `env`, headers or a key named like a token or
-API key, and in Markdown and other text a line appears only when CodeFlow
-ships it. A file in any other format, or one that does not parse, is
-withheld.
+untouched. Update reports key names, never values. The export that
+`codeflow update --diff` writes never shows a value, key name or line from
+the project's files or from the recorded baseline; it is judged only
+against the assets inside the binary. For JSON, TOML and YAML it lists each
+key path the update changed, with CodeFlow's shipped value and a marker for
+the file before and after (same as shipped, differs, added by the project,
+absent); keys the project added are counted, not named. For Markdown and
+other text it shows the shipped lines the update writes and counts the
+rest. A file in any other format, or one that does not parse, is withheld.
 
 ## Inspect without exposing values
 
