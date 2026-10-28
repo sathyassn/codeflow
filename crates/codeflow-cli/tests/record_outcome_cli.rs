@@ -8,36 +8,45 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-/// Runs the binary with an isolated `CODEFLOW_HOME` and a fixed git
-/// identity, as `task new` commits to the ID registry.
-fn codeflow(dir: &Path, args: &[&str]) -> Output {
-    let home = tempfile::tempdir().expect("home tempdir");
-    Command::new(env!("CARGO_BIN_EXE_codeflow"))
-        .args(args)
-        .current_dir(dir)
-        .env("CODEFLOW_HOME", home.path())
+/// `command` as the fixture's adopter runs it: a fixed git identity, the
+/// hooks `init` installs bound to the binary under test, and no agent
+/// session marker, so the hooks judge a human's commit wherever the test
+/// runs.
+fn as_adopter(command: &mut Command) -> &mut Command {
+    command
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE");
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
+    command
+}
+
+/// Runs the binary with an isolated `CODEFLOW_HOME`, as `task new` commits
+/// to the ID registry.
+fn codeflow(dir: &Path, args: &[&str]) -> Output {
+    let home = tempfile::tempdir().expect("home tempdir");
+    as_adopter(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .args(args)
+        .current_dir(dir)
+        .env("CODEFLOW_HOME", home.path())
         .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("codeflow binary runs")
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let home = tempfile::tempdir().expect("home tempdir");
+    let output = as_adopter(&mut Command::new("git"))
         .args(args)
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        // The fixture commits as the adopter's human would.
-        .env_remove("CLAUDECODE")
         .current_dir(dir)
+        .env("CODEFLOW_HOME", home.path())
         .output()
         .expect("git runs");
     assert!(
