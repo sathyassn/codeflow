@@ -192,7 +192,7 @@ digest points to them after a compaction.
   CodeFlow's own hook commands and missing sandbox entries are added back,
   while a shipped permission entry or `env` key the project removed stays
   removed when the recorded baseline shows CodeFlow shipped it. An `env`
-  value still equal to the recorded shipped value moves to the new one, so
+  value still equal to the recorded shipped value moves to the new one,
   whatever the project meant by it, so a project on the compaction
   percentage of 50 moves to 35; a value that differs from the recorded
   shipped value stays, and the report names its key when the default

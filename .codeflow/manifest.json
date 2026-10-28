@@ -17,7 +17,7 @@
     ".agents/skills/cf-customize/references/claude-context-policy.md": {
       "src": "agents/skills/cf-customize/references/claude-context-policy.md",
       "ownership": "managed",
-      "sha256": "884d5e4b80c0c3a9145f99c7872f9320c4c0d471ad3d1a7f4cccbbfdf7880d9a",
+      "sha256": "5b88fb0e6b55cbaa3fb7b230ad10fddc26715c3e666dd42db39e277bd78484c4",
       "exec": false
     },
     ".agents/skills/cf-customize/references/personal-settings.md": {
@@ -863,7 +863,7 @@
     ".claude/skills/cf-customize/references/claude-context-policy.md": {
       "src": "agents/skills/cf-customize/references/claude-context-policy.md",
       "ownership": "managed",
-      "sha256": "884d5e4b80c0c3a9145f99c7872f9320c4c0d471ad3d1a7f4cccbbfdf7880d9a",
+      "sha256": "5b88fb0e6b55cbaa3fb7b230ad10fddc26715c3e666dd42db39e277bd78484c4",
       "exec": false
     },
     ".claude/skills/cf-customize/references/personal-settings.md": {

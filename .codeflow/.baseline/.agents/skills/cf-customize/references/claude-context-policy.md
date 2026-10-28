@@ -103,7 +103,12 @@ not add. Add them by hand if the project wants them. An `env` that is not an
 object of strings is a reported configuration error, and update leaves it
 untouched. Update reports key names, never values, and the patch that
 `codeflow update --diff` writes shows every `env` value as `<redacted>`
-(`<redacted: changed>` where the update changed it).
+(`<redacted: changed>` where the update changed it). That patch shows only
+what CodeFlow wrote: in JSON, TOML and YAML a value appears only at a key
+CodeFlow ships, never under `env`, headers or a key named like a token or
+API key, and in Markdown and other text a line appears only when CodeFlow
+ships it. A file in any other format, or one that does not parse, is
+withheld.
 
 ## Inspect without exposing values
 
