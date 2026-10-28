@@ -350,18 +350,20 @@ fn could_enforce(target: &Path, root: &Path) -> bool {
             return true;
         };
         let first = first.as_os_str();
+        // The name test comes first: it reads nothing, and every lookup
+        // now asks this for each owner (TSK-1050).
         first.eq_ignore_ascii_case(".git")
-            || (git_directory(&root).unwrap_or(true)
-                && [
-                    "config",
-                    "config.worktree",
-                    "hooks",
-                    "HEAD",
-                    "packed-refs",
-                    "refs",
-                ]
-                .iter()
-                .any(|name| first.eq_ignore_ascii_case(name)))
+            || ([
+                "config",
+                "config.worktree",
+                "hooks",
+                "HEAD",
+                "packed-refs",
+                "refs",
+            ]
+            .iter()
+            .any(|name| first.eq_ignore_ascii_case(name))
+                && git_directory(&root).unwrap_or(true))
             || crate::security::actions::table()
                 .claude_edit_denies
                 .iter()
@@ -504,19 +506,45 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
             }
         }
     }
+    // A reading kept from earlier in the scope may keep an owner in the list,
+    // never remove one: when one took part in removing a duplicate, every
+    // owner is read again (TSK-1050).
+    match distinct_owners(target, &roots, true)? {
+        Some(distinct) => Ok(distinct),
+        None => Ok(distinct_owners(target, &roots, false)?.unwrap_or_default()),
+    }
+}
+
+/// The owners in `roots` that `target` must be judged against, one per
+/// common directory. With `reuse`, an owner `target` could not enforce
+/// through may take the reading kept earlier in this scope; `None` means a
+/// kept reading would have removed an owner as a duplicate, so the caller
+/// reads every owner afresh. Without `reuse`, every owner is opened now and
+/// the result is always `Some`.
+fn distinct_owners(
+    target: &Path,
+    roots: &[PathBuf],
+    reuse: bool,
+) -> Result<Option<Vec<PathBuf>>, String> {
     let mut common = std::collections::BTreeSet::new();
     let mut distinct = Vec::new();
+    let mut reused = false;
     for root in roots {
         // Main and linked checkouts share the complete protection set. Open
         // each discovered owner first, so deduplication cannot hide a broken
-        // pointer or a disagreement with its registration.
-        let opened = match owner_common(&root) {
+        // pointer or a disagreement with its registration. An owner whose
+        // enforcement paths `target` may name is always opened now, so a
+        // kept reading never stands in for the refusal a broken owner gives.
+        let enforced = could_enforce(target, root);
+        let (opened, kept) = owner_common(root, reuse && !enforced);
+        reused |= kept;
+        let opened = match opened {
             Ok(opened) => opened,
-            Err(error) if could_enforce(target, &root) => {
+            Err(error) if enforced => {
                 if error.starts_with("Cannot read repository marker ") {
                     return Err(error);
                 }
-                let marker = if git_directory(&root).unwrap_or(false) {
+                let marker = if git_directory(root).unwrap_or(false) {
                     root.clone()
                 } else {
                     root.join(".git")
@@ -530,12 +558,15 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
         };
         if let Some(directory) = opened {
             if !common.insert(directory?) {
+                if reused {
+                    return Ok(None);
+                }
                 continue;
             }
         }
-        distinct.push(root);
+        distinct.push(root.clone());
     }
-    Ok(distinct)
+    Ok(Some(distinct))
 }
 
 /// What opening one discovered owner gave: the error [`open`] reported, or
@@ -544,38 +575,56 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
 type OwnerCommon = Result<Option<Result<PathBuf, String>>, String>;
 
 thread_local! {
-    /// Each owner opened during one guard evaluation (TSK-1050), present
-    /// only while a [`super::edit_guard::RepoFactsScope`] is open.
-    pub(super) static OWNERS: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, OwnerCommon>>> =
+    /// The successful owner readings of one guard evaluation (TSK-1050):
+    /// a proven non-repository or a resolved common directory, present only
+    /// while a [`super::edit_guard::RepoFactsScope`] is open. A failure is
+    /// never kept.
+    pub(super) static OWNERS: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, Option<PathBuf>>>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Open the owner at `root` once per [`super::edit_guard::RepoFactsScope`];
-/// outside a scope, every call opens it. One evaluation asks for the owners
-/// of many targets in the same repository, which the command being judged
-/// has not changed yet. A failed open is kept as it failed: the caller
-/// decides for each target what the failure means, so no refusal or error
-/// depends on which target asked first.
-fn owner_common(root: &Path) -> OwnerCommon {
-    if let Some(cached) = OWNERS.with(|cache| {
-        cache
-            .borrow()
-            .as_ref()
-            .and_then(|map| map.get(root))
-            .cloned()
-    }) {
-        return cached;
+/// The reading of the owner at `root`, and whether it was kept from earlier
+/// in this [`super::edit_guard::RepoFactsScope`]. With `reuse`, a kept
+/// successful reading answers; otherwise, or when none is kept, the owner is
+/// opened now and a successful reading is kept for later lookups. A failure
+/// is never kept, so the next lookup opens the owner again.
+///
+/// Callers reuse only where a successful reading can add an owner but not
+/// remove one: never for a target the owner could enforce, and never to
+/// drop a duplicate (see [`distinct_owners`]). One evaluation asks for the
+/// owners of many ordinary targets in the same repository, so those lookups
+/// share one open.
+fn owner_common(root: &Path, reuse: bool) -> (OwnerCommon, bool) {
+    if reuse {
+        if let Some(kept) = OWNERS.with(|cache| {
+            cache
+                .borrow()
+                .as_ref()
+                .and_then(|map| map.get(root))
+                .cloned()
+        }) {
+            return (Ok(kept.map(Ok)), true);
+        }
     }
     #[cfg(test)]
     OWNER_OPENS.with(|opens| opens.set(opens.get() + 1));
     let value = open(root)
         .map(|repo| repo.map(|repo| canonical(repo.commondir(), "target common directory")));
-    OWNERS.with(|cache| {
-        if let Some(map) = cache.borrow_mut().as_mut() {
-            map.insert(root.to_path_buf(), value.clone());
+    let success = match &value {
+        Ok(None) => Some(None),
+        Ok(Some(Ok(directory))) => Some(Some(directory.clone())),
+        Ok(Some(Err(_))) | Err(_) => None,
+    };
+    OWNERS.with(|cache| match (cache.borrow_mut().as_mut(), success) {
+        (Some(map), Some(reading)) => {
+            map.insert(root.to_path_buf(), reading);
         }
+        (Some(map), None) => {
+            map.remove(root);
+        }
+        (None, _) => {}
     });
-    value
+    (value, false)
 }
 
 /// A checkout hidden from Git's registration list still names its common
