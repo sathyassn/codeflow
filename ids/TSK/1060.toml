@@ -1,0 +1,11 @@
+id = "TSK-1060"
+uid = "ef6208e8-01a8-4aaa-902e-15da660beef4"
+kind = "TSK"
+title = "Codex seats can be qualified under managed requirements"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T19:16:30Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
