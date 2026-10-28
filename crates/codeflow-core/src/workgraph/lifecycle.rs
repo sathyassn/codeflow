@@ -717,10 +717,11 @@ fn project_table_in(repo_root: &Path) -> Result<Option<toml::Table>, String> {
 /// (the destination's advertisement, the hosting platform's target, or the
 /// target branch's ref), never a merge-base or a `--base` boundary. Only
 /// what the change itself does is judged: a head whose marker matches the
-/// marker where it forked from `target` leaves the target's own list in
-/// place when it merges, whatever that list now is. It does not depend on
-/// durable work tracking. A head that does not resolve has no file, which
-/// reads as a removed marker; an unreadable head marker is always judged.
+/// marker at every best fork point from `target` leaves the target's own
+/// list in place when it merges, whatever that list now is. It does not
+/// depend on durable work tracking. A head that does not resolve has no
+/// file, which reads as a removed marker; an unreadable marker, at the head
+/// or at the target, is always judged, and an unreadable target refuses.
 ///
 /// # Errors
 ///
@@ -746,13 +747,21 @@ pub fn outcome_marker_errors(
     let adoption =
         |state: Option<&toml::Table>| state.map_or(Adoption::Unmarked, Adoption::in_table);
     let head_adoption = adoption(head_state.as_ref());
-    if let Some(head_commit) = head_commit {
+    // The shortcut needs a readable list on both sides and a head that
+    // leaves the marker as every best fork point held it; anything else is
+    // judged against the target, which refuses an unreadable target list.
+    let readable = |state: &Adoption| !matches!(state, Adoption::Unreadable(_));
+    if let (Some(head_commit), true, true) = (
+        head_commit,
+        readable(&adoption(target_state.as_ref())),
+        readable(&head_adoption),
+    ) {
         // The guarded reader refuses a shallow cut, an overlay or unreadable
         // history, so an unprovable fork point never skips the judgment.
-        let fork = match history::merge_base(&repo, target_commit, head_commit) {
-            Ok(fork) => Some(fork),
+        let forks = match history::merge_bases(&repo, target_commit, head_commit) {
+            Ok(forks) => forks,
             // Histories proven unrelated: the head is judged whole.
-            Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Vec::new(),
             Err(error) => {
                 return Err(format!(
                     "no merge-base of {target} and the head: {}",
@@ -760,12 +769,12 @@ pub fn outcome_marker_errors(
                 ))
             }
         };
-        if let Some(fork) = fork {
-            let unchanged = !matches!(head_adoption, Adoption::Unreadable(_))
-                && adoption(project_table_at(&repo, fork)?.as_ref()) == head_adoption;
-            if unchanged {
-                return Ok(Vec::new());
-            }
+        let mut unchanged = !forks.is_empty();
+        for fork in forks {
+            unchanged &= adoption(project_table_at(&repo, fork)?.as_ref()) == head_adoption;
+        }
+        if unchanged {
+            return Ok(Vec::new());
         }
     }
     Ok(

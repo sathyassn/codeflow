@@ -8139,10 +8139,13 @@ fn epic_line_adoption_pre_push_merge_only_control() {
 /// adoption route, so the push check stays off, as before this change.
 #[test]
 fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
-    use line_adoption_fixture::{passes, Line, ZERO};
+    use line_adoption_fixture::{passes, Line, LINE, ZERO};
     let f = Line::untracked();
     let first = f.direct();
     passes(&f.push(ZERO));
+    // The destination holds what the first push sent, as a real push leaves
+    // it: the Outcome marker check reads the destination's default branch.
+    f.git(&["push", "-q", "origin", "main", LINE]);
     f.write("src/lib.rs", "pub fn again() {}\n");
     f.commit("fix: second direct change");
     passes(&f.push(&first));

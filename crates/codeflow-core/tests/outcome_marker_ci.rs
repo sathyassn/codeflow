@@ -132,3 +132,87 @@ fn an_unchanged_or_shorter_list_passes() {
 fn the_adoption_write_passes() {
     assert!(marker_errors(None, Some(&[OLD, NEW]), false).is_empty());
 }
+
+/// A repository on `main` holding `uids` as the marker, ready for commits.
+fn seeded(uids: Option<&[&str]>) -> tempfile::TempDir {
+    isolate_git();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    own_repository(root);
+    write(root, ".codeflow/project.toml", &state(uids));
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "chore: seed"]);
+    dir
+}
+
+fn commit_state(root: &Path, text: &str, message: &str) {
+    write(root, ".codeflow/project.toml", text);
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", message]);
+}
+
+fn marker_errors_at_head(root: &Path) -> Vec<String> {
+    codeflow_core::workgraph::lifecycle::outcome_marker_errors(root, "main", Some("HEAD")).unwrap()
+}
+
+/// A target whose marker parses as TOML but is no list refuses, also for
+/// a head that leaves the marker as it was where it forked.
+#[test]
+fn a_malformed_target_marker_refuses_an_unchanged_head() {
+    let dir = seeded(Some(&[OLD]));
+    let root = dir.path();
+    git(root, &["switch", "-q", "-c", "task/TSK-002-x"]);
+    write(root, "notes.txt", "a change\n");
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "feat: add notes"]);
+    git(root, &["switch", "-q", "main"]);
+    commit_state(
+        root,
+        "schema_version = 1\ntier = \"full\"\noutcome_present_uids = \"broken\"\n",
+        "chore: break the marker",
+    );
+    git(root, &["switch", "-q", "task/TSK-002-x"]);
+    let errors = marker_errors_at_head(root);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("cannot be read"), "{errors:?}");
+}
+
+/// After a criss-cross merge the target and the head have two best fork
+/// points, one listing `OLD` and one not. The target dropped `OLD`; a head
+/// that keeps it matches one fork point only, so it is judged and refused.
+#[test]
+fn a_head_matching_one_of_several_fork_points_is_judged() {
+    for order in [["a", "b"], ["b", "a"]] {
+        let dir = seeded(Some(&[]));
+        let root = dir.path();
+        git(root, &["branch", "a"]);
+        git(root, &["branch", "b"]);
+        for side in order {
+            git(root, &["switch", "-q", side]);
+            if side == "a" {
+                commit_state(root, &state(Some(&[OLD])), "chore: list a record");
+            } else {
+                write(root, "b.txt", "b\n");
+                git(root, &["add", "-A"]);
+                git(root, &["commit", "-q", "-m", "feat: add b"]);
+            }
+        }
+        // The target merges `a` into `b` and keeps the shorter list.
+        git(root, &["switch", "-q", "-C", "main", "b"]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "chore: merge a", "a"],
+        );
+        commit_state(root, &state(Some(&[])), "chore: drop the record");
+        // The head merges `b` into `a` and keeps `a`'s list.
+        git(root, &["switch", "-q", "-c", "task/TSK-002-x", "a"]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "chore: merge b", "b"],
+        );
+        let errors = marker_errors_at_head(root);
+        assert_eq!(errors.len(), 1, "{order:?}: {errors:?}");
+        assert!(errors[0].contains(OLD), "{order:?}: {errors:?}");
+    }
+}

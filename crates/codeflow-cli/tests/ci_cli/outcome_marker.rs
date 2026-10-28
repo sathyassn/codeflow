@@ -487,3 +487,88 @@ fn a_rejected_declared_target_does_not_judge_the_marker() {
         "{out}"
     );
 }
+
+/// With no remote, the marker is judged against the local target branch;
+/// a target that does not exist is never read as "no list", which would
+/// let the head's own list decide its exemptions. The refusal says how to
+/// supply the target.
+#[test]
+fn a_missing_target_without_a_remote_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    adopted(root, "standard", false);
+    let mine = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    list(root, mine);
+    commit_all(root, "chore: list a record");
+    let out = run_in(
+        root,
+        &[
+            "ci", "--base", "trunk", "--head", "HEAD", "--branch", "feat/x", "--into", "stable",
+        ],
+    );
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_ne!(out.status.code(), Some(0), "{all}");
+    assert!(
+        all.contains("the tip of the target branch 'stable' cannot be resolved here")
+            && all.contains("create that branch, or name the branch this work lands on"),
+        "{all}"
+    );
+}
+
+/// The pre-push hand-off for a target the destination does not advertise
+/// refuses, and the remedy says how to recover: push the line first, or
+/// push it to the fork.
+#[test]
+fn an_unadvertised_target_names_how_to_supply_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    adopted(root, "standard", false);
+    std::fs::write(root.join("notes.txt"), "a change\n").unwrap();
+    commit_all(root, "feat: add notes");
+    let remote = trunk_copy_as_origin(root);
+    let bare = remote.path().join("origin.git");
+    let bare = bare.to_str().unwrap();
+    let listed = std::process::Command::new("git")
+        .args(["ls-remote", "--symref", bare, "HEAD", "refs/heads/*"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let mut child = super::codeflow()
+        .args([
+            "ci",
+            "--base",
+            "trunk",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--into",
+            "stable",
+            "--destination",
+            bare,
+            "--advertisement-stdin",
+        ])
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), &listed.stdout).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_ne!(out.status.code(), Some(0), "{all}");
+    assert!(
+        all.contains("the destination does not advertise the target branch 'stable'")
+            && all.contains("push 'stable' to this destination before the work that lands on it"),
+        "{all}"
+    );
+}

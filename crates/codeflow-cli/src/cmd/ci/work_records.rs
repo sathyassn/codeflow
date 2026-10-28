@@ -28,7 +28,7 @@ pub(super) fn dispatch(
     authority: Option<&str>,
     on_line: bool,
     brought: Option<&Brought>,
-    target_tip: &Result<Option<String>, String>,
+    target_tip: &Result<String, super::NoTarget>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -173,17 +173,27 @@ pub(super) fn check(
 /// only epics, or no records yet, is judged too. A target the destination
 /// proves absent (`Ok(None)`) has no list to keep; a tip or marker that
 /// cannot be read refuses.
-fn marker(root: &Path, target_tip: &Result<Option<String>, String>, head: &str) -> Vec<Violation> {
-    let judged = match target_tip {
-        Ok(None) => return Vec::new(),
-        Ok(Some(tip)) => outcome_marker_errors(root, tip, Some(head)),
-        Err(error) => Err(error.clone()),
+fn marker(root: &Path, target_tip: &Result<String, super::NoTarget>, head: &str) -> Vec<Violation> {
+    let tip = match target_tip {
+        Ok(tip) => tip,
+        Err(missing) => {
+            return vec![Violation::always_blocking(
+                "work.records",
+                format!(
+                    "cannot judge the Outcome adoption marker in .codeflow/project.toml: {}",
+                    missing.message
+                ),
+                &missing.remedy,
+            )]
+        }
     };
-    match judged {
+    match outcome_marker_errors(root, tip, Some(head)) {
         Ok(errors) => errors.into_iter().map(marker_block).collect(),
-        Err(error) => vec![marker_block(format!(
-            "cannot judge the Outcome adoption marker in .codeflow/project.toml: {error}"
-        ))],
+        Err(error) => vec![Violation::always_blocking(
+            "work.records",
+            format!("cannot judge the Outcome adoption marker in .codeflow/project.toml: {error}"),
+            "repair the Git read the message names (a shallow clone fetches full history), then retry",
+        )],
     }
 }
 
