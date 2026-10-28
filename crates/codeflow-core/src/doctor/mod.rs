@@ -30,8 +30,8 @@ mod remote_perimeter;
 mod startup_files;
 
 pub use codex_profile::{
-    probe_codex_builder_profile, CodexBuilderProbe, CodexLoad, ProjectLayer,
-    CODEX_BUILDER_OVERRIDES,
+    builder_launch_root, probe_codex_builder_grants, probe_codex_builder_profile,
+    CodexBuilderProbe, CodexLoad, GrantCheck, ProjectLayer, CODEX_BUILDER_OVERRIDES,
 };
 
 /// Outcome of a health check.
@@ -2293,6 +2293,20 @@ fn check_permissions(opts: &Options) -> CheckResult {
             opts.codeflow_home.as_deref(),
         )
     };
+    // What the project's Codex profiles grant on the same folders (TSK-337
+    // AC-6). Reported only: the status stays the write probe's, because a
+    // builder seat's launch also carries these grants and doctor
+    // --preflight runs that check under the real profile.
+    let codex = if opts.project_dir.is_empty() {
+        String::new()
+    } else {
+        codex_gate_grants(Path::new(&opts.project_dir))
+            .map(|report| format!("; {report}"))
+            .unwrap_or_default()
+    };
+    let in_codex = opts
+        .env("CODEX_SANDBOX")
+        .is_some_and(|value| !value.is_empty());
     if !unwritable.is_empty() {
         let paths: Vec<String> = unwritable
             .iter()
@@ -2308,11 +2322,16 @@ fn check_permissions(opts: &Options) -> CheckResult {
                 )
             })
             .collect();
+        let step = if in_codex {
+            &remedy::DOCTOR_GATE_DIRS_CODEX
+        } else {
+            &remedy::DOCTOR_GATE_DIRS
+        };
         return CheckResult {
             name: "permissions".into(),
-            status: Status::Warn(remedy::DOCTOR_GATE_DIRS.with(&[("paths", &paths.join(", "))])),
+            status: Status::Warn(step.with(&[("paths", &paths.join(", "))])),
             message: format!(
-                "essential and full gates cannot write their lock or evidence directories, so `codeflow test --mode essential` or `--mode full` refuses or fails here ({}){sandbox}",
+                "essential and full gates cannot write their lock or evidence directories, so `codeflow test --mode essential` or `--mode full` refuses or fails here ({}){sandbox}{codex}",
                 errors.join("; ")
             ),
             duration: start.elapsed(),
@@ -2323,10 +2342,84 @@ fn check_permissions(opts: &Options) -> CheckResult {
         name: "permissions".into(),
         status: Status::Pass,
         message: format!(
-            "file permissions correct; the essential and full gate lock and evidence directories are writable{sandbox}"
+            "file permissions correct; the essential and full gate lock and evidence directories are writable{sandbox}{codex}"
         ),
         duration: start.elapsed(),
     }
+}
+
+/// The two home folders a gate writes, as Codex profile keys.
+const CODEX_GATE_GRANTS: [&str; 2] = ["~/.codeflow/locks", "~/.codeflow/gate-runs"];
+
+/// What the `cf-builder` and `cf-guard` profiles in `.codex/config.toml`
+/// grant on the gate's home folders, following `extends` within the file
+/// (TSK-337 AC-6). `None` when the file is absent or defines neither
+/// profile. This reads configuration; the effective boundary of a seat is
+/// what `codeflow doctor --preflight` observes.
+fn codex_gate_grants(project: &Path) -> Option<String> {
+    let path = project.join(".codex/config.toml");
+    let text = crate::bounded_file::read_regular_to_string(&path).ok()?;
+    let Ok(config) = text.parse::<toml::Table>() else {
+        return Some("Codex profiles: unavailable: .codex/config.toml is not valid TOML".into());
+    };
+    let profiles = config.get("permissions").and_then(toml::Value::as_table)?;
+    let writes = |name: &str| -> Option<Vec<&'static str>> {
+        profiles.get(name)?;
+        let mut granted = Vec::new();
+        for grant in CODEX_GATE_GRANTS {
+            let mut current = Some(name.to_string());
+            let mut seen = std::collections::BTreeSet::new();
+            while let Some(profile) = current.take() {
+                if !seen.insert(profile.clone()) {
+                    break;
+                }
+                let table = profiles.get(&profile).and_then(toml::Value::as_table);
+                let value = table
+                    .and_then(|table| table.get("filesystem"))
+                    .and_then(toml::Value::as_table)
+                    .and_then(|filesystem| filesystem.get(grant))
+                    .and_then(toml::Value::as_str);
+                if let Some(value) = value {
+                    if value == "write" {
+                        granted.push(grant);
+                    }
+                    break;
+                }
+                current = table
+                    .and_then(|table| table.get("extends"))
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_string);
+            }
+        }
+        Some(granted)
+    };
+    let describe = |name: &str, granted: Option<Vec<&str>>| match granted {
+        None => format!("{name} is not defined"),
+        Some(granted) if granted.is_empty() => format!("{name} writes neither"),
+        Some(granted) => format!("{name} writes {}", granted.join(" and ")),
+    };
+    let builder = writes("cf-builder");
+    let guard = writes("cf-guard");
+    if builder.is_none() && guard.is_none() {
+        return None;
+    }
+    let missing: Vec<&str> = builder.as_ref().map_or_else(Vec::new, |granted| {
+        CODEX_GATE_GRANTS
+            .into_iter()
+            .filter(|grant| !granted.contains(grant))
+            .collect()
+    });
+    let mut report = format!(
+        "Codex profiles in .codex/config.toml: {}; {}",
+        describe("cf-builder", builder),
+        describe("cf-guard", guard)
+    );
+    if !missing.is_empty() {
+        report.push_str(
+            " (the shipped cf-builder writes both; a builder seat still gets them from its launch overrides, and `codeflow update` restores the shipped profile)",
+        );
+    }
+    Some(report)
 }
 
 /// Claude Code sets `SANDBOX_RUNTIME` in the commands its sandbox runs.
@@ -6322,6 +6415,86 @@ mod tests {
         }
         assert!(result.message.contains(SANDBOX_NOTE), "{}", result.message);
         assert!(remedy.to_string().contains("allowWrite"), "{remedy}");
+    }
+
+    /// TSK-337 AC-6: the permissions check reports the Codex profiles'
+    /// grants on the gate's home folders, with and without them, and inside
+    /// a Codex sandbox its remedy is the builder relaunch.
+    #[test]
+    fn test_check_permissions_reports_codex_profile_grants() {
+        fn in_codex(name: &str) -> Option<std::ffi::OsString> {
+            (name == "CODEX_SANDBOX").then(|| "seatbelt".into())
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".codeflow")).unwrap();
+        std::fs::create_dir_all(project.join(".codex")).unwrap();
+        git2::Repository::init(&project).unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = project.to_string_lossy().to_string();
+        opts.codeflow_home = Some(dir.path().join("home"));
+        let config = project.join(".codex/config.toml");
+
+        std::fs::write(
+            &config,
+            include_str!("../../../../assets/base/codex/config.toml"),
+        )
+        .unwrap();
+        let result = check_permissions(&opts);
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+        assert!(
+            result.message.contains("Codex profiles in .codex/config.toml: cf-builder writes ~/.codeflow/locks and ~/.codeflow/gate-runs; cf-guard writes neither"),
+            "{}",
+            result.message
+        );
+        assert!(!result.message.contains("restores"), "{}", result.message);
+
+        // The table from before TSK-1003, as this repository's main checkout
+        // had it on 2026-10-27; inheritance through `extends` counts.
+        std::fs::write(
+            &config,
+            "[permissions.cf-guard]\nextends = \":workspace\"\n[permissions.cf-builder]\nextends = \"cf-guard\"\n[permissions.cf-builder.filesystem.\":workspace_roots\"]\n\".git\" = \"write\"\n",
+        )
+        .unwrap();
+        let result = check_permissions(&opts);
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+        assert!(
+            result
+                .message
+                .contains("cf-builder writes neither; cf-guard writes neither (the shipped cf-builder writes both"),
+            "{}",
+            result.message
+        );
+        std::fs::write(
+            &config,
+            "[permissions.cf-guard.filesystem]\n\"~/.codeflow/locks\" = \"write\"\n[permissions.cf-builder]\nextends = \"cf-guard\"\n",
+        )
+        .unwrap();
+        let result = check_permissions(&opts);
+        assert!(
+            result
+                .message
+                .contains("cf-builder writes ~/.codeflow/locks; cf-guard writes ~/.codeflow/locks"),
+            "{}",
+            result.message
+        );
+
+        std::fs::remove_file(&config).unwrap();
+        let result = check_permissions(&opts);
+        assert!(!result.message.contains("Codex"), "{}", result.message);
+
+        let blocked = dir.path().join("not-a-dir");
+        std::fs::write(&blocked, "file").unwrap();
+        opts.codeflow_home = Some(blocked);
+        opts.env_var = Some(in_codex);
+        let result = check_permissions(&opts);
+        let Status::Warn(remedy) = &result.status else {
+            panic!("{:?} {}", result.status, result.message);
+        };
+        let remedy = remedy.to_string();
+        assert!(remedy.contains("transport.md"), "{remedy}");
+        assert!(remedy.contains("cf-guard"), "{remedy}");
+        assert!(!remedy.contains("allowWrite"), "{remedy}");
     }
 
     /// TSK-216 AC-3: in the sandbox the network probe is an HTTPS request,

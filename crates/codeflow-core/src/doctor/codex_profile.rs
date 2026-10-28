@@ -26,11 +26,23 @@ use std::time::Duration;
 /// is their documented home; a test keeps the two in step. The description
 /// override gives the startup load a profile named `cf-builder` that grants
 /// nothing; the session load merges it into the project's table, whose
-/// description is the same value.
-pub const CODEX_BUILDER_OVERRIDES: [&str; 2] = [
+/// description is the same value. The filesystem override carries the
+/// profile's two home grants (TSK-337): a seat gets the profile as the main
+/// checkout root has it, which can predate them, and Codex merges this
+/// table into that profile's. A test keeps it equal to the shipped grants.
+pub const CODEX_BUILDER_OVERRIDES: [&str; 3] = [
     "permissions.cf-builder.description=\"CodeFlow builder seat\"",
+    "permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\",\"~/.codeflow/gate-runs\"=\"write\"}",
     "default_permissions=\"cf-builder\"",
 ];
+
+/// The launch overrides that `codex sandbox` takes as `-c`: all but the
+/// profile selection, which it takes as `-P cf-builder`.
+fn sandbox_overrides() -> impl Iterator<Item = &'static str> {
+    CODEX_BUILDER_OVERRIDES
+        .into_iter()
+        .filter(|value| !value.starts_with("default_permissions="))
+}
 
 /// How long one Codex command may take before it counts as not run.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -284,6 +296,109 @@ fn load(program: &str, cwd: &Path, timeout: Duration) -> CodexLoad {
     CodexLoad::Rejected(reason)
 }
 
+/// What the builder launch let a sandboxed process write, as
+/// `codeflow doctor --check permissions` judged it inside
+/// `codex sandbox` with the launch overrides, from the folder a builder
+/// seat starts in (TSK-337).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrantCheck {
+    /// The check passed there: both gate lock folders (the home one and
+    /// the one under the common `.git`) and the gate evidence folder were
+    /// writable.
+    Effective,
+    /// The check ran there and could not write a folder; its message.
+    NotEffective(String),
+    /// The sandbox or the check did not run, or printed no permissions
+    /// result, so nothing was observed.
+    NotRun(String),
+}
+
+/// The folder a builder seat starts in: the main checkout that holds the
+/// common `.git` of `project` (transport.md, "from the main checkout
+/// root"). `project` itself when it is not in a repository, or when the
+/// common directory is not a `.git` folder inside a checkout.
+#[must_use]
+pub fn builder_launch_root(project: &Path) -> std::path::PathBuf {
+    let common = git2::Repository::discover(project)
+        .ok()
+        .and_then(|repo| repo.commondir().canonicalize().ok());
+    match common {
+        Some(common) if common.file_name().is_some_and(|name| name == ".git") => common
+            .parent()
+            .map_or_else(|| project.to_path_buf(), Path::to_path_buf),
+        _ => project.to_path_buf(),
+    }
+}
+
+/// Run `codeflow doctor --check permissions` with the `codeflow` at
+/// `codeflow` inside `codex sandbox`, under the builder launch overrides
+/// and `-P cf-builder`, from `launch_root`. The check creates and removes
+/// disposable files in the folders it probes and writes nothing else.
+#[must_use]
+pub fn probe_codex_builder_grants(launch_root: &Path, codex: &Path, codeflow: &Path) -> GrantCheck {
+    grants_with_timeout(launch_root, codex, codeflow, LOAD_TIMEOUT)
+}
+
+fn grants_with_timeout(
+    launch_root: &Path,
+    codex: &Path,
+    codeflow: &Path,
+    timeout: Duration,
+) -> GrantCheck {
+    let (Some(program), Some(root), Some(check)) =
+        (codex.to_str(), launch_root.to_str(), codeflow.to_str())
+    else {
+        return GrantCheck::NotRun("a path is not valid UTF-8".to_string());
+    };
+    let mut args = vec!["sandbox", "-C", root];
+    for value in sandbox_overrides() {
+        args.push("-c");
+        args.push(value);
+    }
+    args.extend([
+        "-P",
+        "cf-builder",
+        "--",
+        check,
+        "doctor",
+        "--check",
+        "permissions",
+    ]);
+    let run =
+        match super::run_captured_complete(program, &args, timeout, Some(""), Some(launch_root)) {
+            Ok(run) => run,
+            Err(reason) => {
+                return GrantCheck::NotRun(format!("codex sandbox did not run: {reason}"))
+            }
+        };
+    permissions_result(&run.stdout).unwrap_or_else(|| {
+        GrantCheck::NotRun(match run.code {
+            Some(code) => format!("codex sandbox printed no permissions result (exit code {code})"),
+            None => "codex sandbox printed no permissions result (ended by a signal)".to_string(),
+        })
+    })
+}
+
+/// The one `permissions` result line of a `codeflow doctor --check
+/// permissions` run. `None` when there is no such line or more than one.
+fn permissions_result(stdout: &str) -> Option<GrantCheck> {
+    let mut found = None;
+    for line in stdout.lines() {
+        let Some((badge, message)) = line.split_once("  permissions: ") else {
+            continue;
+        };
+        let result = match badge.trim_end() {
+            "ok" => GrantCheck::Effective,
+            "warn" | "FAIL" => GrantCheck::NotEffective(message.trim().chars().take(400).collect()),
+            _ => continue,
+        };
+        if found.replace(result).is_some() {
+            return None;
+        }
+    }
+    found
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -452,5 +567,105 @@ mod tests {
             Some(ProjectLayer::Unverified { conflicting: false })
         );
         assert_eq!(judge(off(), CodexLoad::Rejected("no".to_string())), None);
+    }
+
+    /// TSK-337: only one top-level `permissions` result counts; its badge
+    /// decides, and anything else is not a result.
+    #[test]
+    fn permissions_results_are_read_from_the_badge_line_only() {
+        let notes = "note  policy: x\n      clear it: y\n";
+        assert_eq!(
+            permissions_result(&format!(
+                "{notes}ok    permissions: file permissions correct\n"
+            )),
+            Some(GrantCheck::Effective)
+        );
+        assert_eq!(
+            permissions_result(
+                "warn  permissions: cannot write /h/.codeflow/locks\n      clear it: z\n"
+            ),
+            Some(GrantCheck::NotEffective(
+                "cannot write /h/.codeflow/locks".to_string()
+            ))
+        );
+        assert!(matches!(
+            permissions_result("FAIL  permissions: .codeflow/ is not writable\n"),
+            Some(GrantCheck::NotEffective(_))
+        ));
+        for odd in [
+            "",
+            "ok    hooks: fine\n",
+            "      ok  permissions: indented\n",
+            "note  permissions: unseen\n",
+            "ok    permissions: a\nwarn  permissions: b\n",
+        ] {
+            assert_eq!(permissions_result(odd), None, "{odd:?}");
+        }
+    }
+
+    /// TSK-337: a builder seat starts in the main checkout root, so a linked
+    /// worktree's launch root is the checkout that holds the common `.git`.
+    #[test]
+    fn the_launch_root_of_a_linked_worktree_is_the_main_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        let repo = git2::Repository::init(&main).unwrap();
+        let signature = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
+            .unwrap();
+        let linked = main.join(".worktrees").join("task");
+        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        repo.worktree("task", &linked, None).unwrap();
+        let main = main.canonicalize().unwrap();
+        assert_eq!(builder_launch_root(&linked), main);
+        assert_eq!(builder_launch_root(&main), main);
+        let plain = dir.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert_eq!(builder_launch_root(&plain), plain);
+    }
+
+    /// TSK-337: the sandbox run passes every launch override but the
+    /// selection, selects with `-P`, runs the permissions check from the
+    /// launch root, and a sandbox that prints nothing observes nothing.
+    #[test]
+    fn the_grant_check_runs_the_permissions_check_inside_codex_sandbox() {
+        let bin = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let log = bin.path().join("log");
+        let codex = script(
+            bin.path(),
+            &format!(
+                "printf '%s|%s\\n' \"$PWD\" \"$*\" > '{}'\necho 'ok    permissions: fine'\n",
+                log.display()
+            ),
+        );
+        let check = Path::new("/opt/codeflow");
+        assert_eq!(
+            grants_with_timeout(root.path(), &codex, check, Duration::from_secs(10)),
+            GrantCheck::Effective
+        );
+        let logged = std::fs::read_to_string(&log).unwrap();
+        let (cwd, args) = logged.trim_end().split_once('|').unwrap();
+        assert_eq!(
+            Path::new(cwd).canonicalize().unwrap(),
+            root.path().canonicalize().unwrap()
+        );
+        assert_eq!(
+            args,
+            format!(
+                "sandbox -C {} -c {} -c {} -P cf-builder -- /opt/codeflow doctor --check permissions",
+                root.path().display(),
+                CODEX_BUILDER_OVERRIDES[0],
+                CODEX_BUILDER_OVERRIDES[1]
+            )
+        );
+        let silent = script(bin.path(), "exit 134\n");
+        assert!(matches!(
+            grants_with_timeout(root.path(), &silent, check, Duration::from_secs(10)),
+            GrantCheck::NotRun(reason) if reason.contains("exit code 134")
+        ));
     }
 }

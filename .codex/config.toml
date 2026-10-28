@@ -5,10 +5,10 @@
 # with no `--sandbox` flag: workspace writes with the enforcement files and
 # the shell startup files read only, the pure-secret stores denied, and
 # public network through the proxy with private and link-local targets
-# blocked. `cf-builder` extends it for builder seats. Tested on Codex 0.164.0
-# (probes of 2026-10-25; earlier probes on 0.159.1 of 2026-09-29, and the
-# profiles and the proxy were first qualified on 0.157.1); earlier versions
-# are unqualified, not unsupported.
+# blocked. `cf-builder` extends it for builder seats. Tested on Codex 0.165.0
+# (probes of 2026-10-27; earlier probes on 0.164.0 of 2026-10-25 and 0.159.1
+# of 2026-09-29, and the profiles and the proxy were first qualified on
+# 0.157.1); earlier versions are unqualified, not unsupported.
 #
 # On macOS, Playwright's Chromium did not start under the three sandboxed
 # profiles probed (`cf-guard`, `cf-builder` and the built-in `:workspace`):
@@ -24,10 +24,11 @@
 # - D1 builder seats, as amended on 2026-10-05 (ADR-0075, TSK-242): the
 #   operator moved builders into a sandbox so that no builder can write a
 #   shell startup file. A builder launches with `--ask-for-approval never`,
-#   `-c 'permissions.cf-builder.description="CodeFlow builder seat"'` and
-#   `-c default_permissions="cf-builder"`, no `--sandbox` flag, from the
-#   main checkout root (the description override is explained at
-#   `[permissions.cf-builder]` below; TSK-1003). The spike of 2026-09-29
+#   `-c 'permissions.cf-builder.description="CodeFlow builder seat"'`,
+#   `-c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write","~/.codeflow/gate-runs"="write"}'`
+#   and `-c default_permissions="cf-builder"`, no `--sandbox` flag, from the
+#   main checkout root (both overrides are explained at
+#   `[permissions.cf-builder]` below; TSK-1003, TSK-337). The spike of 2026-09-29
 #   (Codex 0.159.1) ran fetch, worktree add, stage, commit, cargo and npm
 #   builds unattended with `.git/hooks` and `.git/config` unwritable; a
 #   push to a bare remote
@@ -73,6 +74,12 @@ network_proxy = true
 [shell_environment_policy]
 ignore_default_excludes = false
 
+# `cf-guard` grants no write under the home folder (TSK-337). Review and
+# consult seats run no gate and reserve nothing (ADR-0075 D2: a consult or
+# review edits nothing), so they cannot take the gate lock under
+# `~/.codeflow/locks`, write gate evidence under `~/.codeflow/gate-runs` or,
+# outside the main checkout root, write the common `.git`. A seat that has to
+# run a gate is a builder seat and launches as one.
 [permissions.cf-guard]
 extends = ":workspace"
 
@@ -239,10 +246,28 @@ dangerously_allow_all_unix_sockets = false
 # launch therefore also passes
 # `-c 'permissions.cf-builder.description="CodeFlow builder seat"'`, the
 # same value as below. A description grants nothing and is not inherited,
-# so the startup load sees a profile with no filesystem table (restricted),
-# and the session load, which includes this file, merges the override into
-# this table unchanged. If this file is not loaded, the seat runs that
-# restricted stub and fails closed.
+# so the startup load sees a profile without `extends`, which cannot even
+# read or run a program, and the session load, which includes this file,
+# merges the overrides into this table. If this file is not loaded, the
+# seat runs that stub and fails closed.
+#
+# Where the profile comes from (TSK-337, issue 254): Codex reads the
+# project config of the folder the seat starts in, here the main checkout
+# root, so a builder gets this table as that checkout has it, which is the
+# reviewed copy on the protected default branch. Until a CodeFlow update
+# reaches that branch, the root can hold an older table: on 2026-10-27
+# (Codex 0.165.0) this repository's root still had the table from before
+# TSK-1003, and a seat launched as transport.md said could not write
+# `~/.codeflow/locks`. So the launch also passes the two home grants below
+# as an override,
+# `-c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write","~/.codeflow/gate-runs"="write"}'`.
+# A `-c` key splits on every dot, so a path key can only be passed inside
+# this inline table, which Codex merges into this filesystem table, keeping
+# the `:workspace_roots` entries below. The override and this table name the
+# same two grants (a test keeps them equal), and the startup stub with them
+# still cannot read or run anything. `codeflow doctor --preflight` runs
+# `codex sandbox` with the launch overrides from the main checkout root and
+# fails when a grant is not effective there.
 #
 # `~/.codeflow/locks` is writable so a builder can run `codeflow reserve`
 # and the heavy quick targets, which hold `~/.codeflow/locks/full-gate.lock`
@@ -258,19 +283,27 @@ dangerously_allow_all_unix_sockets = false
 # the folder can at most be locked or replaced, never written through, and
 # reveals nothing beyond a folder the gate already trusts. A gate that
 # cannot write its record refuses rather than run uncoordinated. The folder
-# stays an advisory coordination boundary,
-# not a security boundary: a builder can still hold, delete or replace a
-# lock or a record and so block, mislead or split the coordination between
-# gates. A full gate also writes its evidence to `~/.codeflow/gate-runs`,
-# which stays unwritable here: that decision is TSK-337's. Nothing else
-# under the home folder is writable; a relocated `CODEFLOW_HOME` is not
-# covered.
+# stays an advisory coordination boundary, not a security boundary: a
+# builder can still hold, delete or replace a lock or a record and so
+# block, mislead or split the coordination between gates.
+#
+# `~/.codeflow/gate-runs` is writable so a Codex seat in this production
+# posture, a Codex primary included, can run `codeflow test --mode full`
+# and record the run there (TSK-337 AC-5), as the Claude presets allow.
+# The folder is per-account evidence, not a security boundary: a seat that
+# can write it can also write a record that a later gate on this account
+# reads as a green base and skips checks for, or that a PR cites. The same
+# holds for any code a full gate runs, since the gate runs the candidate's
+# own tests with this write. Hosted CI and review are the checks that do
+# not trust this folder. Nothing else under the home folder is writable; a
+# relocated `CODEFLOW_HOME` is not covered.
 [permissions.cf-builder]
 extends = "cf-guard"
 description = "CodeFlow builder seat"
 
 [permissions.cf-builder.filesystem]
 "~/.codeflow/locks" = "write"
+"~/.codeflow/gate-runs" = "write"
 
 [permissions.cf-builder.filesystem.":workspace_roots"]
 ".git" = "write"
