@@ -1,0 +1,11 @@
+id = "TSK-1031"
+uid = "b2fa4d43-84d6-4694-9b2e-324e43942dd9"
+kind = "TSK"
+title = "The shipped instructions hold project tooling to the tests product code gets"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T00:06:24Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
