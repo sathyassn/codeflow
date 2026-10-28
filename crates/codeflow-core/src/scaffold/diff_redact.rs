@@ -76,7 +76,7 @@ pub fn sides_for(dest: &str, old: &str, new: &str, shipped: &[&str]) -> DiffSide
     match Kind::of(dest) {
         Kind::Structured(format) => structured(format, old, new, shipped),
         Kind::Text => {
-            let owned: HashSet<&str> = shipped.iter().flat_map(|text| text.lines()).collect();
+            let owned: HashSet<&str> = shipped.iter().flat_map(|text| text.split('\n')).collect();
             DiffSides::Show(owned_lines(old, &owned), owned_lines(new, &owned))
         }
         Kind::Unknown => DiffSides::Withheld,
