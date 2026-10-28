@@ -2188,6 +2188,8 @@ fn sed_read_flags(args: &[String]) -> Vec<bool> {
 /// more than one, has that argument list, the position cannot be
 /// established and the whole line is kept.
 fn line_without_reads(line: &str, program: &str, args: &[String], reads: &[bool]) -> String {
+    #[cfg(test)]
+    SEGMENT_LINE_READS.with(|reads| reads.set(reads.get() + 1));
     let segments = expand_commands(line);
     let mut own = Vec::new();
     for (at, segment) in segments.iter().enumerate() {
@@ -4389,6 +4391,8 @@ pub(crate) fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<S
 /// and the value of an assignment (`x=alias/policy.json`), before brace
 /// expansion.
 pub(crate) fn line_path_words(line: &str) -> Vec<String> {
+    #[cfg(test)]
+    SEGMENT_LINE_READS.with(|reads| reads.set(reads.get() + 1));
     let tokens: Vec<String> = expand_commands(line)
         .iter()
         .flat_map(|segment| shell_tokens(segment))
@@ -4409,6 +4413,8 @@ pub(crate) fn line_path_words(line: &str) -> Vec<String> {
 /// Line evidence with the parser's expansion provenance. Raw fragments
 /// still supply literal name evidence; only parsed shell words expand.
 pub(crate) fn line_path_readings(line: &str) -> Vec<(String, bool)> {
+    #[cfg(test)]
+    SEGMENT_LINE_READS.with(|reads| reads.set(reads.get() + 1));
     let tokens = expand_commands(line)
         .iter()
         .flat_map(|segment| shell_words(segment))
@@ -4924,6 +4930,8 @@ const SED_SCRIPT_LIMIT: u64 = 1 << 24;
 /// `line` that has these arguments: `None` when the command cannot be
 /// found in one place on the line.
 fn sed_args_fill(line: &str, args: &[String]) -> Option<Vec<bool>> {
+    #[cfg(test)]
+    SEGMENT_LINE_READS.with(|reads| reads.set(reads.get() + 1));
     let mut own = None;
     for segment in expand_commands(line) {
         let words = shell_words(&segment);
@@ -5484,6 +5492,10 @@ pub(crate) fn xargs_command(args: &[String]) -> Option<&[String]> {
 
 #[cfg(test)]
 thread_local! {
+    /// How many times a check of one segment expanded or re-read its whole
+    /// line (TSK-1050): [`own_literal`], the write checks and the path-word
+    /// readers.
+    static SEGMENT_LINE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many times [`line_names_ripgrep_config`] read a whole line.
     static RIPGREP_LINE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -5548,6 +5560,8 @@ fn line_without_patterns(cmd: &str, args: &[String], line: &str) -> (String, Vec
 /// `line` that runs `program` with that argument list. When no command, or
 /// more than one, has it, no word counts as written.
 fn own_literal(line: &str, program: &str, args: &[String]) -> Vec<bool> {
+    #[cfg(test)]
+    SEGMENT_LINE_READS.with(|reads| reads.set(reads.get() + 1));
     let mut found = Vec::new();
     for segment in expand_commands(line) {
         let words = shell_words(&segment);
@@ -5902,6 +5916,8 @@ pub(crate) fn git_command_write_violation(
         return None;
     }
     if cmd == "git" {
+        #[cfg(test)]
+        SEGMENT_LINE_READS.with(|reads| reads.set(reads.get() + 1));
         let mut literals = Literals::default();
         for segment in expand_commands_read(line).segments {
             let words = command_argv(&segment);
@@ -6207,6 +6223,8 @@ fn direct_write_violation(
         payload_cwd,
         line,
     };
+    #[cfg(test)]
+    SEGMENT_LINE_READS.with(|reads| reads.set(reads.get() + 1));
     let assigned =
         crate::security::unresolved::line_assignments(&expand_commands_read(line).segments);
     if let Some(v) = crate::security::unresolved::judge_writer(cmd, args, &assigned, &guard) {
@@ -14530,6 +14548,37 @@ mod tests {
         let named = format!("RIPGREP_CONFIG_PATH=rc {long}");
         let (reads, _) = judge(&named);
         assert_eq!(reads, single, "a line naming the variable");
+    }
+
+    /// The checks of one segment that read the whole line (`own_literal`,
+    /// the write checks' line assignments and Git literals, the path-word
+    /// readers) read it once per guard evaluation, so a chain of many
+    /// segments costs what one does (TSK-1050 AC-8).
+    #[test]
+    fn a_long_chain_reads_its_whole_line_once_per_reader() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        let policy = GitPolicy::default();
+        let context = ctx(&policy, "task/example");
+        let judge = |command: &str| {
+            super::SEGMENT_LINE_READS.with(|reads| reads.set(0));
+            let mut rules: Vec<_> = super::evaluate_report_at(command, &context, &root)
+                .violations
+                .into_iter()
+                .map(|violation| violation.rule)
+                .collect();
+            rules.sort();
+            rules.dedup();
+            (super::SEGMENT_LINE_READS.with(std::cell::Cell::get), rules)
+        };
+        let one = "rg needle docs && cat notes.txt && rm -f \"$D/x\" && git status";
+        let (single, single_rules) = judge(one);
+        assert!(single >= 4, "each reader reads the line: {single}");
+        let long = vec![one; 40].join(" && ");
+        let (reads, rules) = judge(&long);
+        assert_eq!(reads, single, "reads grew with the segment count");
+        assert_eq!(rules, single_rules);
     }
 
     /// A guard context with an injected `gh pr merge` base-branch resolver.
