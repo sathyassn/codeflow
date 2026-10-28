@@ -553,16 +553,19 @@ struct Qualified {
     base: Option<git2::Oid>,
 }
 
-/// Settle the verb's receiving lines. In a clone with remotes, a tip is
-/// read only from `origin`'s remote-tracking ref: neither
-/// `branch.<name>.remote` nor a missing `origin` selects another source,
-/// and a missing ref refuses, naming the fetch. A clone with no remotes at
-/// all has only local branches. The default target is the conventional
-/// one (`main`, else `master`). The declared target adds a tip only when
-/// it qualifies by policy read at the default target (a protected branch,
-/// or an `integration/` line, which hosts protect); a name the record
-/// alone supplies never does. The anchor is the merge-base with the
-/// qualified declared target, else the default.
+/// Settle the verb's receiving lines (TSK-340, operator decision of
+/// 2026-10-27). The default target comes from explicit pins: `--base`
+/// names its tip and `--into` its name; only a clone with no remotes falls
+/// back to its local `main`, else `master` ([`default_target`]). A clone
+/// with remotes and no pins never reaches here ([`unpinned_binding`]). The
+/// declared target adds a tip only when records read at the pinned
+/// default tip name it: the policy's protected list there, or an open
+/// epic there with a task declaring that line ([`epic_line_at`]); a name's
+/// shape, such as an `integration/` prefix, and a name the record alone
+/// supplies never qualify. In a clone with remotes its tip is read only
+/// from `origin`'s remote-tracking ref, and a missing ref refuses, naming
+/// the fetch. The anchor is the merge-base with the qualified declared
+/// target, else the default.
 fn qualify(
     repo_root: &Path,
     repo: &git2::Repository,
