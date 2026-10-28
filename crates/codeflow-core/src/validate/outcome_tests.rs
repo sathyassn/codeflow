@@ -212,15 +212,19 @@ fn the_template_formatted_or_respaced_is_refused() {
     assert!(wrong.is_empty(), "accepted:\n{}", wrong.join("\n"));
 }
 
-/// An Outcome that quotes a template token in a code span is an example,
-/// not the unfilled form, so it states the Outcome.
+/// An Outcome that quotes a template token or phrase in a code span is an
+/// example, not the unfilled form: its own actor and action are real, so it
+/// states the Outcome.
 #[test]
 fn an_outcome_quoting_a_token_is_clean() {
     let marker = marked(&[OLD]);
+    let mut wrong = Vec::new();
     for outcome in [
         "After this merges, authors can document the literal `<who>` token.",
         "After this merges, authors can explain the `< who >` field in the template.",
         "After this merges, reviewers can spot an unfilled `<do what>`.",
+        "After this merges, authors can document the template `<who> can <do what>`.",
+        "After this merges, maintainers can explain why `can <do what>` is unfinished.",
     ] {
         let body = Body {
             outcome: Some(outcome),
@@ -228,10 +232,12 @@ fn an_outcome_quoting_a_token_is_clean() {
         };
         for kind in [Kind::Task, Kind::Epic] {
             let (errors, warnings) = findings(Some(&marker), kind, open(kind)[0], NEW, body);
-            assert!(errors.is_empty(), "{outcome}: {errors:?}");
-            assert!(warnings.is_empty(), "{outcome}: {warnings:?}");
+            if !(errors.is_empty() && warnings.is_empty()) {
+                wrong.push(format!("{outcome:?}: {errors:?} {warnings:?}"));
+            }
         }
     }
+    assert!(wrong.is_empty(), "refused:\n{}", wrong.join("\n"));
 }
 
 /// AC-2: a later record that states its Outcome is clean.

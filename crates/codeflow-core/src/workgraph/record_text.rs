@@ -760,22 +760,37 @@ fn spaced(text: &str) -> String {
     text
 }
 
-/// Whether an Outcome entry, its formatting and spacing set aside, is the
-/// template left unfilled: a token stands in the template's place
-/// (`<who> can`, `can <do what>`), or nothing remains but tokens and the
-/// template's own words. A sentence that quotes a token elsewhere, such as
-/// "authors can document the literal `<who>` token", is not.
+/// Stands in for a template token while an Outcome is split into words, so
+/// a token is never mistaken for a real word.
+const TOKEN: &str = "\0";
+
+/// Whether an Outcome entry, its formatting and spacing set aside, leaves
+/// one of the template's own slots unfilled. After the leading "after this
+/// merges", the sentence's first "can" splits it into its actor and its
+/// action; either slot holding nothing but tokens is unfilled. With no
+/// "can", the entry is unfilled when nothing remains but tokens and the
+/// template's words. A token or template phrase quoted inside a real action,
+/// such as "authors can document the template `<who> can <do what>`", is an
+/// example and leaves the slots filled.
 fn unfilled_outcome(entry: &str) -> bool {
-    let text = spaced(entry);
-    if text.contains("<who> can") || text.contains("can <do what>") {
-        return true;
-    }
-    text.replace("<who>", " ")
-        .replace("<do what>", " ")
+    let text = spaced(entry)
+        .replace("<who>", &format!(" {TOKEN} "))
+        .replace("<do what>", &format!(" {TOKEN} "));
+    let words: Vec<&str> = text
         .split_whitespace()
-        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\0'))
         .filter(|word| !word.is_empty())
-        .all(|word| matches!(word, "after" | "this" | "merges" | "can"))
+        .collect();
+    let rest = words
+        .strip_prefix(&["after", "this", "merges"][..])
+        .unwrap_or(&words);
+    let real = |slot: &[&str]| slot.iter().any(|word| *word != TOKEN);
+    match rest.iter().position(|word| *word == "can") {
+        Some(at) => !real(&rest[..at]) || !real(&rest[at + 1..]),
+        None => !rest
+            .iter()
+            .any(|word| *word != TOKEN && !matches!(*word, "after" | "this" | "merges")),
+    }
 }
 
 /// Whether one entry is substantive: a Deliverables entry holding its
