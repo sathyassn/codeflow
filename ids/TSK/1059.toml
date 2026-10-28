@@ -1,0 +1,11 @@
+id = "TSK-1059"
+uid = "9ff60878-fc9b-4baa-866a-01920f1c7562"
+kind = "TSK"
+title = "Host-state operations are reachable without a blanket retry"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T19:16:24Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
