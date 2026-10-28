@@ -513,9 +513,10 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
             }
         }
     }
-    // A reading kept from earlier in the scope may keep an owner in the list,
-    // never remove one: when one took part in removing a duplicate, every
-    // owner is read again (TSK-1050).
+    // A reading kept from earlier in the scope may remove an owner as a
+    // duplicate only for a pair two fresh readings proved to share one common
+    // directory; any other duplicate a kept reading finds has every owner
+    // read again (TSK-1050).
     match distinct_owners(target, &roots, true)? {
         Some(distinct) => Ok(distinct),
         None => Ok(distinct_owners(target, &roots, false)?.unwrap_or_default()),
@@ -524,18 +525,22 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
 
 /// The owners in `roots` that `target` must be judged against, one per
 /// common directory. With `reuse`, an owner `target` could not enforce
-/// through may take the reading kept earlier in this scope; `None` means a
-/// kept reading would have removed an owner as a duplicate, so the caller
-/// reads every owner afresh. Without `reuse`, every owner is opened now and
-/// the result is always `Some`.
+/// through may take the reading kept earlier in this scope. Two owners that
+/// share a common directory keep the first; when either reading of that pair
+/// was kept, the pair must have been proven to share by two fresh readings
+/// earlier in this scope ([`SHARED`]), else the result is `None` and the
+/// caller reads every owner afresh. Without `reuse`, every owner is opened
+/// now and the result is always `Some`.
 fn distinct_owners(
     target: &Path,
     roots: &[PathBuf],
     reuse: bool,
 ) -> Result<Option<Vec<PathBuf>>, String> {
-    let mut common = std::collections::BTreeSet::new();
+    // Each common directory, with the first owner that had it and whether
+    // that owner's reading was kept.
+    let mut common: std::collections::BTreeMap<PathBuf, (PathBuf, bool)> =
+        std::collections::BTreeMap::new();
     let mut distinct = Vec::new();
-    let mut reused = false;
     for root in roots {
         // Main and linked checkouts share the complete protection set. Open
         // each discovered owner first, so deduplication cannot hide a broken
@@ -544,7 +549,6 @@ fn distinct_owners(
         // kept reading never stands in for the refusal a broken owner gives.
         let enforced = could_enforce(target, root);
         let (opened, kept) = owner_common(root, reuse && !enforced);
-        reused |= kept;
         let opened = match opened {
             Ok(opened) => opened,
             Err(error) if enforced => {
@@ -564,16 +568,54 @@ fn distinct_owners(
             Err(_) => continue,
         };
         if let Some(directory) = opened {
-            if !common.insert(directory?) {
-                if reused {
+            let directory = directory?;
+            if let Some((first, first_kept)) = common.get(&directory) {
+                if !kept && !first_kept {
+                    note_shared(first, root);
+                } else if !proven_shared(first, root) {
                     return Ok(None);
                 }
                 continue;
             }
+            common.insert(directory, (root.clone(), kept));
         }
         distinct.push(root.clone());
     }
     Ok(Some(distinct))
+}
+
+thread_local! {
+    /// The pairs of owners two fresh readings proved to share one common
+    /// directory in one guard evaluation (TSK-1050), present only while a
+    /// [`super::edit_guard::RepoFactsScope`] is open: a linked worktree and
+    /// its main checkout. Kept readings may fold such a pair into one owner.
+    pub(super) static SHARED: std::cell::RefCell<Option<std::collections::HashSet<(PathBuf, PathBuf)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn shared_key(a: &Path, b: &Path) -> (PathBuf, PathBuf) {
+    if a <= b {
+        (a.to_path_buf(), b.to_path_buf())
+    } else {
+        (b.to_path_buf(), a.to_path_buf())
+    }
+}
+
+fn note_shared(a: &Path, b: &Path) {
+    SHARED.with(|pairs| {
+        if let Some(pairs) = pairs.borrow_mut().as_mut() {
+            pairs.insert(shared_key(a, b));
+        }
+    });
+}
+
+fn proven_shared(a: &Path, b: &Path) -> bool {
+    SHARED.with(|pairs| {
+        pairs
+            .borrow()
+            .as_ref()
+            .is_some_and(|pairs| pairs.contains(&shared_key(a, b)))
+    })
 }
 
 /// What opening one discovered owner gave: the error [`open`] reported, or
@@ -581,33 +623,83 @@ fn distinct_owners(
 /// non-repository, an error when that directory cannot be resolved).
 type OwnerCommon = Result<Option<Result<PathBuf, String>>, String>;
 
+/// The metadata of the files an owner's reading starts from: `.git` (a
+/// directory, or a file naming a linked worktree's Git directory) and
+/// `HEAD` (where the root is itself a Git directory). A reading is kept only
+/// while these are unchanged, so an owner replaced, broken or mended during
+/// the scope is opened again.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct Marker(Vec<Option<MarkerFile>>);
+
+#[derive(Clone, PartialEq, Eq)]
+struct MarkerFile {
+    dir: bool,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    id: u64,
+}
+
+fn marker(root: &Path) -> Marker {
+    Marker(
+        [".git", "HEAD"]
+            .iter()
+            .map(|name| {
+                std::fs::symlink_metadata(root.join(name))
+                    .ok()
+                    .map(|meta| MarkerFile {
+                        dir: meta.is_dir(),
+                        len: meta.len(),
+                        modified: meta.modified().ok(),
+                        id: file_id(&meta),
+                    })
+            })
+            .collect(),
+    )
+}
+
+#[cfg(unix)]
+fn file_id(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.ino()
+}
+
+#[cfg(not(unix))]
+fn file_id(_meta: &std::fs::Metadata) -> u64 {
+    0
+}
+
+/// An owner reading kept for one guard evaluation: a proven non-repository
+/// or a resolved common directory, with the [`Marker`] it was read from.
+type KeptOwner = (Option<PathBuf>, Marker);
+
 thread_local! {
-    /// The successful owner readings of one guard evaluation (TSK-1050):
-    /// a proven non-repository or a resolved common directory, present only
-    /// while a [`super::edit_guard::RepoFactsScope`] is open. A failure is
-    /// never kept.
-    pub(super) static OWNERS: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, Option<PathBuf>>>> =
+    /// The successful owner readings of one guard evaluation (TSK-1050),
+    /// present only while a [`super::edit_guard::RepoFactsScope`] is open. A
+    /// failure is never kept.
+    pub(super) static OWNERS: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, KeptOwner>>> =
         const { std::cell::RefCell::new(None) };
 }
 
 /// The reading of the owner at `root`, and whether it was kept from earlier
 /// in this [`super::edit_guard::RepoFactsScope`]. With `reuse`, a kept
-/// successful reading answers; otherwise, or when none is kept, the owner is
-/// opened now and a successful reading is kept for later lookups. A failure
-/// is never kept, so the next lookup opens the owner again.
+/// successful reading answers while the owner's [`Marker`] is unchanged;
+/// otherwise the owner is opened now and a successful reading is kept for
+/// later lookups. A failure is never kept, so the next lookup opens the
+/// owner again.
 ///
-/// Callers reuse only where a successful reading can add an owner but not
-/// remove one: never for a target the owner could enforce, and never to
-/// drop a duplicate (see [`distinct_owners`]). One evaluation asks for the
-/// owners of many ordinary targets in the same repository, so those lookups
-/// share one open.
+/// Callers never reuse for a target the owner could enforce, and a kept
+/// reading drops a duplicate only for a pair proven to share (see
+/// [`distinct_owners`]). One evaluation asks for the owners of many ordinary
+/// targets in the same repository, so those lookups share one open.
 fn owner_common(root: &Path, reuse: bool) -> (OwnerCommon, bool) {
+    let now = marker(root);
     if reuse {
-        if let Some(kept) = OWNERS.with(|cache| {
+        if let Some((kept, _)) = OWNERS.with(|cache| {
             cache
                 .borrow()
                 .as_ref()
                 .and_then(|map| map.get(root))
+                .filter(|(_, read_from)| *read_from == now)
                 .cloned()
         }) {
             return (Ok(kept.map(Ok)), true);
@@ -624,7 +716,7 @@ fn owner_common(root: &Path, reuse: bool) -> (OwnerCommon, bool) {
     };
     OWNERS.with(|cache| match (cache.borrow_mut().as_mut(), success) {
         (Some(map), Some(reading)) => {
-            map.insert(root.to_path_buf(), reading);
+            map.insert(root.to_path_buf(), (reading, now));
         }
         (Some(map), None) => {
             map.remove(root);
@@ -1725,6 +1817,28 @@ mod owner_opens {
             }
             assert_eq!(opens(), 2, "each owner is opened once: {session:?}");
         }
+    }
+
+    /// A duplicate that a kept reading finds, for a pair not yet proven to
+    /// share, has every owner read again, so the pair is folded only on
+    /// fresh readings; once proven, kept readings fold it.
+    #[test]
+    fn an_unproven_pair_is_read_again_before_it_is_folded() {
+        let (_dir, root) = repository();
+        let repo = git2::Repository::open(&root).unwrap();
+        let linked = root.join("w");
+        repo.worktree("w", &linked, None).unwrap();
+        let _scope = RepoFactsScope::enter();
+        reset();
+        let main = super::target_roots(&root.join("a/x"), &root);
+        assert_eq!(main, Ok(vec![root.clone()]));
+        assert_eq!(opens(), 1, "the main checkout alone");
+        let first = super::target_roots(&linked.join("b/x"), &root);
+        assert_eq!(first, Ok(vec![root.clone()]));
+        assert_eq!(opens(), 4, "the worktree, then both owners afresh");
+        let later = super::target_roots(&linked.join("c/x"), &root);
+        assert_eq!(later, Ok(vec![root.clone()]));
+        assert_eq!(opens(), 4, "a proven pair folds on kept readings");
     }
 
     /// Two owners, an outer repository and an independent one nested in

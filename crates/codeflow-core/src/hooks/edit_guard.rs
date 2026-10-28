@@ -990,6 +990,8 @@ impl RepoFactsScope {
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             super::repo::OWNERS
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
+            super::repo::SHARED
+                .with(|cache| *cache.borrow_mut() = Some(std::collections::HashSet::new()));
             super::git_guard::LINE_READS
                 .with(|cache| *cache.borrow_mut() = Some(super::git_guard::LineReads::default()));
             REGISTRATIONS
@@ -1006,6 +1008,7 @@ impl Drop for RepoFactsScope {
             NORMALIZED.with(|cache| *cache.borrow_mut() = None);
             super::repo::TARGET_ROOTS.with(|cache| *cache.borrow_mut() = None);
             super::repo::OWNERS.with(|cache| *cache.borrow_mut() = None);
+            super::repo::SHARED.with(|cache| *cache.borrow_mut() = None);
             super::git_guard::LINE_READS.with(|cache| *cache.borrow_mut() = None);
             REGISTRATIONS.with(|cache| *cache.borrow_mut() = None);
             PROTECTED.with(|cache| *cache.borrow_mut() = None);
