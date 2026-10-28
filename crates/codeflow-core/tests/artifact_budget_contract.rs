@@ -605,7 +605,7 @@ fn repository_content_rule_has_one_home_and_its_pointers() {
     }
 }
 
-/// TSK-1030 AC-3: no shipped asset presents CodeFlow's own
+/// TSK-1030 AC-3: no shipped asset presents the project's own
 /// `docs/verification/` folder as a standard place, in an example, a
 /// default or a fixture.
 #[test]
