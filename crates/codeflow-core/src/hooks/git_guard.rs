@@ -5488,12 +5488,39 @@ thread_local! {
     static RIPGREP_LINE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    /// The answers of [`line_names_ripgrep_config`] for one guard
+    /// evaluation (TSK-1050), keyed by the line's text, present only while
+    /// a [`super::edit_guard::RepoFactsScope`] is open.
+    pub(super) static RIPGREP_LINES: std::cell::RefCell<Option<std::collections::HashMap<String, bool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Whether `line` names `RIPGREP_CONFIG_PATH`
-/// ([`crate::security::search_pattern::names_ripgrep_config`]).
+/// ([`crate::security::search_pattern::names_ripgrep_config`]), read once
+/// per line text while a [`super::edit_guard::RepoFactsScope`] is open.
+/// The checks below ask it for every segment of a line and each read
+/// expands the whole line, so a long chain did quadratic work. The answer
+/// depends on the text alone, so a kept answer is the one a new read gives;
+/// outside a scope every call reads the line.
 fn line_names_ripgrep_config(line: &str) -> bool {
+    if let Some(answer) = RIPGREP_LINES.with(|lines| {
+        lines
+            .borrow()
+            .as_ref()
+            .and_then(|lines| lines.get(line).copied())
+    }) {
+        return answer;
+    }
     #[cfg(test)]
     RIPGREP_LINE_READS.with(|reads| reads.set(reads.get() + 1));
-    crate::security::search_pattern::names_ripgrep_config(line)
+    let answer = crate::security::search_pattern::names_ripgrep_config(line);
+    RIPGREP_LINES.with(|lines| {
+        if let Some(lines) = lines.borrow_mut().as_mut() {
+            lines.insert(line.to_owned(), answer);
+        }
+    });
+    answer
 }
 
 /// The command line an `xargs` or a `find` is judged against, without the
