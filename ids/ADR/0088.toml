@@ -1,0 +1,11 @@
+id = "ADR-0088"
+uid = "4a97954c-7678-4aff-911e-8fc2a02dcb78"
+kind = "ADR"
+title = "The exec guard's text rule follows the readable sandbox configuration"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T22:00:18Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
