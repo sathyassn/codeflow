@@ -298,6 +298,7 @@ fn ci_environment(
         "GITHUB_HEAD_REF",
         "GITHUB_EVENT_NAME",
         "CI_MERGE_REQUEST_DIFF_BASE_SHA",
+        "CI_MERGE_REQUEST_TARGET_BRANCH_SHA",
         "CI_COMMIT_SHA",
         "BITBUCKET_PR_DESTINATION_COMMIT",
         "BITBUCKET_COMMIT",
@@ -634,6 +635,7 @@ pub fn run(args: &CiArgs) -> i32 {
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     if scope_ready {
+        let target_tip = target_tip(&root, &line_target, &names, &environment);
         record_checks(
             &root,
             &base_candidates,
@@ -651,6 +653,7 @@ pub fn run(args: &CiArgs) -> i32 {
             },
             &names,
             &line_target,
+            &target_tip,
             &mut tagged,
             &mut ran,
         );
@@ -1178,6 +1181,7 @@ fn record_checks(
     on_line: bool,
     names: &Names<'_>,
     line_target: &str,
+    target_tip: &Result<Option<String>, String>,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -1235,10 +1239,81 @@ fn record_checks(
         authority,
         on_line,
         brought.as_ref(),
+        target_tip,
         tagged,
         ran,
     );
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
+}
+
+/// The ref the shipped GitLab and Bitbucket jobs fetch the target into.
+const FETCHED_TARGET: &str = "refs/codeflow/target";
+
+/// The tip of `target`, the branch the range lands on, which the Outcome
+/// adoption marker is judged against (TSK-435). It comes from an identity
+/// the change cannot choose, never from `--base`, which the pre-push hook
+/// sets to a merge-base and any caller can set to any commit:
+///
+/// - the destination's advertisement the pre-push hook hands over, where a
+///   branch the destination does not advertise is proven absent
+///   (`Ok(None)`: there is no list to keep);
+/// - the hosting platform's target commit (GitLab
+///   `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, Bitbucket
+///   `BITBUCKET_PR_DESTINATION_COMMIT`);
+/// - `refs/codeflow/target`, where the shipped GitLab and Bitbucket jobs
+///   fetch the target branch when the platform names no commit;
+/// - otherwise the target branch's remote-tracking ref, then its local
+///   branch, as GitHub's checkout and a local run hold them.
+///
+/// A repository with no `origin` holds every branch it has, so a target it
+/// lacks is absent (`Ok(None)`). Otherwise a tip that cannot be resolved is
+/// an error, and the marker check refuses.
+fn target_tip(
+    root: &Path,
+    target: &str,
+    names: &Names<'_>,
+    environment: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    let branch = named_branch(target).unwrap_or_else(|| target.to_string());
+    if let (Some(url), Some(listed)) = (names.destination, names.advertisement) {
+        let destination = codeflow_core::workgraph::release_line::from_advertisement(url, listed)?;
+        let advertised = destination
+            .heads
+            .iter()
+            .chain(destination.default.iter())
+            .any(|(name, _)| *name == branch);
+        if !advertised {
+            return Ok(None);
+        }
+        return codeflow_core::workgraph::release_line::advertised_tip_here(
+            root,
+            &destination,
+            &branch,
+        )
+        .map(|tip| Some(tip.to_string()));
+    }
+    for key in [
+        "CI_MERGE_REQUEST_TARGET_BRANCH_SHA",
+        "BITBUCKET_PR_DESTINATION_COMMIT",
+    ] {
+        if let Some(sha) = environment.get(key).filter(|sha| !sha.is_empty()) {
+            return rev_parse(root, sha)?
+                .map(Some)
+                .ok_or_else(|| format!("{key} '{sha}' names no commit here"));
+        }
+    }
+    let mut anchors = vec![FETCHED_TARGET.to_string()];
+    anchors.extend(base_refs(&branch));
+    if let Some(tip) = resolve_base(root, &anchors)? {
+        return Ok(Some(tip));
+    }
+    if origin_url(root)?.is_none() {
+        return Ok(None);
+    }
+    let shown = codeflow_core::git::display_text(&branch);
+    Err(format!(
+        "the tip of the target branch '{shown}' cannot be resolved here; fetch it (`git fetch origin {shown}`) so the marker is judged against it"
+    ))
 }
 
 /// The resolved target for the line proof, using the repository default

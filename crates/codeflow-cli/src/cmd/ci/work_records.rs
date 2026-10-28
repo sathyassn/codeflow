@@ -2,7 +2,8 @@
 //! record the range changes is judged by the same lifecycle judge the status
 //! verbs use, from the merge-base to the head. Only projects with durable
 //! work tracking run it; a project without records sees no record rule.
-//! The Outcome adoption marker (TSK-435) is judged in every project.
+//! The Outcome adoption marker (TSK-435) is judged in every project,
+//! against the tip of the branch the range lands on.
 
 use std::path::Path;
 
@@ -11,13 +12,14 @@ use codeflow_core::workgraph::durable_work_tracking_enabled;
 use codeflow_core::workgraph::lifecycle::{
     judge_line_under, judge_pull_request_under, judge_release_range, outcome_marker_errors, Brought,
 };
-use codeflow_core::workgraph::outcome::MARKER_KEY;
 
 /// Run the check for `codeflow ci`, record its findings and whether it ran,
 /// and print its notices. `authority` is the commit whose baseline list
 /// governs; `None` means the resolved base. `on_line` says the range is a
 /// verified epic line, whose landings are judged one by one; `brought`, on a
 /// release range, names the records judged where each was introduced.
+/// `target_tip` is the tip of the branch the range lands on, which the
+/// Outcome marker is judged against (see [`super::target_tip`]).
 #[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 pub(super) fn dispatch(
     root: &Path,
@@ -26,6 +28,7 @@ pub(super) fn dispatch(
     authority: Option<&str>,
     on_line: bool,
     brought: Option<&Brought>,
+    target_tip: &Result<Option<String>, String>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -39,7 +42,7 @@ pub(super) fn dispatch(
             return;
         }
     };
-    let outcome = check(
+    let mut outcome = check(
         root,
         resolved_base.as_deref(),
         head,
@@ -47,6 +50,12 @@ pub(super) fn dispatch(
         on_line,
         brought,
     );
+    // The marker is judged wherever the range resolved, whatever the
+    // tracking state.
+    if resolved_base.is_some() {
+        outcome.violations.extend(marker(root, target_tip, head));
+        outcome.marker_ran = true;
+    }
     if outcome.ran {
         ran.push("work-records");
     }
@@ -79,8 +88,7 @@ pub(super) struct Outcome {
     /// Facts to show without blocking, such as an edited baseline list.
     pub notices: Vec<codeflow_core::remedy::Finding>,
     pub ran: bool,
-    /// Whether the Outcome adoption marker was judged on its own, outside
-    /// the record judge (a project without durable tracking).
+    /// Whether the Outcome adoption marker was judged.
     pub marker_ran: bool,
 }
 
@@ -98,10 +106,14 @@ pub(super) fn check(
 ) -> Outcome {
     match durable_work_tracking_enabled(root) {
         Ok(true) => {}
-        // Without durable tracking no record rule applies, but the Outcome
-        // adoption marker still binds: a project with only epics, or with
-        // no records yet, must not list its own record as present.
-        Ok(false) => return marker_only(root, base, head),
+        Ok(false) => {
+            return Outcome {
+                violations: Vec::new(),
+                notices: Vec::new(),
+                ran: false,
+                marker_ran: false,
+            }
+        }
         Err(error) => {
             return Outcome {
                 violations: vec![super::tracking_state_violation(error)],
@@ -130,17 +142,7 @@ pub(super) fn check(
     };
     match judged {
         Ok(verdict) => {
-            let mut violations: Vec<Violation> = verdict
-                .errors
-                .into_iter()
-                .map(|error| {
-                    if error.contains(MARKER_KEY) {
-                        marker_block(error)
-                    } else {
-                        block(error)
-                    }
-                })
-                .collect();
+            let mut violations: Vec<Violation> = verdict.errors.into_iter().map(block).collect();
             violations.extend(verdict.warnings.into_iter().map(|warning| {
                 Violation::new(
                     "work.records",
@@ -165,30 +167,23 @@ pub(super) fn check(
     }
 }
 
-/// The Outcome adoption marker judged alone (TSK-435), for a range whose
-/// project does not track work durably: the head's list against the file
-/// at `base`, the target's tip, as the record judge reads it. A marker that
-/// cannot be judged refuses.
-fn marker_only(root: &Path, base: Option<&str>, head: &str) -> Outcome {
-    let judged = |violations: Vec<Violation>| Outcome {
-        violations,
-        notices: Vec::new(),
-        ran: false,
-        marker_ran: true,
+/// The Outcome adoption marker's refusals (TSK-435): the head's list
+/// judged against `target_tip`, never against the range's base, which the
+/// pre-push hook sets to a merge-base or another boundary. A project with
+/// only epics, or no records yet, is judged too. A target the destination
+/// proves absent (`Ok(None)`) has no list to keep; a tip or marker that
+/// cannot be read refuses.
+fn marker(root: &Path, target_tip: &Result<Option<String>, String>, head: &str) -> Vec<Violation> {
+    let judged = match target_tip {
+        Ok(None) => return Vec::new(),
+        Ok(Some(tip)) => outcome_marker_errors(root, tip, Some(head)),
+        Err(error) => Err(error.clone()),
     };
-    let Some(base) = base else {
-        return Outcome {
-            violations: Vec::new(),
-            notices: Vec::new(),
-            ran: false,
-            marker_ran: false,
-        };
-    };
-    match outcome_marker_errors(root, base, Some(head)) {
-        Ok(errors) => judged(errors.into_iter().map(marker_block).collect()),
-        Err(error) => judged(vec![marker_block(format!(
+    match judged {
+        Ok(errors) => errors.into_iter().map(marker_block).collect(),
+        Err(error) => vec![marker_block(format!(
             "cannot judge the Outcome adoption marker in .codeflow/project.toml: {error}"
-        ))]),
+        ))],
     }
 }
 

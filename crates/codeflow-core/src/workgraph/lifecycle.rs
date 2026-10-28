@@ -711,35 +711,61 @@ fn project_table_in(repo_root: &Path) -> Result<Option<toml::Table>, String> {
 }
 
 /// The refusals for a change to the Outcome adoption marker (TSK-435): the
-/// head's `.codeflow/project.toml` (the working tree's when `head` is
-/// `None`) judged against the file at `target`, the tip the change lands
-/// on, never against anything the change itself controls: callers pass
-/// the range's base, not its merge-base and not a `--baseline-from`
-/// authority. It does not depend on durable work tracking, so `codeflow
-/// ci` runs it for a project with only epics, or with no records, as
-/// well. A head that does not resolve has no file, which reads as a
-/// removed marker.
+/// head's project state file (the working tree's when `head` is `None`)
+/// judged against the file at `target`. The caller passes the tip of the
+/// branch the change lands on, from an identity the change cannot choose
+/// (the destination's advertisement, the hosting platform's target, or the
+/// target branch's ref), never a merge-base or a `--base` boundary. Only
+/// what the change itself does is judged: a head whose marker matches the
+/// marker where it forked from `target` leaves the target's own list in
+/// place when it merges, whatever that list now is. It does not depend on
+/// durable work tracking. A head that does not resolve has no file, which
+/// reads as a removed marker; an unreadable head marker is always judged.
 ///
 /// # Errors
 ///
-/// Returns a message when the repository, `target` or a
-/// `.codeflow/project.toml` cannot be read; the caller refuses.
+/// Returns a message when the repository, `target`, the fork point or a
+/// project state file cannot be read; the caller refuses.
 pub fn outcome_marker_errors(
     repo_root: &Path,
     target: &str,
     head: Option<&str>,
 ) -> Result<Vec<String>, String> {
+    use super::outcome::Adoption;
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let target_commit = resolve_commit(&repo, target)?
         .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
     let target_state = project_table_at(&repo, target_commit)?;
-    let head_state = match head {
+    let (head_state, head_commit) = match head {
         Some(head) => match resolve_commit(&repo, head)? {
-            Some(commit) => project_table_at(&repo, commit)?,
-            None => None,
+            Some(commit) => (project_table_at(&repo, commit)?, Some(commit)),
+            None => (None, None),
         },
-        None => project_table_in(repo_root)?,
+        None => (project_table_in(repo_root)?, resolve_commit(&repo, "HEAD")?),
     };
+    let adoption =
+        |state: Option<&toml::Table>| state.map_or(Adoption::Unmarked, Adoption::in_table);
+    let head_adoption = adoption(head_state.as_ref());
+    if let Some(head_commit) = head_commit {
+        let fork = match repo.merge_base(target_commit, head_commit) {
+            Ok(fork) => Some(fork),
+            // Unrelated histories: the head is judged whole.
+            Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+            Err(error) => {
+                return Err(format!(
+                    "no merge-base of {target} and the head: {}",
+                    error.message()
+                ))
+            }
+        };
+        if let Some(fork) = fork {
+            let unchanged = !matches!(head_adoption, Adoption::Unreadable(_))
+                && adoption(project_table_at(&repo, fork)?.as_ref()) == head_adoption;
+            if unchanged {
+                return Ok(Vec::new());
+            }
+        }
+    }
     Ok(
         super::outcome::marker_change_errors(target_state.as_ref(), head_state.as_ref())
             .into_iter()
@@ -2098,10 +2124,9 @@ pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<V
 }
 
 /// `verdict` with the Outcome adoption marker's refusals added, judged
-/// against `base` as the caller gave it: the target's tip, never the
-/// merge-base and never the `--baseline-from` authority, which the
-/// pre-push hook takes from the pushed branch's own earlier tip
-/// (TSK-435).
+/// against `base`, which these callers name as the target branch itself
+/// (TSK-435). `codeflow ci` judges the marker on its own, against the
+/// target's tip it resolves, since its `base` can be any boundary.
 fn with_outcome_marker(
     mut verdict: Verdict,
     repo_root: &Path,
@@ -2433,7 +2458,8 @@ pub fn working_context(repo_root: &Path) -> Result<(Option<Graph>, Option<Vec<St
 ///
 /// Returns a message when a revision or the merge-base cannot be resolved.
 pub fn judge_pull_request(repo_root: &Path, base: &str, head: &str) -> Result<Verdict, String> {
-    judge_pull_request_under(repo_root, base, head, base)
+    let verdict = judge_pull_request_under(repo_root, base, head, base)?;
+    with_outcome_marker(verdict, repo_root, base, Some(head))
 }
 
 /// [`judge_pull_request_under`] for a verified integration line judged as
@@ -2487,15 +2513,14 @@ fn judge_pull_request_shaped(
     let target = commit(authority)?;
     let anchor = history::merge_base(&repo, commit(base)?, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
-    let verdict = judge_range_against(
+    judge_range_against(
         repo_root,
         &anchor.to_string(),
         &target.to_string(),
         Some(head),
         on_line,
         None,
-    )?;
-    with_outcome_marker(verdict, repo_root, base, Some(head))
+    )
 }
 
 /// [`judge_pull_request_under`] for a release range: each record in
@@ -2521,15 +2546,14 @@ pub fn judge_release_range(
     let target = commit(authority)?;
     let anchor = history::merge_base(&repo, commit(base)?, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
-    let verdict = judge_range_against(
+    judge_range_against(
         repo_root,
         &anchor.to_string(),
         &target.to_string(),
         Some(head),
         false,
         Some(brought),
-    )?;
-    with_outcome_marker(verdict, repo_root, base, Some(head))
+    )
 }
 
 /// Judge the whole checked-out tree against the migration baseline, and add

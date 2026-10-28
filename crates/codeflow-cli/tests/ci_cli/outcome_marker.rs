@@ -155,7 +155,7 @@ fn removing_the_marker_is_refused_in_a_project_with_no_records() {
 /// Control: a change that leaves the marker alone, or drops a listed uid,
 /// passes, and the marker check is named among the checks that ran.
 #[test]
-fn keeping_or_shortening_the_list_passes_in_every_tier() {
+fn keeping_or_shortening_the_list_passes_in_minimal_and_standard() {
     for tier in ["minimal", "standard"] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -259,4 +259,163 @@ fn an_adoption_write_may_grow_while_the_target_has_no_marker() {
         let (code, out) = ci_from(root, &earlier);
         assert_eq!(code, Some(0), "{tier}: {out}");
     }
+}
+
+/// The caller's `--base` is a diff boundary, never the marker's authority:
+/// with `--into` naming the target, a base at the head itself still judges
+/// the head's list against the target's tip.
+#[test]
+fn a_base_at_the_head_does_not_judge_the_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    adopted(root, "standard", false);
+    let mine = "77777777-7777-4777-8777-777777777777";
+    list(root, mine);
+    commit_all(root, "chore: list a record");
+    let out = run_in(
+        root,
+        &[
+            "ci", "--base", "HEAD", "--head", "HEAD", "--branch", "feat/x", "--into", "trunk",
+        ],
+    );
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_ne!(out.status.code(), Some(0), "{all}");
+    assert!(
+        all.contains("adds uids to outcome_present_uids") && all.contains(mine),
+        "{all}"
+    );
+}
+
+/// Write the marker into `dir`'s project state file: `uids`, or no marker.
+fn rewrite_marker(dir: &Path, uids: Option<&[&str]>) {
+    let mut table = state(dir);
+    match uids {
+        Some(uids) => {
+            table.insert(
+                "outcome_present_uids".into(),
+                toml::Value::Array(uids.iter().map(|uid| (*uid).into()).collect()),
+            );
+        }
+        None => {
+            table.remove("outcome_present_uids");
+        }
+    }
+    std::fs::write(dir.join(STATE), toml::to_string(&table).unwrap()).unwrap();
+}
+
+/// Push `feat/x` from `dir` to a bare copy of `trunk` as `trunk` stands
+/// now, through the hooks `init` installed, and return the push's exit
+/// code and output.
+fn push_to_trunk_copy(dir: &Path) -> (Option<i32>, String) {
+    let remote = tempfile::tempdir().unwrap();
+    let bare = remote.path().join("origin.git");
+    let bare = bare.to_str().unwrap();
+    git(
+        dir,
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            "--single-branch",
+            "--branch",
+            "trunk",
+            ".",
+            bare,
+        ],
+    );
+    git(dir, &["remote", "add", "origin", bare]);
+    git(dir, &["fetch", "-q", "origin"]);
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["push", "origin", "feat/x"])
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+        .env("CODEFLOW_HOME", super::isolated_home())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_PR_BODY");
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        cmd.env_remove(name);
+    }
+    let out = cmd.output().expect("git push runs");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code(), all)
+}
+
+/// Pre-push: the target adopted the marker after the branch forked. The
+/// push's range starts at the unmarked fork point, but the branch's own
+/// adoption write is judged against the target's tip and refused.
+#[test]
+fn a_push_cannot_list_its_record_after_the_target_adopted() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    scaffolded(root, "standard", |dir| rewrite_marker(dir, None));
+    git(root, &["checkout", "-q", "trunk"]);
+    rewrite_marker(root, Some(&[]));
+    commit_all(root, "chore: adopt the Outcome section");
+    git(root, &["checkout", "-q", "feat/x"]);
+    let mine = "88888888-8888-4888-8888-888888888888";
+    rewrite_marker(root, Some(&[mine]));
+    commit_all(root, "chore: list my record");
+    let (code, out) = push_to_trunk_copy(root);
+    assert_ne!(code, Some(0), "{out}");
+    assert!(
+        out.contains("adds uids to outcome_present_uids") && out.contains(mine),
+        "{out}"
+    );
+}
+
+/// Pre-push: the target removed an exemption after the branch forked. A
+/// branch that still lists it while changing the list is refused, though
+/// the fork point listed it.
+#[test]
+fn a_push_cannot_keep_an_exemption_the_target_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let (kept, other) = (
+        "99999999-9999-4999-8999-999999999999",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    );
+    scaffolded(root, "standard", |dir| {
+        rewrite_marker(dir, Some(&[kept, other]));
+    });
+    git(root, &["checkout", "-q", "trunk"]);
+    rewrite_marker(root, Some(&[other]));
+    commit_all(root, "chore: drop an exemption");
+    git(root, &["checkout", "-q", "feat/x"]);
+    rewrite_marker(root, Some(&[kept]));
+    commit_all(root, "chore: drop the other uid");
+    let (code, out) = push_to_trunk_copy(root);
+    assert_ne!(code, Some(0), "{out}");
+    assert!(
+        out.contains("adds uids to outcome_present_uids") && out.contains(kept),
+        "{out}"
+    );
+}
+
+/// Control: a branch that forked before the target adopted the marker and
+/// leaves the file alone pushes cleanly; merging it keeps the target's list.
+#[test]
+fn a_push_that_leaves_the_marker_alone_passes_after_the_target_adopted() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    scaffolded(root, "standard", |dir| rewrite_marker(dir, None));
+    git(root, &["checkout", "-q", "trunk"]);
+    rewrite_marker(root, Some(&[]));
+    commit_all(root, "chore: adopt the Outcome section");
+    git(root, &["checkout", "-q", "feat/x"]);
+    std::fs::write(root.join("notes.txt"), "a change\n").unwrap();
+    commit_all(root, "feat: add notes");
+    let (code, out) = push_to_trunk_copy(root);
+    assert_eq!(code, Some(0), "{out}");
 }
