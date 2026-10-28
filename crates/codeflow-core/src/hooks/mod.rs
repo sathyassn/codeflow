@@ -44,6 +44,7 @@ pub mod policy;
 pub mod policy_schema;
 pub mod ref_authority;
 pub mod repo;
+pub mod sandbox_state;
 pub mod scan;
 pub mod session_summary;
 pub mod source_identity;

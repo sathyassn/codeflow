@@ -595,15 +595,24 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
             allow_write, expected,
             "{name}: the sandbox may add only the cf-present state directory and the full gate's lock and evidence directories as write roots"
         );
-        // The only write denies are the shell startup class and the default
-        // git configuration files (TSK-242).
+        // The write denies are the enforcement paths (TSK-397 design D,
+        // H-4), the shell startup class and the default git configuration
+        // files (TSK-242).
         let table = actions::table();
+        // The generator appends what a preset lacks, so the entries the
+        // presets already carried come first.
         let mut denied = table.startup_paths.sandbox_write_denies();
         denied.extend(table.git_config_paths.sandbox_write_denies());
+        denied.extend(
+            table
+                .claude_edit_denies
+                .iter()
+                .filter_map(|rule| actions::edit_deny_write_path(rule)),
+        );
         assert_eq!(
             value["sandbox"]["filesystem"]["denyWrite"],
             serde_json::json!(denied),
-            "{name}: the sandbox denies writes only to the shell startup class and the default git configuration files"
+            "{name}: the sandbox denies writes only to the enforcement paths, the shell startup class and the default git configuration files"
         );
     }
 }

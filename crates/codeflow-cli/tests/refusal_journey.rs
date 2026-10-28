@@ -23,6 +23,12 @@ impl Project {
             .env("PATH", path)
             .env("CODEFLOW_HOME", &self.home)
             .env("HOME", &self.home)
+            // TSK-397 design D: no managed Claude settings layer, so the
+            // installed scaffold's own settings choose the text rule.
+            .env(
+                "CODEFLOW_TEST_CLAUDE_MANAGED_DIR",
+                self.home.join("managed"),
+            )
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_AUTHOR_NAME", "Test")

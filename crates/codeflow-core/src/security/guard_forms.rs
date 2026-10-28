@@ -136,10 +136,10 @@ pub const ROOTED_DELETIONS: &[&str] = &[
     "cd /Users/alice/project && rm -rf build",
 ];
 
-/// The [`PROJECT_DELETIONS`] the deletion guard passes that the exec guard
-/// still refuses under `git.hook_integrity`: each gives `rm` or `find`, which
-/// are not on the non-executing allowlist, a word filled in at run time, so
-/// TSK-397's directory check judges it (operator decision, 2026-10-27).
+/// The [`PROJECT_DELETIONS`] that give `rm` or `find` a word filled in at
+/// run time: the baseline allows them, and where the strict rule applies
+/// the exec guard refuses them under `git.hook_integrity` (TSK-397 design
+/// D).
 pub const RUN_TIME_PROJECT_DELETIONS: &[&str] = &[
     "D=./build; rm -rf $D",
     "D=build && find $D -delete",

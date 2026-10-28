@@ -301,16 +301,29 @@ fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::
             )),
     )
     .unwrap();
+    // TSK-397 design D: the payload carries the keys only a Codex call
+    // sends, so the guard reads the Codex configuration alone. These wiring
+    // checks pin the line's decisions, so the call is judged in the baseline
+    // outcome on every host: an empty home, no managed settings layer and no
+    // project Codex configuration.
     let payload = serde_json::json!({
         "tool_name": "Bash",
         "tool_input": {"command": command},
         "cwd": root,
+        "turn_id": "wiring",
+        "model": "gpt-6-astra",
     });
+    let harness_home = tempfile::tempdir().unwrap();
     let mut child = std::process::Command::new("sh")
         .args(["-c", &hook])
         .current_dir(root)
         .env("PATH", path)
         .env("CODEFLOW_HOME", root.join(".home"))
+        .env("HOME", harness_home.path())
+        .env(
+            "CODEFLOW_TEST_CLAUDE_MANAGED_DIR",
+            harness_home.path().join("managed"),
+        )
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -717,18 +730,6 @@ fn the_codex_exec_guard_wiring_judges_composed_deletions_and_help() {
     }
     for command in guard_forms::PROJECT_DELETIONS {
         let out = run_codex_exec_guard(root, command);
-        // TSK-397: a run-time word given to `rm` or `find` refuses under the
-        // directory check, never as a dangerous deletion.
-        if guard_forms::RUN_TIME_PROJECT_DELETIONS.contains(command) {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            assert_eq!(out.status.code(), Some(2), "{command}");
-            assert!(
-                stderr.contains("git.hook_integrity")
-                    && !stderr.contains("security.dangerous_commands"),
-                "{command}: {stderr}"
-            );
-            continue;
-        }
         assert_eq!(out.status.code(), Some(0), "{command}");
         assert!(out.stderr.is_empty(), "{command}");
     }
@@ -758,21 +759,6 @@ fn the_codex_exec_guard_wiring_holds_the_round_four_probes() {
     let mut wrong = Vec::new();
     for (case, command, expect) in guard_forms::REVIEW_ROUND_FOUR_PROBES {
         let out = run_codex_exec_guard(root, command);
-        // TSK-397: an allowed cleanup that gives `rm` a run-time word refuses
-        // under the directory check, never as a dangerous deletion.
-        if *expect == Expect::Allowed && command.ends_with("rm -rf \"$D\"") {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            if out.status.code() != Some(2)
-                || !stderr.contains("is filled in at run time")
-                || stderr.contains("security.dangerous_commands")
-            {
-                wrong.push(format!(
-                    "{case}: {command} -> {:?} {stderr}",
-                    out.status.code()
-                ));
-            }
-            continue;
-        }
         let want = if *expect == Expect::Allowed { 0 } else { 2 };
         if out.status.code() != Some(want) {
             wrong.push(format!(

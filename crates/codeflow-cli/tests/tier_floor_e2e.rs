@@ -973,11 +973,20 @@ fn run_wired(root: &Path, hook: &str, command: &str) -> Output {
         "tool_input": {"command": command},
         "cwd": root,
     });
+    // TSK-397 design D: these wiring checks pin the line's decisions, so
+    // the call is judged in the baseline outcome on every host: an empty
+    // home and no managed settings layer, beside the shipped presets.
+    let harness_home = tempfile::tempdir().unwrap();
     let mut child = Command::new("sh")
         .args(["-c", hook])
         .current_dir(root)
         .env("CODEFLOW_HOME", isolated_home())
         .env("PATH", path)
+        .env("HOME", harness_home.path())
+        .env(
+            "CODEFLOW_TEST_CLAUDE_MANAGED_DIR",
+            harness_home.path().join("managed"),
+        )
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -1105,17 +1114,6 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
             for command in guard_forms::PROJECT_DELETIONS {
                 let out = run_wired(&root, &hook, command);
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                // TSK-397: a run-time word given to `rm` or `find` refuses
-                // under the directory check, never as a dangerous deletion.
-                if guard_forms::RUN_TIME_PROJECT_DELETIONS.contains(command) {
-                    assert_eq!(out.status.code(), Some(2), "{tier} {wiring} {command}");
-                    assert!(
-                        stderr.contains("git.hook_integrity")
-                            && !stderr.contains("security.dangerous_commands"),
-                        "{tier} {wiring} {command}: {stderr}"
-                    );
-                    continue;
-                }
                 assert_eq!(
                     out.status.code(),
                     Some(0),

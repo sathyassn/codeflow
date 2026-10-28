@@ -809,18 +809,15 @@ pub(crate) fn read(
     launcher: &dyn Fn(&str, &[String]) -> Option<usize>,
     interpreter: &dyn Fn(&str) -> bool,
     hides: &dyn Fn(&[String]) -> bool,
-    calls: &dyn Fn(&[String]) -> bool,
     hook_variables: &[&str],
 ) -> Reading {
     let callbacks = Callbacks {
         launcher,
         interpreter,
         hides,
-        calls,
         hook_variables,
     };
-    let shadowed = shadows(lexed, &callbacks);
-    read_with(lexed, &callbacks, shadowed)
+    read_with(lexed, &callbacks)
 }
 
 /// The checks [`read`] is given, passed on to an `eval` body.
@@ -828,133 +825,7 @@ struct Callbacks<'a> {
     launcher: &'a dyn Fn(&str, &[String]) -> Option<usize>,
     interpreter: &'a dyn Fn(&str) -> bool,
     hides: &'a dyn Fn(&[String]) -> bool,
-    calls: &'a dyn Fn(&[String]) -> bool,
     hook_variables: &'a [&'a str],
-}
-
-/// Programs that give a name another meaning for the rest of the line: an
-/// alias, a builtin turned off (`enable -n`, `disable`) so a program of the
-/// same name runs, a hashed or autoloaded name, a function, or a file read
-/// into the shell, which may define any of these.
-const SHADOWING_PROGRAMS: &[&str] = &[
-    "alias",
-    "enable",
-    "disable",
-    "hash",
-    "autoload",
-    "function",
-    "functions",
-    "source",
-    ".",
-];
-
-/// Builtins that assign a variable named by an operand, so `read PATH`
-/// changes the command search path.
-const ASSIGNING_PROGRAMS: &[&str] = &[
-    "read",
-    "printf",
-    "mapfile",
-    "readarray",
-    "getln",
-    "vared",
-    "declare",
-    "typeset",
-    "export",
-    "local",
-    "readonly",
-    "getopts",
-    "print",
-];
-
-/// Whether a word sets the command search path (`PATH=`, `path+=`,
-/// `path[1]=`), as an assignment or a declaration's operand.
-fn sets_path(word: &Token) -> bool {
-    ["PATH=", "PATH+=", "PATH[", "path=", "path+=", "path["]
-        .iter()
-        .any(|form| word.text.starts_with(form))
-}
-
-/// Whether the line may change what a program name runs: a command whose
-/// program, reached through modeled launchers, is one of
-/// [`SHADOWING_PROGRAMS`], a function definition, a program word the text
-/// does not show, an `eval` whose text does any of these or is not fixed,
-/// or a change to the command search path. Then no name on the line is
-/// exempt by the allowlist.
-fn shadows(lexed: &Lexed, callbacks: &Callbacks<'_>) -> bool {
-    lexed.opaque
-        || lexed.current_shell
-        || lexed.commands.iter().any(|command| {
-            command.iter().any(sets_path)
-                || command_shadows(&command[program_start(command)..], callbacks)
-        })
-}
-
-/// Whether one command, from its program word, may change what a name runs.
-fn command_shadows(rest: &[Token], callbacks: &Callbacks<'_>) -> bool {
-    let Program::Stopped(remaining) =
-        program_operands(rest, callbacks.launcher, callbacks.interpreter, 0)
-    else {
-        return false;
-    };
-    let Some((program, words)) = remaining.split_first() else {
-        return false;
-    };
-    if program.redirect {
-        return false;
-    }
-    // `[` is the `test` builtin, not a pattern.
-    if program.grouped || !(program.literal() || (program.plain() && program.text == "[")) {
-        return true;
-    }
-    let name = crate::hooks::git_guard::launcher_name(&program.text);
-    if SHADOWING_PROGRAMS.contains(&name) {
-        return true;
-    }
-    if ASSIGNING_PROGRAMS.contains(&name)
-        && words
-            .iter()
-            .any(|w| matches!(w.text.as_str(), "PATH" | "path"))
-    {
-        return true;
-    }
-    if name == "eval" {
-        let joined: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
-        let inner = lex(&joined.join(" "));
-        return words
-            .iter()
-            .any(|w| w.complex || !w.params.is_empty() || w.ansi)
-            || shadows(&inner, callbacks);
-    }
-    false
-}
-
-/// Where a command's program word starts: after redirections, reserved
-/// words, assignments and a `for` or `select` header up to its `do`; the
-/// end for a `case` header.
-fn program_start(command: &[Token]) -> usize {
-    let mut at = 0;
-    while let Some(word) = command.get(at) {
-        if word.redirect {
-            at += 2;
-        } else if word.plain() && matches!(word.text.as_str(), "for" | "select") {
-            match command[at + 1..]
-                .iter()
-                .position(|w| w.plain() && w.text == "do")
-            {
-                Some(offset) => at += offset + 2,
-                None => return command.len(),
-            }
-        } else if word.plain() && word.text == "case" {
-            return command.len();
-        } else if (word.plain() && RESERVED.contains(&word.text.as_str()))
-            || word.assignment().is_some()
-        {
-            at += 1;
-        } else {
-            break;
-        }
-    }
-    at.min(command.len())
 }
 
 /// A command substitution in a possible subscript runs wherever a builtin
@@ -970,62 +841,38 @@ fn subscript_commands(command: &[Token], reading: &mut Reading) {
     }
 }
 
-/// A `[[ ... ]]` conditional, its words after `[[`, runs no program. It
-/// evaluates a word as code only through `-v`, `-R` or a numeric
-/// comparison, and then its words are judged.
+/// A `[[ ... ]]` conditional, its words after `[[`. It can evaluate a word
+/// as code (`-v`, `-R`, a numeric comparison), so the strict branch keeps
+/// every word judged and the directory unknown; no form is exempt
+/// (TSK-397 design D).
 fn conditional(words: &[Token], reading: &mut Reading) {
     let inner = match words.iter().rposition(|w| w.plain() && w.text == "]]") {
         Some(end) => &words[..end],
         None => words,
     };
-    if !super::non_executing::conditional_runs_nothing(inner) {
-        reading.moves = true;
-        reading
-            .operands
-            .extend(inner.iter().filter(|w| !w.redirect).cloned());
-    }
-}
-
-/// Traversal stopped at `remaining`, the tail of `command`, where a program
-/// may run an interpreter with the words after it, at the start of the
-/// command or inside a launcher. One rule holds at every stop (operator
-/// decision, 2026-10-27): the remaining words are judged as possible
-/// operands unless the stop is a literal program on the non-executing
-/// allowlist used with the options its entry lists, on a line that changes
-/// no program name's meaning. `xargs` adds arguments the text does not
-/// show. A later word naming an interpreter, or an interpreter call the
-/// command walk sees, also keeps them.
-fn stopped(
-    command: &[Token],
-    remaining: &[Token],
-    callbacks: &Callbacks<'_>,
-    shadowed: bool,
-    reading: &mut Reading,
-) {
     reading.moves = true;
-    let texts: Vec<String> = command.iter().map(|w| w.text.clone()).collect();
-    let launchers = &command[..command.len() - remaining.len()];
-    let appended = launchers
-        .iter()
-        .any(|w| crate::hooks::git_guard::launcher_name(&w.text) == "xargs");
-    let after = remaining.iter().skip(1);
-    if shadowed
-        || !super::non_executing::runs_nothing(remaining, appended)
-        || after.clone().any(|w| (callbacks.interpreter)(&w.text))
-        || (callbacks.calls)(&texts)
-    {
-        reading
-            .operands
-            .extend(after.filter(|w| !w.redirect).cloned());
-    }
     reading
         .operands
-        .extend(eval_operands(remaining, callbacks, shadowed));
+        .extend(inner.iter().filter(|w| !w.redirect).cloned());
 }
 
-/// [`read`] with the callbacks gathered, and whether the line (or the line
-/// an `eval` body came from) changes what a program name runs.
-fn read_with(lexed: &Lexed, callbacks: &Callbacks<'_>, shadowed: bool) -> Reading {
+/// Traversal stopped at `remaining`, the tail of a command, where a program
+/// may run an interpreter with the words after it, at the start of the
+/// command or inside a launcher. The strict branch's one rule (TSK-397
+/// design D): the remaining words are judged as possible operands, and the
+/// directory is unknown. No program is exempt by name, `echo`, `printf`
+/// and the directory builtins included, since the guard cannot see what a
+/// name runs (an alias, a function, a `PATH` entry).
+fn stopped(remaining: &[Token], callbacks: &Callbacks<'_>, reading: &mut Reading) {
+    reading.moves = true;
+    reading
+        .operands
+        .extend(remaining.iter().skip(1).filter(|w| !w.redirect).cloned());
+    reading.operands.extend(eval_operands(remaining, callbacks));
+}
+
+/// [`read`] with the callbacks gathered.
+fn read_with(lexed: &Lexed, callbacks: &Callbacks<'_>) -> Reading {
     let Callbacks {
         launcher,
         interpreter,
@@ -1107,7 +954,7 @@ fn read_with(lexed: &Lexed, callbacks: &Callbacks<'_>, shadowed: bool) -> Readin
                     .extend(operands.iter().filter(|w| !w.redirect).cloned());
             }
             Program::Stopped(remaining) => {
-                stopped(command, remaining, callbacks, shadowed, &mut reading);
+                stopped(remaining, callbacks, &mut reading);
             }
         }
     }
@@ -1123,7 +970,7 @@ fn read_with(lexed: &Lexed, callbacks: &Callbacks<'_>, shadowed: bool) -> Readin
 /// (`eval 'python3 r.py "$PWD/.."'`) is read as a line of its own (round
 /// 13): the operands that line yields, and every word marked run-time when
 /// the joined text is opaque. Empty for any other program.
-fn eval_operands(words: &[Token], callbacks: &Callbacks<'_>, shadowed: bool) -> Vec<Token> {
+fn eval_operands(words: &[Token], callbacks: &Callbacks<'_>) -> Vec<Token> {
     let Some((program, rest)) = words.split_first() else {
         return Vec::new();
     };
@@ -1132,8 +979,7 @@ fn eval_operands(words: &[Token], callbacks: &Callbacks<'_>, shadowed: bool) -> 
     }
     let joined: Vec<&str> = rest.iter().map(|w| w.text.as_str()).collect();
     let inner = lex(&joined.join(" "));
-    let mut operands =
-        read_with(&inner, callbacks, shadowed || shadows(&inner, callbacks)).operands;
+    let mut operands = read_with(&inner, callbacks).operands;
     if inner.opaque || inner.current_shell {
         operands.extend(rest.iter().map(|w| Token {
             complex: true,

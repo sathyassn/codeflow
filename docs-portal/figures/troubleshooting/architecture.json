@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "Which check inspects which surface, and which checks can fail?",
-    "idea": "The twenty-three checks fall into six groups by the surface they read, and only nine of them can fail; the other fourteen warn at most.",
-    "title": "The twenty-three checks, by what they read",
+    "idea": "The twenty-four checks fall into six groups by the surface they read, and only ten of them can fail; the other fourteen warn at most.",
+    "title": "The twenty-four checks, by what they read",
     "kicker": "Doctor checks",
-    "caption": "A FAIL comes only from hooks, config, permissions, the policy source, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
+    "caption": "A FAIL comes only from hooks, the sandbox configuration, config, permissions, the policy source, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
     "states": [
       {
         "name": "canfail",
@@ -23,12 +23,12 @@
     ],
     "facts": [
       {
-        "claim": "nine checks can fail",
+        "claim": "ten checks can fail",
         "source": "docs/troubleshooting.md#technical",
         "derive": "the fail sentence",
         "check": {
           "kind": "contains",
-          "text": "Nine checks can fail: `hooks`, `config`, `permissions`,"
+          "text": "Ten checks can fail: `hooks`, `sandbox`, `config`,"
         },
         "value": true
       },
@@ -54,7 +54,7 @@
     ],
     "wide": {
       "width": 720,
-      "height": 354,
+      "height": 382,
       "draw": [
         {
           "text": "Hooks, CI, host rules",
@@ -196,31 +196,48 @@
           ]
         },
         {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 239,
+          "cy": 93,
+          "r": 7,
+          "id": "g1c4"
+        },
+        {
+          "text": "sandbox",
+          "x": 255,
+          "y": 98,
+          "style": "mono",
+          "for": [
+            "g1c4"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 16,
-          "y1": 88,
+          "y1": 116,
           "x2": 704,
-          "y2": 88
+          "y2": 116
         },
         {
           "text": "Policy and config",
           "x": 16,
-          "y": 116,
+          "y": 144,
           "style": "strong"
         },
         {
           "state": "canfail",
           "shape": "circle",
           "cx": 239,
-          "cy": 111,
+          "cy": 139,
           "r": 7,
           "id": "g2c0"
         },
         {
           "text": "config",
           "x": 255,
-          "y": 116,
+          "y": 144,
           "style": "mono",
           "for": [
             "g2c0"
@@ -230,14 +247,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 340,
-          "cy": 111,
+          "cy": 139,
           "r": 7,
           "id": "g2c1"
         },
         {
           "text": "permissions",
           "x": 356,
-          "y": 116,
+          "y": 144,
           "style": "mono",
           "for": [
             "g2c1"
@@ -247,14 +264,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 483,
-          "cy": 111,
+          "cy": 139,
           "r": 7,
           "id": "g2c2"
         },
         {
           "text": "policy-source",
           "x": 499,
-          "y": 116,
+          "y": 144,
           "style": "mono",
           "for": [
             "g2c2"
@@ -264,14 +281,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 239,
-          "cy": 139,
+          "cy": 167,
           "r": 7,
           "id": "g2c3"
         },
         {
           "text": "adopter-fit",
           "x": 255,
-          "y": 144,
+          "y": 172,
           "style": "mono",
           "for": [
             "g2c3"
@@ -281,14 +298,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 400,
-          "cy": 139,
+          "cy": 167,
           "r": 7,
           "id": "g2c4"
         },
         {
           "text": "git-config-includes",
           "x": 416,
-          "y": 144,
+          "y": 172,
           "style": "mono",
           "for": [
             "g2c4"
@@ -298,28 +315,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 16,
-          "y1": 162,
+          "y1": 190,
           "x2": 704,
-          "y2": 162
+          "y2": 190
         },
         {
           "text": "Delegates, models, network",
           "x": 16,
-          "y": 190,
+          "y": 218,
           "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
           "cx": 239,
-          "cy": 185,
+          "cy": 213,
           "r": 7,
           "id": "g3c0"
         },
         {
           "text": "delegates",
           "x": 255,
-          "y": 190,
+          "y": 218,
           "style": "mono",
           "for": [
             "g3c0"
@@ -329,14 +346,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 365,
-          "cy": 185,
+          "cy": 213,
           "r": 7,
           "id": "g3c1"
         },
         {
           "text": "model-bindings",
           "x": 381,
-          "y": 190,
+          "y": 218,
           "style": "mono",
           "for": [
             "g3c1"
@@ -346,14 +363,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 239,
-          "cy": 213,
+          "cy": 241,
           "r": 7,
           "id": "g3c2"
         },
         {
           "text": "delegate-roundtrip",
           "x": 255,
-          "y": 218,
+          "y": 246,
           "style": "mono",
           "for": [
             "g3c2"
@@ -363,14 +380,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 441,
-          "cy": 213,
+          "cy": 241,
           "r": 7,
           "id": "g3c3"
         },
         {
           "text": "network",
           "x": 457,
-          "y": 218,
+          "y": 246,
           "style": "mono",
           "for": [
             "g3c3"
@@ -380,28 +397,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 16,
-          "y1": 236,
+          "y1": 264,
           "x2": 704,
-          "y2": 236
+          "y2": 264
         },
         {
           "text": "Repository, managed files",
           "x": 16,
-          "y": 264,
+          "y": 292,
           "style": "strong"
         },
         {
           "state": "canfail",
           "shape": "circle",
           "cx": 239,
-          "cy": 259,
+          "cy": 287,
           "r": 7,
           "id": "g4c0"
         },
         {
           "text": "repo-integrity",
           "x": 255,
-          "y": 264,
+          "y": 292,
           "style": "mono",
           "for": [
             "g4c0"
@@ -411,14 +428,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 408,
-          "cy": 259,
+          "cy": 287,
           "r": 7,
           "id": "g4c1"
         },
         {
           "text": "managed-drift",
           "x": 424,
-          "y": 264,
+          "y": 292,
           "style": "mono",
           "for": [
             "g4c1"
@@ -428,14 +445,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 568,
-          "cy": 259,
+          "cy": 287,
           "r": 7,
           "id": "g4c2"
         },
         {
           "text": "id-registry",
           "x": 584,
-          "y": 264,
+          "y": 292,
           "style": "mono",
           "for": [
             "g4c2"
@@ -445,28 +462,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 16,
-          "y1": 282,
+          "y1": 310,
           "x2": 704,
-          "y2": 282
+          "y2": 310
         },
         {
           "text": "Customization, tests",
           "x": 16,
-          "y": 310,
+          "y": 338,
           "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
           "cx": 239,
-          "cy": 305,
+          "cy": 333,
           "r": 7,
           "id": "g5c0"
         },
         {
           "text": "customization",
           "x": 255,
-          "y": 310,
+          "y": 338,
           "style": "mono",
           "for": [
             "g5c0"
@@ -476,14 +493,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 399,
-          "cy": 305,
+          "cy": 333,
           "r": 7,
           "id": "g5c1"
         },
         {
           "text": "instructions",
           "x": 415,
-          "y": 310,
+          "y": 338,
           "style": "mono",
           "for": [
             "g5c1"
@@ -493,14 +510,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 239,
-          "cy": 333,
+          "cy": 361,
           "r": 7,
           "id": "g5c2"
         },
         {
           "text": "reading",
           "x": 255,
-          "y": 338,
+          "y": 366,
           "style": "mono",
           "for": [
             "g5c2"
@@ -510,14 +527,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 349,
-          "cy": 333,
+          "cy": 361,
           "r": 7,
           "id": "g5c3"
         },
         {
           "text": "test-config",
           "x": 365,
-          "y": 338,
+          "y": 366,
           "style": "mono",
           "for": [
             "g5c3"
@@ -670,6 +687,23 @@
           "style": "mono",
           "for": [
             "g1c3"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 160,
+          "cy": 169,
+          "r": 7,
+          "id": "g1c4"
+        },
+        {
+          "text": "sandbox",
+          "x": 174,
+          "y": 174,
+          "style": "mono",
+          "for": [
+            "g1c4"
           ]
         },
         {
@@ -1016,7 +1050,7 @@
         ],
         [
           "Harness wiring",
-          "none",
+          "`sandbox`",
           "`claude`, `codex`, `grok`, `startup-files`"
         ],
         [

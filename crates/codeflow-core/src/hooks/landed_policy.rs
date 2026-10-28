@@ -447,6 +447,15 @@ fn stricter_levels(
             }
         }
     }
+    // `security.text_guard`: `strict` outranks `auto` (TSK-397).
+    if line.pointer("/security/text_guard").and_then(Value::as_str) == Some("strict") {
+        if let Some(Value::Object(security)) = base.pointer_mut("/security") {
+            security.insert(
+                "text_guard".to_string(),
+                Value::String("strict".to_string()),
+            );
+        }
+    }
     if let Some(Value::Array(additions)) = line.pointer("/git/protected_branches") {
         if let Some(Value::Array(existing)) = base.pointer_mut("/git/protected_branches") {
             for item in additions {
@@ -640,6 +649,30 @@ pub fn staged_paths(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_strict_text_guard_wins_a_merge() {
+        use super::super::policy::TextGuard;
+        let mut strict = Policy::default();
+        strict.security.text_guard = TextGuard::Strict;
+        for (base, line) in [
+            (Policy::default(), strict.clone()),
+            (strict.clone(), Policy::default()),
+            (strict.clone(), strict.clone()),
+        ] {
+            assert_eq!(
+                super::stricter(base, &line).unwrap().security.text_guard,
+                TextGuard::Strict
+            );
+        }
+        assert_eq!(
+            super::stricter(Policy::default(), &Policy::default())
+                .unwrap()
+                .security
+                .text_guard,
+            TextGuard::Auto
+        );
+    }
+
     #[test]
     fn r21_landed_policy_discovery_error_refuses() {
         let root = tempfile::tempdir().unwrap();

@@ -141,7 +141,7 @@ fn classify(argv: &[String], depth: usize) -> Found {
             // The options are an allowlist shared with the directory
             // reader: one this grammar does not list may take a value that
             // would be read as the program, so it is unresolved (SR9-3).
-            "xargs" => match super::outward::skip_launcher_options("xargs", rest) {
+            "xargs" => match super::outward::skip_launcher_options_exact("xargs", rest) {
                 Some(from) => rest.get(from..).unwrap_or_default(),
                 None => return Found::Unresolved,
             },

@@ -27,6 +27,7 @@ mod codex_profile;
 mod git_config;
 mod grok_hooks;
 mod remote_perimeter;
+mod sandbox;
 mod startup_files;
 
 pub use codex_profile::{
@@ -296,6 +297,7 @@ const CHECK_NAMES: &[&str] = &[
     "codex",
     "grok",
     "startup-files",
+    "sandbox",
     "git-config-includes",
     "config",
     "permissions",
@@ -334,6 +336,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
     m.insert("startup-files", startup_files::check);
+    m.insert("sandbox", sandbox::check);
     m.insert("git-config-includes", git_config::check);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
@@ -4329,7 +4332,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 23);
+        assert_eq!(check_names().len(), 24);
     }
 
     #[test]

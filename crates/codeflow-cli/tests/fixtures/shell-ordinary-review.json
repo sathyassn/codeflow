@@ -472,12 +472,12 @@
   [
     "while read -r l; do echo \"$l\"; done < data/in.txt",
     0,
-    0
+    2
   ],
   [
     "while read -r l; do echo \"$l\"; done <<< \"$(ls)\"",
     0,
-    0
+    2
   ],
   [
     "mapfile -t arr < data/in.txt",

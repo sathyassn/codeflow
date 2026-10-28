@@ -525,8 +525,24 @@ const DIR_SET_LIMIT: usize = 64;
 impl DirSet {
     /// Apply one change: a literal directory joins every listed one, a
     /// change the guard cannot resolve makes the set unknown.
-    pub(crate) fn change(&mut self, change: &DirChange) {
+    pub(crate) fn change(&mut self, change: &DirChange, strict: bool) {
         match change {
+            DirChange::To(target) if !strict => {
+                let next: Vec<PathBuf> = self
+                    .dirs
+                    .iter()
+                    .map(|dir| lexical_join(dir, target))
+                    .collect();
+                for dir in next {
+                    if !self.dirs.contains(&dir) {
+                        if self.dirs.len() == DIR_SET_LIMIT {
+                            self.unknown = true;
+                        } else {
+                            self.dirs.push(dir);
+                        }
+                    }
+                }
+            }
             DirChange::To(target) => {
                 let mut resolved = false;
                 let next: Vec<PathBuf> = self
@@ -707,21 +723,15 @@ fn launcher_options(launcher: &str) -> Option<(&'static [&'static str], &'static
                 "-a",
                 "--arg-file",
                 "--delimiter",
+                "--eof",
+                "--max-lines",
                 "--max-args",
                 "--max-procs",
                 "--max-chars",
-                "--process-slot-var",
-                // BSD: the replacement string, its count and its size.
-                "-J",
-                "-R",
-                "-S",
-            ],
-            // GNU's `--replace`, `--eof` and `--max-lines` take a value
-            // only attached with `=`; bare, they consume nothing.
-            &[
                 "--replace",
-                "--eof",
-                "--max-lines",
+                "--process-slot-var",
+            ],
+            &[
                 "-0",
                 "-r",
                 "-t",
@@ -786,6 +796,27 @@ pub(crate) fn skip_launcher_options(launcher: &str, rest: &[String]) -> Option<u
         return None;
     }
     Some(at)
+}
+
+/// GNU `xargs` options whose value is optional: attached with `=` they take
+/// one, bare they take none, while the grammar above (and other `xargs`
+/// builds) read the next word as their value. The two readings name
+/// different programs, so neither is guessed.
+const XARGS_OPTIONAL_VALUES: &[&str] = &["--replace", "--eof", "--max-lines"];
+
+/// [`skip_launcher_options`] for a reader that must not guess: `None` when a
+/// bare optional-value `xargs` option makes the program word ambiguous
+/// (TSK-397 SR9-3). The headless reader and the strict branch use it; the
+/// baseline directory reader keeps the line's grammar.
+pub(crate) fn skip_launcher_options_exact(launcher: &str, rest: &[String]) -> Option<usize> {
+    let from = skip_launcher_options(launcher, rest)?;
+    let ambiguous = launcher == "xargs"
+        && rest.get(..from).is_some_and(|options| {
+            options
+                .iter()
+                .any(|w| XARGS_OPTIONAL_VALUES.contains(&w.as_str()))
+        });
+    (!ambiguous).then_some(from)
 }
 
 /// Read env's options: flags, `-u NAME`, `-C DIR` in every spelling and
@@ -1059,14 +1090,14 @@ pub(crate) fn read_line(lexed: &super::shell_lex::Lexed) -> super::shell_lex::Re
             return None;
         }
         match name {
-            "timeout" => skip_launcher_options(name, rest).map(|from| from + 1),
+            "timeout" => skip_launcher_options_exact(name, rest).map(|from| from + 1),
             "env" => env_options(
                 rest,
                 &|operand| directory_operand(operand, None),
                 &mut Vec::new(),
             ),
             "noglob" | "nocorrect" => Some(0),
-            _ => skip_launcher_options(name, rest),
+            _ => skip_launcher_options_exact(name, rest),
         }
     };
     super::shell_lex::read(
@@ -1074,14 +1105,6 @@ pub(crate) fn read_line(lexed: &super::shell_lex::Lexed) -> super::shell_lex::Re
         &launcher,
         &|word| program_is_interpreter(word),
         &|rest| hides_a_directory_change(rest),
-        // A call the walk resolves; one it reports unresolved (a shell's
-        // `-c "$CMD"` read without the line's assignments) is judged by the
-        // walk's own rule on the whole line.
-        &|words| {
-            interpreter_calls_with_home(&words.join(" "), Path::new("/"), None)
-                .iter()
-                .any(|call| call.unresolved.is_empty())
-        },
         HOOK_VARIABLES,
     )
 }
@@ -1115,7 +1138,16 @@ fn hides_a_directory_change(rest: &[String]) -> bool {
 
 /// The directory set of `command` from `cwd`: every simple command the
 /// line runs, nested bodies included, read in order.
-pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -> DirSet {
+///
+/// `strict` selects the strict branch of TSK-397 design D: the directory is
+/// also unknown wherever the shell's own lexing shows a command that may
+/// move it. The baseline (`false`) is the line's rule unchanged.
+pub(crate) fn line_directories(
+    command: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    strict: bool,
+) -> DirSet {
     // A line that names `CDPATH` or `cdpath` may set it in a form this
     // parser does not read (`+=`, `export`, `declare`, arrays, `read`,
     // `printf -v`), and its search paths may not be enumerable, so the
@@ -1125,13 +1157,15 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
     // (TSK-397): an opaque construct, a current-shell substitution, a
     // `CDPATH` mention, or any command that is not a fully unquoted,
     // literal interpreter call through the modeled launchers.
-    let lexed = super::shell_lex::lex(command);
     let mut set = DirSet {
         dirs: vec![cwd.to_path_buf()],
-        unknown: lexed.opaque
-            || lexed.current_shell
-            || mentions_cdpath(&lexed.text)
-            || read_line(&lexed).moves,
+        unknown: strict && {
+            let lexed = super::shell_lex::lex(command);
+            lexed.opaque
+                || lexed.current_shell
+                || mentions_cdpath(&lexed.text)
+                || read_line(&lexed).moves
+        },
     };
     // The shared walk supplies the directory before each command. Apply the
     // legacy launcher reader locally, rather than combining every change with
@@ -1144,7 +1178,7 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
     // When nothing on the line can move the shell, every command runs in
     // the starting directory, so a step the walk cannot place (a loop body,
     // which it reads conservatively) is that directory, not an unknown one.
-    let stays = !set.unknown;
+    let stays = strict && !set.unknown;
     let mut seen = std::collections::HashSet::from([cwd.to_path_buf()]);
     for step in super::composed::paths::commands(command, cwd, home) {
         let mut local = DirSet {
@@ -1162,7 +1196,7 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
             let mut words = command_argv(&segment);
             strip_reserved_words(&mut words);
             for change in dir_changes(&words, home) {
-                local.change(&change);
+                local.change(&change, strict);
             }
         }
         set.unknown |= local.unknown;
@@ -1323,9 +1357,12 @@ fn argv(
                 "-a",
                 "--arg-file",
                 "--delimiter",
+                "--eof",
+                "--max-lines",
                 "--max-args",
                 "--max-procs",
                 "--max-chars",
+                "--replace",
             ],
         )),
         name if crate::hooks::git_guard::is_shell(name) => {
@@ -3353,7 +3390,7 @@ mod r22_tests {
                     skipped.push(format!("{shell}: {line} (zsh only)"));
                     continue;
                 }
-                let set = line_directories(line, &root, Some(&home));
+                let set = line_directories(line, &root, Some(&home), false);
                 let output = Command::new(shell)
                     .arg("-c")
                     .arg(&script)

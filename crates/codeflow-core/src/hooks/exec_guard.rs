@@ -97,6 +97,31 @@ pub fn evaluate_in(
     cwd: &std::path::Path,
     root: &std::path::Path,
 ) -> Vec<Violation> {
+    evaluate_ruled(
+        command,
+        posix,
+        levels,
+        integrity,
+        cwd,
+        root,
+        &super::sandbox_state::Outcome::Baseline,
+    )
+}
+
+/// [`evaluate_in`] under the outcome [`super::sandbox_state`] selected for
+/// the call (TSK-397 design D): the baseline rule, or the baseline with the
+/// strict branch added. Every check outside the interpreter-argument rule
+/// is the same in both outcomes.
+#[must_use]
+pub fn evaluate_ruled(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+    outcome: &super::sandbox_state::Outcome,
+) -> Vec<Violation> {
     // A NUL byte ends a C string in the shell but not in the guard, so the
     // two would read different commands; refuse before any lexing (TSK-397
     // Codex review round 9).
@@ -193,13 +218,14 @@ pub fn evaluate_in(
     let homes = std::iter::once(crate::portable_path::user_home())
         .chain(super::git_guard::line_home::assigned().map(Some));
     for home in homes {
-        for finding in crate::security::interpreter::evaluate(
+        for finding in crate::security::interpreter::evaluate_ruled(
             command,
             levels,
             integrity,
             cwd,
             root,
             home.as_deref(),
+            outcome.trigger(),
         ) {
             merge_strongest(&mut violations, finding);
         }
@@ -394,13 +420,7 @@ mod tests {
         use crate::security::guard_forms::{COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS};
         let section = SecuritySection::default();
         for (form, equivalent) in COMPOSED_PAIRS {
-            // TSK-397: a run-time word given to `rm` is also judged as a
-            // possible interpreter argument, so only this rule's finding is
-            // compared.
-            let expected: Vec<_> = evaluate(equivalent, &section)
-                .into_iter()
-                .filter(|v| v.rule == "security.dangerous_commands")
-                .collect();
+            let expected = evaluate(equivalent, &section);
             assert_eq!(expected.len(), 1, "{equivalent}");
             assert_eq!(expected[0].rule, "security.dangerous_commands");
             for nesting in NESTINGS {
@@ -443,20 +463,40 @@ mod tests {
                 }
             }
         }
-        // TSK-397: a run-time word given to `rm` or `find` is judged by the
-        // directory check, never as a dangerous deletion.
         for command in PROJECT_DELETIONS {
             for nesting in NESTINGS {
                 let nested = nesting.replace("{}", command);
-                let found = evaluate(&nested, &section);
-                if crate::security::guard_forms::RUN_TIME_PROJECT_DELETIONS.contains(command) {
-                    assert!(
-                        found.iter().all(|v| v.rule == "git.hook_integrity"),
-                        "{nested}: {found:?}"
-                    );
-                } else {
-                    assert!(found.is_empty(), "{nested}: {found:?}");
-                }
+                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+            }
+        }
+    }
+
+    /// TSK-397 design D: where the strict rule applies, a run-time word
+    /// given to `rm` or `find` refuses under the directory check, never as a
+    /// dangerous deletion; the baseline allows these, as the line did.
+    #[test]
+    fn run_time_project_deletions_refuse_only_when_tightened() {
+        use crate::security::guard_forms::{NESTINGS, RUN_TIME_PROJECT_DELETIONS};
+        let section = SecuritySection::default();
+        let tightened = super::super::sandbox_state::Outcome::Tightened("a test trigger".into());
+        let root = std::env::current_dir().unwrap();
+        for command in RUN_TIME_PROJECT_DELETIONS {
+            for nesting in NESTINGS {
+                let nested = nesting.replace("{}", command);
+                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+                let found = evaluate_ruled(
+                    &nested,
+                    true,
+                    &section,
+                    PolicyLevel::Block,
+                    &root,
+                    &root,
+                    &tightened,
+                );
+                assert!(
+                    !found.is_empty() && found.iter().all(|v| v.rule == "git.hook_integrity"),
+                    "{nested}: {found:?}"
+                );
             }
         }
     }

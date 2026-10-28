@@ -131,31 +131,37 @@ fn a_header_returns_to_command_position() {
     assert!(!read_line(&lex("for x in a b; do python3 r.py \"$x\"; done")).moves);
 }
 
-/// No launcher the guard models, in either reader, nor any wrapper
-/// git-guard recognises, is on the non-executing allowlist, by its own name
-/// or a GNU-prefixed one: a launcher always keeps the words after it.
+/// C15-2: no program is exempt by name in the strict branch. Every name the
+/// removed non-executing allowlist held, the directory builtins and `[`
+/// included, keeps the words after it judged and the directory unknown,
+/// as do the launchers either reader models (TSK-397 design D).
 #[test]
-fn no_launcher_is_on_the_allowlist() {
-    let allowed: Vec<&str> = crate::security::non_executing::names().collect();
+fn no_program_keeps_its_words_to_itself() {
     for name in LEXER_LAUNCHERS
         .iter()
         .chain(MODELED_LAUNCHERS)
         .chain(crate::hooks::git_guard::PREFIX_LAUNCHERS)
         .chain(crate::hooks::git_guard::COMMAND_CARRIERS)
         .chain(&[
-            "builtin",
-            "sudo",
-            "doas",
-            "eval",
-            "noglob",
-            "nocorrect",
-            "-",
-            "find",
+            "echo", "printf", "cd", "pushd", "popd", "chdir", "ls", "cat", "true", "[", "test",
+            "wc", "grep", "head", "builtin", "sudo", "eval", "find",
         ])
     {
-        let name = crate::hooks::git_guard::launcher_name(name);
-        assert!(!allowed.contains(&name), "{name}");
+        // `x` is an operand, or the duration or program a launcher takes,
+        // so `$HOME` is an operand of whatever runs.
+        let line = format!("{name} x y \"$HOME\"");
+        let reading = read_line(&lex(&line));
+        assert!(reading.moves, "{line}: {reading:?}");
+        assert!(
+            reading.operands.iter().any(|w| w.text == "$HOME"),
+            "{line}: {reading:?}"
+        );
+        assert!(reading.derived.is_some(), "{line}: {reading:?}");
     }
+    // A conditional can evaluate a word as code, so it is not exempt either.
+    let conditional = read_line(&lex("[[ -n \"$X\" ]] && python3 r.py a"));
+    assert!(conditional.moves, "{conditional:?}");
+    assert!(conditional.derived.is_some(), "{conditional:?}");
 }
 
 /// C11-1, SR7-1: under each wrapper kind, an expanded program name or a
@@ -179,11 +185,10 @@ fn wrappers_keep_expanded_names_and_split_strings() {
         assert!(reading.moves, "{line}");
         assert!(reading.derived.is_some(), "{line}: {reading:?}");
     }
-    // An allowlisted program keeps its words to itself; any other program
-    // may run an interpreter with them (operator decision, 2026-10-27).
+    // No program keeps its words to itself (TSK-397 design D, C15-2).
     for line in ["echo \"$HOME\"", "ls ~"] {
         let reading = read_line(&lex(line));
-        assert!(reading.operands.is_empty(), "{line}: {reading:?}");
+        assert!(reading.derived.is_some(), "{line}: {reading:?}");
     }
     let cargo = read_line(&lex("cargo test -p \"$CRATE\""));
     assert!(cargo.derived.is_some(), "{cargo:?}");
@@ -244,10 +249,9 @@ fn expanded_program_words_are_not_literal() {
         let reading = read_line(&lex(line));
         assert!(reading.derived.is_some(), "{line}: {reading:?}");
     }
-    // A program with no option that runs anything keeps its words to itself
-    // behind `xargs`; `rg` does not, since `xargs` may append `--pre`.
+    // Behind `xargs`, as anywhere, no program keeps its words to itself.
     let plain = read_line(&lex(r#"xargs -n 1 cat "$HOME/x""#));
-    assert!(plain.operands.is_empty(), "{plain:?}");
+    assert!(plain.derived.is_some(), "{plain:?}");
     let appended = read_line(&lex(r#"xargs -n 1 rg "$HOME/x""#));
     assert!(appended.derived.is_some(), "{appended:?}");
 }
@@ -280,7 +284,7 @@ fn extended_patterns_are_not_literal() {
     }
 }
 
-/// SR9-2, SR9-4: a stop on neither the launcher list nor the allowlist keeps
+/// SR9-2, SR9-4: a stop on no launcher list keeps
 /// its words, at the start of a command and inside a launcher. A rule that
 /// keeps words only after names on a wrapper list fails these lines.
 #[test]

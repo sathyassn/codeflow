@@ -161,38 +161,6 @@ const ALLOWED: &[&str] = &[
     "env -S 'echo hi'",
 ];
 
-/// TSK-397 (operator decision, 2026-10-27): allowed lines and controls that
-/// give a program off the non-executing allowlist a word filled in at run
-/// time. The exec guard's directory check refuses them under
-/// `git.hook_integrity`; none is a startup refusal.
-const RUN_TIME_COSTS: &[&str] = &[
-    "diff ~/.zshrc ~/.bashrc",
-    "cp ~/.bashrc backup.txt",
-    "sed -n 1,20p ~/.zshrc",
-    "CMD='git status'; sh -c \"$CMD\"",
-    "git config --file ~/.gitconfig user.name Probe",
-    "sed -n 1p ~/.gitconfig",
-    "cp ~/.gitconfig backup.txt",
-    "install -m 644 ~/.gitconfig /tmp/bak",
-    "install -t /tmp/bak ~/.gitconfig",
-    "install -D ~/.gitconfig /tmp/bak/g",
-    "curl --output-dir \"$HOME\" -o notes.txt https://example.com/payload.txt",
-    "tar -czf/tmp/box.tar -C $HOME .",
-    "cp ~/.gitconfig /tmp/backup",
-    "tar -tf ~/.gitconfig",
-    "rsync -a ~/.gitconfig /tmp/y",
-];
-
-/// Whether `outputs` refuse only as TSK-397's run-time word refusal.
-fn run_time_cost(outputs: &[std::process::Output]) -> bool {
-    refused_with(outputs, "git.hook_integrity")
-        && !refused_with(outputs, RULE)
-        && outputs
-            .iter()
-            .filter(|o| o.status.code() == Some(2))
-            .all(|o| String::from_utf8_lossy(&o.stderr).contains("is filled in at run time"))
-}
-
 #[test]
 fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
     let (project, _home) = startup_project();
@@ -212,12 +180,6 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
         }
         for command in ALLOWED {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
-            if RUN_TIME_COSTS.contains(command) {
-                if !run_time_cost(&outputs) {
-                    wrong.push(format!("{harness}: {command}: {outputs:?}"));
-                }
-                continue;
-            }
             if outputs.iter().any(|o| !o.status.success()) {
                 wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
             }
@@ -992,12 +954,6 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             .chain(ROUND_23_CONTROLS)
         {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
-            if RUN_TIME_COSTS.contains(command) {
-                if !run_time_cost(&outputs) {
-                    wrong.push(format!("{harness}: control {command}: {outputs:?}"));
-                }
-                continue;
-            }
             if outputs.iter().any(|o| !o.status.success()) {
                 wrong.push(format!("{harness}: refused control {command}"));
             }

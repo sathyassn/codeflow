@@ -584,13 +584,22 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         let _ = term_writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
         return 2;
     };
-    let violations = exec_guard::evaluate_in(
+    // Which text rule judges this call (TSK-397 design D): the harness
+    // configuration this host shows, the call's retry flag and the policy.
+    let outcome = codeflow_core::hooks::sandbox_state::outcome(
+        &codeflow_core::hooks::sandbox_state::Host::from_process(&root),
+        codeflow_core::hooks::sandbox_state::Harnesses::from_keys(&payload.keys),
+        payload.tool_input.sandbox_retry(),
+        policy.security.text_guard == codeflow_core::hooks::policy::TextGuard::Strict,
+    );
+    let violations = exec_guard::evaluate_ruled(
         command,
         exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)),
         &policy.security,
         policy.git.hook_integrity,
         &cwd,
         &root,
+        &outcome,
     );
     exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
 }

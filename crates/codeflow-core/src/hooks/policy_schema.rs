@@ -161,7 +161,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 74] = [
+pub const SCHEMA: [KeySpec; 75] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -857,6 +857,13 @@ pub const SCHEMA: [KeySpec; 74] = [
         valid: LEVEL_VALID,
         purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
         notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
+    },
+    KeySpec {
+        path: "security.text_guard",
+        kind: KeyKind::Enum(&["auto", "strict"]),
+        valid: "auto | strict",
+        purpose: "Which text rule the exec-guard applies to shell calls (TSK-397): `auto` adds the strict rule where the readable sandbox configuration is absent, loosened or unsupported, or the call asks to run outside the sandbox; `strict` adds it on every host.",
+        notes: "Default auto. No value loosens the guard: the strict rule only adds refusals, and when policy sources disagree `strict` wins. `codeflow doctor --check sandbox` shows which rule a host gets and why.",
     },
     KeySpec {
         path: "security.outward_actions",
@@ -1668,7 +1675,8 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 9] = [
+        const OPTIONAL: [&str; 10] = [
+            "security.text_guard",
             "git.pr_section_mapping",
             "git.release_branch_pattern",
             "git.clean_regenerable",

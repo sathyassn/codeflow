@@ -60,9 +60,27 @@ fn codeflow() -> Command {
     isolated_codeflow(Command::new(env!("CARGO_BIN_EXE_codeflow")))
 }
 
+/// TSK-397 design D: this suite's exec-guard expectations are the tightened
+/// outcome's. A test managed settings layer with an exclusion list selects
+/// it on every host, whatever the host's own managed policy says; the
+/// baseline's decisions are proven by the `text_guard_invariant` replay.
+fn tightened_managed_dir() -> &'static Path {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = process_folders::until_exit(tempfile::tempdir().expect("managed tempdir"));
+        std::fs::write(
+            dir.join("managed-settings.json"),
+            r#"{"sandbox":{"excludedCommands":["codeflow-test-tightened"]}}"#,
+        )
+        .expect("managed settings");
+        dir
+    })
+}
+
 fn isolated_codeflow(mut cmd: Command) -> Command {
     // Isolate from the developer's environment.
-    cmd.env("CODEFLOW_HOME", isolated_home())
+    cmd.env("CODEFLOW_TEST_CLAUDE_MANAGED_DIR", tightened_managed_dir())
+        .env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -2356,7 +2374,23 @@ fn assignment_prefixes_do_not_hide_git_paths_containing_equals() {
     }
 }
 
+/// TSK-397: the exec guard's strict rule refuses these lines the closing
+/// rule allows, in the tightened outcome this suite runs in; no program,
+/// `echo`, `printf` and `cd` included, is exempt by name (design D, C15-2).
+const CLOSING_RULE_RUN_TIME_COSTS: &[&str] = &[
+    "export PATH=$PATH:/x; git status",
+    "git log -1 \"$((1+1))\"",
+    "export FOO=$(pwd); git push origin task/x",
+    "export PATH=$PATH:/x",
+    ": ${FOO:=bar}",
+    "V=1; echo $V",
+    "cd \"$HOME/src/x\" && git push origin task/x",
+    "printf '%s' \"${HOME}\"; git push origin task/x",
+    "echo \"${HOME:-/x}\"",
+];
+
 #[test]
+#[allow(clippy::too_many_lines)] // One fixture keeps each refusal beside the read it must not catch.
 fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/config");
@@ -2429,14 +2463,6 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
         "grep HOME f",
         "env | grep HOME",
     ];
-    // TSK-397: the exec guard's directory check refuses these allowed lines.
-    let run_time_costs = [
-        "export PATH=$PATH:/x; git status",
-        "git log -1 \"$((1+1))\"",
-        "export FOO=$(pwd); git push origin task/x",
-        "export PATH=$PATH:/x",
-        ": ${FOO:=bar}",
-    ];
     let mut failures = Vec::new();
     for hook in ["git-guard", "exec-guard"] {
         for (commands, expected) in [(&refusals[..], 2), (&allowed[..], 0)] {
@@ -2448,7 +2474,10 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
                         .current_dir(dir.path()),
                     &guard_payload(command, dir.path()),
                 );
-                if hook == "exec-guard" && expected == 0 && run_time_costs.contains(command) {
+                if hook == "exec-guard"
+                    && expected == 0
+                    && CLOSING_RULE_RUN_TIME_COSTS.contains(command)
+                {
                     if !run_time_word_refusal(&out) {
                         failures.push(format!("{hook}: {command}: {out:?}"));
                     }
@@ -2589,8 +2618,9 @@ fn unresolved_configuration_writes_refuse_in_both_guards() {
                 codeflow().args(["hook", hook]).current_dir(dir.path()),
                 &guard_payload(command, dir.path()),
             );
-            // TSK-397: `export` given a run-time word.
-            if hook == "exec-guard" && command.starts_with("export") {
+            // TSK-397: a run-time word given to `export` or `echo` in the
+            // tightened outcome this suite runs in.
+            if hook == "exec-guard" {
                 assert!(run_time_word_refusal(&out), "{command}: {out:?}");
                 continue;
             }
@@ -9393,17 +9423,16 @@ fn guards_read_a_search_pattern_as_text() {
         // A preprocessor over a root that holds nothing protected.
         "rg --pre pdftotext needle docs/".to_string(),
     ];
-    // TSK-397 (operator decision, 2026-10-27): `rg` and `ag` have options
-    // that run a program, so a run-time word that may expand to one, or
-    // arguments `xargs` appends, keep their words judged; `git grep` is not
-    // on the allowlist. Those forms refuse as the rule's accepted cost.
+    // TSK-397 design D: this suite runs in the tightened outcome, whose
+    // strict rule exempts no program by name, so a run-time word given to
+    // any search tool keeps its words judged. Those forms refuse as the
+    // strict rule's accepted cost; the baseline keeps the line's decisions.
     let mut cost = Vec::new();
     for form in ["'/CHANGELOG.md$'", "'^/etc/.*'", "\"$HOME/x\""] {
         let run_time = form.starts_with('"');
         for tool in ["rg", "grep", "egrep", "fgrep", "git grep", "ag"] {
-            let risky = matches!(tool, "rg" | "ag" | "git grep");
             let positional = format!("{tool} {form} docs");
-            if run_time && risky {
+            if run_time {
                 cost.push(positional);
             } else {
                 allowed.push(positional);
@@ -9411,18 +9440,23 @@ fn guards_read_a_search_pattern_as_text() {
             // `ag` has no `-e`, and `git grep` no `--regexp`.
             if tool != "ag" {
                 let valued = format!("{tool} -e {form} docs");
-                if run_time && tool == "git grep" {
+                if run_time {
                     cost.push(valued);
                 } else {
                     allowed.push(valued);
                 }
             }
             if !matches!(tool, "ag" | "git grep") {
-                allowed.push(format!("{tool} --regexp {form} docs"));
+                let long = format!("{tool} --regexp {form} docs");
+                if run_time {
+                    cost.push(long);
+                } else {
+                    allowed.push(long);
+                }
             }
             if tool != "git grep" {
                 let appended = format!("rg --files | xargs {tool} {form}");
-                if run_time && risky {
+                if run_time {
                     cost.push(appended);
                 } else {
                     allowed.push(appended);

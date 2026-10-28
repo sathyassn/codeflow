@@ -87,24 +87,62 @@ enum Reach {
     Enforcement(String),
 }
 
+/// Judge the line's interpreter arguments. The baseline rule always runs.
+/// `strict` is `Some(trigger)` in the tightened outcome of TSK-397 design
+/// D: the strict branch then runs as well, and each refusal it adds says
+/// which trigger selected it. The tightened outcome keeps every baseline
+/// finding, so it never allows what the baseline refuses.
 pub(crate) fn evaluate(
     line: &str,
     integrity: PolicyLevel,
     payload_cwd: &Path,
     root: &Path,
     home: Option<&Path>,
+    strict: Option<&str>,
+) -> Vec<Violation> {
+    let mut found = evaluate_rule(line, integrity, payload_cwd, root, home, false);
+    if let Some(trigger) = strict {
+        for mut violation in evaluate_rule(line, integrity, payload_cwd, root, home, true) {
+            if found
+                .iter()
+                .any(|v| v.rule == violation.rule && v.message == violation.message)
+            {
+                continue;
+            }
+            violation.message = format!(
+                "{}; this is outside the guard's model, and the strict rule applies because {trigger}",
+                violation.message
+            );
+            found.push(violation);
+        }
+    }
+    found
+}
+
+/// One rule's judgement: the line's rule when `strict` is false, the strict
+/// branch when it is true.
+fn evaluate_rule(
+    line: &str,
+    integrity: PolicyLevel,
+    payload_cwd: &Path,
+    root: &Path,
+    home: Option<&Path>,
+    strict: bool,
 ) -> Vec<Violation> {
     let _scope = edit_guard::RepoFactsScope::enter();
     let calls = outward::interpreter_calls_with_home(line, payload_cwd, home);
     let (opaque, runs) = outward::code_sources(line);
-    // A current-shell substitution's body is code the splitter does not
-    // keep whole, so every word on the line may belong to a call the guard
-    // never saw (TSK-397 security review SR2-1).
-    let lexed = super::shell_lex::lex(line);
-    let opaque = opaque || lexed.opaque || lexed.current_shell;
-    // The lexer's possible calls are read before any early return, so its
+    // Strict branch: a current-shell substitution's body is code the
+    // splitter does not keep whole, so every word on the line may belong to
+    // a call the guard never saw (TSK-397 security review SR2-1), and the
+    // lexer's possible calls are read before any early return, so its
     // findings are never skipped (TSK-397 Codex review round 11).
-    let reading = outward::read_line(&lexed);
+    let lexed = strict.then(|| super::shell_lex::lex(line));
+    let opaque = opaque
+        || lexed
+            .as_ref()
+            .is_some_and(|lexed| lexed.opaque || lexed.current_shell);
+    let reading = lexed.as_ref().map(outward::read_line).unwrap_or_default();
     if calls.is_empty()
         && !runs
         && !opaque
@@ -113,8 +151,9 @@ pub(crate) fn evaluate(
     {
         return Vec::new();
     }
-    let line_dirs = outward::line_directories(line, payload_cwd, home);
+    let line_dirs = outward::line_directories(line, payload_cwd, home, strict);
     let mut facts = Facts {
+        strict,
         line,
         payload_cwd,
         root,
@@ -228,6 +267,8 @@ pub(crate) fn evaluate(
 /// (TSK-302 review F4): the protected names, and what the whole line names
 /// from each directory a call runs in.
 struct Facts<'a> {
+    /// The strict branch of TSK-397 design D is judging.
+    strict: bool,
     line: &'a str,
     payload_cwd: &'a Path,
     root: &'a Path,
@@ -426,6 +467,13 @@ fn call_dirs(
     for chdir in &call.chdir {
         match outward::directory_operand(chdir, facts.home) {
             outward::DirChange::Unknown => set.unknown = true,
+            outward::DirChange::To(target) if !facts.strict => {
+                set.dirs = set
+                    .dirs
+                    .iter()
+                    .map(|dir| outward::lexical_join(dir, &target))
+                    .collect();
+            }
             outward::DirChange::To(target) => {
                 // `ruby -C` changes directory physically, so `lnk/..` is the
                 // link target's parent; both readings are kept, and a `..`
@@ -1257,7 +1305,7 @@ fn unreadable_reach(
         // From a directory the guard cannot follow, `.`, `..` or `$PWD`
         // names that directory or one above it, which may be the checkout
         // or a protected directory itself (TSK-397 security review SR2-2).
-        None if names_the_directory_or_above(value, facts.home.is_some()) => {
+        None if facts.strict && names_the_directory_or_above(value, facts.home.is_some()) => {
             Some("the directory it runs in or one above it".to_string())
         }
         None => git_guard::word_could_name(value).map(str::to_string),

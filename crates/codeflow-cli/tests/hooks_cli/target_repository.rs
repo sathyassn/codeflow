@@ -1157,6 +1157,13 @@ fn repair3_runner_locations() {
             ),
         ] {
             let out = f.command(&subdir, hook, &command);
+            // TSK-397 design D: in the tightened outcome the suite runs in,
+            // `cd` is no exempt name, so the exec guard judges the run-time
+            // word after it.
+            if hook == "exec-guard" && command.starts_with("D=..") {
+                assert_eq!(out.status.code(), Some(2), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
         for command in [

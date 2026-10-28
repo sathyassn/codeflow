@@ -787,6 +787,30 @@ pub struct SecuritySection {
     /// Unsupported legacy entries; accepted values have no effect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_retry_allow: Option<Vec<serde_json::Value>>,
+    /// Which text rule the exec guard applies (TSK-397 design D): `auto`
+    /// selects it from the harness sandbox configuration, `strict` always
+    /// adds the strict rule. No value loosens the guard.
+    #[serde(skip_serializing_if = "TextGuard::is_auto")]
+    pub text_guard: TextGuard,
+}
+
+/// The `security.text_guard` values.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextGuard {
+    /// The sandbox configuration selects the rule.
+    #[default]
+    Auto,
+    /// The strict rule applies on every host.
+    Strict,
+}
+
+impl TextGuard {
+    /// Whether this is the default, `auto`.
+    #[must_use]
+    pub fn is_auto(&self) -> bool {
+        *self == Self::Auto
+    }
 }
 
 impl Default for SecuritySection {
@@ -803,6 +827,7 @@ impl Default for SecuritySection {
             workflow_pushes: None,
             sandbox_retry: None,
             sandbox_retry_allow: None,
+            text_guard: TextGuard::Auto,
         }
     }
 }
