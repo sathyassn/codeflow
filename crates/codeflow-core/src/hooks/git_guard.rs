@@ -5482,6 +5482,20 @@ pub(crate) fn xargs_command(args: &[String]) -> Option<&[String]> {
     args.get(at..).filter(|c| !c.is_empty())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times [`line_names_ripgrep_config`] read a whole line.
+    static RIPGREP_LINE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether `line` names `RIPGREP_CONFIG_PATH`
+/// ([`crate::security::search_pattern::names_ripgrep_config`]).
+fn line_names_ripgrep_config(line: &str) -> bool {
+    #[cfg(test)]
+    RIPGREP_LINE_READS.with(|reads| reads.set(reads.get() + 1));
+    crate::security::search_pattern::names_ripgrep_config(line)
+}
+
 /// The command line an `xargs` or a `find` is judged against, without the
 /// search patterns of the command it runs, and the positions of those
 /// patterns in `args` (TSK-380): a pattern is text the search matches,
@@ -5493,7 +5507,7 @@ fn line_without_patterns(cmd: &str, args: &[String], line: &str) -> (String, Vec
         cmd,
         args,
         &own_literal(line, cmd, args),
-        crate::security::search_pattern::names_ripgrep_config(line),
+        line_names_ripgrep_config(line),
     );
     if patterns.is_empty() {
         return (line.to_string(), patterns);
@@ -5540,7 +5554,7 @@ fn preprocessor_write_violation(
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
-    use crate::security::search_pattern::{names_ripgrep_config, preprocessor, Preprocessor};
+    use crate::security::search_pattern::{preprocessor, Preprocessor};
     let refuse = |why: String| {
         Some(hook_integrity_violation(
             level,
@@ -5548,7 +5562,7 @@ fn preprocessor_write_violation(
         ))
     };
     let literal = own_literal(line, cmd, args);
-    let roots = match preprocessor(cmd, args, &literal, names_ripgrep_config(line)) {
+    let roots = match preprocessor(cmd, args, &literal, line_names_ripgrep_config(line)) {
         Preprocessor::None => return None,
         Preprocessor::FromInput => {
             return refuse(format!(
@@ -14457,6 +14471,38 @@ mod tests {
                 .any(|finding| finding.rule == "git.push_to_protected"),
             "{findings:?}"
         );
+    }
+
+    /// TSK-1050: git-guard reads whether a line names `RIPGREP_CONFIG_PATH`
+    /// once per line, not once per segment. The read expands the whole line,
+    /// so a read per segment made a long chain quadratic. Verdicts stay the
+    /// same, including a line that names the variable.
+    #[test]
+    fn a_long_chain_reads_the_ripgrep_config_name_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        let policy = GitPolicy::default();
+        let context = ctx(&policy, "task/example");
+        let judge = |command: &str| {
+            super::RIPGREP_LINE_READS.with(|reads| reads.set(0));
+            let rules: Vec<_> = super::evaluate_report_at(command, &context, &root)
+                .violations
+                .into_iter()
+                .map(|violation| violation.rule)
+                .collect();
+            (super::RIPGREP_LINE_READS.with(std::cell::Cell::get), rules)
+        };
+        let one = "rg needle docs && cat notes.txt";
+        let (single, single_rules) = judge(one);
+        assert!(single >= 1, "the check reads the line: {single}");
+        let long = vec![one; 40].join(" && ");
+        let (reads, rules) = judge(&long);
+        assert_eq!(reads, single, "reads grew with the segment count");
+        assert_eq!(rules, single_rules);
+        let named = format!("RIPGREP_CONFIG_PATH=rc {long}");
+        let (reads, _) = judge(&named);
+        assert_eq!(reads, single, "a line naming the variable");
     }
 
     /// A guard context with an injected `gh pr merge` base-branch resolver.
