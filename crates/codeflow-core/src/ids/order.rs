@@ -19,7 +19,11 @@ use std::path::Path;
 /// order that agrees with `Eq` and groups equal strings next to each other.
 #[must_use]
 pub fn compare_ids(left: &str, right: &str) -> Ordering {
-    let (a, b) = (left.as_bytes(), right.as_bytes());
+    compare_bytes(left.as_bytes(), right.as_bytes()).then_with(|| left.cmp(right))
+}
+
+/// The digit-aware comparison on bytes, equal when the texts read equal.
+fn compare_bytes(a: &[u8], b: &[u8]) -> Ordering {
     let (mut i, mut j) = (0, 0);
     while i < a.len() && j < b.len() {
         if a[i].is_ascii_digit() && b[j].is_ascii_digit() {
@@ -36,16 +40,14 @@ pub fn compare_ids(left: &str, right: &str) -> Ordering {
             }
         }
     }
-    (a.len() - i)
-        .cmp(&(b.len() - j))
-        .then_with(|| left.cmp(right))
+    (a.len() - i).cmp(&(b.len() - j))
 }
 
-/// Compare two paths component by component with [`compare_ids`], so
-/// `tasks/TSK-999.md` lists before `tasks/TSK-1000.md`.
+/// Compare two paths component by component with the same digit-aware
+/// order, so `tasks/TSK-999.md` lists before `tasks/TSK-1000.md`.
 ///
-/// Components that are not valid UTF-8 compare by their lossy text, then the
-/// paths compare by bytes, so the order stays total.
+/// Components compare as bytes, never as decoded text, so a name that is not
+/// valid UTF-8 keeps its place; paths that read equal compare by bytes.
 #[must_use]
 pub fn compare_id_paths(left: &Path, right: &Path) -> Ordering {
     let mut a = left.components();
@@ -53,11 +55,10 @@ pub fn compare_id_paths(left: &Path, right: &Path) -> Ordering {
     loop {
         match (a.next(), b.next()) {
             (Some(x), Some(y)) => {
-                let (x, y) = (
-                    x.as_os_str().to_string_lossy(),
-                    y.as_os_str().to_string_lossy(),
-                );
-                match compare_ids(&x, &y) {
+                match compare_bytes(
+                    x.as_os_str().as_encoded_bytes(),
+                    y.as_os_str().as_encoded_bytes(),
+                ) {
                     Ordering::Equal => {}
                     other => return other,
                 }
