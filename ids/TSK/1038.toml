@@ -1,0 +1,11 @@
+id = "TSK-1038"
+uid = "86d5e337-b4f9-4c3a-8a33-e70973e5af00"
+kind = "TSK"
+title = "Work next never offers a task whose work has landed as ready"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T01:50:56Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
