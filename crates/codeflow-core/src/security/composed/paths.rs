@@ -1479,6 +1479,14 @@ fn simple(
                 targets.extend(effects.writes);
                 targets.extend(effects.copy.and_then(|copy| copy.dest));
             }
+            // The writers that write their operands, as the git guard
+            // judges them: every operand may be a file run later.
+            if matches!(
+                crate::security::unresolved::writer_name(program),
+                "tee" | "touch" | "truncate" | "ed" | "ex" | "vi" | "vim" | "nvim"
+            ) {
+                targets.extend(args.iter().filter(|arg| !arg.starts_with('-')).cloned());
+            }
         }
         let literal_cat = launched.is_some_and(|(program, _)| program == "cat")
             && tokens
@@ -1489,15 +1497,27 @@ fn simple(
             && !tokens
                 .iter()
                 .any(|token| matches!(token, Tok::Redir { op, .. } if op.contains(">>")));
+        // Every file a modeled write produces may be executed later on the
+        // line, whatever wrote it: a heredoc, `printf` or `echo`, an append,
+        // `tee` or a copy (TSK-1002 review 01, B3). Only a body the guard
+        // reads exactly is kept: a heredoc through a plain `cat`, or the
+        // exact output of `echo` or `printf` with no append. Any other body
+        // is unknown, and running the file refuses.
+        let appends = tokens
+            .iter()
+            .any(|token| matches!(token, Tok::Redir { op, .. } if op.contains(">>")));
+        let printed = launched
+            .filter(|(program, _)| matches!(*program, "echo" | "printf" | "print"))
+            .and(stdout.as_ref())
+            .filter(|_| !appends && unresolved.is_empty());
+        let redirected = crate::hooks::git_guard::redirect_writes(&text).targets;
         for target in targets {
             let path = lexical_join(dir, Path::new(&target));
-            if doc_headers.is_empty() && !position.scripts.iter().any(|(prior, _)| prior == &path) {
-                continue;
-            }
             position.scripts.retain(|(prior, _)| prior != &path);
             let body = doc_input
                 .as_ref()
                 .filter(|_| literal_cat)
+                .or(printed.filter(|_| redirected.contains(&target)))
                 .cloned()
                 .unwrap_or_else(|| "__unresolved_shell_code".into());
             position.scripts.push((path, body));
@@ -1550,13 +1570,7 @@ fn simple(
             let mut candidates = Vec::new();
             let file_arguments = family
                 .filter(|family| matches!(*family, "python" | "node" | "nodejs" | "perl" | "ruby"))
-                .map(|family| {
-                    crate::security::outward::interpreter_arguments(family, args, None)
-                        .0
-                        .into_iter()
-                        .map(|(arg, _)| arg)
-                        .collect::<Vec<_>>()
-                });
+                .map(|family| crate::security::outward::interpreter_program_files(family, args));
             if program.contains(['/', '\\']) {
                 candidates.push(program);
             }
@@ -1610,6 +1624,26 @@ fn simple(
                     })
                 },
             );
+            // An interpreter also loads the modules it imports, so a file
+            // written on this line with a source extension it loads counts
+            // as executed, wherever it was written.
+            let loads: &[&str] = match family {
+                Some("python") => &["py", "pyc", "pth"],
+                Some("node" | "nodejs") => &["js", "mjs", "cjs", "node"],
+                Some("ruby") => &["rb"],
+                Some("perl") => &["pl", "pm"],
+                Some("powershell") => &["ps1", "psm1"],
+                Some("deno") => &["ts", "tsx", "js", "jsx", "mjs"],
+                _ => &[],
+            };
+            let executes_written = executes_written
+                || position.scripts.iter().any(|(path, _)| {
+                    path.extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| {
+                            loads.contains(&extension.to_ascii_lowercase().as_str())
+                        })
+                });
             let unverified_selection = candidates
                 .iter()
                 .any(|file| crate::hooks::git_guard::has_glob(file));
@@ -1991,6 +2025,52 @@ mod tests {
                 .iter()
                 .any(|why| { why.contains("written earlier on this line") })),
             "{readings:?}"
+        );
+    }
+
+    /// Review 01, B3: a file written on the line by any modeled producer and
+    /// then run, or imported by an interpreter, is unread code. A shell
+    /// script whose exact body is known is read instead; a data file passed
+    /// to a program as its argument is not run.
+    #[test]
+    fn every_written_file_that_runs_is_read_or_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let unread = |line: &str| {
+            commands(line, temp.path(), None).iter().any(|step| {
+                step.unresolved.iter().any(|why| {
+                    why.contains("written earlier on this line") || why.contains("cannot be read")
+                })
+            })
+        };
+        for line in [
+            "printf 'print(1)' > run.py; python3 run.py",
+            "echo 'print(1)' > run.py && python3 run.py",
+            "echo 'print(1)' >> run.py; python3 run.py",
+            "echo x | tee run.py; python3 run.py",
+            "cp other.py run.py; python3 run.py",
+            "printf 'echo x' > run.sh; ./run.sh",
+            "printf 'x:\\n\\techo x' > Makefile; make",
+            "printf 'x=1' > helper.py; python3 main.py",
+            "printf 'x' > lib.js; node --require ./lib.js app.js",
+            "echo \"$X\" > run.sh; bash -x run.sh",
+        ] {
+            assert!(unread(line), "allowed: {line}");
+        }
+        for line in [
+            "python3 gen.py > out.json; python3 use.py out.json",
+            "printf 'x' > notes.txt; cat notes.txt",
+            "echo x > log.txt; node app.js log.txt",
+        ] {
+            assert!(!unread(line), "refused: {line}");
+        }
+        // A shell script with an exact body is read as that body.
+        let text: Vec<_> = commands("printf 'cat notes.txt' > r.sh; sh r.sh", temp.path(), None)
+            .into_iter()
+            .map(|step| step.text)
+            .collect();
+        assert!(
+            text.iter().any(|step| step.contains("cat notes.txt")),
+            "{text:?}"
         );
     }
 

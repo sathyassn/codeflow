@@ -284,18 +284,31 @@ the inline-code checks. Makefiles supplied on stdin or through `make --eval`
 are code too.
 Unknown PowerShell or deno parameter grammar and encoded PowerShell bodies
 refuse as cannot-verify. AppleScript bodies receive literal-path inspection;
-constructed shell commands refuse. A script written earlier on the same line
-must receive a verified code reading before execution by path, interpreter
-or Make. Otherwise it refuses. Windows namespace spellings are judged as the
-path Windows opens: `\\?\UNC\` and `\\.\UNC\` as the UNC path, `\\?\C:\` and
-`\\.\C:\` as the drive path, and an administrative share such as
-`\\host\C$\` on any host as its drive. A UNC path that ends in a protected
-home-relative path refuses whatever the host or share. Other device paths,
-alternate streams and short names the guard cannot map refuse. A
-short name that does not exist yet refuses unless nothing can exist there,
-since a command earlier on the line could create the entry it aliases. A Git
-revision such as `HEAD~1` that names no path, and inline interpreter code,
-are not file operands.
+constructed shell commands refuse. A file written earlier on the same line,
+by a heredoc, `echo`, `printf`, an append, `tee` or a copy, must receive a
+verified code reading before it runs by path, interpreter or Make, or
+before an interpreter that loads its extension runs. Otherwise it refuses.
+Every inline-code option form, attached or separate (`node --print=CODE`),
+is read as code.
+A command runs in every directory `env` moves it to in any option spelling
+(`-CDIR`, `-iC DIR`, `--chdir=DIR --`), and interpreter code runs where its
+call runs (`ruby -C`, `pwsh -WorkingDirectory`). A directory the guard
+cannot establish refuses a relative operand that could name a secret there.
+A parent component after an existing link is resolved through the link. A
+search selector is matched against every spelling the tool may compare,
+the search root included. Windows namespace spellings are judged as the
+path Windows opens: `\\?\UNC\` and `\\.\UNC\` as the UNC path, `\\?\C:\`,
+`\??\C:\` and `\\.\C:\` as the drive path, and an administrative share such
+as `\\host\C$\` on any host as its drive. A verbatim name that an ordinary
+path would change (a trailing dot or space, `..`, a device name) refuses. A
+named stream is judged as its file. A UNC path that ends in a protected
+home-relative path refuses whatever the host or share; any other share
+outside the home and the session's directory refuses, since its root may
+be a store. Other device paths, stream type syntax and short names the
+guard cannot map refuse. A short name that does not exist yet refuses
+unless nothing can exist there, since a command earlier on the line could
+create the entry it aliases. A Git revision such as `HEAD~1` that names no
+path, and inline interpreter code, are not file operands.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the

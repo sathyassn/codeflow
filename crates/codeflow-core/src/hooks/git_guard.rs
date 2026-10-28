@@ -7540,38 +7540,26 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
         if launcher_name(t) != "env" {
             return None;
         }
-        idx += 1;
-        while let Some(a) = tokens.get(idx).map(String::as_str) {
-            if a == "--" {
-                idx += 1;
-                break;
-            }
-            if let Some(attached) = env_split_option(a) {
-                let (operand, after) = match attached {
-                    SplitString::Attached(text) => (text, idx + 1),
-                    SplitString::NextWord => (tokens.get(idx + 1)?.as_str(), idx + 2),
-                };
-                // env reads `\_` in the string as a field separator, which
-                // the shell kept inside one word (TSK-242 review round 15).
-                let operand = operand.replace("\\_", " ");
-                let rest = tokens.get(after..).unwrap_or_default();
-                return Some(format!(
-                    "{} {operand} {}",
-                    quote_words(&tokens[..idx]),
-                    quote_words(rest)
-                ));
-            }
-            if matches!(
-                a,
-                "-u" | "--unset" | "-C" | "--chdir" | "-P" | "-a" | "--argv0"
-            ) {
-                idx += 2;
-            } else if a.starts_with('-') || assignment(a) {
-                idx += 1;
-            } else {
-                break;
-            }
-        }
+        // An env whose words the grammar cannot read has no split string
+        // here; `launcher_effects` refuses it as a launcher it cannot read.
+        let words = env_words(tokens, idx + 1).ok()?;
+        let Some(at) = words.split else {
+            idx = words.end;
+            continue;
+        };
+        let (operand, after) = match env_split_option(&tokens[at])? {
+            SplitString::Attached(text) => (text, at + 1),
+            SplitString::NextWord => (tokens.get(at + 1)?.as_str(), at + 2),
+        };
+        // env reads `\_` in the string as a field separator, which the
+        // shell kept inside one word (TSK-242 review round 15).
+        let operand = operand.replace("\\_", " ");
+        let rest = tokens.get(after..).unwrap_or_default();
+        return Some(format!(
+            "{} {operand} {}",
+            quote_words(&tokens[..at]),
+            quote_words(rest)
+        ));
     }
 }
 
@@ -7611,6 +7599,44 @@ pub(crate) fn shell_c_argument(args: &[String]) -> Option<&String> {
 
 pub(crate) fn has_shell_code_option(args: &[String]) -> bool {
     shell_code_option(args).0
+}
+
+/// The directory pwsh starts its code in: the value of `-WorkingDirectory`,
+/// an unambiguous abbreviation of it (`-wo`) or its `-wd` alias, read by
+/// the parameter grammar of [`powershell_code`] up to the code or file. A
+/// form that grammar cannot read makes [`powershell_code`] refuse the call.
+pub(crate) fn powershell_working_directory(args: &[String]) -> Option<&str> {
+    let mut found = None;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        let option = arg.trim_start_matches(['-', '/', '\u{2013}', '\u{2014}', '\u{2015}']);
+        if option == arg || option.is_empty() {
+            break;
+        }
+        let option = option.to_ascii_lowercase();
+        if option == "wd" || option.len() >= 2 && "workingdirectory".starts_with(&option) {
+            found = args.get(at + 1).map(String::as_str);
+            at += 2;
+            continue;
+        }
+        let takes_value = [
+            "executionpolicy",
+            "windowstyle",
+            "inputformat",
+            "outputformat",
+        ]
+        .iter()
+        .any(|name| name.starts_with(&option));
+        let ends = ["command", "file", "encodedcommand"]
+            .iter()
+            .any(|name| name.starts_with(&option))
+            || matches!(option.as_str(), "c" | "f" | "ec");
+        if ends {
+            break;
+        }
+        at += 1 + usize::from(takes_value);
+    }
+    found
 }
 
 /// Unknown parameters and encoded bodies never establish readable code.
@@ -7659,6 +7685,12 @@ fn powershell_code(args: &[String]) -> Option<String> {
             "inputformat",
             "outputformat",
         ];
+        // `-wd` is pwsh's alias of `-WorkingDirectory`.
+        let option = if option == "wd" {
+            "workingdirectory".to_string()
+        } else {
+            option
+        };
         let choices: Vec<_> = flags
             .iter()
             .map(|name| (*name, false))
@@ -13170,33 +13202,25 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
             continue;
         }
         if launcher_name(t) == "env" {
-            idx += 1;
-            // `env [-i] [-u NAME] [VAR=val]... command` — skip its own options
-            // and assignments up to the wrapped command.
-            while idx < tokens.len() {
-                let a = tokens[idx].as_str();
-                if a == "--" {
-                    idx += 1;
-                    break;
-                }
+            // env's options and assignments, up to the wrapped command, read
+            // by its full grammar ([`env_words`]).
+            match env_words(tokens, idx + 1) {
                 // `env -S 'cmd'` runs the command packed in that string,
                 // which [`expand_commands`] reads as its own segments; the
                 // string is never a program name.
-                if env_split_option(a).is_some() {
-                    return None;
-                }
-                if matches!(
-                    a,
-                    "-u" | "--unset" | "-C" | "--chdir" | "-P" | "-a" | "--argv0"
-                ) {
-                    idx += 2; // the option and its value, `-u NAME`
-                } else if a.starts_with('-')
-                    || a.split_once('=')
-                        .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-                {
-                    idx += 1; // an env option or a VAR=val pair
-                } else {
-                    break;
+                Ok(words) if words.split.is_some() => return None,
+                Ok(words) => idx = words.end,
+                // An option the grammar does not hold: skip option-shaped
+                // words; [`launcher_effects`] refuses the launcher.
+                Err(_) => {
+                    idx += 1;
+                    while tokens.get(idx).is_some_and(|a| {
+                        a.starts_with('-')
+                            || a.split_once('=')
+                                .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+                    }) {
+                        idx += 1;
+                    }
                 }
             }
             continue;
@@ -13267,78 +13291,171 @@ pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>)
     }
 }
 
+/// What the words of an `env` launcher do, read by env's full option
+/// grammar (GNU coreutils and BSD): short options alone, clustered
+/// (`-iC DIR`) or with an attached value (`-CDIR`), long options and their
+/// unique abbreviations with `=VALUE` or the next word, `--`, then
+/// `NAME=VALUE` assignments (TSK-1002 review 03).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct EnvWords<'t> {
+    /// Each directory `-C` or `--chdir` moves to, in order.
+    pub(crate) dirs: Vec<&'t str>,
+    /// The index of the word holding `-S` or `--split-string`, whose
+    /// string env splits into the command it runs.
+    pub(crate) split: Option<usize>,
+    /// The index of the first word after the options and assignments: the
+    /// command, or the word after a split option.
+    pub(crate) end: usize,
+}
+
+/// env's long options, and whether each takes a value: required (`Some(true)`),
+/// optional and only attached with `=` (`Some(false)`), or none (`None`).
+const ENV_LONG: &[(&str, Option<bool>)] = &[
+    ("argv0", Some(true)),
+    ("block-signal", Some(false)),
+    ("chdir", Some(true)),
+    ("debug", None),
+    ("default-signal", Some(false)),
+    ("help", None),
+    ("ignore-environment", None),
+    ("ignore-signal", Some(false)),
+    ("list-signal-handling", None),
+    ("null", None),
+    ("split-string", Some(true)),
+    ("unset", Some(true)),
+    ("version", None),
+];
+
+/// The long option `name` names, exactly or as an unambiguous
+/// abbreviation, with whether it takes a value ([`ENV_LONG`]).
+fn env_long_option(name: &str) -> Result<(&'static str, Option<bool>), &'static str> {
+    if let Some(&exact) = ENV_LONG.iter().find(|(full, _)| *full == name) {
+        return Ok(exact);
+    }
+    let matches: Vec<_> = ENV_LONG
+        .iter()
+        .filter(|(full, _)| !name.is_empty() && full.starts_with(name))
+        .collect();
+    match matches.as_slice() {
+        [one] => Ok(**one),
+        [] => Err("an option the guard does not read"),
+        _ => Err("an abbreviation the guard cannot read"),
+    }
+}
+
+/// Read an `env` launcher's words from `idx`. An option the grammar does
+/// not know, an ambiguous abbreviation or a value-taking option without
+/// its value is an error naming why, so a caller refuses instead of
+/// guessing where the command starts or which directory it runs in.
+pub(crate) fn env_words(tokens: &[String], mut idx: usize) -> Result<EnvWords<'_>, String> {
+    let mut words = EnvWords::default();
+    let assignment = |t: &str| {
+        t.split_once('=')
+            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+    };
+    let mut options = true;
+    while let Some(a) = tokens.get(idx).map(String::as_str) {
+        if options && a == "--" {
+            options = false;
+            idx += 1;
+            continue;
+        }
+        if options && a == "-" {
+            // A lone `-` is `-i`.
+            idx += 1;
+            continue;
+        }
+        if options {
+            if let Some(long) = a.strip_prefix("--") {
+                let (name, value) = long
+                    .split_once('=')
+                    .map_or((long, None), |(n, v)| (n, Some(v)));
+                let (full, takes) =
+                    env_long_option(name).map_err(|why| format!("`env {a}`, {why}"))?;
+                let value = match (takes, value) {
+                    (None, Some(_)) => {
+                        return Err(format!("`env {a}`, an option the guard does not read"))
+                    }
+                    (Some(true), None) => {
+                        idx += 1;
+                        Some(
+                            tokens
+                                .get(idx)
+                                .ok_or_else(|| format!("`env {a}` without its value"))?
+                                .as_str(),
+                        )
+                    }
+                    (_, value) => value,
+                };
+                match full {
+                    "chdir" => words.dirs.extend(value),
+                    "split-string" => {
+                        // The end is the split string's own word when it
+                        // is separate, as for `-S STRING`.
+                        let attached = long.contains('=');
+                        words.split = Some(if attached { idx } else { idx - 1 });
+                        words.end = if attached { idx + 1 } else { idx };
+                        return Ok(words);
+                    }
+                    _ => {}
+                }
+                idx += 1;
+                continue;
+            }
+            if let Some(letters) = a.strip_prefix('-') {
+                let at_option = idx;
+                for (i, letter) in letters.char_indices() {
+                    let tail = &letters[i + letter.len_utf8()..];
+                    match letter {
+                        'i' | '0' | 'v' => {}
+                        'u' | 'C' | 'P' | 'a' | 'L' | 'U' | 'S' => {
+                            let value = if tail.is_empty() {
+                                idx += 1;
+                                tokens
+                                    .get(idx)
+                                    .map(String::as_str)
+                                    .ok_or_else(|| format!("`env {a}` without its value"))?
+                            } else {
+                                tail
+                            };
+                            if letter == 'C' {
+                                words.dirs.push(value);
+                            }
+                            if letter == 'S' {
+                                words.split = Some(at_option);
+                                words.end = if tail.is_empty() { idx } else { idx + 1 };
+                                return Ok(words);
+                            }
+                            break;
+                        }
+                        _ => return Err(format!("`env {a}`, an option the guard does not read")),
+                    }
+                }
+                idx += 1;
+                continue;
+            }
+        }
+        if assignment(a) {
+            idx += 1;
+            continue;
+        }
+        break;
+    }
+    words.end = idx;
+    Ok(words)
+}
+
 /// Walk the options and assignments of an `env` launcher from `idx`,
-/// pushing each directory `-C DIR`, `-CDIR` or `--chdir[=]DIR` moves to.
-/// Returns the index of the command after them, or why the guard cannot
-/// read them: an option it does not know, or `-C` without a directory.
+/// pushing each directory it moves to ([`env_words`]). Returns the index
+/// of the command after them, or why the guard cannot read them.
 fn env_options<'t>(
     tokens: &'t [String],
-    mut idx: usize,
+    idx: usize,
     dirs: &mut Vec<&'t str>,
 ) -> Result<usize, String> {
-    while let Some(a) = tokens.get(idx).map(String::as_str) {
-        if a == "--" {
-            return Ok(idx + 1);
-        }
-        if matches!(a, "-C" | "--chdir") {
-            let Some(dir) = tokens.get(idx + 1) else {
-                return Err(format!("`env {a}` without a directory"));
-            };
-            dirs.push(dir.as_str());
-            idx += 2;
-            continue;
-        }
-        if let Some(dir) = a
-            .strip_prefix("--chdir=")
-            .or_else(|| a.strip_prefix("-C").filter(|d| !d.is_empty()))
-        {
-            dirs.push(dir);
-            idx += 1;
-            continue;
-        }
-        if matches!(a, "-u" | "--unset" | "-P" | "-a" | "--argv0") {
-            idx += 2;
-            continue;
-        }
-        if a.starts_with('-') {
-            let known = matches!(
-                a,
-                "-" | "-i"
-                    | "--ignore-environment"
-                    | "-0"
-                    | "--null"
-                    | "-v"
-                    | "--debug"
-                    | "--list-signal-handling"
-            ) || [
-                "--unset=",
-                "--argv0=",
-                "--default-signal",
-                "--ignore-signal",
-                "--block-signal",
-                "-u",
-                "-P",
-                "-a",
-                "-S",
-                "--split-string",
-            ]
-            .iter()
-            .any(|prefix| a.starts_with(prefix));
-            if !known {
-                return Err(format!("`env {a}`, an option the guard does not read"));
-            }
-            idx += 1;
-            continue;
-        }
-        let assignment = a
-            .split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name));
-        if !assignment {
-            break;
-        }
-        idx += 1;
-    }
-    Ok(idx)
+    let words = env_words(tokens, idx)?;
+    dirs.extend(words.dirs);
+    Ok(words.end)
 }
 
 /// The GNU programs Homebrew and other ports install with a `g` prefix
@@ -15897,6 +16014,54 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+    }
+
+    /// TSK-1002 review 03: one grammar reads env's words for every walker.
+    /// Each spelling of a directory change yields its directory and the
+    /// command's index; a word the grammar does not hold is an error.
+    #[test]
+    fn env_words_read_every_option_spelling() {
+        let words = |line: &str| command_argv(line);
+        for (line, dirs, command) in [
+            ("env -C d cat x", vec!["d"], "cat"),
+            ("env -Cd cat x", vec!["d"], "cat"),
+            ("env -iC d cat x", vec!["d"], "cat"),
+            ("env -0ivCd cat x", vec!["d"], "cat"),
+            ("env --chdir=d -- cat x", vec!["d"], "cat"),
+            ("env --chdir d cat x", vec!["d"], "cat"),
+            ("env --ch=d cat x", vec!["d"], "cat"),
+            ("env -C a -C b cat x", vec!["a", "b"], "cat"),
+            ("env -u X -i -- FOO=1 cat x", vec![], "cat"),
+            ("env -uX - FOO=1 cat x", vec![], "cat"),
+            ("env --unset X --ignore-environment cat x", vec![], "cat"),
+        ] {
+            let tokens = words(line);
+            let read = env_words(&tokens, 1).unwrap_or_else(|why| panic!("{line}: {why}"));
+            assert_eq!(read.dirs, dirs, "{line}");
+            assert_eq!(tokens[read.end], command, "{line}");
+            assert_eq!(read.split, None, "{line}");
+        }
+        for (line, split) in [("env -iS 'cat x'", 1), ("env --split-string='cat x'", 1)] {
+            assert_eq!(
+                env_words(&words(line), 1).unwrap().split,
+                Some(split),
+                "{line}"
+            );
+        }
+        for line in [
+            "env --frobnicate cat x",
+            "env --i cat x",
+            "env -Z cat x",
+            "env -C",
+        ] {
+            assert!(env_words(&words(line), 1).is_err(), "{line}");
+        }
+        let tokens = words("env -iC .git tee config");
+        assert_eq!(
+            strip_launchers(&tokens).map(|(program, _)| program),
+            Some("tee")
+        );
+        assert_eq!(launcher_effects(&tokens), (vec![".git"], None));
     }
 
     #[test]

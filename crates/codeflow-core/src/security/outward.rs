@@ -1337,22 +1337,38 @@ fn argv(
     }
     let inner = match name {
         "env" => {
-            if let Some(at) = rest
-                .iter()
-                .position(|a| a == "-C" || a == "--chdir" || a.starts_with("--chdir="))
-            {
-                let path = rest[at]
-                    .strip_prefix("--chdir=")
-                    .or_else(|| rest.get(at + 1).map(String::as_str));
-                if let (Some(cwd), Some(path), Some(inner)) = (cwd, path, skip_env(rest)) {
-                    argv(
-                        inner,
-                        pattern_tail(patterns, inner.len()),
-                        Some(&cwd.join(path)),
-                        depth + 1,
-                        out,
-                    );
-                }
+            // The command also runs in each directory env moves to, read by
+            // env's full grammar (`-CDIR`, `-iC DIR`, `--chdir=DIR --`). A
+            // directory the guard cannot establish, or env words it cannot
+            // read, leave the command with no known directory, so its
+            // relative operands refuse (TSK-1002 review 03).
+            let moved = match crate::hooks::git_guard::env_words(rest, 0) {
+                Ok(words) if words.split.is_none() && !words.dirs.is_empty() => Some((
+                    words.end,
+                    cwd.and_then(|cwd| {
+                        words
+                            .dirs
+                            .iter()
+                            .try_fold(cwd.to_path_buf(), |dir, change| {
+                                match directory_operand(change, out.home.as_deref()) {
+                                    DirChange::To(target) => Some(lexical_join(&dir, &target)),
+                                    DirChange::Unknown => None,
+                                }
+                            })
+                    }),
+                )),
+                Ok(_) => None,
+                Err(_) => skip_env(rest).map(|inner| (rest.len() - inner.len(), None)),
+            };
+            if let Some((end, dir)) = moved {
+                let inner = &rest[end..];
+                argv(
+                    inner,
+                    pattern_tail(patterns, inner.len()),
+                    dir.as_deref(),
+                    depth + 1,
+                    out,
+                );
             }
             skip_env(rest)
         }
@@ -1929,7 +1945,14 @@ fn record_extended_interpreter(
             patterns.map_or_else(|| vec![true; rest.len()], <[bool]>::to_vec)
         },
         cwd: cwd.map(Path::to_path_buf),
-        chdir: Vec::new(),
+        // pwsh runs its code in `-WorkingDirectory` (TSK-1002 review 03).
+        chdir: if name == "powershell" {
+            crate::hooks::git_guard::powershell_working_directory(rest)
+                .map(|dir| vec![dir.to_string()])
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
         code: out.code[first..].to_vec(),
         supplier: out.supplier.clone(),
     });
@@ -1987,6 +2010,23 @@ fn record_interpreter(
                 out.code.push(code.to_string());
                 found = true;
             }
+        }
+        // Every word the family's option grammar reads as code is inspected
+        // as a body, so a code form the scan above misses (`--print=CODE`)
+        // cannot leave the operands without being read (review 01, B2).
+        for at in interpreter_code_positions(name, rest) {
+            let Some(word) = rest.get(at) else { continue };
+            let code = word
+                .strip_prefix("--")
+                .and_then(|long| long.split_once('=').map(|(_, value)| value))
+                .unwrap_or(word);
+            if !out.code[code_from..]
+                .iter()
+                .any(|body| word.ends_with(body.as_str()) && !body.is_empty())
+            {
+                out.code.push(code.to_string());
+            }
+            found = true;
         }
         if !found {
             out.stdin_interpreter += 1;
@@ -2093,6 +2133,24 @@ pub(crate) fn interpreter_arguments(
     patterns: Option<&[bool]>,
 ) -> (Vec<(String, bool)>, Vec<String>) {
     interpreter_argument_roles(family, rest, patterns, true)
+}
+
+/// The words an interpreter may load as program text: every option value
+/// (`-r FILE`, `--require FILE`, `-I DIR`), read conservatively, and the
+/// script operand. The words after the script are the program's own
+/// arguments, which it reads as data.
+pub(crate) fn interpreter_program_files(family: &str, rest: &[String]) -> Vec<String> {
+    let (with_values, _) = interpreter_argument_roles(family, rest, None, true);
+    let (positional, _) = interpreter_argument_roles(family, rest, None, false);
+    let values = with_values.len().saturating_sub(positional.len());
+    let mut files: Vec<String> = with_values[..values]
+        .iter()
+        .map(|(text, _)| text.clone())
+        .collect();
+    if family_program(family, rest) == Program::Script {
+        files.extend(positional.first().map(|(text, _)| text.clone()));
+    }
+    files
 }
 
 /// The positions in `rest` of the words that carry inline code (`-e CODE`,
@@ -3032,6 +3090,48 @@ mod tests {
             super::xargs_words("C:/home/notes.md\n", true),
             Some(vec!["C:/home/notes.md".to_string()])
         );
+    }
+
+    /// Every code form the option grammar reads, attached or separate, is
+    /// inspected as a body, so no word leaves the file operands unread
+    /// (review 01, B2: `node --print=CODE`).
+    #[test]
+    fn every_code_position_is_an_inspected_body() {
+        for (command, code) in [
+            ("node --print='CODE1'", "CODE1"),
+            ("node --print 'CODE1'", "CODE1"),
+            ("node --eval='CODE1'", "CODE1"),
+            ("node --eval 'CODE1'", "CODE1"),
+            ("node -p 'CODE1'", "CODE1"),
+            ("node -pe 'CODE1'", "CODE1"),
+            ("node -e 'CODE1'", "CODE1"),
+            ("nodejs --print='CODE1' x", "CODE1"),
+            ("python3 -c 'CODE1'", "CODE1"),
+            ("python3 -cCODE1", "CODE1"),
+            ("python3 -Ic 'CODE1'", "CODE1"),
+            ("perl -e 'CODE1'", "CODE1"),
+            ("perl -neCODE1", "CODE1"),
+            ("perl -E 'CODE1'", "CODE1"),
+            ("ruby -e 'CODE1'", "CODE1"),
+            ("ruby -eCODE1", "CODE1"),
+            ("ruby -w -e 'CODE1'", "CODE1"),
+        ] {
+            let bodies = super::interpreter_bodies(command);
+            assert!(
+                bodies.iter().any(|body| body.contains(code)),
+                "{command}: {bodies:?}"
+            );
+            let words = crate::hooks::git_guard::command_argv(command);
+            let family = super::interpreter_family(&words[0]).unwrap();
+            for at in super::interpreter_code_positions(family, &words[1..]) {
+                assert!(
+                    bodies
+                        .iter()
+                        .any(|body| words[at + 1].ends_with(body.as_str())),
+                    "{command}: position {at} has no body in {bodies:?}"
+                );
+            }
+        }
     }
 
     #[test]

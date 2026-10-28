@@ -210,6 +210,140 @@ fn tsk1002_review3_windows_unmapped_path_spellings() {
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
 
+/// TSK-1002 review 01, findings 1 to 4, through the installed hooks: a
+/// search selector that names the root, inline code in an attached option,
+/// a file written without a heredoc and then run, and a parent component
+/// after an existing link. Each refuses; its public control passes.
+#[test]
+fn tsk1002_review01_classes_refuse_through_the_hooks() {
+    let f = Fixture::new();
+    let copies = f.linked.join("copies");
+    std::fs::create_dir_all(&copies).unwrap();
+    std::fs::write(copies.join("id_rsa"), "planted fixture").unwrap();
+    std::fs::create_dir_all(f.linked.join("visible")).unwrap();
+    std::fs::write(f.linked.join("visible/note.txt"), "ordinary fixture").unwrap();
+    let mut wrong = Vec::new();
+    let mut refuse = vec![
+        "rg -g 'copies/**' needle copies".to_string(),
+        "node --print='require(\"fs\").readFileSync(\"copies/id_rsa\",\"utf8\")'".to_string(),
+        "printf 'print(1)' > run.py; python3 run.py".to_string(),
+        "echo 'print(1)' > run.py && python3 run.py".to_string(),
+    ];
+    let mut allow = vec![
+        "rg -g 'visible/**' needle visible".to_string(),
+        "node --print='require(\"fs\").readFileSync(\"visible/note.txt\",\"utf8\")'".to_string(),
+        "python3 gen.py > out.json; python3 use.py out.json".to_string(),
+    ];
+    #[cfg(unix)]
+    {
+        let store = f.temp.path().join(".codex/child");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(f.temp.path().join(".codex/auth.json"), "planted fixture").unwrap();
+        std::os::unix::fs::symlink(&store, f.linked.join("alias")).unwrap();
+        refuse.push("cat alias/../auth.json".into());
+        allow.push("cat visible/../visible/note.txt".into());
+    }
+    for line in &refuse {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in &allow {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 review 03: a directory change in any spelling env or pwsh
+/// accepts is where the command reads and writes. Attached, clustered,
+/// abbreviated and `--`-terminated forms refuse a store read or a checkout
+/// file write as the separated form does; a directory the guard cannot
+/// establish refuses a relative operand that could name a secret. Public
+/// directories stay usable.
+#[test]
+fn tsk1002_directory_changes_in_every_launcher_spelling() {
+    let f = Fixture::new();
+    let store = f.temp.path().join(".codex");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("auth.json"), "planted fixture").unwrap();
+    let public = f.temp.path().join("public");
+    std::fs::create_dir_all(&public).unwrap();
+    std::fs::write(public.join("auth.json"), "ordinary fixture").unwrap();
+    let store = shell_path(&store);
+    let public = shell_path(&public);
+    let mut wrong = Vec::new();
+    let reads = [
+        "env -C '%' cat auth.json",
+        "env -C'%' cat auth.json",
+        "env -iC '%' cat auth.json",
+        "env -vC '%' cat auth.json",
+        "env -0iC'%' cat auth.json",
+        "env --chdir='%' cat auth.json",
+        "env --chdir='%' -- cat auth.json",
+        "env --ch '%' cat auth.json",
+        "env -u X -C '%' -- FOO=1 cat auth.json",
+        "pwsh -WorkingDirectory '%' -Command 'Get-Content auth.json'",
+        "pwsh -wd '%' -c 'Get-Content auth.json'",
+        "pwsh -wo '%' -c 'Get-Content auth.json'",
+        "pwsh -WorkingDir '%' -c 'Get-Content auth.json'",
+        // Code runs where its call runs.
+        "env -C '%' python3 -c 'open(\"auth.json\").read()'",
+        "env -iC'%' node -e 'require(\"fs\").readFileSync(\"auth.json\")'",
+        "ruby -C '%' -e 'File.read(\"auth.json\")'",
+    ];
+    for form in reads {
+        let line = form.replace('%', &store);
+        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+        let line = form.replace('%', &public);
+        let out = f.command(&f.linked, "exec-guard", &line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused public: {line}: {out:?}"));
+        }
+    }
+    for line in [
+        "D=$(mktemp -d); env -C \"$D\" cat auth.json",
+        "env --frobnicate -C '%' cat auth.json",
+    ] {
+        let line = line.replace('%', &public);
+        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+            wrong.push(format!("allowed unknown directory: {line}"));
+        }
+    }
+    for line in [
+        "env -C .git tee config",
+        "env -C.git tee config",
+        "env -iC .git tee config",
+        "env --chdir=.git -- tee config",
+        "env -C .git sh -c 'printf x > config'",
+        "pwsh -wd .git -c 'Set-Content config x'",
+        "pwsh -WorkingDirectory .git -Command 'Set-Content config x'",
+    ] {
+        // Both guards run before every shell command; either refusal stops it.
+        if ["git-guard", "exec-guard"]
+            .iter()
+            .all(|guard| f.command(&f.linked, guard, line).status.code() != Some(2))
+        {
+            wrong.push(format!("allowed write: {line}"));
+        }
+    }
+    // The shell opens a redirect before env runs, in its own directory.
+    for line in [
+        "env -C .git printf x > notes.txt",
+        "env -iC src tee notes.txt",
+    ] {
+        let out = f.command(&f.linked, "git-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused public write: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// TSK-1002 UNC finding: an administrative share, a verbatim or device UNC
 /// spelling, or any share whose path ends in a home store names the store,
 /// and a share write names the checkout file. Before this change the guard
@@ -262,16 +396,40 @@ fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
             "git-guard",
             format!(r"printf x > '\\localhost\{drive}$\{root_tail}\.git\config'"),
         ),
+        // Review 01: a share that hides the store's directory name, a
+        // verbatim name an ordinary path would change, the NT namespace and
+        // a stream of a protected file.
+        (
+            "exec-guard",
+            r"cat '\\localhost\fixture-share\auth.json'".into(),
+        ),
+        (
+            "exec-guard",
+            r"rg needle '\\localhost\fixture-share\docs'".into(),
+        ),
+        ("exec-guard", format!(r"cat '\\?\{home}\public \auth.json'")),
+        ("exec-guard", format!(r"cat '\\?\{home}\.codex.\auth.json'")),
+        ("exec-guard", format!(r"cat '\??\{home}\{store}'")),
+        ("exec-guard", format!(r"cat '{home}\{store}:notes'")),
+        (
+            "git-guard",
+            format!(r"printf x > '{root}\.git\config:notes'"),
+        ),
     ] {
         let out = f.command(&f.linked, guard, &line);
         if out.status.code() != Some(2) {
             wrong.push(format!("refuse {guard}: {line}: {out:?}"));
         }
     }
-    let line = format!(r"cat '\\localhost\{drive}$\{home_tail}\notes.md'");
-    let out = f.command(&f.linked, "exec-guard", &line);
-    if out.status.code() != Some(0) {
-        wrong.push(format!("allow: {line}: {out:?}"));
+    for line in [
+        format!(r"cat '\\localhost\{drive}$\{home_tail}\notes.md'"),
+        format!(r"cat '\\?\{home}\notes.md'"),
+        format!(r"cat '\??\{home}\notes.md'"),
+    ] {
+        let out = f.command(&f.linked, "exec-guard", &line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("allow: {line}: {out:?}"));
+        }
     }
     // A UNC home and cwd make the hook read through the share, so these
     // controls need the administrative share to answer on this host.
@@ -285,14 +443,29 @@ fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
                 wrong.push(format!("UNC home: {command}: {out:?}"));
             }
         }
-        std::fs::write(f.linked.join("notes.md"), "ordinary fixture").unwrap();
-        let unc_cwd = PathBuf::from(format!(r"\\localhost\{drive}$\{root_tail}"));
+        // A checkout's identity is never established from a share spelling:
+        // the share's host may be another machine, whose `C:` is not this
+        // one's, so the registration comparison refuses (hosted run
+        // 40674611502). Secret judgments map any host's share, because
+        // there a wrong mapping can only refuse more.
+        let linked_unc = PathBuf::from(format!(r"\\localhost\{drive}$\{root_tail}"));
         let out = run_with_stdin(
             &mut f.guard_command(&f.linked, "exec-guard"),
-            &guard_payload("cat notes.md", &unc_cwd),
+            &guard_payload("cat notes.md", &linked_unc),
         );
-        if out.status.code() != Some(0) {
-            wrong.push(format!("UNC cwd: cat notes.md: {out:?}"));
+        if out.status.code() != Some(2) {
+            wrong.push(format!("UNC checkout identity was established: {out:?}"));
+        }
+        // A plain directory outside any checkout reads through the share.
+        let unc_cwd = PathBuf::from(&unc_home);
+        for (command, code) in [("cat notes.md", 0), ("cat .codex/auth.json", 2)] {
+            let out = run_with_stdin(
+                &mut f.guard_command(f.temp.path(), "exec-guard"),
+                &guard_payload(command, &unc_cwd),
+            );
+            if out.status.code() != Some(code) {
+                wrong.push(format!("UNC cwd: {command}: {out:?}"));
+            }
         }
     } else {
         eprintln!("administrative share unavailable; UNC home and cwd controls skipped");

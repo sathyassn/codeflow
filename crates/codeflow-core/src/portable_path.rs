@@ -127,6 +127,12 @@ pub(crate) fn guard_path(path: &Path) -> Result<PathBuf, String> {
         .to_str()
         .ok_or("cannot inspect a Windows path as text")?
         .replace('\\', "/");
+    let base = without_streams(&spelling);
+    let (plain, spelling) = if base == spelling {
+        (plain, spelling)
+    } else {
+        (PathBuf::from(base.replace('/', "\\")), base)
+    };
     if !has_short_component(&spelling) {
         return Ok(plain);
     }
@@ -156,6 +162,23 @@ pub(crate) fn namespace_spelling(text: &str) -> Result<Option<String>, String> {
             && bytes.get(2).is_none_or(|&byte| byte == b'/'))
         .then(|| tail.to_string())
     };
+    // `\??\` is the NT object namespace, which Win32 opens without changing
+    // a name, as it opens `\\?\` (review 01).
+    let text = &if lower.starts_with("/??/") {
+        format!("//?/{}", &text[4..])
+    } else {
+        text.to_string()
+    };
+    let lower = text.to_ascii_lowercase();
+    // A verbatim path keeps names Win32 would change elsewhere: a trailing
+    // dot or space, `.` and `..`, an empty name, a device name. The ordinary
+    // path it would map to can name another file, so it refuses (review 01,
+    // B6). A device path (`\\.\`) is normalized like an ordinary path.
+    if lower.starts_with("//?/") && !verbatim_names_survive(&text[4..]) {
+        return Err(
+            "cannot map a verbatim path whose names Windows reads differently elsewhere".into(),
+        );
+    }
     let unc = if lower.starts_with("//?/unc/") || lower.starts_with("//./unc/") {
         format!("//{}", &text[8..])
     } else if lower.starts_with("//?/") || lower.starts_with("//./") {
@@ -163,7 +186,7 @@ pub(crate) fn namespace_spelling(text: &str) -> Result<Option<String>, String> {
             .map(Some)
             .ok_or_else(|| "cannot map a Windows device or verbatim namespace path".into());
     } else if lower.starts_with("//") {
-        text.to_string()
+        text.clone()
     } else {
         return Ok(None);
     };
@@ -181,6 +204,55 @@ pub(crate) fn namespace_spelling(text: &str) -> Result<Option<String>, String> {
     } else {
         unc
     }))
+}
+
+/// Whether every name after a verbatim prefix reads the same in an ordinary
+/// path: none is empty (a final separator aside), `.` or `..`, ends in a dot
+/// or space, or is a device name (`CON`, `NUL`, `COM1`, `LPT1`, with any
+/// extension). The first name is the drive or `UNC`.
+fn verbatim_names_survive(rest: &str) -> bool {
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.iter().enumerate().skip(1).all(|(at, part)| {
+        if part.is_empty() {
+            return at + 1 == parts.len();
+        }
+        // The name before its first dot, where spaces after a device name
+        // still name the device (`CON .txt`).
+        let stem = part.split('.').next().unwrap_or(part).to_ascii_uppercase();
+        let named = |device: &str| {
+            stem.strip_prefix(device)
+                .is_some_and(|rest| rest.bytes().all(|byte| byte == b' '))
+        };
+        let device = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+            .into_iter()
+            .any(named)
+            || ["COM", "LPT"]
+                .into_iter()
+                .flat_map(|prefix| (0..=9).map(move |digit| format!("{prefix}{digit}")))
+                .any(|device| named(&device));
+        !matches!(*part, "." | "..") && !part.ends_with(['.', ' ']) && !device
+    })
+}
+
+/// `text` (with `/` separators) with each named stream suffix removed: a
+/// name other than a drive ends at its first `:`, so `auth.json:notes`
+/// is judged as `auth.json`, the file whose stream it opens (review 01).
+/// Stream type syntax (`::$DATA`, `:$I30`) refuses earlier.
+fn without_streams(text: &str) -> String {
+    text.split('/')
+        .enumerate()
+        .map(|(at, part)| {
+            let bytes = part.as_bytes();
+            let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+            // A drive (`C:`, or drive-relative `C:name` first) is no stream.
+            if drive && (at == 0 || bytes.len() == 2) {
+                part
+            } else {
+                part.split(':').next().unwrap_or(part)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Whether a component of `text` (with `/` separators) can be an 8.3 short
@@ -426,6 +498,11 @@ mod tests {
             ("//?/unc/server/share/x", "//server/share/x"),
             ("//server/homes/u", "//server/homes/u"),
             ("//server/share$/x", "//server/share$/x"),
+            // Review 01: the NT object namespace opens as `\\?\` does.
+            ("/??/C:/Users/u/x", "C:/Users/u/x"),
+            ("/??/UNC/server/share/x", "//server/share/x"),
+            // A device path is normalized like an ordinary path.
+            ("//./C:/Users/u/public /x", "C:/Users/u/public /x"),
         ] {
             assert_eq!(
                 namespace_spelling(text).unwrap().as_deref(),
@@ -445,8 +522,36 @@ mod tests {
             "C:/Users/u/.codex::$INDEX_ALLOCATION/auth.json",
             "C:/Users/u/.codex:$I30:$INDEX_ALLOCATION/auth.json",
             "//localhost/C$/Users/u/.codex::$DATA",
+            // Review 01, B6: verbatim names an ordinary path would change.
+            "//?/C:/Users/u/public /auth.json",
+            "//?/C:/Users/u/public./auth.json",
+            "//?/C:/Users/u/x/../.codex/auth.json",
+            "//?/C:/Users/u/./x",
+            "//?/C:/Users/u//x",
+            "//?/C:/Users/u/CON/x",
+            "//?/C:/Users/u/nul.txt",
+            "//?/UNC/server/share/x /y",
+            "/??/C:/Users/u/public /auth.json",
         ] {
             assert!(namespace_spelling(text).is_err(), "{text}");
+        }
+    }
+
+    /// Review 01: a named stream is judged as the file it belongs to; a
+    /// drive, also drive-relative, is no stream.
+    #[test]
+    fn stream_suffixes_name_their_file() {
+        for (text, base) in [
+            (
+                "C:/Users/u/.codex/auth.json:notes",
+                "C:/Users/u/.codex/auth.json",
+            ),
+            ("C:/Users/u/.git:x/config", "C:/Users/u/.git/config"),
+            ("C:x/y", "C:x/y"),
+            ("quoted/C:/tail", "quoted/C:/tail"),
+            ("//server/share/a:b", "//server/share/a"),
+        ] {
+            assert_eq!(without_streams(text), base, "{text}");
         }
     }
 

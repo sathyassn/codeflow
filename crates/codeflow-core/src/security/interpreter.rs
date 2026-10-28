@@ -3,7 +3,7 @@
 use super::search_pattern::CommandLine;
 use super::{actions, outward, pattern::matches_extended_glob};
 use crate::hooks::{PolicyLevel, SecuritySection, Violation};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn evaluate(
     command: &str,
@@ -27,6 +27,8 @@ pub(crate) fn evaluate(
         crate::portable_path::guard_path(&home).unwrap_or(home)
     });
     let home = resolved_home.as_deref();
+    let session_dir = crate::portable_path::guard_path(cwd).ok();
+    let _shares = TrustedShares::enter(&[home, session_dir.as_deref()]);
     // Position-scoped arguments carry more precise provenance than the broad
     // literal scan below. Keep their finding first when both name one path.
     let mut violations = super::arguments::evaluate(command, integrity, cwd, root, home);
@@ -104,7 +106,105 @@ pub(crate) fn evaluate(
             }
         }
     }
+    if levels.secret_reads.is_active() {
+        violations.extend(code_reads_where_calls_run(command, cwd, home, levels));
+    }
     violations
+}
+
+/// Code runs in the directory its call runs in: one a launcher moves to
+/// (`env -C`) or the interpreter's own (`ruby -C`, `pwsh
+/// -WorkingDirectory`). Its literals are judged there as well as in the
+/// line's directory. In a directory the guard cannot establish, a relative
+/// literal that could name a secret refuses (TSK-1002 review 03).
+fn code_reads_where_calls_run(
+    command: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    levels: &SecuritySection,
+) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for call in outward::interpreter_calls_with_home(command, cwd, home) {
+        let dir = call.cwd.clone().and_then(|start| {
+            call.chdir.iter().try_fold(start, |dir, change| {
+                match outward::directory_operand(change, home) {
+                    outward::DirChange::To(target) => Some(outward::lexical_join(&dir, &target)),
+                    outward::DirChange::Unknown => None,
+                }
+            })
+        });
+        if dir.as_deref() == Some(cwd) {
+            continue;
+        }
+        for code in &call.code {
+            for word in outward::literal_words(code) {
+                let message = match &dir {
+                    Some(dir) if secret_path(&word, dir, home, None) => format!(
+                        "interpreter code names the secret store `{word}` in the directory it runs in"
+                    ),
+                    None if relative_may_name_secret(&word) => format!(
+                        "cannot verify interpreter path `{word}`: cannot establish the directory the code runs in"
+                    ),
+                    _ => continue,
+                };
+                violations.push(Violation::new(
+                    "security.secret_reads",
+                    levels.secret_reads,
+                    message,
+                    crate::remedy::OUTWARD_ACTION.remedy(),
+                ));
+            }
+        }
+    }
+    violations
+}
+
+/// Whether a relative word, read in a directory the guard cannot establish,
+/// could name a secret: joined to any directory on the way to a protected
+/// home path, or to a directory outside the home, it names a protected
+/// path. An absolute or home word is judged as written; a parent component
+/// can reach any directory, so it could.
+fn relative_may_name_secret(word: &str) -> bool {
+    static DIRS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let word = word.replace('\\', "/");
+    let drive = word.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && word.as_bytes().get(1) == Some(&b':');
+    if word.starts_with(['/', '~']) || drive {
+        return false;
+    }
+    let word = word.trim_start_matches("./");
+    if word.is_empty() {
+        return false;
+    }
+    if word.split('/').any(|part| part == "..") {
+        return true;
+    }
+    let dirs = DIRS.get_or_init(|| {
+        let table = actions::table();
+        let rules = table
+            .claude_read_groups
+            .iter()
+            .filter(|group| group.carveouts.is_empty())
+            .flat_map(|group| group.denies.iter())
+            .filter_map(|rule| rule.strip_prefix("Read(")?.strip_suffix(')'))
+            .chain(table.sandbox_read_denies.iter().map(String::as_str));
+        let mut dirs = vec!["~".to_string(), "/__unknown_directory__".to_string()];
+        for rule in rules.filter(|rule| rule.starts_with("~/")) {
+            let mut dir = "~".to_string();
+            for part in rule[2..].split('/') {
+                if crate::hooks::git_guard::has_glob(part) {
+                    break;
+                }
+                dir = format!("{dir}/{part}");
+                dirs.push(dir.clone());
+            }
+        }
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    });
+    dirs.iter()
+        .any(|dir| secret_path_spelling(&format!("{dir}/{word}"), None, Some(true)))
 }
 
 fn secret_reads(
@@ -158,8 +258,14 @@ fn secret_reads(
                 if glob && recursive.is_some() {
                     continue;
                 }
-                let secret =
-                    inspect_operand(&line, &unwrapped, (at, value, glob), reader_cwd, home);
+                // A reader in a directory the guard cannot establish (an
+                // `env -C "$D"`) refuses a relative operand that could name
+                // a secret there (TSK-1002 review 03).
+                let secret = if unwrapped.cwd.is_none() && relative_may_name_secret(value) {
+                    Err("cannot establish the reader's working directory")
+                } else {
+                    inspect_operand(&line, &unwrapped, (at, value, glob), reader_cwd, home)
+                };
                 if secret.as_ref().map_or(true, |value| *value) {
                     violations.push(Violation::new(
                         "security.secret_reads",
@@ -376,6 +482,21 @@ fn secret_path_result(
     // it as the home is spelled before any store or glob comparison.
     let mapped_cwd = crate::portable_path::guard_path(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let cwd = mapped_cwd.as_path();
+    // Read a namespace spelling as the path Windows opens before any name
+    // is trimmed: a verbatim name keeps a trailing dot or space, so one the
+    // ordinary path would change refuses (review 01, B6).
+    let namespace = if cfg!(windows) {
+        match crate::portable_path::namespace_spelling(&word.replace('\\', "/")) {
+            Ok(mapped) => mapped,
+            Err(_) if reader.is_none() && stream_base(word) != word => {
+                return secret_path_result(&stream_base(word), cwd, home, reader);
+            }
+            Err(_) => return Err("cannot establish a Windows path's mapped filename"),
+        }
+    } else {
+        None
+    };
+    let word = namespace.as_deref().unwrap_or(word);
     let spelling = crate::portable_path::filesystem_spelling(word);
     let word = spelling.as_str();
     let expanded_word = word
@@ -408,12 +529,20 @@ fn secret_path_result(
     } else {
         Some(outward::lexical_join(cwd, Path::new(word)))
     };
+    if physical_secret(word, cwd, home, reader)? {
+        return Ok(true);
+    }
     // A UNC path names a file in a share whose layout the guard cannot
     // see. Judge it before any mapping or metadata read, so the guard never
     // contacts a host a command names before refusing a store spelling.
     if cfg!(windows)
         && absolute.as_deref().is_some_and(|path| {
-            unc_store_suffix(&crate::portable_path::slashed(path), home, reader)
+            unc_store_suffix(
+                &crate::portable_path::slashed(path),
+                home,
+                reader,
+                &trusted_shares(),
+            )
         })
     {
         return Ok(true);
@@ -464,15 +593,140 @@ fn secret_path_result(
     )
 }
 
+/// Whether the file a parent component reaches through an existing link is
+/// a secret: the kernel resolves the link before `..`, so
+/// `alias/../auth.json` opens beside the link's target, not beside the
+/// link (review 01, B4).
+fn physical_secret(
+    word: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    reader: Option<bool>,
+) -> Result<bool, &'static str> {
+    let physical = if word == "~" {
+        None
+    } else if let Some(suffix) = word.strip_prefix("~/").filter(|_| reader != Some(false)) {
+        match home {
+            Some(home) => physical_path(home, Path::new(suffix))?,
+            None => None,
+        }
+    } else {
+        physical_path(cwd, Path::new(word))?
+    };
+    match physical.as_deref() {
+        Some(path) => Ok(
+            secret_path_spelling(&crate::portable_path::slashed(path), home, None)
+                || real_secret_path(path, home)?,
+        ),
+        None => Ok(false),
+    }
+}
+
+/// The path `word` opens from `base` when a parent component follows
+/// another component: each existing link on the way is resolved before the
+/// next `..`, as the kernel resolves it, so `alias/..` is the parent of the
+/// link's target (TSK-1002 review 01, B4). `None` when no parent component
+/// follows a name, where the lexical path is the path opened. A link or a
+/// component the guard cannot read before a parent component refuses.
+fn physical_path(base: &Path, word: &Path) -> Result<Option<PathBuf>, &'static str> {
+    use std::path::Component;
+    let components: Vec<_> = word.components().collect();
+    let first_name = components
+        .iter()
+        .position(|part| matches!(part, Component::Normal(_)));
+    let parent_after_name = first_name.is_some_and(|at| {
+        components[at..]
+            .iter()
+            .any(|part| matches!(part, Component::ParentDir))
+    });
+    if !parent_after_name {
+        return Ok(None);
+    }
+    let mut path = if word.has_root() {
+        PathBuf::new()
+    } else {
+        crate::portable_path::canonicalize(base).unwrap_or_else(|_| base.to_path_buf())
+    };
+    let mut exists = true;
+    for part in components {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                path.pop();
+            }
+            Component::Normal(name) => {
+                path.push(name);
+                if !exists {
+                    continue;
+                }
+                match crate::absence::symlink_metadata_optional(&path) {
+                    Ok(Some(meta)) if meta.file_type().is_symlink() => {
+                        path = crate::portable_path::canonicalize(&path)
+                            .map_err(|_| "cannot resolve a link before a parent component")?;
+                    }
+                    Ok(Some(_)) => {}
+                    // Below a name proven absent the kernel opens nothing,
+                    // so the rest is read by spelling.
+                    Ok(None) => exists = false,
+                    Err(_) => return Err("cannot read a path component before a parent component"),
+                }
+            }
+            other => path.push(other.as_os_str()),
+        }
+    }
+    Ok(Some(path))
+}
+
+thread_local! {
+    /// The UNC directories the operator chose for this guard call, the
+    /// home and the session's directory, lowercase with `/` separators.
+    static TRUSTED_SHARES: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Sets [`TRUSTED_SHARES`] for one guard call and clears it on drop.
+struct TrustedShares;
+
+impl TrustedShares {
+    fn enter(dirs: &[Option<&Path>]) -> Self {
+        let dirs = dirs
+            .iter()
+            .flatten()
+            .map(|dir| {
+                crate::portable_path::slashed(dir)
+                    .trim_end_matches('/')
+                    .to_ascii_lowercase()
+            })
+            .filter(|dir| dir.starts_with("//"))
+            .collect();
+        TRUSTED_SHARES.with(|trusted| *trusted.borrow_mut() = dirs);
+        Self
+    }
+}
+
+fn trusted_shares() -> Vec<String> {
+    TRUSTED_SHARES.with(|trusted| trusted.borrow().clone())
+}
+
+impl Drop for TrustedShares {
+    fn drop(&mut self) {
+        TRUSTED_SHARES.with(|trusted| trusted.borrow_mut().clear());
+    }
+}
+
 /// Whether `text` (with `/` separators) is a UNC path, in any namespace
-/// spelling, that ends in a protected home-relative path. A share can map
-/// any directory of any machine, the home of this user or another, so every
-/// trailing part from the share down is read as relative to a home: a store
-/// reached through `//host/c$/Users/<u>/`, through a share of the home
-/// itself, or through `//?/UNC/host/share/` refuses whatever the host or
-/// share. Other UNC paths, a UNC home's ordinary files included, are judged
-/// as usual.
-fn unc_store_suffix(text: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
+/// spelling, that may name a secret (review 01, B5). A share can map any
+/// directory of any machine, a store itself included, and its name need
+/// not say so. So a UNC path refuses unless it lies under a directory the
+/// operator chose for the session (the home, the session's directory, in
+/// `trusted`), where only its protected home-relative tail refuses. Any
+/// trailing part ending in a protected home path refuses everywhere.
+fn unc_store_suffix(
+    text: &str,
+    home: Option<&Path>,
+    reader: Option<bool>,
+    trusted: &[String],
+) -> bool {
     let lower = text.to_ascii_lowercase();
     let rest = if let Some(rest) = lower
         .strip_prefix("//?/unc/")
@@ -487,8 +741,58 @@ fn unc_store_suffix(text: &str, home: Option<&Path>, reader: Option<bool>) -> bo
         return false;
     };
     let parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
-    (1..parts.len())
+    if (1..parts.len())
         .any(|at| secret_path_spelling(&format!("~/{}", parts[at..].join("/")), home, reader))
+    {
+        return true;
+    }
+    let unc = format!("//{}", parts.join("/"));
+    let chosen = trusted.iter().any(|dir| {
+        unc.strip_prefix(dir.as_str())
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))
+    });
+    // Elsewhere the share's root is a directory the guard cannot
+    // establish, so the tail below it is judged as in an unknown directory.
+    !chosen && parts.len() > 2 && relative_may_name_secret(&parts[2..].join("/"))
+}
+
+/// A recursive root on a share whose root the guard cannot establish
+/// refuses before anything below it is listed: any directory below a share
+/// may be a store (review 01, B5). An administrative share is its drive.
+fn unmapped_share_root(base: &Path, word: &str) -> Result<(), &'static str> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
+    let written = word.replace('\\', "/");
+    let path = match crate::portable_path::namespace_spelling(&written) {
+        Ok(Some(mapped)) => mapped,
+        Ok(None) => crate::portable_path::slashed(&outward::lexical_join(base, Path::new(word))),
+        Err(_) => return Err("cannot establish the directory a network share maps"),
+    };
+    if !unmapped_share(&path) {
+        return Ok(());
+    }
+    let path = path.to_ascii_lowercase();
+    let chosen = trusted_shares().iter().any(|dir| {
+        path.strip_prefix(dir.as_str())
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))
+    });
+    if chosen {
+        Ok(())
+    } else {
+        Err("cannot establish the directory a network share maps")
+    }
+}
+
+/// Whether `text` (with `/` separators) is a UNC path, after any namespace
+/// prefix and an administrative share's drive mapping: a share whose root
+/// the guard cannot establish.
+fn unmapped_share(text: &str) -> bool {
+    match crate::portable_path::namespace_spelling(text) {
+        Ok(Some(mapped)) => mapped.starts_with("//"),
+        Ok(None) => false,
+        Err(_) => true,
+    }
 }
 
 /// `word` (with `/` separators) without NTFS stream syntax: each component
@@ -743,7 +1047,7 @@ fn real_secret_path(path: &Path, home: Option<&Path>) -> Result<bool, &'static s
     let text = secret_path_text(&real)?;
     // A link can resolve into a share (`\\?\UNC\host\share\...`).
     if secret_path_spelling(&text, home, None)
-        || cfg!(windows) && unc_store_suffix(&text, home, None)
+        || cfg!(windows) && unc_store_suffix(&text, home, None, &trusted_shares())
     {
         return Ok(true);
     }
@@ -782,15 +1086,21 @@ fn secret_search_glob(
         if secret_directory(root, cwd, home) {
             return Ok(true);
         }
+        let written = root;
         let (base, root) =
             glob_base(root, cwd, home).ok_or("cannot resolve a search root's home directory")?;
-        let roots = if crate::hooks::git_guard::has_glob(root) {
+        unmapped_share_root(base, root)?;
+        let globbed = crate::hooks::git_guard::has_glob(root);
+        let roots = if globbed {
             crate::hooks::git_guard::secret_glob_paths(root, base)?
         } else {
-            vec![outward::lexical_join(base, Path::new(root))]
+            // A root such as `alias/..` walks the link target's parent.
+            vec![physical_path(base, Path::new(root))?
+                .unwrap_or_else(|| outward::lexical_join(base, Path::new(root)))]
         };
+        let written = (!globbed).then_some(written);
         for root in roots {
-            if search_root_matches(pattern, &root, home, links, &mut read)? {
+            if search_root_matches(pattern, &root, written, home, links, &mut read)? {
                 return Ok(true);
             }
         }
@@ -894,13 +1204,14 @@ fn inspect_recursive_roots(
         } else {
             glob_base(root, cwd, home).ok_or("cannot establish a recursive root")?
         };
+        unmapped_share_root(base, pattern)?;
         let roots = if !literal && crate::hooks::git_guard::has_glob(pattern) {
             crate::hooks::git_guard::secret_glob_paths(pattern, base)?
         } else {
             vec![base.join(pattern)]
         };
         for root in roots {
-            if search_root_matches("*", &root, home, links, &mut read)? {
+            if search_root_matches("*", &root, None, home, links, &mut read)? {
                 return Ok(true);
             }
         }
@@ -1092,6 +1403,7 @@ fn recursive_directories(
         let Some((base, word)) = glob_base(&root, cwd, home) else {
             return Err("cannot establish an unmodelled recursive root");
         };
+        unmapped_share_root(base, word)?;
         let path = base.join(word);
         let planned = links
             .iter()
@@ -1300,6 +1612,7 @@ fn archive_read_roots(args: &[String], cwd: &Path) -> Result<Option<Vec<String>>
 fn search_root_matches(
     pattern: &str,
     root: &Path,
+    written_root: Option<&str>,
     home: Option<&Path>,
     links: &[super::composed::paths::Link],
     read: &mut usize,
@@ -1335,29 +1648,62 @@ fn search_root_matches(
         if !real_secret_path(&path, home)? {
             continue;
         }
-        let relative = path.strip_prefix(root).unwrap_or(&path);
+        let names = selector_spellings(&path, root, written_root)?;
         for pattern in &patterns {
-            let candidate = if pattern.contains('/') {
-                relative
-            } else {
-                Path::new(path.file_name().unwrap_or(std::ffi::OsStr::new("")))
-            };
-            let name = secret_path_text(candidate)?;
             let matcher = glob::Pattern::new(pattern)
                 .map_err(|_| "cannot inspect the search glob's syntax")?;
-            if matcher.matches_with(
-                &name,
-                glob::MatchOptions {
-                    case_sensitive: false,
-                    require_literal_separator: true,
-                    require_literal_leading_dot: false,
-                },
-            ) {
+            if names.iter().any(|name| {
+                matcher.matches_with(
+                    name,
+                    glob::MatchOptions {
+                        case_sensitive: false,
+                        require_literal_separator: true,
+                        require_literal_leading_dot: false,
+                    },
+                )
+            }) {
                 return Ok(true);
             }
         }
     }
     Ok(false)
+}
+
+/// Every spelling a search tool may match a selector against for `path`
+/// under `root` (TSK-1002 review 01, B1). Tools differ: ripgrep matches
+/// the path as it walks it, root included (`copies/id_rsa` for root
+/// `copies`); grep matches the base name; a directory a selector matches
+/// selects what is below it. So a selector clears a secret only when it
+/// matches none of: any run of the path's components that ends at the
+/// file or at a directory from the root down, and the root as written
+/// joined with the path below it.
+fn selector_spellings(
+    path: &Path,
+    root: &Path,
+    written_root: Option<&str>,
+) -> Result<Vec<String>, &'static str> {
+    let text = secret_path_text(path)?;
+    let parts: Vec<&str> = text.split('/').filter(|part| !part.is_empty()).collect();
+    let below = path
+        .strip_prefix(root)
+        .map_or(0, |relative| relative.components().count());
+    // The last index a run may end at: the file, or a directory from the
+    // root down (the root's own component included).
+    let first_end = parts.len().saturating_sub(below + 1);
+    let mut names = Vec::new();
+    for end in first_end..parts.len() {
+        for start in 0..=end {
+            names.push(parts[start..=end].join("/"));
+        }
+    }
+    if let (Some(written), Ok(relative)) = (written_root, path.strip_prefix(root)) {
+        let relative = secret_path_text(relative)?;
+        let written = written.replace('\\', "/");
+        let joined = format!("{}/{relative}", written.trim_end_matches('/'));
+        names.push(joined.trim_start_matches("./").to_string());
+        names.push(joined);
+    }
+    Ok(names)
 }
 
 /// Pattern rules require actual text, never an escaped display or storage key.
@@ -1707,11 +2053,17 @@ mod tests {
 
     /// TSK-1002 UNC finding: a share path that ends in a protected
     /// home-relative path refuses whatever the host or share, in every UNC
-    /// spelling; a UNC home's ordinary files and a UNC project stay readable.
+    /// spelling. Review 01, B5: a share outside the home and the session's
+    /// directory can map a store under any name, so every file in it
+    /// refuses; the home's and the session directory's ordinary files stay
+    /// readable.
     #[test]
     fn unc_paths_ending_in_a_store_refuse_under_any_share() {
         let home = Some(Path::new("//server/homes/u"));
+        let trusted = ["//server/homes/u".to_string(), "//server/proj".to_string()];
         for text in [
+            "//server/share/project/src/main.rs",
+            "//server/share/project/.codex-notes/todo.md",
             "//localhost/c$/Users/u/.codex/auth.json",
             "//build-host/C$/Users/other/.codex/auth.json",
             "//server/homes/u/.codex/auth.json",
@@ -1719,18 +2071,24 @@ mod tests {
             "//?/UNC/server/share/.codex/auth.json",
             "//./UNC/server/share/Users/u/.codex/auth.json",
             "//server/share/.ssh/id_ed25519",
+            // Review 01, B5: a share can map the store itself, or reach it
+            // through a parent component.
+            "//localhost/fixture-store/auth.json",
+            "//server/share/id_rsa",
+            "//server/share/docs/../auth.json",
         ] {
-            assert!(unc_store_suffix(text, home, None), "{text}");
+            assert!(unc_store_suffix(text, home, None, &trusted), "{text}");
         }
         for text in [
             "//server/homes/u/notes.txt",
-            "//server/share/project/src/main.rs",
-            "//server/share/project/.codex-notes/todo.md",
+            "//server/proj/src/main.rs",
+            "//SERVER/Proj/docs/config",
+            "//server/share",
             "C:/Users/u/.codex/auth.json",
             "//?/C:/Users/u/notes.txt",
             "//server",
         ] {
-            assert!(!unc_store_suffix(text, home, None), "{text}");
+            assert!(!unc_store_suffix(text, home, None, &trusted), "{text}");
         }
     }
 
@@ -2033,6 +2391,29 @@ mod tests {
             );
         }
     }
+    /// Review 01, B2: code in any attached or separate form is read as code,
+    /// so a secret it names refuses; the same code on a public path passes.
+    #[test]
+    fn code_in_every_option_form_is_judged() {
+        let levels = SecuritySection::default();
+        for form in [
+            "node --print='%'",
+            "node --print '%'",
+            "node --eval='%'",
+            "node -p '%'",
+            "node -pe '%'",
+        ] {
+            let secret = form.replace(
+                '%',
+                r#"require("fs").readFileSync("/fixture-home/.ssh/id_rsa")"#,
+            );
+            assert!(!check(&secret, &levels).is_empty(), "allowed: {secret}");
+            let public = form.replace('%', r#"require("fs").readFileSync("/fixture/notes.md")"#);
+            let found = check(&public, &levels);
+            assert!(found.is_empty(), "{public}: {found:?}");
+        }
+    }
+
     fn check(code: &str, levels: &SecuritySection) -> Vec<Violation> {
         evaluate(
             code,
@@ -2079,6 +2460,80 @@ mod tests {
                 "a flat directory operand does not read descendants: {command}"
             );
         }
+    }
+
+    /// Review 01, B1: a search selector is matched against every spelling
+    /// the tool may compare, the root included, so a selector that names
+    /// the root, a directory below it or the absolute path still selects
+    /// the secret. Selectors that match no spelling keep the search usable.
+    #[test]
+    fn search_selectors_match_the_spellings_the_tool_compares() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = crate::portable_path::canonicalize(temp.path())
+            .unwrap()
+            .join("repo");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(root.join("copies/deep")).unwrap();
+        std::fs::create_dir_all(root.join("visible")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(root.join("copies/deep/id_rsa"), "fake secret fixture").unwrap();
+        std::fs::write(root.join("visible/note.md"), "ordinary fixture").unwrap();
+        let absolute = crate::portable_path::slashed(&root.join("copies"));
+        let cases = [
+            ("rg -g 'copies/**' needle copies".to_string(), true),
+            ("rg -g 'copies/*/*' needle copies".to_string(), true),
+            ("rg -g './copies/**' needle ./copies".to_string(), true),
+            ("rg -g 'deep/*' needle copies".to_string(), true),
+            ("rg -g 'deep' needle copies".to_string(), true),
+            ("rg -g '**/copies/**' needle .".to_string(), true),
+            (
+                "rg --iglob 'COPIES/**' needle visible copies".to_string(),
+                true,
+            ),
+            (format!("rg -g '{absolute}/**' needle '{absolute}'"), true),
+            ("grep -r --include='id_*' needle copies".to_string(), true),
+            ("rg -g '*.md' needle copies visible".to_string(), false),
+            ("rg -g 'visible/**' needle visible".to_string(), false),
+            ("rg -g 'copies/*.md' needle copies".to_string(), false),
+            ("rg needle visible".to_string(), false),
+        ];
+        let wrong: Vec<_> = cases
+            .iter()
+            .filter(|(command, refuse)| glob_fixture_read(command, &root, &home) != *refuse)
+            .collect();
+        assert!(wrong.is_empty(), "wrong verdicts: {wrong:?}");
+    }
+
+    /// Review 01, B4: a parent component after an existing link reaches the
+    /// link target's parent, for flat operands, globs and recursive roots.
+    /// A plain directory's `..` and a file below the link stay usable.
+    #[cfg(unix)]
+    #[test]
+    fn parent_components_follow_existing_links_physically() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = crate::portable_path::canonicalize(temp.path()).unwrap();
+        let root = base.join("repo");
+        let home = base.join("home");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(home.join(".codex/child")).unwrap();
+        std::fs::write(home.join(".codex/auth.json"), "fake secret fixture").unwrap();
+        std::fs::write(home.join(".codex/child/file.txt"), "ordinary fixture").unwrap();
+        std::fs::write(root.join("notes.md"), "ordinary fixture").unwrap();
+        std::os::unix::fs::symlink(home.join(".codex/child"), root.join("alias")).unwrap();
+        let cases = [
+            ("cat alias/../auth.json", true),
+            ("cat ./alias/./../auth.json", true),
+            ("cat sub/../alias/../auth.json", true),
+            ("cat alias/../auth.*", true),
+            ("rg needle alias/..", true),
+            ("cat alias/file.txt", false),
+            ("cat sub/../notes.md", false),
+        ];
+        let wrong: Vec<_> = cases
+            .iter()
+            .filter(|(command, refuse)| glob_fixture_read(command, &root, &home) != *refuse)
+            .collect();
+        assert!(wrong.is_empty(), "wrong verdicts: {wrong:?}");
     }
 
     #[test]
