@@ -115,6 +115,12 @@ fn secret_reads(
     let mapped_home = home
         .map(|home| crate::portable_path::guard_path(home).unwrap_or_else(|_| home.to_path_buf()));
     let home = mapped_home.as_deref();
+    // Spell the working directory as the home is spelled: store and glob
+    // checks compare cwd-joined text with the home's text, and a Windows cwd
+    // under `RUNNER~1` would never match a mapped home (hosted run
+    // 40620672525, `cat auth.{json}` in the store).
+    let mapped_cwd = crate::portable_path::guard_path(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let cwd = mapped_cwd.as_path();
     let mut violations = Vec::new();
     if levels.secret_reads.is_active() {
         for unwrapped in outward::unwrapped_commands(command, cwd, home) {
@@ -348,6 +354,10 @@ fn secret_path_result(
     home: Option<&Path>,
     reader: Option<bool>,
 ) -> Result<bool, &'static str> {
+    // A directory change on the line can name a short-name directory; spell
+    // it as the home is spelled before any store or glob comparison.
+    let mapped_cwd = crate::portable_path::guard_path(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let cwd = mapped_cwd.as_path();
     let spelling = crate::portable_path::filesystem_spelling(word);
     let word = spelling.as_str();
     let expanded_word = word
