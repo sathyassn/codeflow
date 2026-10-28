@@ -710,10 +710,25 @@ fn the_codex_exec_guard_wiring_judges_composed_deletions_and_help() {
             !stderr.contains("codeflow-cli-installer.sh"),
             "{form}: {stderr}"
         );
-        assert!(!stderr.contains("codeflow update"), "{form}: {stderr}");
+        assert!(
+            !stderr.contains("then run codeflow update"),
+            "{form}: {stderr}"
+        );
     }
     for command in guard_forms::PROJECT_DELETIONS {
         let out = run_codex_exec_guard(root, command);
+        // TSK-397: a run-time word given to `rm` or `find` refuses under the
+        // directory check, never as a dangerous deletion.
+        if guard_forms::RUN_TIME_PROJECT_DELETIONS.contains(command) {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{command}");
+            assert!(
+                stderr.contains("git.hook_integrity")
+                    && !stderr.contains("security.dangerous_commands"),
+                "{command}: {stderr}"
+            );
+            continue;
+        }
         assert_eq!(out.status.code(), Some(0), "{command}");
         assert!(out.stderr.is_empty(), "{command}");
     }
@@ -743,6 +758,21 @@ fn the_codex_exec_guard_wiring_holds_the_round_four_probes() {
     let mut wrong = Vec::new();
     for (case, command, expect) in guard_forms::REVIEW_ROUND_FOUR_PROBES {
         let out = run_codex_exec_guard(root, command);
+        // TSK-397: an allowed cleanup that gives `rm` a run-time word refuses
+        // under the directory check, never as a dangerous deletion.
+        if *expect == Expect::Allowed && command.ends_with("rm -rf \"$D\"") {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(2)
+                || !stderr.contains("is filled in at run time")
+                || stderr.contains("security.dangerous_commands")
+            {
+                wrong.push(format!(
+                    "{case}: {command} -> {:?} {stderr}",
+                    out.status.code()
+                ));
+            }
+            continue;
+        }
         let want = if *expect == Expect::Allowed { 0 } else { 2 };
         if out.status.code() != Some(want) {
             wrong.push(format!(

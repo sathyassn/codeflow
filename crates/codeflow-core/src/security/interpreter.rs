@@ -2002,15 +2002,50 @@ mod tests {
                 // eval parses single-quoted text again.
                 r#"z; eval 'python3 /abs/r.py "$PWD/src/.."'"#,
                 r#"z; eval 'nice "$P" /abs/r.py "$PWD/src/.."'"#,
+                // C14-1, SR9-1: an allowlisted program with an option that
+                // runs a program, writes a file or evaluates a subscript.
+                r#"z; env rg --pre "$P" x "$PWD/src/..""#,
+                r#"z; rg --pre=python3 x "$PWD/src/..""#,
+                r#"rg --files | xargs rg --pre=python3 . "$PWD/src/..""#,
+                r#"z; env gsort --compress-program="$C" -S 1k "$PWD/src/..""#,
+                r#"z; sort --comp="$C" "$PWD/src/..""#,
+                r#"z; ag --pager "$P" x "$PWD/src/..""#,
+                r#"z; file -z "$PWD/src/..""#,
+                r#"z; command printf -v 'a[$(python3 /abs/index_arg.py "$PWD/src/..")]' %s value"#,
+                r#"z; command printf %n 'a[$(python3 /abs/index_arg.py "$PWD/src/..")]'"#,
+                r#"z; command test -v 'a[$(python3 /abs/index_arg.py "$PWD/src/..")]'"#,
+                // `xargs` may append an option such as `--pre`.
+                "rg --files | xargs rg \"$HOME/x\"",
+                "rg --files | xargs -n 1 rg \"$HOME/x\"",
+                // C14-2: zsh extended patterns in the program word.
+                r#"z; /abs/glob-bin/pytho#n3 /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; /abs/glob-bin/^absent /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; /abs/bin/python3~x /abs/read_dir.py "$PWD/src/..""#,
+                // SR9-2, SR9-4: a stop on neither list, at the start of a
+                // command and inside a launcher.
+                r#"bwrap "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; myrun "$P" /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; myrun "${P:-python3}" /abs/read_dir.py "$PWD/src/..""#,
+                r#"z; nice some-tool "$P" /abs/r.py "$PWD/src/..""#,
+                r#"z; xargs bwrap "$P" /abs/r.py "$PWD/src/..""#,
+                // A line that may change what a name runs exempts none.
+                r#"enable -n cd; cd "$p""#,
+                r#"disable cd; cd "$p""#,
             ],
         );
         assert_allowed(
             &repo,
             &[
-                "rg --files | xargs rg \"$HOME/x\"",
-                "rg --files | xargs -n 1 rg \"$HOME/x\"",
+                "rg --files | xargs rg -- x \"$HOME/x\"",
+                "rg --files | xargs -n 1 cat \"$HOME/x\"",
                 "rg --files | xargs --replace=X grep -l X \"$HOME/x\"",
                 "eval 'ls src'",
+                "rg -n pattern ./\"$D\"",
+                "printf '%s\\n' \"$HOME\"",
+                "[ -f \"$HOME/x\" ] && echo yes",
+                "[[ -d \"$HOME\" ]] && echo yes",
+                "cd ~ && cd \"$p\"",
+                "cd / && pushd \"$p\"",
             ],
         );
     }
@@ -2102,18 +2137,27 @@ mod tests {
                 "ls ~",
                 "git log --since=\"$D\" --oneline",
                 "grep -rn \"$PAT\" src",
-                "cargo test -p \"$CRATE\"",
                 "printf -v p %s notes.txt; python3 x.py notes.txt",
                 "p=notes.txt; python3 x.py \"$p\"",
-                // A plain program through a parsed launcher is the program
-                // that runs (round 12).
-                "rg --files | xargs rg \"$HOME/x\"",
+                // A program with no option that runs anything, through a
+                // parsed launcher, keeps its words (round 12).
                 "rg --files | xargs grep \"$HOME/x\"",
                 "rg --files | xargs egrep \"$HOME/x\"",
                 "rg --files | xargs fgrep \"$HOME/x\"",
+                "! command git rebase -x 'cargo test' HEAD~3",
+            ],
+        );
+        // The accepted cost of the one rule (operator decision,
+        // 2026-10-27): a program off the allowlist, or one whose options
+        // may run a program, keeps its run-time words.
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cargo test -p \"$CRATE\"",
                 "rg --files | xargs ag \"$HOME/x\"",
                 "D=build && find $D -delete",
-                "! command git rebase -x 'cargo test' HEAD~3",
             ],
         );
         // C9-4: a NUL byte refuses before anything is read.
@@ -3353,7 +3397,6 @@ mod tests {
                 "print -r '.cla\\x75de/settings.json'",
                 "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
                 "a=no; b=\"${a}tes.txt\"; python3 tool.py \"$b\"",
-                "f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo -ne 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
@@ -3377,6 +3420,14 @@ mod tests {
         assert_public_allowed(
             &repo,
             &["source venv/bin/activate && echo ok && python3 src/app.py"],
+        );
+        // The accepted cost (operator decision, 2026-10-27): a printf
+        // format the text does not show may hold `%n`, so its words are
+        // judged.
+        assert_public_refused(
+            &repo,
+            &["f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'"],
+            false,
         );
     }
 }

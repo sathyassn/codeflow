@@ -72,7 +72,7 @@
   [
     "eval 'rm -rf $PWD/build'",
     0,
-    0
+    2
   ],
   [
     "eval - 'rm -rf $PWD/build'",

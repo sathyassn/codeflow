@@ -102,7 +102,7 @@
   [
     "source ~/.bashrc",
     0,
-    0
+    2
   ],
   [
     ". ./env.sh",
@@ -137,7 +137,7 @@
   [
     "bash -c \"rm -rf $PWD/build\"",
     0,
-    0
+    2
   ],
   [
     "bash <<< 'echo hi'",
@@ -152,7 +152,7 @@
   [
     "bash <<< \"rm -rf $PWD/build\"",
     0,
-    0
+    2
   ],
   [
     "bash -s <<< 'echo hi'",
@@ -572,12 +572,12 @@
   [
     "ln -s $PWD/src link",
     0,
-    0
+    2
   ],
   [
     "ln -s \"$(pwd)/src\" link",
     0,
-    0
+    2
   ],
   [
     "ln src/app.py hard && cat hard",

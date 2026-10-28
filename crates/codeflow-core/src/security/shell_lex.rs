@@ -45,6 +45,9 @@ pub(crate) struct Token {
     pub(crate) ansi: bool,
     /// A redirection operator (`>`, `2>>`, `<<<`, `&>`).
     pub(crate) redirect: bool,
+    /// The word runs straight into a `(`: a zsh or ksh pattern group
+    /// (`pyth(o)n3`, `@(a|b)`) or a function name, never plain text.
+    pub(crate) grouped: bool,
 }
 
 impl Token {
@@ -57,10 +60,29 @@ impl Token {
     }
 
     /// Whether the shell passes the word as exactly its text: plain, with
-    /// no glob (`*`, `?`, `[`), no brace expansion and no zsh `=cmd`
-    /// (C13-2, matching git-guard's `ShellWord::literal`).
+    /// no pattern character any shell may expand (git-guard's `has_glob`:
+    /// `*`, `?`, `[`, zsh's extended `#`, `^`, `(`, `)`, `**` and numeric
+    /// ranges, C14-2), no zsh `~` exclusion or tilde, no brace expansion
+    /// and no zsh `=cmd` (C13-2; a lone `=` is text).
     pub(crate) fn literal(&self) -> bool {
-        self.plain() && !self.text.contains(['*', '?', '[', '{']) && !self.text.starts_with('=')
+        self.plain()
+            && !self.grouped
+            && self.tilde.is_none()
+            && !crate::hooks::git_guard::has_glob(&self.text)
+            && !self.text.contains(['{', '~'])
+            && (!self.text.starts_with('=') || self.text == "=")
+    }
+
+    /// Whether the word holds a command substitution inside a possible
+    /// array subscript (`'a[$(cmd)]'`), which Bash and zsh run when a
+    /// builtin evaluates the subscript (`printf -v`, `test -v`, `read`,
+    /// numeric comparisons), even from quoted text (TSK-397 Codex review
+    /// round 14).
+    pub(crate) fn subscript_code(&self) -> bool {
+        self.text.split('[').skip(1).any(|after| {
+            let inside = after.split(']').next().unwrap_or(after);
+            inside.contains("$(") || inside.contains('`')
+        })
     }
 
     /// The assigned name, when the word is an assignment the shell
@@ -209,6 +231,11 @@ impl Lexer {
                     }
                 }
                 ';' | '|' | '(' | ')' => {
+                    if c == '(' {
+                        if let Some(token) = word.as_mut() {
+                            token.grouped = true;
+                        }
+                    }
                     self.at += 1;
                     if matches!(
                         (c, self.peek(0)),
@@ -731,119 +758,6 @@ const RESERVED: &[&str] = &[
     "[[", "]]",
 ];
 
-/// Every program name that runs another program from its operands, as far
-/// as the guard knows names: each modeled launcher
-/// ([`super::outward::LEXER_LAUNCHERS`], [`super::outward::MODELED_LAUNCHERS`])
-/// and its GNU-prefixed form,
-/// `builtin`, `sudo`, `doas`, `eval`, the zsh precommands, every wrapper
-/// git-guard recognises (`PREFIX_LAUNCHERS`, `COMMAND_CARRIERS`, which a
-/// test asserts) and the standard Linux and macOS wrappers. Where launcher
-/// traversal stops at one of these (an option it does not parse, such as
-/// `env -S`, or a wrapper it does not model), the remaining words are judged
-/// as an interpreter's possible operands. An unknown function used as a
-/// wrapper is outside this list by construction: command text cannot name
-/// it, and the PR states it as a residual (TSK-397 Codex review round 11).
-/// Programs known not to run their operands. Inside a launcher, a stop at
-/// one of these, written literally, takes the normal path (round 13);
-/// every other stop keeps its words as operands. `find`, `sed`, `awk`,
-/// `xargs` and `git` can run commands, so they are not here.
-const NON_EXECUTING: &[&str] = &[
-    "rg", "grep", "egrep", "fgrep", "ag", "ls", "cat", "head", "tail", "wc", "sort", "uniq", "cut",
-    "tr", "echo", "printf", "stat", "file", "du", "df", "test", "true", "false", "basename",
-    "dirname", "realpath", "readlink",
-];
-
-/// Whether a stop inside a launcher runs nothing from its operands: a
-/// literal word naming a program in [`NON_EXECUTING`].
-fn runs_nothing(word: &Token, rest: &[Token]) -> bool {
-    !word.redirect
-        && word.literal()
-        && NON_EXECUTING.contains(&crate::hooks::git_guard::launcher_name(&word.text))
-        && !wraps(word, rest)
-}
-
-/// Whether `word`, followed by `rest`, runs a program it is given: a name in
-/// [`WRAPPERS`], directly or by its path or GNU prefix. `find` runs one only
-/// through an action that executes (`-exec`, `-execdir`, `-ok`, `-okdir`),
-/// so `find "$D" -delete` keeps no operands.
-fn wraps(word: &Token, rest: &[Token]) -> bool {
-    let name = crate::hooks::git_guard::launcher_name(&word.text);
-    if name == "find" {
-        return rest
-            .iter()
-            .any(|w| matches!(w.text.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"));
-    }
-    WRAPPERS.contains(&word.text.as_str()) || WRAPPERS.contains(&name)
-}
-
-const WRAPPERS: &[&str] = &[
-    "builtin",
-    "command",
-    "exec",
-    "nohup",
-    "nice",
-    "timeout",
-    "stdbuf",
-    "time",
-    "env",
-    "xargs",
-    "caffeinate",
-    "xcrun",
-    "ionice",
-    "setsid",
-    "unbuffer",
-    "noglob",
-    "nocorrect",
-    "-",
-    "sudo",
-    "doas",
-    "eval",
-    "genv",
-    "gtimeout",
-    "gnice",
-    "gnohup",
-    "gstdbuf",
-    "gtime",
-    "gxargs",
-    "arch",
-    "script",
-    "chrt",
-    "taskset",
-    "flock",
-    "setpriv",
-    "firejail",
-    "unshare",
-    "nsenter",
-    "watch",
-    "taskpolicy",
-    "find",
-    "parallel",
-    "strace",
-    "ltrace",
-    "valgrind",
-    "gdb",
-    "sandbox-exec",
-    "busybox",
-    "chroot",
-    "prlimit",
-    "numactl",
-    "systemd-run",
-    "launchctl",
-    "npx",
-    "uv",
-    "uvx",
-    "bundle",
-    "pipx",
-    "poetry",
-    "pdm",
-    "hatch",
-    "nix-shell",
-    "direnv",
-    "op",
-    "aws-vault",
-    "dotenv",
-];
-
 /// Reserved words whose whole simple command is a header, not a command
 /// that runs: `for NAME in ...`, `select`, `case WORD in`.
 const HEADERS: &[&str] = &["for", "select", "case"];
@@ -879,10 +793,10 @@ impl Reading {
 enum Program<'a> {
     /// A modeled interpreter runs with these operands.
     Interpreter(&'a [Token]),
-    /// Traversal stopped at the first of these words, at this launcher
-    /// depth: a word that is not plain, an option the grammar does not
-    /// know, or a program that is neither a launcher nor an interpreter.
-    Stopped(&'a [Token], usize),
+    /// Traversal stopped at the first of these words: a word that is not
+    /// literal, a launcher whose options the grammar does not know, or a
+    /// program that is neither a launcher nor an interpreter.
+    Stopped(&'a [Token]),
 }
 
 /// Read a lexed line's commands. `launcher` returns where a modeled
@@ -898,14 +812,241 @@ pub(crate) fn read(
     calls: &dyn Fn(&[String]) -> bool,
     hook_variables: &[&str],
 ) -> Reading {
+    let callbacks = Callbacks {
+        launcher,
+        interpreter,
+        hides,
+        calls,
+        hook_variables,
+    };
+    let shadowed = shadows(lexed, &callbacks);
+    read_with(lexed, &callbacks, shadowed)
+}
+
+/// The checks [`read`] is given, passed on to an `eval` body.
+struct Callbacks<'a> {
+    launcher: &'a dyn Fn(&str, &[String]) -> Option<usize>,
+    interpreter: &'a dyn Fn(&str) -> bool,
+    hides: &'a dyn Fn(&[String]) -> bool,
+    calls: &'a dyn Fn(&[String]) -> bool,
+    hook_variables: &'a [&'a str],
+}
+
+/// Programs that give a name another meaning for the rest of the line: an
+/// alias, a builtin turned off (`enable -n`, `disable`) so a program of the
+/// same name runs, a hashed or autoloaded name, a function, or a file read
+/// into the shell, which may define any of these.
+const SHADOWING_PROGRAMS: &[&str] = &[
+    "alias",
+    "enable",
+    "disable",
+    "hash",
+    "autoload",
+    "function",
+    "functions",
+    "source",
+    ".",
+];
+
+/// Builtins that assign a variable named by an operand, so `read PATH`
+/// changes the command search path.
+const ASSIGNING_PROGRAMS: &[&str] = &[
+    "read",
+    "printf",
+    "mapfile",
+    "readarray",
+    "getln",
+    "vared",
+    "declare",
+    "typeset",
+    "export",
+    "local",
+    "readonly",
+    "getopts",
+    "print",
+];
+
+/// Whether a word sets the command search path (`PATH=`, `path+=`,
+/// `path[1]=`), as an assignment or a declaration's operand.
+fn sets_path(word: &Token) -> bool {
+    ["PATH=", "PATH+=", "PATH[", "path=", "path+=", "path["]
+        .iter()
+        .any(|form| word.text.starts_with(form))
+}
+
+/// Whether the line may change what a program name runs: a command whose
+/// program, reached through modeled launchers, is one of
+/// [`SHADOWING_PROGRAMS`], a function definition, a program word the text
+/// does not show, an `eval` whose text does any of these or is not fixed,
+/// or a change to the command search path. Then no name on the line is
+/// exempt by the allowlist.
+fn shadows(lexed: &Lexed, callbacks: &Callbacks<'_>) -> bool {
+    lexed.opaque
+        || lexed.current_shell
+        || lexed.commands.iter().any(|command| {
+            command.iter().any(sets_path)
+                || command_shadows(&command[program_start(command)..], callbacks)
+        })
+}
+
+/// Whether one command, from its program word, may change what a name runs.
+fn command_shadows(rest: &[Token], callbacks: &Callbacks<'_>) -> bool {
+    let Program::Stopped(remaining) =
+        program_operands(rest, callbacks.launcher, callbacks.interpreter, 0)
+    else {
+        return false;
+    };
+    let Some((program, words)) = remaining.split_first() else {
+        return false;
+    };
+    if program.redirect {
+        return false;
+    }
+    // `[` is the `test` builtin, not a pattern.
+    if program.grouped || !(program.literal() || (program.plain() && program.text == "[")) {
+        return true;
+    }
+    let name = crate::hooks::git_guard::launcher_name(&program.text);
+    if SHADOWING_PROGRAMS.contains(&name) {
+        return true;
+    }
+    if ASSIGNING_PROGRAMS.contains(&name)
+        && words
+            .iter()
+            .any(|w| matches!(w.text.as_str(), "PATH" | "path"))
+    {
+        return true;
+    }
+    if name == "eval" {
+        let joined: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+        let inner = lex(&joined.join(" "));
+        return words
+            .iter()
+            .any(|w| w.complex || !w.params.is_empty() || w.ansi)
+            || shadows(&inner, callbacks);
+    }
+    false
+}
+
+/// Where a command's program word starts: after redirections, reserved
+/// words, assignments and a `for` or `select` header up to its `do`; the
+/// end for a `case` header.
+fn program_start(command: &[Token]) -> usize {
+    let mut at = 0;
+    while let Some(word) = command.get(at) {
+        if word.redirect {
+            at += 2;
+        } else if word.plain() && matches!(word.text.as_str(), "for" | "select") {
+            match command[at + 1..]
+                .iter()
+                .position(|w| w.plain() && w.text == "do")
+            {
+                Some(offset) => at += offset + 2,
+                None => return command.len(),
+            }
+        } else if word.plain() && word.text == "case" {
+            return command.len();
+        } else if (word.plain() && RESERVED.contains(&word.text.as_str()))
+            || word.assignment().is_some()
+        {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    at.min(command.len())
+}
+
+/// A command substitution in a possible subscript runs wherever a builtin
+/// evaluates it, quoted or not, so it is a hidden command and a value filled
+/// in at run time (C14-1).
+fn subscript_commands(command: &[Token], reading: &mut Reading) {
+    for word in command.iter().filter(|w| w.subscript_code()) {
+        reading.moves = true;
+        reading.operands.push(Token {
+            complex: true,
+            ..word.clone()
+        });
+    }
+}
+
+/// A `[[ ... ]]` conditional, its words after `[[`, runs no program. It
+/// evaluates a word as code only through `-v`, `-R` or a numeric
+/// comparison, and then its words are judged.
+fn conditional(words: &[Token], reading: &mut Reading) {
+    let inner = match words.iter().rposition(|w| w.plain() && w.text == "]]") {
+        Some(end) => &words[..end],
+        None => words,
+    };
+    if !super::non_executing::conditional_runs_nothing(inner) {
+        reading.moves = true;
+        reading
+            .operands
+            .extend(inner.iter().filter(|w| !w.redirect).cloned());
+    }
+}
+
+/// Traversal stopped at `remaining`, the tail of `command`, where a program
+/// may run an interpreter with the words after it, at the start of the
+/// command or inside a launcher. One rule holds at every stop (operator
+/// decision, 2026-10-27): the remaining words are judged as possible
+/// operands unless the stop is a literal program on the non-executing
+/// allowlist used with the options its entry lists, on a line that changes
+/// no program name's meaning. `xargs` adds arguments the text does not
+/// show. A later word naming an interpreter, or an interpreter call the
+/// command walk sees, also keeps them.
+fn stopped(
+    command: &[Token],
+    remaining: &[Token],
+    callbacks: &Callbacks<'_>,
+    shadowed: bool,
+    reading: &mut Reading,
+) {
+    reading.moves = true;
+    let texts: Vec<String> = command.iter().map(|w| w.text.clone()).collect();
+    let launchers = &command[..command.len() - remaining.len()];
+    let appended = launchers
+        .iter()
+        .any(|w| crate::hooks::git_guard::launcher_name(&w.text) == "xargs");
+    let after = remaining.iter().skip(1);
+    if shadowed
+        || !super::non_executing::runs_nothing(remaining, appended)
+        || after.clone().any(|w| (callbacks.interpreter)(&w.text))
+        || (callbacks.calls)(&texts)
+    {
+        reading
+            .operands
+            .extend(after.filter(|w| !w.redirect).cloned());
+    }
+    reading
+        .operands
+        .extend(eval_operands(remaining, callbacks, shadowed));
+}
+
+/// [`read`] with the callbacks gathered, and whether the line (or the line
+/// an `eval` body came from) changes what a program name runs.
+fn read_with(lexed: &Lexed, callbacks: &Callbacks<'_>, shadowed: bool) -> Reading {
+    let Callbacks {
+        launcher,
+        interpreter,
+        hides,
+        hook_variables,
+        ..
+    } = *callbacks;
     let mut reading = Reading::default();
     for command in &lexed.commands {
+        subscript_commands(command, &mut reading);
         let mut at = 0;
         let mut header = false;
         while let Some(word) = command.get(at) {
             if word.redirect {
                 at += 2;
                 continue;
+            }
+            if word.plain() && word.text == "[[" {
+                conditional(&command[at + 1..], &mut reading);
+                header = true;
+                break;
             }
             if word.plain() && HEADERS.contains(&word.text.as_str()) {
                 // A `for` or `select` header ends at `do`, and the words
@@ -965,42 +1106,8 @@ pub(crate) fn read(
                     .operands
                     .extend(operands.iter().filter(|w| !w.redirect).cloned());
             }
-            Program::Stopped(remaining, depth) => {
-                reading.moves = true;
-                // Traversal stopped where a program may run an interpreter
-                // with the words after it. The remaining words are judged as
-                // possible operands when any of these holds, a union that
-                // only ever adds (TSK-397 Codex review rounds 9 to 12): the
-                // stop is a non-plain word; it is a wrapper name (a launcher
-                // whose options do not parse stops at its own name); inside
-                // a launcher, it is an option or a redirection; a later word
-                // names an interpreter; or the command walk sees an
-                // interpreter call in the command. A plain program reached
-                // through a fully parsed launcher (`xargs rg`) is the
-                // program that runs, so its words take the normal path.
-                let texts: Vec<String> = command.iter().map(|w| w.text.clone()).collect();
-                let after = remaining.iter().skip(1);
-                if remaining.first().is_some_and(|w| {
-                    if depth > 0 {
-                        !runs_nothing(w, &remaining[1..])
-                    } else {
-                        !w.literal() || wraps(w, &remaining[1..])
-                    }
-                }) || after.clone().any(|w| interpreter(&w.text))
-                    || calls(&texts)
-                {
-                    reading
-                        .operands
-                        .extend(after.filter(|w| !w.redirect).cloned());
-                }
-                reading.operands.extend(eval_operands(
-                    remaining,
-                    launcher,
-                    interpreter,
-                    hides,
-                    calls,
-                    hook_variables,
-                ));
+            Program::Stopped(remaining) => {
+                stopped(command, remaining, callbacks, shadowed, &mut reading);
             }
         }
     }
@@ -1016,14 +1123,7 @@ pub(crate) fn read(
 /// (`eval 'python3 r.py "$PWD/.."'`) is read as a line of its own (round
 /// 13): the operands that line yields, and every word marked run-time when
 /// the joined text is opaque. Empty for any other program.
-fn eval_operands(
-    words: &[Token],
-    launcher: &dyn Fn(&str, &[String]) -> Option<usize>,
-    interpreter: &dyn Fn(&str) -> bool,
-    hides: &dyn Fn(&[String]) -> bool,
-    calls: &dyn Fn(&[String]) -> bool,
-    hook_variables: &[&str],
-) -> Vec<Token> {
+fn eval_operands(words: &[Token], callbacks: &Callbacks<'_>, shadowed: bool) -> Vec<Token> {
     let Some((program, rest)) = words.split_first() else {
         return Vec::new();
     };
@@ -1032,7 +1132,8 @@ fn eval_operands(
     }
     let joined: Vec<&str> = rest.iter().map(|w| w.text.as_str()).collect();
     let inner = lex(&joined.join(" "));
-    let mut operands = read(&inner, launcher, interpreter, hides, calls, hook_variables).operands;
+    let mut operands =
+        read_with(&inner, callbacks, shadowed || shadows(&inner, callbacks)).operands;
     if inner.opaque || inner.current_shell {
         operands.extend(rest.iter().map(|w| Token {
             complex: true,
@@ -1053,7 +1154,7 @@ fn program_operands<'a>(
         return Program::Interpreter(&[]);
     };
     if depth > 8 || program.redirect || !program.literal() {
-        return Program::Stopped(words, depth);
+        return Program::Stopped(words);
     }
     let rest = &words[1..];
     if interpreter(&program.text) {
@@ -1071,7 +1172,7 @@ fn program_operands<'a>(
         .and_then(|from| rest.get(from..))
     {
         Some(inner) => program_operands(inner, launcher, interpreter, depth + 1),
-        None => Program::Stopped(words, depth),
+        None => Program::Stopped(words),
     }
 }
 

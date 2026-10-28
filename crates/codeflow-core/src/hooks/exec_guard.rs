@@ -394,7 +394,13 @@ mod tests {
         use crate::security::guard_forms::{COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS};
         let section = SecuritySection::default();
         for (form, equivalent) in COMPOSED_PAIRS {
-            let expected = evaluate(equivalent, &section);
+            // TSK-397: a run-time word given to `rm` is also judged as a
+            // possible interpreter argument, so only this rule's finding is
+            // compared.
+            let expected: Vec<_> = evaluate(equivalent, &section)
+                .into_iter()
+                .filter(|v| v.rule == "security.dangerous_commands")
+                .collect();
             assert_eq!(expected.len(), 1, "{equivalent}");
             assert_eq!(expected[0].rule, "security.dangerous_commands");
             for nesting in NESTINGS {
@@ -437,10 +443,20 @@ mod tests {
                 }
             }
         }
+        // TSK-397: a run-time word given to `rm` or `find` is judged by the
+        // directory check, never as a dangerous deletion.
         for command in PROJECT_DELETIONS {
             for nesting in NESTINGS {
                 let nested = nesting.replace("{}", command);
-                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+                let found = evaluate(&nested, &section);
+                if crate::security::guard_forms::RUN_TIME_PROJECT_DELETIONS.contains(command) {
+                    assert!(
+                        found.iter().all(|v| v.rule == "git.hook_integrity"),
+                        "{nested}: {found:?}"
+                    );
+                } else {
+                    assert!(found.is_empty(), "{nested}: {found:?}");
+                }
             }
         }
     }

@@ -38,6 +38,7 @@ pub(crate) mod git_config;
 pub(crate) mod guard_forms;
 pub mod headless;
 pub(crate) mod interpreter;
+pub(crate) mod non_executing;
 pub(crate) mod outward;
 pub mod pattern;
 pub mod policy;

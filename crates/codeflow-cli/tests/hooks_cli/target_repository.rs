@@ -1,5 +1,7 @@
 //! TSK-379: built hooks judge the repository holding a target.
-use super::{codeflow, enforced_repo, guard_payload, run_with_stdin, shell_path};
+use super::{
+    codeflow, enforced_repo, guard_payload, run_time_word_refusal, run_with_stdin, shell_path,
+};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -470,7 +472,12 @@ fn repair2_git_creation_assignments() {
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
         let out = f.command(&f.root, hook, "D=scratch; git clone /source $D/newclone");
-        assert_eq!(out.status.code(), Some(0), "ordinary {hook}: {out:?}");
+        // TSK-397: `git clone` given a run-time word.
+        if hook == "exec-guard" {
+            assert!(run_time_word_refusal(&out), "ordinary {hook}: {out:?}");
+        } else {
+            assert_eq!(out.status.code(), Some(0), "ordinary {hook}: {out:?}");
+        }
     }
 }
 
@@ -1569,6 +1576,11 @@ fn runner_home_in_program_path_assignments() {
             "export PATH=\"$HOME/bin:$PATH\"; git status",
         ] {
             let out = f.command(&f.linked, hook, command);
+            // TSK-397: `export` given a run-time word.
+            if hook == "exec-guard" && command.starts_with("export") {
+                assert!(run_time_word_refusal(&out), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
         for command in [
@@ -1591,6 +1603,11 @@ fn runner_home_tilde_operands() {
             "git -c core.pager=true diff ~",
         ] {
             let out = f.command(&f.linked, hook, command);
+            // TSK-397: `git` given a tilde word.
+            if hook == "exec-guard" {
+                assert!(run_time_word_refusal(&out), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
         for command in [
@@ -2275,6 +2292,11 @@ fn reassigned_home_resolves_tilde_and_home_words() {
             "git log -1 --format='%h~%s'",
         ] {
             let out = f.command(&f.linked, hook, command);
+            // TSK-397: `git` given a tilde word, outside `git log`.
+            if hook == "exec-guard" && command.contains(" ~") {
+                assert!(run_time_word_refusal(&out), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
     }
@@ -2395,6 +2417,11 @@ fn wrapped_and_unproven_home_changes_are_read() {
             "command -v git && git status".to_string(),
         ] {
             let out = f.command(&f.root, hook, &command);
+            // TSK-397: `git status` given a tilde word.
+            if hook == "exec-guard" && command.contains(" ~") {
+                assert!(run_time_word_refusal(&out), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
     }

@@ -1105,6 +1105,17 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
             for command in guard_forms::PROJECT_DELETIONS {
                 let out = run_wired(&root, &hook, command);
                 let stderr = String::from_utf8_lossy(&out.stderr);
+                // TSK-397: a run-time word given to `rm` or `find` refuses
+                // under the directory check, never as a dangerous deletion.
+                if guard_forms::RUN_TIME_PROJECT_DELETIONS.contains(command) {
+                    assert_eq!(out.status.code(), Some(2), "{tier} {wiring} {command}");
+                    assert!(
+                        stderr.contains("git.hook_integrity")
+                            && !stderr.contains("security.dangerous_commands"),
+                        "{tier} {wiring} {command}: {stderr}"
+                    );
+                    continue;
+                }
                 assert_eq!(
                     out.status.code(),
                     Some(0),

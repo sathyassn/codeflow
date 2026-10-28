@@ -3,7 +3,7 @@
 //! where another guard check would still refuse the whole line (security
 //! review SR6-4).
 
-use super::{lex, Token, WRAPPERS};
+use super::{lex, Token};
 use crate::security::outward::{read_line, LEXER_LAUNCHERS, MODELED_LAUNCHERS};
 
 fn word(line: &str, command: usize, at: usize) -> Token {
@@ -131,32 +131,30 @@ fn a_header_returns_to_command_position() {
     assert!(!read_line(&lex("for x in a b; do python3 r.py \"$x\"; done")).moves);
 }
 
-/// Every launcher the guard models, in either reader, and every GNU-prefixed
-/// name it maps to one, is a wrapper: a launcher added later cannot be
-/// missed (TSK-397 Codex review round 11).
+/// No launcher the guard models, in either reader, nor any wrapper
+/// git-guard recognises, is on the non-executing allowlist, by its own name
+/// or a GNU-prefixed one: a launcher always keeps the words after it.
 #[test]
-fn every_modeled_launcher_is_a_wrapper() {
-    for name in LEXER_LAUNCHERS.iter().chain(MODELED_LAUNCHERS) {
-        assert!(WRAPPERS.contains(name), "{name}");
-        let prefixed = format!("g{name}");
-        if crate::hooks::git_guard::launcher_name(&prefixed) == *name {
-            assert!(WRAPPERS.contains(&prefixed.as_str()), "{prefixed}");
-        }
-    }
-    for name in [
-        "builtin",
-        "sudo",
-        "doas",
-        "eval",
-        "noglob",
-        "nocorrect",
-        "-",
-    ]
-    .iter()
-    .chain(crate::hooks::git_guard::PREFIX_LAUNCHERS)
-    .chain(crate::hooks::git_guard::COMMAND_CARRIERS)
+fn no_launcher_is_on_the_allowlist() {
+    let allowed: Vec<&str> = crate::security::non_executing::names().collect();
+    for name in LEXER_LAUNCHERS
+        .iter()
+        .chain(MODELED_LAUNCHERS)
+        .chain(crate::hooks::git_guard::PREFIX_LAUNCHERS)
+        .chain(crate::hooks::git_guard::COMMAND_CARRIERS)
+        .chain(&[
+            "builtin",
+            "sudo",
+            "doas",
+            "eval",
+            "noglob",
+            "nocorrect",
+            "-",
+            "find",
+        ])
     {
-        assert!(WRAPPERS.contains(name), "{name}");
+        let name = crate::hooks::git_guard::launcher_name(name);
+        assert!(!allowed.contains(&name), "{name}");
     }
 }
 
@@ -181,11 +179,14 @@ fn wrappers_keep_expanded_names_and_split_strings() {
         assert!(reading.moves, "{line}");
         assert!(reading.derived.is_some(), "{line}: {reading:?}");
     }
-    // An ordinary command keeps its words to itself.
-    for line in ["echo \"$HOME\"", "ls ~", "cargo test -p \"$CRATE\""] {
+    // An allowlisted program keeps its words to itself; any other program
+    // may run an interpreter with them (operator decision, 2026-10-27).
+    for line in ["echo \"$HOME\"", "ls ~"] {
         let reading = read_line(&lex(line));
         assert!(reading.operands.is_empty(), "{line}: {reading:?}");
     }
+    let cargo = read_line(&lex("cargo test -p \"$CRATE\""));
+    assert!(cargo.derived.is_some(), "{cargo:?}");
 }
 
 /// C12-1, C12-2: `arch`, `script` and `find -exec` wrappers, and the `time`
@@ -213,10 +214,11 @@ fn wrappers_and_the_time_keyword_keep_operands() {
         let reading = read_line(&lex(line));
         assert!(reading.derived.is_some(), "{line}: {reading:?}");
     }
-    // `find` without an executing action runs no program.
+    // `find` is not on the allowlist: its actions run programs and write
+    // files, so its words are judged.
     for line in [r#"find "$D" -delete"#, r#"find $D -name "$N" -print"#] {
         let reading = read_line(&lex(line));
-        assert!(reading.operands.is_empty(), "{line}: {reading:?}");
+        assert!(reading.derived.is_some(), "{line}: {reading:?}");
     }
     let timed = read_line(&lex("time -p env python3 r.py notes.txt"));
     assert!(
@@ -242,6 +244,63 @@ fn expanded_program_words_are_not_literal() {
         let reading = read_line(&lex(line));
         assert!(reading.derived.is_some(), "{line}: {reading:?}");
     }
-    let plain = read_line(&lex(r#"xargs -n 1 rg "$HOME/x""#));
+    // A program with no option that runs anything keeps its words to itself
+    // behind `xargs`; `rg` does not, since `xargs` may append `--pre`.
+    let plain = read_line(&lex(r#"xargs -n 1 cat "$HOME/x""#));
     assert!(plain.operands.is_empty(), "{plain:?}");
+    let appended = read_line(&lex(r#"xargs -n 1 rg "$HOME/x""#));
+    assert!(appended.derived.is_some(), "{appended:?}");
+}
+
+/// C14-2: zsh's extended patterns (`#`, `^`, `~`) and the other pattern
+/// characters a shell may expand make a program word non-literal, so its
+/// words are kept.
+#[test]
+fn extended_patterns_are_not_literal() {
+    for text in [
+        "pytho#n3",
+        "^absent",
+        "python3~x",
+        "pyth(o)n3",
+        "py**",
+        "~/bin/python3",
+    ] {
+        let lexed = lex(text);
+        let program = &lexed.commands[0][0];
+        assert!(!program.literal(), "{text}: {program:?}");
+    }
+    for line in [
+        r#"z; /x/glob-bin/pytho#n3 r.py "$PWD/src/..""#,
+        r#"z; /x/glob-bin/^absent r.py "$PWD/src/..""#,
+        r#"z; /x/bin/python3~x r.py "$PWD/src/..""#,
+        r#"nice /x/glob-bin/pytho#n3 r.py "$PWD/src/..""#,
+    ] {
+        let reading = read_line(&lex(line));
+        assert!(reading.derived.is_some(), "{line}: {reading:?}");
+    }
+}
+
+/// SR9-2, SR9-4: a stop on neither the launcher list nor the allowlist keeps
+/// its words, at the start of a command and inside a launcher. A rule that
+/// keeps words only after names on a wrapper list fails these lines.
+#[test]
+fn an_unknown_program_keeps_its_words_everywhere() {
+    for line in [
+        r#"bwrap "$P" r.py "$PWD""#,
+        r#"some-tool "$P" r.py "$PWD""#,
+        r#"xvfb-run "$P" r.py "$PWD""#,
+        r#"nice some-tool "$P" r.py "$PWD""#,
+        r#"xargs bwrap "$P" r.py "$PWD""#,
+        r#"env -u X mise exec -- "$P" r.py "$PWD""#,
+        r#"command conda run "$P" r.py "$PWD""#,
+        r#"timeout 5 pyenv exec "$P" r.py "$PWD""#,
+    ] {
+        let reading = read_line(&lex(line));
+        assert!(reading.moves, "{line}");
+        assert!(
+            reading.operands.iter().any(|w| w.text == "$PWD"),
+            "{line}: {reading:?}"
+        );
+        assert!(reading.derived.is_some(), "{line}");
+    }
 }

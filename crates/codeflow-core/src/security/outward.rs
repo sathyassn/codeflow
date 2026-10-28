@@ -711,6 +711,10 @@ fn launcher_options(launcher: &str) -> Option<(&'static [&'static str], &'static
                 "--max-procs",
                 "--max-chars",
                 "--process-slot-var",
+                // BSD: the replacement string, its count and its size.
+                "-J",
+                "-R",
+                "-S",
             ],
             // GNU's `--replace`, `--eof` and `--max-lines` take a value
             // only attached with `=`; bare, they consume nothing.
@@ -750,7 +754,7 @@ fn launcher_option(launcher: &str, option: &str) -> Option<bool> {
 /// starts, or `None` for an option the grammar does not know. A long
 /// option's value may follow `=`; a short one's may be attached
 /// (`-n5`, `-oL`), or be the next word.
-fn skip_launcher_options(launcher: &str, rest: &[String]) -> Option<usize> {
+pub(crate) fn skip_launcher_options(launcher: &str, rest: &[String]) -> Option<usize> {
     let mut at = 0;
     while let Some(word) = rest.get(at) {
         if word == "--" {

@@ -136,6 +136,20 @@ pub const ROOTED_DELETIONS: &[&str] = &[
     "cd /Users/alice/project && rm -rf build",
 ];
 
+/// The [`PROJECT_DELETIONS`] the deletion guard passes that the exec guard
+/// still refuses under `git.hook_integrity`: each gives `rm` or `find`, which
+/// are not on the non-executing allowlist, a word filled in at run time, so
+/// TSK-397's directory check judges it (operator decision, 2026-10-27).
+pub const RUN_TIME_PROJECT_DELETIONS: &[&str] = &[
+    "D=./build; rm -rf $D",
+    "D=build && find $D -delete",
+    "rm -rf ~/code/app/target",
+    "for d in build dist; do rm -rf \"$d\"; done",
+    "for d in / build; do :; done; rm -rf $d",
+    "D=/; D=build; rm -rf \"$D\"",
+    "rm -rf \"$TMPDIR/codeflow-build\"",
+];
+
 /// Deletions that stay inside the project: allowed, alone and nested
 /// (TSK-141 AC-2).
 pub const PROJECT_DELETIONS: &[&str] = &[

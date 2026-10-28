@@ -138,26 +138,13 @@ fn classify(argv: &[String], depth: usize) -> Found {
                     "--other-user",
                 ],
             )),
-            "xargs" => skip_options(
-                rest,
-                &[
-                    "-I",
-                    "-L",
-                    "-n",
-                    "-P",
-                    "-s",
-                    "-d",
-                    "-E",
-                    "-a",
-                    "--arg-file",
-                    "--delimiter",
-                    // GNU's `--replace`, `--eof` and `--max-lines` take a
-                    // value only attached with `=`; bare, none.
-                    "--max-args",
-                    "--max-procs",
-                    "--max-chars",
-                ],
-            ),
+            // The options are an allowlist shared with the directory
+            // reader: one this grammar does not list may take a value that
+            // would be read as the program, so it is unresolved (SR9-3).
+            "xargs" => match super::outward::skip_launcher_options("xargs", rest) {
+                Some(from) => rest.get(from..).unwrap_or_default(),
+                None => return Found::Unresolved,
+            },
             "find" => return find_exec(rest, depth),
             // A package runner starts the package's binary (TSK-141 AC-6).
             // pnpm 11 also answers to `pn` and `pnx`.
@@ -898,12 +885,13 @@ pub(crate) fn raw_run(command: &str) -> Option<HeadlessRun> {
     })
 }
 
-/// The program name: its last path component, without `.exe`, lower case.
+/// The program name: its last path component, without `.exe`, lower case,
+/// and a GNU-prefixed launcher read as the plain one (`gxargs`, `gtimeout`).
 fn basename(program: &str) -> String {
     let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
     let name = name.to_ascii_lowercase();
-    name.strip_suffix(".exe")
-        .map_or(name.clone(), str::to_string)
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    crate::hooks::git_guard::program_name(name).to_string()
 }
 
 /// `NAME=value` before a program.
@@ -946,6 +934,14 @@ mod tests {
             "printf x | xargs --eof claude -p x",
             "printf x | xargs --max-lines claude -p x",
             "printf x | xargs --max-args 1 claude -p x",
+            // SR9-3: GNU and BSD options that take a separate value, and an
+            // option outside the shared grammar, never hide the program.
+            "printf x | xargs --process-slot-var SLOT claude -p x",
+            "printf x | xargs -J % claude -p x %",
+            "printf x | xargs -R 1 -I % claude -p x %",
+            "printf x | xargs -S 255 -I % claude -p x %",
+            "printf x | xargs --no-such-option V claude -p x",
+            "printf x | gxargs claude -p x",
             r"find . -maxdepth 0 -exec claude -p x \;",
             "timeout 5 claude -p x",
             "nice -n 1 claude -p x",
