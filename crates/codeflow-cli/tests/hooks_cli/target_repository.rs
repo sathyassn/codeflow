@@ -527,6 +527,12 @@ fn tsk1002_review03_classes_fail_closed_through_the_hooks() {
         "cd \"$D\"; node -e 'require(\"fs\").readFileSync(\"auth.json\")'",
         "cd \"$D\"; eval 'cat notes.md'",
         "ruby -C \"$D\" -e 'File.read(\"notes.md\")'",
+        // Listed over-refusals of ruling 4: a launcher the guard does not
+        // model may run its child anywhere (`uv run --directory`,
+        // `poetry -C`), so inline code under one refuses.
+        "cargo run -- python3 -c 'print(1)'",
+        "uv run python -c 'print(1)'",
+        "bundle exec ruby -e 'puts 1'",
         // Ruling 6: a revision's object path keeps the secret-name policy.
         "git show HEAD~1:copies/id_rsa",
         "git log -p HEAD~2:.ssh/id_ed25519",

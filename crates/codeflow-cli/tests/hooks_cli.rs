@@ -8622,7 +8622,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "taskpolicy -- python3 tool.py notes.txt",
         "echo -e 'hello'",
         "cargo test -- --nocapture",
-        "cargo run -- python3 -c 'print(1)'",
+        // `cargo run -- python3 -c 'print(1)'` refuses since TSK-1002
+        // review 03 ruling 4: inline code under a launcher the guard does
+        // not model runs in an unknown directory (target_repository.rs).
         "git commit -m \"python3 x\"",
         "python3 <<< 'print(1)'",
         "echo 'print(1)' | python3",

@@ -830,7 +830,9 @@ thread_local! {
 /// resolve: the line may make it a link before the program runs.
 pub(crate) fn physical_join(dir: &Path, target: &Path) -> Option<PathBuf> {
     use std::path::Component;
-    if remote_or_namespace_operand(&target.to_string_lossy()) {
+    // A target that is not text cannot be checked for a namespace prefix,
+    // so it is unknown too.
+    if target.to_str().is_none_or(remote_or_namespace_operand) {
         return None;
     }
     let target = crate::portable_path::without_verbatim(target.to_path_buf());
