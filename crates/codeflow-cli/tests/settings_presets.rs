@@ -2051,3 +2051,58 @@ fn status_line_without_jq_prints_folder_and_branch() {
         let _ = std::fs::remove_dir_all(folder);
     }
 }
+
+/// Review of PR 368: the line hands the status JSON to `jq` byte for byte,
+/// so a backslash in a path or name, or an escaped control character, stays
+/// literal under `/bin/sh` instead of turning into an escape or a parse
+/// error.
+#[cfg(unix)]
+#[test]
+fn status_line_keeps_backslashes_and_escapes_literal() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let slashed = status_folder("back\\slash", true);
+    let windows = "C:\\Users\\dev\\proj";
+    for preset in preset_files() {
+        for (cwd, style, folder, branch) in [
+            (
+                slashed.to_str().unwrap().to_string(),
+                "tab\there",
+                slashed.file_name().unwrap().to_str().unwrap().to_string(),
+                " (feature-x)",
+            ),
+            (
+                windows.to_string(),
+                "back\\slash\\nstyle",
+                windows.to_string(),
+                "",
+            ),
+        ] {
+            let json = serde_json::json!({
+                "model": {"id": "claude-opus-5-5", "display_name": "Opus 5.5"},
+                "version": "2.3.1",
+                "output_style": {"name": style},
+                "workspace": {"current_dir": cwd},
+                "context_window": {
+                    "context_window_size": 1_000_000,
+                    "current_usage": {
+                        "input_tokens": 1000,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "output_tokens": 0
+                    }
+                }
+            })
+            .to_string();
+            let (out, code) = run_status_line(&preset, &slashed, &json, &path);
+            assert_eq!(code, 0, "{preset}");
+            assert_eq!(
+                visible(&out),
+                format!(
+                    "Opus 5.5 (claude-opus-5-5) | v2.3.1 | {style} | {folder}{branch} | ctx:1k/1000k (0%)\n"
+                ),
+                "{preset}"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(slashed);
+}
