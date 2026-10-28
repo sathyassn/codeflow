@@ -348,6 +348,7 @@ mod authority {
             CriteriaBases {
                 bases: self.0.clone(),
                 imported_home: None,
+                judged_line: None,
             }
         }
     }
@@ -400,6 +401,7 @@ mod authority {
     pub struct CriteriaBases {
         bases: Vec<Oid>,
         imported_home: Option<(String, Oid)>,
+        judged_line: Option<(String, Oid)>,
     }
 
     impl CriteriaBases {
@@ -420,6 +422,26 @@ mod authority {
                 .as_ref()
                 .filter(|(home, _)| home == super::super::work_start::logical_target(name))
                 .map(|(_, tip)| *tip)
+        }
+
+        /// The verified epic line this run judges as one pull request into
+        /// its target, with the range head (TSK-433). A tip of that line the
+        /// head contains is the range under judgment, so it is no outside
+        /// evidence of a landing; it adds no criteria base.
+        pub(super) fn with_judged_line(mut self, line: &str, head: Oid) -> Self {
+            self.judged_line = Some((
+                super::super::work_start::logical_target(line).to_string(),
+                head,
+            ));
+            self
+        }
+
+        /// The range head, when `name` is the judged line ([`Self::with_judged_line`]).
+        pub(super) fn judged_line_head(&self, name: &str) -> Option<Oid> {
+            self.judged_line
+                .as_ref()
+                .filter(|(line, _)| line == super::super::work_start::logical_target(name))
+                .map(|(_, head)| *head)
         }
     }
 }
@@ -2215,6 +2237,21 @@ fn judge_reopened(
                 crate::git::display_text(name)
             ));
         }
+        // The epic line's pull request into its target judges the line's
+        // history up to its head, so a tip of that line the head contains
+        // is the range under judgment, not a target it is not judged
+        // against (TSK-433). A tip beyond the head stays outside evidence.
+        if let Some(head) = criteria.judged_line_head(name) {
+            let mut outside = Vec::new();
+            for (reference, tip) in found {
+                match is_ancestor_or_same(repo, tip, head) {
+                    Ok(true) => {}
+                    Ok(false) => outside.push((reference, tip)),
+                    Err(reason) => return TaskJudgement::unreadable(reason),
+                }
+            }
+            found = outside;
+        }
         tips.extend(found);
     }
     match default_target_name(repo) {
@@ -3887,7 +3924,7 @@ pub fn completions_in_range(
                 Some(source_base.unwrap_or(anchor)),
                 (own_task == Some(task.id.as_str())).then_some(anchor),
                 &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
-                &run.criteria(),
+                &judged_line(run.criteria(), criteria, line, task, head_oid),
             );
             if let Some(proof) = bound.proof {
                 reviewed.push(proof.reviewed);
@@ -3927,6 +3964,36 @@ fn with_own_line(
         }
     }
     tips
+}
+
+/// The criteria bases for `task` in a range, marking the judged line when
+/// the range is a verified epic line into its target (`Criteria::Amendable`
+/// on an `integration/` line) and the task declares that line (TSK-433).
+/// The mark adds no criteria base: it only keeps the line's own tips that
+/// the range head contains from counting as a target the run is not judged
+/// against. A planning range, a task range or a task of another target
+/// keeps the run's bases alone.
+fn judged_line(
+    bases: CriteriaBases,
+    criteria: &Criteria,
+    line: Option<&str>,
+    task: &RecordView,
+    head: Oid,
+) -> CriteriaBases {
+    let declared = task
+        .integration_target
+        .as_deref()
+        .filter(|target| !target.is_empty());
+    match (criteria, line, declared) {
+        (Criteria::Amendable, Some(line), Some(declared))
+            if line.starts_with("integration/")
+                && super::work_start::logical_target(declared)
+                    == super::work_start::logical_target(line) =>
+        {
+            bases.with_judged_line(line, head)
+        }
+        _ => bases,
+    }
 }
 
 /// The anchored base of the task landing that carried `introduced` onto
