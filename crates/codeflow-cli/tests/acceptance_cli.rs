@@ -930,8 +930,13 @@ fn line_task(id: &str, status: &str, closeout: &str) -> String {
 
 /// `main` holds `ids` targeting [`LINE`], which is cut from it.
 fn line_repo(ids: &[&str]) -> tempfile::TempDir {
+    line_repo_with(ids, "")
+}
+
+/// [`line_repo`] with `extra_policy` inside the policy's `git` object.
+fn line_repo_with(ids: &[&str], extra_policy: &str) -> tempfile::TempDir {
     let tasks: Vec<(&str, &str)> = ids.iter().map(|id| (*id, OWN_JOURNEY)).collect();
-    let dir = repo(&tasks, "");
+    let dir = repo(&tasks, extra_policy);
     let root = dir.path();
     for id in ids {
         write(root, &record_path(id), &line_task(id, "todo", "Pending.\n"));

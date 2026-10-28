@@ -16,7 +16,12 @@ fn own_task(status: &str, criteria: &str, closeout: &str) -> String {
 /// `main` never holds the task, as on the 3.2.0 line. TSK-002 binds the
 /// line to EPC-001.
 fn planned_line() -> tempfile::TempDir {
-    let dir = line_repo(&["TSK-002"]);
+    planned_line_with("")
+}
+
+/// [`planned_line`] with `extra_policy` inside the policy's `git` object.
+fn planned_line_with(extra_policy: &str) -> tempfile::TempDir {
+    let dir = line_repo_with(&["TSK-002"], extra_policy);
     let root = dir.path();
     git(root, &["switch", "-q", "-c", "plan/add-task", LINE]);
     write(
@@ -141,6 +146,7 @@ fn the_lines_own_reopened_completion_binds_at_its_line_landing() {
     let dir = planned_line();
     let root = dir.path();
     let into_line = reopened_in_its_own_pull_request(root);
+    let completion = git_out(root, &["rev-parse", "task/TSK-001-work"]);
     for rule in ["work.acceptance_binding", "work.criteria_frozen (block)"] {
         assert!(
             !into_line.1.contains(rule),
@@ -164,11 +170,19 @@ fn the_lines_own_reopened_completion_binds_at_its_line_landing() {
         "the line into main: {}",
         into_main.1
     );
+    assert_bound_at(&into_main, "TSK-001", &completion);
 }
 
 /// The two binding refusals TSK-433 removes for the line's own completions.
 const OUTSIDE_TIP: &str =
     "records a completion of this task, but it is not the target this run is judged against";
+
+/// Assert that `result` bound `id`'s completion at `at`, the commit on its
+/// task branch that made it, which its line landing carried.
+fn assert_bound_at(result: &(i32, String), id: &str, at: &str) {
+    let note = format!("{id} completion bound at {at}");
+    assert!(result.1.contains(&note), "missing {note:?} in {}", result.1);
+}
 
 /// TSK-433 AC-2: the line's tip counts as the range only up to the range
 /// head. A tip of the line beyond the head, here a later landing the run is
@@ -276,7 +290,17 @@ fn a_completion_forged_on_the_line_stays_refused() {
     write_done(root, "TSK-001", "complete", &reviewed);
     commit(root, "docs(records): complete TSK-001 on the line");
     let result = ci_on(root, "main", LINE, "");
-    assert_ne!(result.0, 0, "a forged completion on the line: {}", result.1);
+    assert_blocks(
+        &result,
+        "a forged completion on the line",
+        &[
+            "work.classification",
+            &format!("'{LINE}' is not a verified epic line"),
+            "has a commit made directly on the line",
+            "work.acceptance_binding",
+            "TSK-001: the history after the reviewed commit",
+        ],
+    );
 }
 
 /// TSK-433 AC-2: after the landing, a later merge on the line changes the
@@ -337,6 +361,7 @@ fn a_sync_merge_of_main_after_the_landing_is_not_counted() {
     let dir = planned_line();
     let root = dir.path();
     reopened_in_its_own_pull_request(root);
+    let completion = git_out(root, &["rev-parse", "task/TSK-001-work"]);
     git(root, &["switch", "-q", "main"]);
     write(root, "src/synced.rs", "pub fn synced() {}\n");
     commit(root, "feat: work on main");
@@ -352,6 +377,7 @@ fn a_sync_merge_of_main_after_the_landing_is_not_counted() {
         into_main.1
     );
     assert!(!into_main.1.contains("src/synced.rs"), "{}", into_main.1);
+    assert_bound_at(&into_main, "TSK-001", &completion);
 }
 
 /// A second epic's line, which joins [`LINE`] as EPC-025's line joined the
@@ -466,6 +492,7 @@ fn a_joined_lines_reopened_completion_binds_at_its_landing() {
     let dir = joined_repo(JOINED);
     let root = dir.path();
     reopened_on_joined(root, JOINED);
+    let completion = git_out(root, &["rev-parse", "task/TSK-003-work"]);
     join(root, JOINED);
     let into_main = ci_on(root, "main", LINE, "");
     for refusal in [OUTSIDE_TIP, "work.acceptance_binding (block)"] {
@@ -475,6 +502,7 @@ fn a_joined_lines_reopened_completion_binds_at_its_landing() {
             into_main.1
         );
     }
+    assert_bound_at(&into_main, "TSK-003", &completion);
 }
 
 /// TSK-433 AC-9: a joined line that fails the epic-line proof, here for a
@@ -610,5 +638,65 @@ fn a_judged_line_tip_beyond_the_head_stays_outside_for_a_joined_task() {
         &ci_on(root, "main", LINE, ""),
         "a judged line tip beyond the head for a joined task",
         &["work.acceptance_binding", "TSK-003", OUTSIDE_TIP, LINE],
+    );
+}
+
+/// Review round 01, finding 1: a workspace root branch is judged with
+/// amendable criteria without the epic-line proof. One on an epic line's
+/// name that fails the proof, here for a direct code commit with no landed
+/// adoption, keeps the binding refusal: the line is marked judged only on
+/// a proof of its own history, whatever the range's class.
+#[test]
+fn an_unverified_root_branch_line_keeps_its_refusal() {
+    let dir = planned_line_with(&format!(", \"root_branch\": \"{LINE}\""));
+    let root = dir.path();
+    reopened_in_its_own_pull_request(root);
+    write(root, "src/direct.rs", "pub fn direct() {}\n");
+    commit(root, "feat: a direct commit on the line");
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "an unverified root branch line",
+        &["work.acceptance_binding", "TSK-001", OUTSIDE_TIP],
+    );
+}
+
+/// Review round 01, finding 2: a mark covers the exact tips its proof
+/// covered. TSK-003's record once named its line by a remote-qualified
+/// spelling, which resolves to a commit beside the joined line's tip: a
+/// direct commit with no landed adoption, which the joined line then
+/// merged. The head contains it and the canonical tip is proved, but that
+/// commit is not, so it stays a target the run is not judged against.
+#[test]
+fn a_joined_line_spelling_at_an_unproved_tip_stays_outside_evidence() {
+    let dir = joined_repo(JOINED);
+    let root = dir.path();
+    let other = format!("refs/remotes/other/{JOINED}");
+    reopened_from(
+        root,
+        JOINED,
+        (LINE, Some(JOINED)),
+        "task/TSK-003-work",
+        "TSK-003",
+        &|status, criteria, closeout| {
+            let first = status == "complete" && !closeout.contains("acceptance_superseded");
+            let target = if first { other.as_str() } else { JOINED };
+            joined_task("TSK-003", target, status, criteria, closeout)
+        },
+    );
+    git(root, &["switch", "-q", "-c", "side", JOINED]);
+    write(root, "src/side.rs", "pub fn side() {}\n");
+    let unproved = commit(root, "feat: a direct commit beside the joined line");
+    git(root, &["update-ref", &other, &unproved]);
+    land_on(root, JOINED, "side");
+    join(root, JOINED);
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "a joined line spelling at an unproved tip",
+        &[
+            "work.acceptance_binding",
+            "TSK-003",
+            OUTSIDE_TIP,
+            &format!("`{other}` (commit {})", &unproved[..9]),
+        ],
     );
 }
