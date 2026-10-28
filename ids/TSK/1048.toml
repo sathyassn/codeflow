@@ -1,0 +1,11 @@
+id = "TSK-1048"
+uid = "84e3efe8-a546-494d-9f57-4cd13a37f9a1"
+kind = "TSK"
+title = "Cargo takes the fixed pulldown-cmark release"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T09:13:23Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
