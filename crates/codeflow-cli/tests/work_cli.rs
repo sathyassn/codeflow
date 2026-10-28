@@ -850,6 +850,7 @@ fn with_origin(root: &Path) -> tempfile::TempDir {
 /// from `origin`'s remote-tracking ref in a clone with remotes (TSK-340),
 /// and these fixtures configure a review remote. The caller removes it
 /// after the verb, so the rest of the fixture keeps its remotes.
+#[cfg(unix)]
 fn ensure_origin(root: &Path) -> bool {
     if git(root, &["remote"])
         .lines()
