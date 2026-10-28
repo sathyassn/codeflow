@@ -1701,6 +1701,32 @@ mod owner_opens {
         );
     }
 
+    /// A linked worktree and its main checkout share one common directory.
+    /// Once a lookup has read both and found them sharing, later ordinary
+    /// targets reuse both readings, so 16 targets in the worktree open the
+    /// two owners once each, whether the session is the main checkout or
+    /// the worktree (Codex review 02 of PR 386).
+    #[test]
+    fn a_linked_worktree_and_its_main_checkout_are_opened_once() {
+        let (_dir, root) = repository();
+        let repo = git2::Repository::open(&root).unwrap();
+        let linked = root.join("w");
+        repo.worktree("w", &linked, None).unwrap();
+        for session in [root.clone(), linked.clone()] {
+            let _scope = RepoFactsScope::enter();
+            reset();
+            for word in 0..16 {
+                let target = linked.join(format!("d{word}/x"));
+                assert_eq!(
+                    super::target_roots(&target, &session),
+                    Ok(vec![session.clone()]),
+                    "{word}"
+                );
+            }
+            assert_eq!(opens(), 2, "each owner is opened once: {session:?}");
+        }
+    }
+
     /// Two owners, an outer repository and an independent one nested in
     /// it, keep their own readings: each target gets exactly its owners,
     /// in any order, and each owner is opened once.
