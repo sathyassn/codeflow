@@ -1317,7 +1317,7 @@ fn update_with_diff(tmp: &Path, root: &Path, extra: &[&str]) -> [String; 3] {
     [stdout, stderr, diff]
 }
 
-/// TSK-1029 review 02: a project field CodeFlow does not own never reaches
+/// TSK-1029 review 02: a project field that the shipped settings lack never reaches
 /// the `--diff` file, whatever its name is spelled like and whatever type
 /// its value has.
 #[test]
@@ -1371,7 +1371,7 @@ fn update_diff_never_shows_a_project_api_key_value() {
 }
 
 /// TSK-1029 review 02: `update --force --diff` over a managed workflow the
-/// project edited shows CodeFlow's own lines and hides the project's
+/// project edited shows the shipped lines and hides the project's
 /// values; a workflow that no longer parses is withheld whole.
 #[test]
 fn update_force_diff_hides_project_values_in_a_managed_workflow() {

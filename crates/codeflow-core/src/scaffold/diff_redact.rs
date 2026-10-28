@@ -2,7 +2,7 @@
 //!
 //! A project's files can hold secrets: Claude's `env`, an MCP server's
 //! headers, a Codex `env_http_headers` table, a literal credential a
-//! project added to a workflow. The export shows only what CodeFlow itself
+//! project added to a workflow. The export shows only what `CodeFlow` itself
 //! wrote, so no project value reaches it, not even as context beside a line
 //! the update changed.
 //!
@@ -32,7 +32,7 @@ pub const REDACTED: &str = "<redacted>";
 /// The placeholder for a hidden value that this update changed.
 pub const REDACTED_CHANGED: &str = "<redacted: changed>";
 
-/// The placeholder for a line of text that CodeFlow did not ship.
+/// The placeholder for a line of text that `CodeFlow` did not ship.
 pub const REDACTED_LINE: &str = "<redacted: project line>";
 
 /// Normalised key names whose object or array holds values that may each
@@ -51,7 +51,7 @@ const SECRET_WORDS: [&str; 8] = [
     "privatekey",
 ];
 
-/// Extensions of line-based text that CodeFlow ships: instructions, code,
+/// Extensions of line-based text that `CodeFlow` ships: instructions, code,
 /// styles and pages.
 const TEXT_EXTENSIONS: [&str; 13] = [
     "md", "markdown", "txt", "py", "js", "mjs", "cjs", "ts", "sh", "css", "html", "htm", "rules",
@@ -60,7 +60,7 @@ const TEXT_EXTENSIONS: [&str; 13] = [
 /// The two sides of a diff, ready to show.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DiffSides {
-    /// Show these texts: both sides with every value or line CodeFlow did
+    /// Show these texts: both sides with every value or line `CodeFlow` did
     /// not ship replaced by a placeholder.
     Show(String, String),
     /// Show no content: the format has no redaction rule here, or a side
@@ -69,7 +69,7 @@ pub enum DiffSides {
 }
 
 /// The sides of the diff for `dest` that `update --diff` may export.
-/// `shipped` holds the versions CodeFlow wrote: the old baseline when there
+/// `shipped` holds the versions `CodeFlow` wrote: the old baseline when there
 /// is one, and the new rendering.
 #[must_use]
 pub fn sides_for(dest: &str, old: &str, new: &str, shipped: &[&str]) -> DiffSides {
@@ -179,7 +179,7 @@ impl Format {
     }
 }
 
-/// A key whose value is hidden even where CodeFlow owns it. Case and
+/// A key whose value is hidden even where `CodeFlow` owns it. Case and
 /// separators are ignored, so `api-key`, `api key`, `api.key` and `apiKey`
 /// all match.
 fn secret_key(key: &str) -> bool {
@@ -191,7 +191,7 @@ fn secret_key(key: &str) -> bool {
     SECRET_CONTAINERS.contains(&key.as_str()) || SECRET_WORDS.iter().any(|word| key.contains(word))
 }
 
-/// Replace every value CodeFlow does not own, and every value under a
+/// Replace every value `CodeFlow` does not own, and every value under a
 /// secret key, with a placeholder. `owners` are the shipped values at the
 /// same place; `before` is the same place on the other side, unredacted,
 /// so a changed value reads as changed, and `None` marks every hidden value

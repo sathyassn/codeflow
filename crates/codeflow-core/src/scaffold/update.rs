@@ -671,7 +671,7 @@ fn write_dest(root: &Path, entry: &ManifestEntry, content: &str) -> Result<(), S
 }
 
 /// Append the patch for `dest` to the `--diff` export. Every caller goes
-/// through here, so the export shows only what CodeFlow wrote: `shipped`
+/// through here, so the export shows only what `CodeFlow` wrote: `shipped`
 /// holds the old baseline (when recorded) and the new rendering, and every
 /// project value or line outside them is redacted on both sides; a format
 /// with no redaction rule, or a side that does not parse, is withheld
