@@ -50,9 +50,9 @@ approval_policy = "never"
 approvals_reviewer = "auto_review"
 web_search = "live"
 default_permissions = "cf-guard"
-# Pin the primary Codex seat's ordinary starting effort. Use bounded medium
-# workers where appropriate and xhigh on a documented trigger (ADR-0056).
-model_reasoning_effort = "high"
+# No `model_reasoning_effort`: effort is each person's setting, in their
+# user config or a `-c model_reasoning_effort=...` launch flag, and every
+# seat launch passes its own (ADR-0087, superseding ADR-0056's pin).
 
 # Codex uses its Linux sandbox inside WSL2. On native Windows, prefer the
 # elevated native sandbox; this table is ignored on other platforms.
