@@ -5,11 +5,13 @@ areas = [
 ]
 git_hooks = "wired"
 outcome_present_uids = [
+    "00312d22-298c-49af-a45d-ef73f58a4f83",
     "00ad4438-441c-4e64-b01a-cd18594a81c1",
     "0138e16b-3713-48ba-ba76-e866c30a1187",
     "02076c79-0ae8-45dc-82a7-f28196879593",
     "0324b720-8aeb-4c99-a5ee-bd0d2687c4c6",
     "0345d0ee-7a41-48a2-bc80-646e6f62183b",
+    "03d9f379-3f97-4cf8-9567-4af95e7b9d91",
     "040ddff5-da3d-4efd-b93c-afb869483d77",
     "04705cd3-b389-43a0-bca3-d04fbf5e3fcd",
     "04e4301f-f5e1-4060-aea6-2197f06196e3",
@@ -259,8 +261,10 @@ outcome_present_uids = [
     "8a5478d8-30ae-48e5-bc9e-c8e0ca00b0e0",
     "8ae0d1b3-d299-455d-8577-880cb03e8102",
     "8b0e7e65-7c20-413c-95dc-91d1929c6b4d",
+    "8bc1531a-77d5-4bcf-85b7-aa74bae1cfe3",
     "8c40b165-ef6a-4f6a-9d78-79dd5b16d91e",
     "8c7afbce-7477-45ec-8eb5-d46ad6401cc7",
+    "8c847a4f-3952-4860-838f-44a0681bbf4e",
     "8cab84a5-5af0-4c6b-a2bc-cf6d460a8c5f",
     "8cf82315-14aa-4859-ae97-e45873f47b5f",
     "8d649de6-1d68-4152-991a-e8f9e406a166",
@@ -301,6 +305,7 @@ outcome_present_uids = [
     "9d3e9801-51fa-4c4b-ad70-1e5f8c25bc42",
     "9ed7ad8b-3dc3-4116-9f7b-99fc1ea10f35",
     "9efe68b5-5a3e-4bc4-955d-dbdbf5d0328b",
+    "9f53a8d9-dd29-4038-927b-0c76cf718b30",
     "9f844d04-2aff-489e-9dbb-e39e3b7f756a",
     "9fd039a3-9d60-4d99-8c35-9d933daec46b",
     "9ff31aba-9b0b-4a41-a56f-3bb7169c29f1",
@@ -360,6 +365,7 @@ outcome_present_uids = [
     "ba54c744-2074-4b46-adfe-57390fcabebd",
     "bc00144c-8a83-4ac6-b942-80eba0b71dba",
     "bc19db4d-d8eb-43ef-a640-ed59f483941c",
+    "bc28f149-f0e5-49df-a667-b9b2014e9c94",
     "bca9eb87-9ebf-4a27-938d-f6db320958de",
     "bcd261e0-b418-4a4f-8a2c-3352f78e0748",
     "be0be5a1-231d-4970-98ba-e950e518020c",
@@ -429,6 +435,7 @@ outcome_present_uids = [
     "e055c0f9-3a5b-46d9-9cdd-6a25f57d67ae",
     "e094e02c-bb5a-494d-bd89-53a39161cf8e",
     "e0b237dd-ac95-4411-8ed2-18384f59be5a",
+    "e127aad1-ef35-4372-9204-008e8b365079",
     "e1e8cf86-6918-4432-b1ed-190965b8216e",
     "e239c995-a725-4b58-b191-46ed5499226f",
     "e2bb4f05-717b-4c11-9d6e-ed5a62f0864d",
@@ -493,7 +500,7 @@ outcome_present_uids = [
     "ff6f4af1-dbfa-4c89-b150-55e9a3495e16",
     "ffab40f2-aa62-45c1-a161-93523a27479e",
 ]
-outcome_required_since = "f256b903aa023e44e4c9c63d98ba36f53f9936f2"
+outcome_required_since = "e63a3968edf1c98bececd8f62884bcf460965faf"
 permission_preset = "default"
 policy_armed = true
 product_one_liner = "The AI-development discipline layer you install into any repo"
