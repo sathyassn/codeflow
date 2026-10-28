@@ -300,8 +300,9 @@ A command runs in the directory `env` moves it to in any option spelling
 call runs (`ruby -C`, `pwsh -WorkingDirectory`). An `env -S` string is
 split by env's own grammar and its words, `-C` included, are judged again;
 a string with a variable, `\c`, a comment or an escape the guard does not
-read refuses as cannot-verify. A second `env` directory option refuses,
-since the guard does not assume which one applies. A directory option
+read refuses as cannot-verify. Of several `env` directory options only the
+last applies, from the directory env starts in, as env applies them. A
+directory option
 (`env -C`, `ruby -C`, `pwsh -wd`, `tar -C`, `make -C`) resolves physically:
 a parent component after a link is the parent of the link's target, and a
 missing component before a parent component leaves the directory unknown.

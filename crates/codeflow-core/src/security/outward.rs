@@ -1384,7 +1384,6 @@ fn argv(
             // A string the guard cannot read exactly: retain every trailing
             // argument without certifying a directory for the child, and
             // read the command as one unverifiable operand.
-            visit(&command, None, depth + 1, out);
             if cwd.is_some() {
                 let marker = [
                     "cat".to_string(),
@@ -1392,6 +1391,7 @@ fn argv(
                 ];
                 argv(&marker, None, cwd, depth + 1, out);
             }
+            visit(&command, None, depth + 1, out);
             return;
         }
         if let (Some(dir), Some(inner)) = (
@@ -1440,17 +1440,11 @@ fn argv(
             };
             if let Some((end, dir)) = moved {
                 let inner = &rest[end..];
-                argv(
-                    inner,
-                    pattern_tail(patterns, inner.len()),
-                    dir.as_deref(),
-                    depth + 1,
-                    out,
-                );
                 // env's own directory change the guard cannot establish,
                 // where the line's directory is known: the command reads
                 // relative names there, so it is read as one unverifiable
-                // file operand.
+                // file operand, judged first so the refusal names env's
+                // words.
                 if dir.is_none() && cwd.is_some() {
                     // The marker carries env's words as written, which the
                     // refusal shows in place of the marker.
@@ -1461,6 +1455,13 @@ fn argv(
                     ];
                     argv(&marker, None, cwd, depth + 1, out);
                 }
+                argv(
+                    inner,
+                    pattern_tail(patterns, inner.len()),
+                    dir.as_deref(),
+                    depth + 1,
+                    out,
+                );
             }
             skip_env(rest)
         }

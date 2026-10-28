@@ -13462,7 +13462,9 @@ pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>)
 /// `NAME=VALUE` assignments (TSK-1002 review 03).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct EnvWords<'t> {
-    /// Each directory `-C` or `--chdir` moves to, in order.
+    /// The directory env moves to: the last `-C` or `--chdir`, from the
+    /// directory env starts in. GNU and BSD env keep only the last one
+    /// (TSK-1002 review 02, B4), so this holds at most one.
     pub(crate) dirs: Vec<&'t str>,
     /// The index of the word holding `-S` or `--split-string`, whose
     /// string env splits into the command it runs.
@@ -13471,11 +13473,6 @@ pub(crate) struct EnvWords<'t> {
     /// command, or the word after a split option.
     pub(crate) end: usize,
 }
-
-/// Why a second env directory option refuses: GNU env keeps only the last
-/// one, and the guard does not assume that of every env it may meet
-/// (TSK-1002 review 02, B4).
-const ENV_SECOND_DIRECTORY: &str = "a second directory option, which the guard does not resolve";
 
 /// env's long options, and whether each takes a value: required (`Some(true)`),
 /// optional and only attached with `=` (`Some(false)`), or none (`None`).
@@ -13558,9 +13555,8 @@ pub(crate) fn env_words(tokens: &[String], mut idx: usize) -> Result<EnvWords<'_
                 };
                 match full {
                     "chdir" => {
-                        if !words.dirs.is_empty() {
-                            return Err(format!("`env {a}`, {ENV_SECOND_DIRECTORY}"));
-                        }
+                        // env keeps only the last directory option.
+                        words.dirs.clear();
                         words.dirs.extend(value);
                     }
                     "split-string" => {
@@ -13593,9 +13589,7 @@ pub(crate) fn env_words(tokens: &[String], mut idx: usize) -> Result<EnvWords<'_
                                 tail
                             };
                             if letter == 'C' {
-                                if !words.dirs.is_empty() {
-                                    return Err(format!("`env {a}`, {ENV_SECOND_DIRECTORY}"));
-                                }
+                                words.dirs.clear();
                                 words.dirs.push(value);
                             }
                             if letter == 'S' {
@@ -16207,6 +16201,10 @@ mod tests {
             ("env --chdir=d -- cat x", vec!["d"], "cat"),
             ("env --chdir d cat x", vec!["d"], "cat"),
             ("env --ch=d cat x", vec!["d"], "cat"),
+            // env keeps only the last directory option (review 02, B4).
+            ("env -C a -C b cat x", vec!["b"], "cat"),
+            ("env -Ca --chdir=b cat x", vec!["b"], "cat"),
+            ("env --chdir a -iC b cat x", vec!["b"], "cat"),
             ("env -u X -i -- FOO=1 cat x", vec![], "cat"),
             ("env -uX - FOO=1 cat x", vec![], "cat"),
             ("env --unset X --ignore-environment cat x", vec![], "cat"),
@@ -16229,10 +16227,6 @@ mod tests {
             "env --i cat x",
             "env -Z cat x",
             "env -C",
-            // A second directory option refuses (review 02, B4).
-            "env -C a -C b cat x",
-            "env -Ca --chdir=b cat x",
-            "env --chdir a -iC b cat x",
         ] {
             assert!(env_words(&words(line), 1).is_err(), "{line}");
         }
@@ -17274,8 +17268,8 @@ mod tests {
     }
 
     /// TSK-1002 review 02, B4: an env directory option resolves `..`
-    /// through a link, a missing component before `..` is unknown, and a
-    /// second env directory option leaves the directory unknown.
+    /// through a link, a missing component before `..` is unknown, and only
+    /// the last env directory option applies.
     #[cfg(unix)]
     #[test]
     fn test_run_dirs_resolve_launcher_directories_physically() {
@@ -17288,10 +17282,11 @@ mod tests {
         let run = run_dirs(&expand_commands("env -C alias/.. git status"), &repo);
         assert!(run.dirs.contains(&base.join("other")), "{:?}", run.dirs);
         assert!(run.unknown.is_none(), "{:?}", run.unknown);
-        for line in ["env -C absent/.. git status", "env -C a -C b git status"] {
-            let run = run_dirs(&expand_commands(line), &repo);
-            assert!(run.unknown.is_some(), "{line}: {:?}", run.dirs);
-        }
+        let run = run_dirs(&expand_commands("env -C absent/.. git status"), &repo);
+        assert!(run.unknown.is_some(), "{:?}", run.dirs);
+        let run = run_dirs(&expand_commands("env -C a -C b git status"), &repo);
+        assert!(run.dirs.contains(&repo.join("b")), "{:?}", run.dirs);
+        assert!(!run.dirs.contains(&repo.join("a")), "{:?}", run.dirs);
     }
 
     /// A refusal from a run-time directory names the substitution in

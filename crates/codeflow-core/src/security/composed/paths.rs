@@ -1724,16 +1724,8 @@ fn simple(
                 Some("deno") => &["ts", "tsx", "js", "jsx", "mjs"],
                 _ => &[],
             };
-            // A recursive copy writes files the guard cannot list, so an
-            // interpreter that loads modules may load one of them.
-            let loads_tree = !loads.is_empty()
-                && position
-                    .scripts
-                    .iter()
-                    .any(|(_, body)| body == WRITTEN_TREE);
             let executes_written = executes_written
                 || path_names_written
-                || loads_tree
                 || position.scripts.iter().any(|(path, _)| {
                     path.extension()
                         .and_then(|extension| extension.to_str())
@@ -2160,7 +2152,7 @@ mod tests {
             "cp -t out other.py; python3 out/other.py",
             "cp -r src out; sh out/src/run.sh",
             "cp -a src out; ./out/src/run",
-            "cp -R src out; python3 tool.py",
+            "cp -R src out; ./out/run",
             "printf x > sub/script; env -C sub python3 script",
             "printf x > sub/script; env --chdir=sub sh script",
             "printf x > sub/Makefile; make -C sub",
@@ -2176,6 +2168,7 @@ mod tests {
             "echo x > log.txt; node app.js log.txt",
             "cp other.py out/; cat out/other.py",
             "printf x > run; ls",
+            "mkdir L && rsync -a src/ L/ && python3 tool.py L/app.py",
         ] {
             assert!(!unread(line), "refused: {line}");
         }
