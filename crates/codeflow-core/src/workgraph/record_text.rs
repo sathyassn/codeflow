@@ -665,7 +665,9 @@ fn has_entry(markdown: &str, form: Form) -> bool {
     let mut in_heading = false;
     let mut in_comment = false;
     let close = |entry: &mut String, unfilled: &mut bool| {
-        let substantive = !*unfilled && is_entry(entry, form);
+        let substantive = !*unfilled
+            && is_entry(entry, form)
+            && !(matches!(form, Form::Outcome) && unfilled_outcome(entry));
         entry.clear();
         *unfilled = false;
         substantive
@@ -714,8 +716,10 @@ fn has_entry(markdown: &str, form: Form) -> bool {
 /// The section whose template a reading follows, and so its placeholder
 /// tokens. Deliverables keeps its rule that `<output>` or `<path>`
 /// anywhere in an entry, quoted or not, leaves it empty. Outcome's `<who>`
-/// and `<do what>` leave an entry empty only as the template writes them,
-/// as inline HTML; a code span quoting one is an example, not a gap.
+/// and `<do what>`, in any spacing, leave an entry empty when written as
+/// the template writes them, as inline HTML, and when formatting only
+/// wraps the template ([`unfilled_outcome`]); a sentence that quotes one
+/// as an example states an Outcome.
 #[derive(Clone, Copy)]
 enum Form {
     Deliverables,
@@ -732,9 +736,46 @@ impl Form {
 
     /// Whether inline HTML is one of this template's placeholder tokens.
     fn is_token(self, html: &str) -> bool {
-        let html = html.trim_matches([' ', '\t']).to_lowercase();
+        let html = match self {
+            Self::Deliverables => html.trim_matches([' ', '\t']).to_lowercase(),
+            Self::Outcome => spaced(html),
+        };
         self.tokens().contains(&html.as_str())
     }
+}
+
+/// `text` in lower case with each run of whitespace one space, and none
+/// just inside `<` or `>`, so `< do  what >` reads `<do what>`.
+fn spaced(text: &str) -> String {
+    let mut text = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    for (from, to) in [("< ", "<"), (" >", ">")] {
+        while text.contains(from) {
+            text = text.replace(from, to);
+        }
+    }
+    text
+}
+
+/// Whether an Outcome entry, its formatting and spacing set aside, is the
+/// template left unfilled: a token stands in the template's place
+/// (`<who> can`, `can <do what>`), or nothing remains but tokens and the
+/// template's own words. A sentence that quotes a token elsewhere, such as
+/// "authors can document the literal `<who>` token", is not.
+fn unfilled_outcome(entry: &str) -> bool {
+    let text = spaced(entry);
+    if text.contains("<who> can") || text.contains("can <do what>") {
+        return true;
+    }
+    text.replace("<who>", " ")
+        .replace("<do what>", " ")
+        .split_whitespace()
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|word| !word.is_empty())
+        .all(|word| matches!(word, "after" | "this" | "merges" | "can"))
 }
 
 /// Whether one entry is substantive: a Deliverables entry holding its

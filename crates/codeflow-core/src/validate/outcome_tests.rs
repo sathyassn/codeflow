@@ -180,6 +180,38 @@ fn the_template_form_left_unfilled_is_refused() {
     }
 }
 
+/// Formatting or spacing never fills the template: a sole quoted token,
+/// the whole template in a code span or emphasis, a token left in its
+/// place after a real actor, and respaced tokens are each refused.
+#[test]
+fn the_template_formatted_or_respaced_is_refused() {
+    let marker = marked(&[OLD]);
+    let mut wrong = Vec::new();
+    for outcome in [
+        "`<who>`",
+        "`<do what>`",
+        "`after this merges, <who> can <do what>`",
+        "*after this merges, `<who>` can `<do what>`*",
+        "after this merges, maintainers can <do  what>",
+        "after this merges, maintainers can `<do   what>`",
+        "after this merges, < who > can run the audit",
+        "after this merges,  <who>   can   <do what>",
+        "after  this\n  merges, `<who>`\tcan `<do what>`",
+    ] {
+        let body = Body {
+            outcome: Some(outcome),
+            deliverables: true,
+        };
+        for kind in [Kind::Task, Kind::Epic] {
+            let (errors, _) = findings(Some(&marker), kind, open(kind)[0], NEW, body);
+            if !(errors.len() == 1 && errors[0].contains("`## Outcome`")) {
+                wrong.push(format!("{outcome:?}: {errors:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "accepted:\n{}", wrong.join("\n"));
+}
+
 /// An Outcome that quotes a template token in a code span is an example,
 /// not the unfilled form, so it states the Outcome.
 #[test]
@@ -187,6 +219,7 @@ fn an_outcome_quoting_a_token_is_clean() {
     let marker = marked(&[OLD]);
     for outcome in [
         "After this merges, authors can document the literal `<who>` token.",
+        "After this merges, authors can explain the `< who >` field in the template.",
         "After this merges, reviewers can spot an unfilled `<do what>`.",
     ] {
         let body = Body {

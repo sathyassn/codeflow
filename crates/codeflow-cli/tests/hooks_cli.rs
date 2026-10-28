@@ -8143,8 +8143,11 @@ fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
     let f = Line::untracked();
     let first = f.direct();
     passes(&f.push(ZERO));
-    // The destination holds what the first push sent, as a real push leaves
-    // it: the Outcome marker check reads the destination's default branch.
+    // The hook payloads are simulated and never publish anything, so the
+    // second payload names `first` as the line's remote tip while the
+    // destination is still empty. Publish `main` and the line (at `first`)
+    // so the destination holds what that payload claims: the Outcome marker
+    // check reads the destination's advertised default branch.
     f.git(&["push", "-q", "origin", "main", LINE]);
     f.write("src/lib.rs", "pub fn again() {}\n");
     f.commit("fix: second direct change");

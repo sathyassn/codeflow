@@ -170,9 +170,9 @@ pub(super) fn check(
 /// The Outcome adoption marker's refusals (TSK-435): the head's list
 /// judged against `target_tip`, never against the range's base, which the
 /// pre-push hook sets to a merge-base or another boundary. A project with
-/// only epics, or no records yet, is judged too. A target the destination
-/// proves absent (`Ok(None)`) has no list to keep; a tip or marker that
-/// cannot be read refuses.
+/// only epics, or no records yet, is judged too. A target with no trusted
+/// tip refuses with the recovery its [`super::NoTarget`] names, and a
+/// marker or history that cannot be read refuses.
 fn marker(root: &Path, target_tip: &Result<String, super::NoTarget>, head: &str) -> Vec<Violation> {
     let tip = match target_tip {
         Ok(tip) => tip,
