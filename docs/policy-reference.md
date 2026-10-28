@@ -287,9 +287,11 @@ refuse as cannot-verify. AppleScript bodies receive literal-path inspection;
 constructed shell commands refuse.
 What a program does once it runs is outside the text guard's promise: a
 file the line wrote and then runs, a copied or extracted tree, and the
-directory an unmodelled runner gives its child. TSK-397 option D assigns
-them to the sandbox on a proven-sandboxed host and to its strict rule
-elsewhere. The written-file checks below are a conservative filter that
+directory an unmodelled runner gives its child. Where the OS sandbox is
+active, it contains them. Where it is not, the guard does not yet refuse
+them beyond the filter below; a planned change will fail them closed where
+containment cannot be established. The written-file checks below are a
+conservative filter that
 only refuses, not a boundary: a file written earlier on the same line, by a
 heredoc, `echo`, `printf`, an append, `tee` or a copy, refuses when it runs
 by path, interpreter or Make, or before an interpreter that loads its
@@ -301,7 +303,7 @@ to. After a write on the line, a relative or bare-name run refuses when the
 line changes `PATH` in the shell or in a launcher (`env PATH=`), or runs
 through an execution context the guard does not model (`env -S`, `env -P`,
 `ruby -C` in any option spelling, `pwsh -wd`). Run routes the filter does
-not name are left to the sandbox or the strict rule.
+not name are left to the sandbox.
 Every inline-code option form, attached or separate (`node --print=CODE`),
 is read as code.
 A command runs in the directory `env` moves it to in any option spelling
