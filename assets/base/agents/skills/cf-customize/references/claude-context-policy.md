@@ -54,11 +54,12 @@ measurement of 50, 40, 35 and 30 percent is published on CodeFlow issue 358.
 - **Sessions per phase.** A session that ends at a phase boundary, such as a
   fresh session per task, may never reach the threshold. The point matters
   most for long orchestrator sessions that run across many units.
-- **What survives a compaction.** The orient digest that `SessionStart`
-  prints after a compaction restores the task, branch and next step from
-  their durable homes (records, git and `AGENTS.md`), which limits what a
-  lost detail costs. A fact that lives only in the conversation does not
-  survive.
+- **What survives a compaction.** Detail that lives only in the
+  conversation may be lost. Durable records (task records, git, `AGENTS.md`)
+  let a session recover its task, branch and next step when it rereads
+  them. The orient digest that `SessionStart` prints after a compaction
+  supplies context and pointers to those records; it does not restore the
+  session's state by itself.
 
 Without these keys, a session on a 1M-window model compacts near 967K, so any
 value here lowers the peak context against the harness default.
@@ -66,7 +67,8 @@ value here lowers the peak context against the harness default.
 ## Change the values or opt out
 
 - **For the project:** edit the values in the shared `env` of
-  `.claude/settings.json`. Update keeps a value the project chose.
+  `.claude/settings.json`. Update keeps a value that differs from the one
+  CodeFlow last shipped.
 - **For one person:** set `env` in `.claude/settings.local.json`, which is
   gitignored and takes precedence over the shared file. Since Claude Code
   v2.1.211 a worktree session uses the file at the main checkout's root, so
@@ -78,8 +80,15 @@ value here lowers the peak context against the harness default.
 `codeflow update` and the shared `env`:
 
 - A value still equal to the one CodeFlow last shipped, as recorded under
-  `.codeflow/.baseline/`, moves to the new shipped value. A project on the
-  shipped 50 moves to 35; a value the project chose stays and is reported.
+  `.codeflow/.baseline/`, moves to the new shipped value, whatever the
+  project meant by it: update cannot tell a deliberate 50 from the shipped
+  50, so a project on 50 moves to 35. To keep 50, set it again in the shared
+  `env` after the update; update then keeps it, since it no longer equals
+  the shipped value. A person who wants 50 for themselves sets it in
+  `.claude/settings.local.json` before or after the update.
+- A value that differs from the one CodeFlow last shipped stays. When the
+  shipped default changes, the update report names the key it kept, never
+  the value.
 - To drop one key, delete it. A key CodeFlow wrote that the project has
   since deleted stays deleted.
 - To opt out entirely, delete both keys or the whole `env` object. It stays
@@ -92,7 +101,9 @@ baseline, update adds the keys only when the project has no `env` at all; an
 existing `env` is left as it is and the update report names the keys it did
 not add. Add them by hand if the project wants them. An `env` that is not an
 object of strings is a reported configuration error, and update leaves it
-untouched. Update reports key names, never values.
+untouched. Update reports key names, never values, and the patch that
+`codeflow update --diff` writes shows every `env` value as `<redacted>`
+(`<redacted: changed>` where the update changed it).
 
 ## Inspect without exposing values
 

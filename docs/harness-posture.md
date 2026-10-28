@@ -161,8 +161,9 @@ scaffold ships a status line and leaves effort to each person (ADR-0087).
 The compaction point stays in the shared file because it sets the team's
 token cost; `cf-customize`'s `references/claude-context-policy.md` states
 the tradeoff: per-turn input grows with the context carried, a lower point
-compacts more often, and the orient digest restores task, branch and next
-step after a compaction.
+compacts more often, and detail kept only in the conversation may be lost;
+durable records let a session recover when it rereads them, and the orient
+digest points to them after a compaction.
 
 - Claude Code reads managed settings, then `--settings` at launch, then
   `.claude/settings.local.json`, then the shared `.claude/settings.json`, then
@@ -192,8 +193,10 @@ step after a compaction.
   while a shipped permission entry or `env` key the project removed stays
   removed when the recorded baseline shows CodeFlow shipped it. An `env`
   value still equal to the recorded shipped value moves to the new one, so
-  a project on the shipped compaction percentage of 50 moves to 35; a value
-  the project chose stays.
+  whatever the project meant by it, so a project on the compaction
+  percentage of 50 moves to 35; a value that differs from the recorded
+  shipped value stays, and the report names its key when the default
+  changed.
 
 ### Hosting the duo from either seat
 
