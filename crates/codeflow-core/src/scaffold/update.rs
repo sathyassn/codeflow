@@ -645,52 +645,64 @@ fn record_work_records_baseline(root: &Path) -> Result<Option<Shown>, ScaffoldEr
 /// `outcome_required_since`, the project's `HEAD` when it has one. Those
 /// records only warn without the section; every later record must state
 /// it. A marker already present, in any shape, is left as written.
-pub(crate) fn record_outcome_marker(root: &Path) -> Result<Option<String>, ScaffoldError> {
+pub(crate) fn record_outcome_marker(root: &Path) -> Result<Option<Shown>, ScaffoldError> {
     use crate::workgraph::outcome::{present_uids, with_marker, MARKER_KEY};
+    // The readers' own errors quote record paths and what the records hold,
+    // so each is named by a fixed text and the command that shows the
+    // detail (TSK-1029).
     let path = ProjectState::path(root);
     let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
-    let table: toml::Table = toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-        what: path.display().to_string(),
-        detail: e.to_string(),
+    let table: toml::Table = toml::from_str(&text).map_err(|e| {
+        ScaffoldError::invalid(
+            Shown::path(&path),
+            Shown::place(&crate::scaffold::ParsePlace::toml(&text, &e)),
+        )
     })?;
     if table.contains_key(MARKER_KEY) {
         return Ok(None);
     }
-    let uids = present_uids(root).map_err(ScaffoldError::Git)?;
+    let uids = present_uids(root).map_err(|_| {
+        ScaffoldError::Git(Shown::fixed(
+            "cannot read the work records for the Outcome marker; run `codeflow validate` \
+             to see which record does not read; update changed nothing past this point",
+        ))
+    })?;
     let head = match crate::hooks::repo::open(root)
-        .map_err(|error| ScaffoldError::Git(format!("cannot read the repository: {error}")))?
+        .map_err(|_| ScaffoldError::Git(Shown::fixed("cannot read the repository")))?
     {
         None => None,
         Some(repo) => match repo.head() {
             Ok(head) => Some(
                 head.peel_to_commit()
-                    .map_err(|error| {
-                        ScaffoldError::Git(format!("cannot read the adoption commit: {error}"))
+                    .map_err(|_| {
+                        ScaffoldError::Git(Shown::fixed("cannot read the adoption commit"))
                     })?
-                    .id()
-                    .to_string(),
+                    .id(),
             ),
             // A repository with no commit yet: the marker has no commit.
             Err(error) if error.code() == git2::ErrorCode::UnbornBranch => None,
-            Err(error) => {
-                return Err(ScaffoldError::Git(format!(
-                    "cannot read the adoption HEAD: {error}"
+            Err(_) => {
+                return Err(ScaffoldError::Git(Shown::fixed(
+                    "cannot read the adoption HEAD",
                 )))
             }
         },
     };
+    let commit = head.map(|head| head.to_string());
     let next =
-        super::state::state_text(&with_marker(table, head.as_deref(), &uids)).map_err(|e| {
-            ScaffoldError::InvalidState {
-                what: path.display().to_string(),
-                detail: e.to_string(),
-            }
+        super::state::state_text(&with_marker(table, commit.as_deref(), &uids)).map_err(|_| {
+            ScaffoldError::invalid(
+                Shown::path(&path),
+                Shown::fixed("the project state could not be written as TOML"),
+            )
         })?;
     write_record(root, PROJECT_TOML, next.as_bytes())?;
-    Ok(Some(format!(
-        "recorded {MARKER_KEY} with {} present record(s){}: they warn without an `## Outcome` section, and every later open task or epic must state one",
-        uids.len(),
-        head.map(|head| format!(" at {head}")).unwrap_or_default()
+    Ok(Some(shown!(
+        "recorded {} with {} present record(s){}: they warn without an `## Outcome` section, and every later open task or epic must state one",
+        Shown::fixed(MARKER_KEY),
+        Shown::count(uids.len()),
+        head.map(|head| shown!(" at {}", Shown::object_id(head)))
+            .unwrap_or_default()
     )))
 }
 

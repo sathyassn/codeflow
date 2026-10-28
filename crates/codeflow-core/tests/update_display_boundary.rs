@@ -200,6 +200,13 @@ const RUNTIME_TEXT: &[(&str, &str, &str, usize, &str)] = &[
         "the project state file",
     ),
     (
+        "crates/codeflow-core/src/scaffold/update.rs",
+        "record_outcome_marker",
+        "path",
+        2,
+        "the project state file",
+    ),
+    (
         "crates/codeflow-core/src/scaffold/state.rs",
         "load",
         "path",

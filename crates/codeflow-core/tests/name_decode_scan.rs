@@ -3734,6 +3734,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // Only an unborn branch writes the Outcome marker without a commit; any other HEAD error refuses the update.
+    (
+        "crates/codeflow-core/src/scaffold/update.rs",
+        "record_outcome_marker",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
     // Only an unborn branch skips the migration baseline (no commit to record); any other HEAD error refuses the update.
     (
         "crates/codeflow-core/src/scaffold/update.rs",
