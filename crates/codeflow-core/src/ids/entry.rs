@@ -115,13 +115,38 @@ impl RegId {
         self.number.contains('-')
     }
 
-    /// The canonical sequence, `None` for a legacy id.
+    /// The canonical sequence, `None` for a legacy id and for a number above
+    /// `u64::MAX`. Allocation never uses this: it uses [`RegId::try_seq`],
+    /// which refuses such a number instead of reading it as no number.
     #[must_use]
     pub fn seq(&self) -> Option<u64> {
         if self.is_legacy() {
             None
         } else {
             self.number.parse().ok()
+        }
+    }
+
+    /// The canonical sequence, `Ok(None)` for a legacy id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a number above `u64::MAX`, so a high-water mark
+    /// that includes it is refused, never understated. The message names the
+    /// id only; the caller adds what can be done about it where the id lives.
+    pub fn try_seq(&self) -> Result<Option<u64>, crate::ids::IdsError> {
+        if self.is_legacy() {
+            return Ok(None);
+        }
+        match self.number.parse::<u64>() {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if *error.kind() == std::num::IntErrorKind::PosOverflow => {
+                Err(crate::ids::IdsError::Invalid(format!(
+                    "{self} has a number above {}, so the next id cannot be chosen",
+                    u64::MAX
+                )))
+            }
+            Err(_) => Ok(None),
         }
     }
 
@@ -151,7 +176,7 @@ pub fn record_id_from_path(path: &str) -> Option<RegId> {
         let rest = stem.strip_prefix("ADR-")?;
         let number: String = rest.chars().take_while(char::is_ascii_digit).collect();
         let tail = &rest[number.len()..];
-        if number.len() != 4 || !(tail.is_empty() || tail.starts_with('-')) {
+        if number.len() < 4 || !(tail.is_empty() || tail.starts_with('-')) {
             return None;
         }
         return RegId::parse(&format!("ADR-{number}"));
@@ -454,6 +479,15 @@ mod tests {
         assert_eq!(
             id("docs/decisions/ADR-0072-shared-id-registry.md").as_deref(),
             Some("ADR-0072")
+        );
+        assert_eq!(
+            id("docs/decisions/ADR-10000-after-the-fourth-digit.md").as_deref(),
+            Some("ADR-10000")
+        );
+        assert_eq!(id("docs/decisions/ADR-072-too-short.md"), None);
+        assert_eq!(
+            id("project-management/tasks/TSK-1000.md").as_deref(),
+            Some("TSK-1000")
         );
         assert_eq!(
             id("project-management/feedback/FB-012.md").as_deref(),
