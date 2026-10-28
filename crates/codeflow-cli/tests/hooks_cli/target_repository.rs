@@ -31,15 +31,12 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        // Git matches `includeIf.gitdir:` against the resolved path, and on
-        // macOS the temporary directory sits behind the `/var` symlink.
-        // Windows keeps the path as given, because `canonicalize` adds a
-        // verbatim prefix there.
-        #[cfg(unix)]
-        let base = temp.path().canonicalize().unwrap();
-        #[cfg(not(unix))]
-        let base = temp.path().to_path_buf();
+        // Both Git's includeIf paths and marker diagnostics name the physical
+        // directory. Windows TEMP may use an 8.3 alias; keep every fixture
+        // path in the long, non-verbatim spelling used by the guards.
+        let parent = codeflow_core::portable_path::canonicalize(&std::env::temp_dir()).unwrap();
+        let temp = tempfile::tempdir_in(parent).unwrap();
+        let base = codeflow_core::portable_path::canonicalize(temp.path()).unwrap();
         let root = base.join("repo");
         std::fs::create_dir(&root).unwrap();
         enforced_repo(&root);

@@ -2095,11 +2095,30 @@ pub(crate) fn interpreter_arguments(
     interpreter_argument_roles(family, rest, patterns, true)
 }
 
+/// The positions in `rest` of the words that carry inline code (`-e CODE`,
+/// `-c CODE`, `--eval=CODE`, an attached `-eCODE`). Such a word is program
+/// text, which the code-body checks inspect, not a file operand.
+pub(crate) fn interpreter_code_positions(family: &str, rest: &[String]) -> Vec<usize> {
+    let mut code = Vec::new();
+    interpreter_roles(family, rest, None, false, &mut code);
+    code
+}
+
 fn interpreter_argument_roles(
     family: &str,
     rest: &[String],
     patterns: Option<&[bool]>,
     option_values: bool,
+) -> (Vec<(String, bool)>, Vec<String>) {
+    interpreter_roles(family, rest, patterns, option_values, &mut Vec::new())
+}
+
+fn interpreter_roles(
+    family: &str,
+    rest: &[String],
+    patterns: Option<&[bool]>,
+    option_values: bool,
+    code: &mut Vec<usize>,
 ) -> (Vec<(String, bool)>, Vec<String>) {
     let mut args = Vec::new();
     let mut chdir = Vec::new();
@@ -2127,6 +2146,7 @@ fn interpreter_argument_roles(
                 .split_once('=')
                 .map_or((long, None), |(n, v)| (n, Some(v)));
             if matches!(family, "node" | "nodejs") && matches!(name, "eval" | "print") {
+                code.push(if value.is_none() { at } else { at - 1 });
                 at += usize::from(value.is_none());
                 args.extend(after(at));
                 return (args, chdir);
@@ -2161,8 +2181,12 @@ fn interpreter_argument_roles(
                 Short::Code => {
                     if matches!(family, "node" | "nodejs") && !tail.is_empty() {
                         // `-pe`: the code is the next word.
+                        code.push(at);
                         at += 1;
                     } else {
+                        // Attached code shares the option's word; detached
+                        // code is the next word.
+                        code.push(if attached { at - 1 } else { at });
                         value(&mut at);
                     }
                     if !matches!(family, "perl" | "ruby") {

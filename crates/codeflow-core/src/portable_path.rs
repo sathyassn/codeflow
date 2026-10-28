@@ -104,7 +104,12 @@ pub(crate) fn filesystem_spelling(text: &str) -> String {
 }
 
 /// Namespaces and streams need a mapping before a guard can compare names.
-/// Resolve short names through the kernel; an unmapped spelling refuses.
+/// Existing 8.3 short-name components resolve through the kernel, whose final
+/// path names each entry's long name. A short-looking component that does not
+/// exist refuses while an entry could still be created there, because a
+/// command earlier on the line could create the entry it aliases. It stays
+/// literal only when nothing can exist at that path. Unreadable components
+/// refuse.
 pub(crate) fn guard_path(path: &Path) -> Result<PathBuf, String> {
     if !cfg!(windows) {
         return Ok(path.to_path_buf());
@@ -113,37 +118,86 @@ pub(crate) fn guard_path(path: &Path) -> Result<PathBuf, String> {
         .to_str()
         .ok_or("cannot inspect a Windows path as text")?;
     let spelling = text.replace('\\', "/").to_ascii_lowercase();
-    if spelling.starts_with("//./") || spelling.starts_with("//?/unc/") || spelling.contains("::") {
+    if unmapped_namespace(&spelling) {
         return Err("cannot map a Windows device, UNC or alternate-stream path".into());
     }
-    let short = |text: &str| {
-        text.split('/').any(|part| {
-            part.split_once('~').is_some_and(|(_, tail)| {
-                let number = tail.split('.').next().unwrap_or_default();
-                !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())
-            })
+    let plain = without_verbatim(path.to_path_buf());
+    if !has_short_component(&spelling) {
+        return Ok(plain);
+    }
+    map_short_components(&plain)
+}
+
+/// Windows spellings a guard cannot map to a drive path: the device and
+/// verbatim UNC namespaces, and alternate stream syntax. A stream type such
+/// as `::$DATA` or `:$I30:$INDEX_ALLOCATION` opens the file or directory
+/// itself. `spelling` is lowercase text with `/` separators.
+fn unmapped_namespace(spelling: &str) -> bool {
+    spelling.starts_with("//./")
+        || spelling.starts_with("//?/unc/")
+        || spelling.contains("::")
+        || spelling.contains(":$")
+}
+
+/// Whether a component of `text` (with `/` separators) has the 8.3 short
+/// name shape: a `~` followed by digits, before any extension.
+pub(crate) fn has_short_component(text: &str) -> bool {
+    text.split('/').any(|part| {
+        part.split_once('~').is_some_and(|(_, tail)| {
+            let number = tail.split('.').next().unwrap_or_default();
+            !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())
         })
-    };
-    if short(&spelling) {
-        let mut real = PathBuf::new();
-        for part in path.components() {
+    })
+}
+
+/// [`guard_path`]'s short-name mapping, without the platform check so every
+/// host can test it.
+fn map_short_components(path: &Path) -> Result<PathBuf, String> {
+    let mut real = PathBuf::new();
+    // Set once a component can hold no entry: nothing below it exists or
+    // can be created, so the rest of the path stays as written.
+    let mut impossible = false;
+    for part in path.components() {
+        if matches!(part, std::path::Component::Normal(_))
+            && matches!(
+                Path::new(part.as_os_str()).components().next(),
+                Some(std::path::Component::Prefix(_))
+            )
+        {
+            // `quoted/C:/tail`: a later component that reads alone as a
+            // drive must not replace the path before it.
+            let mut relative = std::ffi::OsString::from(".");
+            relative.push(std::path::MAIN_SEPARATOR_STR);
+            relative.push(part.as_os_str());
+            real.push(relative);
+        } else {
             real.push(part.as_os_str());
-            let part = part
-                .as_os_str()
-                .to_str()
-                .ok_or("cannot inspect a Windows path component as text")?;
-            if short(&part.replace('\\', "/")) {
+        }
+        if impossible {
+            continue;
+        }
+        let part = part
+            .as_os_str()
+            .to_str()
+            .ok_or("cannot inspect a Windows path component as text")?;
+        if !has_short_component(&part.replace('\\', "/")) {
+            continue;
+        }
+        match crate::absence::entry(&real).map_err(|_| "cannot inspect a Windows short filename")? {
+            // The kernel's final path may still contain `~1`: an entry can
+            // have that literal long name rather than an 8.3 alias.
+            crate::absence::Entry::Exists => {
                 real = canonicalize(&real).map_err(|_| "cannot map a Windows short filename")?;
-                if short(&slashed(&real)) {
-                    return Err(
-                        "cannot establish the long spelling of a Windows short filename".into(),
-                    );
-                }
+            }
+            crate::absence::Entry::Impossible => impossible = true,
+            crate::absence::Entry::Creatable => {
+                return Err(
+                    "cannot map a Windows short filename that a command could still create".into(),
+                );
             }
         }
-        return Ok(real);
     }
-    Ok(path.to_path_buf())
+    Ok(real)
 }
 
 /// The user's home directory as the guards and doctor read it: the first
@@ -252,6 +306,79 @@ pub fn git_bash_drive_text(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-1002 Windows repair (hosted run 40602309629): a literal
+    /// `RUNNER~1` directory is its own long name, and a missing name beneath
+    /// a file can never be created; both stay as written.
+    #[test]
+    fn short_mapping_keeps_literal_long_names_and_impossible_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = canonicalize(temp.path()).unwrap();
+        let literal = root.join("RUNNER~1");
+        std::fs::create_dir(&literal).unwrap();
+        assert_eq!(map_short_components(&literal).unwrap(), literal);
+        let prospective = literal.join("new-file");
+        assert_eq!(map_short_components(&prospective).unwrap(), prospective);
+        std::fs::write(root.join("file"), "x").unwrap();
+        let below_file = root.join("file/HEAD~1/leaf");
+        assert_eq!(map_short_components(&below_file).unwrap(), below_file);
+    }
+
+    /// A short name that does not exist yet could alias an entry a command
+    /// earlier on the line creates (`mkdir .claude && ... CLAUDE~1/x`), so
+    /// the mapper refuses it rather than judging the literal spelling.
+    #[test]
+    fn short_mapping_refuses_names_a_command_could_create() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = canonicalize(temp.path()).unwrap();
+        for word in ["HEAD~1", "CLAUDE~1/settings.json", "missing/RUNNER~1/leaf"] {
+            assert!(map_short_components(&root.join(word)).is_err(), "{word}");
+        }
+    }
+
+    /// The kernel maps an existing alias; a symlink models it on Unix. A
+    /// dangling alias cannot be mapped and refuses.
+    #[cfg(unix)]
+    #[test]
+    fn short_mapping_resolves_aliases_and_refuses_dangling_links() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = canonicalize(temp.path()).unwrap();
+        let real = root.join("long directory");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("ALIAS~1")).unwrap();
+        assert_eq!(
+            map_short_components(&root.join("ALIAS~1/new-file")).unwrap(),
+            real.join("new-file")
+        );
+        std::os::unix::fs::symlink(root.join("missing"), root.join("BROKEN~1")).unwrap();
+        assert!(map_short_components(&root.join("BROKEN~1/new-file")).is_err());
+    }
+
+    #[test]
+    fn unmapped_windows_namespaces_include_every_stream_type_spelling() {
+        for spelling in [
+            "//./c:/users/u/.codex/auth.json",
+            "//?/unc/server/share/.codex/auth.json",
+            "c:/users/u/.codex/auth.json::$data",
+            "c:/users/u/.codex::$index_allocation/auth.json",
+            "c:/users/u/.codex:$i30:$index_allocation/auth.json",
+        ] {
+            assert!(unmapped_namespace(spelling), "{spelling}");
+        }
+        for spelling in ["c:/users/u/notes.txt", "//?/c:/users/u/notes.txt", "head~1"] {
+            assert!(!unmapped_namespace(spelling), "{spelling}");
+        }
+    }
+
+    #[test]
+    fn short_component_shape_needs_digits_after_the_tilde() {
+        for text in ["HEAD~1", "c:/users/RUNNER~1/x", "AUTH~1.JSO", "a/b~12"] {
+            assert!(has_short_component(text), "{text}");
+        }
+        for text in ["~", "~/x", "a~b", "a~1b", "RUN~1*", "notes.txt~"] {
+            assert!(!has_short_component(text), "{text}");
+        }
+    }
 
     /// Issue 79: two homes whose names differ only in bytes that are not
     /// UTF-8 share one lossy spelling, but they are two homes.

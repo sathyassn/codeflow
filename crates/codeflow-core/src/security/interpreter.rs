@@ -191,6 +191,9 @@ fn inspect_operand(
     if value == "__unverified_transfer_input" {
         return Err("cannot establish a transfer option's quoted input filename");
     }
+    if git_revision_word(call, at, value, cwd) {
+        return Ok(false);
+    }
     let name = call
         .args
         .first()
@@ -273,6 +276,66 @@ fn inspect_operand(
     Ok(false)
 }
 
+/// A Git operand in revision form that names a short-name component but no
+/// path is a revision, not a file operand, so it needs no Windows
+/// short-name mapping (`git rebase -x 'cargo test' HEAD~3`). Git reads a
+/// word before `--` as a revision unless a path by that name exists: a
+/// non-revision operand must name an existing path, and a word that is both
+/// is refused as ambiguous. The word stays a file operand when the path
+/// exists, after `--`, with `--no-index`, with a work tree or Git directory
+/// option, with a `-C` the guard cannot read, beside a link made earlier on
+/// the line, or when its path cannot be classified.
+fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Path) -> bool {
+    let Some((program, rest)) = call.args.split_first() else {
+        return false;
+    };
+    if !call.links.is_empty()
+        || !crate::portable_path::has_short_component(value)
+        || !crate::hooks::git_guard::revision_word(value)
+    {
+        return false;
+    }
+    let Some(git) = crate::hooks::git_guard::git_arguments(program, rest) else {
+        return false;
+    };
+    let Some((_, tail)) = crate::hooks::git_guard::git_subcommand(&git) else {
+        return false;
+    };
+    let start = call.args.len() - tail.len();
+    if at < start
+        || call.args[start..at].iter().any(|word| word == "--")
+        || tail.iter().any(|word| word == "--no-index")
+    {
+        return false;
+    }
+    let mut directory = cwd.to_path_buf();
+    let globals = &git[..git.len() - tail.len() - 1];
+    let mut words = globals.iter();
+    while let Some(word) = words.next() {
+        let change = if word == "-C" {
+            words.next().map(String::as_str)
+        } else if word.starts_with("--work-tree") || word.starts_with("--git-dir") {
+            return false;
+        } else {
+            word.strip_prefix("-C")
+        };
+        let Some(change) = change else {
+            continue;
+        };
+        if crate::hooks::git_guard::expands(change)
+            || change.starts_with('~')
+            || crate::hooks::git_guard::has_glob(change)
+        {
+            return false;
+        }
+        directory = outward::lexical_join(&directory, Path::new(change));
+    }
+    matches!(
+        crate::absence::entry(&outward::lexical_join(&directory, Path::new(value))),
+        Ok(crate::absence::Entry::Creatable | crate::absence::Entry::Impossible)
+    )
+}
+
 /// `reader` is `Some` for a reader's argument, saying whether the shell
 /// expands it as a pattern, and `None` for a literal in interpreter code.
 fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: Option<bool>) -> bool {
@@ -285,11 +348,6 @@ fn secret_path_result(
     home: Option<&Path>,
     reader: Option<bool>,
 ) -> Result<bool, &'static str> {
-    let candidate = cwd.join(word);
-    let mapped = crate::portable_path::guard_path(&candidate)
-        .map_err(|_| "cannot establish a Windows path's mapped filename")?;
-    let mapped = (mapped != candidate).then(|| crate::portable_path::slashed(&mapped));
-    let word = mapped.as_deref().unwrap_or(word);
     let spelling = crate::portable_path::filesystem_spelling(word);
     let word = spelling.as_str();
     let expanded_word = word
@@ -322,6 +380,20 @@ fn secret_path_result(
     } else {
         Some(outward::lexical_join(cwd, Path::new(word)))
     };
+    // Map the path the word names, after its home is resolved, never
+    // `cwd.join(word)`: a Windows cwd under `RUNNER~1` would otherwise turn
+    // `~/store` into `<cwd>/~/store` and hide the store (hosted run
+    // 40602309629). Namespace and stream spellings refuse here for every
+    // word; only a short name in the word itself replaces its spelling.
+    let absolute = absolute
+        .map(|path| crate::portable_path::guard_path(&path))
+        .transpose()
+        .map_err(|_| "cannot establish a Windows path's mapped filename")?;
+    let mapped_word = absolute
+        .as_deref()
+        .filter(|_| cfg!(windows) && crate::portable_path::has_short_component(word))
+        .map(crate::portable_path::slashed);
+    let word = mapped_word.as_deref().unwrap_or(word);
     if reader == Some(true) && (crate::hooks::git_guard::has_glob(word) || word.contains('{')) {
         return secret_glob(word, cwd, home);
     }
@@ -933,6 +1005,11 @@ fn recursive_directories(
         if crate::hooks::git_guard::has_glob(word) || planned {
             directories.push(root);
         } else {
+            if crate::absence::cannot_exist(&path)
+                .map_err(|_| "cannot establish an unmodelled operand's file type")?
+            {
+                continue;
+            }
             match crate::absence::is_kind(&path, true) {
                 Some(true) => directories.push(root),
                 Some(false) => {}
@@ -1264,6 +1341,12 @@ fn file_operands<'a>(
         }
     }
     let rest = args.get(1..).unwrap_or_default();
+    // Inline code is program text for the code-body checks, never a path.
+    // On Windows, `use File::Path` would otherwise refuse as stream syntax.
+    let code = outward::interpreter_family(name)
+        .filter(|family| matches!(*family, "python" | "node" | "nodejs" | "perl" | "ruby"))
+        .map(|family| outward::interpreter_code_positions(family, rest))
+        .unwrap_or_default();
     let literal: Vec<_> = (1..args.len())
         .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
         .collect();
@@ -1281,6 +1364,7 @@ fn file_operands<'a>(
         .enumerate()
         .filter(|(at, word)| {
             !patterns.contains(at)
+                && !code.contains(at)
                 && *at >= git_start
                 && !directory_option(name, rest, *at)
                 && !git_root.as_deref().is_some_and(|root| {
@@ -1485,6 +1569,108 @@ fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn inline_interpreter_code_keeps_its_role_before_path_mapping() {
+        let cwd = Path::new("/fixture");
+        for command in [
+            "perl -e 'use File::Path qw(remove_tree); remove_tree(\"./\")' public.txt",
+            "python3 -c 'print(\"File::Path\")' public.txt",
+            "node -e 'console.log(\"File::Path\")' public.txt",
+            "ruby -e 'puts \"File::Path\"' public.txt",
+        ] {
+            let args = crate::hooks::git_guard::command_argv(command);
+            let name = super::super::unresolved::writer_name(&args[0]);
+            let values: Vec<_> = file_operands(name, &args, None, command, cwd)
+                .into_iter()
+                .map(|(_, value, _)| value)
+                .collect();
+            assert_eq!(values, ["public.txt"], "{command}");
+        }
+        // Only the code word leaves the operands: a directory an option
+        // changes into, or a library it loads, stays a file operand.
+        for (command, kept) in [
+            ("ruby -C ~/.codex -e 'puts 1'", "~/.codex"),
+            ("perl -x~/.codex -e 'print 1'", "~/.codex"),
+            ("ruby -r ./lib.rb -e 'puts 1'", "./lib.rb"),
+            ("node --eval 'x::y' --require ./hook.js", "./hook.js"),
+        ] {
+            let args = crate::hooks::git_guard::command_argv(command);
+            let name = super::super::unresolved::writer_name(&args[0]);
+            let values: Vec<_> = file_operands(name, &args, None, command, cwd)
+                .into_iter()
+                .map(|(_, value, _)| value)
+                .collect();
+            assert!(values.contains(&kept), "{command}: {values:?}");
+            assert!(
+                !values.iter().any(|value| value.contains("puts")
+                    || value.contains("print")
+                    || value.contains("::")),
+                "{command}: {values:?}"
+            );
+        }
+    }
+
+    /// TSK-1002 Windows repair (hosted run 40602309629): a Git revision
+    /// such as `HEAD~1` names no path, so the short-name mapper never sees
+    /// it; a short-looking word that is a path, or could be, stays an
+    /// operand.
+    #[test]
+    fn git_revisions_with_short_name_shapes_are_not_file_operands() {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = crate::portable_path::canonicalize(temp.path()).unwrap();
+        std::fs::create_dir(cwd.join("sub")).unwrap();
+        std::fs::write(cwd.join("sub/TAG~1"), "x").unwrap();
+        let revision = |command: &str, value: &str| {
+            let calls = outward::unwrapped_commands(command, &cwd, None);
+            let call = calls
+                .iter()
+                .find(|call| call.args.iter().any(|arg| arg.contains(value)))
+                .unwrap_or_else(|| panic!("{command}"));
+            let at = call
+                .args
+                .iter()
+                .position(|arg| arg.contains(value))
+                .unwrap();
+            git_revision_word(call, at, value, &cwd)
+        };
+        for command in [
+            "git format-patch -o patches/ HEAD~1",
+            "git rebase -x 'cargo test' HEAD~3",
+            "git-rebase -x 'cargo test' HEAD~3",
+            "git -c color.ui=never diff HEAD~1",
+            "git -C sub log HEAD~2",
+        ] {
+            let value = command.rsplit(' ').next().unwrap();
+            assert!(revision(command, value), "{command}");
+        }
+        for (command, value) in [
+            ("git diff -- HEAD~1", "HEAD~1"),
+            ("git diff --no-index HEAD~1 other", "HEAD~1"),
+            ("git -C sub log TAG~1", "TAG~1"),
+            ("git --work-tree=sub log HEAD~1", "HEAD~1"),
+            ("git -C \"$D\" log HEAD~1", "HEAD~1"),
+            ("ln -s ~/.codex 'a b' && git log AB~1", "AB~1"),
+            ("cat HEAD~1", "HEAD~1"),
+            ("git log main", "main"),
+        ] {
+            assert!(!revision(command, value), "{command}");
+        }
+    }
+
+    #[test]
+    fn recursive_operands_that_cannot_be_names_are_not_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let unnameable = if cfg!(windows) {
+            "not \"a path\"".to_string()
+        } else {
+            "x".repeat(4096)
+        };
+        assert_eq!(
+            recursive_directories(vec![unnameable], temp.path(), None, &[]),
+            Ok(Vec::new())
+        );
+    }
 
     #[test]
     fn r23_planned_public_link_refuses_at_the_recursive_selection() {

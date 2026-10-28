@@ -13528,6 +13528,19 @@ fn is_identifier(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// The arguments `program` gives Git, `git` itself left out: a `git` call's
+/// own arguments, or `git-<verb>` read as `<verb>` and its arguments.
+/// `None` for any other program.
+pub(crate) fn git_arguments(program: &str, args: &[String]) -> Option<Vec<String>> {
+    runners::arguments(program, args)
+}
+
+/// Whether `word` has the shape of a Git revision with an operator
+/// (`HEAD~1`, `a^..b`, `main@{1}`), with no shell pattern or expansion.
+pub(crate) fn revision_word(word: &str) -> bool {
+    runners::revision_operand(word)
+}
+
 /// Find the git subcommand, skipping global flags (`git -C path commit …`).
 pub(crate) fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     let mut idx = 0;
@@ -13950,6 +13963,12 @@ mod tests {
         assert_eq!(
             super::integrity_disk_case(&short).unwrap(),
             crate::portable_path::canonicalize(&directory).unwrap()
+        );
+        assert_eq!(
+            crate::portable_path::guard_path(&short.join("prospective-file")).unwrap(),
+            crate::portable_path::canonicalize(&directory)
+                .unwrap()
+                .join("prospective-file")
         );
     }
 

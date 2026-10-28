@@ -287,7 +287,11 @@ refuse as cannot-verify. AppleScript bodies receive literal-path inspection;
 constructed shell commands refuse. A script written earlier on the same line
 must receive a verified code reading before execution by path, interpreter
 or Make. Otherwise it refuses. Windows device, UNC, alternate-stream and
-short-name spellings refuse when the guard cannot map their real paths.
+short-name spellings refuse when the guard cannot map their real paths. A
+short name that does not exist yet refuses unless nothing can exist there,
+since a command earlier on the line could create the entry it aliases. A Git
+revision such as `HEAD~1` that names no path, and inline interpreter code,
+are not file operands.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the

@@ -112,7 +112,7 @@ fn checked_mode<'a>(
 // Revision suffixes can contain the shell reader's `~` and `^` markers.
 // Their literal non-option prefix cannot expand into a Git option. Other
 // patterns remain unread, including patterns in an exec command's value.
-fn revision_operand(word: &str) -> bool {
+pub(super) fn revision_operand(word: &str) -> bool {
     if word.is_empty() || word.starts_with(['-', '~', '^', ':']) {
         return false;
     }
@@ -1624,6 +1624,19 @@ fn note_segment(
     earlier: &mut Vec<PathBuf>,
     landings: &mut Vec<Landing>,
 ) {
+    // `export NAME=value` and the other declaration builtins assign shell
+    // variables; their operands name no file, so only their redirections
+    // can write. Read as paths, `R=C:/Users/RUNNER~1/...` named a missing
+    // short-name component the Windows mapper must refuse (hosted run
+    // 40602309629).
+    let words: Vec<String> = std::iter::once(program.to_string())
+        .chain(args.iter().cloned())
+        .collect();
+    let declaring = matches!(
+        super::builtin_words(&words).first().map(String::as_str),
+        Some("export" | "declare" | "typeset" | "local" | "readonly")
+    );
+    let args: &[String] = if declaring { &[] } else { args };
     note_writes(filled, args, locations, earlier);
     let (changes, _) = launcher_effects(tokens);
     let dirs: Vec<PathBuf> = locations

@@ -240,6 +240,8 @@ fn pipeline_tail_words(text: &str) -> Vec<String> {
 }
 
 fn created_links(text: &str, cwd: &Path, input: Option<&str>) -> Vec<Link> {
+    let plain_cwd = crate::portable_path::without_verbatim(cwd.to_path_buf());
+    let cwd = plain_cwd.as_path();
     let words = pipeline_tail_words(text);
     let Some((program, args)) = crate::hooks::git_guard::strip_launchers(&words) else {
         return Vec::new();
@@ -427,6 +429,8 @@ pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec
     if links.is_empty() {
         return Ok(Vec::new());
     }
+    let cwd = crate::portable_path::without_verbatim(cwd.to_path_buf());
+    let word = crate::portable_path::without_verbatim(PathBuf::from(word));
     let original = cwd.join(word);
     let mut pending = vec![(original.clone(), vec![original.clone()], Vec::new())];
     let mut seen = std::collections::HashSet::new();
@@ -471,7 +475,8 @@ pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec
                 {
                     return Err("cannot verify a link target created earlier on this line".into());
                 }
-                let target = link.to.join(components.clone().as_path());
+                let target = crate::portable_path::without_verbatim(link.to.clone())
+                    .join(components.clone().as_path());
                 if ancestors.contains(&target) {
                     return Err(
                         "cannot verify a cycle of links created earlier on this line".into(),
@@ -1963,6 +1968,18 @@ fn change_directory(position: &mut Position, program: &str, args: &[String]) {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_cwd_keeps_parent_components_until_planned_links_resolve() {
+        let temp = tempfile::tempdir().unwrap();
+        let verbatim = temp.path().canonicalize().unwrap();
+        let root = crate::portable_path::without_verbatim(verbatim.clone());
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        let links = created_links("ln -s .git/hooks l", &verbatim, None);
+        let paths = linked_paths("l/../config", &verbatim, &links).unwrap();
+        assert!(paths.contains(&root.join(".git/config")), "{paths:?}");
+    }
+
     #[test]
     fn r26_unused_heredoc_does_not_certify_the_written_script() {
         let temp = tempfile::tempdir().unwrap();
@@ -2000,7 +2017,9 @@ mod tests {
     #[test]
     fn review3_physical_link_child_parent_has_one_result() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap().join("MiXeD");
+        let root = crate::portable_path::canonicalize(temp.path())
+            .unwrap()
+            .join("MiXeD");
         std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
         let links = [Link {
             alternatives: None,
@@ -2024,7 +2043,9 @@ mod tests {
     #[test]
     fn r23_directory_link_alternatives_keep_the_descendant_destination() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap().join("MiXeD");
+        let root = crate::portable_path::canonicalize(temp.path())
+            .unwrap()
+            .join("MiXeD");
         std::fs::create_dir_all(root.join("docs")).unwrap();
         std::fs::create_dir_all(root.join(".worktrees/w/.claude")).unwrap();
         let links = created_links("ln -s ../.worktrees/w docs", &root, None);
@@ -2038,7 +2059,9 @@ mod tests {
     #[test]
     fn r24_written_and_executed_link_paths_share_comparison_keys() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap().join("MiXeD");
+        let root = crate::portable_path::canonicalize(temp.path())
+            .unwrap()
+            .join("MiXeD");
         std::fs::create_dir_all(root.join("clean")).unwrap();
         for (written, executed) in [("l/x.py", "clean/x.py"), ("clean/x.py", "l/x.py")] {
             let line =
@@ -2057,7 +2080,7 @@ mod tests {
     #[test]
     fn r24_one_link_choice_can_be_followed_more_than_once() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = crate::portable_path::canonicalize(temp.path()).unwrap();
         let links = created_links("ln -s . l", &root, None);
         let paths = linked_paths("l/l/notes", &root, &links).unwrap();
         assert_eq!(paths, [root.join("notes")]);
