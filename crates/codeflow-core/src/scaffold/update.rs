@@ -670,10 +670,25 @@ fn write_dest(root: &Path, entry: &ManifestEntry, content: &str) -> Result<(), S
     Ok(())
 }
 
+/// Append the patch for `dest` to the `--diff` export. Every caller goes
+/// through here, so a JSON or TOML file's secret-bearing values (an `env`,
+/// headers, a key named like a token) are redacted on both sides first, and
+/// a side that does not parse is withheld (TSK-1029, `diff_redact`).
 fn push_diff(diffs: &mut String, dest: &str, old: &str, new: &str) {
     use std::fmt::Write;
-    let patch = diffy::create_patch(old, new);
-    let _ = write!(diffs, "=== {dest}\n{patch}\n");
+    match super::diff_redact::sides_for(dest, old, new) {
+        super::diff_redact::DiffSides::Show(old, new) => {
+            let patch = diffy::create_patch(&old, &new);
+            let _ = write!(diffs, "=== {dest}\n{patch}\n");
+        }
+        super::diff_redact::DiffSides::Withheld => {
+            let _ = writeln!(
+                diffs,
+                "=== {dest}\n(content withheld: the file did not parse, and it can hold \
+                 secret values)\n"
+            );
+        }
+    }
 }
 
 /// Update's step for a whole managed file, from the file on disk (`None`
