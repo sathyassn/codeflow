@@ -13,6 +13,7 @@ outcome_present_uids = [
     "0345d0ee-7a41-48a2-bc80-646e6f62183b",
     "03d9f379-3f97-4cf8-9567-4af95e7b9d91",
     "040ddff5-da3d-4efd-b93c-afb869483d77",
+    "044341eb-9f31-4b1e-96c8-f053da5ea0d5",
     "04705cd3-b389-43a0-bca3-d04fbf5e3fcd",
     "04e4301f-f5e1-4060-aea6-2197f06196e3",
     "0538aa1f-2f5a-42f5-8d8d-58dae4e025c7",
@@ -92,6 +93,7 @@ outcome_present_uids = [
     "28904941-14c7-4cc8-b26f-bf49422fe18c",
     "28cbdcdf-bcdb-4088-ada1-f07bf71a0e64",
     "28e4cc23-c096-4b11-bf4a-63c55fafd5ca",
+    "296495a2-382e-4a79-96b5-01577c7ac926",
     "29f99da0-0bf5-441a-94ad-69e46cac1c65",
     "29fc2b14-dd75-4629-9900-cde759befde2",
     "2a2e018d-6b67-49a7-a6f2-e4af688b3b86",
@@ -280,6 +282,7 @@ outcome_present_uids = [
     "939efc5a-771b-4efa-80ae-64a69a162c6e",
     "9470e762-efa8-4fb9-bc15-198cf0ece171",
     "947467b9-3596-4beb-bfff-eb73b086276e",
+    "9481c43e-d6f4-4219-a254-b95e27f18490",
     "9518f37c-a5ab-4cdd-a924-ed97ffdfe813",
     "953bd1de-d59a-4476-9bd4-991e7bb4ac57",
     "9691eae1-468e-43de-9145-d4dba8764522",
@@ -348,6 +351,7 @@ outcome_present_uids = [
     "b220f2e2-4d9c-410c-bdce-0202d04215d3",
     "b22b13fe-0ad4-47fd-9e58-5bd295fda59b",
     "b284c4b0-3855-4895-975c-5a5eee6102e6",
+    "b2fa4d43-84d6-4694-9b2e-324e43942dd9",
     "b3c9bfde-2024-4079-ad72-ca590e2e8882",
     "b45bf2da-3091-4e40-a0a6-5ef1a6bcafd5",
     "b4e81edd-6058-4479-92a7-6e49ad28ab47",
@@ -360,8 +364,10 @@ outcome_present_uids = [
     "b7e8f8e6-e9a1-4877-97c0-62eae24e83fe",
     "b8ba3ea4-b8f1-4f1f-9d0b-cbbe6a8a3b07",
     "b974912e-0c02-46b6-9c66-206ff983d819",
+    "b9d02764-0238-4f1a-9f61-73a4c397ff6f",
     "b9ff107e-5a81-4fde-8cdb-3c59b9f5724c",
     "ba082f6d-909e-48ef-8588-9e1d229d20b9",
+    "ba1743d9-cc00-4924-b12b-933ef578318d",
     "ba54c744-2074-4b46-adfe-57390fcabebd",
     "bc00144c-8a83-4ac6-b942-80eba0b71dba",
     "bc19db4d-d8eb-43ef-a640-ed59f483941c",
@@ -378,6 +384,7 @@ outcome_present_uids = [
     "c1fe3a85-2ba8-4027-8d7e-61971748558a",
     "c2cd320a-3f7b-4231-8c31-d9f0e4baae31",
     "c32d72ad-4a36-48de-886a-cf4891320611",
+    "c3f75e7f-0403-45fb-8aa3-5ca2e6692b99",
     "c4205d35-fda2-4b12-b4e4-74ca52aa8625",
     "c4687ca6-a19b-4954-9a74-4832da663ad4",
     "c601240a-d483-4a95-87a0-cda3b5db8e02",
@@ -485,6 +492,7 @@ outcome_present_uids = [
     "f97cc415-ba3c-4256-b2b6-ec6e23b2a5a7",
     "f98a771d-832f-45f6-ad17-c74e2da5de4c",
     "f9ef6a76-5b0f-4555-a395-fb145e0bff7f",
+    "fa014176-22eb-4ca8-91d3-caeafd145828",
     "fbec7dc5-a549-4b14-9b30-85341a4cd038",
     "fc504e5c-b335-407d-93e3-ab376b8e8109",
     "fcdad66a-1153-4c7c-8b58-9bf87124c7b3",
@@ -500,7 +508,7 @@ outcome_present_uids = [
     "ff6f4af1-dbfa-4c89-b150-55e9a3495e16",
     "ffab40f2-aa62-45c1-a161-93523a27479e",
 ]
-outcome_required_since = "e63a3968edf1c98bececd8f62884bcf460965faf"
+outcome_required_since = "53a0e2595a72bfaa27fed06576adcbc63566396c"
 permission_preset = "default"
 policy_armed = true
 product_one_liner = "The AI-development discipline layer you install into any repo"
