@@ -834,8 +834,7 @@ fn tsk189_start_prefers_fetched_line_without_local_upstream() {
 /// A bare origin for `root`, holding `main`, which tracks it.
 fn with_origin(root: &Path) -> tempfile::TempDir {
     let remote = tempfile::tempdir().unwrap();
-    // The remote advertises `main` as its default branch, as a hosted one
-    // does; `task status` reads the default from that advertisement.
+    // The remote's default branch is `main`, as a hosted remote's is.
     git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
     git(
         root,
@@ -1086,8 +1085,7 @@ fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
 /// case-sensitive filesystem can hold two spellings, so the fallback is
 /// refused where the git directory folds names.
 fn case_sensitive_origin(remote: &Path, insensitive: bool) -> std::path::PathBuf {
-    // Its default branch is `main`, which `task status` reads from what the
-    // remote advertises (TSK-340).
+    // Its default branch is `main`, as a hosted remote's is (TSK-340).
     let origin = remote.join("origin.git");
     let reftable = Command::new("git")
         .args([

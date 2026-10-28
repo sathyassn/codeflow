@@ -2105,17 +2105,30 @@ fn local_task_status_needs_pins_for_authority() {
         let (reviewed, side) = side_merge(root);
         let mut declared = "main";
         let mut env: Vec<(&str, String)> = Vec::new();
-        // A rogue remote advertising `aux` as its default, holding the side
-        // merge, which this clone has also "fetched" as `origin/aux`.
+        // A rogue remote advertising `auxiliary` as its default, holding the
+        // side merge, which this clone has also "fetched" as
+        // `origin/auxiliary`. The name is not a Windows device name (`aux`
+        // is one, and cannot be a ref there).
         let rogue = root.join(".git").join("rogue.git");
         let rogue_path = rogue.to_str().unwrap().to_string();
         let rogue_remote = |root: &Path| {
-            git(root, &["init", "-q", "--bare", "-b", "aux", &rogue_path]);
             git(
                 root,
-                &["push", "-q", &rogue_path, &format!("{side}:refs/heads/aux")],
+                &["init", "-q", "--bare", "-b", "auxiliary", &rogue_path],
             );
-            git(root, &["update-ref", "refs/remotes/origin/aux", &side]);
+            git(
+                root,
+                &[
+                    "push",
+                    "-q",
+                    &rogue_path,
+                    &format!("{side}:refs/heads/auxiliary"),
+                ],
+            );
+            git(
+                root,
+                &["update-ref", "refs/remotes/origin/auxiliary", &side],
+            );
         };
         let fake_ssh = root.join(".git").join("fake-ssh.sh");
         let ssh_script = |path: &Path| {
