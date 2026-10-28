@@ -1700,7 +1700,7 @@ mod owner_opens {
     fn a_protected_target_sees_an_owner_that_breaks_mid_scope() {
         for ordinary_first in [true, false] {
             let (_dir, root) = repository();
-            let _scope = RepoFactsScope::enter();
+            let scope = RepoFactsScope::enter();
             let first = if ordinary_first {
                 "ordinary.txt"
             } else {
@@ -1710,7 +1710,7 @@ mod owner_opens {
             let head = break_head(&root);
             let after = roots(&root, ".claude/notes.txt");
             let ordinary = roots(&root, "plain.txt");
-            drop(_scope);
+            drop(scope);
             let expected = fresh(&root, ".claude/notes.txt");
             assert!(expected.is_err(), "{expected:?}");
             assert_eq!(after, expected, "ordinary first: {ordinary_first}");
@@ -1795,12 +1795,12 @@ mod owner_opens {
         let repo = git2::Repository::open(&root).unwrap();
         let linked = root.join("w");
         repo.worktree("w", &linked, None).unwrap();
-        let _scope = RepoFactsScope::enter();
+        let scope = RepoFactsScope::enter();
         assert_eq!(roots(&root, "w/a.txt"), Ok(vec![root.clone()]));
         std::fs::remove_file(linked.join(".git")).unwrap();
         git2::Repository::init(&linked).unwrap();
         let after = roots(&root, "w/b.txt");
-        drop(_scope);
+        drop(scope);
         assert_eq!(
             fresh(&root, "w/b.txt"),
             Ok(vec![root.clone(), linked.clone()])
