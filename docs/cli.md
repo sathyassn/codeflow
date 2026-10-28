@@ -86,7 +86,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--force` | Overwrite existing files (never the default). |
 | | `--workspace` | Set up an umbrella workspace: put the root checkout on its root branch (created from the default branch if missing), write `git.root_branch`, and ignore every nested git repository. Refuses over uncommitted changes. |
 | `codeflow update` | | Refresh managed scaffold files (3-way merge; never clobbers) |
-| | `--diff <FILE>` | Write the report plus unified diffs of applied changes to a file. A diff shows only what CodeFlow wrote: project values in JSON, TOML and YAML and project lines in Markdown and other text become `<redacted>` placeholders, values under `env`, headers and keys named like a token stay hidden, and a file in any other format, or one that does not parse, is withheld. |
+| | `--diff <FILE>` | Write the report plus unified diffs of applied changes to a file. A diff shows only values and lines the shipped scaffold holds; the project's own become `<redacted>` placeholders, and a file in a format with no redaction rule, or that does not parse, is withheld. |
 | | `--force` | Replace user-modified managed files instead of merging. |
 | | `--pin <VERSION>` | Only pin this codeflow release for CI: download its archives, check them against its sha256.sum and write `scaffold_version` and their digests (`[scaffold_sha256]`) to .codeflow/project.toml. Nothing else changes. The version must read as MAJOR.MINOR.PATCH with an optional -prerelease and +build; any other is refused before a download. Upgrade step one; land it before the update. |
 | `codeflow epic new <TITLE>` | | Allocate the next `EPC-NNN` and scaffold the epic from the template |
