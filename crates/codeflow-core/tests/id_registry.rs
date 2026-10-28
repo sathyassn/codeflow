@@ -166,7 +166,7 @@ fn concurrent_issuers_in_two_clones_and_two_worktrees_never_share_a_number() {
         );
     }
     assert!(!ledger.is_damaged() && ledger.violations.is_empty());
-    assert_eq!(ledger.max_seq(Kind::Tsk), 9);
+    assert_eq!(ledger.max_seq(Kind::Tsk).unwrap(), 9);
 }
 
 // --- AC-2: moved tip retried; other outcomes reported as themselves --------
@@ -731,7 +731,7 @@ fn a_number_an_invalid_commit_introduced_is_never_issued_again() {
             "TSK-{number} is used although its commit broke the rule"
         );
     }
-    assert_eq!(ledger.max_seq(Kind::Tsk), 3);
+    assert_eq!(ledger.max_seq(Kind::Tsk).unwrap(), 3);
     assert!(
         ledger.violations.iter().any(|v| v
             .message
@@ -751,6 +751,95 @@ fn a_number_an_invalid_commit_introduced_is_never_issued_again() {
         task(&a, "after the counterfeit").unwrap().id.to_string(),
         "TSK-004",
         "neither number becomes issuable again"
+    );
+}
+
+// --- A number past u64::MAX is refused by id selection, never skipped -------
+
+const PAST_U64: &str = "18446744073709551616";
+
+fn assert_out_of_range(result: Result<issue::Reservation, IdsError>, from: &str, remedy: &str) {
+    match result {
+        Err(IdsError::Invalid(message)) => {
+            assert!(
+                message.contains("above 18446744073709551615"),
+                "{from}: {message}"
+            );
+            assert!(message.contains(PAST_U64), "{from}: {message}");
+            // The recovery names what can be done where the id lives.
+            assert!(message.contains(remedy), "{from}: {message}");
+            if from == "registry" {
+                assert!(!message.contains("rename or remove"), "{from}: {message}");
+            } else {
+                assert!(!message.contains("exhausted"), "{from}: {message}");
+            }
+        }
+        other => panic!("{from}: expected an out-of-range refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_number_past_u64_in_the_worktree_is_refused_not_skipped() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "one").unwrap();
+    write_record(&a, &format!("TSK-{PAST_U64}"), None);
+    assert_out_of_range(
+        task(&a, "blocked"),
+        "worktree",
+        "rename or remove that record file",
+    );
+    // Removing the name lets issue go on from the true high-water mark.
+    std::fs::remove_file(
+        a.join("project-management/tasks")
+            .join(format!("TSK-{PAST_U64}.md")),
+    )
+    .unwrap();
+    assert_eq!(task(&a, "after").unwrap().id.to_string(), "TSK-002");
+}
+
+#[test]
+fn a_number_past_u64_on_another_ref_is_refused_not_skipped() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "one").unwrap();
+    git(&a, &["checkout", "-q", "-b", "side"]);
+    write_record(&a, &format!("TSK-{PAST_U64}"), None);
+    commit_all(&a, "a record with a huge number");
+    git(&a, &["checkout", "-q", "main"]);
+    assert!(!a
+        .join("project-management/tasks")
+        .join(format!("TSK-{PAST_U64}.md"))
+        .exists());
+    assert_out_of_range(
+        task(&a, "blocked"),
+        "ref",
+        "rename or remove it there, or delete that ref",
+    );
+}
+
+#[test]
+fn a_number_past_u64_in_the_registry_history_is_refused_not_skipped() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "one").unwrap();
+    let work = forge_checkout(&world, "forger");
+    std::fs::write(
+        work.join(format!("ids/TSK/{PAST_U64}.toml")),
+        forged_entry(PAST_U64),
+    )
+    .unwrap();
+    git(&work, &["add", "."]);
+    git(
+        &work,
+        &["commit", "-q", "-m", "registry: add a huge number"],
+    );
+    git(&work, &["push", "-q", "origin", "reg:codeflow/registry"]);
+    assert!(world.remote_ledger().max_seq(Kind::Tsk).is_err());
+    assert_out_of_range(
+        task(&a, "blocked"),
+        "registry",
+        "the TSK id sequence is exhausted until an operator repairs the registry branch",
     );
 }
 
@@ -1279,7 +1368,7 @@ fn seed_decides_replicas_by_commit_stops_on_the_undecidable_and_accepts_a_map() 
         "legacy id registered at ids/TSK/002-001.toml"
     );
     assert_eq!(
-        ledger.max_seq(Kind::Tsk),
+        ledger.max_seq(Kind::Tsk).unwrap(),
         6,
         "the legacy id never raises the high-water mark"
     );
@@ -2093,7 +2182,7 @@ fn property_issued_numbers_exceed_every_number_ever_added_and_never_repeat() {
             }
             _ => {
                 // Delete the top reservation on the host, then restore it.
-                let top = world.remote_ledger().max_seq(Kind::Tsk);
+                let top = world.remote_ledger().max_seq(Kind::Tsk).unwrap();
                 if issued.contains(&top) {
                     push_deletion(&world, &format!("{top:03}"));
                     assert!(matches!(task(&a, "damaged"), Err(IdsError::Damaged(_))));
