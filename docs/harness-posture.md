@@ -26,8 +26,8 @@ an operator still has to decide.
 
 | Harness | What the shipped preset enables | What stays gated |
 |---|---|---|
-| Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests, ask rules for destructive source-control operations, `Edit` denies and sandbox write denies for the shell startup files; cross-family seats pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; an unsandboxed retry only when the native configuration permits it, auto-classified for a trusted installed tool that needs host state such as `herdr` or the official Codex plugin; the guards judge the retried command under the same policy, a retry never lifts a destructive, privileged, publishing, secret-read or enforcement-file refusal, and a delegated seat that runs sandboxed denies the retry natively; auto mode and classifier policy are never taken from the repository, so project `acceptEdits` remains the ordinary fallback (ADR-0026, ADR-0029) |
-| Codex | Guarded workspace permission profile (no `sandbox_mode` key), live search, reviewer-subagent escalation review, workspace key-file denies, the current primary seat's configured fallback, the default secret-bearing environment filter, `approval_policy = "never"`, `model_reasoning_effort = "high"`, shell startup files read only; a builder seat runs the `cf-builder` profile and a reviewer the `cf-guard` profile, so no seat runs without the OS sandbox (ADR-0075 D1 as amended on 2026-10-05) | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
+| Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests, ask rules for destructive source-control operations, `Edit` denies and sandbox write denies for the shell startup files; a status line showing model, version, output style, folder, branch and context use, and no `effortLevel` (ADR-0087); cross-family seats pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; an unsandboxed retry only when the native configuration permits it, auto-classified for a trusted installed tool that needs host state such as `herdr` or the official Codex plugin; the guards judge the retried command under the same policy, a retry never lifts a destructive, privileged, publishing, secret-read or enforcement-file refusal, and a delegated seat that runs sandboxed denies the retry natively; auto mode and classifier policy are never taken from the repository, so project `acceptEdits` remains the ordinary fallback (ADR-0026, ADR-0029) |
+| Codex | Guarded workspace permission profile (no `sandbox_mode` key), live search, reviewer-subagent escalation review, workspace key-file denies, the current primary seat's configured fallback, the default secret-bearing environment filter, `approval_policy = "never"`, no `model_reasoning_effort` (effort is each person's, ADR-0087), shell startup files read only; a builder seat runs the `cf-builder` profile and a reviewer the `cf-guard` profile, so no seat runs without the OS sandbox (ADR-0075 D1 as amended on 2026-10-05) | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
 | Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload; Grok's `workspace` sandbox leaves the home, and so its shell startup files, unwritable | The hooks load only after the one-time `/hooks-trust` (or `--trust`); the doctor check reports structural wiring, not trust state (ADR-0054) |
 
 The unsandboxed retry for Claude Code works as follows.
@@ -88,10 +88,10 @@ The `cf-guard` permission profile in `.codex/config.toml` is selected via
 | Key | Value | Why |
 |---|---|---|
 | `default_permissions` | `cf-guard`, extending `:workspace` | the profile is the only sandbox configuration, because a `sandbox_mode` key would shadow it |
-| egress | broad public egress, exact loopback for local UI tests, live search | private destinations and arbitrary Unix sockets stay closed under `cf-guard`; `cf-builder` allows local binding for dev servers, which also opens private destinations |
-| `approval_policy` | `never`; a reviewer or consult seat launches with no `--sandbox` flag, a builder seat with `-c 'permissions.cf-builder.description="CodeFlow builder seat"' -c default_permissions="cf-builder"` and no `--sandbox` flag (ADR-0055, ADR-0075 D1 as amended on 2026-10-05; the description override lets Codex 0.163 and later open the seat, TSK-1003) | under `cf-guard` the seat gets workspace writes and deletes, read-only enforcement and shell startup files, no Unix sockets and no local binding; a `--sandbox` flag would replace the profile, and full access would leave only git-guard, exec-guard, edit-guard, git hooks and CI |
+| egress | broad public egress, exact loopback for local UI tests, live search | private, link-local and cloud metadata destinations and arbitrary Unix sockets stay closed under `cf-guard` and `cf-builder`; neither seat can serve on a local port, so local server tests run on the primary (TSK-337) |
+| `approval_policy` | `never`; a reviewer or consult seat launches with no `--sandbox` flag, a builder seat with `-c 'permissions.cf-builder.description="CodeFlow builder seat"' -c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write"}' -c permissions.cf-builder.network.allow_local_binding=false -c default_permissions="cf-builder"` and no `--sandbox` flag (ADR-0055, ADR-0075 D1 as amended on 2026-10-05; the description override lets Codex 0.163 and later open the seat, TSK-1003; the filesystem override carries the profile's home grants to a main checkout whose profile predates them, TSK-337) | under `cf-guard` the seat gets workspace writes and deletes, read-only enforcement and shell startup files, no Unix sockets and no local binding; a `--sandbox` flag would replace the profile, and full access would leave only git-guard, exec-guard, edit-guard, git hooks and CI |
 | secret-file denies | `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `.netrc`, `id_rsa*`, `id_ed25519*`, at the workspace root only | the recursive `**/` forms made Codex refuse every directory delete, so a nested secret file, such as `sub/.env` or a linked worktree's `.env`, stays readable, changeable and deletable by the seat |
-| `cf-builder` profile | selected for builder seats, launched from the main checkout root (ADR-0075 D1 as amended on 2026-10-05) | it extends `cf-guard` with the common `.git` writable, its hooks and config read only, `~/.codeflow/locks` writable for `codeflow reserve` and heavy quick targets (TSK-1003; full-gate evidence under `~/.codeflow/gate-runs` stays unwritable, TSK-337), and local binding; its spike ran fetch, worktree add, commit and builds unattended, a push to a remote outside the workspace root is denied, and a push to a hosted remote is not yet verified, so a builder whose push fails reports it and the caller pushes |
+| `cf-builder` profile | selected for builder seats, launched from the main checkout root (ADR-0075 D1 as amended on 2026-10-05) | it extends `cf-guard` with the common `.git` writable, its hooks and config read only, `~/.codeflow/locks` writable for `codeflow reserve` and heavy quick targets (TSK-1003), and the same network table as `cf-guard`, local binding off (TSK-337: with it on, Codex skips the proxy's private-network checks, so a builder reached private and metadata addresses; a builder seat now cannot serve on a local port, so tests that do run on the primary); `~/.codeflow/gate-runs` stays unwritable, since full gates and their evidence stay with the primary (TSK-337: the gate copies run artifacts there and later gates trust its run records without authenticating them); `cf-guard` writes neither home folder, since review seats run no gate; its spike ran fetch, worktree add, commit and builds unattended, a push to a remote outside the workspace root is denied, and a push to a hosted remote is not yet verified, so a builder whose push fails reports it and the caller pushes |
 | shell startup files | read only in `cf-guard`, so in `cf-builder` too: every home and `/etc` entry of the action table's `startup_paths`, and the workspace root's `.envrc` (TSK-242) | a nested `.envrc`, such as one in a linked worktree, stays writable to the profile, since a wildcard directory part makes Codex refuse every directory delete; exec-guard and edit-guard refuse it. The entries name the default locations, so a `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere is writable; `codeflow doctor` reports one |
 | environment | Codex's default `KEY`/`SECRET`/`TOKEN` scrub is kept (ADR-0025, ADR-0026) | the shell does not inherit provider secrets |
 | `approvals_reviewer` | `approvals_reviewer = "auto_review"` | vestigial under `never`: it is not a human gate and does not fire on-request prompts |
@@ -144,6 +144,46 @@ Authenticated command-line tools must be able to read their own configuration.
 | Subprocess scrub | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` is a user/managed hardening option only after proving the project's hooks and stdio MCPs do not require those provider credentials |
 | Auto mode | Claude deliberately ignores repository requests for auto mode and classifier policy, so a Codex-hosted peer launches interactively with `--permission-mode auto` and CLI-scoped `autoMode.classifyAllShell`; `/cf-customize` can offer the equivalent user default but never writes it without approval |
 | Codex review approvals | `auto_review` is configured but is not a human authorization path, and it does not pause for that subagent. Use `on-request` and `approvals_reviewer = "user"` only on a consult/no-edit lane when policy requires a human decision |
+
+### Shared and personal settings
+
+The shared files carry team policy; a few keys are each person's choice. The
+scaffold ships a status line and leaves effort to each person (ADR-0087).
+`cf-customize`'s `references/personal-settings.md` has the full guide.
+
+| Key | Shipped in the shared file | Where a person sets their own |
+|---|---|---|
+| Claude `statusLine` | a `jq` line: model name and id, version, output style, folder, branch, context used with a green, yellow or red percentage; without `jq`, folder and branch | `.claude/settings.local.json` |
+| Claude `effortLevel` | none | `~/.claude/settings.json`, `.claude/settings.local.json`, or `--effort` at launch |
+| Codex `model_reasoning_effort` | none | `~/.codex/config.toml`, or `-c model_reasoning_effort=...` at launch |
+
+- Claude Code reads managed settings, then `--settings` at launch, then
+  `.claude/settings.local.json`, then the shared `.claude/settings.json`, then
+  `~/.claude/settings.json`; a key the shared file sets hides the user
+  file's, and a one-key flag such as `--effort` overrides that key for the
+  session
+  ([Claude Code settings](https://code.claude.com/docs/en/settings#settings-precedence)).
+- Codex reads flags and `-c` overrides, then a trusted project's
+  `.codex/config.toml`, then a `--profile` file, then `~/.codex/config.toml`,
+  so a profile does not override a project value and a `-c` flag does
+  ([Codex configuration](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence)).
+  It has no untracked per-project file.
+- `.claude/settings.local.json` is gitignored. Since Claude Code v2.1.211 a
+  session in a worktree uses the file at the main checkout's root, so one
+  file serves every worktree; outside git, with the repository root at the
+  home folder, on Windows, or when the root, `.git` or `.claude` is owned by
+  someone else, the file stays per checkout and a worktree needs its own
+  copy ([where Claude Code keeps the local file](https://code.claude.com/docs/en/settings#where-claude-code-keeps-the-local-file-in-a-git-repository)).
+- `codeflow update` applies its shipped-value rules only to `statusLine`
+  and `effortLevel`: it moves a value still equal to the one it recorded as
+  shipped, keeps and reports a value the project changed, keeps a deletion,
+  and removes a key it no longer ships only while the key holds the
+  recorded value. Every other plain top-level key, the attribution
+  controls included, is restored whenever a project lacks it. `hooks`,
+  `permissions`, `sandbox` and `env` follow their own merge rules:
+  CodeFlow's own hook commands and missing sandbox entries are added back,
+  while a shipped permission entry or `env` key the project removed stays
+  removed when the recorded baseline shows CodeFlow shipped it.
 
 ### Hosting the duo from either seat
 

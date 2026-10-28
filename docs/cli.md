@@ -126,6 +126,8 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--revisit <REVISIT>` | The event that revisits the blocker. |
 | | `--scope <SCOPE>` | Where a cancelled record's scope went. |
 | | `--acceptance <FILE>` | A file holding the acceptance block to add to the Closeout on completion: the YAML between the fences, starting with a top-level `acceptance:` key that holds `reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`. |
+| | `--base <REF>` | The receiving target's tip a task completion binds against, such as `origin/main`. In a clone with remotes, `task status` grants landing, stacking and waiver authority only with `--base` and `--into`, because any process in the clone can change the git settings that would otherwise decide it; hosted CI pins its own base and is the authority. |
+| | `--into <BRANCH>` | The receiving target's branch name, such as `main`; given with `--base`. |
 | `codeflow adr new <TITLE>` | | Number the next ADR and write it from the template as `proposed` |
 | | `<TITLE>` | Decision title. |
 | `codeflow ids seed` | | Register every id on every ref and in retained history, once (maintainer) |
@@ -231,7 +233,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, git-config-includes, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
-| | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable. |
+| | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
 | `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
 | | `--json` | Print the same facts as JSON. |

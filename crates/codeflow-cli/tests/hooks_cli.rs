@@ -8181,10 +8181,16 @@ fn epic_line_adoption_pre_push_merge_only_control() {
 /// adoption route, so the push check stays off, as before this change.
 #[test]
 fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
-    use line_adoption_fixture::{passes, Line, ZERO};
+    use line_adoption_fixture::{passes, Line, LINE, ZERO};
     let f = Line::untracked();
     let first = f.direct();
     passes(&f.push(ZERO));
+    // The hook payloads are simulated and never publish anything, so the
+    // second payload names `first` as the line's remote tip while the
+    // destination is still empty. Publish `main` and the line (at `first`)
+    // so the destination holds what that payload claims: the Outcome marker
+    // check reads the destination's advertised default branch.
+    f.git(&["push", "-q", "origin", "main", LINE]);
     f.write("src/lib.rs", "pub fn again() {}\n");
     f.commit("fix: second direct change");
     passes(&f.push(&first));

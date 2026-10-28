@@ -126,6 +126,14 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// Order findings by what they say, reading an id in the text by its
+    /// number (`TSK-999` before `TSK-1000`), then by remedy.
+    #[must_use]
+    pub fn by_text(&self, other: &Self) -> std::cmp::Ordering {
+        crate::ids::compare_ids(&self.text, &other.text)
+            .then_with(|| self.remedy.cmp(&other.remedy))
+    }
+
     /// A finding and its remedy.
     #[must_use]
     pub fn new(text: impl Into<String>, remedy: Remedy) -> Self {
@@ -222,6 +230,12 @@ catalog! {
     /// An open task that names no deliverables (sathyassn/codeflow#40).
     TASK_DELIVERABLES = Step::Edit("{path}"),
         "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`, or name the path the task changes in its Description; a home not known yet is marked provisional with what decides it";
+    /// An open record with no filled Outcome section (TSK-435).
+    RECORD_OUTCOME = Step::Edit("{path}"),
+        "in {path}, add one line under `## Outcome`, between the Description (or Summary) and the Deliverables: after this merges, <who> can <do what>";
+    /// An epic created after adoption that names no deliverables (TSK-435).
+    EPIC_DELIVERABLES = Step::Edit("{path}"),
+        "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`; a home not known yet is marked provisional with what decides it";
     /// A documentation layer the project does not have.
     DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
         "run `codeflow update`, which restores {path} at this project's tier";
@@ -546,6 +560,9 @@ catalog! {
     /// A project without its codeflow configuration.
     DOCTOR_INIT = Step::Codeflow("codeflow init"),
         "run `codeflow init` in the project root";
+    /// A project without the Outcome section's adoption marker (TSK-435).
+    DOCTOR_OUTCOME_MARKER = Step::Codeflow("codeflow update"),
+        "run `codeflow update`, which writes `outcome_present_uids` to .codeflow/project.toml once, listing the task and epic records present now; those only warn without an `## Outcome` section, and later ones must state it";
     /// A tool doctor looks for on PATH and does not find.
     DOCTOR_TOOL_MISSING = Step::Codeflow("codeflow doctor"),
         "install {tool} on PATH, then `codeflow doctor --check {check}` confirms it";
@@ -566,6 +583,9 @@ catalog! {
     /// Directories a full gate writes that this process cannot write.
     DOCTOR_GATE_DIRS = Step::Edit(".claude/settings.json"),
         "make {paths} writable for the process that runs the full gate: inside the Claude Code sandbox the operator adds them to `sandbox.filesystem.allowWrite` in `.claude/settings.json` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs `codeflow test --mode full` outside the sandbox; then `codeflow doctor --check permissions` confirms it";
+    /// Gate directories a Codex seat cannot write (TSK-337).
+    DOCTOR_GATE_DIRS_CODEX = Step::Codeflow("codeflow doctor --preflight"),
+        "this runs in a Codex sandbox, which cannot write {paths}. A review seat's `cf-guard` profile grants none of them, by design, so run `codeflow reserve` and quick-mode heavy targets in a builder seat; full gates stay with the primary. The operator, or the session that launched the seat, relaunches the builder seat with the Codex builder launch in cf-model-orchestrator's `resources/routing/transport.md`, from the main checkout root: its override grants `~/.codeflow/locks` and its `cf-builder` profile writes the common `.git`. Outside the seat, `codeflow doctor --preflight` checks that launch, and `codeflow doctor --check permissions` in the relaunched seat confirms it";
     /// A state the sandbox hides from doctor.
     DOCTOR_SANDBOX_UNSEEN = Step::Codeflow("codeflow doctor"),
         "the operator runs `codeflow doctor --check {check}` outside the sandbox, in a separate terminal, to confirm {what}";

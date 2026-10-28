@@ -23,6 +23,14 @@ created: {{DATE}}
      public contracts or boundaries this task changes, and how to recover
      from an irreversible step, when a reviewer needs them. -->
 
+## Outcome
+
+<!-- One line saying what someone can do once this lands, in the form
+     "after this merges, <who> can <do what>". `codeflow validate --docs`
+     refuses an open record created after the project adopted this section
+     when the line is missing (`outcome_present_uids` in
+     `.codeflow/project.toml`), and warns for an older open record. -->
+
 ## Deliverables
 
 <!-- Each output this task produces and its home, one line each as

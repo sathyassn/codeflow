@@ -754,12 +754,30 @@ fn round_two_hook_and_local_plans_use_the_same_epic_target() {
             policy: Box::default(),
         };
         let mut report = StageReport::default();
+        let (listing, advertised, answer, anchor, fetch_failed) = (
+            OnceCell::new(),
+            OnceCell::new(),
+            OnceCell::new(),
+            OnceCell::new(),
+            OnceCell::new(),
+        );
+        let destination = Destination {
+            listing: &listing,
+            answer: &answer,
+            anchor: &anchor,
+            fetch_failed: &fetch_failed,
+            fork: None,
+            url: None,
+            advertised: &advertised,
+            namespace: None,
+            policy: &GitPolicy::default(),
+        };
         let target = ci_target(
             h.local.path(),
             &pushed,
             branch,
             &judged,
-            &GitPolicy::default(),
+            &destination,
             &mut report,
         )
         .unwrap();

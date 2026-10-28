@@ -184,6 +184,11 @@ fn init_writes(
         ),
     };
     state.store(root)?;
+    // The Outcome section's adoption marker (TSK-435): a fresh project lists
+    // no record, so every record it creates must state its Outcome.
+    if let Some(note) = super::update::record_outcome_marker(root)? {
+        report.notes.push(note);
+    }
 
     // Phase 2: install manifest entries for this tier + preset.
     let mut installed = InstalledManifest::load_or_default(root, &opts.binary_version)?;
@@ -327,7 +332,7 @@ fn init_writes(
     let codex_dir = root.join(".codex");
     if codex_dir.join("hooks.json").exists() || codex_dir.join("config.toml").exists() {
         report.notes.push(
-            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and high default effort, with shell startup files read only; a builder seat launches with the cf-builder overrides in the cf-model-orchestrator transport posture table, a reviewer with no --sandbox flag; in-session guards activate after one-time `/hooks` trust inside interactive codex, which `codeflow doctor --check codex` confirms (git hooks + CI enforce regardless)"
+            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve) and no effort setting (each person sets their own), with shell startup files read only; a builder seat launches with the cf-builder overrides in the cf-model-orchestrator transport posture table, a reviewer with no --sandbox flag; in-session guards activate after one-time `/hooks` trust inside interactive codex, which `codeflow doctor --check codex` confirms (git hooks + CI enforce regardless)"
                 .to_string(),
         );
     }

@@ -628,6 +628,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
+    // Body bytes come from strict parse_frontmatter; the Outcome and Deliverables sections are read from already validated UTF-8, never lossy record identities.
+    (
+        "codeflow-core/src/validate/mod.rs",
+        "validate_epic",
+        "from_utf8_lossy",
+        1,
+        "format-contract",
+    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/validate/portal.rs",
@@ -1557,8 +1565,35 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // accepted.
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
-        "codex_builder_line",
+        "codex_builder_load",
         "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // TSK-337: outside a repository the builder launch root is the project
+    // folder itself, so the probe runs there and reports what it observed;
+    // nothing is granted or skipped on that fallback.
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "builder_launch_root",
+        "obtain-absent:Repository::discover",
+        1,
+        "display",
+    ),
+    // TSK-337: the write probe's lines are read by their format; a line
+    // that does not fit leaves the grant check unavailable, never
+    // effective. The sandbox's error text is split only to print it.
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "probe_lines",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "error_text",
+        "lines",
         1,
         "display",
     ),
@@ -4638,7 +4673,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "waiver_problem",
         "trim",
-        7,
+        12,
         "display",
     ),
     // Normalizes human-authored standalone explanation and rejects an empty narrative; task identity and integration target are separate exact fields.
@@ -4897,6 +4932,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // TSK-435: collapses whitespace in an Outcome line so a respaced `<do  what>` still reads as the template token; prose only, never a path or Git name.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "spaced",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
+    // TSK-435: lets a respaced Outcome token such as `< do  what >` run across whitespace while it is scanned; prose only, never a path or Git name.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "token_spans",
+        "is_whitespace",
+        1,
+        "prose",
+    ),
     // Public raw acceptance-text reader removes LF/CRLF once. acceptance_blocks passes already-framed lines directly to parse_acceptance_lines so content CR is never stripped again.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
@@ -5057,27 +5108,19 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         3,
         "format-contract",
     ),
-    // None withholds the own-range waiver route: waiver_problem then returns a problem, so a failure can only add a binding finding.
+    // An unreadable HEAD is not the target branch, so the range is anchored on the qualified target: the stricter, pull-request judgment.
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
+        "qualify",
         "obtain-absent:head",
         1,
         "unproven",
     ),
-    // None withholds the own-range waiver route: waiver_problem then returns a problem, so a failure can only add a binding finding.
+    // A base policy that does not parse qualifies only `main` and `master`, the shipped default: a declared target then adds no receiving line.
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
-        "obtain-absent:merge_base",
-        1,
-        "unproven",
-    ),
-    // An unresolved target gives None, and waiver_problem then refuses an own-range waiver as not on the target; nothing is allowed by the fold.
-    (
-        "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
-        "obtain-absent:peel_to_commit",
+        "qualify",
+        "obtain-absent:from_str",
         1,
         "unproven",
     ),
@@ -6966,6 +7009,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/workgraph/layout.rs", "task_dir_has_record", "is_file", 1, "Type check on entry.file_type() with errors mapped to Unreadable."),
     ("crates/codeflow-core/src/workgraph/layout.rs", "task_record_files", "is_dir", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/workgraph/lifecycle.rs", "recorded_baseline", "ErrorKind::NotFound", 1, "Gives the empty baseline only after proven_absent confirms the file is missing."),
+    ("crates/codeflow-core/src/workgraph/lifecycle.rs", "project_table_in", "ErrorKind::NotFound", 1, "Reads no Outcome marker only after proven_absent confirms project.toml is missing; every other read error refuses."),
     ("crates/codeflow-core/src/workgraph/light_paths.rs", "next_adr_id", "ErrorKind::NotFound", 1, "Starts at ADR-0001 only after proven_absent confirms the directory is missing."),
     ("crates/codeflow-core/src/workgraph/record_template.rs", "load", "ErrorKind::NotFound", 1, "Uses the embedded template only when proven_absent confirms the project template is missing; otherwise it refuses."),
     ("crates/codeflow-core/src/workgraph/history_graph.rs", "snapshot", "is_file", 1, "Metadata from the opened cache must be a regular file; every other file type refuses, never means absent."),
