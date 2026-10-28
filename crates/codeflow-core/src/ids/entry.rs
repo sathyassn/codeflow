@@ -115,13 +115,37 @@ impl RegId {
         self.number.contains('-')
     }
 
-    /// The canonical sequence, `None` for a legacy id.
+    /// The canonical sequence, `None` for a legacy id and for a number above
+    /// `u64::MAX`. Allocation never uses this: it uses [`RegId::try_seq`],
+    /// which refuses such a number instead of reading it as no number.
     #[must_use]
     pub fn seq(&self) -> Option<u64> {
         if self.is_legacy() {
             None
         } else {
             self.number.parse().ok()
+        }
+    }
+
+    /// The canonical sequence, `Ok(None)` for a legacy id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a number above `u64::MAX`, so a high-water mark
+    /// that includes it is refused, never understated.
+    pub fn try_seq(&self) -> Result<Option<u64>, crate::ids::IdsError> {
+        if self.is_legacy() {
+            return Ok(None);
+        }
+        match self.number.parse::<u64>() {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if *error.kind() == std::num::IntErrorKind::PosOverflow => {
+                Err(crate::ids::IdsError::Invalid(format!(
+                    "{self} has a number above {}, so the next id cannot be chosen; rename or remove it",
+                    u64::MAX
+                )))
+            }
+            Err(_) => Ok(None),
         }
     }
 

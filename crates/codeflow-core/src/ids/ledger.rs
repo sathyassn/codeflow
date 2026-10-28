@@ -341,13 +341,18 @@ impl Ledger {
 
     /// The highest canonical sequence ever added for `kind` (R-7, R-111:
     /// legacy ids never count).
-    #[must_use]
-    pub fn max_seq(&self, kind: Kind) -> u64 {
-        self.ids()
-            .filter(|id| id.kind() == kind)
-            .filter_map(|id| id.seq())
-            .max()
-            .unwrap_or(0)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an id of `kind` has a number above `u64::MAX`.
+    pub fn max_seq(&self, kind: Kind) -> Result<u64, IdsError> {
+        let mut max = 0;
+        for id in self.ids().filter(|id| id.kind() == kind) {
+            if let Some(seq) = id.try_seq()? {
+                max = max.max(seq);
+            }
+        }
+        Ok(max)
     }
 
     /// The violations in commits of `rev`'s history that `exclude` does not

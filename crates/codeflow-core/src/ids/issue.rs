@@ -261,15 +261,12 @@ fn choose(git: &Git, ledgers: &[&Ledger], request: &Request) -> Result<RegId, Id
         }
     }
     let kind = request.kind;
-    let history = ledgers
-        .iter()
-        .map(|ledger| ledger.max_seq(kind))
-        .max()
-        .unwrap_or(0);
+    let mut history = 0;
+    for ledger in ledgers {
+        history = history.max(ledger.max_seq(kind)?);
+    }
     let refs = inventory::max_seq_on_refs(git, kind)?;
-    let worktree = inventory::max_seq_in_worktree(git.root(), kind).map_err(|error| {
-        IdsError::Invalid(format!("cannot inventory work records before issuing an ID: {error}; restore readable record directories, then retry"))
-    })?;
+    let worktree = inventory::max_seq_in_worktree(git.root(), kind)?;
     successor(kind, history.max(refs).max(worktree))
 }
 

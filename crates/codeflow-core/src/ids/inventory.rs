@@ -146,7 +146,7 @@ pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
         max = max.max(max_seq_in(
             z_fields(&listing).iter().map(String::as_str),
             kind,
-        ));
+        )?);
     }
     Ok(max)
 }
@@ -155,13 +155,16 @@ pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
 /// uncommitted record also counts.
 ///
 /// # Errors
-/// Returns an error when an existing record directory cannot be read.
-pub fn max_seq_in_worktree(root: &Path, kind: Kind) -> std::io::Result<u64> {
+/// Returns an error when an existing record directory cannot be read, or a
+/// record name has a number above `u64::MAX`.
+pub fn max_seq_in_worktree(root: &Path, kind: Kind) -> Result<u64, IdsError> {
     let mut paths = Vec::new();
     for base in RECORD_ROOTS {
-        collect_files(root, &root.join(base), &mut paths, 0)?;
+        collect_files(root, &root.join(base), &mut paths, 0).map_err(|error| {
+            IdsError::Invalid(format!("cannot inventory work records before issuing an ID: {error}; restore readable record directories, then retry"))
+        })?;
     }
-    Ok(max_seq_in(paths.iter().map(String::as_str), kind))
+    max_seq_in(paths.iter().map(String::as_str), kind)
 }
 
 fn collect_files(
@@ -199,13 +202,17 @@ fn collect_files(
     Ok(())
 }
 
-fn max_seq_in<'a>(paths: impl Iterator<Item = &'a str>, kind: Kind) -> u64 {
-    paths
+fn max_seq_in<'a>(paths: impl Iterator<Item = &'a str>, kind: Kind) -> Result<u64, IdsError> {
+    let mut max = 0;
+    for id in paths
         .filter_map(record_id_from_path)
         .filter(|id| id.kind() == kind)
-        .filter_map(|id| id.seq())
-        .max()
-        .unwrap_or(0)
+    {
+        if let Some(seq) = id.try_seq()? {
+            max = max.max(seq);
+        }
+    }
+    Ok(max)
 }
 
 /// Each id added in `rev`'s history: its adding commits, oldest first, and
