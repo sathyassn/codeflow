@@ -488,7 +488,14 @@ pub(super) fn target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>
 }
 
 fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut roots = vec![session.to_path_buf()];
+    // Roots are listed, compared and kept in the spelling `normalized` gives
+    // the ancestors below: the plain `C:\` form, never the verbatim `\\?\C:\`
+    // form `std::fs::canonicalize` returns on Windows. A session spelled the
+    // verbatim way was listed beside its own plain ancestor, so one owner was
+    // opened twice for every lookup and kept under two keys (TSK-1050).
+    let mut roots = vec![crate::portable_path::without_verbatim(
+        session.to_path_buf(),
+    )];
     for resolve in [false, true] {
         let target =
             super::edit_guard::normalized(target, resolve).map_err(|error| error.to_string())?;
@@ -1667,6 +1674,31 @@ mod owner_opens {
         assert!(roots(&root, "d0/x").is_ok());
         assert!(roots(&root, "d0/x").is_ok());
         assert_eq!(opens(), 2, "outside a scope every lookup opens again");
+    }
+
+    /// A session root in the verbatim spelling Windows `canonicalize` gives
+    /// (`\\?\C:\`) and a target's plain ancestors name one owner, which is
+    /// listed, opened and kept once, in the plain spelling. On other
+    /// platforms both spellings are the same path, so only the hosted
+    /// Windows lane exercises two of them.
+    #[test]
+    fn a_session_in_another_spelling_names_one_owner() {
+        let (_dir, root) = repository();
+        let verbatim = root.canonicalize().unwrap();
+        let _scope = RepoFactsScope::enter();
+        reset();
+        for word in ["a/x", ".claude/settings.json", "b/y"] {
+            assert_eq!(
+                super::target_roots(&root.join(word), &verbatim),
+                Ok(vec![root.clone()]),
+                "{word}"
+            );
+        }
+        assert_eq!(
+            opens(),
+            2,
+            "one open for the ordinary targets, one for the protected target"
+        );
     }
 
     /// Two owners, an outer repository and an independent one nested in
