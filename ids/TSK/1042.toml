@@ -1,0 +1,11 @@
+id = "TSK-1042"
+uid = "d81c670a-feb3-4fd5-a8c0-18dd78753866"
+kind = "TSK"
+title = "Task records whose status no longer matches git are reported"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T01:51:27Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
