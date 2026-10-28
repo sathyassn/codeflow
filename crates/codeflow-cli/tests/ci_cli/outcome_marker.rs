@@ -314,36 +314,19 @@ fn push_to_trunk_copy(dir: &Path) -> (Option<i32>, String) {
     let remote = tempfile::tempdir().unwrap();
     let bare = remote.path().join("origin.git");
     let bare = bare.to_str().unwrap();
-    git(
-        dir,
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            "--single-branch",
-            "--branch",
-            "trunk",
-            ".",
-            bare,
-        ],
-    );
+    codeflow_fixture::clone(dir, ".", bare)
+        .bare()
+        .branch("trunk")
+        .run();
+    // The copy stands for the target alone, so the pushed branch is new to it.
+    git(Path::new(bare), &["update-ref", "-d", "refs/heads/feat/x"]);
     git(dir, &["remote", "add", "origin", bare]);
     git(dir, &["fetch", "-q", "origin"]);
-    let mut cmd = std::process::Command::new("git");
-    cmd.args(["push", "origin", "feat/x"])
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
-        .env("CODEFLOW_HOME", super::isolated_home())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("CODEFLOW_PR_BODY");
-    for name in codeflow_core::root_checkout::AGENT_MARKERS {
-        cmd.env_remove(name);
-    }
-    let out = cmd.output().expect("git push runs");
+    let out = super::git_command(dir)
+        .args(["push", "origin", "feat/x"])
+        .env_remove("CODEFLOW_PR_BODY")
+        .output()
+        .expect("git push runs");
     let all = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),

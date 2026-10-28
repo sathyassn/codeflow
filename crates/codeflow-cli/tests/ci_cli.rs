@@ -90,10 +90,12 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
         .expect("binary runs")
 }
 
-fn git(dir: &Path, args: &[&str]) {
+/// A fixture Git command in `dir`: no global or system configuration, the
+/// installed hooks bound to the binary under test, an isolated home and no
+/// agent session marker.
+fn git_command(dir: &Path) -> Command {
     let mut cmd = Command::new("git");
-    cmd.args(args)
-        .current_dir(dir)
+    cmd.current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
@@ -104,7 +106,11 @@ fn git(dir: &Path, args: &[&str]) {
     for name in codeflow_core::root_checkout::AGENT_MARKERS {
         cmd.env_remove(name);
     }
-    let out = cmd.output().expect("git runs");
+    cmd
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = git_command(dir).args(args).output().expect("git runs");
     assert!(
         out.status.success(),
         "git {args:?} failed with {}: {}",
