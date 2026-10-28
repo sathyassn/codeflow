@@ -177,7 +177,7 @@ fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
         let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let required: &[&str] = if relative == transport {
             &[
-                "`--ask-for-approval never -c 'permissions.cf-builder.description=\"CodeFlow builder seat\"' -c default_permissions=\"cf-builder\"`, no `--sandbox` flag",
+                "`--ask-for-approval never -c 'permissions.cf-builder.description=\"CodeFlow builder seat\"' -c 'permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\"}' -c permissions.cf-builder.network.allow_local_binding=false -c default_permissions=\"cf-builder\"`, no `--sandbox` flag",
                 "The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05",
                 "`--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies",
             ]
@@ -332,9 +332,11 @@ fn codex_builder_launch_carries_the_probed_overrides() {
             .join("assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md"),
     )
     .unwrap();
-    let [description, select] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
+    let [description, grants, network, select] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
     assert!(
-        transport.contains(&format!("-c '{description}' -c {select}`")),
+        transport.contains(&format!(
+            "-c '{description}' -c '{grants}' -c {network} -c {select}`"
+        )),
         "transport.md launch differs from the probed overrides"
     );
     let cfg = shipped_config();
@@ -346,20 +348,76 @@ fn codex_builder_launch_carries_the_probed_overrides() {
     assert_eq!(builder["description"].as_str(), Some(value));
 }
 
-/// TSK-1003: the builder writes `~/.codeflow/locks` for `codeflow reserve`
-/// and nothing else under the home folder.
+/// TSK-337: the launch's filesystem override names exactly the shipped
+/// profile's home grants, so a main checkout whose profile predates them
+/// still gets them, and the override can never widen the profile.
+#[test]
+fn the_launch_grant_override_equals_the_shipped_home_grants() {
+    let [_, grants, _, _] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
+    let (key, value) = grants.split_once('=').unwrap();
+    assert_eq!(key, "permissions.cf-builder.filesystem");
+    let parsed: toml::Table = format!("x = {value}").parse().unwrap();
+    let overridden = parsed["x"].as_table().unwrap();
+    let cfg = shipped_config();
+    let shipped: toml::value::Table = cfg["permissions"]["cf-builder"]["filesystem"]
+        .as_table()
+        .unwrap()
+        .iter()
+        .filter(|(key, _)| !key.starts_with(':'))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    assert_eq!(overridden, &shipped);
+}
+
+/// TSK-337: a builder seat refuses private, link-local and metadata
+/// destinations as a review seat does. Codex skips the proxy's
+/// private-network checks when local binding is on, so `cf-builder` keeps it
+/// off and otherwise matches `cf-guard`'s network table, and the launch
+/// override carries the same value for a main checkout whose older table had
+/// it on.
+#[test]
+fn cf_builder_network_refuses_private_destinations_like_cf_guard() {
+    let cfg = shipped_config();
+    let builder = cfg["permissions"]["cf-builder"]["network"]
+        .as_table()
+        .expect("[permissions.cf-builder.network] table exists");
+    assert_eq!(builder["allow_local_binding"].as_bool(), Some(false));
+    assert_eq!(builder, cf_guard(&cfg, "network"));
+    let [_, _, network, _] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
+    let (key, value) = network.split_once('=').unwrap();
+    assert_eq!(key, "permissions.cf-builder.network.allow_local_binding");
+    assert_eq!(
+        Some(value.parse::<bool>().unwrap()),
+        builder["allow_local_binding"].as_bool()
+    );
+}
+
+/// TSK-1003, TSK-337: the builder writes `~/.codeflow/locks` for `codeflow
+/// reserve` and quick-mode heavy targets, and nothing else under the home
+/// folder; `~/.codeflow/gate-runs` stays unwritable, since full gates and
+/// their evidence stay with the primary; `cf-guard` writes neither.
 #[test]
 fn cf_builder_home_writes_are_only_the_lock_folder() {
     let cfg = shipped_config();
     let fs = cfg["permissions"]["cf-builder"]["filesystem"]
         .as_table()
         .unwrap();
-    let writes: Vec<&str> = fs
+    let mut writes: Vec<&str> = fs
         .iter()
         .filter(|(key, value)| !key.starts_with(':') && value.as_str() == Some("write"))
         .map(|(key, _)| key.as_str())
         .collect();
+    writes.sort_unstable();
     assert_eq!(writes, ["~/.codeflow/locks"]);
+    assert!(
+        !fs.keys().any(|key| key.contains("gate-runs")),
+        "cf-builder names the gate evidence folder"
+    );
+    let guard = cf_guard(&cfg, "filesystem");
+    assert!(
+        !guard.keys().any(|key| key.starts_with("~/.codeflow")),
+        "cf-guard grants a CodeFlow home folder"
+    );
     let roots = fs[":workspace_roots"].as_table().unwrap();
     assert_eq!(roots[".git"].as_str(), Some("write"));
     assert_eq!(roots[".git/hooks"].as_str(), Some("read"));

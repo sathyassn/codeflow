@@ -26,11 +26,27 @@ use std::time::Duration;
 /// is their documented home; a test keeps the two in step. The description
 /// override gives the startup load a profile named `cf-builder` that grants
 /// nothing; the session load merges it into the project's table, whose
-/// description is the same value.
-pub const CODEX_BUILDER_OVERRIDES: [&str; 2] = [
+/// description is the same value. The filesystem override carries the
+/// profile's home grant, the gate lock folder (TSK-337): a seat gets the
+/// profile as the main checkout root has it, which can predate it, and Codex
+/// merges this table into that profile's. A test keeps it equal to the
+/// shipped grants. The network override turns local binding off, which
+/// keeps the proxy's private-network checks on (TSK-337): an older root
+/// profile had it on, and a test keeps it equal to the shipped value.
+pub const CODEX_BUILDER_OVERRIDES: [&str; 4] = [
     "permissions.cf-builder.description=\"CodeFlow builder seat\"",
+    "permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\"}",
+    "permissions.cf-builder.network.allow_local_binding=false",
     "default_permissions=\"cf-builder\"",
 ];
+
+/// The launch overrides that `codex sandbox` takes as `-c`: all but the
+/// profile selection, which it takes as `-P cf-builder`.
+fn sandbox_overrides() -> impl Iterator<Item = &'static str> {
+    CODEX_BUILDER_OVERRIDES
+        .into_iter()
+        .filter(|value| !value.starts_with("default_permissions="))
+}
 
 /// How long one Codex command may take before it counts as not run.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -284,6 +300,156 @@ fn load(program: &str, cwd: &Path, timeout: Duration) -> CodexLoad {
     CodexLoad::Rejected(reason)
 }
 
+/// What the builder launch let a sandboxed process write, as
+/// `codeflow doctor --builder-write-probe` reported it inside `codex
+/// sandbox` with the launch overrides and the managed requirements, from
+/// the folder a builder seat starts in (TSK-337).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrantCheck {
+    /// The probe exited 0 and reported every folder writable: both gate
+    /// lock folders and the common git directory's `objects` and `refs`;
+    /// the folders, in order.
+    Effective(Vec<String>),
+    /// The probe exited 1 and reported at least one folder it could not
+    /// write; those lines.
+    NotEffective(String),
+    /// The sandbox or the probe did not run, ended otherwise, or printed
+    /// something that is not a probe result, so nothing was observed; why,
+    /// with the sandbox's own error text when it printed one.
+    NotRun(String),
+}
+
+/// How many folders the probe reports: two lock folders, `objects` and
+/// `refs`.
+const PROBED_FOLDERS: usize = 4;
+
+/// The folder a builder seat starts in: the main checkout that holds the
+/// common `.git` of `project` (transport.md, "from the main checkout
+/// root"). `project` itself when it is not in a repository, or when the
+/// common directory is not a `.git` folder inside a checkout.
+#[must_use]
+pub fn builder_launch_root(project: &Path) -> std::path::PathBuf {
+    let common = git2::Repository::discover(project)
+        .ok()
+        .and_then(|repo| repo.commondir().canonicalize().ok());
+    match common {
+        Some(common) if common.file_name().is_some_and(|name| name == ".git") => common
+            .parent()
+            .map_or_else(|| project.to_path_buf(), Path::to_path_buf),
+        _ => project.to_path_buf(),
+    }
+}
+
+/// Run `codeflow doctor --builder-write-probe` with the `codeflow` at
+/// `codeflow` inside `codex sandbox`, under the builder launch overrides,
+/// `-P cf-builder` and `--include-managed-config`, from `launch_root`.
+/// `codex sandbox` leaves managed requirements out of an explicitly
+/// selected profile unless asked, and a seat is bound by them, so the probe
+/// includes them; a Codex that refuses the flag leaves the check not run.
+/// The probe creates and removes disposable files in the folders it probes
+/// and writes nothing else.
+#[must_use]
+pub fn probe_codex_builder_grants(launch_root: &Path, codex: &Path, codeflow: &Path) -> GrantCheck {
+    grants_with_timeout(launch_root, codex, codeflow, LOAD_TIMEOUT)
+}
+
+fn grants_with_timeout(
+    launch_root: &Path,
+    codex: &Path,
+    codeflow: &Path,
+    timeout: Duration,
+) -> GrantCheck {
+    let (Some(program), Some(root), Some(check)) =
+        (codex.to_str(), launch_root.to_str(), codeflow.to_str())
+    else {
+        return GrantCheck::NotRun("a path is not valid UTF-8".to_string());
+    };
+    let mut args = vec!["sandbox", "-C", root];
+    for value in sandbox_overrides() {
+        args.push("-c");
+        args.push(value);
+    }
+    args.extend([
+        "-P",
+        "cf-builder",
+        "--include-managed-config",
+        "--",
+        check,
+        "doctor",
+        "--builder-write-probe",
+    ]);
+    let run =
+        match super::run_captured_complete(program, &args, timeout, Some(""), Some(launch_root)) {
+            Ok(run) => run,
+            Err(reason) => {
+                return GrantCheck::NotRun(format!("codex sandbox did not run: {reason}"))
+            }
+        };
+    let lines = probe_lines(&run.stdout);
+    match (run.code, lines) {
+        (Some(0), Some(lines))
+            if lines.len() == PROBED_FOLDERS && lines.iter().all(|(ok, _)| *ok) =>
+        {
+            GrantCheck::Effective(lines.into_iter().map(|(_, dir)| dir).collect())
+        }
+        (Some(1), Some(lines)) if lines.iter().any(|(ok, _)| !*ok) => {
+            let denied: Vec<String> = lines
+                .into_iter()
+                .filter(|(ok, _)| !*ok)
+                .map(|(_, line)| line)
+                .collect();
+            GrantCheck::NotEffective(denied.join("; "))
+        }
+        (code, _) => {
+            let ended = code.map_or_else(
+                || "ended by a signal".to_string(),
+                |code| format!("exit code {code}"),
+            );
+            GrantCheck::NotRun(format!(
+                "codex sandbox gave no complete write-probe result ({ended}){}",
+                error_text(&run.stderr)
+            ))
+        }
+    }
+}
+
+/// The probe's lines: `(true, folder)` for `writable <folder>` and
+/// `(false, line)` for `denied <folder>: <error>`. `None` when any non-empty
+/// line has another shape.
+fn probe_lines(stdout: &str) -> Option<Vec<(bool, String)>> {
+    stdout
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            if let Some(dir) = line.strip_prefix("writable ") {
+                Some((true, dir.to_string()))
+            } else if line.starts_with("denied ") {
+                Some((false, line.chars().take(300).collect()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// `: <stderr>` for a sandbox that printed an error, its non-empty lines
+/// joined and bounded, or nothing.
+fn error_text(stderr: &str) -> String {
+    let text: String = stderr
+        .lines()
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
+        .chars()
+        .take(300)
+        .collect();
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!(": {text}")
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -452,5 +618,133 @@ mod tests {
             Some(ProjectLayer::Unverified { conflicting: false })
         );
         assert_eq!(judge(off(), CodexLoad::Rejected("no".to_string())), None);
+    }
+
+    /// TSK-337: a probe result is four `writable` or `denied` lines; any
+    /// other line makes the output not a result.
+    #[test]
+    fn probe_lines_accept_only_probe_results() {
+        assert_eq!(
+            probe_lines("writable /h/.codeflow/locks\n\ndenied /r/.git/refs: Operation not permitted (os error 1)\n"),
+            Some(vec![
+                (true, "/h/.codeflow/locks".to_string()),
+                (
+                    false,
+                    "denied /r/.git/refs: Operation not permitted (os error 1)".to_string()
+                ),
+            ])
+        );
+        for odd in [
+            "ok    permissions: fine\n",
+            "writable /a\nsomething else\n",
+            " writable /a\n",
+        ] {
+            assert_eq!(probe_lines(odd), None, "{odd:?}");
+        }
+        assert_eq!(error_text(""), "");
+        assert_eq!(error_text("\nError: no\nmore\n"), ": Error: no; more");
+    }
+
+    /// TSK-337: a builder seat starts in the main checkout root, so a linked
+    /// worktree's launch root is the checkout that holds the common `.git`.
+    #[test]
+    fn the_launch_root_of_a_linked_worktree_is_the_main_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        let repo = git2::Repository::init(&main).unwrap();
+        let signature = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
+            .unwrap();
+        let linked = main.join(".worktrees").join("task");
+        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        repo.worktree("task", &linked, None).unwrap();
+        let main = main.canonicalize().unwrap();
+        assert_eq!(builder_launch_root(&linked), main);
+        assert_eq!(builder_launch_root(&main), main);
+        let plain = dir.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert_eq!(builder_launch_root(&plain), plain);
+    }
+
+    /// TSK-337: the sandbox run passes every launch override but the
+    /// selection, selects with `-P`, includes the managed config, runs the
+    /// write probe from the launch root, and counts as effective only on
+    /// exit 0 with every folder writable.
+    #[test]
+    fn the_grant_check_runs_the_write_probe_inside_codex_sandbox() {
+        let bin = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let log = bin.path().join("log");
+        let all_writable = "printf 'writable /l1\\nwritable /l2\\nwritable /o\\nwritable /r\\n'";
+        let codex = script(
+            bin.path(),
+            &format!(
+                "printf '%s|%s\\n' \"$PWD\" \"$*\" > '{}'\n{all_writable}\n",
+                log.display()
+            ),
+        );
+        let check = Path::new("/opt/codeflow");
+        let run =
+            |codex: &Path| grants_with_timeout(root.path(), codex, check, Duration::from_secs(10));
+        assert_eq!(
+            run(&codex),
+            GrantCheck::Effective(vec![
+                "/l1".to_string(),
+                "/l2".to_string(),
+                "/o".to_string(),
+                "/r".to_string()
+            ])
+        );
+        let logged = std::fs::read_to_string(&log).unwrap();
+        let (cwd, args) = logged.trim_end().split_once('|').unwrap();
+        assert_eq!(
+            Path::new(cwd).canonicalize().unwrap(),
+            root.path().canonicalize().unwrap()
+        );
+        assert_eq!(
+            args,
+            format!(
+                "sandbox -C {} -c {} -c {} -c {} -P cf-builder --include-managed-config -- /opt/codeflow doctor --builder-write-probe",
+                root.path().display(),
+                CODEX_BUILDER_OVERRIDES[0],
+                CODEX_BUILDER_OVERRIDES[1],
+                CODEX_BUILDER_OVERRIDES[2]
+            )
+        );
+        // A denied folder with exit 1 is not effective, naming the folder.
+        let denied = script(
+            bin.path(),
+            "printf 'writable /l1\\nwritable /l2\\nwritable /o\\ndenied /r: Operation not permitted\\n'\nexit 1\n",
+        );
+        assert_eq!(
+            run(&denied),
+            GrantCheck::NotEffective("denied /r: Operation not permitted".to_string())
+        );
+        // Every folder writable but a nonzero exit is not a result.
+        let exits = script(
+            bin.path(),
+            &format!("{all_writable}\necho 'sandbox: boom' >&2\nexit 1\n"),
+        );
+        assert!(matches!(
+            run(&exits),
+            GrantCheck::NotRun(reason) if reason.contains("exit code 1") && reason.ends_with(": sandbox: boom")
+        ));
+        // The old permissions badge is not a result either.
+        let badge = script(bin.path(), "echo 'ok    permissions: fine'\n");
+        assert!(matches!(run(&badge), GrantCheck::NotRun(_)));
+        // Too few folders.
+        let short = script(bin.path(), "echo 'writable /l1'\n");
+        assert!(matches!(run(&short), GrantCheck::NotRun(_)));
+        let silent = script(
+            bin.path(),
+            "echo 'error: no such flag --include-managed-config' >&2\nexit 2\n",
+        );
+        assert!(matches!(
+            run(&silent),
+            GrantCheck::NotRun(reason) if reason.contains("exit code 2") && reason.contains("--include-managed-config")
+        ));
     }
 }
