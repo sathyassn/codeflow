@@ -1980,4 +1980,133 @@ mod owner_opens {
         );
         assert_eq!(after, Ok(vec![root, linked]));
     }
+
+    /// A repository with one commit at `path`.
+    fn committed(path: &Path) -> git2::Repository {
+        let repo = git2::Repository::init(path).unwrap();
+        {
+            let tree = repo.treebuilder(None).unwrap().write().unwrap();
+            let tree = repo.find_tree(tree).unwrap();
+            let sig = git2::Signature::now("t", "t@example.test").unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "one", &tree, &[])
+                .unwrap();
+        }
+        repo
+    }
+
+    /// A main checkout `r` with a linked worktree `r/w`, and an independent
+    /// repository `c` beside it. `c` has a linked worktree `d` inside
+    /// `r/w/b`, so its enforcement files lie there, and a registration `x`
+    /// that names `r/w` as its checkout, so `r/w/.git` can be pointed at
+    /// `c` with text of the same length.
+    fn retarget_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let base = crate::portable_path::canonicalize(dir.path()).unwrap();
+        let (root, other) = (base.join("r"), base.join("c"));
+        let main = committed(&root);
+        let independent = committed(&other);
+        let linked = root.join("w");
+        main.worktree("w", &linked, None).unwrap();
+        std::fs::create_dir_all(linked.join("b")).unwrap();
+        independent
+            .worktree("d", &linked.join("b/d"), None)
+            .unwrap();
+        independent.worktree("x", &base.join("x"), None).unwrap();
+        let registration = std::fs::read(root.join(".git/worktrees/w/gitdir")).unwrap();
+        std::fs::write(other.join(".git/worktrees/x/gitdir"), registration).unwrap();
+        (dir, root, linked)
+    }
+
+    /// Point `linked/.git` at `c`'s registration `x` in place, with text of
+    /// the same length and the old modification time, so its inode, length,
+    /// type and time are all unchanged, and drop the main checkout's own
+    /// registration of it, as moving a worktree between repositories does.
+    /// The main checkout's `.git` entries are unchanged.
+    fn retarget(linked: &Path) {
+        use std::io::Write;
+        let gitfile = linked.join(".git");
+        let before = std::fs::read_to_string(&gitfile).unwrap();
+        let after = before
+            .replace("/r/.git/worktrees/w", "/c/.git/worktrees/x")
+            .replace("\\r\\.git\\worktrees\\w", "\\c\\.git\\worktrees\\x");
+        assert_ne!(before, after, "{before}");
+        assert_eq!(before.len(), after.len());
+        let modified = std::fs::metadata(&gitfile).unwrap().modified().unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&gitfile)
+            .unwrap();
+        file.write_all(after.as_bytes()).unwrap();
+        file.set_modified(modified).unwrap();
+        let root = linked.parent().unwrap();
+        std::fs::remove_dir_all(root.join(".git/worktrees/w")).unwrap();
+    }
+
+    type Admission = (
+        Result<bool, String>,
+        Result<bool, String>,
+        Result<Option<(bool, PathBuf)>, String>,
+    );
+
+    /// What the three edit-guard readers that walk a target's owners say
+    /// about `target`: whether it is an enforcement target, whether it holds
+    /// enforcement files, and the checkout a recursive delete would remove.
+    fn admission(target: &Path, root: &Path) -> Admission {
+        use crate::hooks::edit_guard::{self, Checkout};
+        (
+            edit_guard::repository_enforcement_target(target, root, true),
+            edit_guard::holds_enforcement_files(target, root),
+            edit_guard::registered_checkout_under(target, root, None).map(|found| {
+                found.map(|checkout| match checkout {
+                    Checkout::Registered(path) => (true, path),
+                    Checkout::Hidden(path) => (false, path),
+                })
+            }),
+        )
+    }
+
+    /// A worktree pointed at an independent repository during the scope,
+    /// with every metadata field the owner fingerprint compares unchanged,
+    /// keeps its owner: an unseen target inside it gets the owners and the
+    /// admission results a fresh reading gives (Codex review 03 of PR 386).
+    #[test]
+    fn a_worktree_retargeted_with_unchanged_metadata_keeps_its_owner() {
+        for session_is_main in [true, false] {
+            let (_dir, root, linked) = retarget_fixture();
+            let session = if session_is_main {
+                root.clone()
+            } else {
+                linked.clone()
+            };
+            let target = linked.join("b");
+            let scope = RepoFactsScope::enter();
+            assert_eq!(
+                super::target_roots(&linked.join("a/x"), &session),
+                Ok(vec![session.clone()]),
+                "both owners read afresh share one common directory"
+            );
+            let fingerprint = super::marker(&linked);
+            retarget(&linked);
+            assert!(
+                super::marker(&linked) == fingerprint,
+                "the retarget keeps every compared metadata field"
+            );
+            let owners = super::target_roots(&target.join("y"), &session);
+            let admitted = admission(&target, &session);
+            drop(scope);
+            let fresh_owners = super::target_roots(&target.join("y"), &session);
+            let mut both = vec![root.clone(), linked.clone()];
+            if !session_is_main {
+                both.reverse();
+            }
+            assert_eq!(fresh_owners, Ok(both), "two repositories now");
+            assert_eq!(owners, fresh_owners, "session is main: {session_is_main}");
+            let fresh_admitted = admission(&target, &session);
+            assert_eq!(fresh_admitted.1, Ok(true), "c's worktree d lies in w/b");
+            assert_eq!(
+                admitted, fresh_admitted,
+                "session is main: {session_is_main}"
+            );
+        }
+    }
 }
