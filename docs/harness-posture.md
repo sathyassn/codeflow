@@ -157,18 +157,29 @@ scaffold ships a status line and leaves effort to each person (ADR-0087).
 | Claude `effortLevel` | none | `~/.claude/settings.json`, `.claude/settings.local.json`, or `--effort` at launch |
 | Codex `model_reasoning_effort` | none | `~/.codex/config.toml`, or `-c model_reasoning_effort=...` at launch |
 
-- Claude Code reads managed settings, then command-line flags, then
+- Claude Code reads managed settings, then `--settings` at launch, then
   `.claude/settings.local.json`, then the shared `.claude/settings.json`, then
-  `~/.claude/settings.json`; a key the shared file sets hides the user file's.
-- Codex reads flags and profiles, then a trusted project's
-  `.codex/config.toml`, then `~/.codex/config.toml`. It has no untracked
-  per-project file.
-- `.claude/settings.local.json` is gitignored and per checkout, so it does
-  not follow into a new worktree; copy it in, or keep effort in the user file.
-- `codeflow update` moves a value still equal to the one it recorded as
-  shipped, keeps and reports a value the project changed, keeps a key the
-  project deleted deleted, and removes a key it no longer ships only while
-  the key still holds the recorded value.
+  `~/.claude/settings.json`; a key the shared file sets hides the user
+  file's, and a one-key flag such as `--effort` overrides that key for the
+  session
+  ([Claude Code settings](https://code.claude.com/docs/en/settings#settings-precedence)).
+- Codex reads flags and `-c` overrides, then a trusted project's
+  `.codex/config.toml`, then a `--profile` file, then `~/.codex/config.toml`,
+  so a profile does not override a project value and a `-c` flag does
+  ([Codex configuration](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence)).
+  It has no untracked per-project file.
+- `.claude/settings.local.json` is gitignored. Since Claude Code v2.1.211 a
+  session in a worktree uses the file at the main checkout's root, so one
+  file serves every worktree; outside git, with the repository root at the
+  home folder, on Windows, or when the root, `.git` or `.claude` is owned by
+  someone else, the file stays per checkout and a worktree needs its own
+  copy ([where Claude Code keeps the local file](https://code.claude.com/docs/en/settings#where-claude-code-keeps-the-local-file-in-a-git-repository)).
+- `codeflow update` applies its shipped-value rules only to `statusLine`
+  and `effortLevel`: it moves a value still equal to the one it recorded as
+  shipped, keeps and reports a value the project changed, keeps a deletion,
+  and removes a key it no longer ships only while the key holds the
+  recorded value. Every other shipped key, the attribution controls
+  included, is restored whenever a project lacks it.
 
 ### Hosting the duo from either seat
 
