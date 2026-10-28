@@ -1097,6 +1097,256 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
     );
 }
 
+/// What a waiver refusal says "on the target" requires (TSK-340 AC-7).
+const ON_TARGET: &str = "on the target means a receiving line this run pins holds the commit (the pull request's base in `codeflow ci`, `--base` in `task status`)";
+/// The sanctioned route a waiver refusal names (TSK-340 AC-7).
+const ROUTE: &str = "amend the criterion through a planning pull request into the target, merge the target into this branch before the review, and name that planning commit";
+
+/// Issue #354, item 3 (TSK-340 AC-7): a task pull request files a
+/// follow-up record, narrows AC-1 in a records-only commit that changes only
+/// the task's record, and completes with that commit as its waiver. Removing
+/// the follow-up record after the review changes another record, so the
+/// task reopens; it completes again naming the same waiver commit. AC-5's
+/// rule decides it: no completion landed, so the range is still the task's
+/// own pull request, and the verb and CI accept the waiver as before the
+/// reopen. In a clone with remotes the unpinned verb refuses, saying what
+/// "on the target" requires and naming the pins; pinned, it accepts. Once a
+/// completion landed, the original waiver is on the target and still
+/// counts, while a new in-branch waiver is refused, naming the planning
+/// route.
+#[test]
+#[allow(clippy::too_many_lines)] // One fixture keeps the #354 sequence and its controls in order.
+fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let main = planned_project(&root, true);
+    let own = "task/TSK-002-follow-up";
+    git(&root, &["switch", "-q", "-c", own, LINE]);
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-002"]),
+        "work start",
+    );
+    // The pull request files a follow-up record of its own.
+    ok(
+        &codeflow(
+            &root,
+            &["task", "new", "--epic", "EPC-001", "--into", LINE, "later"],
+        ),
+        "task new for the follow-up",
+    );
+    let filed = commit(&root, "docs(records): file the TSK-002 follow-up");
+    // The waiver: records-only, changes only TSK-002's record.
+    edit(
+        &root,
+        SECOND,
+        "the system shall work.",
+        "the system shall work on Linux.",
+    );
+    let waiver = commit(&root, "docs(records): narrow TSK-002 AC-1");
+    write(&root, "src/second.rs", "pub fn second() {}\n");
+    let first_review = commit(&root, "feat: add the second function");
+    let block = waived_block(dir.path(), "first", &first_review, &waiver);
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-002",
+            &["complete", "--acceptance", &block],
+        ),
+        "the first completion with an in-branch waiver",
+    );
+    commit(&root, "chore: complete TSK-002");
+
+    // The follow-up record leaves the pull request: a records-only commit
+    // after the review that changes another record, so the task reopens.
+    let follow_up = git(
+        &root,
+        &[
+            "diff",
+            "--name-only",
+            "--diff-filter=A",
+            &format!("{filed}~1"),
+            &filed,
+        ],
+    )
+    .lines()
+    .find(|path| path.starts_with("project-management/tasks/") && !path.ends_with("TSK-002.md"))
+    .expect("the follow-up record")
+    .to_string();
+    git(&root, &["rm", "-q", &follow_up]);
+    git(&root, &["checkout", &format!("{filed}~1"), "--", EPIC]);
+    commit(&root, "docs(records): remove the TSK-002 follow-up");
+    fails(
+        &task_ci(&root, own, "TSK-002"),
+        "a records-only change after the review",
+        "changed after the reviewed commit",
+    );
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-002",
+            &[
+                "todo",
+                "--reason",
+                "the follow-up record moved out of this pull request",
+            ],
+        ),
+        "reopen in the range",
+    );
+    let reopened = commit(&root, "chore: reopen TSK-002");
+
+    // Completing again names the same waiver commit, which is an ancestor
+    // of the new reviewed commit: accepted, as before the reopen.
+    let block = waived_block(dir.path(), "again", &reopened, &waiver);
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-002",
+            &["complete", "--acceptance", &block],
+        ),
+        "the same waiver after the reopen (issue #354)",
+    );
+    let completed = commit(&root, "chore: complete TSK-002 again");
+    ok(&task_ci(&root, own, "TSK-002"), "its pull request");
+
+    // In a clone with remotes, the unpinned verb grants no waiver authority
+    // (operator decision, 2026-10-27): the refusal says what "on the
+    // target" requires and names the pins. Pinned, it accepts.
+    git(&root, &["reset", "-q", "--hard", &reopened]);
+    let origin = dir.path().join("origin.git");
+    git(dir.path(), &["init", "-q", "--bare", "origin.git"]);
+    git(
+        &origin,
+        &[
+            "fetch",
+            "-q",
+            &root.to_string_lossy(),
+            &format!("{main}:{main}"),
+            &format!("{LINE}:{LINE}"),
+        ],
+    );
+    git(
+        &origin,
+        &["symbolic-ref", "HEAD", &format!("refs/heads/{main}")],
+    );
+    git(
+        &root,
+        &["remote", "add", "origin", &origin.to_string_lossy()],
+    );
+    git(&root, &["fetch", "-q", "origin"]);
+    let unpinned = status(
+        &root,
+        "task",
+        "TSK-002",
+        &["complete", "--acceptance", &block],
+    );
+    fails(
+        &unpinned,
+        "the unpinned verb in a clone with remotes",
+        ON_TARGET,
+    );
+    fails(
+        &unpinned,
+        "the unpinned verb in a clone with remotes",
+        "pass `--base origin/<name> --into <name>`",
+    );
+    let pin = format!("origin/{LINE}");
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-002",
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                &pin,
+                "--into",
+                LINE,
+            ],
+        ),
+        "the pinned verb in a clone with remotes",
+    );
+    git(&root, &["reset", "-q", "--hard", &completed]);
+    git(&root, &["remote", "remove", "origin"]);
+
+    // The completion lands. A fix reopens the landed completion: the
+    // original waiver is now on the line and counts once the verb pins it;
+    // unpinned, the line is not a receiving line `main`'s records name, and
+    // the refusal says what "on the target" requires. A new in-branch
+    // waiver is refused, naming the planning route.
+    merge(&root, LINE, own, "chore: land TSK-002");
+    let landed = "task/TSK-002-landed-fix";
+    git(&root, &["switch", "-q", "-c", landed, LINE]);
+    ok(
+        &status(
+            &root,
+            "task",
+            "TSK-002",
+            &["todo", "--reason", "regression"],
+        ),
+        "reopen a landed completion",
+    );
+    commit(&root, "chore: reopen TSK-002");
+    write(&root, "src/second.rs", "pub fn second_fixed() {}\n");
+    let fix_review = commit(&root, "fix: repair the second function");
+    let block = waived_block(dir.path(), "landed-original", &fix_review, &waiver);
+    let complete = |block: &str, pinned: bool| {
+        let mut args = vec!["complete", "--acceptance", block];
+        if pinned {
+            args.extend(["--base", LINE, "--into", LINE]);
+        }
+        status(&root, "task", "TSK-002", &args)
+    };
+    fails(
+        &complete(&block, false),
+        "the original waiver, unpinned",
+        ON_TARGET,
+    );
+    ok(
+        &complete(&block, true),
+        "the original waiver, now on the pinned line",
+    );
+    commit(&root, "chore: complete TSK-002 after the fix");
+    ok(
+        &task_ci(&root, landed, "TSK-002"),
+        "the original waiver in the fix pull request",
+    );
+    git(&root, &["reset", "-q", "--hard", "HEAD~1"]);
+    edit(&root, SECOND, "on Linux.", "on Linux and macOS.");
+    let late_waiver = commit(&root, "docs(records): widen TSK-002 AC-1");
+    write(&root, "src/second.rs", "pub fn second_refixed() {}\n");
+    let late_review = commit(&root, "fix: repair the second function again");
+    let block = waived_block(dir.path(), "landed-new", &late_review, &late_waiver);
+    let refused = complete(&block, true);
+    for reason in [
+        "a reopened task's waiver must name a planning commit on the target that amends this criterion",
+        ON_TARGET,
+        ROUTE,
+    ] {
+        fails(&refused, "a new in-branch waiver after a landed reopen", reason);
+    }
+    let record = std::fs::read_to_string(root.join(SECOND)).unwrap();
+    let inner = std::fs::read_to_string(&block).unwrap();
+    std::fs::write(
+        root.join(SECOND),
+        format!(
+            "{}\n```yaml\n{inner}```\n",
+            record.replacen("status: todo", "status: complete", 1)
+        ),
+    )
+    .unwrap();
+    commit(&root, "chore: complete TSK-002 by hand");
+    let refused = task_ci(&root, landed, "TSK-002");
+    for reason in [ON_TARGET, ROUTE] {
+        fails(&refused, "its pull request", reason);
+    }
+}
+
 /// Issue #217, comment of 2026-10-26: the two-base shape. Two tasks are
 /// complete on `main` through a checkpoint; the line reopens and completes
 /// each again through its own task pull request, with reviews that exist
