@@ -68,11 +68,13 @@ description: Land finished work (docs and capability updates, then a PR through 
    its target, `codeflow ci` binds each task of the line at its landing on
    the line, as that task's own PR into the line was judged. A task of
    another verified epic line that joined this one, with its tip in the PR
-   head, is judged the same way. A task that targets `main`, a line tip
-   beyond the PR head, or a joined line that fails the epic-line proof gets
-   no such binding. Run without a PR body on an `integration/` line that
-   fails the proof, `codeflow ci` prints why and judges the line as frozen
-   task work.
+   head, is judged the same way. Each binding rests on the epic-line proof
+   of the line's own history, so a task that targets `main`, a line tip
+   beyond the PR head, or a line that fails the proof, a workspace root
+   branch included, gets no such binding. Run without a PR body on an
+   `integration/` line that fails the proof, `codeflow ci` judges the line
+   as frozen task work and prints why, unless the range carries only what a
+   planning amendment may, which it judges as one.
 7. After opening, follow
    [references/pr-evidence.md](references/pr-evidence.md), "After opening":
    no polling by default. Only where the adopted policy requires hosted
