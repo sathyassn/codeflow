@@ -1,0 +1,11 @@
+id = "TSK-1058"
+uid = "399d6ff2-a583-4cc9-a8f2-a708ae961f75"
+kind = "TSK"
+title = "The Monitor tool is judged like every other shell tool"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T19:16:18Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
