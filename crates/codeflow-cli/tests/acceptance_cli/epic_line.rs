@@ -53,10 +53,37 @@ fn reopened_on(
     id: &str,
     record: &dyn Fn(&str, &str, &str) -> String,
 ) -> (i32, String) {
-    git(root, &["switch", "-q", "-c", branch, line]);
+    reopened_from(root, line, (line, None), branch, id, record)
+}
+
+/// [`reopened_on`] with the task branch cut from `from.0` and, after its
+/// first commit, merging `from.1` when given, as TSK-422's branch was cut
+/// from the 3.2.0 line and then took the EPC-025 line.
+fn reopened_from(
+    root: &Path,
+    line: &str,
+    from: (&str, Option<&str>),
+    branch: &str,
+    id: &str,
+    record: &dyn Fn(&str, &str, &str) -> String,
+) -> (i32, String) {
+    git(root, &["switch", "-q", "-c", branch, from.0]);
     let code = format!("src/{}.rs", id.to_lowercase().replace('-', "_"));
     write(root, &code, &format!("// {branch}: initial\n"));
-    let first = commit(root, "feat: initial work");
+    let mut first = commit(root, "feat: initial work");
+    if let Some(sync) = from.1 {
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "chore(merge): take the task's line",
+                sync,
+            ],
+        );
+        first = head(root);
+    }
     let old = fix_block(&first);
     write(
         root,
@@ -342,9 +369,11 @@ fn joined_task(id: &str, target: &str, status: &str, criteria: &str, closeout: &
 }
 
 /// [`planned_line`] where a planning merge on [`LINE`] adds EPC-002 with
-/// TSK-003 (targeting `target`) and TSK-004 (targeting [`JOINED`], so the
-/// line names its epic's task), then [`JOINED`] cut from [`LINE`], as
-/// EPC-025 was planned on the 3.2.0 line and its line cut from it.
+/// TSK-003 and TSK-004 (targeting [`JOINED`], so the line names its epic's
+/// task), then [`JOINED`] cut from [`LINE`], as EPC-025 was planned on the
+/// 3.2.0 line and its line cut from it. TSK-003 first targets [`LINE`]; a
+/// planning merge on [`JOINED`] moves it to `target`, as TSK-422 first
+/// targeted the 3.2.0 line.
 fn joined_repo(target: &str) -> tempfile::TempDir {
     let dir = planned_line();
     let root = dir.path();
@@ -357,7 +386,7 @@ fn joined_repo(target: &str) -> tempfile::TempDir {
     write(
         root,
         &record_path("TSK-003"),
-        &joined_task("TSK-003", target, "todo", OWN_JOURNEY, "Pending.\n"),
+        &joined_task("TSK-003", LINE, "todo", OWN_JOURNEY, "Pending.\n"),
     );
     write(
         root,
@@ -367,15 +396,29 @@ fn joined_repo(target: &str) -> tempfile::TempDir {
     commit(root, "docs(records): plan EPC-002 and its own line");
     land_on(root, LINE, "plan/EPC-002");
     git(root, &["branch", JOINED, LINE]);
+    git(
+        root,
+        &["switch", "-q", "-c", "plan/EPC-002-own-line", JOINED],
+    );
+    write(
+        root,
+        &record_path("TSK-003"),
+        &joined_task("TSK-003", target, "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    commit(root, "docs(records): move TSK-003 to its own line");
+    land_on(root, JOINED, "plan/EPC-002-own-line");
     dir
 }
 
 /// TSK-003's own pull request on [`JOINED`], reopened and re-completed
-/// before its first landing, landed there.
+/// before its first landing, landed there. Its branch is cut from [`LINE`]
+/// and takes [`JOINED`], so its own range holds a version of the record
+/// that names [`LINE`], as TSK-422's did.
 fn reopened_on_joined(root: &Path, target: &'static str) {
-    reopened_on(
+    reopened_from(
         root,
         JOINED,
+        (LINE, Some(JOINED)),
         "task/TSK-003-work",
         "TSK-003",
         &move |status, criteria, closeout| {
@@ -528,5 +571,44 @@ fn a_completion_forged_on_the_joined_line_stays_refused() {
             "TSK-003",
             &format!("unverified home `{JOINED}`"),
         ],
+    );
+}
+
+/// TSK-433 AC-9: a joined line's task whose record once named the judged
+/// line keeps today's refusal when the judged line itself fails the
+/// epic-line proof, here for a direct code commit on it after the join:
+/// the judged line is marked only on a proof of its own history.
+#[test]
+fn a_joined_task_on_an_unverified_judged_line_stays_refused() {
+    let dir = joined_repo(JOINED);
+    let root = dir.path();
+    reopened_on_joined(root, JOINED);
+    join(root, JOINED);
+    write(root, "src/direct.rs", "pub fn direct() {}\n");
+    commit(root, "feat: a direct commit on the judged line");
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "a joined task on an unverified judged line",
+        &["work.acceptance_binding", "TSK-003"],
+    );
+}
+
+/// TSK-433 AC-9: for a verified joined line's task, a tip of the judged
+/// line beyond the range head, here a later landing the run is not given,
+/// stays a target the run is not judged against.
+#[test]
+fn a_judged_line_tip_beyond_the_head_stays_outside_for_a_joined_task() {
+    let dir = joined_repo(JOINED);
+    let root = dir.path();
+    reopened_on_joined(root, JOINED);
+    join(root, JOINED);
+    let judged = head(root);
+    build(root, "task/TSK-002-later", "src/later.rs");
+    land(root, "task/TSK-002-later");
+    git(root, &["switch", "-q", "--detach", &judged]);
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "a judged line tip beyond the head for a joined task",
+        &["work.acceptance_binding", "TSK-003", OUTSIDE_TIP, LINE],
     );
 }

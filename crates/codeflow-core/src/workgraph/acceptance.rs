@@ -348,7 +348,7 @@ mod authority {
             CriteriaBases {
                 bases: self.0.clone(),
                 imported_home: None,
-                judged_line: None,
+                judged_lines: Vec::new(),
             }
         }
     }
@@ -401,7 +401,7 @@ mod authority {
     pub struct CriteriaBases {
         bases: Vec<Oid>,
         imported_home: Option<(String, Oid)>,
-        judged_line: Option<(String, Oid)>,
+        judged_lines: Vec<(String, Oid)>,
     }
 
     impl CriteriaBases {
@@ -424,23 +424,25 @@ mod authority {
                 .map(|(_, tip)| *tip)
         }
 
-        /// The verified epic line this run judges as one pull request into
-        /// its target, with the range head (TSK-433). A tip of that line the
+        /// A verified epic line this run judges as part of one pull request
+        /// into its target, with the range head (TSK-433): the range's own
+        /// line, or a verified line that joined it. A tip of such a line the
         /// head contains is the range under judgment, so it is no outside
         /// evidence of a landing; it adds no criteria base.
         pub(super) fn with_judged_line(mut self, line: &str, head: Oid) -> Self {
-            self.judged_line = Some((
+            self.judged_lines.push((
                 super::super::work_start::logical_target(line).to_string(),
                 head,
             ));
             self
         }
 
-        /// The range head, when `name` is the judged line ([`Self::with_judged_line`]).
+        /// The range head, when `name` is a judged line ([`Self::with_judged_line`]).
         pub(super) fn judged_line_head(&self, name: &str) -> Option<Oid> {
-            self.judged_line
-                .as_ref()
-                .filter(|(line, _)| line == super::super::work_start::logical_target(name))
+            let name = super::super::work_start::logical_target(name);
+            self.judged_lines
+                .iter()
+                .find(|(line, _)| line == name)
                 .map(|(_, head)| *head)
         }
     }
@@ -4037,8 +4039,8 @@ fn with_own_line(
 /// declares either that line or a joined line (TSK-433). A joined line is
 /// another epic line whose every tip the range head contains passes the
 /// epic-line proof ([`super::work_start::check_epic_line`]) into the default
-/// target; one that fails it, or cannot be read, stays unmarked and keeps
-/// today's refusal. The mark adds no criteria base: it only keeps the
+/// target; its task gets the judged line marked too. One that fails the
+/// proof, or cannot be read, stays unmarked and keeps today's refusal. The mark adds no criteria base: it only keeps the
 /// line's own tips that the range head contains from counting as a target
 /// the run is not judged against. A planning range, a task range or a task
 /// of another target keeps the run's bases alone.
@@ -4061,10 +4063,21 @@ fn judged_line(
         return bases;
     }
     let declared = super::work_start::logical_target(declared);
-    if declared == super::work_start::logical_target(line)
-        || (declared.starts_with("integration/") && joined_line(repo, declared, head))
+    if declared == super::work_start::logical_target(line) {
+        return bases.with_judged_line(line, head);
+    }
+    // A joined line's task may name the judged line too, as a target it
+    // had before it moved to its own line (TSK-422): both lines' tips the
+    // head contains are the range. Both marks rest on proofs of the lines'
+    // histories, never on the record's text: the joined line at each tip
+    // the head contains, and the judged line at the head itself.
+    if declared.starts_with("integration/")
+        && joined_line(repo, declared, head)
+        && epic_line_proved(repo, line, head)
     {
-        return bases.with_judged_line(declared, head);
+        return bases
+            .with_judged_line(declared, head)
+            .with_judged_line(line, head);
     }
     bases
 }
@@ -4077,13 +4090,6 @@ fn joined_line(repo: &Repository, joined: &str, head: Oid) -> bool {
     let Ok(tips) = target_tips(repo, joined) else {
         return false;
     };
-    let Ok(default) = default_target_name(repo) else {
-        return false;
-    };
-    let Ok(Some(default_tip)) = imports::home_tip(repo, &default.name) else {
-        return false;
-    };
-    let root = repo.workdir().unwrap_or_else(|| repo.path());
     let mut contained = false;
     for (_, tip) in tips {
         match is_ancestor_or_same(repo, tip, head) {
@@ -4092,19 +4098,33 @@ fn joined_line(repo: &Repository, joined: &str, head: Oid) -> bool {
             Err(_) => return false,
         }
         contained = true;
-        if super::work_start::check_epic_line(
-            root,
-            joined,
-            &default.name,
-            &default_tip.to_string(),
-            &tip.to_string(),
-        )
-        .is_err()
-        {
+        if !epic_line_proved(repo, joined, tip) {
             return false;
         }
     }
     contained
+}
+
+/// Whether `line` at `tip` passes the epic-line proof into the default
+/// target ([`super::work_start::check_epic_line`]): an epic that exists, a
+/// task of it targeting the line, and a first-parent history of merges or
+/// landed adoptions. Any read failure answers no (fail closed).
+fn epic_line_proved(repo: &Repository, line: &str, tip: Oid) -> bool {
+    let Ok(default) = default_target_name(repo) else {
+        return false;
+    };
+    let Ok(Some(default_tip)) = imports::home_tip(repo, &default.name) else {
+        return false;
+    };
+    let root = repo.workdir().unwrap_or_else(|| repo.path());
+    super::work_start::check_epic_line(
+        root,
+        line,
+        &default.name,
+        &default_tip.to_string(),
+        &tip.to_string(),
+    )
+    .is_ok()
 }
 
 /// The anchored base of the task landing that carried `introduced` onto
