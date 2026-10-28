@@ -1754,7 +1754,7 @@ fn figure_grammar_keeps_its_families_rules_altitude_and_evidence() {
         ("concept ownership", "Concept owns what the subject is, who it is for and what it is not"),
         ("how-to rule", "| How-to section | what do I do, in what order, and what tells me it worked | sequence, state or extent |"),
         ("prose rule", "no em or en dash"),
-        ("evidence board", "`docs/verification/tsk-014-w5/` is the evidence board"),
+        ("evidence board", "CodeFlow's own TSK-014 evidence board settled this grammar"),
         ("negative controls", "are the negative controls a figure must beat"),
         ("confusable pair", "| Confusable pair |"),
         ("inner mark anti-pattern", "| Inner mark floor miss |"),
@@ -1796,7 +1796,7 @@ fn presentation_skills_point_at_the_figure_grammar_and_evidence_board() {
     let skills = repo_root().join("assets/base/agents/skills");
     let grammar = shared_presentation_resource("figure-grammar.md");
     assert!(
-        grammar.contains("`docs/verification/tsk-014-w5/` is the evidence board")
+        grammar.contains("CodeFlow's own TSK-014 evidence board settled this grammar")
             && grammar.contains("How the board may be used is the shared doctrine's section 0"),
         "figure grammar must name the evidence board and point at the doctrine's rule"
     );
@@ -1826,7 +1826,7 @@ fn presentation_skills_point_at_the_figure_grammar_and_evidence_board() {
             .next()
             .expect("doctrine has a section 0");
         assert!(
-            section_zero.contains("docs/verification/tsk-014-w5/")
+            section_zero.contains("TSK-014 evidence board")
                 && section_zero.contains("It is **evidence only**. Do not clone it"),
             "{skill} shared doctrine section 0 must name the evidence board and its rule"
         );
@@ -1904,7 +1904,7 @@ fn board_rule_predicate_ignores_clone_commands_and_counts_duplicates() {
 }
 
 /// TSK-072 dedupe: in each presentation skill the altitude contract table
-/// header is stated once, in the figure grammar; the evidence board path
+/// header is stated once, in the figure grammar; the evidence board name
 /// appears only in the doctrine and the grammar; and exactly one paragraph,
 /// in the doctrine, states the rule not to clone the board. The rule count
 /// uses `board_rule_paragraphs`, so it proves no second statement names the
@@ -1934,7 +1934,7 @@ fn presentation_skills_state_the_altitude_table_and_board_rule_once() {
             ));
         }
         let board: BTreeSet<String> =
-            count_where(&|text| text.matches("docs/verification/tsk-014-w5/").count())
+            count_where(&|text| text.matches("TSK-014 evidence board").count())
                 .into_keys()
                 .collect();
         let expected_board = BTreeSet::from([
@@ -1943,7 +1943,7 @@ fn presentation_skills_state_the_altitude_table_and_board_rule_once() {
         ]);
         if board != expected_board {
             problems.push(format!(
-                "{skill}: evidence board path in {board:?}, want {expected_board:?}"
+                "{skill}: evidence board name in {board:?}, want {expected_board:?}"
             ));
         }
         let board_rule = count_where(&board_rule_paragraphs);

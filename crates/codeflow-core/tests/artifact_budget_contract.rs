@@ -490,6 +490,157 @@ fn engineering_rigour_rules_keep_one_home() {
     }
 }
 
+/// TSK-1030 (issue #279): the rule on what a repository holds has one home
+/// in the discipline rules, the build, ship, evidence and planning texts
+/// point at it, and the reviewer asks of every added file whether it is
+/// needed long term.
+const REPOSITORY_CONTENT_PINS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "assets/base/rules/workflow-discipline.md",
+        &[
+            (
+                "what belongs",
+                "A file joins the repository only when the project needs it long term, in the smallest form that serves its use.",
+            ),
+            (
+                "what stays out",
+                "Everything else stays out: run output and per-run logs, review records and verdict files, superseded drafts, build and cache output, copies kept for reference, scratch and session working files, duplicate copies no tool manages, and per-task evidence folders.",
+            ),
+            (
+                "evidence home",
+                "Required evidence goes in the PR body or the task record;",
+            ),
+            (
+                "evidence path condition",
+                "a summary of evidence that a live record cites and the PR body cannot carry. A live record is one still in force, such as a task record, an ADR or a research note.",
+            ),
+            (
+                "one vendoring rule",
+                "A copy of third-party code that a runtime or build needs is a dependency and joins through the project's dependency rule; a copy kept for reference stays out",
+            ),
+            (
+                "history keeps removed evidence",
+                "Git history keeps removed evidence. A record that still needs a removed file cites it at a commit that holds it, so a clean-up breaks no citation.",
+            ),
+            (
+                "review reads added files",
+                "each added file (needed long term, in the smallest form that serves its use)",
+            ),
+            (
+                "unneeded file is material",
+                "add a file the repository does not need long term, or one larger than the smallest form that serves its use",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        &[(
+            "build commits only what is needed",
+            "Commit only files the project needs long term, as the discipline rules' \"Write only what earns its keep\" lists",
+        )],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        &[(
+            "ship puts evidence in the body",
+            "Evidence goes in the body or the task record, never in committed run output or a per-task evidence folder.",
+        )],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        &[
+            ("evidence section", "## Where evidence lives"),
+            (
+                "evidence path condition",
+                "An evidence file joins the repository only when a live record cites it and the body cannot carry it, and then in summary form; there is no per-task evidence folder.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/evidence.md",
+        &[(
+            "evidence quality points to its home",
+            "`cf-ship/references/pr-evidence.md` \"Where evidence lives\"",
+        )],
+    ),
+    (
+        "assets/base/claude/skills/cf-method/references/project-organization.md",
+        &[(
+            "spike evidence row",
+            "| Evidence from a spike or comparison | The PR body or the task record, as `cf-ship/references/pr-evidence.md` \"Where evidence lives\" says |",
+        )],
+    ),
+    (
+        "assets/base/claude/agents/cf-reviewer.md",
+        &[
+            (
+                "added-file question",
+                "Ask of every file the diff adds whether the project needs it long term and whether this is the smallest form that serves its use",
+            ),
+            (
+                "verdict reports added files",
+                "added_files: <how many added files were checked; each unneeded or oversized one is a finding below | none added>",
+            ),
+        ],
+    ),
+];
+
+#[test]
+fn repository_content_rule_has_one_home_and_its_pointers() {
+    let root = repo_root();
+    for (path, clauses) in REPOSITORY_CONTENT_PINS {
+        assert_contains_all(&root.join(path), clauses);
+    }
+    // The pointing texts do not restate the list the discipline rules own.
+    for path in [
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        "assets/base/claude/agents/cf-reviewer.md",
+    ] {
+        assert!(
+            !normalized(&read_text(&root.join(path))).contains("copies kept for reference"),
+            "{path} restates the list the discipline rules own"
+        );
+    }
+}
+
+/// TSK-1030 AC-3: no shipped asset presents CodeFlow's own
+/// `docs/verification/` folder as a standard place, in an example, a
+/// default or a fixture.
+#[test]
+fn shipped_assets_name_no_per_task_verification_folder() {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable asset folder") {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                // Installed packages are not shipped; a local install may hold them.
+                if path.file_name().is_some_and(|name| name != "node_modules") {
+                    walk(&path, out);
+                }
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let assets = repo_root().join("assets");
+    let mut files = Vec::new();
+    walk(&assets, &mut files);
+    assert!(files.len() > 100, "the asset walk found the shipped files");
+    let named: Vec<String> = files
+        .iter()
+        .filter(|path| {
+            std::fs::read(path)
+                .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).contains("docs/verification"))
+        })
+        .map(|path| path.strip_prefix(&assets).unwrap().display().to_string())
+        .collect();
+    assert!(
+        named.is_empty(),
+        "shipped assets name docs/verification: {named:?}"
+    );
+}
+
 #[test]
 fn always_loaded_agents_preserve_responsible_autonomy_kernel() {
     let root = repo_root();
