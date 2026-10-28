@@ -3,7 +3,7 @@ import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  amendmentHeadings, capabilityFenceRecords, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships,
+  amendmentHeadings, capabilityFenceRecords, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, compareIdAwareText, decorateAltitude, excerptFor, extractPageRelationships,
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown, placeCapabilityTable,
   pinnedSourceUrl as providerSourceUrl, recordFilesFor, referencedIds, renderCapabilityFences, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
@@ -621,7 +621,7 @@ function rankedLayerPages(layer, layerPages) {
   return [...layerPages].sort((left, right) => {
     const leftRank = rank.has(left.source_path) ? rank.get(left.source_path) : Number.MAX_SAFE_INTEGER;
     const rightRank = rank.has(right.source_path) ? rank.get(right.source_path) : Number.MAX_SAFE_INTEGER;
-    return leftRank !== rightRank ? leftRank - rightRank : compareDeterministicText(left.route, right.route);
+    return leftRank !== rightRank ? leftRank - rightRank : compareIdAwareText(left.route, right.route);
   });
 }
 
@@ -772,7 +772,7 @@ function committedMarkdownSources(configuredRoots, excluded) {
     }
   }
   if (!sources.size) throw new Error("configured source roots contain no publishable Markdown files");
-  return [...sources.values()].sort((left, right) => compareDeterministicText(left.path, right.path));
+  return [...sources.values()].sort((left, right) => compareIdAwareText(left.path, right.path));
 }
 
 async function assertWorktreeMatchesCommit(records, committedBlobs, perFileBytes, totalLimit, label) {

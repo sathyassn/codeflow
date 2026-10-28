@@ -37,6 +37,27 @@ export function compareDeterministicText(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+// Ids order by their number, so TSK-999 comes before TSK-1000 and TSK-10000
+// (text order puts TSK-1000 first). Only the digits of an id (ADR, EPC, SPC,
+// TSK or CAP, with a historical second group) are read as numbers; every
+// other character keeps the locale-independent code unit order above. Texts
+// that read equal fall back to that order, so the result is a total order.
+const ID_IN_TEXT = /\b((?:ADR|EPC|SPC|TSK|CAP)-)(\d+)((?:-\d+)?)/gi;
+
+function numberKey(digits) {
+  const trimmed = digits.replace(/^0+/, "");
+  return `${String(trimmed.length).padStart(4, "0")}${trimmed}`;
+}
+
+function idOrderKey(text) {
+  return String(text).replace(ID_IN_TEXT, (_match, prefix, number, group) => `${prefix}${numberKey(number)}${group.replace(/\d+/, (digits) => numberKey(digits))}`);
+}
+
+export function compareIdAwareText(left, right) {
+  const order = compareDeterministicText(idOrderKey(left), idOrderKey(right));
+  return order !== 0 ? order : compareDeterministicText(left, right);
+}
+
 export function safeRelative(value, label = "path") {
   if (typeof value !== "string" || !value || value.includes("\\")) throw new Error(`${label}: expected a non-empty POSIX path`);
   const normalized = path.posix.normalize(value);
@@ -529,7 +550,7 @@ export function recordFilesFor(pointer, repositoryFiles) {
     if (!match || !strictId(match[1]) || found.has(match[1])) continue;
     found.set(match[1], { id: match[1], path: sourcePath });
   }
-  return [...found.values()].sort((left, right) => compareDeterministicText(left.id, right.id));
+  return [...found.values()].sort((left, right) => compareIdAwareText(left.id, right.id));
 }
 
 export function strictId(value) {
@@ -560,7 +581,7 @@ export function recoverUnavailableIds(text, sourcePath) {
     }
     if (strictId(candidate) && !recovered.includes(candidate)) recovered.push(candidate);
   }
-  if (sourcePath === "docs/capabilities.md") return [...recovered].sort(compareDeterministicText);
+  if (sourcePath === "docs/capabilities.md") return [...recovered].sort(compareIdAwareText);
   const filenameId = path.posix.basename(sourcePath, ".md").toUpperCase();
   if (strictId(filenameId)) return [filenameId];
   return recovered.length ? [recovered[0]] : [];
@@ -585,7 +606,7 @@ export function collectPageIds(frontmatter, text, sourcePath) {
   }
   const duplicates = declared.filter((id, index) => declared.indexOf(id) !== index);
   if (duplicates.length) throw new Error(`${sourcePath}: duplicate identity declaration ${[...new Set(duplicates)].join(", ")}`);
-  return [...declared].sort();
+  return [...declared].sort(compareIdAwareText);
 }
 
 const relationshipFields = [
