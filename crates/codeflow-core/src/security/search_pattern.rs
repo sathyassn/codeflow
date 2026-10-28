@@ -580,11 +580,51 @@ pub(crate) fn search_roots<'a>(
 /// counts too; that only keeps the first operand judged.
 pub(crate) fn names_ripgrep_config(line: &str) -> bool {
     const NAME: &str = "RIPGREP_CONFIG_PATH";
+    #[cfg(test)]
+    RIPGREP_CONFIG_READS.with(|reads| reads.set(reads.get() + 1));
     line.contains(NAME)
         || expand_commands(line)
             .iter()
             .flat_map(|segment| command_argv(segment))
             .any(|word| word.contains(NAME))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`names_ripgrep_config`] read a whole line on this
+    /// thread, for the tests that pin one read per line.
+    pub(crate) static RIPGREP_CONFIG_READS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// A command line, with [`names_ripgrep_config`] read at most once.
+/// The answer covers the whole line and re-expands every segment, so a
+/// guard that asked once per segment did quadratic work on a long chain.
+#[derive(Clone)]
+pub(crate) struct CommandLine<'a> {
+    text: &'a str,
+    ripgrep_config: std::cell::OnceCell<bool>,
+}
+
+impl<'a> CommandLine<'a> {
+    pub(crate) fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            ripgrep_config: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// The line as written.
+    pub(crate) fn text(&self) -> &'a str {
+        self.text
+    }
+
+    /// Whether the line names `RIPGREP_CONFIG_PATH`, read on first use.
+    pub(crate) fn names_ripgrep_config(&self) -> bool {
+        *self
+            .ripgrep_config
+            .get_or_init(|| names_ripgrep_config(self.text))
+    }
 }
 
 /// How a call runs a ripgrep preprocessor, the program `--pre` names,

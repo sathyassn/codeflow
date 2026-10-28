@@ -1,5 +1,6 @@
 //! Conservative literal inspection inside interpreter code, never ordinary
 //! data, and of the arguments an interpreter is given (TSK-302).
+use super::search_pattern::CommandLine;
 use super::{actions, outward, pattern::matches_extended_glob};
 use crate::hooks::{PolicyLevel, SecuritySection, Violation};
 use std::path::Path;
@@ -122,6 +123,8 @@ fn secret_reads(
     let mapped_cwd = crate::portable_path::guard_path(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let cwd = mapped_cwd.as_path();
     let mut violations = Vec::new();
+    // Every call on the line shares the line's facts, read once.
+    let line = CommandLine::new(command);
     if levels.secret_reads.is_active() {
         for unwrapped in outward::unwrapped_commands(command, cwd, home) {
             let args = &unwrapped.args;
@@ -129,7 +132,7 @@ fn secret_reads(
                 .first()
                 .map_or("", |s| super::unresolved::writer_name(s));
             let reader_cwd = unwrapped.cwd.as_deref().unwrap_or(cwd);
-            let mut recursive = recursive_read(name, &unwrapped, reader_cwd, home, command);
+            let mut recursive = recursive_read(name, &unwrapped, reader_cwd, home, &line);
             if recursive.is_some() && unwrapped.cwd.is_none() {
                 recursive = Some(Err(
                     "cannot establish the recursive reader's working directory",
@@ -149,18 +152,14 @@ fn secret_reads(
                     continue;
                 }
             }
-            for (at, value, glob) in file_operands(
-                name,
-                args,
-                unwrapped.expands.as_deref(),
-                command,
-                reader_cwd,
-            ) {
+            for (at, value, glob) in
+                file_operands(name, args, unwrapped.expands.as_deref(), &line, reader_cwd)
+            {
                 if glob && recursive.is_some() {
                     continue;
                 }
                 let secret =
-                    inspect_operand(command, &unwrapped, (at, value, glob), reader_cwd, home);
+                    inspect_operand(&line, &unwrapped, (at, value, glob), reader_cwd, home);
                 if secret.as_ref().map_or(true, |value| *value) {
                     violations.push(Violation::new(
                         "security.secret_reads",
@@ -187,7 +186,7 @@ fn secret_reads(
 /// add possible real paths before they exist on disk; virtual script
 /// descriptors keep the interpreter's existing best-effort code boundary.
 fn inspect_operand(
-    command: &str,
+    line: &CommandLine<'_>,
     call: &outward::Unwrapped,
     operand: (usize, &str, bool),
     cwd: &Path,
@@ -238,7 +237,7 @@ fn inspect_operand(
             .is_none_or(|flags| flags.get(at).copied().unwrap_or(true));
     if expands
         && crate::hooks::git_guard::has_glob(value)
-        && crate::hooks::git_guard::dot_glob_option(command).is_some()
+        && crate::hooks::git_guard::dot_glob_option(line.text()).is_some()
     {
         return Err("shell options change which hidden paths the glob selects");
     }
@@ -258,7 +257,7 @@ fn inspect_operand(
             call.expands.as_deref(),
             cwd,
             home,
-            command,
+            line,
             &call.links,
         );
     }
@@ -765,20 +764,16 @@ fn secret_search_glob(
     expands: Option<&[bool]>,
     cwd: &Path,
     home: Option<&Path>,
-    line: &str,
+    line: &CommandLine<'_>,
     links: &[super::composed::paths::Link],
 ) -> Result<bool, &'static str> {
     let rest = args.get(1..).unwrap_or_default();
     let literal: Vec<_> = (1..args.len())
         .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
         .collect();
-    let mut roots = super::search_pattern::search_roots(
-        name,
-        rest,
-        &literal,
-        super::search_pattern::names_ripgrep_config(line),
-    )
-    .ok_or("cannot establish the search roots")?;
+    let mut roots =
+        super::search_pattern::search_roots(name, rest, &literal, line.names_ripgrep_config())
+            .ok_or("cannot establish the search roots")?;
     if roots.is_empty() {
         roots.push(".");
     }
@@ -810,7 +805,7 @@ fn recursive_read(
     call: &outward::Unwrapped,
     cwd: &Path,
     home: Option<&Path>,
-    line: &str,
+    line: &CommandLine<'_>,
 ) -> Option<Result<bool, &'static str>> {
     let args = &call.args;
     let expands = call.expands.as_deref();
@@ -821,12 +816,8 @@ fn recursive_read(
         let literal: Vec<_> = (1..args.len())
             .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
             .collect();
-        let selectors = super::search_pattern::path_values(
-            name,
-            rest,
-            &literal,
-            super::search_pattern::names_ripgrep_config(line),
-        );
+        let selectors =
+            super::search_pattern::path_values(name, rest, &literal, line.names_ripgrep_config());
         let Some(selectors) = selectors else {
             return Some(Err("cannot establish a recursive reader's selectors"));
         };
@@ -1009,7 +1000,7 @@ fn conservative_read_roots(
     expands: Option<&[bool]>,
     cwd: &Path,
     home: Option<&Path>,
-    line: &str,
+    line: &CommandLine<'_>,
     links: &[super::composed::paths::Link],
 ) -> Option<Result<Vec<String>, &'static str>> {
     if matches!(
@@ -1389,7 +1380,7 @@ fn file_operands<'a>(
     name: &str,
     args: &'a [String],
     expands: Option<&[bool]>,
-    line: &str,
+    line: &CommandLine<'_>,
     cwd: &Path,
 ) -> Vec<(usize, &'a str, bool)> {
     if matches!(
@@ -1453,7 +1444,7 @@ fn file_operands<'a>(
     let literal: Vec<_> = (1..args.len())
         .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
         .collect();
-    let configured = super::search_pattern::names_ripgrep_config(line);
+    let configured = line.names_ripgrep_config();
     if let Some(paths) = super::search_pattern::path_values(name, rest, &literal, configured) {
         return paths
             .into_iter()
@@ -1684,7 +1675,7 @@ mod tests {
         ] {
             let args = crate::hooks::git_guard::command_argv(command);
             let name = super::super::unresolved::writer_name(&args[0]);
-            let values: Vec<_> = file_operands(name, &args, None, command, cwd)
+            let values: Vec<_> = file_operands(name, &args, None, &CommandLine::new(command), cwd)
                 .into_iter()
                 .map(|(_, value, _)| value)
                 .collect();
@@ -1700,7 +1691,7 @@ mod tests {
         ] {
             let args = crate::hooks::git_guard::command_argv(command);
             let name = super::super::unresolved::writer_name(&args[0]);
-            let values: Vec<_> = file_operands(name, &args, None, command, cwd)
+            let values: Vec<_> = file_operands(name, &args, None, &CommandLine::new(command), cwd)
                 .into_iter()
                 .map(|(_, value, _)| value)
                 .collect();
@@ -1947,6 +1938,37 @@ mod tests {
                 "input still reads: {command}: {findings:?}"
             );
         }
+    }
+
+    /// Every call on a line shares one read of whether the line names
+    /// `RIPGREP_CONFIG_PATH`. The read expands the whole line, so a read
+    /// per call made a long chain quadratic; the verdicts stay the same.
+    #[test]
+    fn a_long_chain_reads_the_ripgrep_config_name_once() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::fs::write(root.join("public.txt"), "ordinary fixture").unwrap();
+        let reads = |command: &str| {
+            super::super::search_pattern::RIPGREP_CONFIG_READS.with(|reads| reads.set(0));
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(findings.is_empty(), "{command}: {findings:?}");
+            super::super::search_pattern::RIPGREP_CONFIG_READS.with(std::cell::Cell::get)
+        };
+        let one = "rg needle docs && cat public.txt";
+        assert_eq!(reads(one), 1, "{one}");
+        let long = vec![one; 40].join(" && ");
+        assert_eq!(reads(&long), 1, "reads grew with the segment count");
+        let findings = secret_reads(
+            &format!("{long} && cat ~/.ssh/id_rsa"),
+            &SecuritySection::default(),
+            root,
+            Some(root),
+        );
+        assert!(
+            findings.iter().any(|v| v.rule == "security.secret_reads"),
+            "a store read at the end of the chain still refuses: {findings:?}"
+        );
     }
 
     #[test]
