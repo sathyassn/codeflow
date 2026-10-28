@@ -656,17 +656,41 @@ fn verification_folder_check_flags_presentation_and_passes_refusal() {
     )
     .is_empty());
     assert!(!table_rows_with_verification_home(old_row).is_empty());
+    // Negative control: a row that forbids the folder is not placement.
+    assert!(table_rows_with_verification_home(
+        "| Forbidden evidence | `docs/verification/<task>/` | Never commit it. |"
+    )
+    .is_empty());
+    assert!(table_rows_with_verification_home(
+        "| Per-task evidence | `docs/verification/<task>/` | No. It stays out of the repository. |"
+    )
+    .is_empty());
 }
 
-/// Table rows whose second cell (a home or location column) names
-/// `docs/verification`: the shape of the row TSK-1030 replaced.
+/// Table rows that place evidence in `docs/verification`: the second cell (a
+/// home or location column) names it and no other cell refuses it. The row
+/// TSK-1030 replaced has that shape; a row that forbids the folder does not.
 fn table_rows_with_verification_home(text: &str) -> Vec<String> {
+    const REFUSALS: &[&str] = &["never", "forbidden", "stays out", "refuse"];
     text.lines()
         .filter(|line| line.trim_start().starts_with('|'))
         .filter(|line| {
-            line.split('|')
-                .nth(2)
-                .is_some_and(|cell| cell.contains("docs/verification"))
+            let cells: Vec<&str> = line.split('|').collect();
+            let names_home = cells
+                .get(2)
+                .is_some_and(|cell| cell.contains("docs/verification"));
+            let refused = cells
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != 2)
+                .any(|(_, cell)| {
+                    let lower = cell.trim().to_lowercase();
+                    lower == "no"
+                        || lower.starts_with("no.")
+                        || lower.starts_with("no,")
+                        || REFUSALS.iter().any(|word| lower.contains(word))
+                });
+            names_home && !refused
         })
         .map(str::to_string)
         .collect()
