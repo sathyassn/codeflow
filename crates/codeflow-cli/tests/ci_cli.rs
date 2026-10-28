@@ -22,6 +22,8 @@ mod change_class_probes;
 mod destination;
 #[path = "ci_cli/document_indexes.rs"]
 mod document_indexes;
+#[path = "ci_cli/outcome_marker.rs"]
+mod outcome_marker;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
 #[path = "ci_cli/range_context.rs"]

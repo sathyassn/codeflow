@@ -8,7 +8,7 @@ use std::path::Path;
 use codeflow_core::hooks::{PolicyLevel, Violation};
 use codeflow_core::workgraph::durable_work_tracking_enabled;
 use codeflow_core::workgraph::lifecycle::{
-    judge_line_under, judge_pull_request_under, judge_release_range, Brought,
+    judge_line_under, judge_pull_request_under, judge_release_range, outcome_marker_errors, Brought,
 };
 
 /// Run the check for `codeflow ci`, record its findings and whether it ran,
@@ -48,6 +48,9 @@ pub(super) fn dispatch(
     if outcome.ran {
         ran.push("work-records");
     }
+    if outcome.marker_ran {
+        ran.push("outcome-marker");
+    }
     for notice in &outcome.notices {
         eprintln!(
             "{}",
@@ -74,6 +77,9 @@ pub(super) struct Outcome {
     /// Facts to show without blocking, such as an edited baseline list.
     pub notices: Vec<codeflow_core::remedy::Finding>,
     pub ran: bool,
+    /// Whether the Outcome adoption marker was judged on its own, outside
+    /// the record judge (a project without durable tracking).
+    pub marker_ran: bool,
 }
 
 /// Judge the records changed between the merge-base of `base` and `head`,
@@ -90,18 +96,16 @@ pub(super) fn check(
 ) -> Outcome {
     match durable_work_tracking_enabled(root) {
         Ok(true) => {}
-        Ok(false) => {
-            return Outcome {
-                violations: Vec::new(),
-                notices: Vec::new(),
-                ran: false,
-            }
-        }
+        // Without durable tracking no record rule applies, but the Outcome
+        // adoption marker still binds: a project with only epics, or with
+        // no records yet, must not list its own record as present.
+        Ok(false) => return marker_only(root, base, head, authority),
         Err(error) => {
             return Outcome {
                 violations: vec![super::tracking_state_violation(error)],
                 notices: Vec::new(),
                 ran: true,
+                marker_ran: false,
             }
         }
     }
@@ -110,6 +114,7 @@ pub(super) fn check(
             violations: Vec::new(),
             notices: Vec::new(),
             ran: false,
+            marker_ran: false,
         };
     };
     // A release range judges each brought record where it was introduced
@@ -136,14 +141,51 @@ pub(super) fn check(
                 violations,
                 notices: verdict.notices,
                 ran: true,
+                marker_ran: false,
             }
         }
         Err(error) => Outcome {
             violations: vec![block(format!("cannot read the record range: {error}"))],
             notices: Vec::new(),
             ran: true,
+            marker_ran: false,
         },
     }
+}
+
+/// The Outcome adoption marker judged alone (TSK-435), for a range whose
+/// project does not track work durably: the head's list against the file
+/// at `authority`, or at `base`, as the record judge reads it. A marker
+/// that cannot be judged refuses.
+fn marker_only(root: &Path, base: Option<&str>, head: &str, authority: Option<&str>) -> Outcome {
+    let judged = |violations: Vec<Violation>| Outcome {
+        violations,
+        notices: Vec::new(),
+        ran: false,
+        marker_ran: true,
+    };
+    let Some(base) = base else {
+        return Outcome {
+            violations: Vec::new(),
+            notices: Vec::new(),
+            ran: false,
+            marker_ran: false,
+        };
+    };
+    match outcome_marker_errors(root, authority.unwrap_or(base), Some(head)) {
+        Ok(errors) => judged(errors.into_iter().map(marker_block).collect()),
+        Err(error) => judged(vec![marker_block(format!(
+            "cannot judge the Outcome adoption marker in .codeflow/project.toml: {error}"
+        ))]),
+    }
+}
+
+fn marker_block(message: String) -> Violation {
+    Violation::always_blocking(
+        "work.records",
+        message,
+        "keep `outcome_present_uids` as the target lists it, or drop uids from it; a record made after adoption states its Outcome instead",
+    )
 }
 
 pub(super) fn block(message: String) -> Violation {

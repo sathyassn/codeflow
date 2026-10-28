@@ -710,6 +710,53 @@ fn project_table_in(repo_root: &Path) -> Result<Option<toml::Table>, String> {
         .map_err(|error| format!("{}: {error}", path.display()))
 }
 
+/// The refusals for a change to the Outcome adoption marker (TSK-435): the
+/// head's `.codeflow/project.toml` (the working tree's when `head` is
+/// `None`) judged against the file at `target`, the commit the change
+/// lands on, never against anything the change itself controls. It does
+/// not depend on durable work tracking, so `codeflow ci` runs it for a
+/// project with only epics, or with no records, as well.
+///
+/// # Errors
+///
+/// Returns a message when the repository, `target` or a
+/// `.codeflow/project.toml` cannot be read; the caller refuses.
+pub fn outcome_marker_errors(
+    repo_root: &Path,
+    target: &str,
+    head: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let target_commit = resolve_commit(&repo, target)?
+        .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
+    marker_errors_at(&repo, repo_root, target_commit, head)
+}
+
+/// [`outcome_marker_errors`] with the repository open and the target
+/// resolved. A head that does not resolve has no file, which reads as a
+/// removed marker.
+fn marker_errors_at(
+    repo: &Repository,
+    repo_root: &Path,
+    target_commit: git2::Oid,
+    head: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let target_state = project_table_at(repo, target_commit)?;
+    let head_state = match head {
+        Some(head) => match resolve_commit(repo, head)? {
+            Some(commit) => project_table_at(repo, commit)?,
+            None => None,
+        },
+        None => project_table_in(repo_root)?,
+    };
+    Ok(
+        super::outcome::marker_change_errors(target_state.as_ref(), head_state.as_ref())
+            .into_iter()
+            .map(|error| format!(".codeflow/project.toml: {error}"))
+            .collect(),
+    )
+}
+
 /// The baseline entries recorded in a commit's `.codeflow/project.toml`.
 fn baseline_at(repo: &Repository, commit: git2::Oid) -> Result<Vec<String>, String> {
     let tree = repo
@@ -2117,21 +2164,9 @@ fn judge_range_against(
     }
     verdict.warnings.extend(baseline.warning());
     verdict.errors.extend(baseline.errors());
-    // The Outcome adoption marker is judged by the target's file, never by
-    // anything the change itself controls (TSK-435).
-    let target_state = project_table_at(&repo, target_commit)?;
-    let head_state = match head {
-        Some(head) => match resolve_commit(&repo, head)? {
-            Some(commit) => project_table_at(&repo, commit)?,
-            None => None,
-        },
-        None => project_table_in(repo_root)?,
-    };
-    verdict.errors.extend(
-        super::outcome::marker_change_errors(target_state.as_ref(), head_state.as_ref())
-            .into_iter()
-            .map(|error| format!(".codeflow/project.toml: {error}")),
-    );
+    verdict
+        .errors
+        .extend(marker_errors_at(&repo, repo_root, target_commit, head)?);
     for record in after.records.values() {
         if brought.is_some_and(|brought| brought.backfills.contains(&record.id)) {
             // A `uid` backfill landed on a line was judged there.
