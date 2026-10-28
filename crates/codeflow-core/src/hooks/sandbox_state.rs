@@ -563,9 +563,10 @@ fn reaches_floor(entry: &str, host: &Host, floor: &[PathBuf]) -> bool {
 /// Whether a pattern's literal start, cut inside a path component, can
 /// still begin a protected path (`.cl*` reaches `.claude`).
 fn literal_prefix_overlaps(reading: &Path, protected: &Path) -> bool {
-    let reading = reading.to_string_lossy();
-    let protected = protected.to_string_lossy();
-    protected.starts_with(reading.as_ref())
+    protected
+        .as_os_str()
+        .as_encoded_bytes()
+        .starts_with(reading.as_os_str().as_encoded_bytes())
 }
 
 fn codex_triggers(host: &Host, found: &mut Vec<String>) {
