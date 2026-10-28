@@ -1,0 +1,11 @@
+id = "TSK-1043"
+uid = "ad9e7e58-75d9-41fa-a182-2ccb3b2134fa"
+kind = "TSK"
+title = "Each release records the tests and checks behind every managed script"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T01:51:34Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
