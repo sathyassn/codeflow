@@ -75,6 +75,10 @@ that exclusion, scoped to its harness, account, route and freshness, and give
 it to the primary that dispatches workers, so it does not choose the
 known-unavailable route again; do not infer that sibling models or another
 account are unavailable, and a materially fresh native signal may clear it.
+A recorded exclusion is a lead for the next routing decision, never a fact:
+that decision probes the route live first, as the orchestrator's
+"Preflight" and `.codeflow/rules/workflow-discipline.md` "Check changeable
+state live" say.
 
 A change to the responsible primary or cross-lineage reviewer seat or lineage
 is a reassignment: it is recorded and reviewed by one other-lineage seat (in
