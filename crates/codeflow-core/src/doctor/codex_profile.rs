@@ -30,10 +30,13 @@ use std::time::Duration;
 /// profile's home grant, the gate lock folder (TSK-337): a seat gets the
 /// profile as the main checkout root has it, which can predate it, and Codex
 /// merges this table into that profile's. A test keeps it equal to the
-/// shipped grants.
-pub const CODEX_BUILDER_OVERRIDES: [&str; 3] = [
+/// shipped grants. The network override turns local binding off, which
+/// keeps the proxy's private-network checks on (TSK-337): an older root
+/// profile had it on, and a test keeps it equal to the shipped value.
+pub const CODEX_BUILDER_OVERRIDES: [&str; 4] = [
     "permissions.cf-builder.description=\"CodeFlow builder seat\"",
     "permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\"}",
+    "permissions.cf-builder.network.allow_local_binding=false",
     "default_permissions=\"cf-builder\"",
 ];
 
@@ -704,10 +707,11 @@ mod tests {
         assert_eq!(
             args,
             format!(
-                "sandbox -C {} -c {} -c {} -P cf-builder --include-managed-config -- /opt/codeflow doctor --builder-write-probe",
+                "sandbox -C {} -c {} -c {} -c {} -P cf-builder --include-managed-config -- /opt/codeflow doctor --builder-write-probe",
                 root.path().display(),
                 CODEX_BUILDER_OVERRIDES[0],
-                CODEX_BUILDER_OVERRIDES[1]
+                CODEX_BUILDER_OVERRIDES[1],
+                CODEX_BUILDER_OVERRIDES[2]
             )
         );
         // A denied folder with exit 1 is not effective, naming the folder.

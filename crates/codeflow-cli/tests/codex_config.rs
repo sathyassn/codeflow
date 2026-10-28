@@ -178,7 +178,7 @@ fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
         let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let required: &[&str] = if relative == transport {
             &[
-                "`--ask-for-approval never -c 'permissions.cf-builder.description=\"CodeFlow builder seat\"' -c 'permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\"}' -c default_permissions=\"cf-builder\"`, no `--sandbox` flag",
+                "`--ask-for-approval never -c 'permissions.cf-builder.description=\"CodeFlow builder seat\"' -c 'permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\"}' -c permissions.cf-builder.network.allow_local_binding=false -c default_permissions=\"cf-builder\"`, no `--sandbox` flag",
                 "The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05",
                 "`--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies",
             ]
@@ -333,9 +333,11 @@ fn codex_builder_launch_carries_the_probed_overrides() {
             .join("assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md"),
     )
     .unwrap();
-    let [description, grants, select] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
+    let [description, grants, network, select] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
     assert!(
-        transport.contains(&format!("-c '{description}' -c '{grants}' -c {select}`")),
+        transport.contains(&format!(
+            "-c '{description}' -c '{grants}' -c {network} -c {select}`"
+        )),
         "transport.md launch differs from the probed overrides"
     );
     let cfg = shipped_config();
@@ -352,7 +354,7 @@ fn codex_builder_launch_carries_the_probed_overrides() {
 /// still gets them, and the override can never widen the profile.
 #[test]
 fn the_launch_grant_override_equals_the_shipped_home_grants() {
-    let [_, grants, _] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
+    let [_, grants, _, _] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
     let (key, value) = grants.split_once('=').unwrap();
     assert_eq!(key, "permissions.cf-builder.filesystem");
     let parsed: toml::Table = format!("x = {value}").parse().unwrap();
@@ -366,6 +368,29 @@ fn the_launch_grant_override_equals_the_shipped_home_grants() {
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     assert_eq!(overridden, &shipped);
+}
+
+/// TSK-337: a builder seat refuses private, link-local and metadata
+/// destinations as a review seat does. Codex skips the proxy's
+/// private-network checks when local binding is on, so `cf-builder` keeps it
+/// off and otherwise matches `cf-guard`'s network table, and the launch
+/// override carries the same value for a main checkout whose older table had
+/// it on.
+#[test]
+fn cf_builder_network_refuses_private_destinations_like_cf_guard() {
+    let cfg = shipped_config();
+    let builder = cfg["permissions"]["cf-builder"]["network"]
+        .as_table()
+        .expect("[permissions.cf-builder.network] table exists");
+    assert_eq!(builder["allow_local_binding"].as_bool(), Some(false));
+    assert_eq!(builder, cf_guard(&cfg, "network"));
+    let [_, _, network, _] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
+    let (key, value) = network.split_once('=').unwrap();
+    assert_eq!(key, "permissions.cf-builder.network.allow_local_binding");
+    assert_eq!(
+        Some(value.parse::<bool>().unwrap()),
+        builder["allow_local_binding"].as_bool()
+    );
 }
 
 /// TSK-1003, TSK-337: the builder writes `~/.codeflow/locks` for `codeflow

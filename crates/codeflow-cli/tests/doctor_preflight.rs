@@ -320,7 +320,7 @@ fn a_codex_that_loads_the_project_config_is_reported_with_the_exact_overrides() 
         .filter(|l| l.contains("|features list"))
         .collect();
     assert_eq!(loads.len(), 2, "{log}");
-    let expected = "features list -c permissions.cf-builder.description=\"CodeFlow builder seat\" -c permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\"} -c default_permissions=\"cf-builder\"";
+    let expected = "features list -c permissions.cf-builder.description=\"CodeFlow builder seat\" -c permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\"} -c permissions.cf-builder.network.allow_local_binding=false -c default_permissions=\"cf-builder\"";
     for load in &loads {
         assert!(load.ends_with(&format!("|{expected}")), "{load}");
     }
@@ -539,7 +539,7 @@ fn the_builder_grants_are_checked_inside_codex_sandbox_from_the_launch_root() {
     assert_eq!(std::fs::canonicalize(cwd).unwrap(), project_dir);
     assert!(
         args.starts_with(&format!(
-            "sandbox -C {} -c permissions.cf-builder.description=\"CodeFlow builder seat\" -c permissions.cf-builder.filesystem={{\"~/.codeflow/locks\"=\"write\"}} -P cf-builder --include-managed-config -- ",
+            "sandbox -C {} -c permissions.cf-builder.description=\"CodeFlow builder seat\" -c permissions.cf-builder.filesystem={{\"~/.codeflow/locks\"=\"write\"}} -c permissions.cf-builder.network.allow_local_binding=false -P cf-builder --include-managed-config -- ",
             project_dir.display()
         )),
         "{args}"

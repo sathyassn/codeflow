@@ -25,9 +25,10 @@
 #   operator moved builders into a sandbox so that no builder can write a
 #   shell startup file. A builder launches with `--ask-for-approval never`,
 #   `-c 'permissions.cf-builder.description="CodeFlow builder seat"'`,
-#   `-c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write"}'`
+#   `-c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write"}'`,
+#   `-c permissions.cf-builder.network.allow_local_binding=false`
 #   and `-c default_permissions="cf-builder"`, no `--sandbox` flag, from the
-#   main checkout root (both overrides are explained at
+#   main checkout root (the overrides are explained at
 #   `[permissions.cf-builder]` below; TSK-1003, TSK-337). The spike of 2026-09-29
 #   (Codex 0.159.1) ran fetch, worktree add, stage, commit, cargo and npm
 #   builds unattended with `.git/hooks` and `.git/config` unwritable; a
@@ -234,9 +235,22 @@ dangerously_allow_all_unix_sockets = false
 # protocol/src/permissions.rs:2470-2506); hooks and config stay read-only
 # because hook commands run unsandboxed later. Secret denies are inherited
 # from `cf-guard`, and so are the read-only shell startup files.
-# `allow_local_binding = true` lets dev servers listen and also turns the
-# private-network guard off for this profile: a recorded gap. A push to a
-# remote outside the workspace root is denied (see D1 above).
+# A push to a remote outside the workspace root is denied (see D1 above).
+#
+# Network (TSK-337, decided 2026-10-28): `allow_local_binding = false`, as
+# for `cf-guard`, so a builder cannot reach private, link-local or cloud
+# metadata destinations. Codex documents that local binding "skips the
+# proxy's additional private-network destination checks"
+# (codex-rs config/src/permissions_toml.rs:343), and a `codex sandbox` probe
+# on 0.165.0 confirmed it: with binding on, connections to 192.168.1.1,
+# 10.0.0.1, 172.16.0.1 and 169.254.169.254 left the machine; with it off the
+# proxy refused each with 403. Deny rules cannot replace it: `10.*` did not
+# match an address, and a public name resolving to a private address
+# (`192-168-1-1.sslip.io`) still got through. The cost: a builder seat cannot
+# bind a local listener, so tests that serve on 127.0.0.1 (the present
+# service, `read_commands_offline`, one `hooks_cli` test, browser checks)
+# run on the primary. The launch passes the same value as an override,
+# since a main checkout's older table had local binding on.
 #
 # Selecting this profile on Codex 0.163 and later (TSK-1003, issue 213):
 # the TUI's startup `account/read` loads config without the project layer,
@@ -312,7 +326,7 @@ description = "CodeFlow builder seat"
 [permissions.cf-builder.network]
 enabled = true
 mode = "full"
-allow_local_binding = true
+allow_local_binding = false
 allow_upstream_proxy = false
 dangerously_allow_non_loopback_proxy = false
 dangerously_allow_all_unix_sockets = false

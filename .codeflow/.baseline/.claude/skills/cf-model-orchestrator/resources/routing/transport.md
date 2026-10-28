@@ -57,7 +57,7 @@ work. This table is the one home of these flags:
 | Seat | Production and building | Consult and review |
 |---|---|---|
 | Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |
-| Codex | `--ask-for-approval never -c 'permissions.cf-builder.description="CodeFlow builder seat"' -c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write"}' -c default_permissions="cf-builder"`, no `--sandbox` flag, from the main checkout root | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |
+| Codex | `--ask-for-approval never -c 'permissions.cf-builder.description="CodeFlow builder seat"' -c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write"}' -c permissions.cf-builder.network.allow_local_binding=false -c default_permissions="cf-builder"`, no `--sandbox` flag, from the main checkout root | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |
 | Grok | Not qualified; no Grok seat builds (ADR-0075 D3, below) | `--permission-mode auto`, launched in its own task worktree |
 
 The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05: a
@@ -68,8 +68,11 @@ nothing, and the session load merges it into the project's profile;
 without it the seat stops with "failed to load workspace requirements".
 The seat gets the profile as the main checkout root has it, which can
 predate a CodeFlow update, so the launch also carries the profile's home
-grant, the gate lock folder; Codex merges it into that profile. A
-builder runs `codeflow reserve` and quick-mode heavy targets under the
+grant, the gate lock folder, and its local binding off, which keeps
+private, link-local and cloud metadata destinations refused as for a
+review seat; Codex merges both into that profile. A builder seat cannot
+serve on a local port, so tests that do run on the primary. A builder
+runs `codeflow reserve` and quick-mode heavy targets under the
 shared lock; full gates and their evidence stay with the primary, and
 `~/.codeflow/gate-runs` is not writable to any Codex seat.
 `codeflow doctor --preflight` checks that the installed Codex accepts

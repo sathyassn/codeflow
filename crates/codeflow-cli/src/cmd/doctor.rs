@@ -16,7 +16,9 @@ pub struct DoctorArgs {
     pub list: bool,
     /// Print the seat, sandbox and tool evidence the orchestrator preflight
     /// reads, each value marked configured, observed or unavailable; exit 1
-    /// when Codex refuses the builder launch or a builder write is refused.
+    /// when Codex refuses the builder launch or a builder write is refused;
+    /// when the builder write probe gives no result, the line says builder
+    /// readiness is not established and the exit stays 0.
     #[arg(long, conflicts_with_all = ["check", "list"])]
     pub preflight: bool,
     /// Internal (TSK-337): print whether this process can write each folder

@@ -635,7 +635,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "304dba9da6b5ae3dcc1b919c86b3bb200e87b36f4679da65fecf8f34bc828895",
+      "sha256": "2ae60e36cdee005be4d864f14c79a403cad7625237b5ede9c7c359dc355d2f96",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1475,7 +1475,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "304dba9da6b5ae3dcc1b919c86b3bb200e87b36f4679da65fecf8f34bc828895",
+      "sha256": "2ae60e36cdee005be4d864f14c79a403cad7625237b5ede9c7c359dc355d2f96",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1775,7 +1775,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "4fb0b43ea5fad5ed65ceb62a7f9a6687c3735718cd938b3ca3edfba0f1c61d2a",
+      "sha256": "6d29bcc8bd2c66353721993fbb3ef69e1cecefa26eb151653fca92c0ac388f27",
       "exec": false
     },
     ".codex/hooks.json": {
