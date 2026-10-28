@@ -399,8 +399,12 @@ pub fn pin_release(
     let text = read_beneath_root(root, PROJECT_TOML)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("no {PROJECT_TOML}: run `codeflow init` first"))?;
-    let mut state: toml::Table =
-        toml::from_str(&text).map_err(|error| format!("{PROJECT_TOML} does not parse: {error}"))?;
+    let mut state: toml::Table = toml::from_str(&text).map_err(|error| {
+        format!(
+            "{PROJECT_TOML} does not parse: {}",
+            super::toml_error(&text, &error)
+        )
+    })?;
     let previous = state
         .get("scaffold_version")
         .and_then(toml::Value::as_str)

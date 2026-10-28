@@ -228,10 +228,12 @@ pub fn read_project_info(repo_root: &Path) -> Result<ProjectInfo, String> {
     {
         let text = std::fs::read_to_string(&path)
             .map_err(|error| format!("cannot read project metadata: {error}"))?;
-        Some(
-            toml::from_str(&text)
-                .map_err(|error| format!("cannot parse project metadata: {error}"))?,
-        )
+        Some(toml::from_str(&text).map_err(|error| {
+            format!(
+                "cannot parse project metadata: {}",
+                crate::scaffold::toml_error(&text, &error)
+            )
+        })?)
     } else {
         None
     };

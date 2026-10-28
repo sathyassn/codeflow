@@ -649,8 +649,12 @@ fn policy_keys(text: &str) -> Result<BTreeSet<String>, String> {
         }
     }
     let mut out = BTreeSet::new();
-    let value = serde_json::from_str::<serde_json::Value>(text)
-        .map_err(|error| format!("cannot parse policy: {error}"))?;
+    let value = serde_json::from_str::<serde_json::Value>(text).map_err(|error| {
+        format!(
+            "cannot parse policy: {}",
+            crate::scaffold::unquoted(&error.to_string())
+        )
+    })?;
     walk(&value, "", &mut out);
     Ok(out)
 }

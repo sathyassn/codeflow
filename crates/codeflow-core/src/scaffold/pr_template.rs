@@ -394,12 +394,14 @@ fn read_policy(root: &Path) -> Result<(String, Value, Policy), ScaffoldError> {
     })?;
     let original: Value = serde_json::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
         what: POLICY.to_string(),
-        detail: e.to_string(),
+        detail: super::unquoted(&e.to_string()),
     })?;
+    // A typed parse error quotes the offending value, so it is unquoted
+    // before it reaches the report (TSK-1029).
     let policy: Policy =
         serde_json::from_str(&text).map_err(|error| ScaffoldError::InvalidState {
             what: POLICY.into(),
-            detail: error.to_string(),
+            detail: super::unquoted(&error.to_string()),
         })?;
     Ok((text, original, policy))
 }

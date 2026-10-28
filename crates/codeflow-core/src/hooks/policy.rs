@@ -878,8 +878,15 @@ impl Policy {
     /// An existing policy cannot be read or decoded.
     pub fn load_file(path: &Path) -> Result<Self, String> {
         match optional_text(path)? {
-            Some(data) => serde_json::from_str(&data)
-                .map_err(|error| format!("cannot parse policy {}: {error}", path.display())),
+            // The parser quotes the offending value, which the project wrote
+            // and which can be a secret, so it is replaced (TSK-1029).
+            Some(data) => serde_json::from_str(&data).map_err(|error| {
+                format!(
+                    "cannot parse policy {}: {}",
+                    path.display(),
+                    crate::scaffold::unquoted(&error.to_string())
+                )
+            }),
             None => Ok(Self::default()),
         }
     }

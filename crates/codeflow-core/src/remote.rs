@@ -231,8 +231,13 @@ impl ProtectionPlan {
             serde_json::json!({})
         } else {
             let bytes = std::fs::read(path).map_err(unreadable)?;
-            serde_json::from_slice(&bytes)
-                .map_err(|error| format!("cannot parse policy {}: {error}", path.display()))?
+            serde_json::from_slice(&bytes).map_err(|error| {
+                format!(
+                    "cannot parse policy {}: {}",
+                    path.display(),
+                    crate::scaffold::unquoted(&error.to_string())
+                )
+            })?
         };
         if !policy.is_object() {
             return Err("policy must be an object".into());

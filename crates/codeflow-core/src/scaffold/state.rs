@@ -77,7 +77,7 @@ impl ProjectState {
         })?;
         toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
             what: PROJECT_TOML.to_string(),
-            detail: e.to_string(),
+            detail: super::toml_error(&text, &e),
         })
     }
 
@@ -98,7 +98,7 @@ impl ProjectState {
                 let mut table: toml::Table =
                     toml::from_str(&existing).map_err(|e| ScaffoldError::InvalidState {
                         what: PROJECT_TOML.to_string(),
-                        detail: e.to_string(),
+                        detail: super::toml_error(&existing, &e),
                     })?;
                 for (k, v) in ours {
                     table.insert(k, v);
@@ -151,7 +151,7 @@ impl ScaffoldConfig {
         let table: toml::Table =
             toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
                 what: PROJECT_TOML.to_string(),
-                detail: e.to_string(),
+                detail: super::toml_error(&text, &e),
             })?;
         let ignore = match table.get("scaffold") {
             None => Vec::new(),
@@ -246,7 +246,7 @@ impl ReadingConfig {
         let table: toml::Table =
             toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
                 what: PROJECT_TOML.to_string(),
-                detail: e.to_string(),
+                detail: super::toml_error(&text, &e),
             })?;
         let invalid = |detail: String| ScaffoldError::InvalidState {
             what: PROJECT_TOML.to_string(),
@@ -347,7 +347,7 @@ impl FeedbackConfig {
         let table: toml::Table =
             toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
                 what: PROJECT_TOML.to_string(),
-                detail: e.to_string(),
+                detail: super::toml_error(&text, &e),
             })?;
         let invalid = |detail: String| ScaffoldError::InvalidState {
             what: PROJECT_TOML.to_string(),
@@ -416,7 +416,7 @@ impl FeedbackConfig {
         let table: toml::Table =
             toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
                 what: PROJECT_TOML.to_string(),
-                detail: e.to_string(),
+                detail: super::toml_error(&text, &e),
             })?;
         let mut topics_line = String::from("topics = [\n");
         for topic in Self::DEFAULT_TOPICS {
@@ -462,7 +462,10 @@ impl FeedbackConfig {
         let check: toml::Table =
             toml::from_str(&updated).map_err(|e| ScaffoldError::InvalidState {
                 what: PROJECT_TOML.to_string(),
-                detail: format!("adding the feedback topics would break the file: {e}"),
+                detail: format!(
+                    "adding the feedback topics would break the file: {}",
+                    super::toml_error(&updated, &e)
+                ),
             })?;
         if check
             .get("feedback")

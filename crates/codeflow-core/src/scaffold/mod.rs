@@ -142,8 +142,74 @@ pub enum ScaffoldError {
     InvalidState { what: String, detail: String },
     #[error("git: {0}")]
     Git(String),
-    #[error("json: {0}")]
+    /// A JSON error from a file the project writes; any value the parser
+    /// quotes is replaced ([`unquoted`], TSK-1029).
+    #[error("json: {}", unquoted(&.0.to_string()))]
     Json(#[from] serde_json::Error),
+}
+
+/// A parse error for a TOML file the project writes, named by its place:
+/// the line and column and the parser's message with any quoted text
+/// replaced. The parser's own rendering quotes the offending source line,
+/// which can hold a secret, so it is never passed on (TSK-1029).
+pub(crate) fn toml_error(text: &str, error: &toml::de::Error) -> String {
+    let message = unquoted(error.message());
+    match error.span() {
+        Some(span) => {
+            let before = &text[..span.start.min(text.len())];
+            let line = before.matches('\n').count() + 1;
+            let column = before
+                .rsplit('\n')
+                .next()
+                .map_or(0, |tail| tail.chars().count())
+                + 1;
+            format!("TOML parse error at line {line}, column {column}: {message}")
+        }
+        None => format!("TOML parse error: {message}"),
+    }
+}
+
+/// `message` with every value a parser quotes replaced by `<value>`: a span
+/// in double quotes, one in single quotes that opens after a space or at
+/// the start (an apostrophe inside a word is kept), and a backticked span
+/// serde uses for a value or an unknown name (`unknown variant`, `unknown
+/// field`, `invalid type: integer` and the like). Any other backticked name
+/// is a schema name and stays. An unclosed quote hides the rest
+/// (TSK-1029).
+#[must_use]
+pub fn unquoted(message: &str) -> String {
+    /// The words serde puts before a backticked value or project-written
+    /// name.
+    const VALUE_BEFORE: [&str; 8] = [
+        "unknown variant ",
+        "unknown field ",
+        "integer ",
+        "floating point ",
+        "boolean ",
+        "char ",
+        "string ",
+        "map key ",
+    ];
+    let mut out = String::with_capacity(message.len());
+    let mut quote: Option<char> = None;
+    let mut previous = ' ';
+    for c in message.chars() {
+        match quote {
+            Some(open) if c == open => quote = None,
+            Some(_) => {}
+            None if c == '"' || (c == '\'' && previous == ' ') => {
+                quote = Some(c);
+                out.push_str("<value>");
+            }
+            None if c == '`' && VALUE_BEFORE.iter().any(|word| out.ends_with(word)) => {
+                quote = Some(c);
+                out.push_str("<value>");
+            }
+            None => out.push(c),
+        }
+        previous = c;
+    }
+    out
 }
 
 impl ScaffoldError {
@@ -197,5 +263,42 @@ mod r22_tests {
         std::os::unix::fs::symlink("missing", dir.path().join("link")).unwrap();
         assert!(path_exists(&dir.path().join("link")).is_err());
         assert!(path_exists(&dir.path().join("link/leaf")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod parse_error_tests {
+    use super::{toml_error, unquoted};
+
+    /// A synthetic value no message may show.
+    const SECRET: &str = "opaque-neighbour-value-31337";
+
+    #[test]
+    fn a_toml_error_names_its_place_never_the_source_line() {
+        let text = format!("a = 1\nbroken = \"{SECRET}\n");
+        let error = toml::from_str::<toml::Table>(&text).unwrap_err();
+        assert!(
+            error.to_string().contains(SECRET),
+            "the parser quotes the line"
+        );
+        let shown = toml_error(&text, &error);
+        assert!(!shown.contains(SECRET), "{shown}");
+        assert!(
+            shown.starts_with("TOML parse error at line 2, column "),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn a_typed_error_loses_its_quoted_value() {
+        let error = serde_json::from_str::<bool>(&format!("\"{SECRET}\"")).unwrap_err();
+        let shown = unquoted(&error.to_string());
+        assert!(!shown.contains(SECRET), "{shown}");
+        assert!(
+            shown.contains("<value>") && shown.contains("line 1"),
+            "{shown}"
+        );
+        assert_eq!(unquoted("can't read `key`"), "can't read `key`");
+        assert_eq!(unquoted("bad 'x' here"), "bad <value> here");
     }
 }
