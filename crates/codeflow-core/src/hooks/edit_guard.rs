@@ -988,6 +988,8 @@ impl RepoFactsScope {
             NORMALIZED.with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             super::repo::TARGET_ROOTS
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
+            super::repo::OWNERS
+                .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             REGISTRATIONS
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             CHECKOUTS.with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
@@ -1001,6 +1003,7 @@ impl Drop for RepoFactsScope {
         if self.outer {
             NORMALIZED.with(|cache| *cache.borrow_mut() = None);
             super::repo::TARGET_ROOTS.with(|cache| *cache.borrow_mut() = None);
+            super::repo::OWNERS.with(|cache| *cache.borrow_mut() = None);
             REGISTRATIONS.with(|cache| *cache.borrow_mut() = None);
             PROTECTED.with(|cache| *cache.borrow_mut() = None);
             CHECKOUTS.with(|cache| *cache.borrow_mut() = None);

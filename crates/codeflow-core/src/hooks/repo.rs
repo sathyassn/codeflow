@@ -510,10 +510,8 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
         // Main and linked checkouts share the complete protection set. Open
         // each discovered owner first, so deduplication cannot hide a broken
         // pointer or a disagreement with its registration.
-        #[cfg(test)]
-        OWNER_OPENS.with(|opens| opens.set(opens.get() + 1));
-        let opened = match open(&root) {
-            Ok(repo) => repo,
+        let opened = match owner_common(&root) {
+            Ok(opened) => opened,
             Err(error) if could_enforce(target, &root) => {
                 if error.starts_with("Cannot read repository marker ") {
                     return Err(error);
@@ -530,14 +528,54 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
             }
             Err(_) => continue,
         };
-        if let Some(repo) = opened {
-            if !common.insert(canonical(repo.commondir(), "target common directory")?) {
+        if let Some(directory) = opened {
+            if !common.insert(directory?) {
                 continue;
             }
         }
         distinct.push(root);
     }
     Ok(distinct)
+}
+
+/// What opening one discovered owner gave: the error [`open`] reported, or
+/// for what it opened the canonical common directory (`None` for a proven
+/// non-repository, an error when that directory cannot be resolved).
+type OwnerCommon = Result<Option<Result<PathBuf, String>>, String>;
+
+thread_local! {
+    /// Each owner opened during one guard evaluation (TSK-1050), present
+    /// only while a [`super::edit_guard::RepoFactsScope`] is open.
+    pub(super) static OWNERS: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, OwnerCommon>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Open the owner at `root` once per [`super::edit_guard::RepoFactsScope`];
+/// outside a scope, every call opens it. One evaluation asks for the owners
+/// of many targets in the same repository, which the command being judged
+/// has not changed yet. A failed open is kept as it failed: the caller
+/// decides for each target what the failure means, so no refusal or error
+/// depends on which target asked first.
+fn owner_common(root: &Path) -> OwnerCommon {
+    if let Some(cached) = OWNERS.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .and_then(|map| map.get(root))
+            .cloned()
+    }) {
+        return cached;
+    }
+    #[cfg(test)]
+    OWNER_OPENS.with(|opens| opens.set(opens.get() + 1));
+    let value = open(root)
+        .map(|repo| repo.map(|repo| canonical(repo.commondir(), "target common directory")));
+    OWNERS.with(|cache| {
+        if let Some(map) = cache.borrow_mut().as_mut() {
+            map.insert(root.to_path_buf(), value.clone());
+        }
+    });
+    value
 }
 
 /// A checkout hidden from Git's registration list still names its common
@@ -756,7 +794,7 @@ pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 thread_local! {
     static VALIDATION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// How many times [`read_target_roots`] opened a discovered owner.
+    /// How many times [`owner_common`] opened a discovered owner.
     static OWNER_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
