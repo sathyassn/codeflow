@@ -1,0 +1,11 @@
+id = "TSK-1033"
+uid = "c3f75e7f-0403-45fb-8aa3-5ca2e6692b99"
+kind = "TSK"
+title = "The shipped instructions declare each value once and reviews ask about copies"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T00:06:55Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
