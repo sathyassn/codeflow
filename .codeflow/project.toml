@@ -257,6 +257,7 @@ outcome_present_uids = [
     "847a4505-2899-4f39-9f22-8432ad53d7d1",
     "849d774a-a442-4e99-9446-cfd8aad7779b",
     "85017702-b05f-41c3-a834-0912e605a63b",
+    "86d5e337-b4f9-4c3a-8a33-e70973e5af00",
     "8708c983-a22e-41ff-9f42-7ae66b99612a",
     "8908b2b9-d2d0-42f6-aad4-1649525929be",
     "8a518885-1d8b-472d-8dbe-18b2f3cc2828",
@@ -332,7 +333,9 @@ outcome_present_uids = [
     "a72918a3-3962-48c7-a542-3ad7e8a2e60d",
     "a7403f27-b74e-438f-8f7e-c5bb9e4b3f30",
     "a77f060f-9262-4509-a20e-880bce205842",
+    "a83c1e6c-43e1-4f86-8bb8-77101fb7b882",
     "a892538b-2fbb-4d5f-8b11-8a5effdedffd",
+    "a8c13802-9d88-425a-b48d-1439798f02ca",
     "a913f8ce-ac60-4bd2-900f-4ae6ca68d020",
     "a9505d9d-e8f3-4eb7-9c29-87103f2e7fcc",
     "a95d3b03-d02e-4855-88ba-d77be2e5e58f",
@@ -341,6 +344,7 @@ outcome_present_uids = [
     "ab9fed02-7e5e-43e7-b229-890f0975f5a2",
     "ac6ba199-b8c8-4e17-b771-11881023b550",
     "acfc0b3a-f48d-40ff-b075-51873ccdc845",
+    "ad9e7e58-75d9-41fa-a182-2ccb3b2134fa",
     "ae1f999d-5f18-4000-bfd5-94e58b376936",
     "affd881f-ca38-4e22-9949-db5cac0f8cd4",
     "b008eaff-5106-4a7f-bfb4-f5d78264c67c",
@@ -403,6 +407,7 @@ outcome_present_uids = [
     "cb48a9e3-ff2a-4114-8b63-9f62f6e10eda",
     "cc11b45a-c982-46c6-b647-735e55d26621",
     "cc845522-764a-45c7-b754-a1993327eedc",
+    "ccd6925b-a1d3-4ea1-a41d-bf12d573b684",
     "cd175a6d-ea07-4638-b696-afb216563c88",
     "ce4b7044-d443-4026-b4e3-19fdda8d7bab",
     "ce5b405d-339a-43d4-b125-a61b9bb95978",
@@ -430,6 +435,7 @@ outcome_present_uids = [
     "d7a3ba81-fe2e-4fa2-b3b2-9e080b12b49e",
     "d7d2af01-03dd-409f-9a73-f4859982c032",
     "d7fc424b-23c3-49f6-85a3-179dc6c1e919",
+    "d81c670a-feb3-4fd5-a8c0-18dd78753866",
     "d83e4f2e-5462-4676-bd30-137206962df2",
     "d8520cb8-55fc-44b0-a063-0ab7c0dae991",
     "d87a91fd-1064-4486-bf44-71f1ce4a7193",
@@ -508,7 +514,7 @@ outcome_present_uids = [
     "ff6f4af1-dbfa-4c89-b150-55e9a3495e16",
     "ffab40f2-aa62-45c1-a161-93523a27479e",
 ]
-outcome_required_since = "53a0e2595a72bfaa27fed06576adcbc63566396c"
+outcome_required_since = "df47d06780f6817f99b524b368b6acfce61f3005"
 permission_preset = "default"
 policy_armed = true
 product_one_liner = "The AI-development discipline layer you install into any repo"
