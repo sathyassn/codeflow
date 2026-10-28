@@ -1,0 +1,11 @@
+id = "TSK-1036"
+uid = "9481c43e-d6f4-4219-a254-b95e27f18490"
+kind = "TSK"
+title = "A blocked task can be unblocked in its own pull request"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T00:07:22Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
