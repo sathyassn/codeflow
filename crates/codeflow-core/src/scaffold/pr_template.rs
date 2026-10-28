@@ -415,6 +415,39 @@ fn edit_error(key: &str) -> ScaffoldError {
     }
 }
 
+/// Whether `heading` is a required section `CodeFlow` defines by default.
+/// Only such headings are named in a report: any other was written by the
+/// project, in its policy or its template, and can hold a secret
+/// (TSK-1029).
+fn shipped_section(heading: &str) -> bool {
+    let defaults = Policy::default().git;
+    defaults
+        .pr_required_sections
+        .iter()
+        .chain(&defaults.pr_code_sections)
+        .any(|section| section.eq_ignore_ascii_case(heading))
+}
+
+/// `headings` for a report: each shipped one by name, in order, then a
+/// count of the project's own.
+fn named_sections<'a>(headings: impl IntoIterator<Item = &'a String>, prefix: &str) -> String {
+    let mut named = Vec::new();
+    let mut own = 0usize;
+    for heading in headings {
+        if shipped_section(heading) {
+            named.push(format!("{prefix}{heading}"));
+        } else {
+            own += 1;
+        }
+    }
+    match own {
+        0 => {}
+        1 => named.push("1 project section (not named)".to_string()),
+        n => named.push(format!("{n} project sections (not named)")),
+    }
+    named.join(", ")
+}
+
 /// A one-paragraph report line for a diagnosis.
 #[must_use]
 pub fn describe(
@@ -435,16 +468,28 @@ pub fn describe(
             let proposed = if mapping.is_empty() {
                 "none".to_string()
             } else {
+                // A template heading is named by its position; a required
+                // section by name only when CodeFlow defines it.
                 mapping
                     .iter()
-                    .map(|(r, a)| format!("{r} -> {a}"))
+                    .map(|(required, heading)| {
+                        let required = if shipped_section(required) {
+                            required.clone()
+                        } else {
+                            "a project section".to_string()
+                        };
+                        match kept.headings.iter().position(|h| h == heading) {
+                            Some(index) => format!("{required} -> template heading {}", index + 1),
+                            None => format!("{required} -> a template heading"),
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             };
             let unmatched = if unmatched.is_empty() {
                 String::new()
             } else {
-                format!("; no counterpart for: {}", unmatched.join(", "))
+                format!("; no counterpart for: {}", named_sections(unmatched, ""))
             };
             let level = if policy_created {
                 "the PR-section check runs at warn (diagnosed) until you decide"
@@ -524,11 +569,7 @@ pub fn record_decision(
                 template.push_str(heading);
                 template.push_str("\n\n<!-- Required by git.pr_required_sections. -->\n");
             }
-            let added = missing
-                .iter()
-                .map(|h| format!("## {h}"))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let added = named_sections(missing.iter().copied(), "## ");
             appended = Some((template, added));
         }
     }

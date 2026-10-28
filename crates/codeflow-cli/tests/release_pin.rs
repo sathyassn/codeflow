@@ -209,7 +209,8 @@ fn update_pin_and_doctor_name_an_unparseable_version() {
         );
         let said = text(&refused);
         assert!(
-            said.contains(&format!("`{version}` is not a codeflow version")),
+            said.contains("the `--pin` value is not a codeflow version")
+                && !said.contains(&format!("`{version}`")),
             "{said}"
         );
         assert!(!said.contains("cannot download"), "{version}: {said}");

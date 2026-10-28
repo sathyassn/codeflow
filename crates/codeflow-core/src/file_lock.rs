@@ -137,7 +137,8 @@ where
 
     // Read
     let data = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let mut value: Value = serde_json::from_str(&data).map_err(|e| format!("parse: {e}"))?;
+    let mut value: Value = serde_json::from_str(&data)
+        .map_err(|e| format!("parse: {}", crate::scaffold::json_error(&e)))?;
 
     // Modify
     f(&mut value);
@@ -163,7 +164,8 @@ pub fn locked_read(path: &Path) -> Result<Value, String> {
     let _lock = acquire_shared_lock(path)?;
 
     let data = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let value: Value = serde_json::from_str(&data).map_err(|e| format!("parse: {e}"))?;
+    let value: Value = serde_json::from_str(&data)
+        .map_err(|e| format!("parse: {}", crate::scaffold::json_error(&e)))?;
 
     // Lock released on drop
     Ok(value)
@@ -258,9 +260,8 @@ where
 
     // Read (default on NotFound)
     let mut value: T = match fs::read_to_string(path) {
-        Ok(data) => {
-            serde_json::from_str(&data).map_err(|e| RmwError::Other(format!("parse: {e}")))?
-        }
+        Ok(data) => serde_json::from_str(&data)
+            .map_err(|e| RmwError::Other(format!("parse: {}", crate::scaffold::json_error(&e))))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => default_fn(),
         Err(e) => return Err(RmwError::Io("read", e)),
     };

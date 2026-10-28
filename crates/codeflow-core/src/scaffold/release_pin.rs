@@ -30,7 +30,7 @@ use regex::Regex;
 
 use super::hash::sha256_hex;
 use super::state::{read_beneath_root, state_text, write_record, PROJECT_TOML};
-use super::version::{is_older, is_parseable};
+use super::version::{is_older, is_parseable, shown};
 
 /// The release triples `CodeFlow` publishes for macOS and Linux, the ones the
 /// CI installers download, in the order the table lists them.
@@ -63,13 +63,14 @@ impl fmt::Display for PinReport {
         match &self.previous {
             Some(previous) if previous != &self.version => writeln!(
                 f,
-                "codeflow update --pin: scaffold_version {previous} -> {} in {PROJECT_TOML}",
-                self.version
+                "codeflow update --pin: scaffold_version {} -> {} in {PROJECT_TOML}",
+                shown(previous),
+                shown(&self.version)
             )?,
             _ => writeln!(
                 f,
                 "codeflow update --pin: scaffold_version {} in {PROJECT_TOML}",
-                self.version
+                shown(&self.version)
             )?,
         }
         writeln!(
@@ -86,7 +87,7 @@ impl fmt::Display for PinReport {
         write!(
             f,
             "  then: with codeflow {} installed, run `codeflow update` on a new branch",
-            self.version
+            shown(&self.version)
         )
     }
 }
@@ -367,19 +368,33 @@ pub fn release_url() -> Result<String, String> {
 ///
 /// # Errors
 ///
-/// The reason curl could not run or fetch the URL.
+/// The category of the failure: never the URL, whose base comes from
+/// `CODEFLOW_RELEASE_URL` and can carry credentials, and never curl's own
+/// message, which repeats it (TSK-1029). Callers name the artifact.
 pub fn fetch_with_curl(url: &str) -> Result<Vec<u8>, String> {
     let out = std::process::Command::new("curl")
         .args(["-fsSL", "--", url])
         .output()
-        .map_err(|error| format!("cannot run curl to download {url}: {error}"))?;
+        .map_err(|error| format!("curl could not run ({:?})", error.kind()))?;
     if !out.status.success() {
-        return Err(format!(
-            "cannot download {url}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(curl_failure(out.status.code()).to_string());
     }
     Ok(out.stdout)
+}
+
+/// A fixed description of a curl exit code.
+fn curl_failure(code: Option<i32>) -> &'static str {
+    match code {
+        Some(3) => "the release URL is malformed",
+        Some(5 | 6) => "the release host could not be resolved",
+        Some(7) => "the release host refused or dropped the connection",
+        Some(22) => "the release host answered with an HTTP error",
+        Some(28) => "the download timed out",
+        Some(35 | 51 | 58 | 60) => "the TLS connection failed",
+        Some(37) => "the release file could not be read",
+        Some(_) => "the download failed",
+        None => "curl was stopped by a signal",
+    }
 }
 
 /// Pins `version` and its release digests in `root`'s
@@ -400,10 +415,13 @@ pub fn pin_release(
     fetch: &dyn Fn(&str) -> Result<Vec<u8>, String>,
 ) -> Result<PinReport, String> {
     if !is_parseable(version) {
-        return Err(format!(
-            "`{version}` is not a codeflow version: it must read as MAJOR.MINOR.PATCH, with an optional -prerelease and +build; nothing was downloaded or written"
-        ));
+        return Err(
+            "the `--pin` value is not a codeflow version: it must read as MAJOR.MINOR.PATCH, with an optional -prerelease and +build; nothing was downloaded or written"
+                .to_string(),
+        );
     }
+    // Versions are printed through `shown` (TSK-1029).
+    let label = shown(version);
     let text = read_beneath_root(root, PROJECT_TOML)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("no {PROJECT_TOML}: run `codeflow init` first"))?;
@@ -421,13 +439,14 @@ pub fn pin_release(
         match is_older(version, previous) {
             Ok(true) => {
                 return Err(format!(
-                    "{version} is older than the pinned {previous}; the pin only rises"
+                    "{label} is older than the pinned {}; the pin only rises",
+                    shown(previous)
                 ))
             }
             Ok(false) => {}
             Err(error) => {
                 return Err(format!(
-                    "scaffold_version {error} in {PROJECT_TOML}, so it cannot be compared with {version}; correct it and retry; nothing was downloaded or written"
+                    "scaffold_version {error} in {PROJECT_TOML}, so it cannot be compared with {label}; correct it and retry; nothing was downloaded or written"
                 ))
             }
         }
@@ -435,10 +454,10 @@ pub fn pin_release(
 
     let release = format!("{}/v{version}", base.trim_end_matches('/'));
     let sums = fetch(&format!("{release}/sha256.sum")).map_err(|error| {
-        format!("codeflow {version} has no published checksum file (sha256.sum): {error}")
+        format!("codeflow {label} has no published checksum file (sha256.sum): {error}")
     })?;
     let sums = std::str::from_utf8(&sums)
-        .map_err(|error| format!("sha256.sum for codeflow {version} is not UTF-8 text: {error}"))?;
+        .map_err(|error| format!("sha256.sum for codeflow {label} is not UTF-8 text: {error}"))?;
     let mut digests = Vec::new();
     for triple in TRIPLES {
         let asset = format!("codeflow-cli-{triple}.tar.xz");
@@ -452,14 +471,14 @@ pub fn pin_release(
             })
             .filter(|digest| is_digest(digest))
             .ok_or_else(|| {
-                format!("sha256.sum for codeflow {version} lists no checksum for {asset}")
+                format!("sha256.sum for codeflow {label} lists no checksum for {asset}")
             })?;
         let archive = fetch(&format!("{release}/{asset}"))
-            .map_err(|error| format!("cannot download {asset} for codeflow {version}: {error}"))?;
+            .map_err(|error| format!("cannot download {asset} for codeflow {label}: {error}"))?;
         let actual = sha256_hex(&archive);
         if actual != listed {
             return Err(format!(
-                "{asset} for codeflow {version} does not match its sha256.sum entry (listed {listed}, got {actual}); nothing was pinned"
+                "{asset} for codeflow {label} does not match its sha256.sum entry (listed {listed}, got {actual}); nothing was pinned"
             ));
         }
         digests.push((triple.to_string(), actual));
@@ -621,7 +640,8 @@ mod tests {
         for version in ["3.2", "10.0", "3.2.0x", "1.2.3-", "01.2.3"] {
             let error = pin_release(dir.path(), version, "base", &fetch).unwrap_err();
             assert!(
-                error.contains(&format!("`{version}` is not a codeflow version")),
+                error.contains("the `--pin` value is not a codeflow version")
+                    && !error.contains(&format!("`{version}`")),
                 "{error}"
             );
         }

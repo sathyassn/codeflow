@@ -684,14 +684,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // curl's stderr after a failed download, shown in the refusal only; the downloaded bytes are returned unchanged
-    (
-        "codeflow-core/src/scaffold/release_pin.rs",
-        "fetch_with_curl",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
     // a fixture clone's stderr in its panic message and its stdout returned to tests that show or discard it; neither is compared as a name
     (
         "codeflow-fixture/src/lib.rs",
@@ -5652,14 +5644,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_start_matches",
         1,
         "grammar:installer-awk-lines",
-    ),
-    // Trims curl's stderr for the refusal message only.
-    (
-        "crates/codeflow-core/src/scaffold/release_pin.rs",
-        "fetch_with_curl",
-        "trim",
-        1,
-        "display",
     ),
     // sha256.sum is read as sha256sum writes it: one digest and one file name per line, separated by blanks; a file that is not UTF-8 refuses before this split.
     (

@@ -142,59 +142,99 @@ pub enum ScaffoldError {
     InvalidState { what: String, detail: String },
     #[error("git: {0}")]
     Git(String),
-    /// A JSON error from a file the project writes, named by its place only
-    /// ([`json_error`], TSK-1029).
-    #[error("{}", json_error(.0))]
-    Json(#[from] serde_json::Error),
+    /// A JSON file the project writes did not parse. Only the place is
+    /// kept: the parser's own error is dropped at the conversion, so
+    /// neither this error's text nor its `Debug` form nor an error chain
+    /// can carry what the project wrote (TSK-1029).
+    #[error("{0}")]
+    Json(ParsePlace),
+}
+
+impl From<serde_json::Error> for ScaffoldError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(ParsePlace::json(&error))
+    }
+}
+
+/// Where a file the project writes failed to parse: its format, the kind
+/// of failure, and a line and column. It holds nothing else, and has no
+/// source, because a parser's message and rendering quote keys, values and
+/// source lines the project wrote, and a value can hold any delimiter the
+/// message would put around it (TSK-1029).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsePlace {
+    /// `JSON` or `TOML`.
+    pub format: &'static str,
+    /// A fixed description of the failure, never parser text.
+    pub kind: &'static str,
+    /// The 1-based line and column, when the parser gave a position.
+    pub position: Option<(usize, usize)>,
+}
+
+impl ParsePlace {
+    /// The place of a JSON error.
+    #[must_use]
+    pub fn json(error: &serde_json::Error) -> Self {
+        let kind = match error.classify() {
+            serde_json::error::Category::Io => "read error",
+            serde_json::error::Category::Syntax => "syntax error",
+            serde_json::error::Category::Data => {
+                "error: a key or value does not fit the expected shape"
+            }
+            serde_json::error::Category::Eof => "error: the input ends early",
+        };
+        let position = (error.line() > 0).then(|| (error.line(), error.column()));
+        Self {
+            format: "JSON",
+            kind,
+            position,
+        }
+    }
+
+    /// The place of a TOML error in `text`.
+    #[must_use]
+    pub fn toml(text: &str, error: &toml::de::Error) -> Self {
+        let position = error
+            .span()
+            .and_then(|span| text.get(..span.start))
+            .map(|before| {
+                let line = before.matches('\n').count() + 1;
+                let column = before
+                    .rsplit('\n')
+                    .next()
+                    .map_or(0, |tail| tail.chars().count())
+                    + 1;
+                (line, column)
+            });
+        Self {
+            format: "TOML",
+            kind: "parse error",
+            position,
+        }
+    }
+}
+
+impl std::fmt::Display for ParsePlace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.format, self.kind)?;
+        match self.position {
+            Some((line, column)) => write!(f, " at line {line}, column {column}"),
+            None => write!(f, " (the parser gave no position)"),
+        }
+    }
 }
 
 /// A TOML error for a file the project writes, named by its line and
-/// column only. The parser's message and its rendering quote keys, values
-/// and the offending source line, all written by the project and possibly
-/// secret, and a value can hold any delimiter the message puts around it,
-/// so no part of the message is passed on (TSK-1029).
+/// column only ([`ParsePlace`], TSK-1029).
 pub(crate) fn toml_error(text: &str, error: &toml::de::Error) -> String {
-    let place = error
-        .span()
-        .and_then(|span| text.get(..span.start))
-        .map(|before| {
-            let line = before.matches('\n').count() + 1;
-            let column = before
-                .rsplit('\n')
-                .next()
-                .map_or(0, |tail| tail.chars().count())
-                + 1;
-            format!(" at line {line}, column {column}")
-        });
-    format!(
-        "TOML parse error{}",
-        place.as_deref().unwrap_or(" (the parser gave no position)")
-    )
+    ParsePlace::toml(text, error).to_string()
 }
 
 /// A JSON error for a file the project writes, named by its kind and its
-/// line and column only. The parser's message quotes keys and values the
-/// project wrote, and a value can hold any delimiter the message puts
-/// around it, so no part of the message is passed on (TSK-1029).
+/// line and column only ([`ParsePlace`], TSK-1029).
 #[must_use]
 pub fn json_error(error: &serde_json::Error) -> String {
-    let kind = match error.classify() {
-        serde_json::error::Category::Io => "read error",
-        serde_json::error::Category::Syntax => "syntax error",
-        serde_json::error::Category::Data => {
-            "error: a key or value does not fit the expected shape"
-        }
-        serde_json::error::Category::Eof => "error: the input ends early",
-    };
-    if error.line() == 0 {
-        format!("JSON {kind}")
-    } else {
-        format!(
-            "JSON {kind} at line {}, column {}",
-            error.line(),
-            error.column()
-        )
-    }
+    ParsePlace::json(error).to_string()
 }
 
 impl ScaffoldError {
@@ -313,6 +353,19 @@ mod parse_error_tests {
         Warn,
     }
 
+    /// Everything an error chain can print: its text, its `Debug` form and
+    /// every source's text, as the CLI prints a chain.
+    fn chain(error: &dyn std::error::Error) -> String {
+        use std::fmt::Write as _;
+        let mut shown = format!("{error}\n{error:?}");
+        let mut source = error.source();
+        while let Some(cause) = source {
+            let _ = write!(shown, "\nCaused by: {cause} {cause:?}");
+            source = cause.source();
+        }
+        shown
+    }
+
     /// Why `shown` fails, if it shows the value or does not name its line.
     fn misplaced(shown: &str, line: usize) -> Option<String> {
         if shown.contains(SECRET) {
@@ -342,7 +395,7 @@ mod parse_error_tests {
         ] {
             let error = serde_json::from_str::<Shape>(&text).unwrap_err();
             assert!(error.to_string().contains(SECRET), "{error}");
-            failures.extend(misplaced(&ScaffoldError::Json(error).to_string(), line));
+            failures.extend(misplaced(&chain(&ScaffoldError::from(error)), line));
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }

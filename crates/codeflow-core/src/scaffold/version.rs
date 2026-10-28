@@ -94,6 +94,7 @@ pub(super) fn check_write_version(
     }
     // Both values parsed above, so the comparison is always `Ok`.
     if is_older(binary, pinned) == Ok(true) {
+        let pinned = shown(pinned);
         return Err(super::ScaffoldError::InvalidState {
             what: format!("{command} version"),
             detail: format!(
@@ -136,6 +137,39 @@ pub fn is_older(a: &str, b: &str) -> Result<bool, Unparseable> {
     })
 }
 
+/// `version` as a report may print it (TSK-1029). The strict grammar still
+/// admits an opaque suffix a project wrote, such as
+/// `999.0.0+opaque-value`, so only `MAJOR.MINOR.PATCH` is printed, plus a
+/// prerelease in `CodeFlow`'s own release form (`alpha.N`, `beta.N`,
+/// `rc.N`). Any other prerelease, and any build metadata, is replaced by
+/// `(with a suffix)`; a value that does not parse is never printed.
+#[must_use]
+pub fn shown(version: &str) -> String {
+    if !is_parseable(version) {
+        return "(a value that is not a version)".to_string();
+    }
+    let (rest, build) = match version.split_once('+') {
+        Some((rest, _)) => (rest, true),
+        None => (version, false),
+    };
+    let (core, prerelease) = match rest.split_once('-') {
+        Some((core, prerelease)) => (core, Some(prerelease)),
+        None => (rest, None),
+    };
+    let release_form = |label: &str| {
+        label.split_once('.').is_some_and(|(name, number)| {
+            matches!(name, "alpha" | "beta" | "rc")
+                && !number.is_empty()
+                && number.bytes().all(|b| b.is_ascii_digit())
+        })
+    };
+    match prerelease {
+        Some(label) if !build && release_form(label) => format!("{core}-{label}"),
+        None if !build => core.to_string(),
+        _ => format!("{core} (with a suffix)"),
+    }
+}
+
 /// One-line warning when the project's scaffold is behind the binary.
 /// Quiet (None) when the project is uninitialized or up to date.
 #[must_use]
@@ -146,7 +180,7 @@ pub fn version_skew_warning(root: &Path, binary_version: &str) -> Option<String>
     (is_older(&state.scaffold_version, binary_version) == Ok(true)).then(|| {
         format!(
             "codeflow: scaffold {} is behind binary {} — run `codeflow update`",
-            crate::git::display_line(&state.scaffold_version),
+            shown(&state.scaffold_version),
             binary_version
         )
     })
@@ -155,6 +189,24 @@ pub fn version_skew_warning(root: &Path, binary_version: &str) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-1029: only `CodeFlow`'s own release forms are shown in full.
+    #[test]
+    fn a_version_is_shown_without_a_project_suffix() {
+        for (version, expected) in [
+            ("3.2.0", "3.2.0"),
+            ("3.2.0-rc.1", "3.2.0-rc.1"),
+            ("3.2.0-alpha.12", "3.2.0-alpha.12"),
+            ("3.2.0-beta.3", "3.2.0-beta.3"),
+            ("999.0.0+opaque-31337", "999.0.0 (with a suffix)"),
+            ("1.0.0-opaque31337", "1.0.0 (with a suffix)"),
+            ("1.0.0-rc.1.opaque", "1.0.0 (with a suffix)"),
+            ("1.0.0-rc.1+build", "1.0.0 (with a suffix)"),
+            ("10.0", "(a value that is not a version)"),
+        ] {
+            assert_eq!(shown(version), expected, "{version}");
+        }
+    }
 
     #[test]
     fn semver_ordering() {

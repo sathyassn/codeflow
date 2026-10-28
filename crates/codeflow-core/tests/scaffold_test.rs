@@ -1002,7 +1002,8 @@ fn init_tier_upgrade_refuses_an_unparsable_pin_without_writing_any_file() {
     let result = scaffold::init(&assets, &root, &opts(Some(Tier::Standard), "2.1.0"));
     assert_eq!(tree_bytes(&root), before);
     let message = result.unwrap_err().to_string();
-    assert!(message.contains("\"broken\""), "{message}");
+    // TSK-1029: the refusal names the file, never the value it holds.
+    assert!(!message.contains("broken"), "{message}");
     assert!(message.contains(".codeflow/project.toml"), "{message}");
     assert!(message.contains("correct it and retry"), "{message}");
     assert!(!message.contains("older"), "{message}");
@@ -1061,7 +1062,8 @@ fn update_refuses_an_unparsable_pin_without_writing_any_file() {
         let result = scaffold::update(&assets_v2, &root, &update_opts("2.1.0"));
         assert_eq!(tree_bytes(&root), before, "invalid pin {pin:?}");
         let message = result.unwrap_err().to_string();
-        assert!(message.contains(&format!("{pin:?}")), "{message}");
+        // TSK-1029: the refusal names the file, never the value it holds.
+        assert!(pin.is_empty() || !message.contains(pin), "{message}");
         assert!(message.contains("scaffold_version"), "{message}");
         assert!(message.contains(".codeflow/project.toml"), "{message}");
         assert!(message.contains("correct it and retry"), "{message}");

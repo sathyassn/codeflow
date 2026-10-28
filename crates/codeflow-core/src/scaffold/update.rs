@@ -324,7 +324,9 @@ fn update_writes(
 
     let mut report = Report::new(format!(
         "codeflow update (scaffold {} -> {}, {} tier)",
-        state.scaffold_version, opts.binary_version, state.tier
+        super::version::shown(&state.scaffold_version),
+        opts.binary_version,
+        state.tier
     ));
     // Validate every outstanding resolution before writing anything, including
     // state, reports and files that precede the conflicted entry in the manifest.
