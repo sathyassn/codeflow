@@ -293,10 +293,18 @@ fn repeated_policy_loads_report_each_unsupported_key_once() {
         dir.path(),
         r#"{"security":{"script_bypass":"block","interpreter_scan":"warn"}}"#,
     );
+    // The Outcome marker is judged against the branch the change lands on,
+    // which a repository with no remote holds locally.
+    let made = Command::new("git")
+        .args(["branch", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("git runs");
+    assert!(made.status.success());
     let out = run_in(
         dir.path(),
         &[
-            "ci", "--base", "HEAD", "--head", "HEAD", "--branch", "feat/x",
+            "ci", "--base", "HEAD", "--head", "HEAD", "--branch", "feat/x", "--into", "main",
         ],
     );
     let text = format!(

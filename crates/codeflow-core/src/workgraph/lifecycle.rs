@@ -670,6 +670,121 @@ pub fn recorded_baseline(repo_root: &Path) -> Result<Vec<String>, String> {
     baseline_entries(Some(&config))
 }
 
+/// A commit's `.codeflow/project.toml`, parsed; `None` when the commit has
+/// no such file. A file that is not valid UTF-8 or TOML is an error.
+fn project_table_at(repo: &Repository, commit: git2::Oid) -> Result<Option<toml::Table>, String> {
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    let entry = match tree.get_path(Path::new(".codeflow/project.toml")) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| error.to_string())?;
+    let text = std::str::from_utf8(blob.content()).map_err(|error| error.to_string())?;
+    text.parse::<toml::Table>()
+        .map(Some)
+        .map_err(|error| format!(".codeflow/project.toml at {commit}: {error}"))
+}
+
+/// The working tree's `.codeflow/project.toml`, parsed; `None` when it is
+/// proven absent.
+fn project_table_in(repo_root: &Path) -> Result<Option<toml::Table>, String> {
+    let path = repo_root.join(".codeflow/project.toml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(&path).map_err(|error| error.to_string())? =>
+        {
+            return Ok(None)
+        }
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    text.parse::<toml::Table>()
+        .map(Some)
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// The refusals for a change to the Outcome adoption marker (TSK-435): the
+/// head's project state file (the working tree's when `head` is `None`)
+/// judged against the file at `target`. The caller passes the tip of the
+/// branch the change lands on, from an identity the change cannot choose
+/// (the destination's advertisement, the hosting platform's target, or the
+/// target branch's ref), never a merge-base or a `--base` boundary. Only
+/// what the change itself does is judged: a head whose marker matches the
+/// marker at every best fork point from `target` leaves the target's own
+/// list in place when it merges, whatever that list now is. It does not
+/// depend on durable work tracking. A head that does not resolve has no
+/// file, which reads as a removed marker; an unreadable marker, at the head
+/// or at the target, is always judged, and an unreadable target refuses.
+///
+/// # Errors
+///
+/// Returns a message when the repository, `target`, the fork point or a
+/// project state file cannot be read; the caller refuses.
+pub fn outcome_marker_errors(
+    repo_root: &Path,
+    target: &str,
+    head: Option<&str>,
+) -> Result<Vec<String>, String> {
+    use super::outcome::Adoption;
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let target_commit = resolve_commit(&repo, target)?
+        .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
+    let target_state = project_table_at(&repo, target_commit)?;
+    let (head_state, head_commit) = match head {
+        Some(head) => match resolve_commit(&repo, head)? {
+            Some(commit) => (project_table_at(&repo, commit)?, Some(commit)),
+            None => (None, None),
+        },
+        None => (project_table_in(repo_root)?, resolve_commit(&repo, "HEAD")?),
+    };
+    let adoption =
+        |state: Option<&toml::Table>| state.map_or(Adoption::Unmarked, Adoption::in_table);
+    let head_adoption = adoption(head_state.as_ref());
+    // The shortcut needs a readable list on both sides and a head that
+    // leaves the marker as every best fork point held it; anything else is
+    // judged against the target, which refuses an unreadable target list.
+    let readable = |state: &Adoption| !matches!(state, Adoption::Unreadable(_));
+    if let (Some(head_commit), true, true) = (
+        head_commit,
+        readable(&adoption(target_state.as_ref())),
+        readable(&head_adoption),
+    ) {
+        // The guarded reader refuses a shallow cut, an overlay or unreadable
+        // history, so an unprovable fork point never skips the judgment.
+        let forks = match history::merge_bases(&repo, target_commit, head_commit) {
+            Ok(forks) => forks,
+            // Histories proven unrelated: the head is judged whole.
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Vec::new(),
+            Err(error) => {
+                return Err(format!(
+                    "no merge-base of {target} and the head: {}",
+                    error.message()
+                ))
+            }
+        };
+        let mut unchanged = !forks.is_empty();
+        for fork in forks {
+            unchanged &= adoption(project_table_at(&repo, fork)?.as_ref()) == head_adoption;
+        }
+        if unchanged {
+            return Ok(Vec::new());
+        }
+    }
+    Ok(
+        super::outcome::marker_change_errors(target_state.as_ref(), head_state.as_ref())
+            .into_iter()
+            .map(|error| format!(".codeflow/project.toml: {error}"))
+            .collect(),
+    )
+}
+
 /// The baseline entries recorded in a commit's `.codeflow/project.toml`.
 fn baseline_at(repo: &Repository, commit: git2::Oid) -> Result<Vec<String>, String> {
     let tree = repo
@@ -2053,7 +2168,25 @@ pub fn judge_change(
 ///
 /// Returns a message when the repository or a revision cannot be read.
 pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<Verdict, String> {
-    judge_range_against(repo_root, base, base, head, false, None)
+    let verdict = judge_range_against(repo_root, base, base, head, false, None)?;
+    with_outcome_marker(verdict, repo_root, base, head)
+}
+
+/// `verdict` with the Outcome adoption marker's refusals added, judged
+/// against `base`, which these callers name as the target branch itself
+/// (TSK-435). `codeflow ci` judges the marker on its own, against the
+/// target's tip it resolves, since its `base` can be any boundary.
+fn with_outcome_marker(
+    mut verdict: Verdict,
+    repo_root: &Path,
+    base: &str,
+    head: Option<&str>,
+) -> Result<Verdict, String> {
+    verdict
+        .errors
+        .extend(outcome_marker_errors(repo_root, base, head)?);
+    verdict.sort();
+    Ok(verdict)
 }
 
 /// [`judge_range`] with the records diffed from `base` and the governing
@@ -2374,7 +2507,8 @@ pub fn working_context(repo_root: &Path) -> Result<(Option<Graph>, Option<Vec<St
 ///
 /// Returns a message when a revision or the merge-base cannot be resolved.
 pub fn judge_pull_request(repo_root: &Path, base: &str, head: &str) -> Result<Verdict, String> {
-    judge_pull_request_under(repo_root, base, head, base)
+    let verdict = judge_pull_request_under(repo_root, base, head, base)?;
+    with_outcome_marker(verdict, repo_root, base, Some(head))
 }
 
 /// [`judge_pull_request_under`] for a verified integration line judged as

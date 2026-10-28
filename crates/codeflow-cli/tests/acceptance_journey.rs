@@ -9,6 +9,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 #[path = "acceptance_journey/sequence.rs"]
@@ -92,7 +94,10 @@ fn fails(out: &Output, what: &str, reason: &str) {
     );
 }
 
+/// Commit everything, with each new record's Outcome stated as its author
+/// states it before committing (TSK-435).
 fn commit(root: &Path, message: &str) -> String {
+    outcome::state_outcomes(root);
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", message]);
     git(root, &["rev-parse", "HEAD"])
