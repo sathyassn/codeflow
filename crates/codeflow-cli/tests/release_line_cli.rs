@@ -1922,7 +1922,7 @@ fn a_direct_completion_binds_to_the_release_head() {
     blocks(
         &verb,
         "the verb after later code",
-        &[&format!("TSK-002: {needle}")],
+        &[&format!("TSK-002: 1 path {needle}"), "first: src/later.rs"],
     );
 
     // Control: a task already complete gets the status refusal, apart from
