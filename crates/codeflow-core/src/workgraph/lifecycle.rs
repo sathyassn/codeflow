@@ -712,10 +712,13 @@ fn project_table_in(repo_root: &Path) -> Result<Option<toml::Table>, String> {
 
 /// The refusals for a change to the Outcome adoption marker (TSK-435): the
 /// head's `.codeflow/project.toml` (the working tree's when `head` is
-/// `None`) judged against the file at `target`, the commit the change
-/// lands on, never against anything the change itself controls. It does
-/// not depend on durable work tracking, so `codeflow ci` runs it for a
-/// project with only epics, or with no records, as well.
+/// `None`) judged against the file at `target`, the tip the change lands
+/// on, never against anything the change itself controls: callers pass
+/// the range's base, not its merge-base and not a `--baseline-from`
+/// authority. It does not depend on durable work tracking, so `codeflow
+/// ci` runs it for a project with only epics, or with no records, as
+/// well. A head that does not resolve has no file, which reads as a
+/// removed marker.
 ///
 /// # Errors
 ///
@@ -729,22 +732,10 @@ pub fn outcome_marker_errors(
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let target_commit = resolve_commit(&repo, target)?
         .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
-    marker_errors_at(&repo, repo_root, target_commit, head)
-}
-
-/// [`outcome_marker_errors`] with the repository open and the target
-/// resolved. A head that does not resolve has no file, which reads as a
-/// removed marker.
-fn marker_errors_at(
-    repo: &Repository,
-    repo_root: &Path,
-    target_commit: git2::Oid,
-    head: Option<&str>,
-) -> Result<Vec<String>, String> {
-    let target_state = project_table_at(repo, target_commit)?;
+    let target_state = project_table_at(&repo, target_commit)?;
     let head_state = match head {
-        Some(head) => match resolve_commit(repo, head)? {
-            Some(commit) => project_table_at(repo, commit)?,
+        Some(head) => match resolve_commit(&repo, head)? {
+            Some(commit) => project_table_at(&repo, commit)?,
             None => None,
         },
         None => project_table_in(repo_root)?,
@@ -2102,7 +2093,26 @@ pub fn judge_change(
 ///
 /// Returns a message when the repository or a revision cannot be read.
 pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<Verdict, String> {
-    judge_range_against(repo_root, base, base, head, false, None)
+    let verdict = judge_range_against(repo_root, base, base, head, false, None)?;
+    with_outcome_marker(verdict, repo_root, base, head)
+}
+
+/// `verdict` with the Outcome adoption marker's refusals added, judged
+/// against `base` as the caller gave it: the target's tip, never the
+/// merge-base and never the `--baseline-from` authority, which the
+/// pre-push hook takes from the pushed branch's own earlier tip
+/// (TSK-435).
+fn with_outcome_marker(
+    mut verdict: Verdict,
+    repo_root: &Path,
+    base: &str,
+    head: Option<&str>,
+) -> Result<Verdict, String> {
+    verdict
+        .errors
+        .extend(outcome_marker_errors(repo_root, base, head)?);
+    verdict.sort();
+    Ok(verdict)
 }
 
 /// [`judge_range`] with the records diffed from `base` and the governing
@@ -2164,9 +2174,6 @@ fn judge_range_against(
     }
     verdict.warnings.extend(baseline.warning());
     verdict.errors.extend(baseline.errors());
-    verdict
-        .errors
-        .extend(marker_errors_at(&repo, repo_root, target_commit, head)?);
     for record in after.records.values() {
         if brought.is_some_and(|brought| brought.backfills.contains(&record.id)) {
             // A `uid` backfill landed on a line was judged there.
@@ -2480,14 +2487,15 @@ fn judge_pull_request_shaped(
     let target = commit(authority)?;
     let anchor = history::merge_base(&repo, commit(base)?, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
-    judge_range_against(
+    let verdict = judge_range_against(
         repo_root,
         &anchor.to_string(),
         &target.to_string(),
         Some(head),
         on_line,
         None,
-    )
+    )?;
+    with_outcome_marker(verdict, repo_root, base, Some(head))
 }
 
 /// [`judge_pull_request_under`] for a release range: each record in
@@ -2513,14 +2521,15 @@ pub fn judge_release_range(
     let target = commit(authority)?;
     let anchor = history::merge_base(&repo, commit(base)?, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
-    judge_range_against(
+    let verdict = judge_range_against(
         repo_root,
         &anchor.to_string(),
         &target.to_string(),
         Some(head),
         false,
         Some(brought),
-    )
+    )?;
+    with_outcome_marker(verdict, repo_root, base, Some(head))
 }
 
 /// Judge the whole checked-out tree against the migration baseline, and add

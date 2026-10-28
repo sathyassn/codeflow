@@ -1,7 +1,9 @@
 //! The Outcome adoption marker is judged in every tier (TSK-435): a pull
 //! request may not add a uid to `outcome_present_uids` that its target
 //! does not list, also in a minimal or standard project that keeps only
-//! epics, or no records yet, where no other record rule runs.
+//! epics, or no records yet, where no other record rule runs. The target
+//! is the range's base: a `--baseline-from` commit, which the pre-push
+//! hook takes from the pushed branch's own earlier tip, never governs it.
 
 use std::path::Path;
 
@@ -13,6 +15,18 @@ const STATE: &str = ".codeflow/project.toml";
 /// no record) and, when `epic` is set, one epic record listed in the
 /// marker; then a `feat/x` branch.
 fn adopted(dir: &Path, tier: &str, epic: bool) {
+    scaffolded(dir, tier, |dir| {
+        assert_eq!(listed(dir), Vec::<String>::new(), "init lists no record");
+        if epic {
+            add_epic(dir, "EPC-001", "11111111-1111-4111-8111-111111111111");
+            list(dir, "11111111-1111-4111-8111-111111111111");
+        }
+    });
+}
+
+/// A `trunk` commit holding `codeflow init --<tier>` as `prepare` leaves
+/// it; then a `feat/x` branch.
+fn scaffolded(dir: &Path, tier: &str, prepare: impl FnOnce(&Path)) {
     git(dir, &["init", "-b", "trunk"]);
     git(dir, &["config", "user.email", "t@example.com"]);
     git(dir, &["config", "user.name", "t"]);
@@ -25,11 +39,7 @@ fn adopted(dir: &Path, tier: &str, epic: bool) {
         "init: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(listed(dir), Vec::<String>::new(), "init lists no record");
-    if epic {
-        add_epic(dir, "EPC-001", "11111111-1111-4111-8111-111111111111");
-        list(dir, "11111111-1111-4111-8111-111111111111");
-    }
+    prepare(dir);
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-q", "-m", "chore: adopt codeflow"]);
     git(dir, &["checkout", "-q", "-b", "feat/x"]);
@@ -161,6 +171,92 @@ fn keeping_or_shortening_the_list_passes_in_every_tier() {
         std::fs::write(root.join(STATE), toml::to_string(&table).unwrap()).unwrap();
         commit_all(root, "chore: drop a listed uid");
         let (code, out) = ci(root);
+        assert_eq!(code, Some(0), "{tier}: {out}");
+    }
+}
+
+/// `codeflow ci` with `--baseline-from`, as the pre-push hook runs it with
+/// the pushed branch's own earlier tip.
+fn ci_from(dir: &Path, earlier: &str) -> (Option<i32>, String) {
+    let out = run_in(
+        dir,
+        &[
+            "ci",
+            "--base",
+            "trunk",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--baseline-from",
+            earlier,
+        ],
+    );
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code(), all)
+}
+
+fn head(dir: &Path) -> String {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// The branch's own earlier tip never governs the marker: a uid it listed
+/// earlier is still an addition against the target.
+#[test]
+fn an_earlier_tip_of_the_branch_cannot_launder_a_uid() {
+    for tier in ["standard", "full"] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        adopted(root, tier, false);
+        let mine = "44444444-4444-4444-8444-444444444444";
+        list(root, mine);
+        commit_all(root, "chore: list a record");
+        let earlier = head(root);
+        std::fs::write(root.join("notes.txt"), "a change\n").unwrap();
+        commit_all(root, "feat: add notes");
+        let (code, out) = ci_from(root, &earlier);
+        assert_ne!(code, Some(0), "{tier}: {out}");
+        assert!(
+            out.contains("adds uids to outcome_present_uids") && out.contains(mine),
+            "{tier}: {out}"
+        );
+    }
+}
+
+/// A target with no marker admits the adoption write, also when the branch
+/// already wrote one at its earlier tip and now lists a record that landed
+/// on the target meanwhile.
+#[test]
+fn an_adoption_write_may_grow_while_the_target_has_no_marker() {
+    for tier in ["standard", "full"] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // An older release wrote no marker.
+        scaffolded(root, tier, |dir| {
+            let mut table = state(dir);
+            table.remove("outcome_present_uids");
+            std::fs::write(dir.join(STATE), toml::to_string(&table).unwrap()).unwrap();
+        });
+        let mut table = state(root);
+        table.insert(
+            "outcome_present_uids".into(),
+            toml::Value::Array(vec!["55555555-5555-4555-8555-555555555555".into()]),
+        );
+        std::fs::write(root.join(STATE), toml::to_string(&table).unwrap()).unwrap();
+        commit_all(root, "chore: adopt the Outcome section");
+        let earlier = head(root);
+        list(root, "66666666-6666-4666-8666-666666666666");
+        commit_all(root, "chore: list a record that landed meanwhile");
+        let (code, out) = ci_from(root, &earlier);
         assert_eq!(code, Some(0), "{tier}: {out}");
     }
 }
