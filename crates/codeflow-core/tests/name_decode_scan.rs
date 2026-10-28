@@ -2863,6 +2863,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // Parses a settings file only to redact it for the `update --diff` export; a side that does not parse is withheld, and no command, path or policy authority is selected (TSK-1029).
+    (
+        "crates/codeflow-core/src/scaffold/diff_redact.rs",
+        "Format::parse",
+        "obtain-absent:from_str",
+        2,
+        "display",
+    ),
     // Normalizes natural-language request keywords using explicit punctuation; output chooses advisory guidance text, not command/ref/path authority.
     (
         "crates/codeflow-core/src/hooks/guidance.rs",
