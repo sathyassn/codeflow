@@ -1557,8 +1557,42 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // accepted.
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
-        "codex_builder_line",
+        "codex_builder_load",
         "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // TSK-337: outside a repository the builder launch root is the project
+    // folder itself, so the probe runs there and reports what it observed;
+    // nothing is granted or skipped on that fallback.
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "builder_launch_root",
+        "obtain-absent:Repository::discover",
+        1,
+        "display",
+    ),
+    // TSK-337: the permissions result is read by the doctor badge format;
+    // a line that does not fit, or a second result, leaves the grant check
+    // unavailable, never effective. The message is trimmed only to print it.
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "permissions_result",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "permissions_result",
+        "trim_end",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "permissions_result",
+        "trim",
         1,
         "display",
     ),
