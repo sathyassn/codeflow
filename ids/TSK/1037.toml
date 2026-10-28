@@ -1,0 +1,11 @@
+id = "TSK-1037"
+uid = "044341eb-9f31-4b1e-96c8-f053da5ea0d5"
+kind = "TSK"
+title = "A waiting session gets a managed sweep of its rules, skills and open work"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T00:46:13Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
