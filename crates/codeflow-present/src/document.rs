@@ -1627,11 +1627,11 @@ fn validate_provenance(provenance: &Provenance) -> Result<()> {
     {
         return Err(invalid("provenance task_id must be TSK-NNN or TSK-NNN-NNN"));
     }
-    for (name, value, prefix, digits) in [
+    for (name, value, prefix, minimum) in [
         ("spec_id", provenance.spec_id.as_deref(), "SPC-", 3),
         ("adr_id", provenance.adr_id.as_deref(), "ADR-", 4),
     ] {
-        if value.is_some_and(|value| !valid_fixed_id(value, prefix, digits)) {
+        if value.is_some_and(|value| !valid_numbered_id(value, prefix, minimum)) {
             return Err(invalid(format!(
                 "provenance {name} must use its canonical numeric ID"
             )));
@@ -1640,24 +1640,29 @@ fn validate_provenance(provenance: &Provenance) -> Result<()> {
     Ok(())
 }
 
+// These rules match the work graph's id rules (`codeflow-core`,
+// `workgraph::format_id` and the ADR allocator): at least the zero-padded
+// width in ASCII digits, with no upper bound, so every id an allocator can
+// issue is accepted. This crate does not depend on `codeflow-core`; the
+// `present_id_rules` test in `codeflow-cli` fails when the two drift.
 fn valid_task_id(value: &str) -> bool {
     let Some(suffix) = value.strip_prefix("TSK-") else {
         return false;
     };
     let mut groups = suffix.split('-');
-    let first = groups.next().is_some_and(valid_three_digits);
-    let second = groups.next().is_none_or(valid_three_digits);
+    let first = groups.next().is_some_and(|group| valid_digits(group, 3));
+    let second = groups.next().is_none_or(|group| valid_digits(group, 3));
     first && second && groups.next().is_none()
 }
 
-fn valid_fixed_id(value: &str, prefix: &str, digits: usize) -> bool {
-    value.strip_prefix(prefix).is_some_and(|suffix| {
-        suffix.len() == digits && suffix.bytes().all(|byte| byte.is_ascii_digit())
-    })
+fn valid_numbered_id(value: &str, prefix: &str, minimum: usize) -> bool {
+    value
+        .strip_prefix(prefix)
+        .is_some_and(|suffix| valid_digits(suffix, minimum))
 }
 
-fn valid_three_digits(value: &str) -> bool {
-    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_digit())
+fn valid_digits(value: &str, minimum: usize) -> bool {
+    value.len() >= minimum && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// The figure families of `figure-grammar.md`, in the grammar module's order.
@@ -2641,5 +2646,76 @@ mod tests {
             caption: None,
         }]);
         assert!(media.validate().is_err());
+    }
+
+    /// The result of parsing a document that carries one provenance field.
+    fn provenance_result(field: &str, value: &str) -> Result<ParsedDocument> {
+        let document = serde_json::json!({
+            "schema_version": 1,
+            "title": "Review",
+            "provenance": { field: value },
+            "blocks": [{ "type": "narrative", "id": "summary", "markdown": "x" }],
+        });
+        parse_document(document.to_string().as_bytes())
+    }
+
+    #[test]
+    fn provenance_ids_accept_every_width_the_allocators_issue() {
+        for (field, id) in [
+            ("task_id", "TSK-001"),
+            ("task_id", "TSK-999"),
+            ("task_id", "TSK-1000"),
+            ("task_id", "TSK-1023"),
+            ("task_id", "TSK-10000"),
+            ("task_id", "TSK-12345"),
+            ("task_id", "TSK-022-013"),
+            ("task_id", "TSK-1000-0001"),
+            ("task_id", "TSK-12345-67890"),
+            ("spec_id", "SPC-001"),
+            ("spec_id", "SPC-999"),
+            ("spec_id", "SPC-1000"),
+            ("spec_id", "SPC-10000"),
+            ("adr_id", "ADR-0001"),
+            ("adr_id", "ADR-9999"),
+            ("adr_id", "ADR-10000"),
+            ("adr_id", "ADR-123456"),
+        ] {
+            let result = provenance_result(field, id);
+            assert!(
+                matches!(result, Ok(ParsedDocument::Supported(_))),
+                "{field} {id} was refused: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provenance_ids_the_work_graph_rejects_are_still_refused() {
+        for (field, id) in [
+            ("task_id", "TSK-99"),
+            ("task_id", "TSK-0x12"),
+            ("task_id", "TSK-"),
+            ("task_id", "TSK-001-"),
+            ("task_id", "TSK-001-001-001"),
+            ("task_id", "TSK-1-001"),
+            ("task_id", "TSK-001-1"),
+            ("task_id", "TSK-+001"),
+            ("task_id", "TSK-001\n"),
+            ("task_id", "tsk-001"),
+            ("spec_id", "SPC-12"),
+            ("spec_id", "SPC-"),
+            ("spec_id", "SPC-12a"),
+            ("spec_id", "SPC-001-001"),
+            ("adr_id", "ADR-123"),
+            ("adr_id", "ADR-12"),
+            ("adr_id", "ADR-"),
+            ("adr_id", "ADR-12a4"),
+            ("adr_id", "ADR-0001-001"),
+        ] {
+            let result = provenance_result(field, id);
+            assert!(
+                matches!(result, Err(PresentError::InvalidDocument(_))),
+                "{field} {id} was accepted: {result:?}"
+            );
+        }
     }
 }
