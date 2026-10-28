@@ -1,0 +1,11 @@
+id = "TSK-1056"
+uid = "eaddc351-d26e-4524-af5f-b746d25af5a2"
+kind = "TSK"
+title = "Qualification requires an administrator policy on every escape control"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T19:16:07Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
