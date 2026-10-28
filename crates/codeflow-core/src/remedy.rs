@@ -126,6 +126,14 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// Order findings by what they say, reading an id in the text by its
+    /// number (`TSK-999` before `TSK-1000`), then by remedy.
+    #[must_use]
+    pub fn by_text(&self, other: &Self) -> std::cmp::Ordering {
+        crate::ids::compare_ids(&self.text, &other.text)
+            .then_with(|| self.remedy.cmp(&other.remedy))
+    }
+
     /// A finding and its remedy.
     #[must_use]
     pub fn new(text: impl Into<String>, remedy: Remedy) -> Self {
