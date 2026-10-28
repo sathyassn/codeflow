@@ -759,11 +759,15 @@ impl DirSet {
     pub(crate) fn change(&mut self, change: &DirChange) {
         match change {
             DirChange::To(target) => {
-                let next: Vec<PathBuf> = self
+                let Some(next) = self
                     .dirs
                     .iter()
-                    .map(|dir| lexical_join(dir, target))
-                    .collect();
+                    .map(|dir| physical_join(dir, target))
+                    .collect::<Option<Vec<PathBuf>>>()
+                else {
+                    self.unknown = true;
+                    return;
+                };
                 for dir in next {
                     if !self.dirs.contains(&dir) {
                         if self.dirs.len() == DIR_SET_LIMIT {
@@ -795,6 +799,60 @@ pub(crate) fn lexical_join(dir: &Path, target: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// The directory a program's own directory option (`env -C`, `ruby -C`,
+/// `pwsh -wd`, `tar -C`, `make -C`) moves to: `chdir` resolves each link
+/// before the `..` after it, so `alias/..` is the parent of the link's
+/// target (TSK-1002 review 02, B4). Without a parent component after a
+/// name the spelling is the path, as [`lexical_join`] reads it. `None` when
+/// a component before a parent component is absent, unreadable or a link
+/// the guard cannot resolve: the line may make it a link before the
+/// program runs, so the directory is unknown.
+pub(crate) fn physical_join(dir: &Path, target: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let target = crate::portable_path::without_verbatim(target.to_path_buf());
+    let components: Vec<_> = target.components().collect();
+    let last_parent = components
+        .iter()
+        .rposition(|part| matches!(part, Component::ParentDir));
+    let first_name = components
+        .iter()
+        .position(|part| matches!(part, Component::Normal(_)));
+    let (Some(last_parent), Some(first_name)) = (last_parent, first_name) else {
+        return Some(lexical_join(dir, &target));
+    };
+    if first_name > last_parent {
+        return Some(lexical_join(dir, &target));
+    }
+    let mut path = if target.has_root() {
+        PathBuf::new()
+    } else {
+        crate::portable_path::canonicalize(dir).ok()?
+    };
+    for (at, part) in components.iter().enumerate() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                path.pop();
+            }
+            Component::Normal(name) => {
+                path.push(name);
+                if at > last_parent {
+                    continue;
+                }
+                match crate::absence::symlink_metadata_optional(&path) {
+                    Ok(Some(meta)) if meta.file_type().is_symlink() => {
+                        path = crate::portable_path::canonicalize(&path).ok()?;
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(_) => return None,
+                }
+            }
+            other => path.push(other.as_os_str()),
+        }
+    }
+    Some(path)
 }
 
 /// A directory change one simple command makes.
@@ -1316,9 +1374,24 @@ fn argv(
     }
     if name == "env" {
         if let Some(command) = crate::hooks::git_guard::env_split_command(args) {
-            // env's split grammar can change options and cwd. Retain every
-            // trailing argument without certifying a directory for the child.
+            // The split string read by env's own grammar runs where its
+            // own `-C` moves, judged from the line's directory (TSK-1002
+            // review 02).
+            if let Some(Ok(words)) = crate::hooks::git_guard::env_split_argv(args) {
+                argv(&words, None, cwd, depth + 1, out);
+                return;
+            }
+            // A string the guard cannot read exactly: retain every trailing
+            // argument without certifying a directory for the child, and
+            // read the command as one unverifiable operand.
             visit(&command, None, depth + 1, out);
+            if cwd.is_some() {
+                let marker = [
+                    "cat".to_string(),
+                    format!("{UNVERIFIED_ENV_DIRECTORY}{}", args.join(" ")),
+                ];
+                argv(&marker, None, cwd, depth + 1, out);
+            }
             return;
         }
         if let (Some(dir), Some(inner)) = (
@@ -1356,7 +1429,7 @@ fn argv(
                             .iter()
                             .try_fold(cwd.to_path_buf(), |dir, change| {
                                 match directory_operand(change, out.home.as_deref()) {
-                                    DirChange::To(target) => Some(lexical_join(&dir, &target)),
+                                    DirChange::To(target) => physical_join(&dir, &target),
                                     DirChange::Unknown => None,
                                 }
                             })
@@ -3031,20 +3104,56 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-1002 review 02, B4: a directory option's `..` after a link is
+    /// the parent of the link's target; a missing component before `..`
+    /// leaves the directory unknown; without `..` after a name the spelling
+    /// is the path.
+    #[cfg(unix)]
     #[test]
-    fn r25_env_split_keeps_trailing_arguments_and_unknown_directory() {
+    fn directory_options_resolve_parent_components_physically() {
+        use std::path::Path;
         let temp = tempfile::tempdir().unwrap();
-        for prefix in [
-            "env -S 'python3 tool.py'",
-            "env --split-string='python3 tool.py'",
-            "env -iS 'python3 tool.py'",
-            "nice env -S 'python3 tool.py'",
+        let base = crate::portable_path::canonicalize(temp.path()).unwrap();
+        std::fs::create_dir_all(base.join("store/child")).unwrap();
+        std::fs::create_dir_all(base.join("repo/sub")).unwrap();
+        std::os::unix::fs::symlink(base.join("store/child"), base.join("repo/alias")).unwrap();
+        let repo = base.join("repo");
+        let join = |target: &str| super::physical_join(&repo, Path::new(target));
+        assert_eq!(join("alias/.."), Some(base.join("store")));
+        assert_eq!(join("sub/../alias/.."), Some(base.join("store")));
+        assert_eq!(join("sub/.."), Some(repo.clone()));
+        assert_eq!(join("alias"), Some(repo.join("alias")));
+        assert_eq!(join("../x"), Some(base.join("x")));
+        assert_eq!(join("absent/.."), None);
+        assert_eq!(join("absent"), Some(repo.join("absent")));
+    }
+
+    #[test]
+    fn r25_env_split_keeps_trailing_arguments_and_reads_its_directory() {
+        // TSK-1002 review 02: a split string env's grammar reads exactly
+        // runs where its own `-C` moves, from the line's directory; one the
+        // guard cannot read leaves the directory unknown.
+        let temp = tempfile::tempdir().unwrap();
+        let sub = temp.path().join("sub");
+        for (prefix, cwd) in [
+            ("env -S 'python3 tool.py'", Some(temp.path().to_path_buf())),
+            (
+                "env --split-string='python3 tool.py'",
+                Some(temp.path().to_path_buf()),
+            ),
+            ("env -iS 'python3 tool.py'", Some(temp.path().to_path_buf())),
+            (
+                "nice env -S 'python3 tool.py'",
+                Some(temp.path().to_path_buf()),
+            ),
+            ("env -S '-C sub python3 tool.py'", Some(sub)),
+            ("env -S '${X} python3 tool.py'", None),
         ] {
             let line = format!("{prefix} 'ordinary data.json'");
             let calls = super::interpreter_calls_with_home(&line, temp.path(), None);
             assert!(
                 calls.iter().any(|call| {
-                    call.args == ["tool.py", "ordinary data.json"] && call.cwd.is_none()
+                    call.args == ["tool.py", "ordinary data.json"] && call.cwd == cwd
                 }),
                 "{line}: {calls:?}"
             );

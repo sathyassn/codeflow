@@ -7563,6 +7563,119 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
     }
 }
 
+/// The words env runs when a launcher in front uses `-S` or
+/// `--split-string`: the words before the option, the split string read by
+/// env's own grammar ([`env_split_string`]), then the words after it. The
+/// result starts at the same launcher, so its env options, `-C` included,
+/// are read again by [`env_words`] (TSK-1002 review 02). `None` when no
+/// launcher uses `-S`; an error when the string uses a form the guard does
+/// not read exactly.
+pub(crate) fn env_split_argv(tokens: &[String]) -> Option<Result<Vec<String>, String>> {
+    let assignment = |t: &str| {
+        t.split_once('=')
+            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+    };
+    let mut idx = 0;
+    loop {
+        while tokens.get(idx).is_some_and(|t| assignment(t)) {
+            idx += 1;
+        }
+        let t = tokens.get(idx)?.as_str();
+        if is_prefix_launcher(t) {
+            idx = skip_launcher_options(t, tokens, idx + 1)?;
+            continue;
+        }
+        if launcher_name(t) != "env" {
+            return None;
+        }
+        let words = env_words(tokens, idx + 1).ok()?;
+        let Some(at) = words.split else {
+            idx = words.end;
+            continue;
+        };
+        let (operand, after) = match env_split_option(&tokens[at])? {
+            SplitString::Attached(text) => (text, at + 1),
+            SplitString::NextWord => (tokens.get(at + 1)?.as_str(), at + 2),
+        };
+        // The option word itself goes; a cluster before it (`-iS`) keeps
+        // its other letters.
+        let mut out: Vec<String> = tokens[..at].to_vec();
+        if let Some(letters) = tokens[at].strip_prefix('-').filter(|w| !w.starts_with('-')) {
+            if let Some((before, _)) = letters.split_once('S') {
+                if !before.is_empty() {
+                    out.push(format!("-{before}"));
+                }
+            }
+        }
+        return Some(env_split_string(operand).map(|split| {
+            out.extend(split);
+            out.extend(tokens.get(after..).unwrap_or_default().iter().cloned());
+            out
+        }));
+    }
+}
+
+/// `env -S`'s string split into words by env's grammar (GNU coreutils):
+/// blanks separate words, `\_` outside quotes separates them too, single
+/// quotes keep their text, and double quotes and bare words take the
+/// escapes `\\ \" \' \_ \t \n \r \f \v \#`. A `$` (env expands `${NAME}`
+/// from its environment), `\c`, a `#` that starts a comment, any other
+/// escape or an unclosed quote is an error, so the caller refuses the
+/// command instead of guessing it.
+pub(crate) fn env_split_string(text: &str) -> Result<Vec<String>, String> {
+    let unread = |what: &str| {
+        Err(format!(
+            "`env -S` string with {what}, which the guard does not read"
+        ))
+    };
+    let mut words = Vec::new();
+    let mut current: Option<String> = None;
+    let mut quote: Option<char> = None;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (_, '$') => return unread("a variable"),
+            (Some(q), c) if c == q => quote = None,
+            (Some('\''), '\\') => return unread("a backslash in single quotes"),
+            (Some('\''), c) => current.get_or_insert_with(String::new).push(c),
+            (_, '\\') => {
+                let Some(next) = chars.next() else {
+                    return unread("a trailing backslash");
+                };
+                let value = match next {
+                    '_' if quote.is_none() => {
+                        words.extend(current.take());
+                        continue;
+                    }
+                    '_' => ' ',
+                    '\\' | '"' | '\'' | '#' => next,
+                    't' => '\t',
+                    'n' => '\n',
+                    'r' => '\r',
+                    'f' => '\u{c}',
+                    'v' => '\u{b}',
+                    _ => return unread("an escape"),
+                };
+                current.get_or_insert_with(String::new).push(value);
+            }
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                current.get_or_insert_with(String::new);
+            }
+            (None, '#') if current.is_none() => return unread("a comment"),
+            (None, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}') => {
+                words.extend(current.take());
+            }
+            (_, c) => current.get_or_insert_with(String::new).push(c),
+        }
+    }
+    if quote.is_some() {
+        return unread("an unclosed quote");
+    }
+    words.extend(current);
+    Ok(words)
+}
+
 /// Shells continue reading options after -c; the first operand is the code.
 /// In particular, -o/+o and -O/+O consume an option name, not the script.
 fn shell_code_option(args: &[String]) -> (bool, Option<&String>) {
@@ -13308,6 +13421,11 @@ pub(crate) struct EnvWords<'t> {
     pub(crate) end: usize,
 }
 
+/// Why a second env directory option refuses: GNU env keeps only the last
+/// one, and the guard does not assume that of every env it may meet
+/// (TSK-1002 review 02, B4).
+const ENV_SECOND_DIRECTORY: &str = "a second directory option, which the guard does not resolve";
+
 /// env's long options, and whether each takes a value: required (`Some(true)`),
 /// optional and only attached with `=` (`Some(false)`), or none (`None`).
 const ENV_LONG: &[(&str, Option<bool>)] = &[
@@ -13388,7 +13506,12 @@ pub(crate) fn env_words(tokens: &[String], mut idx: usize) -> Result<EnvWords<'_
                     (_, value) => value,
                 };
                 match full {
-                    "chdir" => words.dirs.extend(value),
+                    "chdir" => {
+                        if !words.dirs.is_empty() {
+                            return Err(format!("`env {a}`, {ENV_SECOND_DIRECTORY}"));
+                        }
+                        words.dirs.extend(value);
+                    }
                     "split-string" => {
                         // The end is the split string's own word when it
                         // is separate, as for `-S STRING`.
@@ -13419,6 +13542,9 @@ pub(crate) fn env_words(tokens: &[String], mut idx: usize) -> Result<EnvWords<'_
                                 tail
                             };
                             if letter == 'C' {
+                                if !words.dirs.is_empty() {
+                                    return Err(format!("`env {a}`, {ENV_SECOND_DIRECTORY}"));
+                                }
                                 words.dirs.push(value);
                             }
                             if letter == 'S' {
@@ -16030,7 +16156,6 @@ mod tests {
             ("env --chdir=d -- cat x", vec!["d"], "cat"),
             ("env --chdir d cat x", vec!["d"], "cat"),
             ("env --ch=d cat x", vec!["d"], "cat"),
-            ("env -C a -C b cat x", vec!["a", "b"], "cat"),
             ("env -u X -i -- FOO=1 cat x", vec![], "cat"),
             ("env -uX - FOO=1 cat x", vec![], "cat"),
             ("env --unset X --ignore-environment cat x", vec![], "cat"),
@@ -16053,6 +16178,10 @@ mod tests {
             "env --i cat x",
             "env -Z cat x",
             "env -C",
+            // A second directory option refuses (review 02, B4).
+            "env -C a -C b cat x",
+            "env -Ca --chdir=b cat x",
+            "env --chdir a -iC b cat x",
         ] {
             assert!(env_words(&words(line), 1).is_err(), "{line}");
         }
@@ -16062,6 +16191,56 @@ mod tests {
             Some("tee")
         );
         assert_eq!(launcher_effects(&tokens), (vec![".git"], None));
+    }
+
+    /// TSK-1002 review 02: env's split string is read by env's grammar into
+    /// the words env runs, so its own `-C` is read again; a form the guard
+    /// does not read exactly is an error.
+    #[test]
+    fn env_split_strings_read_by_env_grammar() {
+        let words = |line: &str| command_argv(line);
+        for (line, expected) in [
+            ("env -S '-C d cat x'", vec!["env", "-C", "d", "cat", "x"]),
+            (
+                "env -S'-C d cat x' y",
+                vec!["env", "-C", "d", "cat", "x", "y"],
+            ),
+            (
+                "env -iS '-C d cat x'",
+                vec!["env", "-i", "-C", "d", "cat", "x"],
+            ),
+            (
+                "env --split-string='-C d cat x'",
+                vec!["env", "-C", "d", "cat", "x"],
+            ),
+            (
+                "env -S '-C\\_d cat \"a b\"'",
+                vec!["env", "-C", "d", "cat", "a b"],
+            ),
+            (
+                "FOO=1 env -S \"cat 'a b'\"",
+                vec!["FOO=1", "env", "cat", "a b"],
+            ),
+        ] {
+            let read = env_split_argv(&words(line))
+                .unwrap_or_else(|| panic!("{line}: no split"))
+                .unwrap_or_else(|why| panic!("{line}: {why}"));
+            assert_eq!(read, expected, "{line}");
+        }
+        for line in [
+            "env -S '-C ${D} cat x'",
+            "env -S '-C d \\c cat x'",
+            "env -S '#cat x'",
+            "env -S 'cat \"x'",
+            "env -S \"cat 'a\\b'\"",
+            "env -S 'cat \\q'",
+        ] {
+            assert!(
+                matches!(env_split_argv(&words(line)), Some(Err(_))),
+                "{line}"
+            );
+        }
+        assert_eq!(env_split_argv(&words("env -C d cat x")), None);
     }
 
     #[test]

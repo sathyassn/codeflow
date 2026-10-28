@@ -371,6 +371,128 @@ fn tsk1002_directory_changes_in_every_launcher_spelling() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// TSK-1002 review 02 through the hooks: env's split string runs where its
+/// own `-C` moves; a second env directory option refuses; after an unknown
+/// directory change a relative name that could be a secret refuses; a copy
+/// into a directory, a launcher's directory and a changed PATH all reach a
+/// file written earlier on the line; a `local` declaration reads nothing.
+/// Each refusal allowed before this change.
+#[test]
+fn tsk1002_review02_classes_refuse_through_the_hooks() {
+    let f = Fixture::new();
+    let store = f.temp.path().join(".codex");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("auth.json"), "planted fixture").unwrap();
+    let public = f.temp.path().join("public");
+    std::fs::create_dir_all(&public).unwrap();
+    std::fs::write(public.join("auth.json"), "ordinary fixture").unwrap();
+    std::fs::write(f.linked.join("tool.py"), "# ordinary\n").unwrap();
+    let store = shell_path(&store);
+    let public = shell_path(&public);
+    let mut wrong = Vec::new();
+    for form in [
+        "env -S \"-C '%' cat auth.json\"",
+        "env -S\"-C '%' cat auth.json\"",
+        "env -iS \"-C '%' cat auth.json\"",
+        "env --split-string=\"-C '%' cat auth.json\"",
+        "env -S \"--chdir='%' cat auth.json\"",
+    ] {
+        let line = form.replace('%', &store);
+        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+        let line = form.replace('%', &public);
+        let out = f.command(&f.linked, "exec-guard", &line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused public: {line}: {out:?}"));
+        }
+    }
+    let second = format!("env -C '{public}' -C '{store}' cat auth.json");
+    for line in [
+        // A split string the guard cannot read exactly, and a second
+        // directory option, leave the directory unknown.
+        "env -S '-C ${DIR} cat auth.json'".to_string(),
+        "env -S '-C \\c cat auth.json'".to_string(),
+        second,
+        // After an unknown directory change, a name that could be a secret.
+        "cd \"$UNKNOWN\" && cat auth.json".to_string(),
+        "pushd \"$UNKNOWN\" && cat auth.json".to_string(),
+        "cd \"$UNKNOWN\"; cat .codex/auth.json".to_string(),
+        "cd \"$UNKNOWN\"; cat x/../auth.json".to_string(),
+        "cd \"$UNKNOWN\"; cat id_rsa".to_string(),
+        // A written file run through a directory copy, a launcher's
+        // directory or a changed PATH.
+        "cp tool.py out/; python3 out/tool.py".to_string(),
+        "cp -t out tool.py; python3 out/tool.py".to_string(),
+        "cp -r src out; sh out/src/run.sh".to_string(),
+        "printf x > sub/script; env -C sub python3 script".to_string(),
+        "printf x > sub/script; env --chdir=sub sh script".to_string(),
+        "printf x > run; chmod +x run; PATH=.:$PATH run".to_string(),
+        "printf x > run; chmod +x run; export PATH=.:$PATH; run".to_string(),
+    ] {
+        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "cd \"$UNKNOWN\" && cat README.md",
+        "cd \"$UNKNOWN\" && python3 tool.py",
+        "cp tool.py out/; cat out/tool.py",
+        "printf x > notes.txt; cat notes.txt",
+        "f() { local x=id_rsa; }; f",
+        "f() { local -r x=id_rsa; }; f",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 review 02, B4: a directory option resolves `..` through a link
+/// as `chdir` does, so `alias/..` is the parent of the link's target, for
+/// env, ruby, pwsh and tar. A missing component before `..` may become a
+/// link on the line, so it leaves the directory unknown. Each refusal
+/// allowed before this change; the control links into an ordinary tree.
+#[cfg(unix)]
+#[test]
+fn tsk1002_review02_directory_options_resolve_physically() {
+    let f = Fixture::new();
+    let store = f.temp.path().join(".codex");
+    std::fs::create_dir_all(store.join("child")).unwrap();
+    std::fs::write(store.join("auth.json"), "planted fixture").unwrap();
+    let public = f.temp.path().join("public");
+    std::fs::create_dir_all(public.join("child")).unwrap();
+    std::fs::write(public.join("auth.json"), "ordinary fixture").unwrap();
+    std::os::unix::fs::symlink(store.join("child"), f.linked.join("alias")).unwrap();
+    std::os::unix::fs::symlink(public.join("child"), f.linked.join("plain")).unwrap();
+    let mut wrong = Vec::new();
+    for form in [
+        "env -C %/.. cat auth.json",
+        "env --chdir=%/.. cat auth.json",
+        "env -iC%/.. cat auth.json",
+        "ruby -C %/.. -e 'File.read(\"auth.json\")'",
+        "pwsh -wd %/.. -c 'Get-Content auth.json'",
+        "tar -C %/.. -cf out.tar auth.json",
+    ] {
+        let line = form.replace('%', "alias");
+        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+        let line = form.replace('%', "plain");
+        let out = f.command(&f.linked, "exec-guard", &line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused public: {line}: {out:?}"));
+        }
+    }
+    let line = "env -C absent/.. cat auth.json";
+    if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        wrong.push(format!("allowed: {line}"));
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// TSK-1002 UNC finding: an administrative share, a verbatim or device UNC
 /// spelling, or any share whose path ends in a home store names the store,
 /// and a share write names the checkout file. Before this change the guard

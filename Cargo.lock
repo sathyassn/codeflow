@@ -283,6 +283,7 @@ dependencies = [
  "fs2",
  "git2",
  "glob",
+ "globset",
  "libc",
  "proc-macro2",
  "pulldown-cmark",

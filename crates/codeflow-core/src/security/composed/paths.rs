@@ -1092,8 +1092,19 @@ fn nul_stdout(program: &str, args: &[String]) -> Option<String> {
     Some(output)
 }
 
+/// The body recorded for a directory a recursive copy wrote: every file
+/// under it may have been written on this line, with contents unknown.
+const WRITTEN_TREE: &str = "__unresolved_shell_code # written tree";
+
 fn names_written_file(position: &Position, dir: &Path, file: &str, links: &[Link]) -> bool {
     let candidate = lexical_join(dir, Path::new(file));
+    if position
+        .scripts
+        .iter()
+        .any(|(path, body)| body == WRITTEN_TREE && candidate.starts_with(path))
+    {
+        return true;
+    }
     if crate::hooks::git_guard::has_glob(file) {
         // New files are absent from the expansion snapshot. A selector that
         // may name one cannot certify the code the interpreter will read.
@@ -1474,16 +1485,46 @@ fn simple(
     let input_code = doc_input.clone().or(here_input);
     if let Some(dir) = &position.state.directory {
         let mut targets = crate::hooks::git_guard::redirect_writes(&text).targets;
+        let mut trees: Vec<String> = Vec::new();
         if let Some((program, args)) = launched {
             if let Some(effects) = crate::security::unresolved::writer_effects(program, args, &[]) {
                 targets.extend(effects.writes);
                 // A link names an existing file rather than writing a body;
                 // the line's links are judged as links (`linked_script`).
-                if !matches!(
-                    crate::security::unresolved::writer_name(program),
-                    "ln" | "link"
-                ) {
-                    targets.extend(effects.copy.and_then(|copy| copy.dest));
+                if let Some(copy) = effects.copy.filter(|_| {
+                    !matches!(
+                        crate::security::unresolved::writer_name(program),
+                        "ln" | "link"
+                    )
+                }) {
+                    if let Some(dest) = copy.dest {
+                        // A copy into a directory writes `dest/<source name>`
+                        // (review 02, B3). A recursive copy, or one whose
+                        // options the table cannot read, writes a tree.
+                        let recursive = copy.unknown.is_some()
+                            || copy.flags.iter().any(|flag| {
+                                matches!(flag.as_str(), "--recursive" | "--archive")
+                                    || !flag.starts_with("--")
+                                        && flag.starts_with('-')
+                                        && flag.contains(['r', 'R', 'a'])
+                            });
+                        for source in &copy.sources {
+                            if let Some(name) =
+                                Path::new(source).file_name().and_then(|n| n.to_str())
+                            {
+                                let child = format!("{}/{name}", dest.trim_end_matches('/'));
+                                if recursive {
+                                    trees.push(child);
+                                } else {
+                                    targets.push(child);
+                                }
+                            }
+                        }
+                        if recursive {
+                            trees.push(dest.clone());
+                        }
+                        targets.push(dest);
+                    }
                 }
             }
             // The writers that write their operands, as the git guard
@@ -1528,6 +1569,11 @@ fn simple(
                 .cloned()
                 .unwrap_or_else(|| "__unresolved_shell_code".into());
             position.scripts.push((path, body));
+        }
+        for tree in trees {
+            position
+                .scripts
+                .push((lexical_join(dir, Path::new(&tree)), WRITTEN_TREE.into()));
         }
     }
     let unread_script_word = unresolved
@@ -1602,6 +1648,39 @@ fn simple(
                 candidates.extend(["GNUmakefile", "makefile", "Makefile"]);
             }
             let mut directory = position.state.directory.clone();
+            // A launcher's directory (`env -C sub python3 script`) is where
+            // the script operand is opened (review 02, B3); one the guard
+            // cannot read leaves the directory unknown.
+            let (moves, uncertain) = crate::hooks::git_guard::launcher_effects(&words);
+            let launcher_moved = uncertain.is_some() || !moves.is_empty();
+            if uncertain.is_some()
+                || moves.iter().any(|dir| {
+                    crate::hooks::git_guard::unresolved_word(dir)
+                        || crate::hooks::git_guard::has_glob(dir)
+                })
+            {
+                directory = None;
+            } else {
+                for target in moves {
+                    directory = directory.and_then(|dir| {
+                        crate::security::outward::physical_join(&dir, Path::new(target))
+                    });
+                }
+            }
+            // A bare name runs from PATH; once the line changes PATH, it may
+            // name a file the line wrote.
+            let path_changed = position.state.world.is_some()
+                || position.state.vars.contains_key("PATH")
+                || position.state.changed.contains("PATH")
+                || words
+                    .iter()
+                    .take_while(|word| word.contains('='))
+                    .any(|word| word.starts_with("PATH="));
+            let path_names_written = path_changed
+                && !program.contains(['/', '\\'])
+                && position.scripts.iter().any(|(path, body)| {
+                    body == WRITTEN_TREE || path.file_name() == Some(std::ffi::OsStr::new(program))
+                });
             if make {
                 let mut at = 0;
                 while let Some(arg) = args.get(at) {
@@ -1613,7 +1692,9 @@ fn simple(
                             .or_else(|| arg.strip_prefix("-C"))
                     };
                     if let Some(target) = target {
-                        directory = directory.map(|dir| lexical_join(&dir, Path::new(target)));
+                        directory = directory.and_then(|dir| {
+                            crate::security::outward::physical_join(&dir, Path::new(target))
+                        });
                     }
                     at += 1;
                 }
@@ -1643,7 +1724,16 @@ fn simple(
                 Some("deno") => &["ts", "tsx", "js", "jsx", "mjs"],
                 _ => &[],
             };
+            // A recursive copy writes files the guard cannot list, so an
+            // interpreter that loads modules may load one of them.
+            let loads_tree = !loads.is_empty()
+                && position
+                    .scripts
+                    .iter()
+                    .any(|(_, body)| body == WRITTEN_TREE);
             let executes_written = executes_written
+                || path_names_written
+                || loads_tree
                 || position.scripts.iter().any(|(path, _)| {
                     path.extension()
                         .and_then(|extension| extension.to_str())
@@ -1654,16 +1744,19 @@ fn simple(
             let unverified_selection = candidates
                 .iter()
                 .any(|file| crate::hooks::git_guard::has_glob(file));
-            let raw_body = directory.as_ref().is_some_and(|dir| {
-                reader.is_some_and(|(_, args)| {
-                    args.iter()
-                        .find(|arg| !arg.starts_with('-'))
-                        .is_some_and(|file| {
-                            let file = lexical_join(dir, Path::new(file));
-                            position.scripts.iter().any(|(path, _)| path == &file)
-                        })
-                })
-            });
+            // The body below is read from the line's directory, so a script
+            // a launcher runs from another directory is not read raw.
+            let raw_body = !launcher_moved
+                && directory.as_ref().is_some_and(|dir| {
+                    reader.is_some_and(|(_, args)| {
+                        args.iter()
+                            .find(|arg| !arg.starts_with('-'))
+                            .is_some_and(|file| {
+                                let file = lexical_join(dir, Path::new(file));
+                                position.scripts.iter().any(|(path, _)| path == &file)
+                            })
+                    })
+                });
             if executes_written
                 && (reader.is_none()
                     || interpreter
@@ -2060,6 +2153,20 @@ mod tests {
             "printf 'x=1' > helper.py; python3 main.py",
             "printf 'x' > lib.js; node --require ./lib.js app.js",
             "echo \"$X\" > run.sh; bash -x run.sh",
+            // Review 02, B3: a copy's child in its directory, a recursive
+            // copy's tree, a launcher's directory and a changed PATH.
+            "cp other.py out/; python3 out/other.py",
+            "cp other.py out; python3 out/other.py",
+            "cp -t out other.py; python3 out/other.py",
+            "cp -r src out; sh out/src/run.sh",
+            "cp -a src out; ./out/src/run",
+            "cp -R src out; python3 tool.py",
+            "printf x > sub/script; env -C sub python3 script",
+            "printf x > sub/script; env --chdir=sub sh script",
+            "printf x > sub/Makefile; make -C sub",
+            "printf x > run; chmod +x run; PATH=.:$PATH run",
+            "printf x > run; chmod +x run; export PATH=.:$PATH; run",
+            "printf x > run; chmod +x run; PATH=$PWD:$PATH; run",
         ] {
             assert!(unread(line), "allowed: {line}");
         }
@@ -2067,6 +2174,8 @@ mod tests {
             "python3 gen.py > out.json; python3 use.py out.json",
             "printf 'x' > notes.txt; cat notes.txt",
             "echo x > log.txt; node app.js log.txt",
+            "cp other.py out/; cat out/other.py",
+            "printf x > run; ls",
         ] {
             assert!(!unread(line), "refused: {line}");
         }

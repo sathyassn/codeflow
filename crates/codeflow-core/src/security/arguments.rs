@@ -408,11 +408,15 @@ fn call_dirs(
         match outward::directory_operand(chdir, facts.home) {
             outward::DirChange::Unknown => set.unknown = true,
             outward::DirChange::To(target) => {
-                set.dirs = set
+                match set
                     .dirs
                     .iter()
-                    .map(|dir| outward::lexical_join(dir, &target))
-                    .collect();
+                    .map(|dir| outward::physical_join(dir, &target))
+                    .collect::<Option<Vec<_>>>()
+                {
+                    Some(dirs) => set.dirs = dirs,
+                    None => set.unknown = true,
+                }
             }
         }
     }

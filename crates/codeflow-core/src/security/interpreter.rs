@@ -134,7 +134,7 @@ fn code_reads_where_calls_run(
         let dir = call.cwd.clone().and_then(|start| {
             call.chdir.iter().try_fold(start, |dir, change| {
                 match outward::directory_operand(change, home) {
-                    outward::DirChange::To(target) => Some(outward::lexical_join(&dir, &target)),
+                    outward::DirChange::To(target) => outward::physical_join(&dir, &target),
                     outward::DirChange::Unknown => None,
                 }
             })
@@ -171,21 +171,64 @@ fn code_reads_where_calls_run(
 /// path. An absolute or home word is judged as written; a parent component
 /// can reach any directory, so it could.
 fn relative_may_name_secret(word: &str) -> bool {
-    static DIRS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let slashed = word.replace('\\', "/");
+    let drive = slashed
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        && slashed.as_bytes().get(1) == Some(&b':');
+    if slashed.starts_with(['/', '~']) || drive {
+        return false;
+    }
+    let word = slashed.trim_start_matches("./");
+    !word.is_empty()
+        && (word.split('/').any(|part| part == "..")
+            || protected_dirs()
+                .iter()
+                .any(|dir| secret_path_spelling(&format!("{dir}/{word}"), None, Some(true))))
+}
+
+/// Whether a relative word names a secret in some directory: its name is a
+/// secret basename, or its path is a secret below a protected home
+/// directory (`auth.json`, `.codex/auth.json`, `id_rsa`), by the same
+/// names the absolute-path checks use. After a parent component
+/// the rest may start anywhere, so only the rest is judged. This is the
+/// rule for a relative operand read after a directory change the guard
+/// cannot establish (TSK-1002 review 02).
+fn relative_names_secret(word: &str) -> bool {
     let word = word.replace('\\', "/");
     let drive = word.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
         && word.as_bytes().get(1) == Some(&b':');
     if word.starts_with(['/', '~']) || drive {
         return false;
     }
-    let word = word.trim_start_matches("./");
-    if word.is_empty() {
+    let word = word
+        .rsplit_once("/../")
+        .map_or(word.as_str(), |(_, rest)| rest)
+        .trim_start_matches("../")
+        .trim_start_matches("./");
+    if word.is_empty() || word == ".." || word == "." {
         return false;
     }
-    if word.split('/').any(|part| part == "..") {
-        return true;
-    }
-    let dirs = DIRS.get_or_init(|| {
+    // A name counts where its own spelling makes the path secret: in a
+    // directory denied as a whole every name is secret, which says nothing
+    // about this name, so an ordinary name of the same depth is the control.
+    let ordinary = word
+        .split('/')
+        .map(|_| "__codeflow_ordinary_name__")
+        .collect::<Vec<_>>()
+        .join("/");
+    protected_dirs().iter().any(|dir| {
+        secret_path_spelling(&format!("{dir}/{word}"), None, Some(true))
+            && !secret_path_spelling(&format!("{dir}/{ordinary}"), None, Some(true))
+    })
+}
+
+/// The home directories on the way to a protected path, with the home and
+/// a directory outside it, where a relative word may be read.
+fn protected_dirs() -> &'static [String] {
+    static DIRS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    DIRS.get_or_init(|| {
         let table = actions::table();
         let rules = table
             .claude_read_groups
@@ -208,9 +251,7 @@ fn relative_may_name_secret(word: &str) -> bool {
         dirs.sort();
         dirs.dedup();
         dirs
-    });
-    dirs.iter()
-        .any(|dir| secret_path_spelling(&format!("{dir}/{word}"), None, Some(true)))
+    })
 }
 
 fn secret_reads(
@@ -305,6 +346,12 @@ fn inspect_operand(
     let (at, value, glob) = operand;
     if value.starts_with(outward::UNVERIFIED_ENV_DIRECTORY) {
         return Err("cannot establish the directory env runs the command in");
+    }
+    // After a directory change the guard cannot establish, of any kind, a
+    // relative operand that could name a secret refuses (TSK-1002 review
+    // 02); other relative operands keep their verdicts below.
+    if call.cwd.is_none() && relative_names_secret(value) {
+        return Err("cannot establish the directory the command runs in");
     }
     if value == "__unverified_transfer_input" {
         return Err("cannot establish a transfer option's quoted input filename");
@@ -536,12 +583,10 @@ fn secret_path_result(
     } else {
         Some(outward::lexical_join(cwd, Path::new(word)))
     };
-    if physical_secret(word, cwd, home, reader)? {
-        return Ok(true);
-    }
     // A UNC path names a file in a share whose layout the guard cannot
-    // see. Judge it before any mapping or metadata read, so the guard never
-    // contacts a host a command names before refusing a store spelling.
+    // see. Judge it before any physical resolution, mapping or metadata
+    // read, so the guard never contacts a host a command names before
+    // refusing it (review 02, B5).
     if cfg!(windows) {
         if let Some(path) = absolute.as_deref() {
             let text = crate::portable_path::slashed(path);
@@ -549,6 +594,9 @@ fn secret_path_result(
                 return Ok(true);
             }
         }
+    }
+    if physical_secret(word, cwd, home, reader)? {
+        return Ok(true);
     }
     // Map the path the word names, after its home is resolved, never
     // `cwd.join(word)`: a Windows cwd under `RUNNER~1` would otherwise turn
@@ -625,6 +673,12 @@ fn physical_secret(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many metadata reads [`physical_path`] made on this thread.
+    static PHYSICAL_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The path `word` opens from `base` when a parent component follows
 /// another component: each existing link on the way is resolved before the
 /// next `..`, as the kernel resolves it, so `alias/..` is the parent of the
@@ -662,6 +716,8 @@ fn physical_path(base: &Path, word: &Path) -> Result<Option<PathBuf>, &'static s
                 if !exists {
                     continue;
                 }
+                #[cfg(test)]
+                PHYSICAL_READS.with(|reads| reads.set(reads.get() + 1));
                 match crate::absence::symlink_metadata_optional(&path) {
                     Ok(Some(meta)) if meta.file_type().is_symlink() => {
                         path = crate::portable_path::canonicalize(&path)
@@ -1524,6 +1580,13 @@ fn positive_selector(args: &[String], at: usize, value: &str) -> bool {
 
 /// A create archive reads whole input trees. Read its root and archive-file
 /// options separately so the destination never becomes an input root.
+/// The directory tar's `-C` moves to, resolved as `chdir` resolves it
+/// ([`outward::physical_join`]); one the guard cannot establish refuses.
+fn archive_directory(base: &Path, value: &str) -> Result<PathBuf, &'static str> {
+    outward::physical_join(base, Path::new(value))
+        .ok_or("cannot establish the directory an archive option moves to")
+}
+
 fn archive_read_roots(args: &[String], cwd: &Path) -> Result<Option<Vec<String>>, &'static str> {
     let creates = args.iter().enumerate().any(|(at, arg)| {
         if arg == "--create" {
@@ -1566,10 +1629,10 @@ fn archive_read_roots(args: &[String], cwd: &Path) -> Result<Option<Vec<String>>
                 .ok_or("cannot establish an archive option value")?;
             at += 1;
             if arg == "--directory" {
-                base = outward::lexical_join(&base, Path::new(value));
+                base = archive_directory(&base, value)?;
             }
         } else if !literal && arg.starts_with("--directory=") {
-            base = outward::lexical_join(&base, Path::new(&arg[12..]));
+            base = archive_directory(&base, &arg[12..])?;
         } else if !literal
             && (arg.starts_with("--file=")
                 || matches!(
@@ -1601,7 +1664,7 @@ fn archive_read_roots(args: &[String], cwd: &Path) -> Result<Option<Vec<String>>
                         attached
                     };
                     if flag == 'C' {
-                        base = outward::lexical_join(&base, Path::new(value));
+                        base = archive_directory(&base, value)?;
                     }
                     break;
                 }
@@ -1635,13 +1698,17 @@ fn search_root_matches(
     let patterns: Vec<_> = patterns
         .iter()
         .filter(|pattern| !pattern.starts_with('!'))
-        .map(|pattern| pattern.trim_start_matches('/').to_ascii_lowercase())
+        .map(|pattern| pattern.trim_start_matches('/').to_string())
         .collect();
     let patterns = if patterns.is_empty() {
         vec!["*".into()]
     } else {
         patterns
     };
+    let matchers = patterns
+        .iter()
+        .map(|pattern| selector_matchers(pattern))
+        .collect::<Result<Vec<_>, _>>()?;
     // The guard cannot reproduce every ignore source or same-line edit.
     // Inspect ignored names too, under the same metadata budget.
     let root_path = crate::hooks::git_guard::prospective_path(root)
@@ -1659,24 +1726,38 @@ fn search_root_matches(
             continue;
         }
         let names = selector_spellings(&path, root, written_root)?;
-        for pattern in &patterns {
-            let matcher = glob::Pattern::new(pattern)
-                .map_err(|_| "cannot inspect the search glob's syntax")?;
-            if names.iter().any(|name| {
-                matcher.matches_with(
-                    name,
-                    glob::MatchOptions {
-                        case_sensitive: false,
-                        require_literal_separator: true,
-                        require_literal_leading_dot: false,
-                    },
-                )
-            }) {
-                return Ok(true);
-            }
+        if matchers
+            .iter()
+            .flatten()
+            .any(|matcher| names.iter().any(|name| matcher.is_match(name)))
+        {
+            return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// The selector as each reading a search tool may give it, by the glob
+/// grammar ripgrep uses (`globset`): with and without backslash escapes
+/// (ripgrep on Unix and grep's `fnmatch` escape, ripgrep on Windows reads a
+/// separator), and with `*` stopping at `/` or not (grep compares name
+/// suffixes). Case is ignored, so `--iglob` and case-folding hosts are
+/// covered. A selector clears a secret only when no reading matches it; one
+/// the grammar cannot read refuses (review 02, B1).
+fn selector_matchers(pattern: &str) -> Result<Vec<globset::GlobMatcher>, &'static str> {
+    let mut matchers = Vec::new();
+    for escape in [true, false] {
+        for separator in [true, false] {
+            let glob = globset::GlobBuilder::new(pattern)
+                .literal_separator(separator)
+                .backslash_escape(escape)
+                .case_insensitive(true)
+                .build()
+                .map_err(|_| "cannot read the search glob as its tool does")?;
+            matchers.push(glob.compile_matcher());
+        }
+    }
+    Ok(matchers)
 }
 
 /// Every spelling a search tool may match a selector against for `path`
@@ -1763,6 +1844,7 @@ fn file_operands<'a>(
             | "declare"
             | "typeset"
             | "readonly"
+            | "local"
             | "unset"
             | "getln"
             | "read"
@@ -2514,6 +2596,20 @@ mod tests {
             ),
             (format!("rg -g '{absolute}/**' needle '{absolute}'"), true),
             ("grep -r --include='id_*' needle copies".to_string(), true),
+            // Review 02, B1: the tool's own glob grammar, escapes included.
+            (r"rg -g 'copie\s/**' needle copies".to_string(), true),
+            (
+                r"rg -g 'c\opies/de\ep/i\d_rsa' needle copies".to_string(),
+                true,
+            ),
+            ("rg -g '[c]opies/**' needle copies".to_string(), true),
+            ("rg -g 'cop?es/**' needle copies".to_string(), true),
+            ("rg -g 'copies/**/id_*' needle copies".to_string(), true),
+            ("grep -r --include='*deep*' needle copies".to_string(), true),
+            (
+                r"rg -g 'visibl\e/**' needle visible copies".to_string(),
+                false,
+            ),
             ("rg -g '*.md' needle copies visible".to_string(), false),
             ("rg -g 'visible/**' needle visible".to_string(), false),
             ("rg -g 'copies/*.md' needle copies".to_string(), false),
@@ -2551,11 +2647,82 @@ mod tests {
             ("cat alias/file.txt", false),
             ("cat sub/../notes.md", false),
         ];
+        PHYSICAL_READS.with(|reads| reads.set(0));
         let wrong: Vec<_> = cases
             .iter()
             .filter(|(command, refuse)| glob_fixture_read(command, &root, &home) != *refuse)
             .collect();
         assert!(wrong.is_empty(), "wrong verdicts: {wrong:?}");
+        // The seam the share test relies on counts these reads.
+        assert!(PHYSICAL_READS.with(std::cell::Cell::get) > 0);
+    }
+
+    /// Review 02, item 3: after an unknown directory change a relative word
+    /// refuses when its name or path is a secret somewhere, by the names
+    /// the absolute checks use; a name secret only because a whole
+    /// directory is denied says nothing, so ordinary names stay usable.
+    #[test]
+    fn relative_names_that_could_be_secrets() {
+        for word in [
+            "auth.json",
+            ".codex/auth.json",
+            "./auth.json",
+            "x/../auth.json",
+            "../../auth.json",
+            "id_rsa",
+            ".ssh/id_ed25519",
+            ".ssh/config",
+            ".aws/credentials",
+        ] {
+            assert!(relative_names_secret(word), "{word}");
+        }
+        for word in [
+            "README.md",
+            "tool.py",
+            "docs/README.md",
+            "..",
+            ".",
+            "/etc/hosts",
+            "~/notes.md",
+        ] {
+            assert!(!relative_names_secret(word), "{word}");
+        }
+        // Interpreter literals in an unknown directory keep the broader rule.
+        assert!(relative_may_name_secret("../anything"));
+    }
+
+    /// Review 02, item 7: a `local` declaration in a function reads nothing.
+    #[test]
+    fn a_local_declaration_is_not_a_file_operand() {
+        let temp = tempfile::tempdir().unwrap();
+        for line in [
+            "f() { local x=id_rsa; }; f",
+            "f() { local -r x=id_rsa; }; f",
+        ] {
+            assert!(!glob_fixture_read(line, temp.path(), temp.path()), "{line}");
+        }
+        // The declaration's sibling that does read stays refused.
+        assert!(glob_fixture_read(
+            "f() { cat id_rsa; }; f",
+            temp.path(),
+            temp.path()
+        ));
+    }
+
+    /// Review 02, B5: a share outside the chosen directories refuses before
+    /// any physical resolution reads metadata, even with a parent component.
+    #[cfg(windows)]
+    #[test]
+    fn an_untrusted_share_refuses_before_any_metadata_read() {
+        PHYSICAL_READS.with(|reads| reads.set(0));
+        let result = secret_path_result(
+            r"\\fixture-host\fixture-share\child\..\notes.txt",
+            Path::new("C:/repo"),
+            Some(Path::new("C:/Users/u")),
+            Some(true),
+        );
+        assert_eq!(result, Err(UNKNOWN_SHARE));
+        assert_eq!(PHYSICAL_READS.with(std::cell::Cell::get), 0);
     }
 
     #[test]
