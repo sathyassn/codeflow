@@ -287,10 +287,11 @@ fn inspect_operand(
 /// short-name mapping (`git rebase -x 'cargo test' HEAD~3`). Git reads a
 /// word before `--` as a revision unless a path by that name exists: a
 /// non-revision operand must name an existing path, and a word that is both
-/// is refused as ambiguous. The word stays a file operand when the path
-/// exists, after `--`, with `--no-index`, with a work tree or Git directory
-/// option, with a `-C` the guard cannot read, beside a link made earlier on
-/// the line, or when its path cannot be classified.
+/// is refused as ambiguous. The word stays a file operand when a path by
+/// that name exists in the directory Git runs in or its work tree, after
+/// `--`, with `--no-index`, with a `-C` or work tree the guard cannot read,
+/// beside a link made earlier on the line, or when its path cannot be
+/// classified.
 fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Path) -> bool {
     let Some((program, rest)) = call.args.split_first() else {
         return false;
@@ -314,32 +315,50 @@ fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Pa
     {
         return false;
     }
+    // Git checks the word against the directory it runs in and, with a
+    // work tree option, against that tree's top. The word must name nothing
+    // in either; `--git-dir` alone moves neither.
     let mut directory = cwd.to_path_buf();
+    let mut trees = Vec::new();
     let globals = &git[..git.len() - tail.len() - 1];
     let mut words = globals.iter();
     while let Some(word) = words.next() {
-        let change = if word == "-C" {
-            words.next().map(String::as_str)
-        } else if word.starts_with("--work-tree") || word.starts_with("--git-dir") {
-            return false;
-        } else {
-            word.strip_prefix("-C")
+        let (tree, location) = match word.as_str() {
+            "-C" => (false, words.next().map(String::as_str)),
+            "--work-tree" => (true, words.next().map(String::as_str)),
+            "-c" => match words.next().and_then(|setting| setting.split_once('=')) {
+                Some((key, value)) if key.eq_ignore_ascii_case("core.worktree") => {
+                    (true, Some(value))
+                }
+                _ => continue,
+            },
+            _ => match word.strip_prefix("--work-tree=") {
+                Some(value) => (true, Some(value)),
+                None => (false, word.strip_prefix("-C")),
+            },
         };
-        let Some(change) = change else {
+        let Some(location) = location else {
             continue;
         };
-        if crate::hooks::git_guard::expands(change)
-            || change.starts_with('~')
-            || crate::hooks::git_guard::has_glob(change)
+        if crate::hooks::git_guard::expands(location)
+            || location.starts_with('~')
+            || crate::hooks::git_guard::has_glob(location)
         {
             return false;
         }
-        directory = outward::lexical_join(&directory, Path::new(change));
+        let joined = outward::lexical_join(&directory, Path::new(location));
+        if tree {
+            trees.push(joined);
+        } else {
+            directory = joined;
+        }
     }
-    matches!(
-        crate::absence::entry(&outward::lexical_join(&directory, Path::new(value))),
-        Ok(crate::absence::Entry::Creatable | crate::absence::Entry::Impossible)
-    )
+    std::iter::once(directory).chain(trees).all(|base| {
+        matches!(
+            crate::absence::entry(&outward::lexical_join(&base, Path::new(value))),
+            Ok(crate::absence::Entry::Creatable | crate::absence::Entry::Impossible)
+        )
+    })
 }
 
 /// `reader` is `Some` for a reader's argument, saying whether the shell
@@ -395,10 +414,25 @@ fn secret_path_result(
     // `~/store` into `<cwd>/~/store` and hide the store (hosted run
     // 40602309629). Namespace and stream spellings refuse here for every
     // word; only a short name in the word itself replaces its spelling.
-    let absolute = absolute
+    let absolute = match absolute
         .map(|path| crate::portable_path::guard_path(&path))
         .transpose()
-        .map_err(|_| "cannot establish a Windows path's mapped filename")?;
+    {
+        Ok(absolute) => absolute,
+        // A literal in interpreter code is often no path at all (Perl's
+        // `File::Path`). Judge the file or directory a stream spelling
+        // opens; a spelling that still cannot be mapped refuses (hosted
+        // run 40623450157).
+        Err(_) if reader.is_none() => {
+            let base = stream_base(word);
+            return if base == word {
+                Err("cannot establish a Windows path's mapped filename")
+            } else {
+                secret_path_result(&base, cwd, home, reader)
+            };
+        }
+        Err(_) => return Err("cannot establish a Windows path's mapped filename"),
+    };
     let mapped_word = absolute
         .as_deref()
         .filter(|_| cfg!(windows) && crate::portable_path::has_short_component(word))
@@ -419,6 +453,25 @@ fn secret_path_result(
                 None => false,
             },
     )
+}
+
+/// `word` (with `/` separators) without NTFS stream syntax: each component
+/// ends at its first `:` unless it is a drive (`C:`). `x::$DATA`,
+/// `dir:$I30:$INDEX_ALLOCATION/f` and `f:name` open `x`, `dir/f` and `f`.
+fn stream_base(word: &str) -> String {
+    word.split('/')
+        .map(|part| {
+            let drive = part.len() == 2
+                && part.ends_with(':')
+                && part.starts_with(|ch: char| ch.is_ascii_alphabetic());
+            if drive {
+                part
+            } else {
+                part.split(':').next().unwrap_or(part)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
@@ -1621,6 +1674,36 @@ mod tests {
         }
     }
 
+    /// Hosted run 40623450157: a code literal with stream syntax is judged by
+    /// the entry it opens, so `File::Path` is the name `File`, while a stream
+    /// spelling of a store still names the store. Drives are kept.
+    #[test]
+    fn stream_spellings_name_the_entry_they_open() {
+        for (word, base) in [
+            ("File::Path", "File"),
+            ("~/.codex/auth.json::$DATA", "~/.codex/auth.json"),
+            (
+                "C:/Users/u/.codex:$I30:$INDEX_ALLOCATION/auth.json",
+                "C:/Users/u/.codex/auth.json",
+            ),
+            (
+                "//?/C:/Users/u/.codex/auth.json:x",
+                "//?/C:/Users/u/.codex/auth.json",
+            ),
+            ("notes.txt", "notes.txt"),
+        ] {
+            assert_eq!(stream_base(word), base, "{word}");
+        }
+        let home = Path::new("/fixture-home");
+        assert!(secret_path_result(
+            &stream_base("~/.codex/auth.json::$DATA"),
+            Path::new("/w"),
+            Some(home),
+            None
+        )
+        .unwrap());
+    }
+
     /// TSK-1002 Windows repair (hosted run 40602309629): a Git revision
     /// such as `HEAD~1` names no path, so the short-name mapper never sees
     /// it; a short-looking word that is a path, or could be, stays an
@@ -1650,6 +1733,8 @@ mod tests {
             "git-rebase -x 'cargo test' HEAD~3",
             "git -c color.ui=never diff HEAD~1",
             "git -C sub log HEAD~2",
+            "git --git-dir=.git --work-tree=sub rebase -x 'cargo test' HEAD~3",
+            "git -c core.worktree=sub log HEAD~2",
         ] {
             let value = command.rsplit(' ').next().unwrap();
             assert!(revision(command, value), "{command}");
@@ -1658,7 +1743,9 @@ mod tests {
             ("git diff -- HEAD~1", "HEAD~1"),
             ("git diff --no-index HEAD~1 other", "HEAD~1"),
             ("git -C sub log TAG~1", "TAG~1"),
-            ("git --work-tree=sub log HEAD~1", "HEAD~1"),
+            ("git --work-tree=sub log TAG~1", "TAG~1"),
+            ("git -c core.worktree=sub log TAG~1", "TAG~1"),
+            ("git --work-tree=\"$W\" log HEAD~1", "HEAD~1"),
             ("git -C \"$D\" log HEAD~1", "HEAD~1"),
             ("ln -s ~/.codex 'a b' && git log AB~1", "AB~1"),
             ("cat HEAD~1", "HEAD~1"),

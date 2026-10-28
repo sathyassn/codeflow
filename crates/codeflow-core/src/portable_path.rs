@@ -139,15 +139,27 @@ fn unmapped_namespace(spelling: &str) -> bool {
         || spelling.contains(":$")
 }
 
-/// Whether a component of `text` (with `/` separators) has the 8.3 short
-/// name shape: a `~` followed by digits, before any extension.
+/// Whether a component of `text` (with `/` separators) can be an 8.3 short
+/// name alias: a base of at most eight characters ending in `~` and digits,
+/// an optional extension of at most three, and no character an 8.3 name
+/// cannot hold (a space, `"*+,/:;<=>?[\]|` or a control character). Win32
+/// drops trailing dots and spaces before the lookup. A component of any
+/// other shape is never resolved as an alias, so it needs no mapping.
 pub(crate) fn has_short_component(text: &str) -> bool {
-    text.split('/').any(|part| {
-        part.split_once('~').is_some_and(|(_, tail)| {
-            let number = tail.split('.').next().unwrap_or_default();
-            !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())
-        })
-    })
+    text.split('/').any(short_name_shape)
+}
+
+fn short_name_shape(part: &str) -> bool {
+    let part = part.trim_end_matches(['.', ' ']);
+    let (base, extension) = part.split_once('.').unwrap_or((part, ""));
+    base.rsplit_once('~').is_some_and(|(_, number)| {
+        !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())
+    }) && base.chars().count() <= 8
+        && extension.chars().count() <= 3
+        && !extension.contains('.')
+        && !part
+            .chars()
+            .any(|ch| ch.is_control() || " \"*+,/:;<=>?[\\]|".contains(ch))
 }
 
 /// [`guard_path`]'s short-name mapping, without the platform check so every
@@ -372,10 +384,30 @@ mod tests {
 
     #[test]
     fn short_component_shape_needs_digits_after_the_tilde() {
-        for text in ["HEAD~1", "c:/users/RUNNER~1/x", "AUTH~1.JSO", "a/b~12"] {
+        for text in [
+            "HEAD~1",
+            "c:/users/RUNNER~1/x",
+            "AUTH~1.JSO",
+            "a/b~12",
+            "HEAD~1. ",
+            "café~1",
+        ] {
             assert!(has_short_component(text), "{text}");
         }
-        for text in ["~", "~/x", "a~b", "a~1b", "RUN~1*", "notes.txt~"] {
+        // Hosted run 40623450157: a shell's `-c` string is one component
+        // with spaces, which no 8.3 alias can hold.
+        for text in [
+            "~",
+            "~/x",
+            "a~b",
+            "a~1b",
+            "RUN~1*",
+            "notes.txt~",
+            "git rebase -x 'cargo test' HEAD~3",
+            "verylongname~1",
+            "AUTH~1.JSON",
+            "a.b~1.c",
+        ] {
             assert!(!has_short_component(text), "{text}");
         }
     }
