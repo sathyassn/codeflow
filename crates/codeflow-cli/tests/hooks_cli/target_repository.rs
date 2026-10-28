@@ -493,6 +493,113 @@ fn tsk1002_review02_directory_options_resolve_physically() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// TSK-1002 review 03 through the hooks: each class fails closed. A
+/// selector construct the guard does not model, a run after a recursive
+/// copy, a written file under an execution context the guard does not
+/// model, inline code after an unknown directory, the object path of a
+/// revision and a UNC directory option all refuse. Each allowed before.
+#[test]
+fn tsk1002_review03_classes_fail_closed_through_the_hooks() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.linked.join("copies")).unwrap();
+    std::fs::write(f.linked.join("copies/id_rsa"), "planted fixture").unwrap();
+    std::fs::create_dir_all(f.linked.join("src")).unwrap();
+    std::fs::create_dir_all(f.linked.join("sub")).unwrap();
+    std::fs::write(f.linked.join("tool.py"), "# ordinary\n").unwrap();
+    let mut wrong = Vec::new();
+    for line in [
+        // Ruling 1: a bracket class grep reads and globset does not.
+        "grep -r --include='[[:alpha:]]*' needle copies",
+        "grep -r --include='[[=i=]]d_rsa' needle .",
+        "rg -g '[[:alnum:]]d_rsa' needle copies",
+        // Ruling 2: any interpreter or launcher after a recursive copy.
+        "cp -r src out; python3 -c 'import out.src.helper'",
+        "cp -r src out; python3 -m out.src.tool",
+        "cp -r src out; PYTHONPATH=out python3 tool.py",
+        // Ruling 3: a written file under an unmodeled execution context.
+        "printf x > sub/script; ruby -Csub script",
+        "printf x > run; chmod +x run; env PATH=.:$PATH run",
+        "printf x > run; chmod +x run; env -P . run",
+        "printf x > run; chmod +x run; env -S 'PATH=. run'",
+        "printf x > run; chmod +x run; env PATH=. sh -c run",
+        // Ruling 4: inline code after an unknown directory change.
+        "cd \"$D\"; python3 -c 'open(\"auth.json\").read()'",
+        "cd \"$D\"; node -e 'require(\"fs\").readFileSync(\"auth.json\")'",
+        "cd \"$D\"; eval 'cat notes.md'",
+        "ruby -C \"$D\" -e 'File.read(\"notes.md\")'",
+        // Ruling 6: a revision's object path keeps the secret-name policy.
+        "git show HEAD~1:copies/id_rsa",
+        "git log -p HEAD~2:.ssh/id_ed25519",
+        // Ruling 7: a UNC directory option is unknown.
+        r"env -C '\\fixture-host\fixture-share\child\..' cat auth.json",
+        "env -C '//fixture-host/fixture-share' cat notes.md",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "grep -r --include='*.md' needle .",
+        "cp -r src out; ls out",
+        "printf x > run; chmod +x run; env PATH=. ls",
+        "cd \"$D\" && python3 tool.py",
+        "git show HEAD~1:README.md",
+        "deno eval -p '1 + 1'",
+        "deno eval --print '1 + 1'",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 review 03, ruling 5: successive and physical directory changes
+/// keep the physical place or make it unknown. `..` after a directory
+/// reached through a link is the target's parent; a physical `cd` through
+/// a link or `..` is unknown, so a secret-capable name refuses. Each
+/// refusal allowed before; plain logical moves stay usable.
+#[cfg(unix)]
+#[test]
+fn tsk1002_review03_successive_and_physical_directory_changes() {
+    let f = Fixture::new();
+    let store = f.temp.path().join(".codex");
+    std::fs::create_dir_all(store.join("child")).unwrap();
+    std::fs::write(store.join("auth.json"), "planted fixture").unwrap();
+    std::os::unix::fs::symlink(store.join("child"), f.linked.join("alias")).unwrap();
+    std::fs::write(f.linked.join("notes.md"), "ordinary fixture").unwrap();
+    let mut wrong = Vec::new();
+    for line in [
+        "env -C alias env -C .. cat auth.json",
+        "ruby -C alias -C .. -e 'File.read(\"auth.json\")'",
+        "tar -C alias -C .. -cf out.tar auth.json",
+        "cd -P alias/.. && cat auth.json",
+        "cd -LP alias/.. ; cat auth.json",
+        "pushd -P alias/.. && cat auth.json",
+        "set -o physical; cd alias/.. && cat auth.json",
+        "set -P; cd alias/.. && cat auth.json",
+        "cd -P alias && cd .. && cat auth.json",
+        "cd alias && cat ../auth.json",
+        "cd alias && env -C .. cat auth.json",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    std::fs::create_dir_all(f.linked.join("plain")).unwrap();
+    for line in [
+        "cd alias/.. && cat notes.md",
+        "cd -P plain && cat ../notes.md",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// TSK-1002 UNC finding: an administrative share, a verbatim or device UNC
 /// spelling, or any share whose path ends in a home store names the store,
 /// and a share write names the checkout file. Before this change the guard

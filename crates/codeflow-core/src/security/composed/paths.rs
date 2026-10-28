@@ -38,6 +38,9 @@ struct Position {
     state: State,
     stack: Vec<PathBuf>,
     scripts: Vec<(PathBuf, String)>,
+    /// Set once the line runs `set -P` or `set -o physical`: every later
+    /// `cd` and `pushd` resolves links as `cd -P` does.
+    physical: bool,
 }
 
 fn script_states(states: &[Position]) -> Vec<(PathBuf, String)> {
@@ -128,6 +131,7 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
                 state,
                 stack: Vec::new(),
                 scripts: Vec::new(),
+                physical: false,
             }],
             dialect,
             &mut reading,
@@ -676,6 +680,8 @@ fn bound(states: &mut Vec<Position>) {
             state,
             stack: Vec::new(),
             scripts,
+            // A shell option set in code the guard did not read may be on.
+            physical: true,
         }];
     }
 }
@@ -1090,6 +1096,17 @@ fn nul_stdout(program: &str, args: &[String]) -> Option<String> {
         output.push('\0');
     }
     Some(output)
+}
+
+/// Whether `word` is a `NAME=value` shell assignment.
+fn is_assignment_word(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && !name.starts_with(|ch: char| ch.is_ascii_digit())
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    })
 }
 
 /// The body recorded for a directory a recursive copy wrote: every file
@@ -1600,6 +1617,22 @@ fn simple(
         return position;
     }
     let reader = crate::hooks::git_guard::script_reader(&words);
+    // Inline code after a directory change the guard cannot establish
+    // refuses whole: `eval`, a shell's `-c` body, and code read from stdin
+    // (TSK-1002 review 03, ruling 4). The guard does not read names out of
+    // code it cannot place.
+    if position.state.directory.is_none()
+        && (matches!(reader, Some(("eval", _)))
+            || reader.is_some_and(|(name, args)| {
+                crate::hooks::git_guard::shell_inline_code(name, args).is_some()
+            })
+            || crate::security::outward::reads_stdin_code(&text))
+    {
+        output.push(unread_code(
+            "inline code runs after a directory change the guard cannot establish",
+        ));
+        return position;
+    }
     if !position.scripts.is_empty() {
         let links = position_effects(output.clone())
             .last()
@@ -1611,6 +1644,15 @@ fn simple(
                 .iter()
                 .any(|(path, _)| path.starts_with(&link.from) || path.starts_with(&link.to))
         });
+        // `env -S` packs the command, its PATH and its directory into one
+        // string the launcher walk does not open: after a write on the line
+        // it refuses (TSK-1002 review 03, ruling 3).
+        if launched.is_none() && crate::hooks::git_guard::env_split_command(&words).is_some() {
+            let mut unread =
+                unread_code("a file written earlier on this line may run from an env -S string");
+            unread.input_code = Some("__unresolved_shell_code".into());
+            output.push(unread);
+        }
         if let Some((program, args)) = launched {
             let family = crate::security::outward::interpreter_family(
                 crate::hooks::git_guard::basename(program),
@@ -1667,20 +1709,63 @@ fn simple(
                     });
                 }
             }
-            // A bare name runs from PATH; once the line changes PATH, it may
-            // name a file the line wrote.
-            let path_changed = position.state.world.is_some()
+            // The words in front of the program: assignments and launchers.
+            // Unknown placement reads as all of them (fail closed).
+            // An env whose options the launcher walk stops at (`env -S`)
+            // is itself the program: all of its words count.
+            let prefix = words
+                .iter()
+                .position(|word| std::ptr::eq(word.as_str(), program))
+                .filter(|_| crate::hooks::git_guard::launcher_name(program) != "env")
+                .map_or(&words[..], |at| &words[..at]);
+            // An execution context the guard does not fully model: a
+            // launcher option that splits a command or sets the search path
+            // (`env -S`, `env -P`), or an interpreter's own directory option
+            // (`ruby -C`, `pwsh -wd`). After a write on the line, a
+            // relative or bare-name run there refuses (TSK-1002 review 03,
+            // ruling 3).
+            let unmodeled = prefix.iter().any(|word| {
+                word.starts_with('-') && !word.starts_with("--") && word.contains(['S', 'P'])
+                    || word.starts_with("--s")
+            }) || match family {
+                Some("ruby") => args
+                    .iter()
+                    .any(|arg| arg.starts_with("-C") || arg.starts_with("--chdir")),
+                Some("powershell") => {
+                    crate::hooks::git_guard::powershell_working_directory(args).is_some()
+                }
+                _ => false,
+            };
+            if unmodeled {
+                directory = None;
+            }
+            // A bare name runs from PATH; once the line changes PATH, in the
+            // shell or in any launcher word (`env PATH=. run`, `env -S
+            // 'PATH=. run'`), it may name a file the line wrote.
+            let path_changed = unmodeled
+                || position.state.world.is_some()
                 || position.state.vars.contains_key("PATH")
                 || position.state.changed.contains("PATH")
-                || words
-                    .iter()
-                    .take_while(|word| word.contains('='))
-                    .any(|word| word.starts_with("PATH="));
+                || prefix.iter().any(|word| word.contains("PATH="));
             let path_names_written = path_changed
                 && !program.contains(['/', '\\'])
-                && position.scripts.iter().any(|(path, body)| {
-                    body == WRITTEN_TREE || path.file_name() == Some(std::ffi::OsStr::new(program))
-                });
+                && (unmodeled
+                    || position.scripts.iter().any(|(path, body)| {
+                        body == WRITTEN_TREE
+                            || path.file_name() == Some(std::ffi::OsStr::new(program))
+                    }));
+            // A recursive copy writes files the guard cannot list: any
+            // interpreter, shell, Make or launcher after it on the line may
+            // load one, by import, module search or PATH (ruling 2).
+            let tree_written = position
+                .scripts
+                .iter()
+                .any(|(_, body)| body == WRITTEN_TREE);
+            let runs_after_tree = tree_written
+                && (interpreter
+                    || make
+                    || reader.is_some()
+                    || prefix.iter().any(|word| !is_assignment_word(word)));
             if make {
                 let mut at = 0;
                 while let Some(arg) = args.get(at) {
@@ -1726,6 +1811,7 @@ fn simple(
             };
             let executes_written = executes_written
                 || path_names_written
+                || runs_after_tree
                 || position.scripts.iter().any(|(path, _)| {
                     path.extension()
                         .and_then(|extension| extension.to_str())
@@ -1749,12 +1835,20 @@ fn simple(
                             })
                     })
                 });
-            if executes_written
-                && (reader.is_none()
-                    || interpreter
-                    || linked_script
-                    || unverified_selection
-                    || !raw_body)
+            // A shell started with a changed PATH (`env PATH=. sh -c run`)
+            // runs its inline code's bare names from that PATH, which the
+            // nested reading does not carry.
+            let shell_code_on_path = path_changed
+                && reader.is_some_and(|(name, args)| {
+                    crate::hooks::git_guard::shell_inline_code(name, args).is_some()
+                });
+            if shell_code_on_path
+                || executes_written
+                    && (reader.is_none()
+                        || interpreter
+                        || linked_script
+                        || unverified_selection
+                        || !raw_body)
             {
                 let mut unread = unread_code("a file written earlier on this line is executed without a verified code reading");
                 unread.input_code = Some("__unresolved_shell_code".into());
@@ -1858,11 +1952,24 @@ fn simple(
         }
     }
     if let Some((program, args)) = launched {
-        if matches!(program, "cd" | "chdir" | "pushd")
-            && args
+        if program == "set"
+            && (args
                 .iter()
-                .any(|arg| arg.starts_with('-') && arg.contains('P'))
+                .any(|arg| arg.starts_with('-') && !arg.starts_with("--") && arg.contains('P'))
+                || args
+                    .windows(2)
+                    .any(|pair| pair[0] == "-o" && pair[1] == "physical")
+                || args.iter().any(|arg| arg == "-ophysical"))
         {
+            position.physical = true;
+        }
+        let physical = matches!(program, "cd" | "chdir" | "pushd")
+            && (position.physical
+                || position.state.world.is_some()
+                || args
+                    .iter()
+                    .any(|arg| arg.starts_with('-') && arg.contains('P')));
+        if physical {
             // Planned links are not on disk yet. Retain their kernel reading
             // before a physical cd consumes parent components.
             let links = position_effects(output.clone())
@@ -1886,6 +1993,28 @@ fn simple(
                         output.push(unread_code("cannot establish one physical directory through links declared on this line"));
                         return position;
                     }
+                }
+            }
+            // A physical change through `..` or an existing link resolves
+            // where the guard does not follow it: the directory becomes
+            // unknown, so the unknown-directory rules apply (TSK-1002 review
+            // 03, ruling 5). A plain physical change keeps its spelling.
+            if let (Some(dir), Some(target)) = (
+                position.state.directory.clone(),
+                args.iter().find(|arg| !arg.starts_with('-')),
+            ) {
+                let lexical = lexical_join(&dir, Path::new(target));
+                let through_parent = Path::new(target)
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir));
+                let through_link =
+                    crate::portable_path::canonicalize(&lexical).is_ok_and(|real| real != lexical);
+                if through_parent || through_link {
+                    set_oldpwd(&mut position.state);
+                    position.state.directory = None;
+                    position.stack.clear();
+                    set_pwd(&mut position.state);
+                    return position;
                 }
             }
         }
@@ -2159,6 +2288,23 @@ mod tests {
             "printf x > run; chmod +x run; PATH=.:$PATH run",
             "printf x > run; chmod +x run; export PATH=.:$PATH; run",
             "printf x > run; chmod +x run; PATH=$PWD:$PATH; run",
+            // Review 03, ruling 2: any interpreter, shell, Make or launcher
+            // after a recursive copy, imports and module search included.
+            "cp -r src out; python3 -c 'import out.src.helper'",
+            "cp -r src out; python3 -m out.src.tool",
+            "cp -r src out; PYTHONPATH=out python3 main.py",
+            "cp -a src out; node -e 'require(\"./out/src/lib\")'",
+            "mkdir L && rsync -a src/ L/ && python3 tool.py L/app.py",
+            "cp -R src out; nice ./tool",
+            // Ruling 3: an execution context the guard does not model.
+            "printf x > sub/script; ruby -Csub script",
+            "cp -r src out; env PATH=out/src:$PATH run",
+            "printf x > run; env PATH=.:$PATH run",
+            "printf x > run; env -i PATH=. run",
+            "printf x > run; env -P . run",
+            "printf x > run; env -S 'PATH=. run'",
+            "printf x > run; nice env PATH=. run",
+            "printf x > run; env PATH=. sh -c run",
         ] {
             assert!(unread(line), "allowed: {line}");
         }
@@ -2168,7 +2314,8 @@ mod tests {
             "echo x > log.txt; node app.js log.txt",
             "cp other.py out/; cat out/other.py",
             "printf x > run; ls",
-            "mkdir L && rsync -a src/ L/ && python3 tool.py L/app.py",
+            "cp -r src out; ls out",
+            "printf x > run; env PATH=. ls",
         ] {
             assert!(!unread(line), "refused: {line}");
         }

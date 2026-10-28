@@ -801,34 +801,55 @@ pub(crate) fn lexical_join(dir: &Path, target: &Path) -> PathBuf {
     out
 }
 
+/// Whether a directory operand is a UNC, device or verbatim spelling
+/// (`\\host\share`, `//host/share`, `\\?\`, `\\.\`, `\??\`). Such an
+/// operand is never resolved: the guard does not contact a host a command
+/// names (TSK-1002 review 03, ruling 7).
+pub(crate) fn remote_or_namespace_operand(operand: &str) -> bool {
+    let slashed = operand.replace('\\', "/");
+    slashed.starts_with("//") || slashed.starts_with("/??/")
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many filesystem reads [`physical_join`] made on this thread.
+    pub(crate) static JOIN_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The directory a program's own directory option (`env -C`, `ruby -C`,
-/// `pwsh -wd`, `tar -C`, `make -C`) moves to: `chdir` resolves each link
-/// before the `..` after it, so `alias/..` is the parent of the link's
-/// target (TSK-1002 review 02, B4). Without a parent component after a
-/// name the spelling is the path, as [`lexical_join`] reads it. `None` when
-/// a component before a parent component is absent, unreadable or a link
-/// the guard cannot resolve: the line may make it a link before the
-/// program runs, so the directory is unknown.
+/// `pwsh -wd`, `tar -C`, `make -C`) moves to, as `chdir` resolves it: the
+/// base is the physical directory the program starts in, and each link is
+/// resolved before the `..` after it, so `alias/..` is the parent of the
+/// link's target and `..` from a directory reached through a link is that
+/// target's parent (TSK-1002 reviews 02 and 03, B4). Without a parent
+/// component the spelling is the path, as [`lexical_join`] reads it; a
+/// result naming the same place as the lexical spelling keeps that
+/// spelling. `None`, an unknown directory, for a UNC or namespace operand
+/// (before any filesystem access), or when the base or a component before
+/// a parent component is absent, unreadable or a link the guard cannot
+/// resolve: the line may make it a link before the program runs.
 pub(crate) fn physical_join(dir: &Path, target: &Path) -> Option<PathBuf> {
     use std::path::Component;
+    if remote_or_namespace_operand(&target.to_string_lossy()) {
+        return None;
+    }
     let target = crate::portable_path::without_verbatim(target.to_path_buf());
     let components: Vec<_> = target.components().collect();
-    let last_parent = components
+    let Some(last_parent) = components
         .iter()
-        .rposition(|part| matches!(part, Component::ParentDir));
-    let first_name = components
-        .iter()
-        .position(|part| matches!(part, Component::Normal(_)));
-    let (Some(last_parent), Some(first_name)) = (last_parent, first_name) else {
+        .rposition(|part| matches!(part, Component::ParentDir))
+    else {
         return Some(lexical_join(dir, &target));
     };
-    if first_name > last_parent {
-        return Some(lexical_join(dir, &target));
-    }
+    let canonical = |path: &Path| {
+        #[cfg(test)]
+        JOIN_READS.with(|reads| reads.set(reads.get() + 1));
+        crate::portable_path::canonicalize(path).ok()
+    };
     let mut path = if target.has_root() {
         PathBuf::new()
     } else {
-        crate::portable_path::canonicalize(dir).ok()?
+        canonical(dir)?
     };
     for (at, part) in components.iter().enumerate() {
         match part {
@@ -841,9 +862,11 @@ pub(crate) fn physical_join(dir: &Path, target: &Path) -> Option<PathBuf> {
                 if at > last_parent {
                     continue;
                 }
+                #[cfg(test)]
+                JOIN_READS.with(|reads| reads.set(reads.get() + 1));
                 match crate::absence::symlink_metadata_optional(&path) {
                     Ok(Some(meta)) if meta.file_type().is_symlink() => {
-                        path = crate::portable_path::canonicalize(&path).ok()?;
+                        path = canonical(&path)?;
                     }
                     Ok(Some(_)) => {}
                     Ok(None) | Err(_) => return None,
@@ -851,6 +874,10 @@ pub(crate) fn physical_join(dir: &Path, target: &Path) -> Option<PathBuf> {
             }
             other => path.push(other.as_os_str()),
         }
+    }
+    let lexical = lexical_join(dir, &target);
+    if canonical(&lexical).as_ref() == Some(&path) {
+        return Some(lexical);
     }
     Some(path)
 }
@@ -1096,6 +1123,7 @@ pub(crate) fn directory_operand(operand: &str, home: Option<&Path>) -> DirChange
         || crate::hooks::git_guard::has_glob(operand)
         || operand.contains(['{', '}'])
         || operand == "-"
+        || remote_or_namespace_operand(operand)
     {
         return DirChange::Unknown;
     }
@@ -1867,7 +1895,9 @@ fn deno_input(args: &[String]) -> Result<(Program, Option<String>, Vec<String>),
                 | "--cached-only"
                 | "--allow-all"
                 | "-A"
-        ) {
+        ) || mode == Some("eval") && matches!(option, "-p" | "--print")
+        {
+            // `deno eval -p CODE` prints the value of the same inline code.
             continue;
         }
         if arg.starts_with('-') && arg != "-" {
@@ -3127,6 +3157,41 @@ mod tests {
         assert_eq!(join("../x"), Some(base.join("x")));
         assert_eq!(join("absent/.."), None);
         assert_eq!(join("absent"), Some(repo.join("absent")));
+        // Review 03, ruling 5: `..` from a directory reached through a link
+        // is the target's parent, so successive changes keep the physical
+        // place (`env -C alias env -C ..`).
+        assert_eq!(
+            super::physical_join(&repo.join("alias"), Path::new("..")),
+            Some(base.join("store"))
+        );
+        assert_eq!(
+            super::physical_join(&repo.join("alias"), Path::new("../child/..")),
+            Some(base.join("store"))
+        );
+    }
+
+    /// TSK-1002 review 03, ruling 7: a UNC, device or verbatim directory
+    /// option is unknown before any filesystem access.
+    #[test]
+    fn remote_directory_options_are_unknown_before_any_read() {
+        use std::path::Path;
+        let temp = tempfile::tempdir().unwrap();
+        for target in [
+            r"\\fixture-host\fixture-share\child\..",
+            "//fixture-host/fixture-share",
+            r"\\?\C:\Users\..",
+            r"\\.\C:\x\..",
+            r"\??\C:\x\..",
+        ] {
+            super::JOIN_READS.with(|reads| reads.set(0));
+            assert_eq!(super::physical_join(temp.path(), Path::new(target)), None);
+            assert_eq!(super::JOIN_READS.with(std::cell::Cell::get), 0, "{target}");
+            assert_eq!(
+                super::directory_operand(target, None),
+                super::DirChange::Unknown,
+                "{target}"
+            );
+        }
     }
 
     #[test]

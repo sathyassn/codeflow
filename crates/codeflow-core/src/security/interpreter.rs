@@ -125,10 +125,19 @@ fn code_reads_where_calls_run(
 ) -> Vec<Violation> {
     let mut violations = Vec::new();
     for call in outward::interpreter_calls_with_home(command, cwd, home) {
-        // Only the call's own directory option counts as unknown here; a
-        // line whose directory is already unknown is judged elsewhere, and
-        // env's own unknown change refuses as an unverifiable operand.
+        // Inline code after a directory change the guard cannot establish
+        // refuses: the guard does not read names out of code it cannot
+        // place (TSK-1002 review 03, ruling 4). Arguments without inline
+        // code keep the operand rules.
         if call.cwd.is_none() {
+            if !call.code.is_empty() {
+                violations.push(Violation::new(
+                    "security.secret_reads",
+                    levels.secret_reads,
+                    "cannot verify interpreter code: it runs after a directory change the guard cannot establish".into(),
+                    crate::remedy::SECRET_SELECTION.remedy(),
+                ));
+            }
             continue;
         }
         let dir = call.cwd.clone().and_then(|start| {
@@ -142,17 +151,28 @@ fn code_reads_where_calls_run(
         if dir.as_deref() == Some(cwd) {
             continue;
         }
+        let Some(dir) = dir else {
+            // The interpreter's own directory option cannot be established:
+            // its inline code refuses whole, as after any other unknown
+            // directory change (ruling 4).
+            if !call.code.is_empty() {
+                violations.push(Violation::new(
+                    "security.secret_reads",
+                    levels.secret_reads,
+                    "cannot verify interpreter code: cannot establish the directory the code runs in".into(),
+                    crate::remedy::OUTWARD_ACTION.remedy(),
+                ));
+            }
+            continue;
+        };
         for code in &call.code {
             for word in outward::literal_words(code) {
-                let message = match &dir {
-                    Some(dir) if secret_path(&word, dir, home, None) => format!(
-                        "interpreter code names the secret store `{word}` in the directory it runs in"
-                    ),
-                    None if relative_may_name_secret(&word) => format!(
-                        "cannot verify interpreter path `{word}`: cannot establish the directory the code runs in"
-                    ),
-                    _ => continue,
-                };
+                if !secret_path(&word, &dir, home, None) {
+                    continue;
+                }
+                let message = format!(
+                    "interpreter code names the secret store `{word}` in the directory it runs in"
+                );
                 violations.push(Violation::new(
                     "security.secret_reads",
                     levels.secret_reads,
@@ -357,7 +377,14 @@ fn inspect_operand(
         return Err("cannot establish a transfer option's quoted input filename");
     }
     if git_revision_word(call, at, value, cwd) {
-        return Ok(false);
+        // The revision needs no filename mapping, but the object path in
+        // `REV:PATH` names a file in the tree: it keeps the secret-name
+        // policy of a file operand on every platform (TSK-1002 review 03,
+        // ruling 6).
+        return match object_path(value) {
+            Some(path) => secret_path_result(path, cwd, home, Some(false)),
+            None => Ok(false),
+        };
     }
     let name = call
         .args
@@ -439,6 +466,24 @@ fn inspect_operand(
         }
     }
     Ok(false)
+}
+
+/// The object path of a `REV:PATH` Git word: the text after its first `:`
+/// outside a `@{...}` selector (`HEAD@{1}:a`), when not empty. `None` for a
+/// word with no object path.
+fn object_path(word: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    for (at, ch) in word.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 => {
+                return Some(&word[at + 1..]).filter(|path| !path.is_empty());
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A Git operand in revision form that names a short-name component but no
@@ -688,24 +733,24 @@ thread_local! {
     static PHYSICAL_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The path `word` opens from `base` when a parent component follows
-/// another component: each existing link on the way is resolved before the
-/// next `..`, as the kernel resolves it, so `alias/..` is the parent of the
-/// link's target (TSK-1002 review 01, B4). `None` when no parent component
-/// follows a name, where the lexical path is the path opened. A link or a
-/// component the guard cannot read before a parent component refuses.
+/// The path `word` opens from `base` when it holds a parent component: the
+/// walk starts at the physical `base`, and each existing link on the way is
+/// resolved before the next `..`, as the kernel resolves it, so
+/// `alias/..` is the parent of the link's target (TSK-1002 review 01, B4)
+/// and `..` from a directory reached through a link is the target's parent.
+/// `None` without a parent component, where the lexical path is the path
+/// opened. A link or a component the guard cannot read refuses.
 fn physical_path(base: &Path, word: &Path) -> Result<Option<PathBuf>, &'static str> {
     use std::path::Component;
     let components: Vec<_> = word.components().collect();
-    let first_name = components
+    // Any parent component: one after a name may follow a link in the
+    // word, and a leading one leaves the physical directory the command
+    // runs in, which a link in the line's directory can move (TSK-1002
+    // review 03, ruling 5).
+    if !components
         .iter()
-        .position(|part| matches!(part, Component::Normal(_)));
-    let parent_after_name = first_name.is_some_and(|at| {
-        components[at..]
-            .iter()
-            .any(|part| matches!(part, Component::ParentDir))
-    });
-    if !parent_after_name {
+        .any(|part| matches!(part, Component::ParentDir))
+    {
         return Ok(None);
     }
     let mut path = if word.has_root() {
@@ -1754,6 +1799,13 @@ fn search_root_matches(
 /// covered. A selector clears a secret only when no reading matches it; one
 /// the grammar cannot read refuses (review 02, B1).
 fn selector_matchers(pattern: &str) -> Result<Vec<globset::GlobMatcher>, &'static str> {
+    // A bracket class, equivalence class or collating element (`[[:alpha:]]`,
+    // `[[=a=]]`, `[[.a.]]`) is grep's fnmatch grammar, which globset does
+    // not model: refuse it rather than guess its matches (TSK-1002 review
+    // 03, ruling 1).
+    if pattern.contains("[:") || pattern.contains("[=") || pattern.contains("[.") {
+        return Err("a search selector uses a bracket class the guard does not read");
+    }
     let mut matchers = Vec::new();
     for escape in [true, false] {
         for separator in [true, false] {
@@ -2721,6 +2773,45 @@ mod tests {
         }
         // Interpreter literals in an unknown directory keep the broader rule.
         assert!(relative_may_name_secret("../anything"));
+    }
+
+    /// Review 03, ruling 6: the object path of a `REV:PATH` word keeps the
+    /// file operand's secret-name policy; the revision needs no mapping.
+    #[test]
+    fn revision_object_paths_keep_the_secret_name_policy() {
+        assert_eq!(object_path("HEAD~1:README.md"), Some("README.md"));
+        assert_eq!(object_path("HEAD@{1:2}:a/b"), Some("a/b"));
+        assert_eq!(object_path("HEAD~1"), None);
+        assert_eq!(object_path("HEAD~1:"), None);
+        let temp = tempfile::tempdir().unwrap();
+        let root = crate::portable_path::canonicalize(temp.path()).unwrap();
+        for line in [
+            "git show HEAD~1:copies/id_rsa",
+            "git show HEAD~2:.ssh/id_ed25519",
+            "git log -p HEAD~1:fixture/id_rsa",
+        ] {
+            assert!(glob_fixture_read(line, &root, &root), "allowed: {line}");
+        }
+        assert!(!glob_fixture_read(
+            "git show HEAD~1:README.md",
+            &root,
+            &root
+        ));
+    }
+
+    /// Review 03, ruling 1: a bracket class grep reads (`[[:alpha:]]`) is
+    /// not modeled, so a selector holding one refuses.
+    #[test]
+    fn unmodeled_selector_classes_refuse() {
+        for pattern in [
+            "[[:alpha:]]*",
+            "[[:lower:]]d_rsa",
+            "[[=i=]]d_rsa",
+            "[[.a.]]x",
+        ] {
+            assert!(selector_matchers(pattern).is_err(), "{pattern}");
+        }
+        assert!(selector_matchers("[a-z]*.md").is_ok());
     }
 
     /// Review 02, item 7: a `local` declaration in a function reads nothing.

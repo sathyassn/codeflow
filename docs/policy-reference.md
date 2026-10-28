@@ -288,11 +288,14 @@ constructed shell commands refuse. A file written earlier on the same line,
 by a heredoc, `echo`, `printf`, an append, `tee` or a copy, must receive a
 verified code reading before it runs by path, interpreter or Make, or
 before an interpreter that loads its extension runs. Otherwise it refuses.
-A copy into a directory writes the file of the source's name there, and a
-recursive copy writes a tree whose every file counts as written. A script
-operand is opened in the directory a launcher such as `env -C` moves to,
-and once the line changes `PATH`, a bare program name may run a file the
-line wrote.
+A copy into a directory writes the file of the source's name there. After
+a recursive copy, any interpreter, shell, Make or launcher later on the
+line refuses, since it may load a copied file by import, module search or
+`PATH`. A script operand is opened in the directory a launcher such as
+`env -C` moves to. After a write on the line, a relative or bare-name run
+refuses when the line changes `PATH` in the shell or in a launcher
+(`env PATH=`), or runs through an execution context the guard does not
+model (`env -S`, `env -P`, `ruby -C`, `pwsh -wd`).
 Every inline-code option form, attached or separate (`node --print=CODE`),
 is read as code.
 A command runs in the directory `env` moves it to in any option spelling
@@ -303,22 +306,29 @@ a string with a variable, `\c`, a comment or an escape the guard does not
 read refuses as cannot-verify. Of several `env` directory options only the
 last applies, from the directory env starts in, as env applies them. A
 directory option
-(`env -C`, `ruby -C`, `pwsh -wd`, `tar -C`, `make -C`) resolves physically:
-a parent component after a link is the parent of the link's target, and a
-missing component before a parent component leaves the directory unknown.
+(`env -C`, `ruby -C`, `pwsh -wd`, `tar -C`, `make -C`) resolves physically
+from the physical directory it starts in: a parent component after a link,
+or after a directory reached through a link, is the parent of the link's
+target, and a missing component before a parent component leaves the
+directory unknown. A UNC, device or verbatim directory option is unknown
+before any filesystem access. A physical shell change (`cd -P`, `pushd -P`,
+or any `cd` after `set -P` or `set -o physical`) through a link or `..`
+leaves the directory unknown.
 A directory that a launcher or interpreter option moves to and the guard
 cannot establish refuses as cannot-verify. After any other directory change
-the guard cannot establish, such as `cd "$DIR"` or `pushd "$DIR"`, a
+the guard cannot establish, such as `cd "$DIR"` or `pushd "$DIR"`, inline
+interpreter code (`-c`, `-e`, `eval`, a heredoc or stdin) refuses, and a
 relative operand refuses when its name or path could name a secret: a
 secret basename such as `id_rsa`, or a path that is secret below a
 protected home directory, such as `auth.json` or `.codex/auth.json`, by the
 same names the absolute-path checks use. Env files such as `.env` are not
 among those names; the native read deny covers them. Other relative
 operands keep their verdicts.
-A parent component after an existing link is resolved through the link. A
-search selector is matched with the tool's own matching semantics against
-every spelling the tool may compare, the search root included; a selector
-the guard cannot evaluate exactly refuses. Windows namespace spellings are judged as the
+A parent component after an existing link, or leading out of a directory
+reached through one, is resolved through the link. A search selector is
+matched with the tool's own matching semantics against every spelling the
+tool may compare, the search root included; a selector construct the
+guard does not model, such as a bracket class (`[[:alpha:]]`), refuses. Windows namespace spellings are judged as the
 path Windows opens: `\\?\UNC\` and `\\.\UNC\` as the UNC path, `\\?\C:\`,
 `\??\C:\` and `\\.\C:\` as the drive path, and an administrative share such
 as `\\host\C$\` on any host as its drive. A verbatim name that an ordinary
@@ -331,7 +341,8 @@ before any filesystem access. Other device paths, stream type syntax and short n
 guard cannot map refuse. A short name that does not exist yet refuses
 unless nothing can exist there, since a command earlier on the line could
 create the entry it aliases. A Git revision such as `HEAD~1` that names no
-path, and inline interpreter code, are not file operands.
+path, and inline interpreter code, are not file operands; the object path
+in `REV:PATH` keeps the secret-name rules of a file operand.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the
