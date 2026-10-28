@@ -747,9 +747,11 @@ pub fn outcome_marker_errors(
         |state: Option<&toml::Table>| state.map_or(Adoption::Unmarked, Adoption::in_table);
     let head_adoption = adoption(head_state.as_ref());
     if let Some(head_commit) = head_commit {
-        let fork = match repo.merge_base(target_commit, head_commit) {
+        // The guarded reader refuses a shallow cut, an overlay or unreadable
+        // history, so an unprovable fork point never skips the judgment.
+        let fork = match history::merge_base(&repo, target_commit, head_commit) {
             Ok(fork) => Some(fork),
-            // Unrelated histories: the head is judged whole.
+            // Histories proven unrelated: the head is judged whole.
             Err(error) if error.code() == git2::ErrorCode::NotFound => None,
             Err(error) => {
                 return Err(format!(
