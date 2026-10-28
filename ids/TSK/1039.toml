@@ -1,0 +1,11 @@
+id = "TSK-1039"
+uid = "ccd6925b-a1d3-4ea1-a41d-bf12d573b684"
+kind = "TSK"
+title = "The pre-push gate narrows from a base the push itself proves"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T01:51:04Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
