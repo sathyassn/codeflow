@@ -302,11 +302,13 @@ pub fn next_adr_id(repo_root: &Path) -> Result<String, StoreError> {
 /// prefix, at least four, so `ADR-10000` reads as 10000 and not 1000.
 fn adr_number(name: &[u8]) -> Option<u64> {
     let rest = name.strip_prefix(b"ADR-")?;
-    let digits = rest.iter().take_while(|byte| byte.is_ascii_digit()).count();
-    if digits < 4 {
+    let mut digits = rest.iter().take_while(|byte| byte.is_ascii_digit());
+    if digits.clone().count() < 4 {
         return None;
     }
-    std::str::from_utf8(&rest[..digits]).ok()?.parse().ok()
+    digits.try_fold(0u64, |value, digit| {
+        value.checked_mul(10)?.checked_add(u64::from(*digit - b'0'))
+    })
 }
 
 /// Write the next ADR from `template` with `status: proposed` (R-36),
