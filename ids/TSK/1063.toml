@@ -1,0 +1,11 @@
+id = "TSK-1063"
+uid = "456951cf-feae-43b3-b41c-7ef21e833acc"
+kind = "TSK"
+title = "Every Windows test partition finishes well inside its job limit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T22:40:11Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
