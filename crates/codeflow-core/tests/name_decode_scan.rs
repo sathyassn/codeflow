@@ -4905,6 +4905,30 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // TSK-435: collapses whitespace in an Outcome line so a respaced `<do  what>` still reads as the template token; prose only, never a path or Git name.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "spaced",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
+    // TSK-435: splits an Outcome line into words to see whether anything beyond the template's own words remains; prose only, never a path or Git name.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "unfilled_outcome",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
+    // TSK-435: strips punctuation from an Outcome word before comparing it with the template's words; prose only, never a path or Git name.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "unfilled_outcome",
+        "trim_matches",
+        1,
+        "prose",
+    ),
     // Public raw acceptance-text reader removes LF/CRLF once. acceptance_blocks passes already-framed lines directly to parse_acceptance_lines so content CR is never stripped again.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
