@@ -271,7 +271,11 @@ fn secret_reads(
                         "security.secret_reads",
                         levels.secret_reads,
                         match secret {
-                            Err(why) => format!("cannot verify file operand `{value}`: {why}"),
+                            Err(why) => match value.strip_prefix(outward::UNVERIFIED_ENV_DIRECTORY)
+                            {
+                                Some(written) => format!("cannot verify `{written}`: {why}"),
+                                None => format!("cannot verify file operand `{value}`: {why}"),
+                            },
                             Ok(_) => format!("file operand names a secret file or store `{value}`"),
                         },
                         if secret.is_err() {
@@ -299,7 +303,7 @@ fn inspect_operand(
     home: Option<&Path>,
 ) -> Result<bool, &'static str> {
     let (at, value, glob) = operand;
-    if value == outward::UNVERIFIED_ENV_DIRECTORY {
+    if value.starts_with(outward::UNVERIFIED_ENV_DIRECTORY) {
         return Err("cannot establish the directory env runs the command in");
     }
     if value == "__unverified_transfer_input" {
@@ -538,17 +542,13 @@ fn secret_path_result(
     // A UNC path names a file in a share whose layout the guard cannot
     // see. Judge it before any mapping or metadata read, so the guard never
     // contacts a host a command names before refusing a store spelling.
-    if cfg!(windows)
-        && absolute.as_deref().is_some_and(|path| {
-            unc_store_suffix(
-                &crate::portable_path::slashed(path),
-                home,
-                reader,
-                &trusted_shares(),
-            )
-        })
-    {
-        return Ok(true);
+    if cfg!(windows) {
+        if let Some(path) = absolute.as_deref() {
+            let text = crate::portable_path::slashed(path);
+            if unc_store_suffix(&text, home, reader, &trusted_shares())? {
+                return Ok(true);
+            }
+        }
     }
     // Map the path the word names, after its home is resolved, never
     // `cwd.join(word)`: a Windows cwd under `RUNNER~1` would otherwise turn
@@ -729,7 +729,7 @@ fn unc_store_suffix(
     home: Option<&Path>,
     reader: Option<bool>,
     trusted: &[String],
-) -> bool {
+) -> Result<bool, &'static str> {
     let lower = text.to_ascii_lowercase();
     let rest = if let Some(rest) = lower
         .strip_prefix("//?/unc/")
@@ -737,17 +737,17 @@ fn unc_store_suffix(
     {
         rest
     } else if lower.starts_with("//?/") || lower.starts_with("//./") {
-        return false;
+        return Ok(false);
     } else if let Some(rest) = lower.strip_prefix("//") {
         rest
     } else {
-        return false;
+        return Ok(false);
     };
     let parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
     if (1..parts.len())
         .any(|at| secret_path_spelling(&format!("~/{}", parts[at..].join("/")), home, reader))
     {
-        return true;
+        return Ok(true);
     }
     let unc = format!("//{}", parts.join("/"));
     let chosen = trusted.iter().any(|dir| {
@@ -756,8 +756,15 @@ fn unc_store_suffix(
     });
     // Elsewhere the share's root is a directory the guard cannot
     // establish, so the tail below it is judged as in an unknown directory.
-    !chosen && parts.len() > 2 && relative_may_name_secret(&parts[2..].join("/"))
+    if !chosen && parts.len() > 2 && relative_may_name_secret(&parts[2..].join("/")) {
+        return Err(UNKNOWN_SHARE);
+    }
+    Ok(false)
 }
+
+/// Why a share outside the home and the session's directory refuses, with
+/// the remedy: its drive-letter path names what it maps.
+const UNKNOWN_SHARE: &str = "cannot establish what a network share outside the home and the session's directory maps; use its drive-letter path (a mapped drive or the local path) instead";
 
 /// A recursive root on a share whose root the guard cannot establish
 /// refuses before anything below it is listed: any directory below a share
@@ -770,7 +777,7 @@ fn unmapped_share_root(base: &Path, word: &str) -> Result<(), &'static str> {
     let path = match crate::portable_path::namespace_spelling(&written) {
         Ok(Some(mapped)) => mapped,
         Ok(None) => crate::portable_path::slashed(&outward::lexical_join(base, Path::new(word))),
-        Err(_) => return Err("cannot establish the directory a network share maps"),
+        Err(_) => return Err(UNKNOWN_SHARE),
     };
     if !unmapped_share(&path) {
         return Ok(());
@@ -783,7 +790,7 @@ fn unmapped_share_root(base: &Path, word: &str) -> Result<(), &'static str> {
     if chosen {
         Ok(())
     } else {
-        Err("cannot establish the directory a network share maps")
+        Err(UNKNOWN_SHARE)
     }
 }
 
@@ -1050,7 +1057,7 @@ fn real_secret_path(path: &Path, home: Option<&Path>) -> Result<bool, &'static s
     let text = secret_path_text(&real)?;
     // A link can resolve into a share (`\\?\UNC\host\share\...`).
     if secret_path_spelling(&text, home, None)
-        || cfg!(windows) && unc_store_suffix(&text, home, None, &trusted_shares())
+        || cfg!(windows) && unc_store_suffix(&text, home, None, &trusted_shares())?
     {
         return Ok(true);
     }
@@ -2080,8 +2087,16 @@ mod tests {
             "//server/share/id_rsa",
             "//server/share/docs/../auth.json",
         ] {
-            assert!(unc_store_suffix(text, home, None, &trusted), "{text}");
+            assert!(
+                unc_store_suffix(text, home, None, &trusted) != Ok(false),
+                "{text}"
+            );
         }
+        // Review 04: a share outside the chosen directories refuses as
+        // cannot-verify and names the drive-letter remedy.
+        let unknown = unc_store_suffix("//localhost/fixture-store/auth.json", home, None, &trusted);
+        assert_eq!(unknown, Err(UNKNOWN_SHARE));
+        assert!(UNKNOWN_SHARE.contains("drive-letter path"));
         for text in [
             "//server/homes/u/notes.txt",
             "//server/proj/src/main.rs",
@@ -2091,7 +2106,11 @@ mod tests {
             "//?/C:/Users/u/notes.txt",
             "//server",
         ] {
-            assert!(!unc_store_suffix(text, home, None, &trusted), "{text}");
+            assert_eq!(
+                unc_store_suffix(text, home, None, &trusted),
+                Ok(false),
+                "{text}"
+            );
         }
     }
 

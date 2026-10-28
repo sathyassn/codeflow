@@ -223,26 +223,48 @@ fn tsk1002_review01_classes_refuse_through_the_hooks() {
     std::fs::create_dir_all(f.linked.join("visible")).unwrap();
     std::fs::write(f.linked.join("visible/note.txt"), "ordinary fixture").unwrap();
     let mut wrong = Vec::new();
-    let mut refuse = vec![
-        "rg -g 'copies/**' needle copies".to_string(),
-        "node --print='require(\"fs\").readFileSync(\"copies/id_rsa\",\"utf8\")'".to_string(),
-        "printf 'print(1)' > run.py; python3 run.py".to_string(),
-        "echo 'print(1)' > run.py && python3 run.py".to_string(),
-    ];
-    let mut allow = vec![
-        "rg -g 'visible/**' needle visible".to_string(),
-        "node --print='require(\"fs\").readFileSync(\"visible/note.txt\",\"utf8\")'".to_string(),
-        "python3 gen.py > out.json; python3 use.py out.json".to_string(),
-    ];
+    // The link cases need a Unix symlink; other hosts run the rest.
     #[cfg(unix)]
-    {
+    let (link_refuse, link_allow) = {
         let store = f.temp.path().join(".codex/child");
         std::fs::create_dir_all(&store).unwrap();
         std::fs::write(f.temp.path().join(".codex/auth.json"), "planted fixture").unwrap();
         std::os::unix::fs::symlink(&store, f.linked.join("alias")).unwrap();
-        refuse.push("cat alias/../auth.json".into());
-        allow.push("cat visible/../visible/note.txt".into());
-    }
+        (
+            vec!["cat alias/../auth.json"],
+            vec!["cat visible/../visible/note.txt"],
+        )
+    };
+    #[cfg(not(unix))]
+    let (link_refuse, link_allow): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    let refuse: Vec<&str> = [
+        "rg -g 'copies/**' needle copies",
+        "node --print='require(\"fs\").readFileSync(\"copies/id_rsa\",\"utf8\")'",
+        "printf 'print(1)' > run.py; python3 run.py",
+        "echo 'print(1)' > run.py && python3 run.py",
+        // Review 04: deno's inline code is still read.
+        "deno eval 'Deno.readTextFileSync(\"copies/id_rsa\")'",
+        "deno run --allow-read - < copies/id_rsa",
+    ]
+    .into_iter()
+    .chain(link_refuse)
+    .collect();
+    let allow: Vec<&str> = [
+        "rg -g 'visible/**' needle visible",
+        "node --print='require(\"fs\").readFileSync(\"visible/note.txt\",\"utf8\")'",
+        "python3 gen.py > out.json; python3 use.py out.json",
+        // Review 04: deno subcommands and permission flags are ordinary.
+        "deno test",
+        "deno task dev",
+        "deno fmt",
+        "deno run --allow-read main.ts",
+        "deno run --allow-net=example.com --unstable-kv --watch main.ts",
+        "deno run -A --reload --no-remote --node-modules-dir=auto main.ts",
+        "deno eval 'console.log(1)'",
+    ]
+    .into_iter()
+    .chain(link_allow)
+    .collect();
     for line in &refuse {
         if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
             wrong.push(format!("allowed: {line}"));
@@ -310,8 +332,13 @@ fn tsk1002_directory_changes_in_every_launcher_spelling() {
         "env --frobnicate -C '%' cat auth.json",
     ] {
         let line = line.replace('%', &public);
-        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+        let out = f.command(&f.linked, "exec-guard", &line);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) {
             wrong.push(format!("allowed unknown directory: {line}"));
+        } else if stderr.contains("__unverified") || !stderr.contains("`env -") {
+            // The refusal names env's words as written, never a marker.
+            wrong.push(format!("unclear refusal: {line}: {stderr}"));
         }
     }
     for line in [
@@ -352,6 +379,7 @@ fn tsk1002_directory_changes_in_every_launcher_spelling() {
 /// and a UNC cwd stay usable.
 #[cfg(windows)]
 #[test]
+#[allow(clippy::too_many_lines)] // One fixture: share refusals, then home, cwd and identity controls.
 fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
     let f = Fixture::new();
     let home = f.temp.path().to_str().unwrap().replace('/', "\\");
@@ -420,6 +448,15 @@ fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
         if out.status.code() != Some(2) {
             wrong.push(format!("refuse {guard}: {line}: {out:?}"));
         }
+    }
+    // Review 04: the share refusal names the drive-letter remedy.
+    let out = f.command(
+        &f.linked,
+        "exec-guard",
+        r"cat '\\localhost\fixture-share\notes.md'",
+    );
+    if !String::from_utf8_lossy(&out.stderr).contains("drive-letter path") {
+        wrong.push(format!("share refusal without its remedy: {out:?}"));
     }
     for line in [
         format!(r"cat '\\localhost\{drive}$\{home_tail}\notes.md'"),

@@ -292,8 +292,10 @@ Every inline-code option form, attached or separate (`node --print=CODE`),
 is read as code.
 A command runs in every directory `env` moves it to in any option spelling
 (`-CDIR`, `-iC DIR`, `--chdir=DIR --`), and interpreter code runs where its
-call runs (`ruby -C`, `pwsh -WorkingDirectory`). A directory the guard
-cannot establish refuses a relative operand that could name a secret there.
+call runs (`ruby -C`, `pwsh -WorkingDirectory`). A directory that a
+launcher or interpreter option moves to (`env -C`, `ruby -C`, `pwsh -wd`)
+and the guard cannot establish refuses as cannot-verify; an unknown shell
+`cd` or `pushd` stays the residual TSK-302 records.
 A parent component after an existing link is resolved through the link. A
 search selector is matched against every spelling the tool may compare,
 the search root included. Windows namespace spellings are judged as the
@@ -304,7 +306,7 @@ path would change (a trailing dot or space, `..`, a device name) refuses. A
 named stream is judged as its file. A UNC path that ends in a protected
 home-relative path refuses whatever the host or share; any other share
 outside the home and the session's directory refuses, since its root may
-be a store. Other device paths, stream type syntax and short names the
+be a store; read it through its drive-letter path. Other device paths, stream type syntax and short names the
 guard cannot map refuse. A short name that does not exist yet refuses
 unless nothing can exist there, since a command earlier on the line could
 create the entry it aliases. A Git revision such as `HEAD~1` that names no

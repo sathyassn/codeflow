@@ -1379,7 +1379,13 @@ fn argv(
                 // relative names there, so it is read as one unverifiable
                 // file operand.
                 if dir.is_none() && cwd.is_some() {
-                    let marker = ["cat".to_string(), UNVERIFIED_ENV_DIRECTORY.to_string()];
+                    // The marker carries env's words as written, which the
+                    // refusal shows in place of the marker.
+                    let written = format!("env {}", rest[..end].join(" "));
+                    let marker = [
+                        "cat".to_string(),
+                        format!("{UNVERIFIED_ENV_DIRECTORY}{written}"),
+                    ];
                     argv(&marker, None, cwd, depth + 1, out);
                 }
             }
@@ -1759,6 +1765,23 @@ fn deno_input(args: &[String]) -> Result<(Program, Option<String>, Vec<String>),
         if matches!(option, "--help" | "--version") {
             return Ok((Program::Script, None, Vec::new()));
         }
+        // Permission, unstable and reload flags take a value only with `=`
+        // (`--allow-read=dir`), so they never consume the next word.
+        if [
+            "--allow-",
+            "--deny-",
+            "--unstable",
+            "--watch",
+            "--reload",
+            "--no-remote",
+            "--node-modules-dir",
+        ]
+        .iter()
+        .any(|prefix| option.starts_with(prefix))
+            || matches!(option, "-r" | "-R" | "-W" | "-N" | "-E" | "-S" | "-P")
+        {
+            continue;
+        }
         if matches!(
             option,
             "--quiet"
@@ -1778,15 +1801,24 @@ fn deno_input(args: &[String]) -> Result<(Program, Option<String>, Vec<String>),
         }
         return match mode {
             Some("eval") => Ok((Program::Inline, Some(arg.clone()), args[at..].to_vec())),
-            Some("run") if arg == "-" || descriptor_program(arg) => {
+            // A bare script (`deno main.ts`) runs like `run`.
+            Some("run") | None if arg == "-" || descriptor_program(arg) => {
                 Ok((Program::Stdin, None, args[at..].to_vec()))
             }
             Some("run") => Ok((Program::Script, None, args[at - 1..].to_vec())),
+            None if arg.contains(['.', '/', '\\']) => {
+                Ok((Program::Script, None, args[at - 1..].to_vec()))
+            }
+            // Another subcommand (`deno test`, `deno task dev`, `deno fmt`)
+            // takes no inline code: an ordinary program whose words stay
+            // operands.
+            None => Ok((Program::Script, None, args[at..].to_vec())),
             _ => Err("cannot establish deno's executable input"),
         };
     }
     match mode {
-        Some("run" | "repl") => Ok((Program::Stdin, None, Vec::new())),
+        // `deno` alone opens the REPL, which reads standard input.
+        Some("run" | "repl") | None => Ok((Program::Stdin, None, Vec::new())),
         _ => Err("cannot establish deno's executable input"),
     }
 }
