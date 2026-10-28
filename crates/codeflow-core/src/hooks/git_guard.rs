@@ -5515,6 +5515,9 @@ thread_local! {
     /// line (TSK-1050): [`own_literal`], the write checks and the path-word
     /// readers.
     static SEGMENT_LINE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Whether [`kept_line_read`] reads every line afresh, for tests that
+    /// compare kept readings and verdicts with uncached ones.
+    static LINE_READS_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// How many times [`line_names_ripgrep_config`] read a whole line.
     static RIPGREP_LINE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -5551,6 +5554,10 @@ fn kept_line_read<T: Clone>(
     field: fn(&mut LineReads) -> &mut std::collections::HashMap<String, T>,
     read: impl FnOnce() -> T,
 ) -> T {
+    #[cfg(test)]
+    if LINE_READS_OFF.with(std::cell::Cell::get) {
+        return read();
+    }
     let kept = LINE_READS.with(|reads| {
         reads
             .borrow_mut()
@@ -5619,7 +5626,7 @@ fn line_assignments(line: &str) -> std::rc::Rc<[(String, String)]> {
 
 /// A command a line runs, as [`own_literal`] matches it: its program name,
 /// its arguments and whether the shell passes each one as written.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct LineCommand {
     program: String,
     rest: Vec<String>,
@@ -14699,6 +14706,66 @@ mod tests {
         let (reads, rules) = judge(&long);
         assert_eq!(reads, single, "reads grew with the segment count");
         assert_eq!(rules, single_rules);
+    }
+
+    /// Every kept line reading equals the reading made with no cache, for a
+    /// corpus of distinct lines read in one scope, and every verdict, the
+    /// line naming `RIPGREP_CONFIG_PATH` included, is the same with and
+    /// without the cache (Codex review 02 of PR 386).
+    #[test]
+    fn kept_line_readings_match_fresh_readings_and_verdicts() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        let policy = GitPolicy::default();
+        let context = ctx(&policy, "task/example");
+        let one = "rg needle docs && cat notes.txt";
+        let chain = vec![one; 40].join(" && ");
+        let corpus = [
+            one.to_string(),
+            format!("RIPGREP_CONFIG_PATH=rc {chain}"),
+            chain.clone(),
+            "rg --pre ./x needle docs".into(),
+            "x=.claude/settings.json; rm -f \"$x\" && git status".into(),
+            "find . -name '*.md' -exec sed -i s/a/b/ {} +".into(),
+            "printf x | xargs rm && printf y | xargs rm".into(),
+            "sed -i 's/a/b/' .claude/settings.json".into(),
+            "git -c core.hooksPath=/tmp/h commit -m x && cat a".into(),
+            "rm -rf \"$D/x\" && echo ok".into(),
+            "bash -c 'rg -n x docs; cat y'".into(),
+        ];
+        let readings = |line: &str| {
+            format!(
+                "{:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+                super::line_expansion(line),
+                super::line_argvs(line),
+                super::line_commands(line),
+                super::line_assignments(line),
+                super::line_path_words(line),
+                super::line_path_readings(line),
+                super::line_names_ripgrep_config(line),
+            )
+        };
+        let set_off = |off: bool| super::LINE_READS_OFF.with(|flag| flag.set(off));
+        set_off(true);
+        let fresh: Vec<String> = corpus.iter().map(|line| readings(line)).collect();
+        let fresh_verdicts: Vec<String> = corpus
+            .iter()
+            .map(|line| format!("{:?}", super::evaluate_report_at(line, &context, &root)))
+            .collect();
+        set_off(false);
+        {
+            let _scope = super::super::edit_guard::RepoFactsScope::enter();
+            for _ in 0..2 {
+                for (line, fresh) in corpus.iter().zip(&fresh) {
+                    assert_eq!(&readings(line), fresh, "{line}");
+                }
+            }
+        }
+        for (line, fresh) in corpus.iter().zip(&fresh_verdicts) {
+            let kept = format!("{:?}", super::evaluate_report_at(line, &context, &root));
+            assert_eq!(&kept, fresh, "{line}");
+        }
     }
 
     /// A guard context with an injected `gh pr merge` base-branch resolver.
