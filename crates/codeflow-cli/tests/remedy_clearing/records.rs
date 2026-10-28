@@ -749,9 +749,16 @@ fn clears_review_row_binding() {
     assert!(out.contains("todo -> complete"), "{out}");
     commit_all(root, "chore: complete the work");
     let body = hosted.dir.path().join("review-row.md");
+    // A short form that holds a digit: the Reviews reader takes a hex word
+    // without one for prose, so an all-letter prefix such as `bbfbddbaa`
+    // names no commit and the section defers to the block (hosted run
+    // 40734999603).
+    let short = reviewed
+        .find(|c: char| c.is_ascii_digit())
+        .map_or(reviewed.len(), |at| (at + 1).max(9));
     let house = format!(
         "| Reviewer | whole unit at `{}` | approved, no findings |",
-        &reviewed[..9]
+        &reviewed[..short]
     );
     let table = format!("| Seat | Scope | Verdict |\n|---|---|---|\n{house}");
     std::fs::write(&body, BODY.replace("None: pending review.", &table)).unwrap();
