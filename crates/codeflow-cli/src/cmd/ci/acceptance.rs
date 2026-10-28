@@ -354,11 +354,14 @@ fn criteria(
 /// falls back to a planning amendment; a pull request's classification
 /// already names the reason.
 fn frozen_line_note(branch: &str, reason: &str) {
-    println!(
-        "codeflow ci: acceptance: note: '{}' is not a verified epic line, so its completions bind at the range head with frozen criteria: {}",
-        codeflow_core::git::display_text(branch),
-        codeflow_core::git::display_message(reason)
+    let note = codeflow_core::remedy::Finding::new(
+        format!(
+            "'{}' is not a verified epic line, so its completions bind at the range head with frozen criteria: {reason}",
+            codeflow_core::git::display_text(branch)
+        ),
+        codeflow_core::remedy::UNVERIFIED_LINE_FROZEN.remedy(),
     );
+    println!("{}", note.line("codeflow ci: acceptance", "note"));
 }
 
 /// Whether the range carries only what a planning amendment may, read

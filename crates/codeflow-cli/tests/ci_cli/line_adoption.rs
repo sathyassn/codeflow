@@ -114,6 +114,10 @@ fn an_unverified_line_names_its_downgrade_and_the_range_head() {
     assert_eq!(result.status.code(), Some(1), "{text}");
     let note = format!("'{LINE}' is not a verified epic line, so its completions bind at the range head with frozen criteria: ");
     assert_eq!(text.matches(&note).count(), 1, "{text}");
+    assert!(
+        text.contains("\n  clear it: land work on the line only by classified pull requests"),
+        "{text}"
+    );
     assert!(text.contains(&direct[..9]), "{text}");
     assert!(
         text.contains(&format!("the range head {direct} also changes src/lib.rs")),
