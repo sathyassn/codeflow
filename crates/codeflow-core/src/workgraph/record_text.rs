@@ -607,7 +607,8 @@ pub fn epic_names_deliverables(body: &str) -> bool {
 
 /// Whether a record states its Outcome (TSK-435): its `## Outcome` section
 /// has a substantive line. Comments never count, so the section as the
-/// template writes it, holding only its comment, states nothing.
+/// template writes it, holding only its comment, states nothing; a line
+/// keeping the template's `<who>` or `<do what>` token states nothing either.
 #[must_use]
 pub fn states_outcome(body: &str) -> bool {
     section_markdown(body, "## Outcome").is_some_and(|text| has_entry(&text))
@@ -650,7 +651,7 @@ const PLACEHOLDERS: &[&str] = &[
 /// placeholders. An inline HTML comment, delimited by `<!--` and `-->`
 /// and possibly spanning lines, never reaches the entry, so it never
 /// changes the result; other inline HTML is dropped too, except the
-/// template's `<output>` and `<path>` tokens, which empty their entry.
+/// templates' tokens ([`TEMPLATE_TOKENS`]), which empty their entry.
 fn has_entry(markdown: &str) -> bool {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
@@ -696,17 +697,21 @@ fn has_entry(markdown: &str) -> bool {
     filled || is_entry(&entry)
 }
 
+/// The templates' placeholder tokens: Deliverables' `<output>` and
+/// `<path>`, and Outcome's `<who>` and `<do what>`.
+const TEMPLATE_TOKENS: &[&str] = &["<output>", "<path>", "<who>", "<do what>"];
+
 /// Whether inline HTML is one of the template's placeholder tokens.
 fn is_template_token(html: &str) -> bool {
     let html = html.trim_matches([' ', '\t']).to_lowercase();
-    html == "<output>" || html == "<path>"
+    TEMPLATE_TOKENS.contains(&html.as_str())
 }
 
-/// Whether one entry is substantive: an entry holding the template's
-/// `<output>` or `<path>` token is not, whatever else it says.
+/// Whether one entry is substantive: an entry holding a template token
+/// is not, whatever else it says.
 fn is_entry(text: &str) -> bool {
     let lower = text.to_lowercase();
-    if lower.contains("<output>") || lower.contains("<path>") {
+    if TEMPLATE_TOKENS.iter().any(|token| lower.contains(token)) {
         return false;
     }
     let visible = text.trim_start_matches([' ', '\t']);

@@ -158,6 +158,28 @@ fn a_later_open_record_without_an_outcome_is_refused() {
     }
 }
 
+/// The template's form copied as written, or with one token left, names
+/// no one and nothing, so it is refused like a missing line.
+#[test]
+fn the_template_form_left_unfilled_is_refused() {
+    let marker = marked(&[OLD]);
+    for outcome in [
+        "after this merges, <who> can <do what>",
+        "After this merges, <Who> can run the audit",
+        "after this merges, maintainers can <do what>",
+    ] {
+        let body = Body {
+            outcome: Some(outcome),
+            deliverables: true,
+        };
+        for kind in [Kind::Task, Kind::Epic] {
+            let (errors, _) = findings(Some(&marker), kind, open(kind)[0], NEW, body);
+            assert_eq!(errors.len(), 1, "{outcome}: {errors:?}");
+            assert!(errors[0].contains("`## Outcome`"), "{errors:?}");
+        }
+    }
+}
+
 /// AC-2: a later record that states its Outcome is clean.
 #[test]
 fn a_later_record_with_an_outcome_is_clean() {
