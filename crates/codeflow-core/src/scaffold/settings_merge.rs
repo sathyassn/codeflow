@@ -327,9 +327,10 @@ fn retire_top_level_keys(
     }
 }
 
-/// Merge the shipped `env` keys into the project's `env` without changing any
-/// entry the project has. `baseline` is the shipped settings recorded at the
-/// last install or update, or `None` when no such record exists.
+/// Merge the shipped `env` keys into the project's `env`, changing only a
+/// value still equal to the one the recorded baseline holds. `baseline` is
+/// the shipped settings recorded at the last install or update, or `None`
+/// when no such record exists.
 ///
 /// - With no `env`, the shipped keys are added, except a key the baseline
 ///   shows codeflow wrote before: the project removed it, so it stays out.
@@ -338,8 +339,10 @@ fn retire_top_level_keys(
 ///   removed by the project; with no baseline, update cannot tell a removal
 ///   from a key the project never had, so it adds nothing.
 /// - A value still equal to the one the baseline recorded is codeflow's, so
-///   it moves to the new shipped value (TSK-1029); any other value is the
-///   project's and stays. With no baseline every value stays.
+///   it moves to the new shipped value (TSK-1029), whatever the project
+///   meant by it; any other value is the project's and stays, and when the
+///   shipped default changed that is a standing note. With no baseline
+///   every value stays.
 /// - An `env` that is not an object of strings is reported and left as is.
 ///
 /// Report lines name keys only, never values, since `env` may hold secrets.
@@ -393,6 +396,15 @@ fn merge_env(
                         env.insert(key.clone(), value.clone());
                         report.push(format!(
                             "settings: updated env.{key} to the new shipped default"
+                        ));
+                    }
+                    Some(_)
+                        if shipped_before
+                            .and_then(|env| env.get(key))
+                            .is_some_and(|before| before != value) =>
+                    {
+                        report.push(format!(
+                            "settings: {KEPT_OWN}env.{key}\"; the shipped default changed"
                         ));
                     }
                     Some(_) => {
@@ -1137,7 +1149,8 @@ mod tests {
         assert_eq!(added["statusLine"]["command"], "printf new");
     }
 
-    /// The shipped compaction keys, as the presets carry them.
+    /// The compaction keys as releases before 3.2.0 shipped them; the
+    /// presets now carry 35 (`ENV_PRESET_NEXT`).
     const ENV_PRESET: &str = r#"{
         "env": {
             "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
@@ -1324,10 +1337,16 @@ mod tests {
             merge_settings_from_baseline(chosen, Some(ENV_PRESET), ENV_PRESET_NEXT, &mut report)
                 .unwrap();
         assert_eq!(env_of(&merged)["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "40");
-        assert!(report
-            .iter()
-            .any(|line| line
-                == "settings: preserved user value for env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"));
+        let kept = "settings: kept the project's \"env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\"; \
+                    the shipped default changed";
+        assert!(report.iter().any(|line| line == kept), "{report:?}");
+        assert!(is_standing_note(kept));
+        // Once the baseline records the new default, the value is just the
+        // project's own and the note is no longer standing.
+        let mut next = vec![];
+        merge_settings_from_baseline(&merged, Some(ENV_PRESET_NEXT), ENV_PRESET_NEXT, &mut next)
+            .unwrap();
+        assert!(next.iter().all(|line| !is_standing_note(line)), "{next:?}");
         assert_no_values(&report, &["\"40\"", "\"35\"", "\"50\""]);
 
         let shipped_before = r#"{"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",

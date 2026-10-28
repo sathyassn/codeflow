@@ -1254,6 +1254,85 @@ fn update_keeps_the_projects_compaction_choices() {
     }
 }
 
+/// Roll a fresh install back to a release that shipped the compaction
+/// percentage at `shipped`, with the project's own `env` entries on top.
+fn roll_back_compaction(root: &Path, shipped: &str, project_env: &serde_json::Value) {
+    for rel in [CLAUDE_SETTINGS, CLAUDE_SETTINGS_BASELINE] {
+        let mut earlier = read_json(root, rel);
+        earlier["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = serde_json::json!(shipped);
+        if rel == CLAUDE_SETTINGS {
+            for (key, value) in project_env.as_object().unwrap() {
+                earlier["env"][key] = value.clone();
+            }
+        }
+        write_json(root, rel, &earlier);
+    }
+}
+
+/// TSK-1029 review: an `env` value can be a secret, so neither the printed
+/// report nor the `--diff` file of an update that changes the settings
+/// shows one, even as context beside a migrated value.
+#[test]
+fn update_diff_never_shows_an_env_value() {
+    // A synthetic value standing for a secret; no output may show it.
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    let (tmp, root) = project();
+    init(&root, "--minimal");
+    roll_back_compaction(&root, "50", &serde_json::json!({"PROJECT_TOKEN": SECRET}));
+    let diff_file = tmp.path().join("update.diff");
+
+    let out = codeflow(
+        &root,
+        &["update", "--diff", diff_file.to_str().expect("utf-8 path")],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "update failed: {stdout}\n{stderr}");
+    let diff = std::fs::read_to_string(&diff_file).expect("diff file");
+
+    let env = &read_json(&root, CLAUDE_SETTINGS)["env"];
+    assert_eq!(env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "35", "{stdout}");
+    assert_eq!(env["PROJECT_TOKEN"], SECRET, "{stdout}");
+    assert!(
+        diff.contains("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
+        "the diff does not name the migrated key:\n{diff}"
+    );
+    for (name, text) in [("stdout", &stdout), ("stderr", &stderr), ("diff", &diff)] {
+        assert!(!text.contains(SECRET), "{name} shows an env value:\n{text}");
+    }
+}
+
+/// TSK-1029 review: when the shipped default changes and the project keeps
+/// its own value, the update says so by key, even when nothing else in the
+/// settings changes; the next update, with nothing new shipped, is quiet.
+#[test]
+fn update_reports_a_kept_project_value_when_the_default_moves() {
+    const LINE: &str =
+        "settings: kept the project's \"env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\"; the shipped default changed";
+    let (_tmp, root) = project();
+    init(&root, "--minimal");
+    roll_back_compaction(&root, "50", &serde_json::json!({}));
+    let mut chosen = read_json(&root, CLAUDE_SETTINGS);
+    chosen["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = serde_json::json!("40");
+    write_json(&root, CLAUDE_SETTINGS, &chosen);
+    let before = read(&root, CLAUDE_SETTINGS);
+
+    let first = update(&root);
+    assert_eq!(read(&root, CLAUDE_SETTINGS), before, "{first}");
+    assert!(first.contains(LINE), "no kept-value notice:\n{first}");
+    assert!(
+        !first.contains("\"40\""),
+        "the report printed a value:\n{first}"
+    );
+
+    let second = update(&root);
+    assert_eq!(read(&root, CLAUDE_SETTINGS), before, "{second}");
+    assert!(
+        !second.contains("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
+        "the next update repeated the notice with nothing new shipped:\n{second}"
+    );
+}
+
 /// TSK-211 AC-2: a project installed before the default, whose recorded
 /// baseline has no `env`, gains both keys on update; one with its own `env`
 /// keeps every entry and gains the two keys; a second update is a no-op.
