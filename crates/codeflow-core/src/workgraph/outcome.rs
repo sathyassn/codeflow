@@ -7,11 +7,11 @@
 //! `.codeflow/project.toml`: `outcome_present_uids`, the `uid` of every
 //! task and epic record then in the working tree, which is the marker, and
 //! `outcome_required_since`, the project's `HEAD` at that moment when it
-//! has one. They are top-level keys, never a table, so a key appended to
-//! the end of the file stays top-level. A
-//! record whose uid is listed is "present at adoption" and only warns
-//! without the section; any other open record must state it. With no
-//! marker every missing section warns and nothing refuses.
+//! has one. They are top-level keys, never a table, so writing them
+//! introduces no new table scope. A record whose uid is listed is "present
+//! at adoption" and only warns without the section; any other open record
+//! must state it. With no marker every missing section warns and nothing
+//! refuses.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -213,7 +213,8 @@ mod tests {
         let uids: BTreeSet<String> = ["u1".to_string(), "u2".to_string()].into();
         let table = with_marker(toml::Table::new(), Some("abc"), &uids);
         let text = crate::scaffold::state::state_text(&table).unwrap();
-        // A key appended to the file stays top-level.
+        // The marker opens no table: in a file with none, a key appended
+        // after it is still top-level.
         let back: toml::Table = toml::from_str(&format!("{text}appended = 1\n")).unwrap();
         assert_eq!(Adoption::in_table(&back), Adoption::Marked(uids));
         assert_eq!(back["outcome_required_since"].as_str(), Some("abc"));
