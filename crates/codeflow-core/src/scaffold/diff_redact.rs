@@ -14,10 +14,12 @@
 //!   at the same key path, and an array item only when it equals an item of
 //!   the shipped array. Every other value becomes [`REDACTED`], or
 //!   [`REDACTED_CHANGED`] where the two sides differ. Key names stay
-//!   visible. A key that names a secret (`env`, `headers`, `token`,
-//!   `api-key` in any case or separator) is hidden even when owned, as
-//!   defence in depth. The rendering is normalised, so comments and layout
-//!   do not show.
+//!   visible. As defence in depth, a value is hidden even when owned when
+//!   it sits under a secret container (`env`, `headers` and their kin) or
+//!   its own key names a secret (`token`, `api-key` in any case or
+//!   separator). A word in the name of an object's key, such as a
+//!   `secret-scan` job, does not hide that object's owned values. The
+//!   rendering is normalised, so comments and layout do not show.
 //! - **Markdown, code and other line-based text: owned lines only.** A line
 //!   is shown when a shipped version holds the same line; every other line
 //!   becomes [`REDACTED_LINE`].
@@ -179,16 +181,19 @@ impl Format {
     }
 }
 
-/// A key whose value is hidden even where `CodeFlow` owns it. Case and
-/// separators are ignored, so `api-key`, `api key`, `api.key` and `apiKey`
-/// all match.
-fn secret_key(key: &str) -> bool {
+/// Whether the value at `key` is hidden even where `CodeFlow` owns it: a
+/// secret container hides everything under it, and a secret word hides a
+/// scalar or array, never an object, whose own keys are judged in turn.
+/// Case and separators are ignored, so `api-key`, `api key`, `api.key` and
+/// `apiKey` all match.
+fn secret_key(key: &str, value: &Value) -> bool {
     let key: String = key
         .chars()
         .filter(char::is_ascii_alphanumeric)
         .map(|c| c.to_ascii_lowercase())
         .collect();
-    SECRET_CONTAINERS.contains(&key.as_str()) || SECRET_WORDS.iter().any(|word| key.contains(word))
+    SECRET_CONTAINERS.contains(&key.as_str())
+        || (!value.is_object() && SECRET_WORDS.iter().any(|word| key.contains(word)))
 }
 
 /// Replace every value `CodeFlow` does not own, and every value under a
@@ -202,7 +207,8 @@ fn redact(value: &mut Value, before: Option<&Value>, owners: &[&Value], secret: 
             for (key, child) in map.iter_mut() {
                 let prior = before.and_then(|before| before.get(key));
                 let owned: Vec<&Value> = owners.iter().filter_map(|owner| owner.get(key)).collect();
-                redact(child, prior, &owned, secret || secret_key(key));
+                let hidden = secret || secret_key(key, child);
+                redact(child, prior, &owned, hidden);
             }
         }
         Value::Array(items) => {
@@ -302,13 +308,13 @@ mod tests {
             r#"{{"api-key": "{SECRET}", "api key": 271828, "api.key": [true],
                 "tools": {{"httpHeaders": {{"Authorization": "{SECRET}"}},
                            "http-headers": {{"X": 271828}},
-                           "inner": {{"api-key": {{"deep": "{SECRET}"}}}}}}}}"#
+                           "inner": {{"api-key": "{SECRET}", "client.secret": 271828}}}}}}"#
         );
         let toml_text = format!(
             "\"api-key\" = \"{SECRET}\"\n\"api key\" = 271828\n\"api.key\" = true\n\
              [tools.httpHeaders]\nAuthorization = \"{SECRET}\"\n\
              [tools.\"http-headers\"]\nX = 271828\n\
-             [tools.inner.\"api-key\"]\ndeep = \"{SECRET}\"\n"
+             [tools.inner]\n\"api-key\" = \"{SECRET}\"\n\"client.secret\" = 271828\n"
         );
         // Unowned, and then owned at every path: the name rule still hides
         // each value.
@@ -338,6 +344,14 @@ mod tests {
         assert!(old.contains("RELEASE_NOTE: <redacted>"), "{old}");
         assert!(old.contains("runs-on: ubuntu-latest"), "{old}");
         assert!(new.contains("name: ci"), "{new}");
+    }
+
+    #[test]
+    fn a_secret_word_in_an_object_key_keeps_its_owned_values() {
+        let shipped = "jobs:\n  secret-scan:\n    runs-on: ubuntu-latest\n    env:\n      SHA: x\n";
+        let (old, _) = shown(".github/workflows/ci.yml", shipped, shipped, &[shipped]);
+        assert!(old.contains("runs-on: ubuntu-latest"), "{old}");
+        assert!(old.contains("SHA: <redacted>"), "{old}");
     }
 
     #[test]
