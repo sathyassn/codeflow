@@ -30,7 +30,10 @@ evidence" define; the brief follows
    rules' "Write only what earns its keep"); an unneeded or oversized
    addition, such as run output, a log, a review verdict file, a per-task
    evidence folder, a superseded draft, build output or a duplicate copy no
-   tool manages, is a material finding. Challenge
+   tool manages, is a material finding. Oversized means shown unnecessary
+   content or avoidable bulk, never a wording or structure preference, and
+   an admitted use outranks the exclusions: fixtures, a lockfile or a
+   bundle the project ships stay. Challenge
    whether a smaller, clearer solution meets the same criteria; flag speculative
    features, abstractions, dependencies, configuration, compatibility layers,
    dead paths, and complexity without a current requirement or risk. Also flag

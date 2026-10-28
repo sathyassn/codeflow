@@ -180,15 +180,19 @@ the smallest form that serves its use. That covers:
   and work records;
 - code with its tests, fixtures, snapshots and config;
 - lockfiles, as the stack's tools and the project decide;
-- generated code the project needs checked in, marked as generated;
+- generated code or a built artifact the project needs checked in, such as
+  a bundle its consumers run from the repository, marked as generated;
 - a summary of evidence that a live record cites and the PR body cannot
   carry. A live record is one still in force, such as a task record, an ADR
-  or a research note.
+  or a research note; a completed task or a past decision stays live while
+  work still relies on it.
 
 Everything else stays out: run output and per-run logs, review records and
 verdict files, superseded drafts, build and cache output, copies kept for
 reference, scratch and session working files, duplicate copies no tool
-manages, and per-task evidence folders.
+manages, and per-task evidence folders. An admitted use above outranks
+these exclusions: a generated file that is the shipped product, such as a
+GitHub action's bundled `dist/index.js`, is not refused as build output.
 
 Required evidence goes in the PR body or the task record; the full output
 stays where the run left it, such as the task's scratch directory or the
@@ -389,8 +393,9 @@ A finding is **material** when, shipped unfixed, it would:
   assurance;
 - lose, corrupt or rewrite data, records or history;
 - add a file the repository does not need long term, or one larger than
-  the smallest form that serves its use ("Write only what earns its
-  keep");
+  the smallest form that serves its use: shown unnecessary content or
+  avoidable bulk, never a wording or structure preference ("Write only
+  what earns its keep");
 - make a claim the diff or evidence does not back;
 - present a mocked or unrun boundary as whole-flow proof;
 - break compatibility, privacy, authority, recovery or operability for an

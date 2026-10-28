@@ -8934,6 +8934,41 @@
           "evidence_missing_from_pr_body"
         ]
       }
+    },
+    {
+      "id": "review-weighs-each-added-file",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "action-branch-added-files",
+      "requirements": [
+        "CF-QA-017"
+      ],
+      "prompt": "Review the current branch against main for TSK-012, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "run_log_flagged_as_material_finding",
+          "round_verdict_file_flagged_as_material_finding",
+          "bundled_dist_kept_as_shipped_product",
+          "lockfile_and_test_fixture_kept",
+          "verdict_reports_added_files_checked"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "action.yml"
+        ],
+        "must_not": [
+          "bundled_dist_refused_as_build_output",
+          "lockfile_or_fixture_refused",
+          "unneeded_files_approved",
+          "code_changed"
+        ]
+      }
     }
   ]
 }

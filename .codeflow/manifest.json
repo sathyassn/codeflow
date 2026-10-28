@@ -293,7 +293,7 @@
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "79aa36a05e040784bf1a7e2ed16b4982f20a9fe7692979fd9d456df6308b24ee",
+      "sha256": "6e28ae35618280dd419d093104378d816435c6d9d23da7e4ddcd4848197133dd",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -305,7 +305,7 @@
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "b9f9a4bb395aa39e31b5091f7a2f6d8ea949860b26945affc642041e4efe4afd",
+      "sha256": "6afdfda1a45d0ba59ec37c2197c3a00e4ca6c3688613c9dc2ccf2661164090f2",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -323,7 +323,7 @@
     ".agents/skills/cf-evaluate-model/resources/packs.json": {
       "src": "agents/skills/cf-evaluate-model/resources/packs.json",
       "ownership": "managed",
-      "sha256": "5004d303b12b667ad6476b652ad4ecc45e14305e3b2063499e349ea8adcbdbd3",
+      "sha256": "3b1561452ff31e4d9d53cea2330a7477ab79d1ffbeca33848437c98e6565eef2",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/protocol.md": {
@@ -335,7 +335,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "444c9e7766bf127d1d4006216eb76e16e83c0ec50dcbb8bb3e0fcc0c403b7875",
+      "sha256": "09fde3c2fbf83dacda2cf1b0ec6b201b41fe67f7744cc8909df7eecf146cb3c4",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -827,7 +827,7 @@
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
       "ownership": "managed",
-      "sha256": "053ec5fabe5905f44589e1cc42528a2fce9db50a8f703807f554d1d2825d99f2",
+      "sha256": "f50d8d59ce7e5f743b4393b50701ed67c089204e64d283e1f9ec8d36ab1e45d2",
       "exec": false
     },
     ".claude/agents/cf-security-reviewer.md": {
@@ -1133,7 +1133,7 @@
     ".claude/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "79aa36a05e040784bf1a7e2ed16b4982f20a9fe7692979fd9d456df6308b24ee",
+      "sha256": "6e28ae35618280dd419d093104378d816435c6d9d23da7e4ddcd4848197133dd",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -1145,7 +1145,7 @@
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "b9f9a4bb395aa39e31b5091f7a2f6d8ea949860b26945affc642041e4efe4afd",
+      "sha256": "6afdfda1a45d0ba59ec37c2197c3a00e4ca6c3688613c9dc2ccf2661164090f2",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -1163,7 +1163,7 @@
     ".claude/skills/cf-evaluate-model/resources/packs.json": {
       "src": "agents/skills/cf-evaluate-model/resources/packs.json",
       "ownership": "managed",
-      "sha256": "5004d303b12b667ad6476b652ad4ecc45e14305e3b2063499e349ea8adcbdbd3",
+      "sha256": "3b1561452ff31e4d9d53cea2330a7477ab79d1ffbeca33848437c98e6565eef2",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/protocol.md": {
@@ -1175,7 +1175,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "444c9e7766bf127d1d4006216eb76e16e83c0ec50dcbb8bb3e0fcc0c403b7875",
+      "sha256": "09fde3c2fbf83dacda2cf1b0ec6b201b41fe67f7744cc8909df7eecf146cb3c4",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1721,7 +1721,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "22df4dc672a80980be38f69b3ade74b56b43e6b46eeb624eb1a3ed397b59cbb0",
+      "sha256": "a314ed97adb512fc8690a11b5c966e4c43c6c9b9e3014bb0fcf2d67f5618520a",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {

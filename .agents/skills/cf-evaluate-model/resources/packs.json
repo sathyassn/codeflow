@@ -188,7 +188,8 @@
         "single-task-does-not-invent-integration-branch",
         "graph-mutation-creates-new-version",
         "in-node-detail-does-not-replan",
-        "run-output-goes-in-the-pr-body"
+        "run-output-goes-in-the-pr-body",
+        "review-weighs-each-added-file"
       ]
     },
     {

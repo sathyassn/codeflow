@@ -3140,7 +3140,7 @@
     {
       "id": "CF-QA-017",
       "level": "hard",
-      "statement": "A file joins the repository only when the project needs it long term, in the smallest form that serves its use. Run output, per-run logs, review records, superseded drafts, build and cache output, copies kept for reference, scratch files, duplicate copies no tool manages and per-task evidence folders stay out, whatever earlier commits did; required evidence goes in the PR body or the task record as a summary, and an evidence file lands only when a live record cites it and the PR body cannot carry it. Review asks of every added file whether it is needed long term and in the smallest form that serves its use.",
+      "statement": "A file joins the repository only when the project needs it long term, in the smallest form that serves its use. Run output, per-run logs, review records, superseded drafts, build and cache output, copies kept for reference, scratch files, duplicate copies no tool manages and per-task evidence folders stay out, whatever earlier commits did, while an admitted use such as a fixture, a lockfile or a bundle the project ships outranks those exclusions; required evidence goes in the PR body or the task record as a summary, and an evidence file lands only when a live record cites it and the PR body cannot carry it. Review asks of every added file whether it is needed long term and in the smallest form that serves its use.",
       "sources": [
         {
           "path": ".codeflow/rules/workflow-discipline.md",
