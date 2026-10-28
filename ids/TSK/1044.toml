@@ -1,0 +1,11 @@
+id = "TSK-1044"
+uid = "c2002b0c-876d-4d11-8157-7342a27ec050"
+kind = "TSK"
+title = "Gate evidence cannot be redirected or forged by an agent session"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T03:29:35Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
