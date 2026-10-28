@@ -1,0 +1,11 @@
+id = "TSK-1049"
+uid = "08d59b62-d9d2-4971-8c08-578439e9a13a"
+kind = "TSK"
+title = "The compaction default is revisited from the adopter's measurement"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T09:25:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
