@@ -53,10 +53,9 @@ fn autonomy_and_automatic_review_are_enabled() {
     assert_eq!(cfg["approval_policy"].as_str(), Some("never"));
     assert_eq!(cfg["approvals_reviewer"].as_str(), Some("auto_review"));
     assert_eq!(cfg["web_search"].as_str(), Some("live"));
-    assert_eq!(
-        cfg["model_reasoning_effort"].as_str(),
-        Some("high"),
-        "the primary Codex seat must not inherit an unrelated user-level effort"
+    assert!(
+        cfg.get("model_reasoning_effort").is_none(),
+        "effort is each person's setting; seat launches pass their own (TSK-1028)"
     );
     assert_eq!(cfg["features"]["hooks"].as_bool(), Some(true));
     assert_eq!(

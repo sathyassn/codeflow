@@ -560,7 +560,12 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
     let codex = read(&root, ".codex/config.toml");
     assert!(!codex.contains("sandbox_mode"));
     assert!(codex.contains("approvals_reviewer = \"auto_review\""));
-    assert!(codex.contains("model_reasoning_effort = \"high\""));
+    assert!(
+        !codex
+            .lines()
+            .any(|line| line.starts_with("model_reasoning_effort")),
+        "effort is each person's setting (TSK-1028)"
+    );
     assert!(codex.contains("web_search = \"live\""));
 
     assert_engine_placeholders_rendered(&root);
