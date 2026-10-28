@@ -59,9 +59,15 @@ pub(crate) fn bounded_record_files(
             Ok(())
         },
     )?;
-    files.tasks.sort();
-    files.epics.sort();
-    files.specs.sort();
+    files
+        .tasks
+        .sort_by(|a, b| crate::ids::compare_id_paths(a, b));
+    files
+        .epics
+        .sort_by(|a, b| crate::ids::compare_id_paths(a, b));
+    files
+        .specs
+        .sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(files)
 }
 
@@ -215,7 +221,7 @@ pub(crate) fn epic_record_files(pm_root: &Path) -> std::io::Result<Vec<PathBuf>>
             }
         }
     }
-    paths.sort();
+    paths.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(paths)
 }
 
@@ -230,7 +236,7 @@ pub(crate) fn task_record_files(pm_root: &Path) -> std::io::Result<Vec<PathBuf>>
             }
         }
     }
-    paths.sort();
+    paths.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(paths)
 }
 
@@ -254,7 +260,7 @@ fn direct_markdown_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             }
         }
     }
-    paths.sort();
+    paths.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(paths)
 }
 
@@ -316,6 +322,41 @@ mod tests {
         std::os::unix::fs::symlink("gone", &pm).unwrap();
         assert!(task_record_files(&pm).is_err());
         assert!(epic_record_files(&pm).is_err());
+    }
+
+    /// Record files list by id number, so TSK-1000 follows TSK-999 and
+    /// TSK-10000 follows TSK-1000, in every inventory.
+    #[test]
+    fn record_files_list_by_id_number_past_three_digits() {
+        let dir = tempfile::tempdir().unwrap();
+        let pm = dir.path();
+        fs::create_dir_all(pm.join("tasks")).unwrap();
+        fs::create_dir_all(pm.join("specs")).unwrap();
+        fs::create_dir_all(pm.join("epics")).unwrap();
+        for id in ["10000", "1000", "999", "100"] {
+            fs::write(pm.join(format!("tasks/TSK-{id}.md")), "task").unwrap();
+            fs::write(pm.join(format!("specs/SPC-{id}.md")), "spec").unwrap();
+            fs::write(pm.join(format!("epics/EPC-{id}.md")), "epic").unwrap();
+        }
+        let names = |paths: Vec<PathBuf>| -> Vec<String> {
+            paths
+                .iter()
+                .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+                .collect()
+        };
+        let expected = |prefix: &str| -> Vec<String> {
+            ["100", "999", "1000", "10000"]
+                .iter()
+                .map(|id| format!("{prefix}-{id}"))
+                .collect()
+        };
+        assert_eq!(names(task_record_files(pm).unwrap()), expected("TSK"));
+        assert_eq!(names(spec_record_files(pm).unwrap()), expected("SPC"));
+        assert_eq!(names(epic_record_files(pm).unwrap()), expected("EPC"));
+        let bounded = bounded_record_files(pm, 100).unwrap();
+        assert_eq!(names(bounded.tasks), expected("TSK"));
+        assert_eq!(names(bounded.specs), expected("SPC"));
+        assert_eq!(names(bounded.epics), expected("EPC"));
     }
 
     #[test]
