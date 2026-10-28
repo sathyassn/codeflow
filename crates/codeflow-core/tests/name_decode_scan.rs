@@ -4638,7 +4638,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "waiver_problem",
         "trim",
-        7,
+        12,
         "display",
     ),
     // Normalizes human-authored standalone explanation and rejects an empty narrative; task identity and integration target are separate exact fields.
@@ -5057,27 +5057,19 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         3,
         "format-contract",
     ),
-    // None withholds the own-range waiver route: waiver_problem then returns a problem, so a failure can only add a binding finding.
+    // An unreadable HEAD is not the target branch, so the range is anchored on the qualified target: the stricter, pull-request judgment.
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
+        "qualify",
         "obtain-absent:head",
         1,
         "unproven",
     ),
-    // None withholds the own-range waiver route: waiver_problem then returns a problem, so a failure can only add a binding finding.
+    // A base policy that does not parse qualifies only `main` and `master`, the shipped default: a declared target then adds no receiving line.
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
-        "obtain-absent:merge_base",
-        1,
-        "unproven",
-    ),
-    // An unresolved target gives None, and waiver_problem then refuses an own-range waiver as not on the target; nothing is allowed by the fold.
-    (
-        "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
-        "obtain-absent:peel_to_commit",
+        "qualify",
+        "obtain-absent:from_str",
         1,
         "unproven",
     ),
