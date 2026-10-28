@@ -237,15 +237,17 @@ mod commands {
     };
 
     fn codeflow(project: &Path, home: &Path, args: &[&str]) -> Output {
+        // A literal name keeps the git-environment scan quiet; this pins it.
+        assert_eq!(
+            codeflow_present::service::OWNER_PID_ENV,
+            "CF_PRESENT_OWNER_PID"
+        );
         Command::new(env!("CARGO_BIN_EXE_codeflow"))
             .args(args)
             .current_dir(project)
             .env("HOME", home)
             .env("XDG_STATE_HOME", home.join("state"))
-            .env(
-                codeflow_present::service::OWNER_PID_ENV,
-                std::process::id().to_string(),
-            )
+            .env("CF_PRESENT_OWNER_PID", std::process::id().to_string())
             .output()
             .unwrap()
     }
