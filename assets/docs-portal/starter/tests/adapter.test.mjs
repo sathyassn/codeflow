@@ -1512,9 +1512,7 @@ test("a coordinator killed right after it spawned a writer leaves the lease held
     assert.equal(processAlive(writer), true);
     const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
     assert.match(String(refused), /workflow already in progress/);
-    const before = await readFile(path.join(root, "writer-tick"), "utf8");
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.notEqual(await readFile(path.join(root, "writer-tick"), "utf8"), before);
+    await assertTicking(path.join(root, "writer-tick"));
   } finally {
     if (writer !== null) { try { process.kill(-writer, "SIGKILL"); } catch { try { process.kill(writer, "SIGKILL"); } catch { /* gone */ } } }
     await rm(root, treeRemoval);
@@ -1987,9 +1985,7 @@ test("a reclaimer that exits after moving a live holder's claim does not lose th
     await new Promise((resolve) => setTimeout(resolve, 6100));
     const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
     assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: ${coordinator.pid}\\)`));
-    const before = await readFile(path.join(root, "tick"), "utf8");
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.notEqual(await readFile(path.join(root, "tick"), "utf8"), before);
+    await assertTicking(path.join(root, "tick"));
   } finally {
     if (coordinator !== null) coordinator.kill("SIGKILL");
     await rm(root, treeRemoval);
@@ -3372,6 +3368,17 @@ async function waitUntil(predicate, timeoutMs = 5_000) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`condition was not met within ${timeoutMs}ms`);
+}
+
+// A tick file is rewritten in place, so one read can land between the
+// truncate and the write and see an empty file. Wait for a new, non-empty
+// value instead of comparing two samples taken 100 ms apart.
+async function assertTicking(file) {
+  const before = await readFile(file, "utf8");
+  await waitUntil(async () => {
+    const now = await readFile(file, "utf8");
+    return now !== "" && now !== before;
+  });
 }
 
 function pngHeader(width, height) {
