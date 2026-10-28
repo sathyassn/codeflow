@@ -1,0 +1,11 @@
+id = "TSK-1034"
+uid = "ba1743d9-cc00-4924-b12b-933ef578318d"
+kind = "TSK"
+title = "A non-trivial project uses its standard framework, in proportion"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T00:07:04Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
