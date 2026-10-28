@@ -1,0 +1,11 @@
+id = "TSK-1041"
+uid = "a83c1e6c-43e1-4f86-8bb8-77101fb7b882"
+kind = "TSK"
+title = "Open pull requests are reported by state in one read-only command"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T01:51:19Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
