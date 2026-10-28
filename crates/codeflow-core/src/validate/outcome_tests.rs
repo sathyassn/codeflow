@@ -200,6 +200,9 @@ fn the_template_formatted_or_respaced_is_refused() {
         "after this merges, `<who>` c*an* `<do what>`",
         "`after,this,merges,<who>,can,<do what>`",
         "after this merges, [`<who>`](https://example.com) can `<do what>`",
+        "after<br>this merges, `<who>` can `<do what>`",
+        "after this<BR/>merges, `<who>` can `<do what>`",
+        "after this merges, `<who>`<br />can `<do what>`",
     ] {
         let body = Body {
             outcome: Some(outcome),

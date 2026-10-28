@@ -735,6 +735,9 @@ fn read_entries(markdown: &str, form: Form) -> Reading {
                     reading.raw_token |= outcome;
                     entry.push_str(&html);
                     entry.push_str(separator);
+                } else if matches!(spaced(&html).as_str(), "<br>" | "<br/>" | "<br />") {
+                    // An HTML line break separates words as a newline does.
+                    entry.push(' ');
                 }
             }
             Event::Text(text) => {
