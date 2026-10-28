@@ -1,0 +1,11 @@
+id = "TSK-1045"
+uid = "39f8bb69-a11e-4748-b78c-11a1cf19582b"
+kind = "TSK"
+title = "An away session's charter, decisions and owed actions survive compaction and render as one report"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T04:14:29Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
