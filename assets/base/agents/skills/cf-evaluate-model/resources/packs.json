@@ -175,7 +175,7 @@
     },
     {
       "id": "project-organization",
-      "description": "Focused diagnostics for durable work authority, planning clarity, graph integrity, stable anchors, external-method coexistence, and local-cache boundaries.",
+      "description": "Focused diagnostics for durable work authority, planning clarity, graph integrity, stable anchors, external-method coexistence, local-cache boundaries, and what the repository holds.",
       "includes": [],
       "cases": [
         "external-method-keeps-work-authority",
@@ -187,7 +187,9 @@
         "multi-task-epic-defaults-to-one-integration-branch",
         "single-task-does-not-invent-integration-branch",
         "graph-mutation-creates-new-version",
-        "in-node-detail-does-not-replan"
+        "in-node-detail-does-not-replan",
+        "run-output-goes-in-the-pr-body",
+        "review-weighs-each-added-file"
       ]
     },
     {

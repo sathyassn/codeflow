@@ -8901,6 +8901,74 @@
           "behaviour_changed_to_fit_a_name"
         ]
       }
+    },
+    {
+      "id": "run-output-goes-in-the-pr-body",
+      "kind": "capability",
+      "category": "verification",
+      "canary": false,
+      "fixture": "sweep-evidence-for-review",
+      "requirements": [
+        "CF-QA-017",
+        "CF-QA-015"
+      ],
+      "prompt": "Finish TSK-005 from CHANGE.md: make the change, run what proves it, commit the work on this branch and write the pull request body to PR_BODY.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "source_and_test_committed",
+          "sweep_summarised_in_pr_body",
+          "earlier_evidence_folder_not_taken_as_precedent"
+        ],
+        "references": [
+          "CHANGE.md",
+          "src/units.py",
+          "tools/sweep.py"
+        ],
+        "must_not": [
+          "run_output_committed",
+          "per_task_evidence_folder_added",
+          "evidence_missing_from_pr_body"
+        ]
+      }
+    },
+    {
+      "id": "review-weighs-each-added-file",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "action-branch-added-files",
+      "requirements": [
+        "CF-QA-017"
+      ],
+      "prompt": "Review the current branch against main for TSK-012, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "run_log_flagged_as_material_finding",
+          "round_verdict_file_flagged_as_material_finding",
+          "bundled_dist_kept_as_shipped_product",
+          "lockfile_and_test_fixture_kept",
+          "verdict_reports_added_files_checked"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "action.yml"
+        ],
+        "must_not": [
+          "bundled_dist_refused_as_build_output",
+          "lockfile_or_fixture_refused",
+          "unneeded_files_approved",
+          "code_changed"
+        ]
+      }
     }
   ]
 }

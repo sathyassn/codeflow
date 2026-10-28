@@ -671,8 +671,8 @@ code on a protected target. `work_type: spike | experiment` records intent.
 | Situation | Home | Lands on protected? |
 |---|---|---|
 | Changing an existing tree | `spike/<task-or-question>` branch; edit the real packages | Findings only: the spike task's PR lands files under `docs/research/` and its record, never product code. Build the decision later on `task/TSK-…`. |
-| Standalone throwaway (no production path yet) | `spikes/<task-or-question>/` **on that spike/experiment branch** | No. `spikes/` on a PR into `main` or `integration/` is a review defect unless the approved plan archives a named subset as evidence. |
-| Retained comparison evidence | `docs/verification/<task>/` | Yes, as evidence, not as a product runtime. |
+| Standalone throwaway (no production path yet) | `spikes/<task-or-question>/` **on that spike/experiment branch** | No. `spikes/` on a PR into `main` or `integration/` is a review defect; its findings land as the next row says. |
+| Evidence from a spike or comparison | The PR body or the task record, as `cf-ship/references/pr-evidence.md` "Where evidence lives" says | Only a summary file that a live record cites and the PR body cannot carry; never a per-task evidence folder. |
 
 Do not add a mandatory `spikes/` directory on `main`. Do not host prototypes in
 `cf-present` or `cf-docs-portal`. A static frame answers a composition question;

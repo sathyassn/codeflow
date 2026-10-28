@@ -24,7 +24,16 @@ evidence" define; the brief follows
 ## Procedure
 
 1. Read the acceptance criteria and list them.
-2. Inspect the diff (`git diff <base>...HEAD`) and every touched file. Challenge
+2. Inspect the diff (`git diff <base>...HEAD`) and every touched file. Ask of
+   every file the diff adds whether the project needs it long term and
+   whether this is the smallest form that serves its use (the discipline
+   rules' "Write only what earns its keep"); an unneeded or oversized
+   addition, such as run output, a log, a review verdict file, a per-task
+   evidence folder, a superseded draft, build output or a duplicate copy no
+   tool manages, is a material finding. Oversized means shown unnecessary
+   content or avoidable bulk, never a wording or structure preference, and
+   an admitted use outranks the exclusions: fixtures, a lockfile or a
+   bundle the project ships stay. Challenge
    whether a smaller, clearer solution meets the same criteria; flag speculative
    features, abstractions, dependencies, configuration, compatibility layers,
    dead paths, and complexity without a current requirement or risk. Also flag
@@ -146,6 +155,7 @@ verdict: approved | changes_requested
 head: <the block's reviewed commit in full; an earlier head's approval never carries>
 widened: <what the pass read beyond the brief, and why | none>
 not_verified: <what this pass did not establish>
+added_files: <how many added files were checked; each unneeded or oversized one is a finding below | none added>
 
 criteria:
   - criterion: <text>

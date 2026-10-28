@@ -47,7 +47,11 @@ records the required interactive seat unavailable and the reduced assurance.
       evidenced mechanism and add a regression test that fails before the fix
       and passes after; for a defect that resists a first glance, first run one
       command that fails on the exact reported symptom (a cheap local failing
-      test, else the closest executable check). Use small conventional
+      test, else the closest executable check). Commit only files the
+      project needs long term, as the discipline rules' "Write only what
+      earns its keep" lists: run output, logs, review verdict files and scratch
+      files stay out, and the evidence goes in the PR body or the task
+      record. Use small conventional
       commits and push once, at ready, as the git rules' "One push at ready"
       says. Planned work moves at the pace
       [the workflow lifecycle](../cf-method/references/workflow-lifecycle.md)

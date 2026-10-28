@@ -62,9 +62,11 @@ description: Land finished work (docs and capability updates, then a PR through 
    release notes plainly: simple, straightforward and clear, no mannered
    prose (see `.codeflow/rules/writing.md`), in short prose and bullets.
    Follow the project template and conventional-commit policy; attribute
-   measured evidence to its revision and scope. Missing required evidence
-   keeps the PR draft. Lint the body with `codeflow ci` before pushing and
-   opening the PR. No AI attribution or emoji.
+   measured evidence to its revision and scope. Evidence goes in the body
+   or the task record, never in committed run output or a per-task
+   evidence folder. Missing required evidence keeps the PR draft. Lint the
+   body with `codeflow ci` before pushing and opening the PR. No AI
+   attribution or emoji.
 7. After opening, follow
    [references/pr-evidence.md](references/pr-evidence.md), "After opening":
    no polling by default. Only where the adopted policy requires hosted
