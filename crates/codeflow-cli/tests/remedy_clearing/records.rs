@@ -692,7 +692,7 @@ fn clears_acceptance_binding() {
     commit(root, "y.txt", "feat: add y");
     prove(
         "ACCEPTANCE_BINDING",
-        "changed after the reviewed commit",
+        "changed between the reviewed commit",
         || hosted.ci("task/TSK-001-work", &[]),
         |printed| {
             // Review the pull request head, then take the printed steps in

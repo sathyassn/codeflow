@@ -93,3 +93,31 @@ fn epic_line_adoption_requires_first_arrival_by_merge_unless_target_has_it() {
     f.merge("main");
     passes(&f.ci("main", LINE));
 }
+
+/// TSK-433 AC-7 (issue #341): an `integration/` line that fails the
+/// epic-line proof, here for an unadopted direct code commit, is judged
+/// without a pull request body as frozen task work. `codeflow ci` says why
+/// once, and the binding finding names the range head whose change it
+/// counts, since the completion was made before it.
+#[test]
+fn an_unverified_line_names_its_downgrade_and_the_range_head() {
+    let f = Line::new();
+    f.git(&["push", "-q", "origin", "main"]);
+    f.land_task();
+    let direct = f.direct();
+    let result = f
+        .command(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["ci", "--base", "main", "--head", "HEAD", "--branch", LINE])
+        .output()
+        .unwrap();
+    let text = output(&result);
+    assert_eq!(result.status.code(), Some(1), "{text}");
+    let note = format!("'{LINE}' is not a verified epic line, so its completions bind at the range head with frozen criteria: ");
+    assert_eq!(text.matches(&note).count(), 1, "{text}");
+    assert!(text.contains(&direct[..9]), "{text}");
+    assert!(
+        text.contains(&format!("the range head {direct} also changes src/lib.rs")),
+        "{text}"
+    );
+    assert!(!text.contains("the completion also changes"), "{text}");
+}

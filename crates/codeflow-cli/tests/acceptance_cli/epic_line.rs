@@ -35,15 +35,33 @@ fn planned_line() -> tempfile::TempDir {
 /// it lands on the line. Returns the task pull request's `codeflow ci`
 /// into the line, run before the landing.
 fn reopened_in_its_own_pull_request(root: &Path) -> (i32, String) {
-    let branch = "task/TSK-001-work";
-    git(root, &["switch", "-q", "-c", branch, LINE]);
-    write(root, "src/lib.rs", "pub fn initial() {}\n");
+    reopened_on(
+        root,
+        LINE,
+        "task/TSK-001-work",
+        "TSK-001",
+        &|status, criteria, closeout| own_task(status, criteria, closeout),
+    )
+}
+
+/// [`reopened_in_its_own_pull_request`] for the task `id`, written by
+/// `record`, on `branch` cut from `line` and landed there.
+fn reopened_on(
+    root: &Path,
+    line: &str,
+    branch: &str,
+    id: &str,
+    record: &dyn Fn(&str, &str, &str) -> String,
+) -> (i32, String) {
+    git(root, &["switch", "-q", "-c", branch, line]);
+    let code = format!("src/{}.rs", id.to_lowercase().replace('-', "_"));
+    write(root, &code, &format!("// {branch}: initial\n"));
     let first = commit(root, "feat: initial work");
     let old = fix_block(&first);
     write(
         root,
-        &record_path("TSK-001"),
-        &own_task("complete", REOPEN_ADDS, &old),
+        &record_path(id),
+        &record("complete", REOPEN_ADDS, &old),
     );
     commit(root, "docs(records): complete the task");
     let archived = old.replace(
@@ -52,22 +70,37 @@ fn reopened_in_its_own_pull_request(root: &Path) -> (i32, String) {
     );
     write(
         root,
-        &record_path("TSK-001"),
-        &own_task("todo", REOPEN_ADDS, &archived),
+        &record_path(id),
+        &record("todo", REOPEN_ADDS, &archived),
     );
     commit(root, "docs(records): reopen in the task range");
-    write(root, "src/lib.rs", "pub fn fixed() {}\n");
+    write(root, &code, &format!("// {branch}: fixed\n"));
     let reviewed = commit(root, "fix: keep working when rerun");
     let closeout = format!("{archived}{}", three_criteria_block(&reviewed));
     write(
         root,
-        &record_path("TSK-001"),
-        &own_task("complete", REOPEN_ADDS, &closeout),
+        &record_path(id),
+        &record("complete", REOPEN_ADDS, &closeout),
     );
     commit(root, "docs(records): complete the task again");
-    let into_line = ci_on(root, LINE, branch, "Task: TSK-001");
-    land(root, branch);
+    let into_line = ci_on(root, line, branch, &format!("Task: {id}"));
+    land_on(root, line, branch);
     into_line
+}
+
+/// Land `branch` on `line` with a merge commit.
+fn land_on(root: &Path, line: &str, branch: &str) {
+    git(root, &["switch", "-q", line]);
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            &format!("merge: {branch}"),
+            branch,
+        ],
+    );
 }
 
 /// TSK-433 AC-1: the line's own task, completed, reopened and completed
@@ -292,4 +325,208 @@ fn a_sync_merge_of_main_after_the_landing_is_not_counted() {
         into_main.1
     );
     assert!(!into_main.1.contains("src/synced.rs"), "{}", into_main.1);
+}
+
+/// A second epic's line, which joins [`LINE`] as EPC-025's line joined the
+/// 3.2.0 line (TSK-422 through TSK-1000).
+const JOINED: &str = "integration/EPC-002-joined";
+
+/// `id` as a task of EPC-002 targeting `target`.
+fn joined_task(id: &str, target: &str, status: &str, criteria: &str, closeout: &str) -> String {
+    task(id, status, criteria, closeout)
+        .replace("epic_id: EPC-001", "epic_id: EPC-002")
+        .replace(
+            "integration_target: main",
+            &format!("integration_target: {target}"),
+        )
+}
+
+/// [`planned_line`] where a planning merge on [`LINE`] adds EPC-002 with
+/// TSK-003 (targeting `target`) and TSK-004 (targeting [`JOINED`], so the
+/// line names its epic's task), then [`JOINED`] cut from [`LINE`], as
+/// EPC-025 was planned on the 3.2.0 line and its line cut from it.
+fn joined_repo(target: &str) -> tempfile::TempDir {
+    let dir = planned_line();
+    let root = dir.path();
+    git(root, &["switch", "-q", "-c", "plan/EPC-002", LINE]);
+    write(
+        root,
+        "project-management/epics/EPC-002.md",
+        &EPIC.replace("EPC-001", "EPC-002"),
+    );
+    write(
+        root,
+        &record_path("TSK-003"),
+        &joined_task("TSK-003", target, "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    write(
+        root,
+        &record_path("TSK-004"),
+        &joined_task("TSK-004", JOINED, "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    commit(root, "docs(records): plan EPC-002 and its own line");
+    land_on(root, LINE, "plan/EPC-002");
+    git(root, &["branch", JOINED, LINE]);
+    dir
+}
+
+/// TSK-003's own pull request on [`JOINED`], reopened and re-completed
+/// before its first landing, landed there.
+fn reopened_on_joined(root: &Path, target: &'static str) {
+    reopened_on(
+        root,
+        JOINED,
+        "task/TSK-003-work",
+        "TSK-003",
+        &move |status, criteria, closeout| {
+            joined_task("TSK-003", target, status, criteria, closeout)
+        },
+    );
+}
+
+/// [`JOINED`] joins [`LINE`] as TSK-1000 joined EPC-025's line. First a
+/// planning merge on [`LINE`] rewords TSK-003's criteria to the text its
+/// own pull request settled, as the 3.2.0 line did for TSK-422, so the
+/// line's head owns the record; then a task branch cut from [`LINE`]
+/// merges [`JOINED`] and lands on [`LINE`].
+fn join(root: &Path, target: &str) {
+    git(root, &["switch", "-q", "-c", "plan/EPC-001-amend", LINE]);
+    write(
+        root,
+        &record_path("TSK-003"),
+        &joined_task("TSK-003", target, "todo", REOPEN_ADDS, "Pending.\n"),
+    );
+    commit(root, "docs(plan): reword TSK-003 on the line");
+    land_on(root, LINE, "plan/EPC-001-amend");
+    git(root, &["switch", "-q", "-c", "task/TSK-002-join", LINE]);
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore(merge): take the joined line",
+            JOINED,
+        ],
+    );
+    land_on(root, LINE, "task/TSK-002-join");
+}
+
+/// TSK-433 AC-9: a verified epic line that joined the judged line, and
+/// whose tip the range head contains, is judged as the range too. Its own
+/// task, reopened and re-completed inside its pull request before landing
+/// on its line, binds at that landing on the judged line's pull request
+/// into `main`. Before AC-9 the joined line's tip counted as a target the
+/// run is not judged against, as TSK-422's did.
+#[test]
+fn a_joined_lines_reopened_completion_binds_at_its_landing() {
+    let dir = joined_repo(JOINED);
+    let root = dir.path();
+    reopened_on_joined(root, JOINED);
+    join(root, JOINED);
+    let into_main = ci_on(root, "main", LINE, "");
+    for refusal in [OUTSIDE_TIP, "work.acceptance_binding (block)"] {
+        assert!(
+            !into_main.1.contains(refusal),
+            "the line into main with a joined line: {refusal}: {}",
+            into_main.1
+        );
+    }
+}
+
+/// TSK-433 AC-9: a joined line that fails the epic-line proof, here for a
+/// direct code commit with no landed adoption, keeps today's refusal: the
+/// import check refuses the unverified home, and the joined tip is not
+/// judged as the range.
+#[test]
+fn an_unverified_joined_line_stays_outside_evidence() {
+    let dir = joined_repo(JOINED);
+    let root = dir.path();
+    reopened_on_joined(root, JOINED);
+    git(root, &["switch", "-q", JOINED]);
+    write(root, "src/direct.rs", "pub fn direct() {}\n");
+    commit(root, "feat: a direct commit on the joined line");
+    join(root, JOINED);
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "an unverified joined line",
+        &[
+            "work.import_authority",
+            "TSK-003",
+            &format!("unverified home `{JOINED}`"),
+        ],
+    );
+}
+
+/// TSK-433 AC-9: a joined line's tip beyond the range head, here a later
+/// landing on the joined line the judged line never merged, stays a target
+/// the run is not judged against.
+#[test]
+fn a_joined_tip_beyond_the_head_stays_outside_evidence() {
+    let dir = joined_repo(JOINED);
+    let root = dir.path();
+    reopened_on_joined(root, JOINED);
+    join(root, JOINED);
+    git(root, &["switch", "-q", "-c", "task/TSK-004-later", JOINED]);
+    write(root, "src/later.rs", "pub fn later() {}\n");
+    commit(root, "feat: later work on the joined line");
+    land_on(root, JOINED, "task/TSK-004-later");
+    git(root, &["switch", "-q", LINE]);
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "a joined tip beyond the head",
+        &["work.acceptance_binding", "TSK-003", OUTSIDE_TIP],
+    );
+}
+
+/// TSK-433 AC-9: a task the joined line carries that declares `main` keeps
+/// today's judgment; only a task of the joined line itself is judged as the
+/// range.
+#[test]
+fn a_joined_lines_task_targeting_main_keeps_its_refusal() {
+    let dir = joined_repo("main");
+    let root = dir.path();
+    reopened_on_joined(root, "main");
+    join(root, "main");
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "a task of main on the joined line",
+        &["work.acceptance_binding", "TSK-003"],
+    );
+}
+
+/// TSK-433 AC-9: a completion written straight onto the joined line, with
+/// no task pull request and no landed adoption, leaves the joined line
+/// unverified, so the import check refuses it and the joined tip is not
+/// judged as the range.
+#[test]
+fn a_completion_forged_on_the_joined_line_stays_refused() {
+    let dir = joined_repo(JOINED);
+    let root = dir.path();
+    git(root, &["switch", "-q", "-c", "task/TSK-003-work", JOINED]);
+    write(root, "src/joined.rs", "pub fn joined() {}\n");
+    let reviewed = commit(root, "feat: joined work");
+    land_on(root, JOINED, "task/TSK-003-work");
+    write(
+        root,
+        &record_path("TSK-003"),
+        &joined_task(
+            "TSK-003",
+            JOINED,
+            "complete",
+            REOPEN_ADDS,
+            &three_criteria_block(&reviewed),
+        ),
+    );
+    commit(root, "docs(records): complete TSK-003 on the joined line");
+    join(root, JOINED);
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "a completion forged on the joined line",
+        &[
+            "work.import_authority",
+            "TSK-003",
+            &format!("unverified home `{JOINED}`"),
+        ],
+    );
 }

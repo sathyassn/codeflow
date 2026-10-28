@@ -275,14 +275,20 @@ fn a_completion_binds_to_the_reviewed_commit() {
     assert_passes(&pass, "reviewed code commit, record-only after it");
     assert!(pass.1.contains(SCOPE), "scope note: {}", pass.1);
 
+    // TSK-433 AC-8 (issue #320): the finding says what it compared and how
+    // much: the count of other paths from the reviewed commit to the point
+    // it binds at, and the first one.
     write(root, "src/lib.rs", "pub fn later() {}\n");
-    commit(root, "feat: change after review");
+    write(root, "src/more.rs", "pub fn also() {}\n");
+    let later = commit(root, "feat: change after review");
     assert_blocks(
         &ci(root, BRANCH, "TSK-001"),
         "a later code change",
         &[
             "work.acceptance_binding",
-            "src/lib.rs changed after the reviewed commit",
+            &format!(
+                "2 paths changed between the reviewed commit {reviewed} and {later}, first: src/lib.rs (commit {later}: src/lib.rs changed); review the result again"
+            ),
         ],
     );
 
@@ -563,7 +569,8 @@ fn task_status_complete_binds_the_block() {
         assert!(
             result
                 .1
-                .contains("src/lib.rs changed after the reviewed commit"),
+                .contains("1 path changed between the reviewed commit")
+                && result.1.contains("first: src/lib.rs"),
             "{policy}: {}",
             result.1
         );
@@ -2835,7 +2842,7 @@ fn assert_invalid_fix(fault: &str) {
     );
     let reason = match fault {
         "copied" => "inside the fix range",
-        "later-code" => "after the reviewed commit",
+        "later-code" => "changed between the reviewed commit",
         "dropped" | "edited" => "old acceptance block",
         "reason" => "reason",
         "missing" | "unverified" => "AC-1",
@@ -3139,7 +3146,10 @@ fn a_one_pr_reopen_does_not_carry_a_merged_review_past_later_code() {
     assert_blocks(
         &ci_on(root, LINE, "task/TSK-001-fix", "Task: TSK-001"),
         "a merged review carried past later code in a reopening range",
-        &["src/side.rs changed after the reviewed commit"],
+        &[
+            "1 path changed between the reviewed commit",
+            "first: src/side.rs",
+        ],
     );
 }
 
@@ -3831,11 +3841,11 @@ fn anything_but_a_clean_target_merge_still_blocks_and_names_the_commit() {
                 "merge {culprit} is not a clean re-merge from the task's integration target"
             )],
             "commit" => vec![
-                format!("after the reviewed commit {reviewed}"),
+                format!("changed between the reviewed commit {reviewed} and {culprit}, first: src/extra.rs"),
                 format!("(commit {culprit}: src/extra.rs changed)"),
             ],
             _ => vec![
-                format!("after the reviewed commit {reviewed}"),
+                format!("changed between the reviewed commit {reviewed} and "),
                 format!("merge {culprit} brings"),
                 "which is not on the first-parent line of the target tip this run is judged against".to_string(),
             ],
@@ -3950,7 +3960,7 @@ fn local_refs_and_overlays_never_make_a_merge_the_target() {
             case,
             &[
                 "work.acceptance_binding",
-                &format!("src/unreviewed.rs changed after the reviewed commit {reviewed}"),
+                &format!("1 path changed between the reviewed commit {reviewed} and {merge}, first: src/unreviewed.rs"),
                 &needle,
             ],
         );
@@ -4949,7 +4959,8 @@ fn a_line_carries_merges_only_for_the_tasks_that_target_it() {
                 &[
                     "work.acceptance_binding",
                     "TSK-001",
-                    "project-management/tasks/TSK-002.md changed after the reviewed commit",
+                    "changed between the reviewed commit",
+                    "first: project-management/tasks/TSK-002.md",
                     "not on the first-parent line of the target tip",
                 ],
             );
