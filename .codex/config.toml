@@ -25,7 +25,7 @@
 #   operator moved builders into a sandbox so that no builder can write a
 #   shell startup file. A builder launches with `--ask-for-approval never`,
 #   `-c 'permissions.cf-builder.description="CodeFlow builder seat"'`,
-#   `-c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write","~/.codeflow/gate-runs"="write"}'`
+#   `-c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write"}'`
 #   and `-c default_permissions="cf-builder"`, no `--sandbox` flag, from the
 #   main checkout root (both overrides are explained at
 #   `[permissions.cf-builder]` below; TSK-1003, TSK-337). The spike of 2026-09-29
@@ -79,7 +79,8 @@ ignore_default_excludes = false
 # review edits nothing), so they cannot take the gate lock under
 # `~/.codeflow/locks`, write gate evidence under `~/.codeflow/gate-runs` or,
 # outside the main checkout root, write the common `.git`. A seat that has to
-# run a gate is a builder seat and launches as one.
+# reserve or run a quick-mode heavy target is a builder seat and launches as
+# one.
 [permissions.cf-guard]
 extends = ":workspace"
 
@@ -258,16 +259,17 @@ dangerously_allow_all_unix_sockets = false
 # reaches that branch, the root can hold an older table: on 2026-10-27
 # (Codex 0.165.0) this repository's root still had the table from before
 # TSK-1003, and a seat launched as transport.md said could not write
-# `~/.codeflow/locks`. So the launch also passes the two home grants below
-# as an override,
-# `-c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write","~/.codeflow/gate-runs"="write"}'`.
+# `~/.codeflow/locks`. So the launch also passes the home grant below as an
+# override,
+# `-c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write"}'`.
 # A `-c` key splits on every dot, so a path key can only be passed inside
 # this inline table, which Codex merges into this filesystem table, keeping
 # the `:workspace_roots` entries below. The override and this table name the
-# same two grants (a test keeps them equal), and the startup stub with them
+# same home grant (a test keeps them equal), and the startup stub with it
 # still cannot read or run anything. `codeflow doctor --preflight` runs
-# `codex sandbox` with the launch overrides from the main checkout root and
-# fails when a grant is not effective there.
+# `codex sandbox` with the launch overrides and managed config from the main
+# checkout root, writes a probe file in both gate lock folders and in the
+# common `.git` objects and refs, and fails when any of them is not writable.
 #
 # `~/.codeflow/locks` is writable so a builder can run `codeflow reserve`
 # and the heavy quick targets, which hold `~/.codeflow/locks/full-gate.lock`
@@ -287,23 +289,20 @@ dangerously_allow_all_unix_sockets = false
 # builder can still hold, delete or replace a lock or a record and so
 # block, mislead or split the coordination between gates.
 #
-# `~/.codeflow/gate-runs` is writable so a Codex seat in this production
-# posture, a Codex primary included, can run `codeflow test --mode full`
-# and record the run there (TSK-337 AC-5), as the Claude presets allow.
-# The folder is per-account evidence, not a security boundary: a seat that
-# can write it can also write a record that a later gate on this account
-# reads as a green base and skips checks for, or that a PR cites. The same
-# holds for any code a full gate runs, since the gate runs the candidate's
-# own tests with this write. Hosted CI and review are the checks that do
-# not trust this folder. Nothing else under the home folder is writable; a
-# relocated `CODEFLOW_HOME` is not covered.
+# `~/.codeflow/gate-runs` stays unwritable to builder and review seats
+# (TSK-337 AC-5, decided 2026-10-27): full gates and their evidence stay
+# with the primary. The gate copies run artifacts into that folder, and later
+# gates read its run records as a green base without authenticating them, so
+# a seat that could write it could plant a record a later gate trusts. A
+# builder runs `codeflow reserve` and quick-mode heavy targets under the
+# shared lock, which need only `~/.codeflow/locks`. Nothing else under the
+# home folder is writable; a relocated `CODEFLOW_HOME` is not covered.
 [permissions.cf-builder]
 extends = "cf-guard"
 description = "CodeFlow builder seat"
 
 [permissions.cf-builder.filesystem]
 "~/.codeflow/locks" = "write"
-"~/.codeflow/gate-runs" = "write"
 
 [permissions.cf-builder.filesystem.":workspace_roots"]
 ".git" = "write"

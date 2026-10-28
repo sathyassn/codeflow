@@ -57,7 +57,7 @@ work. This table is the one home of these flags:
 | Seat | Production and building | Consult and review |
 |---|---|---|
 | Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |
-| Codex | `--ask-for-approval never -c 'permissions.cf-builder.description="CodeFlow builder seat"' -c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write","~/.codeflow/gate-runs"="write"}' -c default_permissions="cf-builder"`, no `--sandbox` flag, from the main checkout root | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |
+| Codex | `--ask-for-approval never -c 'permissions.cf-builder.description="CodeFlow builder seat"' -c 'permissions.cf-builder.filesystem={"~/.codeflow/locks"="write"}' -c default_permissions="cf-builder"`, no `--sandbox` flag, from the main checkout root | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |
 | Grok | Not qualified; no Grok seat builds (ADR-0075 D3, below) | `--permission-mode auto`, launched in its own task worktree |
 
 The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05: a
@@ -67,13 +67,19 @@ description override gives that load a `cf-builder` profile that grants
 nothing, and the session load merges it into the project's profile;
 without it the seat stops with "failed to load workspace requirements".
 The seat gets the profile as the main checkout root has it, which can
-predate a CodeFlow update, so the launch also carries the profile's two
-home grants, the gate lock folder and the gate evidence folder; Codex
-merges them into that profile. `codeflow doctor --preflight` checks
-that the installed Codex accepts these overrides and that, from the main
-checkout root, they give the lock, evidence and common `.git` writes;
-it exits 1 when a grant is not effective. A review seat gets none of
-these writes. A builder reports a failed push and the caller pushes. The Grok builder posture is ADR-0075 D3:
+predate a CodeFlow update, so the launch also carries the profile's home
+grant, the gate lock folder; Codex merges it into that profile. A
+builder runs `codeflow reserve` and quick-mode heavy targets under the
+shared lock; full gates and their evidence stay with the primary, and
+`~/.codeflow/gate-runs` is not writable to any Codex seat.
+`codeflow doctor --preflight` checks that the installed Codex accepts
+these overrides and that, from the main checkout root with managed
+config, they let a builder write both gate lock folders and the common
+`.git` objects and refs; it exits 1 when a write is refused. When it
+cannot run that check, it says builder readiness is not established,
+and the launched seat's own writes are the evidence. A review seat gets
+none of these writes. A builder reports a failed push and the caller
+pushes. The Grok builder posture is ADR-0075 D3:
 `--always-approve --sandbox cf-guard-worktree`, launched in its own task
 worktree after a separate step saves folder trust for that exact directory,
 with readiness judged by the hooks that load. ADR-0075 still lists as

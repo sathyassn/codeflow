@@ -449,7 +449,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "58552155c9ed82f07fa1bfc36c73d21efe139e8c25021e1945ed85d38e827d29",
+      "sha256": "9347acc66e95bdcf7854327a505121263e22472a95650bdbaa8abd7af6f2f27d",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -635,7 +635,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "f69c72b38720fb5c9d520a0e4ffa694713bce12856f4483449634d9cb37ee167",
+      "sha256": "304dba9da6b5ae3dcc1b919c86b3bb200e87b36f4679da65fecf8f34bc828895",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1289,7 +1289,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "58552155c9ed82f07fa1bfc36c73d21efe139e8c25021e1945ed85d38e827d29",
+      "sha256": "9347acc66e95bdcf7854327a505121263e22472a95650bdbaa8abd7af6f2f27d",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -1475,7 +1475,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "f69c72b38720fb5c9d520a0e4ffa694713bce12856f4483449634d9cb37ee167",
+      "sha256": "304dba9da6b5ae3dcc1b919c86b3bb200e87b36f4679da65fecf8f34bc828895",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1775,7 +1775,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "f36543b0b72afa93382caac887f7a4a26042884f6ffeff31d994b73a9beb34bc",
+      "sha256": "4fb0b43ea5fad5ed65ceb62a7f9a6687c3735718cd938b3ca3edfba0f1c61d2a",
       "exec": false
     },
     ".codex/hooks.json": {

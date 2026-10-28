@@ -229,10 +229,12 @@ Start by running `codeflow doctor --preflight` and reading it: it prints the
 seat, sandbox and tool evidence the steps below ask for, each value marked
 configured, observed or unavailable, whether the installed Codex
 accepts the builder launch's profile, and whether that launch gives a
-builder seat its gate and commit writes from the main checkout root; it
-exits 1 when it observed either fail. It cannot establish the live model and
-effort a seat selected or the boundary a running session enforces, so still
-make the live observations the steps below require.
+builder seat its gate lock and commit writes from the main checkout root; it
+exits 1 when it observed either fail. When it could not run that check, it
+says builder readiness is not established and exits 0; that line is
+information, never readiness evidence. It cannot establish the live model
+and effort a seat selected or the boundary a running session enforces, so
+still make the live observations the steps below require.
 
 1. Before choosing a landing route, read `PLAN.md` and the landing policy
    in the project README when present, alongside the project operating

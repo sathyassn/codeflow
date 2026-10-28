@@ -37,6 +37,14 @@ fn configured_project() -> tempfile::TempDir {
         ".codex/config.toml",
         "default_permissions = \"cf-guard\"\n[permissions.cf-guard]\n[permissions.cf-builder]\n",
     );
+    // A repository, so the builder write probe has a common `.git` whose
+    // objects and refs it can write (TSK-337).
+    let status = Command::new("git")
+        .current_dir(dir.path())
+        .args(["init", "-q"])
+        .status()
+        .unwrap();
+    assert!(status.success());
     dir
 }
 
@@ -179,12 +187,15 @@ enum Fake {
 #[cfg(unix)]
 #[derive(Clone, Copy, PartialEq)]
 enum Grants {
-    /// Runs the command after `--` unsandboxed, so the real permissions
-    /// check answers.
+    /// Runs the command after `--` unsandboxed, so the real write probe
+    /// answers.
     Runs,
-    /// Prints a failing permissions result, as when the profile from the
-    /// launch folder cannot write the home lock folder.
+    /// Prints a refused write probe, as when the profile from the launch
+    /// folder cannot write the home lock folder.
     Denied,
+    /// Prints every folder writable, then fails with an error of its own,
+    /// as a sandbox that dies after its command does.
+    FailsAfterProbe,
     /// Aborts with no output, as a sandbox whose profile cannot run a
     /// program does.
     Aborts,
@@ -218,7 +229,8 @@ fn fake_codex_with(fake: Fake, grants: Grants) -> tempfile::TempDir {
     };
     let sandbox = match grants {
         Grants::Runs => "while [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"",
-        Grants::Denied => "echo 'warn  permissions: essential and full gates cannot write their lock or evidence directories (/h/.codeflow/locks: Operation not permitted (os error 1))'\necho '      clear it: relaunch'\nexit 0",
+        Grants::Denied => "printf 'denied /h/.codeflow/locks: Operation not permitted (os error 1)\\nwritable /r/.git/codeflow\\nwritable /r/.git/objects\\nwritable /r/.git/refs\\n'\nexit 1",
+        Grants::FailsAfterProbe => "printf 'writable /h/.codeflow/locks\\nwritable /r/.git/codeflow\\nwritable /r/.git/objects\\nwritable /r/.git/refs\\n'\necho 'Error: sandbox teardown failed' >&2\nexit 1",
         Grants::Aborts => "exit 134",
     };
     let script = format!(
@@ -308,7 +320,7 @@ fn a_codex_that_loads_the_project_config_is_reported_with_the_exact_overrides() 
         .filter(|l| l.contains("|features list"))
         .collect();
     assert_eq!(loads.len(), 2, "{log}");
-    let expected = "features list -c permissions.cf-builder.description=\"CodeFlow builder seat\" -c permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\",\"~/.codeflow/gate-runs\"=\"write\"} -c default_permissions=\"cf-builder\"";
+    let expected = "features list -c permissions.cf-builder.description=\"CodeFlow builder seat\" -c permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\"} -c default_permissions=\"cf-builder\"";
     for load in &loads {
         assert!(load.ends_with(&format!("|{expected}")), "{load}");
     }
@@ -496,8 +508,9 @@ fn output_over_the_capture_bound_is_unavailable() {
 
 /// TSK-337: the grant check runs `codex sandbox` once, from the builder
 /// launch root, with every launch override but the selection, `-P
-/// cf-builder`, and the permissions check of this `codeflow`; the real
-/// check's pass is reported effective and the preflight exits 0.
+/// cf-builder`, the managed config, and the write probe of this
+/// `codeflow`; the real probe's pass names the folders it wrote and the
+/// preflight exits 0.
 #[cfg(unix)]
 #[test]
 fn the_builder_grants_are_checked_inside_codex_sandbox_from_the_launch_root() {
@@ -505,12 +518,20 @@ fn the_builder_grants_are_checked_inside_codex_sandbox_from_the_launch_root() {
     let (line, bin) = builder_line(project.path(), Fake::LoadsProject);
     let project_dir = std::fs::canonicalize(project.path()).unwrap();
     assert!(
-        line.ends_with(&format!(
-            "; builder grants: observed effective from {} under `codex sandbox` with the launch overrides: the gate lock folders and the gate evidence folder are writable",
+        line.contains(&format!(
+            "; builder grants: observed effective from {} under `codex sandbox` with the launch overrides and managed config: wrote ",
             project_dir.display()
         )),
         "{line}"
     );
+    for folder in [
+        "personal/locks",
+        ".git/codeflow",
+        ".git/objects",
+        ".git/refs",
+    ] {
+        assert!(line.contains(folder), "{folder}: {line}");
+    }
     let log = std::fs::read_to_string(bin.path().join("codex.log")).unwrap();
     let runs: Vec<&str> = log.lines().filter(|l| l.contains("|sandbox ")).collect();
     assert_eq!(runs.len(), 1, "{log}");
@@ -518,17 +539,18 @@ fn the_builder_grants_are_checked_inside_codex_sandbox_from_the_launch_root() {
     assert_eq!(std::fs::canonicalize(cwd).unwrap(), project_dir);
     assert!(
         args.starts_with(&format!(
-            "sandbox -C {} -c permissions.cf-builder.description=\"CodeFlow builder seat\" -c permissions.cf-builder.filesystem={{\"~/.codeflow/locks\"=\"write\",\"~/.codeflow/gate-runs\"=\"write\"}} -P cf-builder -- ",
+            "sandbox -C {} -c permissions.cf-builder.description=\"CodeFlow builder seat\" -c permissions.cf-builder.filesystem={{\"~/.codeflow/locks\"=\"write\"}} -P cf-builder --include-managed-config -- ",
             project_dir.display()
         )),
         "{args}"
     );
-    assert!(args.ends_with(" doctor --check permissions"), "{args}");
+    assert!(args.ends_with(" doctor --builder-write-probe"), "{args}");
 }
 
 /// TSK-337: a grant that is not effective from the launch root fails the
 /// preflight (exit 1) and names the refused folder; a sandbox that runs
-/// nothing is unavailable, never effective, and does not fail it.
+/// nothing, or that fails after a clean probe, is unavailable, never
+/// effective, keeps its error text, and says readiness is not established.
 #[cfg(unix)]
 #[test]
 fn a_builder_grant_that_is_not_effective_fails_the_preflight() {
@@ -542,8 +564,11 @@ fn a_builder_grant_that_is_not_effective_fails_the_preflight() {
         .unwrap();
     assert!(
         line.contains("builder grants: observed NOT EFFECTIVE from ")
-            && line.contains("/h/.codeflow/locks: Operation not permitted")
-            && line.contains("cannot run `codeflow reserve` or a gate there"),
+            && line.contains("denied /h/.codeflow/locks: Operation not permitted")
+            && !line.contains("/r/.git/refs")
+            && line.contains(
+                "cannot run `codeflow reserve`, a quick-mode heavy target or a commit there"
+            ),
         "{line}"
     );
 
@@ -551,9 +576,18 @@ fn a_builder_grant_that_is_not_effective_fails_the_preflight() {
     let (code, out) = preflight_status(project.path(), bin.path());
     assert_eq!(code, Some(0), "{out}");
     assert!(
-        out.contains("builder grants: unavailable: codex sandbox printed no permissions result (exit code 134); whether a builder seat can write the gate folders is unverified"),
+        out.contains("builder grants: unavailable: codex sandbox gave no complete write-probe result (exit code 134); builder readiness is not established, so a builder seat's own writes are the evidence"),
         "{out}"
     );
+
+    let bin = fake_codex_with(Fake::LoadsProject, Grants::FailsAfterProbe);
+    let (code, out) = preflight_status(project.path(), bin.path());
+    assert_eq!(code, Some(0), "{out}");
+    assert!(
+        out.contains("builder grants: unavailable: codex sandbox gave no complete write-probe result (exit code 1): Error: sandbox teardown failed; builder readiness is not established"),
+        "{out}"
+    );
+    assert!(!out.contains("observed effective"), "{out}");
 }
 
 /// TSK-337: a refusal of the overrides fails the preflight too, and no

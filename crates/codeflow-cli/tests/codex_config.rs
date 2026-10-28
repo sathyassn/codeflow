@@ -178,7 +178,7 @@ fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
         let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let required: &[&str] = if relative == transport {
             &[
-                "`--ask-for-approval never -c 'permissions.cf-builder.description=\"CodeFlow builder seat\"' -c 'permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\",\"~/.codeflow/gate-runs\"=\"write\"}' -c default_permissions=\"cf-builder\"`, no `--sandbox` flag",
+                "`--ask-for-approval never -c 'permissions.cf-builder.description=\"CodeFlow builder seat\"' -c 'permissions.cf-builder.filesystem={\"~/.codeflow/locks\"=\"write\"}' -c default_permissions=\"cf-builder\"`, no `--sandbox` flag",
                 "The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05",
                 "`--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies",
             ]
@@ -369,10 +369,11 @@ fn the_launch_grant_override_equals_the_shipped_home_grants() {
 }
 
 /// TSK-1003, TSK-337: the builder writes `~/.codeflow/locks` for `codeflow
-/// reserve` and `~/.codeflow/gate-runs` for full-gate evidence, and nothing
-/// else under the home folder; `cf-guard` writes neither.
+/// reserve` and quick-mode heavy targets, and nothing else under the home
+/// folder; `~/.codeflow/gate-runs` stays unwritable, since full gates and
+/// their evidence stay with the primary; `cf-guard` writes neither.
 #[test]
-fn cf_builder_home_writes_are_only_the_gate_folders() {
+fn cf_builder_home_writes_are_only_the_lock_folder() {
     let cfg = shipped_config();
     let fs = cfg["permissions"]["cf-builder"]["filesystem"]
         .as_table()
@@ -383,7 +384,11 @@ fn cf_builder_home_writes_are_only_the_gate_folders() {
         .map(|(key, _)| key.as_str())
         .collect();
     writes.sort_unstable();
-    assert_eq!(writes, ["~/.codeflow/gate-runs", "~/.codeflow/locks"]);
+    assert_eq!(writes, ["~/.codeflow/locks"]);
+    assert!(
+        !fs.keys().any(|key| key.contains("gate-runs")),
+        "cf-builder names the gate evidence folder"
+    );
     let guard = cf_guard(&cfg, "filesystem");
     assert!(
         !guard.keys().any(|key| key.starts_with("~/.codeflow")),

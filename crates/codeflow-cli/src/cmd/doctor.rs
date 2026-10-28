@@ -16,10 +16,15 @@ pub struct DoctorArgs {
     pub list: bool,
     /// Print the seat, sandbox and tool evidence the orchestrator preflight
     /// reads, each value marked configured, observed or unavailable; exit 1
-    /// when Codex refuses the builder launch or a builder grant is not
-    /// effective.
+    /// when Codex refuses the builder launch or a builder write is refused.
     #[arg(long, conflicts_with_all = ["check", "list"])]
     pub preflight: bool,
+    /// Internal (TSK-337): print whether this process can write each folder
+    /// a Codex builder seat writes outside its worktree, one line each, and
+    /// exit 1 when one is denied. The preflight runs it inside `codex
+    /// sandbox` under the builder launch.
+    #[arg(long, hide = true, conflicts_with_all = ["check", "list", "preflight"])]
+    pub builder_write_probe: bool,
 }
 
 /// Run doctor checks; exit 0 when healthy (warnings allowed), 1 on failures.
@@ -45,6 +50,25 @@ pub fn run(args: &DoctorArgs) -> i32 {
         );
         for line in lines {
             let _ = term_writeln!(out, "{line}");
+        }
+        return i32::from(failed);
+    }
+    if args.builder_write_probe {
+        let mut out = std::io::stdout();
+        let mut failed = false;
+        for (dir, result) in
+            codeflow_core::testing::gate_guard::builder_write_probe(&root, home.as_deref())
+        {
+            let dir = shown(&dir.display());
+            match result {
+                Ok(()) => {
+                    let _ = term_writeln!(out, "writable {dir}");
+                }
+                Err(error) => {
+                    failed = true;
+                    let _ = term_writeln!(out, "denied {dir}: {}", shown(&error));
+                }
+            }
         }
         return i32::from(failed);
     }
@@ -315,15 +339,14 @@ fn sandbox_lines(root: &std::path::Path) -> Vec<String> {
 
 /// What the installed Codex says about the builder launch overrides
 /// (TSK-1003, TSK-337), with `true` when it observed a failure: a refusal,
-/// or a grant that is not effective. This is the one preflight value that
-/// runs a binary: `codex --version` and `codex features list` with the
+/// or a write the launch does not give. This is the one preflight value
+/// that runs a binary: `codex --version` and `codex features list` with the
 /// overrides, which load config and start no model, session or sandbox,
-/// and then `codex sandbox` with the same overrides running `codeflow
-/// doctor --check permissions` (the `codeflow` at `codeflow`, this
-/// process) from the folder a builder seat starts in, the main checkout
-/// root. An exit code of 0 shows only that Codex accepted the command;
-/// whether the project config loaded is read from the feature table, and
-/// is otherwise unverified.
+/// and then `codex sandbox` with the same overrides and the managed config
+/// running `codeflow doctor --builder-write-probe` (the `codeflow` at
+/// `codeflow`, this process) from the folder a builder seat starts in, the
+/// main checkout root. When that run gives no result, the line says
+/// readiness is not established and the preflight does not fail on it.
 fn codex_builder_line(
     project: &std::path::Path,
     look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
@@ -339,27 +362,30 @@ fn codex_builder_line(
     };
     let Some(codeflow) = codeflow else {
         return (
-            format!("{line}; builder grants: unavailable: doctor cannot name its own binary to run the permissions check"),
+            format!("{line}; builder grants: unavailable: doctor cannot name its own binary to run the write probe; builder readiness is not established"),
             false,
         );
     };
     let root = codeflow_core::doctor::builder_launch_root(project);
     let place = shown(&root.display());
     match codeflow_core::doctor::probe_codex_builder_grants(&root, &codex, codeflow) {
-        GrantCheck::Effective => (
-            format!("{line}; builder grants: observed effective from {place} under `codex sandbox` with the launch overrides: the gate lock folders and the gate evidence folder are writable"),
+        GrantCheck::Effective(dirs) => (
+            format!(
+                "{line}; builder grants: observed effective from {place} under `codex sandbox` with the launch overrides and managed config: wrote {}",
+                shown(&dirs.join(", "))
+            ),
             false,
         ),
         GrantCheck::NotEffective(message) => (
             format!(
-                "{line}; builder grants: observed NOT EFFECTIVE from {place} under `codex sandbox` with the launch overrides: {}; a builder seat launched as transport.md says cannot run `codeflow reserve` or a gate there",
+                "{line}; builder grants: observed NOT EFFECTIVE from {place} under `codex sandbox` with the launch overrides and managed config: {}; a builder seat launched as transport.md says cannot run `codeflow reserve`, a quick-mode heavy target or a commit there",
                 shown(&message)
             ),
             true,
         ),
         GrantCheck::NotRun(reason) => (
             format!(
-                "{line}; builder grants: unavailable: {}; whether a builder seat can write the gate folders is unverified",
+                "{line}; builder grants: unavailable: {}; builder readiness is not established, so a builder seat's own writes are the evidence",
                 shown(&reason)
             ),
             false,
@@ -587,6 +613,7 @@ mod tests {
             check: check.map(ToString::to_string),
             list,
             preflight: false,
+            builder_write_probe: false,
         }
     }
 

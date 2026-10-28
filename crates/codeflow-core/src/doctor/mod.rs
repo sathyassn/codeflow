@@ -2285,7 +2285,7 @@ fn check_permissions(opts: &Options) -> CheckResult {
     } else {
         String::new()
     };
-    let unwritable = if opts.project_dir.is_empty() {
+    let mut unwritable = if opts.project_dir.is_empty() {
         Vec::new()
     } else {
         crate::testing::gate_guard::unwritable_gate_dirs(
@@ -2295,18 +2295,24 @@ fn check_permissions(opts: &Options) -> CheckResult {
     };
     // What the project's Codex profiles grant on the same folders (TSK-337
     // AC-6). Reported only: the status stays the write probe's, because a
-    // builder seat's launch also carries these grants and doctor
+    // builder seat's launch also carries the lock grant and doctor
     // --preflight runs that check under the real profile.
     let codex = if opts.project_dir.is_empty() {
         String::new()
     } else {
-        codex_gate_grants(Path::new(&opts.project_dir))
+        let home = opts.env("HOME").map(PathBuf::from);
+        codex_gate_grants(Path::new(&opts.project_dir), home.as_deref())
             .map(|report| format!("; {report}"))
             .unwrap_or_default()
     };
     let in_codex = opts
         .env("CODEX_SANDBOX")
         .is_some_and(|value| !value.is_empty());
+    let by_design = if in_codex {
+        codex_evidence_by_design(opts.codeflow_home.as_deref(), &mut unwritable)
+    } else {
+        String::new()
+    };
     if !unwritable.is_empty() {
         let paths: Vec<String> = unwritable
             .iter()
@@ -2331,92 +2337,232 @@ fn check_permissions(opts: &Options) -> CheckResult {
             name: "permissions".into(),
             status: Status::Warn(step.with(&[("paths", &paths.join(", "))])),
             message: format!(
-                "essential and full gates cannot write their lock or evidence directories, so `codeflow test --mode essential` or `--mode full` refuses or fails here ({}){sandbox}{codex}",
+                "essential and full gates cannot write their lock or evidence directories, so `codeflow test --mode essential` or `--mode full` refuses or fails here ({}){sandbox}{by_design}{codex}",
                 errors.join("; ")
             ),
             duration: start.elapsed(),
         };
     }
 
+    let writable = if by_design.is_empty() {
+        "the essential and full gate lock and evidence directories are writable"
+    } else {
+        "the gate lock directories are writable, so `codeflow reserve` and quick-mode heavy targets can run here"
+    };
     CheckResult {
         name: "permissions".into(),
         status: Status::Pass,
-        message: format!(
-            "file permissions correct; the essential and full gate lock and evidence directories are writable{sandbox}{codex}"
-        ),
+        message: format!("file permissions correct; {writable}{sandbox}{by_design}{codex}"),
         duration: start.elapsed(),
     }
 }
 
-/// The two home folders a gate writes, as Codex profile keys.
-const CODEX_GATE_GRANTS: [&str; 2] = ["~/.codeflow/locks", "~/.codeflow/gate-runs"];
+/// No Codex seat writes the gate evidence folder (TSK-337 AC-5): full gates
+/// and their evidence stay with the primary. So inside a Codex sandbox an
+/// unwritable evidence folder under `home` is taken out of `unwritable` and
+/// reported instead, as this note; nothing when it was writable.
+fn codex_evidence_by_design(
+    home: Option<&Path>,
+    unwritable: &mut Vec<(PathBuf, std::io::Error)>,
+) -> String {
+    let Some(evidence) = home.map(|home| home.join(crate::testing::gate_guard::HOME_EVIDENCE_DIR))
+    else {
+        return String::new();
+    };
+    if !unwritable.iter().any(|(dir, _)| *dir == evidence) {
+        return String::new();
+    }
+    unwritable.retain(|(dir, _)| *dir != evidence);
+    format!(
+        "; `{}` is not writable in a Codex seat, by design: full gates and their evidence stay with the primary",
+        crate::git::display_path(&evidence)
+    )
+}
+
+/// The two home folders a gate writes, under the home folder.
+const CODEX_GATE_GRANTS: [&str; 2] = [".codeflow/locks", ".codeflow/gate-runs"];
+
+/// What one Codex profile's filesystem entries say about one folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexGrant {
+    Write,
+    NotWrite,
+    /// A pattern or special path that may cover the folder, which doctor
+    /// does not resolve.
+    Unresolved,
+}
+
+/// What `entries`, a profile's filesystem table with its `extends` chain
+/// merged in, grant on `~/<folder>` (TSK-337). The most specific entry that
+/// covers the folder decides: the folder itself or an ancestor, as a `~`
+/// path or, when `home` is known, an absolute path. An entry that may cover
+/// the folder but that doctor does not resolve (a special `:` path, a
+/// pattern under the folder or an ancestor, or an absolute path when `home`
+/// is unknown) leaves it unresolved. Workspace-relative entries never cover
+/// a home folder.
+fn codex_grant(
+    entries: &BTreeMap<String, String>,
+    folder: &str,
+    home: Option<&Path>,
+) -> CodexGrant {
+    let tilde = Path::new("~").join(folder);
+    let absolute = home.map(|home| home.join(folder));
+    // Whether a folder `dir` (a `~` or absolute path) is the target, an
+    // ancestor of it or inside it; `None` when that needs an unknown home.
+    let related = |dir: &Path, below: bool| -> Option<bool> {
+        let target = if dir.starts_with("~") {
+            tilde.as_path()
+        } else {
+            absolute.as_deref()?
+        };
+        Some(target.starts_with(dir) || below && dir.starts_with(target))
+    };
+    let depth_of = |dir: &Path| -> usize {
+        let count = dir.components().count();
+        match (dir.starts_with("~"), home) {
+            (true, Some(home)) => count + home.components().count() - 1,
+            _ => count,
+        }
+    };
+    let mut best: Option<(usize, bool)> = None;
+    for (key, value) in entries {
+        if key.starts_with(':') {
+            return CodexGrant::Unresolved;
+        }
+        if !(key == "~" || key.starts_with("~/") || key.starts_with('/')) {
+            continue;
+        }
+        if let Some(at) = key.find(['*', '?', '[', '{']) {
+            let literal = &key[..at];
+            let dir = match literal.rfind('/') {
+                Some(0) => "/",
+                Some(slash) => &literal[..slash],
+                None => literal,
+            };
+            if related(Path::new(dir), true) != Some(false) {
+                return CodexGrant::Unresolved;
+            }
+            continue;
+        }
+        let dir = Path::new(key.as_str());
+        match related(dir, false) {
+            None => return CodexGrant::Unresolved,
+            Some(false) => {}
+            Some(true) => {
+                let depth = depth_of(dir);
+                if best.is_none_or(|(deepest, _)| depth > deepest) {
+                    best = Some((depth, value == "write"));
+                }
+            }
+        }
+    }
+    match best {
+        Some((_, true)) => CodexGrant::Write,
+        _ => CodexGrant::NotWrite,
+    }
+}
 
 /// What the `cf-builder` and `cf-guard` profiles in `.codex/config.toml`
 /// grant on the gate's home folders, following `extends` within the file
 /// (TSK-337 AC-6). `None` when the file is absent or defines neither
 /// profile. This reads configuration; the effective boundary of a seat is
 /// what `codeflow doctor --preflight` observes.
-fn codex_gate_grants(project: &Path) -> Option<String> {
+fn codex_gate_grants(project: &Path, home: Option<&Path>) -> Option<String> {
     let path = project.join(".codex/config.toml");
     let text = crate::bounded_file::read_regular_to_string(&path).ok()?;
     let Ok(config) = text.parse::<toml::Table>() else {
         return Some("Codex profiles: unavailable: .codex/config.toml is not valid TOML".into());
     };
     let profiles = config.get("permissions").and_then(toml::Value::as_table)?;
-    let writes = |name: &str| -> Option<Vec<&'static str>> {
+    let grants = |name: &str| -> Option<Vec<CodexGrant>> {
         profiles.get(name)?;
-        let mut granted = Vec::new();
-        for grant in CODEX_GATE_GRANTS {
-            let mut current = Some(name.to_string());
-            let mut seen = std::collections::BTreeSet::new();
-            while let Some(profile) = current.take() {
-                if !seen.insert(profile.clone()) {
-                    break;
+        // The profile and its `extends` chain; an entry of a profile nearer
+        // `name` replaces its parent's.
+        let mut chain = Vec::new();
+        let mut current = Some(name.to_string());
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(profile) = current.take() {
+            if !seen.insert(profile.clone()) {
+                break;
+            }
+            let table = profiles.get(&profile).and_then(toml::Value::as_table);
+            chain.push(table);
+            current = table
+                .and_then(|table| table.get("extends"))
+                .and_then(toml::Value::as_str)
+                .map(str::to_string);
+        }
+        let mut entries = BTreeMap::new();
+        for table in chain.into_iter().rev().flatten() {
+            let filesystem = table.get("filesystem").and_then(toml::Value::as_table);
+            for (key, value) in filesystem.into_iter().flatten() {
+                if let Some(value) = value.as_str() {
+                    entries.insert(key.clone(), value.to_string());
                 }
-                let table = profiles.get(&profile).and_then(toml::Value::as_table);
-                let value = table
-                    .and_then(|table| table.get("filesystem"))
-                    .and_then(toml::Value::as_table)
-                    .and_then(|filesystem| filesystem.get(grant))
-                    .and_then(toml::Value::as_str);
-                if let Some(value) = value {
-                    if value == "write" {
-                        granted.push(grant);
-                    }
-                    break;
-                }
-                current = table
-                    .and_then(|table| table.get("extends"))
-                    .and_then(toml::Value::as_str)
-                    .map(str::to_string);
             }
         }
-        Some(granted)
+        Some(
+            CODEX_GATE_GRANTS
+                .iter()
+                .map(|folder| codex_grant(&entries, folder, home))
+                .collect(),
+        )
     };
-    let describe = |name: &str, granted: Option<Vec<&str>>| match granted {
-        None => format!("{name} is not defined"),
-        Some(granted) if granted.is_empty() => format!("{name} writes neither"),
-        Some(granted) => format!("{name} writes {}", granted.join(" and ")),
+    let describe = |name: &str, grants: Option<&Vec<CodexGrant>>| {
+        let Some(grants) = grants else {
+            return format!("{name} is not defined");
+        };
+        let named = |wanted: CodexGrant| -> Vec<String> {
+            CODEX_GATE_GRANTS
+                .iter()
+                .zip(grants)
+                .filter(|(_, grant)| **grant == wanted)
+                .map(|(folder, _)| format!("~/{folder}"))
+                .collect()
+        };
+        let mut parts = Vec::new();
+        let written = named(CodexGrant::Write);
+        if !written.is_empty() {
+            parts.push(format!("writes {}", written.join(" and ")));
+        }
+        let not_written = named(CodexGrant::NotWrite);
+        if !not_written.is_empty() {
+            parts.push(format!("does not write {}", not_written.join(" or ")));
+        }
+        let unresolved = named(CodexGrant::Unresolved);
+        if !unresolved.is_empty() {
+            parts.push(format!(
+                "has an entry that may cover {} and that doctor does not resolve",
+                unresolved.join(" and ")
+            ));
+        }
+        format!("{name} {}", parts.join(", "))
     };
-    let builder = writes("cf-builder");
-    let guard = writes("cf-guard");
+    let builder = grants("cf-builder");
+    let guard = grants("cf-guard");
     if builder.is_none() && guard.is_none() {
         return None;
     }
-    let missing: Vec<&str> = builder.as_ref().map_or_else(Vec::new, |granted| {
-        CODEX_GATE_GRANTS
-            .into_iter()
-            .filter(|grant| !granted.contains(grant))
-            .collect()
-    });
     let mut report = format!(
         "Codex profiles in .codex/config.toml: {}; {}",
-        describe("cf-builder", builder),
-        describe("cf-guard", guard)
+        describe("cf-builder", builder.as_ref()),
+        describe("cf-guard", guard.as_ref())
     );
-    if !missing.is_empty() {
+    if builder
+        .as_ref()
+        .is_some_and(|grants| grants[0] != CodexGrant::Write)
+    {
         report.push_str(
-            " (the shipped cf-builder writes both; a builder seat still gets them from its launch overrides, and `codeflow update` restores the shipped profile)",
+            " (the shipped cf-builder writes ~/.codeflow/locks; a builder seat still gets it from its launch override, and `codeflow update` restores the shipped profile)",
+        );
+    }
+    if [&builder, &guard]
+        .into_iter()
+        .flatten()
+        .any(|grants| grants[1] != CodexGrant::NotWrite)
+    {
+        report.push_str(
+            " (the shipped profiles leave ~/.codeflow/gate-runs unwritable: full gates and their evidence stay with the primary)",
         );
     }
     Some(report)
@@ -6417,6 +6563,75 @@ mod tests {
         assert!(remedy.to_string().contains("allowWrite"), "{remedy}");
     }
 
+    /// TSK-337 review fix 5: the most specific covering entry decides, in
+    /// `~` or absolute form, and an entry doctor cannot place is unresolved.
+    #[test]
+    fn codex_grants_resolve_the_most_specific_covering_entry() {
+        let entries = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect()
+        };
+        let home = Path::new("/home/someone");
+        let grant = |pairs: &[(&str, &str)], home: Option<&Path>| {
+            codex_grant(&entries(pairs), ".codeflow/locks", home)
+        };
+        assert_eq!(grant(&[], Some(home)), CodexGrant::NotWrite);
+        assert_eq!(
+            grant(&[("/home/someone", "write")], Some(home)),
+            CodexGrant::Write
+        );
+        assert_eq!(
+            grant(
+                &[("/home/someone", "write"), ("~/.codeflow", "read")],
+                Some(home)
+            ),
+            CodexGrant::NotWrite
+        );
+        assert_eq!(
+            grant(
+                &[("~", "read"), ("/home/someone/.codeflow/locks", "write")],
+                Some(home)
+            ),
+            CodexGrant::Write
+        );
+        assert_eq!(grant(&[("/", "write")], Some(home)), CodexGrant::Write);
+        assert_eq!(
+            grant(&[("/home/other", "write")], Some(home)),
+            CodexGrant::NotWrite
+        );
+        assert_eq!(
+            grant(&[("/home/someone", "write")], None),
+            CodexGrant::Unresolved
+        );
+        assert_eq!(grant(&[("~/.codeflow", "write")], None), CodexGrant::Write);
+        assert_eq!(
+            grant(&[(".codeflow", "write")], Some(home)),
+            CodexGrant::NotWrite
+        );
+        assert_eq!(
+            grant(&[(":root", "write")], Some(home)),
+            CodexGrant::Unresolved
+        );
+        assert_eq!(
+            grant(&[("~/.ssh/**", "deny")], Some(home)),
+            CodexGrant::NotWrite
+        );
+        assert_eq!(
+            grant(&[("~/.code*", "write")], Some(home)),
+            CodexGrant::Unresolved
+        );
+        assert_eq!(
+            grant(&[("~/.codeflow/locks/*.lock", "deny")], Some(home)),
+            CodexGrant::Unresolved
+        );
+        assert_eq!(
+            grant(&[("/etc/**", "read")], Some(home)),
+            CodexGrant::NotWrite
+        );
+    }
+
     /// TSK-337 AC-6: the permissions check reports the Codex profiles'
     /// grants on the gate's home folders, with and without them, and inside
     /// a Codex sandbox its remedy is the builder relaunch.
@@ -6425,6 +6640,12 @@ mod tests {
         fn in_codex(name: &str) -> Option<std::ffi::OsString> {
             (name == "CODEX_SANDBOX").then(|| "seatbelt".into())
         }
+        fn no_env(_: &str) -> Option<std::ffi::OsString> {
+            None
+        }
+        fn with_home(name: &str) -> Option<std::ffi::OsString> {
+            (name == "HOME").then(|| "/home/someone".into())
+        }
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
         std::fs::create_dir_all(project.join(".codeflow")).unwrap();
@@ -6432,6 +6653,7 @@ mod tests {
         git2::Repository::init(&project).unwrap();
         let mut opts = test_opts();
         opts.project_dir = project.to_string_lossy().to_string();
+        opts.env_var = Some(with_home);
         opts.codeflow_home = Some(dir.path().join("home"));
         let config = project.join(".codex/config.toml");
 
@@ -6443,11 +6665,12 @@ mod tests {
         let result = check_permissions(&opts);
         assert_eq!(result.status, Status::Pass, "{}", result.message);
         assert!(
-            result.message.contains("Codex profiles in .codex/config.toml: cf-builder writes ~/.codeflow/locks and ~/.codeflow/gate-runs; cf-guard writes neither"),
+            result.message.contains("Codex profiles in .codex/config.toml: cf-builder writes ~/.codeflow/locks, does not write ~/.codeflow/gate-runs; cf-guard does not write ~/.codeflow/locks or ~/.codeflow/gate-runs"),
             "{}",
             result.message
         );
         assert!(!result.message.contains("restores"), "{}", result.message);
+        assert!(!result.message.contains("unwritable"), "{}", result.message);
 
         // The table from before TSK-1003, as this repository's main checkout
         // had it on 2026-10-27; inheritance through `extends` counts.
@@ -6461,7 +6684,7 @@ mod tests {
         assert!(
             result
                 .message
-                .contains("cf-builder writes neither; cf-guard writes neither (the shipped cf-builder writes both"),
+                .contains("cf-builder does not write ~/.codeflow/locks or ~/.codeflow/gate-runs; cf-guard does not write ~/.codeflow/locks or ~/.codeflow/gate-runs (the shipped cf-builder writes ~/.codeflow/locks"),
             "{}",
             result.message
         );
@@ -6474,7 +6697,43 @@ mod tests {
         assert!(
             result
                 .message
-                .contains("cf-builder writes ~/.codeflow/locks; cf-guard writes ~/.codeflow/locks"),
+                .contains("cf-builder writes ~/.codeflow/locks, does not write ~/.codeflow/gate-runs; cf-guard writes ~/.codeflow/locks, does not write"),
+            "{}",
+            result.message
+        );
+        // Fix 5 of the TSK-337 review: a grant on a covering ancestor
+        // counts, a more specific entry overrides it, a child's entry
+        // replaces its parent's, and an entry doctor cannot resolve is said.
+        std::fs::write(
+            &config,
+            "[permissions.cf-guard.filesystem]\n\"~/.codeflow\" = \"write\"\n\"~/.codeflow/gate-runs\" = \"read\"\n[permissions.cf-builder]\nextends = \"cf-guard\"\n[permissions.cf-builder.filesystem]\n\"~/.codeflow\" = \"read\"\n\"~/.codeflow/locks/\" = \"write\"\n",
+        )
+        .unwrap();
+        let result = check_permissions(&opts);
+        assert!(
+            result
+                .message
+                .contains("cf-builder writes ~/.codeflow/locks, does not write ~/.codeflow/gate-runs; cf-guard writes ~/.codeflow/locks, does not write ~/.codeflow/gate-runs"),
+            "{}",
+            result.message
+        );
+        std::fs::write(
+            &config,
+            "[permissions.cf-guard.filesystem]\n\"~\" = \"write\"\n\"~/.ssh/**\" = \"deny\"\n[permissions.cf-builder]\nextends = \"cf-guard\"\n[permissions.cf-builder.filesystem]\n\"~/.codeflow/*\" = \"write\"\n",
+        )
+        .unwrap();
+        let result = check_permissions(&opts);
+        assert!(
+            result
+                .message
+                .contains("cf-builder has an entry that may cover ~/.codeflow/locks and ~/.codeflow/gate-runs and that doctor does not resolve; cf-guard writes ~/.codeflow/locks and ~/.codeflow/gate-runs (the shipped cf-builder writes ~/.codeflow/locks"),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("leave ~/.codeflow/gate-runs unwritable"),
             "{}",
             result.message
         );
@@ -6495,6 +6754,35 @@ mod tests {
         assert!(remedy.contains("transport.md"), "{remedy}");
         assert!(remedy.contains("cf-guard"), "{remedy}");
         assert!(!remedy.contains("allowWrite"), "{remedy}");
+
+        // TSK-337 AC-5: in a Codex seat the evidence folder is unwritable by
+        // design; the lock folders decide the status.
+        let home = dir.path().join("evidence-blocked");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("gate-runs"), "file").unwrap();
+        opts.codeflow_home = Some(home.clone());
+        let result = check_permissions(&opts);
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+        assert!(
+            result
+                .message
+                .contains("not writable in a Codex seat, by design"),
+            "{}",
+            result.message
+        );
+        assert!(
+            result.message.contains("lock directories are writable"),
+            "{}",
+            result.message
+        );
+        opts.env_var = Some(no_env);
+        let result = check_permissions(&opts);
+        assert!(
+            matches!(result.status, Status::Warn(_)),
+            "{}",
+            result.message
+        );
+        assert!(!result.message.contains("by design"), "{}", result.message);
     }
 
     /// TSK-216 AC-3: in the sandbox the network probe is an HTTPS request,
