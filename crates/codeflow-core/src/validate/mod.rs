@@ -725,7 +725,7 @@ fn outcome_findings(
 ) -> (Vec<ValidationError>, Vec<ValidationWarning>) {
     use crate::workgraph::outcome::{Adoption, MARKER_KEY};
     use crate::workgraph::record_text::{epic_names_deliverables, outcome_line, OutcomeLine};
-    const RAW: &str = "a raw `<who>` or `<do what>` renders as HTML, so readers see nothing; put a token you mean to show in a code span";
+    const RAW: &str = "a template token in an Outcome must be in a code span, such as `` `<who>` ``; a raw token, including an escaped, entity-encoded or respaced one, is refused";
 
     let mut errors = Vec::new();
     let mut warnings = Vec::new();

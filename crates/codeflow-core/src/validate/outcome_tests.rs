@@ -196,6 +196,10 @@ fn the_template_formatted_or_respaced_is_refused() {
         "after this merges, < who > can run the audit",
         "after this merges,  <who>   can   <do what>",
         "after  this\n  merges, `<who>`\tcan `<do what>`",
+        "af**ter** this merges, `<who>` can `<do what>`",
+        "after this merges, `<who>` c*an* `<do what>`",
+        "`after,this,merges,<who>,can,<do what>`",
+        "after this merges, [`<who>`](https://example.com) can `<do what>`",
     ] {
         let body = Body {
             outcome: Some(outcome),
@@ -211,9 +215,10 @@ fn the_template_formatted_or_respaced_is_refused() {
     assert!(wrong.is_empty(), "accepted:\n{}", wrong.join("\n"));
 }
 
-/// A raw template token outside a code span renders as HTML, so a reader
-/// sees nothing: it is refused wherever it stands, inside quotation marks
-/// too, and the message says to put a token meant to show in a code span.
+/// A template token in an Outcome must be in a code span: a raw one is
+/// refused wherever it stands, inside quotation marks too, and so is an
+/// escaped, entity-encoded or respaced one, which shows but is not quoted.
+/// The message states that requirement.
 #[test]
 fn a_raw_token_is_refused_even_inside_quotation_marks() {
     let marker = marked(&[OLD]);
@@ -223,6 +228,9 @@ fn a_raw_token_is_refused_even_inside_quotation_marks() {
         "After this merges, authors can explain \u{201c}<who> placeholder\u{201d} to contributors.",
         "After this merges, authors can explain the < Do What > slot to contributors.",
         "after this merges, maintainers can <do  what>",
+        "Authors can explain \\<who\\> to readers.",
+        "Authors can explain &lt;who&gt; to readers.",
+        "Authors can explain < who > to readers.",
     ] {
         let body = Body {
             outcome: Some(outcome),
@@ -230,7 +238,7 @@ fn a_raw_token_is_refused_even_inside_quotation_marks() {
         };
         for kind in [Kind::Task, Kind::Epic] {
             let (errors, _) = findings(Some(&marker), kind, open(kind)[0], NEW, body);
-            if !(errors.len() == 1 && errors[0].contains("code span")) {
+            if !(errors.len() == 1 && errors[0].contains("must be in a code span")) {
                 wrong.push(format!("{outcome:?}: {errors:?}"));
             }
         }

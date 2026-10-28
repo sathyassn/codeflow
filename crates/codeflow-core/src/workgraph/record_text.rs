@@ -616,8 +616,9 @@ pub enum OutcomeLine {
     /// the template's tokens and words in any formatting.
     Unfilled,
     /// A template token, `<who>` or `<do what>` in any case or spacing,
-    /// outside a code span. Markdown renders it as HTML, so a reader sees
-    /// nothing; quoted in a code span it shows.
+    /// outside a code span. A token in an Outcome must be in a code span, so
+    /// a raw one is refused, and so is an escaped, entity-encoded or
+    /// respaced one.
     RawToken,
 }
 
@@ -625,8 +626,9 @@ pub enum OutcomeLine {
 /// judge it, never the sentence's grammar: a template token outside a code
 /// span is [`OutcomeLine::RawToken`] wherever it stands, and a section
 /// whose every line holds nothing but the template's tokens and words
-/// (after, this, merges, can), formatting, quotes and punctuation set
-/// aside, is [`OutcomeLine::Unfilled`]. Comments never count.
+/// (after, this, merges, can) in its visible text, formatting, quotes,
+/// punctuation and link destinations set aside, is
+/// [`OutcomeLine::Unfilled`]. Comments never count.
 #[must_use]
 pub fn outcome_line(body: &str) -> OutcomeLine {
     let Some(text) = section_markdown(body, "## Outcome") else {
@@ -694,11 +696,15 @@ struct Reading {
 
 /// Reads a section's entries as [`has_entry`] describes. Only an Outcome
 /// section looks for its tokens in text ([`token_spans`]); a Deliverables
-/// code span is pushed as written and never scanned.
+/// code span is pushed as written and never scanned. An Outcome entry is
+/// its visible text: inline text and code joined as written, with no
+/// separator added where formatting splits a word, line breaks as spaces,
+/// and link destinations left out.
 fn read_entries(markdown: &str, form: Form) -> Reading {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
     let outcome = matches!(form, Form::Outcome);
+    let separator = if outcome { "" } else { " " };
     let mut entry = String::new();
     let mut reading = Reading {
         filled: false,
@@ -728,7 +734,7 @@ fn read_entries(markdown: &str, form: Form) -> Reading {
                 } else if form.is_token(&html) {
                     reading.raw_token |= outcome;
                     entry.push_str(&html);
-                    entry.push(' ');
+                    entry.push_str(separator);
                 }
             }
             Event::Text(text) => {
@@ -736,13 +742,14 @@ fn read_entries(markdown: &str, form: Form) -> Reading {
                     reading.raw_token = true;
                 }
                 entry.push_str(&text);
-                entry.push(' ');
+                entry.push_str(separator);
             }
             Event::Code(text) => {
                 entry.push_str(&text);
-                entry.push(' ');
+                entry.push_str(separator);
             }
-            Event::Start(Tag::Link { dest_url, .. }) => {
+            Event::SoftBreak | Event::HardBreak => entry.push(' '),
+            Event::Start(Tag::Link { dest_url, .. }) if !outcome => {
                 entry.push_str(&dest_url);
                 entry.push(' ');
             }
@@ -810,10 +817,10 @@ fn template_word(word: &str) -> bool {
         .any(|template| word.eq_ignore_ascii_case(template))
 }
 
-/// An Outcome's words, punctuation trimmed.
+/// An Outcome's words: runs of letters and digits, split at every other
+/// character, so `after,this` reads as two words.
 fn outcome_words(text: &str) -> Vec<&str> {
-    text.split_whitespace()
-        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
+    text.split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
         .collect()
 }
