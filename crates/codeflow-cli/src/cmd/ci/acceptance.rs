@@ -320,9 +320,10 @@ fn criteria(
         Some(Class::EpicLine(_) | Class::RootBranch(_)) => true,
         Some(_) => false,
         None => {
-            if root_branch_at(root, range.base)?.as_deref() == Some(branch)
-                || (branch.starts_with("integration/") && verified_line(root, range, branch))
-            {
+            let root_branch = root_branch_at(root, range.base)?.as_deref() == Some(branch);
+            let line = (!root_branch && branch.starts_with("integration/"))
+                .then(|| check_epic_line(root, branch, range.target, range.base, range.head));
+            if root_branch || matches!(line, Some(Ok(_))) {
                 true
             } else if task_id_from_branch(root, branch)
                 .map_err(|error| error.to_string())?
@@ -331,6 +332,10 @@ fn criteria(
             {
                 return Ok(Criteria::Amendment(None));
             } else {
+                // Only now are the criteria frozen, so only now say why.
+                if let Some(Err(reason)) = line {
+                    frozen_line_note(branch, &reason);
+                }
                 false
             }
         }
@@ -342,23 +347,18 @@ fn criteria(
     })
 }
 
-/// Whether `branch`, an `integration/` head judged without a pull request
-/// body, is a verified epic line. When it is not, the reason is printed
-/// once as an acceptance note, since the range is then judged as frozen
-/// task work and each completion binds at the range head (TSK-433 AC-7,
-/// issue #341); a pull request's classification already names it.
-fn verified_line(root: &Path, range: &Range<'_>, branch: &str) -> bool {
-    match check_epic_line(root, branch, range.target, range.base, range.head) {
-        Ok(_) => true,
-        Err(reason) => {
-            println!(
-                "codeflow ci: acceptance: note: '{}' is not a verified epic line, so its completions bind at the range head with frozen criteria: {}",
-                codeflow_core::git::display_text(branch),
-                codeflow_core::git::display_message(&reason)
-            );
-            false
-        }
-    }
+/// Print once why `branch`, an `integration/` head judged without a pull
+/// request body, is judged as frozen task work: it is not a verified epic
+/// line, so each completion binds at the range head (TSK-433 AC-7, issue
+/// #341). Printed only once the criteria are frozen, never when the range
+/// falls back to a planning amendment; a pull request's classification
+/// already names the reason.
+fn frozen_line_note(branch: &str, reason: &str) {
+    println!(
+        "codeflow ci: acceptance: note: '{}' is not a verified epic line, so its completions bind at the range head with frozen criteria: {}",
+        codeflow_core::git::display_text(branch),
+        codeflow_core::git::display_message(reason)
+    );
 }
 
 /// Whether the range carries only what a planning amendment may, read

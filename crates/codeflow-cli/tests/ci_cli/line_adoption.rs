@@ -121,3 +121,28 @@ fn an_unverified_line_names_its_downgrade_and_the_range_head() {
     );
     assert!(!text.contains("the completion also changes"), "{text}");
 }
+
+/// TSK-433 AC-7: an unverified line whose range carries only what a
+/// planning amendment may, here a direct record change, is judged without a
+/// pull request body as a planning amendment, never as frozen task work, so
+/// the frozen-criteria note does not print.
+#[test]
+fn an_unverified_planning_only_line_prints_no_frozen_note() {
+    let f = Line::new();
+    f.git(&["push", "-q", "origin", "main"]);
+    let path = "project-management/tasks/TSK-001.md";
+    let record = std::fs::read_to_string(f.root().join(path)).unwrap();
+    f.write(
+        path,
+        &record.replace("AC-1 Work runs.", "AC-1 The planned work runs."),
+    );
+    f.commit("docs: reword the planned work");
+    let result = f
+        .command(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["ci", "--base", "main", "--head", "HEAD", "--branch", LINE])
+        .output()
+        .unwrap();
+    let text = output(&result);
+    assert!(text.contains("acceptance binding: amendable"), "{text}");
+    assert!(!text.contains("is not a verified epic line"), "{text}");
+}
