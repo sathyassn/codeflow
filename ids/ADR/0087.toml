@@ -1,0 +1,11 @@
+id = "ADR-0087"
+uid = "3ae4f9a9-02b4-4713-90c4-95acd8d3d9ec"
+kind = "ADR"
+title = "Effort is each person's setting, not the project's"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T00:08:58Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
