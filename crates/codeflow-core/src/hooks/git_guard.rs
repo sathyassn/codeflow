@@ -3641,7 +3641,21 @@ pub(crate) fn run_dirs_from_home(
                 .get_or_insert_with(|| format!("`{name}`, which can move the shell"));
             continue;
         }
-        let mut moves_to: Vec<&str> = launcher_effects(&tokens).0;
+        let (launched_to, uncertain) = launcher_effects(&tokens);
+        if let Some(why) = uncertain {
+            run.unknown.get_or_insert(why);
+        }
+        // A launcher's directory option resolves `..` through links, as
+        // `chdir` does (TSK-1002 review 02, B4); a shell `cd` is logical.
+        for target in launched_to {
+            moves = true;
+            for dir in reach_physical_dirs(target, &mut run) {
+                if !add_run_dir(&mut run, dir) {
+                    return run;
+                }
+            }
+        }
+        let mut moves_to: Vec<&str> = Vec::new();
         match dir_move(name, args) {
             DirMove::To(target) => moves_to.push(target),
             DirMove::Stack => stacked = true,
@@ -3735,6 +3749,43 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
             ));
             reached.truncate(RUN_DIR_LIMIT);
             break;
+        }
+    }
+    reached
+}
+
+/// [`reach_dirs`] for a launcher's directory option (`env -C`), which the
+/// process resolves physically: a parent component after a link is the
+/// parent of the link's target ([`crate::security::outward::physical_join`]).
+/// A directory that cannot be resolved that way leaves the line's
+/// directory unknown.
+fn reach_physical_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
+    let parent = Path::new(target)
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir));
+    let lexical = reach_dirs(target, run);
+    if !parent || lexical.is_empty() {
+        return lexical;
+    }
+    let spelled = match target.strip_prefix("~/") {
+        Some(rest) => match run.home.clone() {
+            Some(home) => home.join(rest),
+            None => return lexical,
+        },
+        None => PathBuf::from(target),
+    };
+    let mut reached = Vec::new();
+    for dir in run.dirs.clone() {
+        match crate::security::outward::physical_join(&dir, &spelled) {
+            Some(path) => reached.push(path),
+            None => {
+                run.unknown.get_or_insert_with(|| {
+                    format!(
+                        "`{}`, a directory through a path the guard cannot resolve",
+                        shown_word(target)
+                    )
+                });
+            }
         }
     }
     reached
@@ -17220,6 +17271,27 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    /// TSK-1002 review 02, B4: an env directory option resolves `..`
+    /// through a link, a missing component before `..` is unknown, and a
+    /// second env directory option leaves the directory unknown.
+    #[cfg(unix)]
+    #[test]
+    fn test_run_dirs_resolve_launcher_directories_physically() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = crate::portable_path::canonicalize(temp.path()).unwrap();
+        std::fs::create_dir_all(base.join("other/child")).unwrap();
+        std::fs::create_dir_all(base.join("repo")).unwrap();
+        std::os::unix::fs::symlink(base.join("other/child"), base.join("repo/alias")).unwrap();
+        let repo = base.join("repo");
+        let run = run_dirs(&expand_commands("env -C alias/.. git status"), &repo);
+        assert!(run.dirs.contains(&base.join("other")), "{:?}", run.dirs);
+        assert!(run.unknown.is_none(), "{:?}", run.unknown);
+        for line in ["env -C absent/.. git status", "env -C a -C b git status"] {
+            let run = run_dirs(&expand_commands(line), &repo);
+            assert!(run.unknown.is_some(), "{line}: {:?}", run.dirs);
+        }
     }
 
     /// A refusal from a run-time directory names the substitution in
