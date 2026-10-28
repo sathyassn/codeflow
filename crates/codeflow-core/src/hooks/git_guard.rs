@@ -17254,8 +17254,16 @@ mod tests {
     /// unknown, and the work stays small (TSK-216 round 6).
     #[test]
     fn test_run_dirs_stop_at_the_limit_while_collecting() {
+        // env keeps only its last `-C` (TSK-1002 review 02), so one env
+        // with many options moves once; many env commands move many times.
         let options: Vec<String> = (0..30).map(|n| format!("-C d{n}")).collect();
-        let line = format!("env {} true", options.join(" "));
+        let one = run_dirs(
+            &expand_commands(&format!("env {} true", options.join(" "))),
+            Path::new("/r"),
+        );
+        assert_eq!(one.dirs, [PathBuf::from("/r"), PathBuf::from("/r/d29")]);
+        let commands: Vec<String> = (0..30).map(|n| format!("env -C d{n} true")).collect();
+        let line = commands.join("; ");
         let started = std::time::Instant::now();
         let run = run_dirs(&expand_commands(&line), Path::new("/r"));
         assert!(run.dirs.len() <= RUN_DIR_LIMIT, "{}", run.dirs.len());
