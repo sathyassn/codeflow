@@ -1038,7 +1038,7 @@ mod tests {
     const SHIPPED: &str = include_str!("../../../../assets/base/settings/default.json");
 
     /// Review of PR 368: a deleted attribution control or `$schema`, a
-    /// deleted `hooks` object (CodeFlow's hook commands) and a deleted
+    /// deleted `hooks` object (the codeflow hook commands) and a deleted
     /// `sandbox` object come back on update even with a recorded baseline.
     /// A deleted `permissions` array or `env` key follows its own rule and
     /// stays removed (`a_removed_env_object_stays_removed`, and
