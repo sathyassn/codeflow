@@ -1,0 +1,11 @@
+id = "TSK-1057"
+uid = "5c6fc559-785a-43f5-a54e-266914879176"
+kind = "TSK"
+title = "The policy authority cannot be weakened by a direct ref write"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T19:16:12Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
