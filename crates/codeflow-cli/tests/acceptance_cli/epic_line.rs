@@ -4,8 +4,7 @@
 //! request that landed it was judged.
 use super::*;
 
-/// The line's own task as a standalone-free record of EPC-001 with
-/// `criteria`, targeting [`LINE`].
+/// TSK-001 as a task of EPC-001 with `criteria`, targeting [`LINE`].
 fn own_task(status: &str, criteria: &str, closeout: &str) -> String {
     task("TSK-001", status, criteria, closeout).replace(
         "integration_target: main",
@@ -14,9 +13,8 @@ fn own_task(status: &str, criteria: &str, closeout: &str) -> String {
 }
 
 /// A line cut from `main` that plans TSK-001 through a planning merge, so
-/// `main` never holds the task, and a later commit on `main` the line has
-/// merged, so `main`'s tip is behind the line. TSK-002 binds the line to
-/// EPC-001.
+/// `main` never holds the task, as on the 3.2.0 line. TSK-002 binds the
+/// line to EPC-001.
 fn planned_line() -> tempfile::TempDir {
     let dir = line_repo(&["TSK-002"]);
     let root = dir.path();
@@ -267,4 +265,31 @@ fn an_overlaid_line_history_stays_refused() {
         "{}",
         result.1
     );
+}
+
+/// TSK-433 AC-8, issue #320's shape: after the line's own reopened and
+/// re-completed task lands, `main` gains a file and the line merges `main`.
+/// On the verified line the completion binds at its landing, so the file
+/// the sync merge brought, equal to `main`'s, is not counted against the
+/// task's reviewed commit.
+#[test]
+fn a_sync_merge_of_main_after_the_landing_is_not_counted() {
+    let dir = planned_line();
+    let root = dir.path();
+    reopened_in_its_own_pull_request(root);
+    git(root, &["switch", "-q", "main"]);
+    write(root, "src/synced.rs", "pub fn synced() {}\n");
+    commit(root, "feat: work on main");
+    git(root, &["switch", "-q", LINE]);
+    git(
+        root,
+        &["merge", "--no-ff", "-m", "chore(merge): sync main", "main"],
+    );
+    let into_main = ci_on(root, "main", LINE, "");
+    assert!(
+        !into_main.1.contains("work.acceptance_binding (block)"),
+        "the line into main after a sync merge: {}",
+        into_main.1
+    );
+    assert!(!into_main.1.contains("src/synced.rs"), "{}", into_main.1);
 }
