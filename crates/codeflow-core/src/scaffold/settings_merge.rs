@@ -31,9 +31,16 @@
 //!   keeps its value, and an `env` that is not an object of strings is
 //!   reported and left untouched.
 //!
-//! Every other key — user or shipped — is preserved verbatim: shipped
-//! top-level keys (`statusLine`, `$schema`) are added only when
-//! the user file lacks them. Every mutation is reported.
+//! - **plain top-level keys** (`statusLine`, `$schema`, `attribution` and
+//!   the like) — merged against the recorded baseline (TSK-1028): a value
+//!   still equal to the one CodeFlow recorded moves to the new shipped
+//!   value, a value the project changed stays, a shipped key the project
+//!   removed stays removed, and a key this preset no longer ships is removed
+//!   while it still holds the recorded value. With no recorded baseline, a
+//!   missing key is added and every existing value stays.
+//!
+//! Every key the preset does not ship stays verbatim. Every mutation is
+//! reported.
 
 use serde_json::{Map, Value};
 
@@ -47,20 +54,28 @@ const COMMAND_PREFIX: &str = "codeflow ";
 /// keeps removed.
 pub const KEPT_REMOVAL: &str = "kept the project's removal of";
 
+/// The start of every report line about a top-level value the project
+/// changed that update keeps while the shipped default moved or retired.
+const KEPT_OWN: &str = "kept the project's \"";
+
 /// The start of every report line about a malformed `env`.
 const ENV_MALFORMED: &str = "settings: \"env\" ";
 
-/// The wording of every report line about a shipped `env` key update did
-/// not add.
+/// The wording of every report line about a shipped key, in `env` or at the
+/// top level, that update did not add.
 const ENV_UNSET: &str = "stays unset";
 
 /// Whether a report line describes a standing condition that update reports
 /// on every run, even when the settings file does not change: a permission
-/// entry the project removed, a malformed `env`, or a shipped `env` key
-/// update did not add. Such lines name keys, never `env` values.
+/// entry the project removed, a malformed `env`, a shipped `env` or
+/// top-level key update did not add, or a project value update kept while
+/// the shipped default moved or retired. Such lines name keys, never values.
 #[must_use]
 pub fn is_standing_note(line: &str) -> bool {
-    line.contains(KEPT_REMOVAL) || line.starts_with(ENV_MALFORMED) || line.contains(ENV_UNSET)
+    line.contains(KEPT_REMOVAL)
+        || line.contains(KEPT_OWN)
+        || line.starts_with(ENV_MALFORMED)
+        || line.contains(ENV_UNSET)
 }
 
 fn is_codeflow_command(cmd: &str) -> bool {
@@ -91,9 +106,10 @@ pub fn merge_settings(
 }
 
 /// Merges settings during update, using the prior shipped baseline to retire
-/// the CodeFlow-managed permission and sandbox array entries the new preset
-/// removed, and to keep a permission entry the project removed from coming
-/// back. User-only entries are preserved.
+/// the CodeFlow-managed permission and sandbox array entries and the plain
+/// top-level keys the new preset removed, to move a top-level value still at
+/// its recorded value to the new one, and to keep a permission entry or key
+/// the project removed from coming back. User-only entries are preserved.
 ///
 /// # Errors
 ///
@@ -197,16 +213,21 @@ fn merge(
                 inc_val,
                 report,
             ),
-            _ => {
-                if cur.contains_key(key) {
-                    if cur[key] != *inc_val {
-                        report.push(format!("settings: preserved user value for \"{key}\""));
-                    }
-                } else {
-                    cur.insert(key.clone(), inc_val.clone());
-                    report.push(format!("settings: added \"{key}\""));
-                }
-            }
+            _ => merge_top_level_key(
+                cur,
+                key,
+                previous
+                    .as_ref()
+                    .filter(|_| kind == Previous::Recorded)
+                    .map(|value| value.get(key)),
+                inc_val,
+                report,
+            ),
+        }
+    }
+    if kind == Previous::Recorded {
+        if let Some(Value::Object(baseline)) = &previous {
+            retire_top_level_keys(cur, baseline, inc, report);
         }
     }
 
@@ -216,6 +237,83 @@ fn merge(
             s
         })
         .map_err(ScaffoldError::from)
+}
+
+/// The top-level keys merged by their own rules; every other shipped key is
+/// a plain value merged by [`merge_top_level_key`].
+const STRUCTURED_KEYS: [&str; 4] = ["hooks", "permissions", "sandbox", "env"];
+
+/// Merge one shipped top-level value such as `statusLine` (TSK-1028).
+/// `baseline` is `None` when no recorded baseline exists, and `Some(None)`
+/// when one exists without this key.
+///
+/// - A value equal to the one the baseline recorded is still CodeFlow's, so
+///   it moves to the new shipped value.
+/// - Any other value is the project's and stays. When the shipped default
+///   changed, the report says so even if nothing else in the file changes.
+/// - A key the baseline recorded and the project no longer has was removed
+///   by the project and stays removed, reported on every update.
+/// - Otherwise a missing key is added.
+fn merge_top_level_key(
+    cur: &mut Map<String, Value>,
+    key: &str,
+    baseline: Option<Option<&Value>>,
+    inc_val: &Value,
+    report: &mut Vec<String>,
+) {
+    let shipped_before = baseline.flatten();
+    match cur.get_mut(key) {
+        Some(existing) if existing == inc_val => {}
+        Some(existing) if Some(&*existing) == shipped_before => {
+            *existing = inc_val.clone();
+            report.push(format!(
+                "settings: updated \"{key}\" to the new shipped default"
+            ));
+        }
+        Some(_) if shipped_before.is_some_and(|before| before != inc_val) => {
+            report.push(format!(
+                "settings: {KEPT_OWN}{key}\"; the shipped default changed"
+            ));
+        }
+        Some(_) => report.push(format!("settings: preserved user value for \"{key}\"")),
+        None if shipped_before.is_some() => report.push(format!(
+            "settings: \"{key}\" {ENV_UNSET}; update does not restore a shipped key \
+             the project removed"
+        )),
+        None => {
+            cur.insert(key.to_string(), inc_val.clone());
+            report.push(format!("settings: added \"{key}\""));
+        }
+    }
+}
+
+/// Retire the plain top-level keys the recorded baseline carried and this
+/// preset no longer ships, such as `effortLevel` (TSK-1028): a value still
+/// equal to the recorded one is removed, a value the project changed stays.
+/// Both are reported.
+fn retire_top_level_keys(
+    cur: &mut Map<String, Value>,
+    baseline: &Map<String, Value>,
+    incoming: &Map<String, Value>,
+    report: &mut Vec<String>,
+) {
+    for (key, shipped_before) in baseline {
+        if STRUCTURED_KEYS.contains(&key.as_str()) || incoming.contains_key(key) {
+            continue;
+        }
+        match cur.get(key) {
+            Some(existing) if existing == shipped_before => {
+                cur.shift_remove(key);
+                report.push(format!(
+                    "settings: removed \"{key}\"; this release no longer ships it"
+                ));
+            }
+            Some(_) => report.push(format!(
+                "settings: {KEPT_OWN}{key}\"; this release no longer ships it"
+            )),
+            None => {}
+        }
+    }
 }
 
 /// Merge the shipped `env` keys into the project's `env` without changing any
@@ -829,6 +927,127 @@ mod tests {
             report2.is_empty(),
             "second merge reports nothing: {report2:?}"
         );
+    }
+
+    /// An earlier release's shipped top-level keys (TSK-1028): the
+    /// branch-only status line and the effort pin.
+    const OLD_TOP_LEVEL: &str = r#"{
+        "statusLine": {"type": "command", "command": "printf old"},
+        "effortLevel": "high"
+    }"#;
+
+    /// This release's: a new status line and no effort pin.
+    const NEW_TOP_LEVEL: &str = r#"{
+        "statusLine": {"type": "command", "command": "printf new"}
+    }"#;
+
+    fn merged_value(current: &str, baseline: Option<&str>) -> (Value, Vec<String>) {
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(current, baseline, NEW_TOP_LEVEL, &mut report).unwrap();
+        (serde_json::from_str(&merged).unwrap(), report)
+    }
+
+    #[test]
+    fn a_shipped_key_the_project_deleted_is_not_added_back() {
+        // The adopter's case in issue 351: both keys deleted from the shared
+        // file, then `codeflow update`.
+        let (merged, report) = merged_value("{}", Some(OLD_TOP_LEVEL));
+        assert!(merged.get("statusLine").is_none(), "{merged}");
+        assert!(merged.get("effortLevel").is_none(), "{merged}");
+        let line = "settings: \"statusLine\" stays unset; update does not restore \
+                    a shipped key the project removed";
+        assert!(report.iter().any(|l| l == line), "{report:?}");
+        assert!(is_standing_note(line));
+
+        // The next update, against the baseline this one records, keeps it so.
+        let mut again = vec![];
+        let twice =
+            merge_settings_from_baseline("{}", Some(NEW_TOP_LEVEL), NEW_TOP_LEVEL, &mut again)
+                .unwrap();
+        assert!(serde_json::from_str::<Value>(&twice).unwrap()["statusLine"].is_null());
+    }
+
+    #[test]
+    fn a_status_line_still_at_the_shipped_value_moves_to_the_new_default() {
+        let (merged, report) = merged_value(OLD_TOP_LEVEL, Some(OLD_TOP_LEVEL));
+        assert_eq!(merged["statusLine"]["command"], "printf new");
+        assert!(report
+            .iter()
+            .any(|l| l == "settings: updated \"statusLine\" to the new shipped default"));
+    }
+
+    #[test]
+    fn a_status_line_the_project_changed_stays_and_is_reported() {
+        let current = r#"{"statusLine": {"type": "command", "command": "my-line"}}"#;
+        let (merged, report) = merged_value(current, Some(OLD_TOP_LEVEL));
+        assert_eq!(merged["statusLine"]["command"], "my-line");
+        let kept = "settings: kept the project's \"statusLine\"; the shipped default changed";
+        assert!(report.iter().any(|l| l == kept), "{report:?}");
+        assert!(is_standing_note(kept));
+
+        // Once the baseline records the new default, the kept line is an
+        // ordinary preserved value.
+        let mut again = vec![];
+        merge_settings_from_baseline(current, Some(NEW_TOP_LEVEL), NEW_TOP_LEVEL, &mut again)
+            .unwrap();
+        assert_eq!(again, ["settings: preserved user value for \"statusLine\""]);
+        assert!(!is_standing_note(&again[0]));
+    }
+
+    #[test]
+    fn an_effort_pin_at_the_shipped_value_is_removed_and_a_changed_one_kept() {
+        let (merged, report) = merged_value(OLD_TOP_LEVEL, Some(OLD_TOP_LEVEL));
+        assert!(merged.get("effortLevel").is_none(), "{merged}");
+        assert!(report
+            .iter()
+            .any(|l| l == "settings: removed \"effortLevel\"; this release no longer ships it"));
+
+        // The removal keeps the order of the keys around it.
+        let ordered = r#"{"a": 1, "effortLevel": "high", "b": 2, "c": 3}"#;
+        let (merged, _) = merged_value(ordered, Some(OLD_TOP_LEVEL));
+        let keys: Vec<&String> = merged.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["a", "b", "c"]);
+
+        let chosen = r#"{"effortLevel": "xhigh"}"#;
+        let (merged, report) = merged_value(chosen, Some(OLD_TOP_LEVEL));
+        assert_eq!(merged["effortLevel"], "xhigh");
+        let kept = "settings: kept the project's \"effortLevel\"; this release no longer ships it";
+        assert!(report.iter().any(|l| l == kept), "{report:?}");
+        assert!(is_standing_note(kept));
+
+        // Once removed, later updates never bring it back.
+        let mut again = vec![];
+        let twice =
+            merge_settings_from_baseline("{}", Some(NEW_TOP_LEVEL), NEW_TOP_LEVEL, &mut again)
+                .unwrap();
+        assert!(serde_json::from_str::<Value>(&twice).unwrap()["effortLevel"].is_null());
+    }
+
+    #[test]
+    fn without_a_recorded_baseline_top_level_values_stay() {
+        // No record proves the project's value is one CodeFlow wrote, so the
+        // old line and the effort pin stay, and a missing line is added.
+        let mut report = vec![];
+        let merged = merge_settings(OLD_TOP_LEVEL, NEW_TOP_LEVEL, &mut report).unwrap();
+        let merged: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(merged["statusLine"]["command"], "printf old");
+        assert_eq!(merged["effortLevel"], "high");
+
+        let mut prior_report = vec![];
+        let prior = merge_settings_from_prior_release(
+            OLD_TOP_LEVEL,
+            OLD_TOP_LEVEL,
+            NEW_TOP_LEVEL,
+            &mut prior_report,
+        )
+        .unwrap();
+        let prior: Value = serde_json::from_str(&prior).unwrap();
+        assert_eq!(prior["statusLine"]["command"], "printf old");
+        assert_eq!(prior["effortLevel"], "high");
+
+        let (added, _) = merged_value("{}", None);
+        assert_eq!(added["statusLine"]["command"], "printf new");
     }
 
     /// The shipped compaction keys, as the presets carry them.
