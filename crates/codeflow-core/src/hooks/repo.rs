@@ -1546,74 +1546,216 @@ mod r16_obtaining_regressions {
     }
 }
 
-/// TSK-1050: one guard evaluation opens each repository once.
+/// TSK-1050: one guard evaluation opens each repository once for ordinary
+/// targets, and a kept reading never turns a refusal into an allow.
 #[cfg(test)]
 mod owner_opens {
     use super::OWNER_OPENS;
     use crate::hooks::edit_guard::RepoFactsScope;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    type Roots = Result<Vec<PathBuf>, String>;
 
     fn opens() -> usize {
         OWNER_OPENS.with(std::cell::Cell::get)
     }
 
-    fn ask(session: &Path, words: std::ops::Range<usize>) {
-        for word in words {
-            let target = session.join(format!("d{word}/x"));
-            assert!(super::target_roots(&target, session).is_ok());
-        }
+    fn reset() {
+        OWNER_OPENS.with(|count| count.set(0));
     }
 
-    /// Owner lookups for many targets in one repository open it once per
-    /// scope, a new scope opens it again, and no scope caches nothing.
+    /// A repository with one commit at the physical path of a new
+    /// directory, so every spelling of a target names one owner.
+    fn repository() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "one", &tree, &[])
+            .unwrap();
+        (dir, root)
+    }
+
+    fn roots(root: &Path, word: &str) -> Roots {
+        super::target_roots(&root.join(word), root)
+    }
+
+    /// The owners a target gets with no scope, so nothing is kept.
+    fn fresh(root: &Path, word: &str) -> Roots {
+        roots(root, word)
+    }
+
+    fn break_head(root: &Path) -> Vec<u8> {
+        let head = root.join(".git/HEAD");
+        let bytes = std::fs::read(&head).unwrap();
+        std::fs::remove_file(&head).unwrap();
+        bytes
+    }
+
+    fn mend_head(root: &Path, bytes: &[u8]) {
+        std::fs::write(root.join(".git/HEAD"), bytes).unwrap();
+    }
+
+    /// Ordinary targets in one repository share one open per scope, a new
+    /// scope opens again, and no scope keeps nothing.
     #[test]
     fn each_owner_is_opened_once_per_guard_evaluation() {
-        let dir = tempfile::tempdir().unwrap();
-        git2::Repository::init(dir.path()).unwrap();
+        let (_dir, root) = repository();
         for _ in 0..2 {
             let _scope = RepoFactsScope::enter();
-            OWNER_OPENS.with(|count| count.set(0));
-            ask(dir.path(), 0..1);
-            let first = opens();
-            assert!(first >= 1, "the first lookup in a scope opens its owner");
-            ask(dir.path(), 1..16);
-            assert_eq!(opens(), first, "later targets reuse the opened owner");
+            reset();
+            assert_eq!(roots(&root, "d0/x"), Ok(vec![root.clone()]));
+            assert_eq!(opens(), 1, "the first lookup in a scope opens its owner");
+            for word in 1..16 {
+                assert_eq!(roots(&root, &format!("d{word}/x")), Ok(vec![root.clone()]));
+            }
+            assert_eq!(opens(), 1, "later ordinary targets reuse the opened owner");
         }
-        OWNER_OPENS.with(|count| count.set(0));
-        ask(dir.path(), 0..1);
-        let one = opens();
-        ask(dir.path(), 0..1);
-        assert_eq!(opens(), 2 * one, "outside a scope every lookup opens again");
+        reset();
+        assert!(roots(&root, "d0/x").is_ok());
+        assert!(roots(&root, "d0/x").is_ok());
+        assert_eq!(opens(), 2, "outside a scope every lookup opens again");
     }
 
-    /// An owner that cannot be opened fails the same way for every target
-    /// it could protect, and is still skipped for an ordinary target, in
-    /// any order inside a scope and exactly as outside one: the scope keeps
-    /// the failed open, and each target decides what the failure means.
+    /// Two owners, an outer repository and an independent one nested in
+    /// it, keep their own readings: each target gets exactly its owners,
+    /// in any order, and each owner is opened once.
     #[test]
-    fn a_broken_owner_fails_closed_for_every_protected_target_in_a_scope() {
-        let dir = tempfile::tempdir().unwrap();
-        git2::Repository::init(dir.path()).unwrap();
-        std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
-        let roots = |word: &str| super::target_roots(&dir.path().join(word), dir.path());
-        let words = [
-            ".claude/settings.json",
-            "src/a.rs",
-            ".git/config",
-            "notes.txt",
-            ".claude/hooks/x",
-        ];
-        let unscoped: Vec<_> = words.iter().map(|word| roots(word)).collect();
-        for (word, result) in words.iter().zip(&unscoped) {
-            assert_eq!(result.is_err(), word.starts_with('.'), "{word}: {result:?}");
-        }
+    fn two_owners_keep_their_own_roots() {
+        let (_dir, root) = repository();
+        let nested = root.join("nested");
+        git2::Repository::init(&nested).unwrap();
+        let both = vec![root.clone(), nested.clone()];
         let _scope = RepoFactsScope::enter();
-        OWNER_OPENS.with(|count| count.set(0));
-        for _ in 0..2 {
-            for (word, expected) in words.iter().zip(&unscoped) {
-                assert_eq!(&roots(word), expected, "{word}");
+        reset();
+        for word in 0..6 {
+            let (outer, inner) = (format!("o{word}/x"), format!("nested/i{word}/x"));
+            let pairs = if word % 2 == 0 {
+                [(outer, vec![root.clone()]), (inner, both.clone())]
+            } else {
+                [(inner, both.clone()), (outer, vec![root.clone()])]
+            };
+            for (target, owners) in pairs {
+                assert_eq!(roots(&root, &target), Ok(owners), "{target}");
             }
         }
-        assert!(opens() <= 2, "the broken owner is opened once per spelling");
+        assert_eq!(opens(), 2, "each owner is opened once");
+    }
+
+    /// An owner that breaks during the scope refuses an unseen protected
+    /// target as it does with no scope, whichever kind of target opened it
+    /// first (Codex review 01 of PR 386).
+    #[test]
+    fn a_protected_target_sees_an_owner_that_breaks_mid_scope() {
+        for ordinary_first in [true, false] {
+            let (_dir, root) = repository();
+            let _scope = RepoFactsScope::enter();
+            let first = if ordinary_first {
+                "ordinary.txt"
+            } else {
+                ".claude/a.json"
+            };
+            assert_eq!(roots(&root, first), Ok(vec![root.clone()]));
+            let head = break_head(&root);
+            let after = roots(&root, ".claude/notes.txt");
+            let ordinary = roots(&root, "plain.txt");
+            drop(_scope);
+            let expected = fresh(&root, ".claude/notes.txt");
+            assert!(expected.is_err(), "{expected:?}");
+            assert_eq!(after, expected, "ordinary first: {ordinary_first}");
+            // An ordinary target may keep an owner the fresh reading skips;
+            // it never loses one the fresh reading keeps.
+            let (Ok(kept), Ok(fresh_owners)) = (ordinary, fresh(&root, "plain.txt")) else {
+                panic!("an ordinary target never fails on a broken owner");
+            };
+            assert!(fresh_owners.iter().all(|owner| kept.contains(owner)));
+            mend_head(&root, &head);
+        }
+    }
+
+    /// An owner mended during the scope is opened again, so an unseen
+    /// target of either kind gets the owner a fresh reading gives.
+    #[test]
+    fn a_mended_owner_is_read_again_in_the_same_scope() {
+        for ordinary_first in [true, false] {
+            let (_dir, root) = repository();
+            let head = break_head(&root);
+            let _scope = RepoFactsScope::enter();
+            if ordinary_first {
+                assert_eq!(roots(&root, "src/a.rs"), Ok(Vec::new()));
+            } else {
+                assert!(roots(&root, ".claude/a.json").is_err());
+            }
+            mend_head(&root, &head);
+            for word in ["src/b.rs", ".claude/b.json"] {
+                assert_eq!(roots(&root, word), Ok(vec![root.clone()]), "{word}");
+            }
+        }
+    }
+
+    /// A broken owner fails every protected target and skips every
+    /// ordinary one, exactly as with no scope. Each unseen target opens it
+    /// again: a failure is never kept.
+    #[test]
+    fn a_broken_owner_fails_closed_for_every_protected_target_in_a_scope() {
+        let (_dir, root) = repository();
+        break_head(&root);
+        let passes = [
+            [
+                ".claude/settings.json",
+                "src/a.rs",
+                ".git/config",
+                "notes.txt",
+            ],
+            [
+                "src/b.rs",
+                ".claude/hooks/x",
+                "docs/c.md",
+                ".git/hooks/pre-push",
+            ],
+        ];
+        let expected: Vec<Vec<Roots>> = passes
+            .iter()
+            .map(|pass| pass.iter().map(|word| fresh(&root, word)).collect())
+            .collect();
+        let _scope = RepoFactsScope::enter();
+        reset();
+        for (pass, results) in passes.iter().zip(&expected) {
+            for (word, result) in pass.iter().zip(results) {
+                assert_eq!(result.is_err(), word.starts_with('.'), "{word}: {result:?}");
+                assert_eq!(&roots(&root, word), result, "{word}");
+            }
+        }
+        assert_eq!(
+            opens(),
+            8,
+            "every unseen target opens the broken owner again"
+        );
+    }
+
+    /// A kept reading never removes an owner as a duplicate. A linked
+    /// worktree shares its main checkout's common directory, so it is
+    /// folded into it; once the worktree is replaced by an independent
+    /// repository, an unseen target inside it gets both owners, as a fresh
+    /// reading does.
+    #[test]
+    fn a_kept_reading_never_removes_an_owner() {
+        let (_dir, root) = repository();
+        let repo = git2::Repository::open(&root).unwrap();
+        let linked = root.join("w");
+        repo.worktree("w", &linked, None).unwrap();
+        let _scope = RepoFactsScope::enter();
+        assert_eq!(roots(&root, "w/a.txt"), Ok(vec![root.clone()]));
+        std::fs::remove_file(linked.join(".git")).unwrap();
+        git2::Repository::init(&linked).unwrap();
+        let after = roots(&root, "w/b.txt");
+        drop(_scope);
+        assert_eq!(
+            fresh(&root, "w/b.txt"),
+            Ok(vec![root.clone(), linked.clone()])
+        );
+        assert_eq!(after, Ok(vec![root, linked]));
     }
 }
