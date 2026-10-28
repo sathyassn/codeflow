@@ -27,9 +27,10 @@
 //!   project-specific sandbox configuration.
 //! - **env entries** — the shipped `env` keys are added to a project that
 //!   lacks them, unless the recorded baseline shows codeflow wrote a key
-//!   before and the project removed it since; every entry the project has
-//!   keeps its value, and an `env` that is not an object of strings is
-//!   reported and left untouched.
+//!   before and the project removed it since. A shipped key still at the
+//!   value the recorded baseline holds moves to the new shipped value;
+//!   every other entry the project has keeps its value, and an `env` that
+//!   is not an object of strings is reported and left untouched.
 //!
 //! - **personal preference keys** ([`PREFERENCE_KEYS`]: `statusLine`,
 //!   `effortLevel`) — merged against the recorded baseline (TSK-1028): a
@@ -336,6 +337,9 @@ fn retire_top_level_keys(
 ///   the baseline exists and did not carry it. A key the baseline carried was
 ///   removed by the project; with no baseline, update cannot tell a removal
 ///   from a key the project never had, so it adds nothing.
+/// - A value still equal to the one the baseline recorded is codeflow's, so
+///   it moves to the new shipped value (TSK-1029); any other value is the
+///   project's and stays. With no baseline every value stays.
 /// - An `env` that is not an object of strings is reported and left as is.
 ///
 /// Report lines name keys only, never values, since `env` may hold secrets.
@@ -382,10 +386,17 @@ fn merge_env(
             }
             for (key, value) in inc_env {
                 match env.get(key) {
-                    Some(existing) => {
-                        if existing != value {
-                            report.push(format!("settings: preserved user value for env.{key}"));
-                        }
+                    Some(existing) if existing == value => {}
+                    Some(existing)
+                        if shipped_before.and_then(|env| env.get(key)) == Some(existing) =>
+                    {
+                        env.insert(key.clone(), value.clone());
+                        report.push(format!(
+                            "settings: updated env.{key} to the new shipped default"
+                        ));
+                    }
+                    Some(_) => {
+                        report.push(format!("settings: preserved user value for env.{key}"));
                     }
                     None if baseline.is_none() => report.push(format!(
                         "settings: env.{key} {ENV_UNSET}; no recorded baseline shows \
@@ -1246,6 +1257,103 @@ mod tests {
         let merged: Value = serde_json::from_str(&merged).unwrap();
         assert!(merged.get("env").is_none(), "{merged}");
         assert_eq!(report.len(), 2, "{report:?}");
+    }
+
+    /// The compaction keys after the shipped percentage moved (TSK-1029).
+    const ENV_PRESET_NEXT: &str = r#"{
+        "env": {
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "35"
+        }
+    }"#;
+
+    /// TSK-1029 AC-1: a value still equal to the one the recorded baseline
+    /// holds is codeflow's, so it moves to the new shipped value; the
+    /// unchanged key and the project's own keys stay as they are.
+    #[test]
+    fn an_env_value_still_at_the_recorded_default_moves_to_the_new_one() {
+        let user = r#"{
+            "env": {
+                "KEEP_PROJECT_VALUE": "opaque-secret",
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+            }
+        }"#;
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(user, Some(ENV_PRESET), ENV_PRESET_NEXT, &mut report)
+                .unwrap();
+        assert_eq!(
+            env_of(&merged),
+            serde_json::json!({
+                "KEEP_PROJECT_VALUE": "opaque-secret",
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "35"
+            })
+        );
+        assert_eq!(
+            report,
+            vec![
+                "settings: updated env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE to the new shipped default"
+                    .to_string()
+            ]
+        );
+        assert_no_values(&report, &["\"50\"", "\"35\"", "opaque-secret"]);
+
+        let mut again = vec![];
+        let twice = merge_settings_from_baseline(
+            &merged,
+            Some(ENV_PRESET_NEXT),
+            ENV_PRESET_NEXT,
+            &mut again,
+        )
+        .unwrap();
+        assert_eq!(merged, twice);
+        assert!(again.is_empty(), "{again:?}");
+    }
+
+    /// TSK-1029 AC-1: a value the project chose stays when the shipped
+    /// default moves, and is reported; with no recorded baseline update
+    /// cannot tell a shipped value from the project's own, so it keeps both.
+    #[test]
+    fn an_env_value_the_project_chose_stays_when_the_default_moves() {
+        let chosen = r#"{"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "40",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"}}"#;
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(chosen, Some(ENV_PRESET), ENV_PRESET_NEXT, &mut report)
+                .unwrap();
+        assert_eq!(env_of(&merged)["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "40");
+        assert!(report
+            .iter()
+            .any(|line| line
+                == "settings: preserved user value for env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"));
+        assert_no_values(&report, &["\"40\"", "\"35\"", "\"50\""]);
+
+        let shipped_before = r#"{"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"}}"#;
+        let mut unrecorded = vec![];
+        let kept = merge_settings(shipped_before, ENV_PRESET_NEXT, &mut unrecorded).unwrap();
+        assert_eq!(env_of(&kept)["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50");
+        let mut prior = vec![];
+        let kept = merge_settings_from_prior_release(
+            shipped_before,
+            ENV_PRESET,
+            ENV_PRESET_NEXT,
+            &mut prior,
+        )
+        .unwrap();
+        assert_eq!(env_of(&kept)["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50");
+
+        // A key the project deleted stays deleted when its default moves.
+        let deleted = r#"{"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"}}"#;
+        let mut gone = vec![];
+        let merged =
+            merge_settings_from_baseline(deleted, Some(ENV_PRESET), ENV_PRESET_NEXT, &mut gone)
+                .unwrap();
+        assert!(env_of(&merged)
+            .get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+            .is_none());
     }
 
     #[test]
