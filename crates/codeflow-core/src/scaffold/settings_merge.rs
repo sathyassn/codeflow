@@ -33,7 +33,7 @@
 //!
 //! - **plain top-level keys** (`statusLine`, `$schema`, `attribution` and
 //!   the like) — merged against the recorded baseline (TSK-1028): a value
-//!   still equal to the one CodeFlow recorded moves to the new shipped
+//!   still equal to the one codeflow recorded moves to the new shipped
 //!   value, a value the project changed stays, a shipped key the project
 //!   removed stays removed, and a key this preset no longer ships is removed
 //!   while it still holds the recorded value. With no recorded baseline, a
@@ -219,7 +219,7 @@ fn merge(
                 previous
                     .as_ref()
                     .filter(|_| kind == Previous::Recorded)
-                    .map(|value| value.get(key)),
+                    .and_then(|value| value.get(key)),
                 inc_val,
                 report,
             ),
@@ -244,10 +244,10 @@ fn merge(
 const STRUCTURED_KEYS: [&str; 4] = ["hooks", "permissions", "sandbox", "env"];
 
 /// Merge one shipped top-level value such as `statusLine` (TSK-1028).
-/// `baseline` is `None` when no recorded baseline exists, and `Some(None)`
-/// when one exists without this key.
+/// `shipped_before` is the value the recorded baseline holds for this key,
+/// `None` when there is no recorded baseline or it lacks the key.
 ///
-/// - A value equal to the one the baseline recorded is still CodeFlow's, so
+/// - A value equal to the one the baseline recorded is still codeflow's, so
 ///   it moves to the new shipped value.
 /// - Any other value is the project's and stays. When the shipped default
 ///   changed, the report says so even if nothing else in the file changes.
@@ -257,11 +257,10 @@ const STRUCTURED_KEYS: [&str; 4] = ["hooks", "permissions", "sandbox", "env"];
 fn merge_top_level_key(
     cur: &mut Map<String, Value>,
     key: &str,
-    baseline: Option<Option<&Value>>,
+    shipped_before: Option<&Value>,
     inc_val: &Value,
     report: &mut Vec<String>,
 ) {
-    let shipped_before = baseline.flatten();
     match cur.get_mut(key) {
         Some(existing) if existing == inc_val => {}
         Some(existing) if Some(&*existing) == shipped_before => {
