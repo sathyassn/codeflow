@@ -104,8 +104,10 @@ pub(crate) fn filesystem_spelling(text: &str) -> String {
 }
 
 /// Namespaces and streams need a mapping before a guard can compare names.
-/// Existing 8.3 short-name components resolve through the kernel, whose final
-/// path names each entry's long name. A short-looking component that does not
+/// A namespace spelling becomes the drive or UNC path Windows opens
+/// ([`namespace_spelling`]); one that names no file path refuses. Existing
+/// 8.3 short-name components resolve through the kernel, whose final path
+/// names each entry's long name. A short-looking component that does not
 /// exist refuses while an entry could still be created there, because a
 /// command earlier on the line could create the entry it aliases. It stays
 /// literal only when nothing can exist at that path. Unreadable components
@@ -117,26 +119,68 @@ pub(crate) fn guard_path(path: &Path) -> Result<PathBuf, String> {
     let text = path
         .to_str()
         .ok_or("cannot inspect a Windows path as text")?;
-    let spelling = text.replace('\\', "/").to_ascii_lowercase();
-    if unmapped_namespace(&spelling) {
-        return Err("cannot map a Windows device, UNC or alternate-stream path".into());
-    }
-    let plain = without_verbatim(path.to_path_buf());
+    let plain = match namespace_spelling(&text.replace('\\', "/"))? {
+        Some(mapped) => PathBuf::from(mapped.replace('/', "\\")),
+        None => without_verbatim(path.to_path_buf()),
+    };
+    let spelling = plain
+        .to_str()
+        .ok_or("cannot inspect a Windows path as text")?
+        .replace('\\', "/");
     if !has_short_component(&spelling) {
         return Ok(plain);
     }
     map_short_components(&plain)
 }
 
-/// Windows spellings a guard cannot map to a drive path: the device and
-/// verbatim UNC namespaces, and alternate stream syntax. A stream type such
-/// as `::$DATA` or `:$I30:$INDEX_ALLOCATION` opens the file or directory
-/// itself. `spelling` is lowercase text with `/` separators.
-fn unmapped_namespace(spelling: &str) -> bool {
-    spelling.starts_with("//./")
-        || spelling.starts_with("//?/unc/")
-        || spelling.contains("::")
-        || spelling.contains(":$")
+/// The path Windows opens for a namespace spelling, as text with `/`
+/// separators: `//?/UNC/h/s/x` and `//./UNC/h/s/x` open `//h/s/x`,
+/// `//?/C:/x` and `//./C:/x` open `C:/x`, and an administrative share
+/// `//<any host>/C$/x` is read as the drive path `C:/x`. Any host: the local
+/// machine answers to names, addresses and aliases a guard cannot list, so
+/// the share name decides, never the host name a command chooses. `None`
+/// when `text` is no namespace or UNC spelling. Another device or verbatim
+/// namespace (`//./pipe/`, `//?/GLOBALROOT/`, `//?/Volume{...}/`) and
+/// alternate stream syntax (`::$DATA`, `:$I30:$INDEX_ALLOCATION`, which open
+/// the file or directory itself) refuse.
+pub(crate) fn namespace_spelling(text: &str) -> Result<Option<String>, String> {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("::") || lower.contains(":$") {
+        return Err("cannot map a Windows alternate-stream path".into());
+    }
+    let drive = |tail: &str| {
+        let bytes = tail.as_bytes();
+        (bytes.len() >= 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes.get(2).is_none_or(|&byte| byte == b'/'))
+        .then(|| tail.to_string())
+    };
+    let unc = if lower.starts_with("//?/unc/") || lower.starts_with("//./unc/") {
+        format!("//{}", &text[8..])
+    } else if lower.starts_with("//?/") || lower.starts_with("//./") {
+        return drive(&text[4..])
+            .map(Some)
+            .ok_or_else(|| "cannot map a Windows device or verbatim namespace path".into());
+    } else if lower.starts_with("//") {
+        text.to_string()
+    } else {
+        return Ok(None);
+    };
+    let mut parts = unc[2..].splitn(3, '/');
+    let (host, share, rest) = (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    );
+    let admin = share.len() == 2
+        && share.as_bytes()[0].is_ascii_alphabetic()
+        && share.as_bytes()[1] == b'$';
+    Ok(Some(if admin && !host.is_empty() {
+        format!("{}:/{rest}", &share[..1])
+    } else {
+        unc
+    }))
 }
 
 /// Whether a component of `text` (with `/` separators) can be an 8.3 short
@@ -366,19 +410,43 @@ mod tests {
         assert!(map_short_components(&root.join("BROKEN~1/new-file")).is_err());
     }
 
+    /// TSK-1002 UNC finding: every namespace spelling of a drive path is
+    /// that drive path, an administrative share on any host is its drive,
+    /// and other UNC paths stay UNC so a UNC home or cwd keeps working.
     #[test]
-    fn unmapped_windows_namespaces_include_every_stream_type_spelling() {
-        for spelling in [
-            "//./c:/users/u/.codex/auth.json",
-            "//?/unc/server/share/.codex/auth.json",
-            "c:/users/u/.codex/auth.json::$data",
-            "c:/users/u/.codex::$index_allocation/auth.json",
-            "c:/users/u/.codex:$i30:$index_allocation/auth.json",
+    fn namespace_spellings_name_the_path_windows_opens() {
+        for (text, opened) in [
+            ("//?/C:/Users/u/x", "C:/Users/u/x"),
+            ("//./C:/Users/u/x", "C:/Users/u/x"),
+            ("//localhost/C$/Users/u/x", "C:/Users/u/x"),
+            ("//127.0.0.1/c$/Users/u/x", "c:/Users/u/x"),
+            ("//build-host.example/D$/repo", "D:/repo"),
+            ("//?/UNC/localhost/C$/Users/u/x", "C:/Users/u/x"),
+            ("//./UNC/localhost/C$/Users/u/x", "C:/Users/u/x"),
+            ("//?/unc/server/share/x", "//server/share/x"),
+            ("//server/homes/u", "//server/homes/u"),
+            ("//server/share$/x", "//server/share$/x"),
         ] {
-            assert!(unmapped_namespace(spelling), "{spelling}");
+            assert_eq!(
+                namespace_spelling(text).unwrap().as_deref(),
+                Some(opened),
+                "{text}"
+            );
         }
-        for spelling in ["c:/users/u/notes.txt", "//?/c:/users/u/notes.txt", "head~1"] {
-            assert!(!unmapped_namespace(spelling), "{spelling}");
+        for text in ["C:/Users/u/x", "relative/x", "/c/Users/u", "HEAD~1"] {
+            assert_eq!(namespace_spelling(text).unwrap(), None, "{text}");
+        }
+        for text in [
+            "//./pipe/x",
+            "//./PhysicalDrive0",
+            "//?/GLOBALROOT/Device/HarddiskVolume3/x",
+            "//?/Volume{1234}/x",
+            "C:/Users/u/.codex/auth.json::$DATA",
+            "C:/Users/u/.codex::$INDEX_ALLOCATION/auth.json",
+            "C:/Users/u/.codex:$I30:$INDEX_ALLOCATION/auth.json",
+            "//localhost/C$/Users/u/.codex::$DATA",
+        ] {
+            assert!(namespace_spelling(text).is_err(), "{text}");
         }
     }
 

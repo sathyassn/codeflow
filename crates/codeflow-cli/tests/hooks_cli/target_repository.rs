@@ -210,6 +210,96 @@ fn tsk1002_review3_windows_unmapped_path_spellings() {
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
 
+/// TSK-1002 UNC finding: an administrative share, a verbatim or device UNC
+/// spelling, or any share whose path ends in a home store names the store,
+/// and a share write names the checkout file. Before this change the guard
+/// compared `\\localhost\C$\...` with the drive-spelled home and allowed it.
+/// Controls: an ordinary file through an administrative share, a UNC home
+/// and a UNC cwd stay usable.
+#[cfg(windows)]
+#[test]
+fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
+    let f = Fixture::new();
+    let home = f.temp.path().to_str().unwrap().replace('/', "\\");
+    let root = f.linked.to_str().unwrap().replace('/', "\\");
+    let (drive, home_tail) = (&home[..1], &home[3..]);
+    let root_tail = &root[3..];
+    std::fs::create_dir_all(f.temp.path().join(".codex")).unwrap();
+    std::fs::write(f.temp.path().join(".codex/auth.json"), "planted fixture").unwrap();
+    std::fs::write(f.temp.path().join("notes.md"), "ordinary fixture").unwrap();
+    let store = r".codex\auth.json";
+    let mut wrong = Vec::new();
+    for (guard, line) in [
+        (
+            "exec-guard",
+            format!(r"cat '\\localhost\{drive}$\{home_tail}\{store}'"),
+        ),
+        (
+            "exec-guard",
+            format!(
+                "cat '//localhost/{drive}$/{}/.codex/auth.json'",
+                home_tail.replace('\\', "/")
+            ),
+        ),
+        (
+            "exec-guard",
+            format!(r"cat '\\127.0.0.1\{drive}$\{home_tail}\{store}'"),
+        ),
+        (
+            "exec-guard",
+            format!(r"cat '\\?\UNC\localhost\{drive}$\{home_tail}\{store}'"),
+        ),
+        (
+            "exec-guard",
+            format!(r"cat '\\.\UNC\localhost\{drive}$\{home_tail}\{store}'"),
+        ),
+        ("exec-guard", format!(r"cat '\\?\{home}\{store}'")),
+        (
+            "exec-guard",
+            format!(r"cat '\\invalid.invalid\share\Users\u\{store}'"),
+        ),
+        (
+            "git-guard",
+            format!(r"printf x > '\\localhost\{drive}$\{root_tail}\.git\config'"),
+        ),
+    ] {
+        let out = f.command(&f.linked, guard, &line);
+        if out.status.code() != Some(2) {
+            wrong.push(format!("refuse {guard}: {line}: {out:?}"));
+        }
+    }
+    let line = format!(r"cat '\\localhost\{drive}$\{home_tail}\notes.md'");
+    let out = f.command(&f.linked, "exec-guard", &line);
+    if out.status.code() != Some(0) {
+        wrong.push(format!("allow: {line}: {out:?}"));
+    }
+    // A UNC home and cwd make the hook read through the share, so these
+    // controls need the administrative share to answer on this host.
+    let unc_home = format!(r"\\localhost\{drive}$\{home_tail}");
+    if std::fs::metadata(&unc_home).is_ok() {
+        for (command, code) in [("cat ~/notes.md", 0), ("cat ~/.codex/auth.json", 2)] {
+            let mut cmd = f.guard_command(&f.linked, "exec-guard");
+            cmd.env("HOME", &unc_home).env("USERPROFILE", &unc_home);
+            let out = run_with_stdin(&mut cmd, &guard_payload(command, &f.linked));
+            if out.status.code() != Some(code) {
+                wrong.push(format!("UNC home: {command}: {out:?}"));
+            }
+        }
+        std::fs::write(f.linked.join("notes.md"), "ordinary fixture").unwrap();
+        let unc_cwd = PathBuf::from(format!(r"\\localhost\{drive}$\{root_tail}"));
+        let out = run_with_stdin(
+            &mut f.guard_command(&f.linked, "exec-guard"),
+            &guard_payload("cat notes.md", &unc_cwd),
+        );
+        if out.status.code() != Some(0) {
+            wrong.push(format!("UNC cwd: cat notes.md: {out:?}"));
+        }
+    } else {
+        eprintln!("administrative share unavailable; UNC home and cwd controls skipped");
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn tsk1002_review3_environment_ignore_inputs_cannot_hide_secrets() {
     let f = Fixture::new();

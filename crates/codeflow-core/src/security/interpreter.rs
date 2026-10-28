@@ -409,6 +409,16 @@ fn secret_path_result(
     } else {
         Some(outward::lexical_join(cwd, Path::new(word)))
     };
+    // A UNC path names a file in a share whose layout the guard cannot
+    // see. Judge it before any mapping or metadata read, so the guard never
+    // contacts a host a command names before refusing a store spelling.
+    if cfg!(windows)
+        && absolute.as_deref().is_some_and(|path| {
+            unc_store_suffix(&crate::portable_path::slashed(path), home, reader)
+        })
+    {
+        return Ok(true);
+    }
     // Map the path the word names, after its home is resolved, never
     // `cwd.join(word)`: a Windows cwd under `RUNNER~1` would otherwise turn
     // `~/store` into `<cwd>/~/store` and hide the store (hosted run
@@ -453,6 +463,33 @@ fn secret_path_result(
                 None => false,
             },
     )
+}
+
+/// Whether `text` (with `/` separators) is a UNC path, in any namespace
+/// spelling, that ends in a protected home-relative path. A share can map
+/// any directory of any machine, the home of this user or another, so every
+/// trailing part from the share down is read as relative to a home: a store
+/// reached through `//host/c$/Users/<u>/`, through a share of the home
+/// itself, or through `//?/UNC/host/share/` refuses whatever the host or
+/// share. Other UNC paths, a UNC home's ordinary files included, are judged
+/// as usual.
+fn unc_store_suffix(text: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let rest = if let Some(rest) = lower
+        .strip_prefix("//?/unc/")
+        .or_else(|| lower.strip_prefix("//./unc/"))
+    {
+        rest
+    } else if lower.starts_with("//?/") || lower.starts_with("//./") {
+        return false;
+    } else if let Some(rest) = lower.strip_prefix("//") {
+        rest
+    } else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
+    (1..parts.len())
+        .any(|at| secret_path_spelling(&format!("~/{}", parts[at..].join("/")), home, reader))
 }
 
 /// `word` (with `/` separators) without NTFS stream syntax: each component
@@ -705,7 +742,10 @@ fn real_secret_path(path: &Path, home: Option<&Path>) -> Result<bool, &'static s
     let real = crate::portable_path::canonicalize(path)
         .map_err(|_| "cannot resolve a read path's real target")?;
     let text = secret_path_text(&real)?;
-    if secret_path_spelling(&text, home, None) {
+    // A link can resolve into a share (`\\?\UNC\host\share\...`).
+    if secret_path_spelling(&text, home, None)
+        || cfg!(windows) && unc_store_suffix(&text, home, None)
+    {
         return Ok(true);
     }
     let real_home = home
@@ -1671,6 +1711,35 @@ mod tests {
                     || value.contains("::")),
                 "{command}: {values:?}"
             );
+        }
+    }
+
+    /// TSK-1002 UNC finding: a share path that ends in a protected
+    /// home-relative path refuses whatever the host or share, in every UNC
+    /// spelling; a UNC home's ordinary files and a UNC project stay readable.
+    #[test]
+    fn unc_paths_ending_in_a_store_refuse_under_any_share() {
+        let home = Some(Path::new("//server/homes/u"));
+        for text in [
+            "//localhost/c$/Users/u/.codex/auth.json",
+            "//build-host/C$/Users/other/.codex/auth.json",
+            "//server/homes/u/.codex/auth.json",
+            "//server/u/.ssh/id_rsa",
+            "//?/UNC/server/share/.codex/auth.json",
+            "//./UNC/server/share/Users/u/.codex/auth.json",
+            "//server/share/.ssh/id_ed25519",
+        ] {
+            assert!(unc_store_suffix(text, home, None), "{text}");
+        }
+        for text in [
+            "//server/homes/u/notes.txt",
+            "//server/share/project/src/main.rs",
+            "//server/share/project/.codex-notes/todo.md",
+            "C:/Users/u/.codex/auth.json",
+            "//?/C:/Users/u/notes.txt",
+            "//server",
+        ] {
+            assert!(!unc_store_suffix(text, home, None), "{text}");
         }
     }
 

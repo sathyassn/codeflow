@@ -286,8 +286,12 @@ Unknown PowerShell or deno parameter grammar and encoded PowerShell bodies
 refuse as cannot-verify. AppleScript bodies receive literal-path inspection;
 constructed shell commands refuse. A script written earlier on the same line
 must receive a verified code reading before execution by path, interpreter
-or Make. Otherwise it refuses. Windows device, UNC, alternate-stream and
-short-name spellings refuse when the guard cannot map their real paths. A
+or Make. Otherwise it refuses. Windows namespace spellings are judged as the
+path Windows opens: `\\?\UNC\` and `\\.\UNC\` as the UNC path, `\\?\C:\` and
+`\\.\C:\` as the drive path, and an administrative share such as
+`\\host\C$\` on any host as its drive. A UNC path that ends in a protected
+home-relative path refuses whatever the host or share. Other device paths,
+alternate streams and short names the guard cannot map refuse. A
 short name that does not exist yet refuses unless nothing can exist there,
 since a command earlier on the line could create the entry it aliases. A Git
 revision such as `HEAD~1` that names no path, and inline interpreter code,
