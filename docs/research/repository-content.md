@@ -10,23 +10,47 @@ date.
 
 ## Findings
 
-Current practice agrees on one test: a repository holds what people review,
-build from and need again, and leaves out what a tool can regenerate or what
-only one run needed.
+The sources below share a working test, though none states it as a universal
+law: a repository holds what people review, build from and need again, and
+leaves out what a tool can regenerate on demand or what only one run needed.
+The exceptions are deliberate: a project may version an output when its
+consumers take it straight from the repository, as a GitHub JavaScript action
+does with its bundled `dist/index.js`. So the line runs between disposable
+output and an output the project chooses to version, not between generated and
+hand-written files.
+
+Revised 2026-10-28 after review: the first version stated two practices as
+universal (review records and generated code); both rows are now qualified,
+and a distribution-artifact row and the project shapes below were added.
 
 | Class | Current practice | Rule for CodeFlow |
 |---|---|---|
 | Build and cache output | Every stack template ignores it: `dist`, `build/`, `target/`, `__pycache__/`, `.venv`, tool caches ([github/gitignore][gi], [Node][gi-node], [Python][gi-py]). OpenSSF Scorecard rates committed binaries a high risk because they cannot be reviewed and drift from source ([Scorecard checks][scorecard]). | Stays out. |
 | Run output and per-run logs | `*.log`, coverage reports and test output are ignored by the same templates; CI keeps them as workflow artifacts, deleted after 90 days by default ([GitHub retention][gh-retention], [artifacts][gh-artifacts]). | Stays out. The PR body carries a summary; the full output stays in the run's own home. |
-| Review records and verdict files | No ecosystem commits them; review lives on the PR. CodeFlow already says the review verdict lives on the PR (`cf-method/references/delivery-process.md:255`). | Stays out. |
-| Lockfiles | Committed: npm `package-lock.json` "is intended to be committed" ([npm][npm-lock]); `uv.lock` "should be checked into version control" ([uv][uv]); Terraform's lock file belongs in version control ([Terraform][tf-lock]); Cargo now leaves the choice to the project and `cargo new` stops ignoring `Cargo.lock` for libraries ([Cargo FAQ][cargo-faq], [Rust blog][rust-lock]). | Belongs, as the stack's tools ask. |
-| Generated code | Go marks generated files with `// Code generated ... DO NOT EDIT.` and never runs `go generate` during a build, so generated Go code is committed ([go generate][go-gen]). Code a build step regenerates is build output. | Belongs only when the build does not regenerate it; marked as generated. |
+| Review records and verdict files | None of the sources here recommends committing per-round review verdicts; GitHub keeps review on the pull request. Some teams keep an audit or decision log in the repository by policy, which is an authority record the project chose, not a per-run file. CodeFlow already says the review verdict lives on the PR (`cf-method/references/delivery-process.md:255`). | Per-round verdict files stay out; a record the project keeps as authority belongs. |
+| Lockfiles | Committed: npm `package-lock.json` "is intended to be committed" ([npm][npm-lock]); `uv.lock` "should be checked into version control" ([uv][uv]); Terraform's lock file belongs in version control ([Terraform][tf-lock]); Cargo now leaves the choice to the project and `cargo new` stops ignoring `Cargo.lock` for libraries ([Cargo FAQ][cargo-faq], [Rust blog][rust-lock]). | Belongs, as the stack's tools and the project decide. |
+| Generated code | Go marks generated files with `// Code generated ... DO NOT EDIT.` and `go build` never runs `go generate`, which makes committing the output the usual Go choice, though the docs do not prescribe it ([go generate][go-gen]). Protobuf stubs and API clients are committed in some projects and generated in the build in others. | Belongs when the project needs it checked in, marked as generated; otherwise it is build output. |
+| Distribution artifacts | A GitHub JavaScript action bundles its code with rollup or ncc into `dist/index.js` and commits it, because the runner executes the repository as checked out; the same guide says not to commit `node_modules` ([GitHub action guide][gh-js-action]). | Belongs when it is the shipped product consumers take from the repository; an admitted use outranks the build-output exclusion. |
 | Vendored code | Go vendoring copies what the build needs and verifies it against `go.mod` ([Go modules][go-mod]); GitHub recommends a package manager over storing dependencies in the repository ([GitHub large files][gh-large]). The adopter on #279 kept runtime vendoring through its dependency rule and banned copies kept for reference (comment of 2026-10-27 22:46Z). | One rule: a copy a runtime or build needs is a dependency and joins through the project's dependency rule; a copy kept for reference stays out. |
 | Fixtures and snapshots | Committed and reviewed as part of the test: "all snapshot files should be committed alongside the modules they are covering" ([Jest][jest]). | Belongs, as test content. |
 | Large binaries | GitHub warns at 50 MiB, blocks 100 MiB and recommends repositories stay under 1 GB; large product files go to Git LFS or release assets ([GitHub large files][gh-large], [Git LFS][lfs]). pre-commit's `check-added-large-files` refuses additions over 500 kB by default ([pre-commit-hooks][pre-commit]). | A product asset belongs in its smallest form; size alone is a review question, and a size check is TSK-428's warn tier. |
 | Secrets | Deleting a committed secret does not remove it from history; rotate it first ([GitHub sensitive data][gh-secrets]). | Already covered: the managed `.gitignore` and the git floor's secret scan. No change here. |
 | Research and decision records | CodeFlow keeps research under `docs/research/`, one file per question, and decisions as ADRs (`cf-method/references/project-organization.md:173`). | Belongs: authority content. A superseded draft stays out; history keeps it. |
 | Evidence for a change | Pasted summaries in the PR body; full output in CI artifacts with a retention limit ([GitHub retention][gh-retention]). Git history keeps every removed file, so a clean-up loses nothing a commit pin cannot recover. | The PR body or the task record. A file only when a live record cites it and the body cannot carry it, in summary form. |
+
+## Project shapes
+
+The same file class can fall on either side depending on what the project
+ships.
+
+| Project shape | Kept that a generic rule might refuse | Still stays out |
+|---|---|---|
+| Application or service | lockfile; migrations; generated clients the team edits against | build output, logs, coverage |
+| Library | lockfile when the project chooses it (Cargo, uv) | build output, test run output |
+| GitHub JavaScript action | bundled `dist/index.js` | `node_modules`, run logs |
+| Infrastructure (Terraform, OpenTofu) | `.terraform.lock.hcl`, policy fixtures | `.terraform/`, plan output, state |
+| Docs site or portal | sources and figure data | the rendered site when a pipeline builds it |
+| Monorepo | each package's admitted content | per-task evidence folders, reference copies |
 
 ## CodeFlow guidance and checks this touches
 
@@ -72,22 +96,28 @@ pins TSK-428 builds, so its clean-up stays with TSK-428.
 
 - The rule has one home, the discipline rules' "Write only what earns its
   keep", which ships at every tier. It states what belongs, what stays out,
-  where evidence goes, the evidence-path condition, that history keeps
+  where evidence goes, the evidence-file condition, that history keeps
   removed evidence (cite a removed file at a commit that holds it), and the
-  vendoring rule.
+  vendoring rule. An admitted use outranks the exclusions, so a generated
+  file the project ships, such as an action's bundled `dist/index.js`, is
+  not refused as build output.
 - `cf-develop` (build), `cf-ship` (PR), `pr-evidence.md` (the body),
   `quality/evidence.md` and the `project-organization.md` row point to it.
   The row names no per-task folder and points to `pr-evidence.md`.
 - `cf-reviewer` asks of every added file whether it is needed long term and
-  in its smallest form, reports the count in its verdict, and an unneeded or
-  oversized addition is a finding. The materiality list gains that case, so
-  such a finding blocks: the issue's cause was that every such file passed
-  review.
+  in the smallest form that serves its use, reports the count in its
+  verdict, and an unneeded or oversized addition is a finding. The
+  materiality list gains that case, so such a finding blocks: the issue's
+  cause was that every such file passed review. Oversized means shown
+  unnecessary content or avoidable bulk, never a wording or structure
+  preference.
 - The examples and defaults above stop naming `docs/verification/`: the
   board is named as CodeFlow's own and unshipped, the writing examples take
   durable sources, and the portal starter and fixtures exclude nothing.
-- One `cf-evaluate-model` case: a builder with run output in hand puts its
-  summary in the PR body and commits none of it.
+- Two `cf-evaluate-model` cases: a builder with run output in hand puts its
+  summary in the PR body and commits none of it; a reviewer refuses an
+  unneeded file while it keeps fixtures, a lockfile and an action's bundled
+  `dist/index.js`.
 - Left out, for TSK-428: the gate and its tiers, citation checks, exception
   handling, a managed `.gitignore` entry for run output (a gate class, and a
   stack-neutral ignore would hide files some projects track), and this
@@ -108,6 +138,7 @@ pins TSK-428 builds, so its clean-up stays with TSK-428.
 [go-gen]: https://pkg.go.dev/cmd/go#hdr-Generate_Go_files_by_processing_source
 [go-mod]: https://go.dev/ref/mod
 [gh-large]: https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github
+[gh-js-action]: https://docs.github.com/en/actions/tutorials/create-actions/create-a-javascript-action
 [lfs]: https://git-lfs.com/
 [jest]: https://jestjs.io/docs/snapshot-testing
 [pre-commit]: https://github.com/pre-commit/pre-commit-hooks
