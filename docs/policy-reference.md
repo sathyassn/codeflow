@@ -312,8 +312,9 @@ the guard cannot establish, such as `cd "$DIR"` or `pushd "$DIR"`, a
 relative operand refuses when its name or path could name a secret: a
 secret basename such as `id_rsa`, or a path that is secret below a
 protected home directory, such as `auth.json` or `.codex/auth.json`, by the
-same names the absolute-path checks use. Other relative operands keep
-their verdicts.
+same names the absolute-path checks use. Env files such as `.env` are not
+among those names; the native read deny covers them. Other relative
+operands keep their verdicts.
 A parent component after an existing link is resolved through the link. A
 search selector is matched with the tool's own matching semantics against
 every spelling the tool may compare, the search root included; a selector
