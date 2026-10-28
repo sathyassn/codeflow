@@ -636,7 +636,7 @@ mod tests {
         );
         for odd in [
             "ok    permissions: fine\n",
-            "writable /a\nnote: something\n",
+            "writable /a\nsomething else\n",
             " writable /a\n",
         ] {
             assert_eq!(probe_lines(odd), None, "{odd:?}");
