@@ -34,6 +34,7 @@ pub mod release_pin;
 pub mod report;
 pub mod rule_map;
 pub mod settings_merge;
+pub mod shown;
 pub mod state;
 pub mod template;
 pub mod update;
@@ -118,30 +119,36 @@ pub use hash::sha256_hex;
 pub use init::{init, InitAnswers, InitOptions};
 pub use manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest, Tier};
 pub use report::{Action, FileReport, Report};
+pub use shown::Shown;
 pub use update::{update, UpdateOptions};
 pub use version::version_skew_warning;
 
-/// Errors produced by the scaffold engine.
+/// Errors produced by the scaffold engine. Every text a variant holds is a
+/// [`Shown`], a path or a [`ParsePlace`], and no variant has a source, so
+/// neither its text, its `Debug` form nor an error chain can carry what a
+/// project wrote (TSK-1029, the display boundary in [`shown`]).
 #[derive(Debug, thiserror::Error)]
 pub enum ScaffoldError {
-    #[error("io error on {path}: {source}")]
+    /// An I/O failure, shown by its path and kind. The `io::Error` stays
+    /// for callers that match on it; it is not a source, since a custom
+    /// error's message can hold any text.
+    #[error("io error on {}: {}", .path.display(), Shown::io(.source))]
     Io {
         path: std::path::PathBuf,
-        #[source]
         source: std::io::Error,
     },
     #[error("scaffold manifest missing from assets ({0})")]
-    ManifestMissing(String),
+    ManifestMissing(Shown),
     #[error("scaffold manifest invalid: {0}")]
-    ManifestInvalid(String),
-    #[error("refusing to follow a symlink at {path} — scaffold IO stays beneath the repo root")]
+    ManifestInvalid(Shown),
+    #[error("refusing to follow a symlink at {} — scaffold IO stays beneath the repo root", .path.display())]
     UnsafeSymlink { path: std::path::PathBuf },
     #[error("not a codeflow project (no .codeflow/project.toml) — run `codeflow init`")]
     NotInitialized,
     #[error("invalid {what}: {detail}")]
-    InvalidState { what: String, detail: String },
+    InvalidState { what: Shown, detail: Shown },
     #[error("git: {0}")]
-    Git(String),
+    Git(Shown),
     /// A JSON file the project writes did not parse. Only the place is
     /// kept: the parser's own error is dropped at the conversion, so
     /// neither this error's text nor its `Debug` form nor an error chain
@@ -238,6 +245,12 @@ pub fn json_error(error: &serde_json::Error) -> String {
 }
 
 impl ScaffoldError {
+    /// An invalid file or value: `what` names it, `detail` says why.
+    #[must_use]
+    pub fn invalid(what: Shown, detail: Shown) -> Self {
+        Self::InvalidState { what, detail }
+    }
+
     fn io(path: impl Into<std::path::PathBuf>, source: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),

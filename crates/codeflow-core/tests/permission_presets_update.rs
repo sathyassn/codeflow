@@ -472,7 +472,7 @@ fn notes_for(report: &scaffold::Report, dest: &str) -> Vec<String> {
         .files
         .iter()
         .find(|f| f.dest == dest)
-        .map(|f| f.notes.clone())
+        .map(|f| f.notes.iter().map(ToString::to_string).collect())
         .unwrap_or_default()
 }
 

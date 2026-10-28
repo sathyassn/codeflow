@@ -64,43 +64,53 @@ impl std::fmt::Display for Unparseable {
 pub(super) fn check_write_version(
     pinned: &str,
     binary: &str,
-    command: &str,
+    command: &'static str,
 ) -> Result<(), super::ScaffoldError> {
-    let project_file = super::state::PROJECT_TOML;
+    use super::Shown;
+    let project_file = Shown::path(super::state::PROJECT_TOML);
+    let command = Shown::fixed(command);
     for (name, value, location, remedy) in [
         (
             "scaffold_version",
             pinned,
-            format!(" in {project_file}"),
+            crate::shown!(" in {}", project_file),
             "correct it",
         ),
         (
             "binary version",
             binary,
-            String::new(),
+            Shown::default(),
             "install a build with a valid version",
         ),
     ] {
         // The value is not shown: a pin that does not parse is free text the
         // project wrote, and can hold a secret (TSK-1029).
         if !is_parseable(value) {
-            return Err(super::ScaffoldError::InvalidState {
-                what: name.to_string(),
-                detail: format!(
-                    "the value{location} is not a parseable version; {remedy} and retry; {command} wrote no project files"
+            return Err(super::ScaffoldError::invalid(
+                Shown::fixed(name),
+                crate::shown!(
+                    "the value{} is not a parseable version; {} and retry; {} wrote no project files",
+                    location,
+                    Shown::fixed(remedy),
+                    command
                 ),
-            });
+            ));
         }
     }
     // Both values parsed above, so the comparison is always `Ok`.
     if is_older(binary, pinned) == Ok(true) {
-        let pinned = shown(pinned);
-        return Err(super::ScaffoldError::InvalidState {
-            what: format!("{command} version"),
-            detail: format!(
-                "binary {binary} is older than scaffold_version {pinned} in {project_file}; install the pinned version {pinned} and retry; {command} wrote no project files"
+        let pinned = Shown::version(pinned);
+        return Err(super::ScaffoldError::invalid(
+            crate::shown!("{} version", command),
+            crate::shown!(
+                "binary {} is older than scaffold_version {} in {}; install the pinned version {} and retry; {} wrote no project files",
+                Shown::version(binary),
+                pinned,
+                project_file,
+                pinned,
+                command
             ),
-        });
+        ));
     }
     Ok(())
 }

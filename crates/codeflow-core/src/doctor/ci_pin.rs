@@ -355,7 +355,8 @@ fn digest_mode(state: &str, version: &str) -> Result<String, String> {
 /// line they stop at, and the edit that clears it (`codeflow update --pin`
 /// keeps the project's own lines, so it cannot).
 fn unreadable(prefix: &str, state: &str, reason: &str) -> PinReport {
-    let (number, line) = unread_line(state).unwrap_or((0, "an unnamed line".to_string()));
+    let (number, line) =
+        unread_line(state).unwrap_or((0, crate::scaffold::Shown::fixed("an unnamed line")));
     PinReport {
         status: Status::Warn(
             remedy::DOCTOR_CI_DIGEST_LINE.with(&[("line", number.to_string().as_str())]),

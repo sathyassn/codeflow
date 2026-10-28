@@ -154,14 +154,22 @@ pub enum MappingState {
     Custom,
 }
 
-impl fmt::Display for MappingState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl MappingState {
+    /// The state as the policy file writes it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
             Self::Diagnosed => "diagnosed",
             Self::Accepted => "accepted",
             Self::Refused => "refused",
             Self::Custom => "custom",
-        })
+        }
+    }
+}
+
+impl fmt::Display for MappingState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

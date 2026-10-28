@@ -61,14 +61,18 @@ pub(crate) fn read_text(
 ) -> Result<Option<String>, super::ScaffoldError> {
     source
         .read(path)
-        .map_err(|error| super::ScaffoldError::InvalidState {
-            what: format!("asset {path}"),
-            detail: error.to_string(),
+        .map_err(|_| {
+            super::ScaffoldError::invalid(
+                crate::shown!("asset {}", super::Shown::path(path)),
+                super::Shown::fixed("the binary could not read its embedded asset"),
+            )
         })?
         .map(|bytes| {
-            String::from_utf8(bytes).map_err(|_| super::ScaffoldError::InvalidState {
-                what: format!("asset {path}"),
-                detail: "not valid UTF-8".into(),
+            String::from_utf8(bytes).map_err(|_| {
+                super::ScaffoldError::invalid(
+                    crate::shown!("asset {}", super::Shown::path(path)),
+                    super::Shown::fixed("not valid UTF-8"),
+                )
             })
         })
         .transpose()

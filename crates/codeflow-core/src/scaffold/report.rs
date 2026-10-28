@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use super::Shown;
+
 /// What happened to one destination file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -59,20 +61,21 @@ impl Action {
 /// Report line for one destination file.
 #[derive(Debug, Clone)]
 pub struct FileReport {
-    pub dest: String,
+    /// The destination path.
+    pub dest: Shown,
     pub action: Action,
-    pub notes: Vec<String>,
+    pub notes: Vec<Shown>,
 }
 
 /// The full init/update report.
 #[derive(Debug, Default, Clone)]
 pub struct Report {
     /// Heading, e.g. `codeflow init (standard tier)`.
-    pub title: String,
+    pub title: Shown,
     pub files: Vec<FileReport>,
     /// Non-file findings: hook wiring, bootstrap notes, next steps.
-    pub notes: Vec<String>,
-    pub warnings: Vec<String>,
+    pub notes: Vec<Shown>,
+    pub warnings: Vec<Shown>,
     /// A kept PR template whose mapping awaits the operator's decision
     /// (SPC-013 R-84); an interactive caller asks before it reports.
     pub pending_pr_template: Option<super::pr_template::KeptTemplate>,
@@ -80,24 +83,29 @@ pub struct Report {
 
 impl Report {
     #[must_use]
-    pub fn new(title: impl Into<String>) -> Self {
+    pub fn new(title: Shown) -> Self {
         Self {
-            title: title.into(),
+            title,
             ..Self::default()
         }
     }
 
-    pub fn file(&mut self, dest: impl Into<String>, action: Action) {
+    pub fn file(&mut self, dest: impl AsRef<std::path::Path>, action: Action) {
         self.files.push(FileReport {
-            dest: dest.into(),
+            dest: Shown::path(dest),
             action,
             notes: vec![],
         });
     }
 
-    pub fn file_with_notes(&mut self, dest: impl Into<String>, action: Action, notes: Vec<String>) {
+    pub fn file_with_notes(
+        &mut self,
+        dest: impl AsRef<std::path::Path>,
+        action: Action,
+        notes: Vec<Shown>,
+    ) {
         self.files.push(FileReport {
-            dest: dest.into(),
+            dest: Shown::path(dest),
             action,
             notes,
         });
@@ -133,56 +141,74 @@ impl Report {
     }
 
     fn write_block(&self, f: &mut crate::git::TextBlock) -> fmt::Result {
-        writeln!(f, "{}", self.title)?;
+        for line in self.lines() {
+            writeln!(f, "{line}")?;
+        }
+        Ok(())
+    }
+
+    /// The report as text inside the display boundary ([`Shown`]), as the
+    /// `--diff` export writes it (TSK-1029).
+    #[must_use]
+    pub fn shown(&self) -> Shown {
+        let mut text = Shown::join(self.lines(), "\n");
+        text.push(&Shown::fixed("\n"));
+        text
+    }
+
+    /// The report's lines: every one is built from `Shown` fragments.
+    fn lines(&self) -> Vec<Shown> {
+        let mut lines = vec![self.title.clone()];
         for file in &self.files {
-            writeln!(f, "  {:<22} {}", file.action.label(), file.dest)?;
+            lines.push(crate::shown!(
+                "  {:<22} {}",
+                Shown::fixed(file.action.label()),
+                file.dest
+            ));
             for note in &file.notes {
-                writeln!(f, "      - {note}")?;
+                lines.push(crate::shown!("      - {}", note));
             }
         }
         if !self.notes.is_empty() {
-            writeln!(f)?;
+            lines.push(Shown::default());
             for note in &self.notes {
-                writeln!(f, "  note: {note}")?;
+                lines.push(crate::shown!("  note: {}", note));
             }
         }
         if !self.warnings.is_empty() {
-            writeln!(f)?;
+            lines.push(Shown::default());
             for warning in &self.warnings {
-                writeln!(f, "  warning: {warning}")?;
+                lines.push(crate::shown!("  warning: {}", warning));
             }
         }
         let summary = [
-            (Action::Created, self.count(Action::Created)),
-            (Action::Added, self.count(Action::Added)),
-            (Action::Changed, self.count(Action::Changed)),
-            (Action::Merged, self.count(Action::Merged)),
-            (Action::Conflicted, self.count(Action::Conflicted)),
-            (Action::KeysAdded, self.count(Action::KeysAdded)),
-            (Action::Skipped, self.count(Action::Skipped)),
-            (Action::MissingAsset, self.count(Action::MissingAsset)),
-            (
-                Action::KeptUserModified,
-                self.count(Action::KeptUserModified),
-            ),
-            (Action::Forced, self.count(Action::Forced)),
-            (Action::Removed, self.count(Action::Removed)),
-            (Action::Unchanged, self.count(Action::Unchanged)),
+            Action::Created,
+            Action::Added,
+            Action::Changed,
+            Action::Merged,
+            Action::Conflicted,
+            Action::KeysAdded,
+            Action::Skipped,
+            Action::MissingAsset,
+            Action::KeptUserModified,
+            Action::Forced,
+            Action::Removed,
+            Action::Unchanged,
         ];
-        let parts: Vec<String> = summary
-            .iter()
+        let parts: Vec<Shown> = summary
+            .into_iter()
+            .map(|action| (action, self.count(action)))
             .filter(|(_, n)| *n > 0)
-            .map(|(a, n)| format!("{} {}", n, a.label()))
+            .map(|(action, n)| {
+                crate::shown!("{} {}", Shown::count(n), Shown::fixed(action.label()))
+            })
             .collect();
-        writeln!(f)?;
-        writeln!(
-            f,
-            "  {}",
-            if parts.is_empty() {
-                "no changes".to_string()
-            } else {
-                parts.join(", ")
-            }
-        )
+        lines.push(Shown::default());
+        lines.push(if parts.is_empty() {
+            Shown::fixed("  no changes")
+        } else {
+            crate::shown!("  {}", Shown::join(parts, ", "))
+        });
+        lines
     }
 }

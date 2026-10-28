@@ -29,6 +29,9 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use super::Shown;
+use crate::shown;
+
 /// The embedded asset a section is judged against.
 #[derive(Clone, Copy)]
 pub struct Reference<'a> {
@@ -60,18 +63,19 @@ const TEXT_EXTENSIONS: [&str; 13] = [
 /// The `--diff` section for `dest`, from the file before and after this
 /// update, judged against `reference`.
 #[must_use]
-pub fn section(dest: &str, old: &str, new: &str, reference: Reference<'_>) -> String {
+pub fn section(dest: &str, old: &str, new: &str, reference: Reference<'_>) -> Shown {
     let body = match Kind::of(dest) {
         Kind::Structured(format) => structured(format, old, new, reference),
         Kind::Text => Some(text(old, new, reference)),
         Kind::Unknown => None,
     };
     match body {
-        Some(body) => format!("=== {dest}\n{body}\n"),
-        None => format!(
-            "=== {dest}\n(content withheld: the export shows only values and lines from the \
+        Some(body) => shown!("=== {}\n{}\n", Shown::path(dest), body),
+        None => shown!(
+            "=== {}\n(content withheld: the export shows only values and lines from the \
              shipped version, and this file's format has no rule for finding them, or the file \
-             did not parse)\n\n"
+             did not parse)\n\n",
+            Shown::path(dest)
         ),
     }
 }
@@ -122,30 +126,35 @@ impl Format {
     }
 }
 
-fn structured(format: Format, old: &str, new: &str, reference: Reference<'_>) -> Option<String> {
+fn structured(format: Format, old: &str, new: &str, reference: Reference<'_>) -> Option<Shown> {
     let old = format.parse(old)?;
     let new = format.parse(new)?;
     // A reference that does not parse owns nothing: every key is the
     // project's and no shipped value is shown.
     let shipped = format.parse(reference.rendered);
     let raw = reference.raw.and_then(|raw| format.parse(raw));
-    let mut lines = vec![
-        "(changed key paths; values and key names from the project are never shown)".to_string(),
-    ];
+    let mut lines = vec![Shown::fixed(
+        "(changed key paths; values and key names from the project are never shown)",
+    )];
     walk(
         &mut lines,
-        "",
+        &Shown::default(),
         Sides {
             old: Some(&old),
             new: Some(&new),
         },
-        shipped.as_ref(),
-        raw.as_ref(),
+        Shipped {
+            rendered: shipped.as_ref(),
+            raw: raw.as_ref(),
+            text: reference.raw,
+        },
     );
     if lines.len() == 1 {
-        lines.push("no key path changed".to_string());
+        lines.push(Shown::fixed("no key path changed"));
     }
-    Some(lines.join("\n") + "\n")
+    let mut body = Shown::join(lines, "\n");
+    body.push(&Shown::fixed("\n"));
+    Some(body)
 }
 
 /// One place in the file before and after this update.
@@ -171,13 +180,35 @@ impl Sides<'_> {
     }
 }
 
-fn walk(
-    out: &mut Vec<String>,
-    path: &str,
-    sides: Sides<'_>,
-    shipped: Option<&Value>,
-    raw: Option<&Value>,
-) {
+/// The shipped file at one place: as update writes it (`rendered`), as
+/// embedded before templating (`raw`), and the embedded bytes (`text`),
+/// which are the proof for every name and value shown ([`Shown::shipped`]).
+#[derive(Clone, Copy)]
+struct Shipped<'a> {
+    rendered: Option<&'a Value>,
+    raw: Option<&'a Value>,
+    text: Option<&'a str>,
+}
+
+impl<'a> Shipped<'a> {
+    fn get(self, key: &str) -> Option<Shipped<'a>> {
+        let rendered = self.rendered.and_then(|value| value.get(key))?;
+        Some(Shipped {
+            rendered: Some(rendered),
+            raw: self.raw.and_then(|value| value.get(key)),
+            text: self.text,
+        })
+    }
+
+    /// A key the embedded bytes hold; any other is a placeholder.
+    fn key(self, key: &str) -> Shown {
+        self.text
+            .and_then(|text| Shown::shipped(key, text))
+            .unwrap_or_else(|| Shown::fixed("<a key the embedded file does not hold as written>"))
+    }
+}
+
+fn walk(out: &mut Vec<Shown>, path: &Shown, sides: Sides<'_>, shipped: Shipped<'_>) {
     if sides.old == sides.new {
         return;
     }
@@ -199,15 +230,9 @@ fn walk(
             if child.old == child.new {
                 continue;
             }
-            match shipped.and_then(|shipped| shipped.get(key)) {
+            match shipped.get(key) {
                 // The key is the shipped file's, so its name is shown.
-                Some(owned) => walk(
-                    out,
-                    &join(path, key),
-                    child,
-                    Some(owned),
-                    raw.and_then(|raw| raw.get(key)),
-                ),
+                Some(owned) => walk(out, &join(path, shipped.key(key)), child, owned),
                 None => project.count(child),
             }
         }
@@ -215,14 +240,14 @@ fn walk(
             out.push(line);
         }
     } else if sides.lists() {
-        list(out, path, sides, shipped, raw);
+        list(out, path, sides, shipped);
     } else {
-        out.push(format!(
+        out.push(shown!(
             "{}\n  shipped: {}\n  before:  {}\n  after:   {}",
             label(path),
-            shown(shipped, raw),
-            marker(sides.old, shipped, ABSENT),
-            marker(sides.new, shipped, REMOVED),
+            shipped_value(shipped),
+            Shown::fixed(marker(sides.old, shipped.rendered, ABSENT)),
+            Shown::fixed(marker(sides.new, shipped.rendered, REMOVED)),
         ));
     }
 }
@@ -244,33 +269,27 @@ impl Tally {
         }
     }
 
-    fn line(&self, path: &str) -> Option<String> {
-        let parts: Vec<String> = [
+    fn line(&self, path: &Shown) -> Option<Shown> {
+        let parts: Vec<Shown> = [
             (self.added, "added"),
             (self.removed, "removed"),
             (self.changed, "changed"),
         ]
-        .iter()
+        .into_iter()
         .filter(|(count, _)| *count > 0)
-        .map(|(count, what)| format!("{count} {what}"))
+        .map(|(count, what)| shown!("{} {}", Shown::count(count), Shown::fixed(what)))
         .collect();
         (!parts.is_empty()).then(|| {
-            format!(
+            shown!(
                 "{}\n  keys the shipped file does not have (names not shown): {}",
                 label(path),
-                parts.join(", ")
+                Shown::join(parts, ", ")
             )
         })
     }
 }
 
-fn list(
-    out: &mut Vec<String>,
-    path: &str,
-    sides: Sides<'_>,
-    shipped: Option<&Value>,
-    raw: Option<&Value>,
-) {
+fn list(out: &mut Vec<Shown>, path: &Shown, sides: Sides<'_>, shipped: Shipped<'_>) {
     let items = |value: Option<&Value>| -> Vec<Value> {
         value.and_then(Value::as_array).cloned().unwrap_or_default()
     };
@@ -284,52 +303,111 @@ fn list(
             None => added.push(item),
         }
     }
-    let shipped_items = items(shipped);
-    let raw_items = items(raw);
+    let shipped_items = items(shipped.rendered);
+    let raw_items = items(shipped.raw);
     let (written, other): (Vec<Value>, Vec<Value>) = added
         .into_iter()
         .partition(|item| shipped_items.contains(item) && raw_items.contains(item));
-    let mut lines = vec![format!("{} (list)", label(path))];
-    lines.extend(written.iter().map(|item| format!("  + {item}")));
+    let mut lines = vec![shown!("{} (list)", label(path))];
+    lines.extend(written.iter().map(|item| {
+        shown!(
+            "  + {}",
+            embedded_json(item, shipped.text)
+                .unwrap_or_else(|| Shown::fixed("<a shipped item not held as written>"))
+        )
+    }));
     if !other.is_empty() {
-        lines.push(format!("  {} other items added (not shown)", other.len()));
+        lines.push(shown!(
+            "  {} other items added (not shown)",
+            Shown::count(other.len())
+        ));
     }
     if !old.is_empty() {
-        lines.push(format!("  {} items removed (not shown)", old.len()));
+        lines.push(shown!(
+            "  {} items removed (not shown)",
+            Shown::count(old.len())
+        ));
     }
-    lines.push(format!("  before:  {}", marker(sides.old, shipped, ABSENT)));
-    lines.push(format!(
-        "  after:   {}",
-        marker(sides.new, shipped, REMOVED)
+    lines.push(shown!(
+        "  before:  {}",
+        Shown::fixed(marker(sides.old, shipped.rendered, ABSENT))
     ));
-    out.push(lines.join("\n"));
+    lines.push(shown!(
+        "  after:   {}",
+        Shown::fixed(marker(sides.new, shipped.rendered, REMOVED))
+    ));
+    out.push(Shown::join(lines, "\n"));
 }
 
-fn join(path: &str, key: &str) -> String {
+fn join(path: &Shown, key: Shown) -> Shown {
     if path.is_empty() {
-        key.to_string()
+        key
     } else {
-        format!("{path}.{key}")
+        shown!("{}.{}", path, key)
     }
 }
 
-fn label(path: &str) -> &str {
+fn label(path: &Shown) -> Shown {
     if path.is_empty() {
-        "(top level)"
+        Shown::fixed("(top level)")
     } else {
-        path
+        path.clone()
     }
 }
 
 /// The shipped value at a path, shown only when the embedded asset holds it
 /// as written.
-fn shown(shipped: Option<&Value>, raw: Option<&Value>) -> String {
-    match shipped {
-        None => "<not shipped>".to_string(),
-        Some(value) if raw != Some(value) => "<filled from the project's settings>".to_string(),
-        Some(Value::Object(_)) => "<an object>".to_string(),
-        Some(Value::Array(items)) => format!("<a list of {} items>", items.len()),
-        Some(value) => value.to_string(),
+fn shipped_value(shipped: Shipped<'_>) -> Shown {
+    match shipped.rendered {
+        None => Shown::fixed("<not shipped>"),
+        Some(value) if shipped.raw != Some(value) => {
+            Shown::fixed("<filled from the project's settings>")
+        }
+        Some(Value::Object(_)) => Shown::fixed("<an object>"),
+        Some(Value::Array(items)) => shown!("<a list of {} items>", Shown::count(items.len())),
+        Some(value) => embedded_json(value, shipped.text)
+            .unwrap_or_else(|| Shown::fixed("<a shipped value not held as written>")),
+    }
+}
+
+/// `value` as compact JSON, built only from strings and numbers the
+/// embedded bytes (`text`) hold as written; `None` when any part is not, or
+/// a string needs escaping.
+fn embedded_json(value: &Value, text: Option<&str>) -> Option<Shown> {
+    let text = text?;
+    match value {
+        Value::Null => Some(Shown::fixed("null")),
+        Value::Bool(true) => Some(Shown::fixed("true")),
+        Value::Bool(false) => Some(Shown::fixed("false")),
+        Value::Number(number) => Shown::shipped(&number.to_string(), text),
+        Value::String(string) => {
+            let plain =
+                serde_json::to_string(string).is_ok_and(|json| json == format!("\"{string}\""));
+            if string.is_empty() {
+                Some(Shown::fixed("\"\""))
+            } else if plain {
+                Some(shown!("\"{}\"", Shown::shipped(string, text)?))
+            } else {
+                None
+            }
+        }
+        Value::Array(items) => {
+            let items = items
+                .iter()
+                .map(|item| embedded_json(item, Some(text)))
+                .collect::<Option<Vec<_>>>()?;
+            Some(shown!("[{}]", Shown::join(items, ",")))
+        }
+        Value::Object(map) => {
+            let members = map
+                .iter()
+                .map(|(key, item)| {
+                    let key = embedded_json(&Value::String(key.clone()), Some(text))?;
+                    Some(shown!("{}:{}", key, embedded_json(item, Some(text))?))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(shown!("{{{}}}", Shown::join(members, ",")))
+        }
     }
 }
 
@@ -342,7 +420,7 @@ fn marker(value: Option<&Value>, shipped: Option<&Value>, missing: &'static str)
     }
 }
 
-fn text(old: &str, new: &str, reference: Reference<'_>) -> String {
+fn text(old: &str, new: &str, reference: Reference<'_>) -> Shown {
     let shipped_lines: HashSet<&str> = reference
         .raw
         .map(|raw| raw.split('\n').collect())
@@ -355,10 +433,17 @@ fn text(old: &str, new: &str, reference: Reference<'_>) -> String {
             match line {
                 diffy::Line::Insert(line) => {
                     let body = line.strip_suffix('\n').unwrap_or(line);
-                    if shipped_lines.contains(body) {
-                        written.push(format!("+ {body}"));
+                    // A line of the embedded bytes, shown as they hold it.
+                    let shown_line = if !shipped_lines.contains(body) {
+                        None
+                    } else if body.is_empty() {
+                        Some(Shown::default())
                     } else {
-                        other += 1;
+                        reference.raw.and_then(|raw| Shown::shipped(body, raw))
+                    };
+                    match shown_line {
+                        Some(body) => written.push(shown!("+ {}", body)),
+                        None => other += 1,
                     }
                 }
                 diffy::Line::Delete(_) => removed += 1,
@@ -367,25 +452,34 @@ fn text(old: &str, new: &str, reference: Reference<'_>) -> String {
         }
     }
     let mut lines = vec![
-        "(lines this update writes from the shipped version; lines from the project are never \
-         shown)"
-            .to_string(),
-        format!("before: {}", likeness(reference.rendered, old)),
-        format!("after:  {}", likeness(reference.rendered, new)),
+        Shown::fixed(
+            "(lines this update writes from the shipped version; lines from the project are never \
+             shown)",
+        ),
+        shown!("before: {}", likeness(reference.rendered, old)),
+        shown!("after:  {}", likeness(reference.rendered, new)),
     ];
     lines.extend(written);
     if other > 0 {
-        lines.push(format!("{other} other lines written (not shown)"));
+        lines.push(shown!(
+            "{} other lines written (not shown)",
+            Shown::count(other)
+        ));
     }
     if removed > 0 {
-        lines.push(format!("{removed} lines removed (not shown)"));
+        lines.push(shown!(
+            "{} lines removed (not shown)",
+            Shown::count(removed)
+        ));
     }
-    lines.join("\n") + "\n"
+    let mut body = Shown::join(lines, "\n");
+    body.push(&Shown::fixed("\n"));
+    body
 }
 
 /// Whether `file` matches the shipped version, or by how many lines it
 /// differs.
-fn likeness(shipped: &str, file: &str) -> String {
+fn likeness(shipped: &str, file: &str) -> Shown {
     let changed = diffy::create_patch(shipped, file)
         .hunks()
         .iter()
@@ -393,9 +487,12 @@ fn likeness(shipped: &str, file: &str) -> String {
         .filter(|line| !matches!(line, diffy::Line::Context(_)))
         .count();
     if changed == 0 {
-        "matches the shipped version".to_string()
+        Shown::fixed("matches the shipped version")
     } else {
-        format!("differs from the shipped version in {changed} lines")
+        shown!(
+            "differs from the shipped version in {} lines",
+            Shown::count(changed)
+        )
     }
 }
 

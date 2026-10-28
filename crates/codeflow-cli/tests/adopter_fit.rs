@@ -691,7 +691,12 @@ fn first_install_diagnoses_the_kept_template_and_warns_until_decided() {
         all.contains("recorded git.pr_section_mapping = diagnosed"),
         "{all}"
     );
-    assert!(all.contains("Summary -> Description"), "{all}");
+    // The report names a template heading by its position: the heading
+    // text is the project's and is never printed (TSK-1029).
+    assert!(all.contains("Summary -> template heading 1"), "{all}");
+    for heading in ["Description", "How has this been tested?", "Release notes"] {
+        assert!(!all.contains(heading), "{heading} printed: {all}");
+    }
     assert!(all.contains("warn (diagnosed)"), "{all}");
     // No second template: the only template is the project's.
     assert_eq!(

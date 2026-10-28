@@ -516,30 +516,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Failed-process stderr is display-only; it never supplies a config value or an absence answer.
-    (
-        "codeflow-core/src/scaffold/gitutil.rs",
-        "failed",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
-    // a git or tool error message shown to a person, never compared
-    (
-        "codeflow-core/src/scaffold/gitutil.rs",
-        "add_and_commit",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
-    // a git or tool error message shown to a person, never compared
-    (
-        "codeflow-core/src/scaffold/gitutil.rs",
-        "git_ok",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
     // a name that is not UTF-8 makes the deletion unproven when the glob has a single-character wildcard or a bracket; the lossy spelling decides only literal and `*` patterns, which it answers as the bytes would, except that a literal U+FFFD in the pattern also matches such a name, which only adds a candidate or a refusal
     (
         "codeflow-core/src/security/deletion.rs",
@@ -3726,6 +3702,38 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // A report's lines, split only to indent each for the terminal or the export; nothing is decided from them.
+    (
+        "crates/codeflow-core/src/scaffold/report.rs",
+        "Report::shown",
+        "lines",
+        1,
+        "display",
+    ),
+    // The same indenting split when the report is written to the terminal.
+    (
+        "crates/codeflow-core/src/scaffold/report.rs",
+        "Report::write_block",
+        "lines",
+        1,
+        "display",
+    ),
+    // A retired entry that is not a JSON string is shown as a placeholder, never as text; only the report line is affected, and the entry is retired either way.
+    (
+        "crates/codeflow-core/src/scaffold/settings_merge.rs",
+        "shown_entry",
+        "obtain-absent:as_str",
+        1,
+        "display",
+    ),
+    // Only an unborn branch skips the migration baseline (no commit to record); any other HEAD error refuses the update.
+    (
+        "crates/codeflow-core/src/scaffold/update.rs",
+        "record_work_records_baseline",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
     // Any HEAD read error refuses with the no-commit stop; the wording assumes an unborn branch, but nothing proceeds.
     (
         "crates/codeflow-core/src/root_checkout.rs",
@@ -3741,30 +3749,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:into_string",
         1,
         "ascii-marker",
-    ),
-    // Only failed-process stderr is trimmed for a refusal diagnostic.
-    (
-        "crates/codeflow-core/src/scaffold/gitutil.rs",
-        "failed",
-        "trim",
-        1,
-        "display",
-    ),
-    // Trims stderr solely when producing an error for a failed Git command.
-    (
-        "crates/codeflow-core/src/scaffold/gitutil.rs",
-        "add_and_commit",
-        "trim",
-        1,
-        "display",
-    ),
-    // Trims stderr solely when producing an error for a failed Git command.
-    (
-        "crates/codeflow-core/src/scaffold/gitutil.rs",
-        "git_ok",
-        "trim",
-        1,
-        "display",
     ),
     // Trims literal JSON whitespace around an object insertion point, not a JSON string or key; verified reparses and compares the complete expected value.
     (
@@ -5648,7 +5632,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // sha256.sum is read as sha256sum writes it: one digest and one file name per line, separated by blanks; a file that is not UTF-8 refuses before this split.
     (
         "crates/codeflow-core/src/scaffold/release_pin.rs",
-        "pin_release",
+        "verified_digests",
         "lines",
         1,
         "grammar:sha256sum-lines",
@@ -5656,7 +5640,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // sha256.sum fields are the digest then the file name, split as sha256sum separates them; the name must equal the ASCII asset name and the digest must be lowercase hex, so no other spacing is accepted.
     (
         "crates/codeflow-core/src/scaffold/release_pin.rs",
-        "pin_release",
+        "verified_digests",
         "split_whitespace",
         1,
         "grammar:sha256sum-lines",

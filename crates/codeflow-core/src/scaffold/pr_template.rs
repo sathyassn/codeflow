@@ -24,8 +24,9 @@ use super::json_edit;
 use super::state::{
     guard_beneath_root, read_beneath_root, write_beneath_root, InstalledManifest, SyncBatch,
 };
-use super::ScaffoldError;
+use super::{ScaffoldError, Shown};
 use crate::hooks::policy::{MappingState, Policy};
+use crate::shown;
 
 /// Where `CodeFlow` installs its PR template.
 pub const MANAGED_TEMPLATE: &str = ".github/pull_request_template.md";
@@ -64,12 +65,12 @@ fn candidates(root: &Path) -> Result<Vec<String>, ScaffoldError> {
                 .file_type()
                 .map_err(|error| ScaffoldError::io(entry.path(), error))?;
             if kind.is_file() && name.eq_ignore_ascii_case("pull_request_template.md") {
-                let name = name
-                    .into_string()
-                    .map_err(|_| ScaffoldError::InvalidState {
-                        what: "PR template".into(),
-                        detail: "path is not valid UTF-8".into(),
-                    })?;
+                let name = name.into_string().map_err(|_| {
+                    ScaffoldError::invalid(
+                        Shown::fixed("PR template"),
+                        Shown::fixed("path is not valid UTF-8"),
+                    )
+                })?;
                 names.push(if dir.is_empty() {
                     name
                 } else {
@@ -80,9 +81,11 @@ fn candidates(root: &Path) -> Result<Vec<String>, ScaffoldError> {
                 && name.eq_ignore_ascii_case("pull_request_template")
             {
                 let text_name = |name: std::ffi::OsString| {
-                    name.into_string().map_err(|_| ScaffoldError::InvalidState {
-                        what: "PR template".into(),
-                        detail: "path is not valid UTF-8".into(),
+                    name.into_string().map_err(|_| {
+                        ScaffoldError::invalid(
+                            Shown::fixed("PR template"),
+                            Shown::fixed("path is not valid UTF-8"),
+                        )
                     })
                 };
                 let dir_name = text_name(name)?;
@@ -121,9 +124,11 @@ pub fn find_kept(
             Err(ScaffoldError::UnsafeSymlink { .. }) => continue,
             result => result?,
         }
-        .ok_or_else(|| ScaffoldError::InvalidState {
-            what: path.clone(),
-            detail: "template disappeared during reading".into(),
+        .ok_or_else(|| {
+            ScaffoldError::invalid(
+                Shown::path(&path),
+                Shown::fixed("template disappeared during reading"),
+            )
         })?;
         let ours = text == shipped
             || (path == MANAGED_TEMPLATE && installed.files.contains_key(MANAGED_TEMPLATE));
@@ -255,9 +260,9 @@ pub fn today() -> String {
 /// and release tools that own versions, which want `release.backend =
 /// "external"`. Read-only; nothing is written.
 #[must_use]
-pub fn automation_notes(root: &Path) -> Vec<String> {
+pub fn automation_notes(root: &Path) -> Vec<Shown> {
     let mut notes = Vec::new();
-    let bots: &[(&str, &[&str], &str, &str)] = &[
+    let bots: &[(&'static str, &[&'static str], &'static str, &'static str)] = &[
         (
             "Dependabot",
             &[".github/dependabot.yml", ".github/dependabot.yaml"],
@@ -279,9 +284,13 @@ pub fn automation_notes(root: &Path) -> Vec<String> {
     ];
     for (bot, files, actor, pattern) in bots {
         if let Some(file) = files.iter().find(|f| root.join(f).is_file()) {
-            notes.push(format!(
-                "{bot} is configured ({file}): its pull requests fail branch naming and commit format until you add a trusted profile to git.automation_profiles, e.g. {{\"name\": \"{}\", \"actors\": [\"{actor}\"], \"branch_pattern\": \"{pattern}\", \"sections\": {{...}}}} (see `codeflow policy explain`)",
-                bot.to_ascii_lowercase()
+            notes.push(shown!(
+                "{} is configured ({}): its pull requests fail branch naming and commit format until you add a trusted profile to git.automation_profiles, e.g. {{\"name\": \"{}\", \"actors\": [\"{}\"], \"branch_pattern\": \"{}\", \"sections\": {{...}}}} (see `codeflow policy explain`)",
+                Shown::fixed(bot),
+                Shown::fixed(file),
+                Shown::fixed(if *bot == "Dependabot" { "dependabot" } else { "renovate" }),
+                Shown::fixed(actor),
+                Shown::fixed(pattern)
             ));
         }
     }
@@ -388,117 +397,126 @@ pub fn diagnose(
 /// The policy file's text, parsed value and typed view, read without
 /// following a symlink.
 fn read_policy(root: &Path) -> Result<(String, Value, Policy), ScaffoldError> {
-    let text = read_beneath_root(root, POLICY)?.ok_or_else(|| ScaffoldError::InvalidState {
-        what: POLICY.to_string(),
-        detail: "no policy file".to_string(),
+    let text = read_beneath_root(root, POLICY)?.ok_or_else(|| {
+        ScaffoldError::invalid(Shown::path(POLICY), Shown::fixed("no policy file"))
     })?;
-    let original: Value = serde_json::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-        what: POLICY.to_string(),
-        detail: super::json_error(&e),
+    let original: Value = serde_json::from_str(&text).map_err(|e| {
+        ScaffoldError::invalid(
+            Shown::path(POLICY),
+            Shown::place(&crate::scaffold::ParsePlace::json(&e)),
+        )
     })?;
     // A typed parse error quotes the offending value, so only its place
     // reaches the report (TSK-1029).
-    let policy: Policy =
-        serde_json::from_str(&text).map_err(|error| ScaffoldError::InvalidState {
-            what: POLICY.into(),
-            detail: super::json_error(&error),
-        })?;
+    let policy: Policy = serde_json::from_str(&text).map_err(|error| {
+        ScaffoldError::invalid(
+            Shown::path(POLICY),
+            Shown::place(&crate::scaffold::ParsePlace::json(&error)),
+        )
+    })?;
     Ok((text, original, policy))
 }
 
-fn edit_error(key: &str) -> ScaffoldError {
-    ScaffoldError::InvalidState {
-        what: POLICY.to_string(),
-        detail: format!(
-            "cannot record git.{key} without rewriting other bytes; add it by hand (see `codeflow policy explain`)"
+fn edit_error(key: &'static str) -> ScaffoldError {
+    ScaffoldError::invalid(
+        Shown::path(POLICY),
+        shown!(
+            "cannot record git.{} without rewriting other bytes; add it by hand (see `codeflow policy explain`)",
+            Shown::fixed(key)
         ),
-    }
+    )
 }
 
 /// Whether `heading` is a required section `CodeFlow` defines by default.
 /// Only such headings are named in a report: any other was written by the
 /// project, in its policy or its template, and can hold a secret
 /// (TSK-1029).
-fn shipped_section(heading: &str) -> bool {
+fn shipped_section(heading: &str) -> Option<Shown> {
     let defaults = Policy::default().git;
-    defaults
-        .pr_required_sections
-        .iter()
-        .chain(&defaults.pr_code_sections)
-        .any(|section| section.eq_ignore_ascii_case(heading))
+    Shown::defined(
+        heading,
+        defaults
+            .pr_required_sections
+            .iter()
+            .chain(&defaults.pr_code_sections)
+            .map(String::as_str),
+    )
 }
 
 /// `headings` for a report: each shipped one by name, in order, then a
 /// count of the project's own.
-fn named_sections<'a>(headings: impl IntoIterator<Item = &'a String>, prefix: &str) -> String {
+fn named_sections<'a>(
+    headings: impl IntoIterator<Item = &'a String>,
+    prefix: &'static str,
+) -> Shown {
     let mut named = Vec::new();
     let mut own = 0usize;
     for heading in headings {
-        if shipped_section(heading) {
-            named.push(format!("{prefix}{heading}"));
-        } else {
-            own += 1;
+        match shipped_section(heading) {
+            Some(name) => named.push(shown!("{}{}", Shown::fixed(prefix), name)),
+            None => own += 1,
         }
     }
     match own {
         0 => {}
-        1 => named.push("1 project section (not named)".to_string()),
-        n => named.push(format!("{n} project sections (not named)")),
+        1 => named.push(Shown::fixed("1 project section (not named)")),
+        n => named.push(shown!("{} project sections (not named)", Shown::count(n))),
     }
-    named.join(", ")
+    Shown::join(named, ", ")
 }
 
 /// A one-paragraph report line for a diagnosis.
 #[must_use]
-pub fn describe(
-    kept: &KeptTemplate,
-    diagnosis: &Diagnosis,
-    policy_created: bool,
-) -> Option<String> {
+pub fn describe(kept: &KeptTemplate, diagnosis: &Diagnosis, policy_created: bool) -> Option<Shown> {
+    let path = Shown::path(&kept.path);
     match diagnosis {
-        Diagnosis::Satisfied => Some(format!(
+        Diagnosis::Satisfied => Some(shown!(
             "kept PR template {}: it carries every required section; no second template installed",
-            kept.path
+            path
         )),
-        Diagnosis::Recorded(state) => Some(format!(
-            "kept PR template {}: git.pr_section_mapping is {state}; template left as the project owns it",
-            kept.path
+        Diagnosis::Recorded(state) => Some(shown!(
+            "kept PR template {}: git.pr_section_mapping is {}; template left as the project owns it",
+            path,
+            Shown::fixed(state.as_str())
         )),
         Diagnosis::Diagnosed { mapping, unmatched } => {
             let proposed = if mapping.is_empty() {
-                "none".to_string()
+                Shown::fixed("none")
             } else {
                 // A template heading is named by its position; a required
                 // section by name only when CodeFlow defines it.
-                mapping
-                    .iter()
-                    .map(|(required, heading)| {
-                        let required = if shipped_section(required) {
-                            required.clone()
-                        } else {
-                            "a project section".to_string()
-                        };
+                Shown::join(
+                    mapping.iter().map(|(required, heading)| {
+                        let required = shipped_section(required)
+                            .unwrap_or_else(|| Shown::fixed("a project section"));
                         match kept.headings.iter().position(|h| h == heading) {
-                            Some(index) => format!("{required} -> template heading {}", index + 1),
-                            None => format!("{required} -> a template heading"),
+                            Some(index) => shown!(
+                                "{} -> template heading {}",
+                                required,
+                                Shown::count(index + 1)
+                            ),
+                            None => shown!("{} -> a template heading", required),
                         }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                    }),
+                    ", ",
+                )
             };
             let unmatched = if unmatched.is_empty() {
-                String::new()
+                Shown::default()
             } else {
-                format!("; no counterpart for: {}", named_sections(unmatched, ""))
+                shown!("; no counterpart for: {}", named_sections(unmatched, ""))
             };
-            let level = if policy_created {
+            let level = Shown::fixed(if policy_created {
                 "the PR-section check runs at warn (diagnosed) until you decide"
             } else {
                 "the PR-section check keeps its configured level"
-            };
-            Some(format!(
-                "kept PR template {} differs from the required PR sections: recorded git.pr_section_mapping = diagnosed with proposed mapping {proposed}{unmatched}; {level}. Decide: accepted (check the mapped headings), refused (append the missing headings to the template) or custom (set git.pr_required_sections in a reviewed change); `codeflow doctor` repeats this until then",
-                kept.path
+            });
+            Some(shown!(
+                "kept PR template {} differs from the required PR sections: recorded git.pr_section_mapping = diagnosed with proposed mapping {}{}; {}. Decide: accepted (check the mapped headings), refused (append the missing headings to the template) or custom (set git.pr_required_sections in a reviewed change); `codeflow doctor` repeats this until then",
+                path,
+                proposed,
+                unmatched,
+                level
             ))
         }
     }
@@ -516,15 +534,17 @@ pub fn record_decision(
     kept: &KeptTemplate,
     decision: MappingState,
     today: &str,
-) -> Result<String, ScaffoldError> {
+) -> Result<Shown, ScaffoldError> {
     let (text, original, policy) = read_policy(root)?;
     let mapping = policy
         .git
         .pr_section_mapping
         .filter(|m| m.state == MappingState::Diagnosed && decision != MappingState::Diagnosed)
-        .ok_or_else(|| ScaffoldError::InvalidState {
-            what: POLICY.to_string(),
-            detail: "no diagnosed git.pr_section_mapping to decide".to_string(),
+        .ok_or_else(|| {
+            ScaffoldError::invalid(
+                Shown::path(POLICY),
+                Shown::fixed("no diagnosed git.pr_section_mapping to decide"),
+            )
         })?;
     let value = mapping_json(decision, &mapping.headings, today);
     let edited = json_edit::replace_value(
@@ -556,10 +576,10 @@ pub fn record_decision(
         if !missing.is_empty() {
             guard_beneath_root(root, Path::new(&kept.path))?;
             let mut template = read_beneath_root(root, &kept.path)?.ok_or_else(|| {
-                ScaffoldError::InvalidState {
-                    what: kept.path.clone(),
-                    detail: "the kept PR template is gone".to_string(),
-                }
+                ScaffoldError::invalid(
+                    Shown::path(&kept.path),
+                    Shown::fixed("the kept PR template is gone"),
+                )
             })?;
             if !template.ends_with('\n') {
                 template.push('\n');
@@ -576,15 +596,22 @@ pub fn record_decision(
     // Both writes share one run's flushes (TSK-153).
     let batch = SyncBatch::begin();
     write_beneath_root(root, POLICY, edited.as_bytes())?;
-    let mut line =
-        format!("PR template decision recorded: git.pr_section_mapping = {decision} ({today})");
+    let mut line = shown!(
+        "PR template decision recorded: git.pr_section_mapping = {} ({})",
+        Shown::fixed(decision.as_str()),
+        Shown::iso_date(today).unwrap_or_else(|| Shown::fixed("today"))
+    );
     if let Some((template, added)) = appended {
         write_beneath_root(root, &kept.path, template.as_bytes())?;
-        line = format!("{line}; appended {added} to {}", kept.path);
+        line.push(&shown!(
+            "; appended {} to {}",
+            added,
+            Shown::path(&kept.path)
+        ));
     } else if decision == MappingState::Custom {
-        line.push_str(
+        line.push(&Shown::fixed(
             "; set git.pr_required_sections and git.pr_code_sections to your template's headings in a reviewed change",
-        );
+        ));
     }
     batch.finish()?;
     Ok(line)

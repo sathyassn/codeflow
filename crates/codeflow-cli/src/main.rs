@@ -252,7 +252,10 @@ fn update(
         binary_version: BINARY_VERSION.to_string(),
         diff_out: diff,
     };
-    let mut report = scaffold::update(assets, cwd, &options)?;
+    // The display boundary (TSK-1029): everything update prints is a
+    // `scaffold::Shown`, and its errors are turned into one here, with no
+    // source, so the chain `main` prints holds nothing else.
+    let mut report = scaffold::update(assets, cwd, &options).map_err(boundary_error)?;
     for file in &mut report.files {
         file.notes
             .retain(|note| codeflow_core::hooks::policy_schema::first_unsupported_warning(note));
@@ -263,7 +266,8 @@ fn update(
     print_block!(report.block());
     cmd::present::provision_state_root_or_warn();
     print_workspace_hint(cwd);
-    let portal_report = scaffold::portal::update_adopted_portal(assets, cwd)?;
+    let portal_report =
+        scaffold::portal::update_adopted_portal(assets, cwd).map_err(boundary_error)?;
     if let Some(portal_report) = &portal_report {
         print_block!(portal_report.block());
     }
@@ -271,6 +275,14 @@ fn update(
         std::process::exit(2);
     }
     Ok(())
+}
+
+/// A scaffold error at the display boundary of `codeflow update`
+/// (TSK-1029): its text only, which every variant builds from `Shown`
+/// fragments, as an error with no source.
+#[allow(clippy::needless_pass_by_value)] // `map_err` hands the error over by value
+fn boundary_error(error: scaffold::ScaffoldError) -> anyhow::Error {
+    anyhow::Error::msg(scaffold::Shown::from(&error).into_string())
 }
 
 /// `codeflow update --pin <version>`: pin that release and its archive
@@ -293,7 +305,7 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
         &scaffold::release_pin::fetch_with_curl,
     ) {
         Ok(report) => {
-            println!("{report}");
+            println!("{}", report.shown());
             0
         }
         Err(error) => {
