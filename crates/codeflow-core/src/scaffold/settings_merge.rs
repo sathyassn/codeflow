@@ -637,7 +637,10 @@ fn retire_codeflow_hooks(
                 return true;
             }
             if !wanted.iter().any(|(_, c)| *c == cmd) {
-                report.push(format!("settings: removed stale hook {event}: \"{cmd}\""));
+                report.push(format!(
+                    "settings: removed stale hook {event}: {}",
+                    shown_entry(&Value::String(cmd.to_string()))
+                ));
                 return false;
             }
             if wanted
@@ -865,11 +868,60 @@ fn retire_entries(
         let retired = previous.contains(entry) && !incoming.contains(entry);
         if retired {
             report.push(format!(
-                "settings: removed retired permissions.{key} entry {entry}"
+                "settings: removed retired permissions.{key} entry {}",
+                shown_entry(entry)
             ));
         }
         !retired
     });
+}
+
+/// How a report line names an entry update took from the project's file or
+/// its recorded baseline: the entry itself when an earlier release's
+/// settings copy embedded in this binary ([`super::prior_release`]) ships
+/// it, otherwise a placeholder, since either file can hold a secret
+/// (TSK-1029).
+fn shown_entry(entry: &Value) -> String {
+    if entry.as_str().is_some_and(embedded_string) {
+        entry.to_string()
+    } else {
+        "<not shown: no shipped copy in this binary holds it>".to_string()
+    }
+}
+
+/// Whether some settings copy embedded in this binary holds `text` as a
+/// string value.
+fn embedded_string(text: &str) -> bool {
+    use std::collections::HashSet;
+    use std::sync::OnceLock;
+    static STRINGS: OnceLock<HashSet<String>> = OnceLock::new();
+    fn collect(value: &Value, into: &mut HashSet<String>) {
+        match value {
+            Value::String(text) => {
+                into.insert(text.clone());
+            }
+            Value::Array(items) => items.iter().for_each(|item| collect(item, into)),
+            Value::Object(map) => map.values().for_each(|item| collect(item, into)),
+            _ => {}
+        }
+    }
+    STRINGS
+        .get_or_init(|| {
+            let mut strings = HashSet::new();
+            for src in [
+                "settings/default.json",
+                "settings/acceptEdits.json",
+                "settings/bypass-sandboxed.json",
+            ] {
+                if let Some(Ok(value)) =
+                    super::prior_release::settings(src).map(serde_json::from_str::<Value>)
+                {
+                    collect(&value, &mut strings);
+                }
+            }
+            strings
+        })
+        .contains(text)
 }
 
 #[cfg(test)]

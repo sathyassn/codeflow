@@ -482,7 +482,11 @@ fn warn_steps_before_secret_scan(root: &Path, dest: &str, report: &mut Report) {
                  set the scan's environment through GITHUB_ENV or GITHUB_PATH, and one that runs \
                  the pull request's code lets the pull request hide a leak from the scan; move it \
                  after the gitleaks step or into another job. Update kept it as you wrote it.",
-                steps.join(", ")
+                steps
+                    .iter()
+                    .map(|step| format!("step {step}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )),
             ScanOrder::Unrecognized => report.warnings.push(format!(
                 "{path}: the secret-scan job has no step named `gitleaks` with TRUSTED_SHA in its \
@@ -506,9 +510,11 @@ enum ScanOrder {
     /// `gitleaks`, with `TRUSTED_SHA` in its env), so its order needs a
     /// person's review.
     Unrecognized,
-    /// The steps before the scan other than `actions/checkout`, each named by
-    /// its `name`, `uses` or first `run` line; empty when there are none.
-    Checked(Vec<String>),
+    /// The steps before the scan other than `actions/checkout`, each by its
+    /// position in the job, counted from 1; empty when there are none. A
+    /// step is never named by its `name`, `uses` or `run`, which the project
+    /// writes and which can hold a secret (TSK-1029).
+    Checked(Vec<usize>),
 }
 
 fn scan_order(workflow: &str) -> ScanOrder {
@@ -540,20 +546,12 @@ fn scan_order(workflow: &str) -> ScanOrder {
     ScanOrder::Checked(
         steps[..scan]
             .iter()
-            .filter(|step| {
+            .enumerate()
+            .filter(|(_, step)| {
                 !(text(step, "uses").is_some_and(|uses| uses.starts_with("actions/checkout@"))
                     && step.get("run").is_none())
             })
-            .map(|step| {
-                let label = text(step, "name")
-                    .or_else(|| text(step, "uses").map(|uses| format!("uses: {uses}")))
-                    .or_else(|| {
-                        text(step, "run")
-                            .map(|run| format!("run: {}", run.lines().next().unwrap_or("").trim()))
-                    })
-                    .unwrap_or_else(|| "a step".to_string());
-                format!("`{label}`")
-            })
+            .map(|(index, _)| index + 1)
             .collect(),
     )
 }
@@ -600,7 +598,7 @@ fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldE
     let mut table: toml::Table =
         toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
             what: path.display().to_string(),
-            detail: e.to_string(),
+            detail: super::toml_error(&text, &e),
         })?;
     table.insert(BASELINE_KEY.to_string(), toml::Value::String(head.clone()));
     let next = super::state::state_text(&table).map_err(|e| ScaffoldError::InvalidState {
@@ -670,33 +668,26 @@ fn write_dest(root: &Path, entry: &ManifestEntry, content: &str) -> Result<(), S
     Ok(())
 }
 
-/// Append the patch for `dest` to the `--diff` export. Every caller goes
-/// through here, so the export shows only what `CodeFlow` wrote: `shipped`
-/// holds the old baseline (when recorded) and the new rendering, and every
-/// project value or line outside them is redacted on both sides; a format
-/// with no redaction rule, or a side that does not parse, is withheld
-/// (TSK-1029, `diff_redact`).
-fn push_diff(diffs: &mut String, dest: &str, old: &str, new: &str, shipped: &[&str]) {
-    use std::fmt::Write;
-    match super::diff_redact::sides_for(dest, old, new, shipped) {
-        super::diff_redact::DiffSides::Show(old, new) => {
-            let patch = diffy::create_patch(&old, &new);
-            let _ = write!(diffs, "=== {dest}\n{patch}\n");
-        }
-        super::diff_redact::DiffSides::Withheld => {
-            let _ = writeln!(
-                diffs,
-                "=== {dest}\n(content withheld: the diff shows only values CodeFlow wrote, \
-                 and this file's format has no rule for finding them or it did not parse)\n"
-            );
-        }
-    }
-}
-
-/// The shipped versions of a file: its recorded baseline, when there is
-/// one, and the new rendering.
-fn shipped_versions<'a>(baseline: Option<&'a str>, rendered: &'a str) -> Vec<&'a str> {
-    baseline.into_iter().chain([rendered]).collect()
+/// Append the section for `dest` to the `--diff` export. Every caller
+/// goes through here, and the section is judged only against the asset
+/// embedded in this binary (`raw`, and `rendered` as update writes it):
+/// the export never prints a value, key or line from the project's files or
+/// from the recorded baseline, which the project can write (TSK-1029,
+/// `diff_redact`).
+fn push_diff(
+    diffs: &mut String,
+    dest: &str,
+    old: &str,
+    new: &str,
+    rendered: &str,
+    raw: Option<&str>,
+) {
+    diffs.push_str(&super::diff_redact::section(
+        dest,
+        old,
+        new,
+        super::diff_redact::Reference { rendered, raw },
+    ));
 }
 
 /// Update's step for a whole managed file, from the file on disk (`None`
@@ -812,6 +803,9 @@ fn update_entry(
     let Some(rendered) = render_entry(source, entry, ctx, report)? else {
         return Ok(());
     };
+    // The embedded asset, before templating: what the `--diff` export may
+    // show of this file (TSK-1029).
+    let raw = super::assets::read_text(source, &format!("base/{}", entry.src))?;
     let dest_path = root.join(&entry.dest);
     let exists = super::path_exists(&dest_path)?;
     let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
@@ -858,7 +852,8 @@ fn update_entry(
                         &entry.dest,
                         old,
                         &rendered,
-                        &shipped_versions(base.as_deref(), &rendered),
+                        &rendered,
+                        raw.as_deref(),
                     );
                     report.file(&entry.dest, Action::Changed);
                 }
@@ -871,7 +866,8 @@ fn update_entry(
                         &entry.dest,
                         old,
                         &rendered,
-                        &shipped_versions(base.as_deref(), &rendered),
+                        &rendered,
+                        raw.as_deref(),
                     );
                     report.file_with_notes(
                         &entry.dest,
@@ -907,13 +903,7 @@ fn update_entry(
                     // on the following update.
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(
-                        diffs,
-                        &entry.dest,
-                        old,
-                        &merged,
-                        &shipped_versions(base.as_deref(), &rendered),
-                    );
+                    push_diff(diffs, &entry.dest, old, &merged, &rendered, raw.as_deref());
                     report.file_with_notes(
                         &entry.dest,
                         Action::Merged,
@@ -981,7 +971,8 @@ fn update_entry(
                         &entry.dest,
                         &current,
                         &merged,
-                        &shipped_versions(previous.as_deref(), &rendered),
+                        &rendered,
+                        raw.as_deref(),
                     );
                     report.file_with_notes(&entry.dest, Action::Merged, lines);
                 }
@@ -989,7 +980,6 @@ fn update_entry(
             format @ (RegionFormat::Markdown | RegionFormat::Hash) => {
                 let block = region::extract_block(&rendered, format)
                     .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
-                let previous = Baseline::read(root, &entry.dest)?;
                 record(installed, entry, hash::sha256_hex(block.as_bytes()));
                 Baseline::write(root, &entry.dest, &block)?;
                 if !exists {
@@ -1009,13 +999,7 @@ fn update_entry(
                     BlockOutcome::Unchanged => report.file(&entry.dest, Action::Unchanged),
                     BlockOutcome::Replaced => {
                         write_dest(root, entry, &next)?;
-                        push_diff(
-                            diffs,
-                            &entry.dest,
-                            &current,
-                            &next,
-                            &shipped_versions(previous.as_deref(), &block),
-                        );
+                        push_diff(diffs, &entry.dest, &current, &next, &block, raw.as_deref());
                         report.file_with_notes(
                             &entry.dest,
                             Action::Changed,
@@ -1027,13 +1011,7 @@ fn update_entry(
                     }
                     BlockOutcome::Appended => {
                         write_dest(root, entry, &next)?;
-                        push_diff(
-                            diffs,
-                            &entry.dest,
-                            &current,
-                            &next,
-                            &shipped_versions(previous.as_deref(), &block),
-                        );
+                        push_diff(diffs, &entry.dest, &current, &next, &block, raw.as_deref());
                         report.file_with_notes(
                             &entry.dest,
                             Action::Merged,
@@ -1055,7 +1033,15 @@ fn update_entry(
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("json"));
             if is_json {
-                sync_user_owned_json(root, entry, &rendered, installed, report, diffs)?;
+                sync_user_owned_json(
+                    root,
+                    entry,
+                    &rendered,
+                    raw.as_deref(),
+                    installed,
+                    report,
+                    diffs,
+                )?;
             } else {
                 let mut notes = vec!["user-owned: never mutated by update".to_string()];
                 let is_new_entry = !installed.files.contains_key(&entry.dest);
@@ -1086,6 +1072,7 @@ fn sync_user_owned_json(
     root: &Path,
     entry: &ManifestEntry,
     rendered: &str,
+    raw: Option<&str>,
     installed: &mut InstalledManifest,
     report: &mut Report,
     diffs: &mut String,
@@ -1095,10 +1082,8 @@ fn sync_user_owned_json(
         std::fs::read_to_string(&dest_path).map_err(|e| ScaffoldError::io(&dest_path, e))?;
     let mut user: serde_json::Value = serde_json::from_str(&current_text)?;
     let new_default: serde_json::Value = serde_json::from_str(rendered)?;
-    let old_default_text = Baseline::read(root, &entry.dest)?;
-    let old_default: Option<serde_json::Value> = old_default_text
-        .as_deref()
-        .map(serde_json::from_str)
+    let old_default: Option<serde_json::Value> = Baseline::read(root, &entry.dest)?
+        .map(|t| serde_json::from_str(&t))
         .transpose()?;
 
     let mut added: Vec<String> = vec![];
@@ -1198,13 +1183,7 @@ fn sync_user_owned_json(
         text
     };
     write_file(&dest_path, next.as_bytes())?;
-    push_diff(
-        diffs,
-        &entry.dest,
-        &current_text,
-        &next,
-        &shipped_versions(old_default_text.as_deref(), rendered),
-    );
+    push_diff(diffs, &entry.dest, &current_text, &next, rendered, raw);
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
 }
@@ -1262,17 +1241,19 @@ fn preserving_edit(
 /// the new one (ADR-0075, TSK-171).
 struct MovedDefault {
     path: String,
-    old: serde_json::Value,
     new: serde_json::Value,
 }
 
 impl MovedDefault {
+    /// The report line: the key and the new shipped value, never the old
+    /// value, which comes from the project's file and its recorded baseline
+    /// (TSK-1029).
     fn note(&self) -> String {
         format!(
-            "moved {} from {} to {}: it held the previous shipped default. \
-             To keep {}, set it again in .codeflow/policy.json; update keeps a \
+            "moved {} to {}: it held the previous shipped default. To keep the \
+             previous value, set it again in .codeflow/policy.json; update keeps a \
              value that differs from the shipped default",
-            self.path, self.old, self.new, self.old
+            self.path, self.new
         )
     }
 }
@@ -1317,7 +1298,6 @@ fn move_unchanged_defaults(
             *user_val = new_val.clone();
             moved.push(MovedDefault {
                 path: key_path,
-                old: old_val.clone(),
                 new: new_val.clone(),
             });
         }
@@ -1350,9 +1330,10 @@ fn recommend_defaults(
         ) else {
             continue;
         };
+        // The project's value is never printed (TSK-1029).
         if old != new && current != new {
             notes.push(format!(
-                "kept {path} = {current}; new installs default to {new}: {reason}. \
+                "kept the project's {path}; new installs default to {new}: {reason}. \
                  To adopt it, set it to {new} in .codeflow/policy.json"
             ));
         }
@@ -1611,15 +1592,14 @@ mod tests {
     }
 
     /// The shipped workflow and this repository's own run only the checkout
-    /// before the gitleaks step; a step added there is named, a renamed scan
+    /// before the gitleaks step; a step added there is counted by position, a renamed scan
     /// step is reported as unrecognised, and a conflict proposal that does
     /// not parse is left alone (TSK-210).
     #[test]
     fn scan_order_names_only_added_steps() {
         use super::{scan_order, ScanOrder};
         let none = ScanOrder::Checked(vec![]);
-        let named =
-            |names: &[&str]| ScanOrder::Checked(names.iter().map(|n| (*n).to_string()).collect());
+        let named = |steps: &[usize]| ScanOrder::Checked(steps.to_vec());
         let shipped = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
         let own = include_str!("../../../../.github/workflows/codeflow-ci.yml");
         assert_eq!(scan_order(shipped), none);
@@ -1635,10 +1615,7 @@ mod tests {
             ),
             1,
         );
-        assert_eq!(
-            scan_order(&added),
-            named(&["`setup`", "`uses: ./.github/actions/prepare`"])
-        );
+        assert_eq!(scan_order(&added), named(&[2, 3]));
         let renamed = added.replacen(
             "      - name: gitleaks\n",
             "      - name: Repository credential scan\n",
@@ -1656,13 +1633,7 @@ mod tests {
             ),
             1,
         );
-        assert_eq!(
-            scan_order(&canary),
-            named(&[
-                "`run: sh scripts/check-gitleaks-allowlist.sh \"$RUNNER_TEMP/gitleaks\"`",
-                "`setup`"
-            ])
-        );
+        assert_eq!(scan_order(&canary), named(&[2, 3]));
         let conflicted = format!("<<<<<<< ours\n{added}=======\n{shipped}>>>>>>> theirs\n");
         assert_eq!(scan_order(&conflicted), ScanOrder::NotChecked);
         assert_eq!(

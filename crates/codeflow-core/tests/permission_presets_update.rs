@@ -515,7 +515,7 @@ fn update_moves_policy_scalars_still_at_the_prior_default() {
         assert!(
             notes
                 .iter()
-                .any(|n| n.starts_with(&format!("moved {key} from \"warn\" to \"block\""))),
+                .any(|n| n.starts_with(&format!("moved {key} to \"block\""))),
             "{key}: {notes:?}"
         );
     }
@@ -621,9 +621,9 @@ fn update_without_a_baseline_compares_with_the_2_1_0_copy() {
     }
     let notes = notes_for(&report, ".codeflow/policy.json");
     assert!(
-        notes.iter().any(
-            |n| n.starts_with("moved security.privilege_escalation from \"warn\" to \"block\"")
-        ),
+        notes
+            .iter()
+            .any(|n| n.starts_with("moved security.privilege_escalation to \"block\"")),
         "{notes:?}"
     );
     codeflow_core::hooks::policy_schema::validate_policy(&root).unwrap();

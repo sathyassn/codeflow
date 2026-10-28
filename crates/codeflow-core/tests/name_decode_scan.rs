@@ -1569,6 +1569,23 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-1029: the `update --diff` export splits a text patch and a file
+    // into lines only to decide which shipped lines it prints and how many
+    // other lines it counts; no command, path or policy is selected.
+    (
+        "crates/codeflow-core/src/scaffold/diff_redact.rs",
+        "text",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/diff_redact.rs",
+        "likeness",
+        "lines",
+        1,
+        "display",
+    ),
     (
         "crates/codeflow-core/src/doctor/codex_profile.rs",
         "load",
@@ -3833,22 +3850,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "split_terminator",
         1,
         "schema-reject-only",
-    ),
-    // The first trimmed run line is only a label in the warning identifying an already-classified workflow step.
-    (
-        "crates/codeflow-core/src/scaffold/update.rs",
-        "scan_order",
-        "lines",
-        1,
-        "display",
-    ),
-    // The first trimmed run line is only a label in the warning identifying an already-classified workflow step.
-    (
-        "crates/codeflow-core/src/scaffold/update.rs",
-        "scan_order",
-        "trim",
-        1,
-        "display",
     ),
     // None means canonical containment is unproven, so temp_place grants no safe temporary-path exemption; raw catastrophic classification stays active.
     (

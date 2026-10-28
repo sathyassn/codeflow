@@ -1862,7 +1862,7 @@ fn a_2_1_0_project_upgrades_through_the_installed_cli() {
             "{case}"
         );
         assert!(
-            first.contains("moved security.privilege_escalation from \"warn\" to \"block\""),
+            first.contains("moved security.privilege_escalation to \"block\""),
             "{case}: the moved default is reported:\n{first}"
         );
 
