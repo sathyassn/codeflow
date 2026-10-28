@@ -260,6 +260,26 @@ pub fn merge_base(repo: &Repository, left: Oid, right: Oid) -> Result<Oid, Error
     result
 }
 
+/// Every best common base of two commits, from verified ancestry: more
+/// than one after a criss-cross merge.
+///
+/// # Errors
+/// Refuses overlays, a shallow cut in the compared history, unreadable
+/// history, or (`NotFound`) histories proven unrelated.
+pub fn merge_bases(repo: &Repository, left: Oid, right: Oid) -> Result<Vec<Oid>, Error> {
+    check(repo)?;
+    let result = repo.merge_bases(left, right);
+    match &result {
+        Ok(bases) if bases.len() == 1 => verify_range(repo, &[left, right], Some(bases[0]))?,
+        Ok(_) => verify_range(repo, &[left, right], None)?,
+        Err(error) if error.code() == ErrorCode::NotFound => {
+            verify_range(repo, &[left, right], None)?;
+        }
+        Err(_) => {}
+    }
+    result.map(|bases| bases.iter().copied().collect())
+}
+
 /// Whether `descendant` strictly descends from `ancestor`.
 ///
 /// # Errors

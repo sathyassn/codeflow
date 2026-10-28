@@ -230,6 +230,12 @@ catalog! {
     /// An open task that names no deliverables (sathyassn/codeflow#40).
     TASK_DELIVERABLES = Step::Edit("{path}"),
         "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`, or name the path the task changes in its Description; a home not known yet is marked provisional with what decides it";
+    /// An open record with no filled Outcome section (TSK-435).
+    RECORD_OUTCOME = Step::Edit("{path}"),
+        "in {path}, add one line under `## Outcome`, between the Description (or Summary) and the Deliverables: after this merges, <who> can <do what>";
+    /// An epic created after adoption that names no deliverables (TSK-435).
+    EPIC_DELIVERABLES = Step::Edit("{path}"),
+        "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`; a home not known yet is marked provisional with what decides it";
     /// A documentation layer the project does not have.
     DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
         "run `codeflow update`, which restores {path} at this project's tier";
@@ -559,6 +565,9 @@ catalog! {
     /// A project without its codeflow configuration.
     DOCTOR_INIT = Step::Codeflow("codeflow init"),
         "run `codeflow init` in the project root";
+    /// A project without the Outcome section's adoption marker (TSK-435).
+    DOCTOR_OUTCOME_MARKER = Step::Codeflow("codeflow update"),
+        "run `codeflow update`, which writes `outcome_present_uids` to .codeflow/project.toml once, listing the task and epic records present now; those only warn without an `## Outcome` section, and later ones must state it";
     /// A tool doctor looks for on PATH and does not find.
     DOCTOR_TOOL_MISSING = Step::Codeflow("codeflow doctor"),
         "install {tool} on PATH, then `codeflow doctor --check {check}` confirms it";
