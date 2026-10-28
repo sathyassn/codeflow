@@ -173,6 +173,32 @@ under-design and a reviewer refuses it. A shortcut never weakens a guard,
 hook, gate, policy, credential path, input validation or other security
 control; those stay under "Match the gate".
 
+A file joins the repository only when the project needs it long term, in
+the smallest form that serves its use. That covers:
+
+- product and authority content: source, docs, decisions, specs, research
+  and work records;
+- code with its tests, fixtures, snapshots and config;
+- lockfiles, as the stack's tools and the project decide;
+- generated code the project needs checked in, marked as generated;
+- a summary of evidence that a live record cites and the PR body cannot
+  carry. A live record is one still in force, such as a task record, an ADR
+  or a research note.
+
+Everything else stays out: run output and per-run logs, review records and
+verdict files, superseded drafts, build and cache output, copies kept for
+reference, scratch and session working files, duplicate copies no tool
+manages, and per-task evidence folders.
+
+Required evidence goes in the PR body or the task record; the full output
+stays where the run left it, such as the task's scratch directory or the
+gate run's durable home. A copy of third-party code that a runtime or
+build needs is a dependency and joins through the project's dependency
+rule; a copy kept for reference stays out, and a link to its source and
+version replaces it. Git history keeps removed evidence. A record that
+still needs a removed file cites it at a commit that holds it, so a
+clean-up breaks no citation.
+
 ## Prove it at every surface
 
 **Prove it at every surface.** Verify the work where it runs: unit,
@@ -307,8 +333,10 @@ reduced assurance recorded. This is the one statement of when `cf-reviewer`
 runs. Self-review is not review.
 
 A holistic pass reads the whole unit at one head: the full diff against its
-base, the criteria and acceptance evidence, the blast radius (upstream,
-downstream, adopters, other platforms, CI time, docs, records) and the fit
+base, each added file (needed long term, in the smallest form that serves
+its use), the
+criteria and acceptance evidence, the blast radius (upstream, downstream,
+adopters, other platforms, CI time, docs, records) and the fit
 (the neighbour it should match, what it reuses, each departure with its
 reason, and the rules and decisions that settled how this repository does
 things), in the manner "Ground it in evidence" sets out; that scope is a
@@ -360,6 +388,9 @@ A finding is **material** when, shipped unfixed, it would:
 - let a guard, hook, policy, CI or credential path be evaded, or give false
   assurance;
 - lose, corrupt or rewrite data, records or history;
+- add a file the repository does not need long term, or one larger than
+  the smallest form that serves its use ("Write only what earns its
+  keep");
 - make a claim the diff or evidence does not back;
 - present a mocked or unrun boundary as whole-flow proof;
 - break compatibility, privacy, authority, recovery or operability for an

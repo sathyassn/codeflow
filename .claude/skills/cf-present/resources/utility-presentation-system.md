@@ -26,13 +26,14 @@ an agent **reuses one design system** instead of inventing a page each turn.
 | Explain or review **this session** | `cf-present` | **This** subject's catalog blocks | Chrome, themes, tokens, **Comment system** |
 | Durable docs for **CodeFlow or any consuming project** | `cf-docs-portal` | Repository sources + portal config | Docs shell, search, layers, same craft overlay |
 
-The evidence board that settled this system is `docs/verification/tsk-014-w5/`:
-its `shared/svg.js` is the mark vocabulary the figure grammar distils, and its
-`baselines/` (plain chat, plain Markdown and plain HTML for every scorable
-surface) are the negative controls every figure must beat. It is **evidence
-only**. Do not clone it: never re-render its cases, portal families or
-comments as a present session, a portal page, or product HTML. Each
-invocation applies the same craft to **new** subject matter. Comment is
+CodeFlow's own TSK-014 evidence board settled this system; CodeFlow's
+history keeps it, and it is not shipped. Its `shared/svg.js` is the mark
+vocabulary the figure grammar distils, and its `baselines/` (plain chat, plain
+Markdown and plain HTML for every scorable surface) are the negative controls
+every figure must beat. It is **evidence only**. Do not clone it: never
+re-render its cases, portal families or comments as a present session, a
+portal page, or product HTML. Each invocation applies the same craft to
+**new** subject matter. Comment is
 present-only chrome the runtime already owns; the portal has **no** Comment
 lifecycle.
 

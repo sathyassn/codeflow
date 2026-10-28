@@ -3136,6 +3136,34 @@
           ]
         }
       ]
+    },
+    {
+      "id": "CF-QA-017",
+      "level": "hard",
+      "statement": "A file joins the repository only when the project needs it long term, in the smallest form that serves its use. Run output, per-run logs, review records, superseded drafts, build and cache output, copies kept for reference, scratch files, duplicate copies no tool manages and per-task evidence folders stay out, whatever earlier commits did; required evidence goes in the PR body or the task record as a summary, and an evidence file lands only when a live record cites it and the PR body cannot carry it. Review asks of every added file whether it is needed long term and in the smallest form that serves its use.",
+      "sources": [
+        {
+          "path": ".codeflow/rules/workflow-discipline.md",
+          "markers": [
+            "A file joins the repository only when the project needs it long term, in the smallest form that serves its use",
+            "Required evidence goes in the PR body or the task record",
+            "Git history keeps removed evidence."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "Run output, logs and review verdict files are never committed to carry it",
+            "there is no per-task evidence folder"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "Ask of every file the diff adds whether the project needs it long term and whether this is the smallest form that serves its use"
+          ]
+        }
+      ]
     }
   ]
 }
