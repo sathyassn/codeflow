@@ -1728,9 +1728,11 @@ fn simple(
                 word.starts_with('-') && !word.starts_with("--") && word.contains(['S', 'P'])
                     || word.starts_with("--s")
             }) || match family {
-                Some("ruby") => args
-                    .iter()
-                    .any(|arg| arg.starts_with("-C") || arg.starts_with("--chdir")),
+                // Read by the shared interpreter grammar, so clustered and
+                // attached spellings (`-wCsub`, `-Csub`) count (review 04).
+                Some(family @ ("ruby" | "perl" | "python" | "node" | "nodejs")) => {
+                    !crate::security::outward::interpreter_chdirs(family, args).is_empty()
+                }
                 Some("powershell") => {
                     crate::hooks::git_guard::powershell_working_directory(args).is_some()
                 }
@@ -1952,15 +1954,7 @@ fn simple(
         }
     }
     if let Some((program, args)) = launched {
-        if program == "set"
-            && (args
-                .iter()
-                .any(|arg| arg.starts_with('-') && !arg.starts_with("--") && arg.contains('P'))
-                || args
-                    .windows(2)
-                    .any(|pair| pair[0] == "-o" && pair[1] == "physical")
-                || args.iter().any(|arg| arg == "-ophysical"))
-        {
+        if sets_physical(program, args) {
             position.physical = true;
         }
         let physical = matches!(program, "cd" | "chdir" | "pushd")
@@ -1970,6 +1964,24 @@ fn simple(
                     .iter()
                     .any(|arg| arg.starts_with('-') && arg.contains('P')));
         if physical {
+            // A UNC or namespace place is never resolved: it is unknown
+            // before any filesystem access, so the guard contacts no host
+            // (TSK-1002 review 04).
+            if let Some(target) = args.iter().find(|arg| !arg.starts_with('-')) {
+                let remote = crate::security::outward::remote_or_namespace_operand(target)
+                    || position.state.directory.as_ref().is_some_and(|dir| {
+                        lexical_join(dir, Path::new(target))
+                            .to_str()
+                            .is_none_or(crate::security::outward::remote_or_namespace_operand)
+                    });
+                if remote {
+                    set_oldpwd(&mut position.state);
+                    position.state.directory = None;
+                    position.stack.clear();
+                    set_pwd(&mut position.state);
+                    return position;
+                }
+            }
             // Planned links are not on disk yet. Retain their kernel reading
             // before a physical cd consumes parent components.
             let links = position_effects(output.clone())
@@ -2007,8 +2019,22 @@ fn simple(
                 let through_parent = Path::new(target)
                     .components()
                     .any(|part| matches!(part, std::path::Component::ParentDir));
-                let through_link =
-                    crate::portable_path::canonicalize(&lexical).is_ok_and(|real| real != lexical);
+                #[cfg(test)]
+                crate::security::outward::JOIN_READS.with(|reads| reads.set(reads.get() + 2));
+                // A relative target is compared with the start's own physical
+                // spelling, so a start reached by another spelling (a Windows
+                // short name such as `RUNNER~1`, a linked session directory)
+                // is not a link in the target; a start that cannot be
+                // resolved counts as one. An absolute target is its own
+                // spelling.
+                let through_link = crate::portable_path::canonicalize(&lexical).is_ok_and(|real| {
+                    if Path::new(target).has_root() {
+                        real != lexical
+                    } else {
+                        crate::portable_path::canonicalize(&dir)
+                            .map_or(true, |base| real != lexical_join(&base, Path::new(target)))
+                    }
+                });
                 if through_parent || through_link {
                     set_oldpwd(&mut position.state);
                     position.state.directory = None;
@@ -2108,6 +2134,139 @@ fn reparse(
     set_pwd(&mut position.state);
     output.push(unread_code("shell code exceeds the bounded reading"));
     position
+}
+
+/// Shell options the guard reads as leaving directory changes logical,
+/// normalized as zsh reads option names (no case, no `_`; bash's `-` too).
+const LOGICAL_OPTIONS: &[&str] = &[
+    "allexport",
+    "autopushd",
+    "braceexpand",
+    "emacs",
+    "errexit",
+    "errreturn",
+    "errtrace",
+    "extendedglob",
+    "functrace",
+    "globdots",
+    "hashall",
+    "histexpand",
+    "history",
+    "ignoreeof",
+    "interactivecomments",
+    "keyword",
+    "ksharrays",
+    "localoptions",
+    "localtraps",
+    "monitor",
+    "noclobber",
+    "noexec",
+    "noglob",
+    "nolog",
+    "nomatch",
+    "notify",
+    "nounset",
+    "nullglob",
+    "onecmd",
+    "pipefail",
+    "posix",
+    "privileged",
+    "promptsubst",
+    "pushdsilent",
+    "shwordsplit",
+    "verbose",
+    "vi",
+    "xtrace",
+];
+
+/// Whether an option name turned on (`on`) or off makes directory changes
+/// physical: bash `physical`, zsh `CHASE_LINKS` and `CHASE_DOTS` in any
+/// spelling (`chase_links`, `NO_CHASE_LINKS` turned off). A name the guard
+/// does not read counts as physical (fail closed).
+fn option_physical(name: &str, on: bool) -> bool {
+    let name: String = name
+        .chars()
+        .filter(|ch| !matches!(ch, '_' | '-'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    let (name, on) = match name.strip_prefix("no") {
+        Some(rest) if !LOGICAL_OPTIONS.contains(&name.as_str()) => (rest.to_string(), !on),
+        _ => (name, on),
+    };
+    match name.as_str() {
+        "physical" | "chaselinks" | "chasedots" => on,
+        name => !LOGICAL_OPTIONS.contains(&name),
+    }
+}
+
+/// Whether `set`, `setopt`, `unsetopt` or `emulate` may make later
+/// directory changes physical: bash `set -P` and `-o physical`, zsh
+/// `set -w`, `setopt chaselinks` or `chase_dots`, `emulate ... -o
+/// chaselinks`. An option word the guard does not read counts too (TSK-1002
+/// review 06).
+fn sets_physical(program: &str, args: &[String]) -> bool {
+    match program {
+        "set" => {
+            let mut words = args.iter();
+            while let Some(word) = words.next() {
+                let Some(sign) = word.chars().next().filter(|ch| matches!(ch, '-' | '+')) else {
+                    // Positional parameters follow.
+                    return false;
+                };
+                if word == "-" || word == "--" {
+                    return false;
+                }
+                let on = sign == '-';
+                let letters = &word[1..];
+                for (at, letter) in letters.char_indices() {
+                    match letter {
+                        'o' => {
+                            let attached = &letters[at + 1..];
+                            let name = if attached.is_empty() {
+                                words.next().map(String::as_str)
+                            } else {
+                                Some(attached)
+                            };
+                            if name.is_some_and(|name| option_physical(name, on)) {
+                                return true;
+                            }
+                            break;
+                        }
+                        'P' | 'w' if on => return true,
+                        'a' | 'b' | 'e' | 'f' | 'h' | 'k' | 'm' | 'n' | 'p' | 't' | 'u' | 'v'
+                        | 'x' | 'B' | 'C' | 'E' | 'H' | 'T' | 'P' | 'w' => {}
+                        _ => return true,
+                    }
+                }
+            }
+            false
+        }
+        "setopt" | "unsetopt" => args
+            .iter()
+            .any(|word| word.starts_with(['-', '+']) || option_physical(word, program == "setopt")),
+        "emulate" => {
+            let mut words = args.iter();
+            while let Some(word) = words.next() {
+                match word.as_str() {
+                    "-o" | "+o" => {
+                        if words
+                            .next()
+                            .is_none_or(|name| option_physical(name, word == "-o"))
+                        {
+                            return true;
+                        }
+                    }
+                    "zsh" | "sh" | "ksh" | "csh" | "bash" => {}
+                    word if word.len() > 1
+                        && word.starts_with('-')
+                        && word[1..].chars().all(|ch| matches!(ch, 'L' | 'R' | 'l')) => {}
+                    _ => return true,
+                }
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 fn set_oldpwd(state: &mut State) {
@@ -2770,6 +2929,87 @@ mod tests {
         assert!(values("pushd docs && popd && probe $PWD")
             .iter()
             .all(|args| args == &["/project"]));
+    }
+
+    /// TSK-1002 review 04: a physical change to a UNC or namespace place is
+    /// unknown before any filesystem access; a local physical change still
+    /// reads the disk, so the counter is live.
+    #[test]
+    fn physical_changes_to_remote_places_are_unknown_before_any_read() {
+        use crate::security::outward::JOIN_READS;
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("sub")).unwrap();
+        for line in [
+            "cd -P //fixture-host/share/child && probe",
+            "pushd -P //fixture-host/share && probe",
+            "set -P; cd //fixture-host/share && probe",
+            "setopt chaselinks; cd //fixture-host/share/child && probe",
+            r"cd -P '\\fixture-host\share' && probe",
+            r"cd -LP '\??\C:\fixture' && probe",
+        ] {
+            JOIN_READS.with(|reads| reads.set(0));
+            let steps = commands(line, temp.path(), None);
+            let probes: Vec<_> = steps
+                .iter()
+                .filter(|step| step.text.starts_with("probe"))
+                .collect();
+            assert!(
+                !probes.is_empty() && probes.iter().all(|step| step.cwd.is_none()),
+                "{line}: {probes:?}"
+            );
+            assert_eq!(JOIN_READS.with(std::cell::Cell::get), 0, "{line}");
+        }
+        JOIN_READS.with(|reads| reads.set(0));
+        commands("cd -P sub && probe", temp.path(), None);
+        assert!(JOIN_READS.with(std::cell::Cell::get) > 0);
+    }
+
+    /// TSK-1002 review 06: zsh's physical options and option words the
+    /// guard does not read make later changes physical; read options keep
+    /// them logical.
+    #[test]
+    fn zsh_physical_options_set_the_physical_state() {
+        let args = |text: &str| text.split(' ').map(String::from).collect::<Vec<_>>();
+        for (program, words) in [
+            ("setopt", "chaselinks"),
+            ("setopt", "CHASE_LINKS"),
+            ("setopt", "chase_dots"),
+            ("setopt", "-w"),
+            ("setopt", "frobnicate"),
+            ("unsetopt", "nochaselinks"),
+            ("set", "-w"),
+            ("set", "-euw"),
+            ("set", "-P"),
+            ("set", "-o chasedots"),
+            ("set", "-oCHASE_LINKS"),
+            ("set", "-o physical"),
+            ("set", "-o frobnicate"),
+            ("set", "-X"),
+            ("emulate", "-R zsh -o chaselinks"),
+            ("emulate", "zsh -o"),
+            ("emulate", "-c true"),
+        ] {
+            assert!(
+                super::sets_physical(program, &args(words)),
+                "{program} {words}"
+            );
+        }
+        for (program, words) in [
+            ("setopt", "extendedglob"),
+            ("setopt", "nochaselinks"),
+            ("unsetopt", "chase_links"),
+            ("set", "-euo pipefail"),
+            ("set", "+o physical"),
+            ("set", "-- -P"),
+            ("set", "a -P"),
+            ("emulate", "-L zsh"),
+            ("emulate", "-LR sh -o errexit"),
+        ] {
+            assert!(
+                !super::sets_physical(program, &args(words)),
+                "{program} {words}"
+            );
+        }
     }
 
     #[cfg(unix)]

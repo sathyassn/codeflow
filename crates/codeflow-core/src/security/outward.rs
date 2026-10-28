@@ -1640,6 +1640,50 @@ const MODELED_LAUNCHERS: &[&str] = &[
     "xargs",
 ];
 
+/// Programs that read the files they are given, read as a command another
+/// program may launch (`uv run --directory DIR cat auth.json`).
+const LAUNCHED_READERS: &[&str] = &[
+    "cat",
+    "head",
+    "tail",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "wc",
+    "od",
+    "hexdump",
+    "xxd",
+    "strings",
+    "jq",
+    "base64",
+    "less",
+    "more",
+    "bat",
+    "nl",
+    "tac",
+    "sort",
+    "uniq",
+    "cut",
+    "awk",
+    "sed",
+    "diff",
+    "cmp",
+    "tar",
+    "zip",
+    "cp",
+    "md5",
+    "md5sum",
+    "shasum",
+    "sha1sum",
+    "sha256sum",
+    "sha512sum",
+    "cksum",
+    "b2sum",
+    "stat",
+    "file",
+];
+
 /// A program the grammar does not model may itself launch what follows it
 /// (`frobnicate env -C.claude python3 tool.py settings.json`), or run a
 /// script string it is given (`expect -c '...'`, `osascript -e '...'`,
@@ -1713,6 +1757,30 @@ fn unmodeled_launch(
                 &mut inner,
             );
             break;
+        }
+    }
+    // A file reader this program may run (`uv run --directory DIR cat
+    // auth.json`, `direnv exec DIR cat auth.json`) reads its operands where
+    // the program puts it, which the guard does not know: they take the
+    // unknown-directory rule, as inline code does (TSK-1002 review 06). A
+    // reader is never a launcher itself.
+    if !prints && !LAUNCHED_READERS.contains(&name) {
+        if let Some(at) = rest.iter().position(|word| {
+            LAUNCHED_READERS.contains(&crate::hooks::git_guard::launcher_name(word))
+        }) {
+            let mut reader = Parsed {
+                supplier: out.supplier.clone(),
+                ..Parsed::default()
+            };
+            argv(
+                &rest[at..],
+                pattern_tail(patterns, rest.len() - at),
+                None,
+                depth + 1,
+                &mut reader,
+            );
+            out.commands.extend(reader.commands);
+            inner.calls.extend(reader.calls);
         }
     }
     out.calls.extend(inner.calls);
@@ -2311,6 +2379,12 @@ pub(crate) fn interpreter_code_positions(family: &str, rest: &[String]) -> Vec<u
     let mut code = Vec::new();
     interpreter_roles(family, rest, None, false, &mut code);
     code
+}
+
+/// The directory changes an interpreter's own options make (`ruby -C DIR`,
+/// `-CDIR`, clustered `-wCDIR`), read by the shared option grammar.
+pub(crate) fn interpreter_chdirs(family: &str, rest: &[String]) -> Vec<String> {
+    interpreter_argument_roles(family, rest, None, false).1
 }
 
 fn interpreter_argument_roles(

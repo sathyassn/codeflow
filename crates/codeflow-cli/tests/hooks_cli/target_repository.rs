@@ -606,6 +606,80 @@ fn tsk1002_review03_successive_and_physical_directory_changes() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// TSK-1002 Codex review 04 and Fable review 06, the bounded findings:
+/// clustered Ruby directory options after a write, object paths on every
+/// revision shape, zsh's physical options, `pwd -P`, a physical `cd` to a
+/// UNC place, and a reader under a program the guard does not model. Each
+/// refusal allowed at `399594818`; the controls stay allowed.
+#[cfg(unix)]
+#[test]
+fn tsk1002_review04_bounded_classes_refuse_through_the_hooks() {
+    let f = Fixture::new();
+    let store = f.temp.path().join(".codex");
+    std::fs::create_dir_all(store.join("child")).unwrap();
+    std::fs::write(store.join("auth.json"), "planted fixture").unwrap();
+    std::os::unix::fs::symlink(store.join("child"), f.linked.join("alias")).unwrap();
+    std::fs::create_dir_all(f.linked.join("sub")).unwrap();
+    std::fs::write(f.linked.join("tool.py"), "# ordinary\n").unwrap();
+    std::fs::write(f.linked.join("notes.md"), "ordinary fixture").unwrap();
+    let store = store.display().to_string();
+    let mut wrong = Vec::new();
+    let refused = [
+        // Codex 3: Ruby's directory option read by the shared grammar.
+        "printf x > sub/script; ruby -wCsub script".to_string(),
+        "printf x > sub/script; ruby -dCsub script".into(),
+        "printf x > sub/script; ruby -wC sub script".into(),
+        // Codex 5: the object path keeps the secret-name policy.
+        "git show HEAD:id_rsa".into(),
+        "git cat-file -p HEAD:id_rsa".into(),
+        "git show :0:id_rsa".into(),
+        "git show 'HEAD^{tree}:id_rsa'".into(),
+        "git log -p origin/main:id_rsa".into(),
+        // Codex 6: a physical change to a UNC place is unknown.
+        "cd -P //fixture-host/share && cat auth.json".into(),
+        // Fable 1: zsh's physical options and unread option words.
+        "setopt chaselinks; cd alias/.. && cat auth.json".into(),
+        "setopt CHASE_DOTS; cd alias/.. && cat auth.json".into(),
+        "set -w; cd alias/.. && cat auth.json".into(),
+        "set -o chase_links; cd alias/.. && cat auth.json".into(),
+        "emulate -R zsh -o chaselinks; cd alias/.. && cat auth.json".into(),
+        "unsetopt nochaselinks; cd alias/.. && cat auth.json".into(),
+        "setopt frobnicate; cd alias/.. && cat auth.json".into(),
+        // Fable 4: `pwd -P` prints the physical directory.
+        "cd alias && cat \"$(pwd -P)/../auth.json\"".into(),
+        "cd alias && cat \"`pwd -P`/../auth.json\"".into(),
+        // Fable 06 Major 3: a reader under a program the guard does not
+        // model takes the unknown-directory rule.
+        format!("uv run --directory '{store}' cat auth.json"),
+        format!("npm -C '{store}' exec -- cat auth.json"),
+        format!("direnv exec '{store}' head auth.json"),
+        "frobnicate --cwd x rg token auth.json".into(),
+    ];
+    for line in &refused {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "printf x > notes.txt; ruby -w tool.py",
+        "git show HEAD:README.md",
+        "git log --format=%H:%s",
+        "set -euo pipefail; cd alias/.. && cat auth.json",
+        "setopt nochaselinks; cd alias/.. && cat auth.json",
+        "emulate -L zsh; cd alias/.. && cat auth.json",
+        "cd alias && cat \"$(pwd -L)/../notes.md\"",
+        "uv run cat notes.md",
+        "uv run python tool.py notes.md",
+        "grep -r cat sub",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// TSK-1002 UNC finding: an administrative share, a verbatim or device UNC
 /// spelling, or any share whose path ends in a home store names the store,
 /// and a share write names the checkout file. Before this change the guard

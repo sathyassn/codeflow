@@ -3126,6 +3126,26 @@ impl Arg {
 }
 
 /// The fields of a run of arguments, flattened.
+/// Whether a `pwd` prints the physical directory (`-P`) or the logical one
+/// (no option, `-L`); the last of the two wins. `None` for any other word.
+fn pwd_physical(args: &[Arg]) -> Option<bool> {
+    let mut physical = false;
+    for arg in args {
+        let word = arg.literal()?;
+        let letters = word
+            .strip_prefix('-')
+            .filter(|letters| !letters.is_empty())?;
+        for letter in letters.chars() {
+            match letter {
+                'P' => physical = true,
+                'L' => physical = false,
+                _ => return None,
+            }
+        }
+    }
+    Some(physical)
+}
+
 fn flatten(args: &[Arg]) -> Result<Vec<Value>, &'static str> {
     let mut out = Vec::new();
     for arg in args {
@@ -3491,13 +3511,27 @@ impl Run<'_> {
                 && (DECLARERS.contains(&program.as_str())
                     || matches!(program.as_str(), "set" | "shopt" | "trap" | "alias")));
         match program.as_str() {
-            "pwd" if rest.is_empty() && self.state.directory.is_some() => {
-                let directory = crate::git::GitName::from_os_str(
-                    self.state.directory.as_ref().unwrap().as_os_str(),
-                );
-                self.output(match directory.rule_text() {
-                    Ok(text) => Ok(Value::text(&format!("{text}\n"))),
-                    Err(_) => Err("working directory is not UTF-8"),
+            "pwd" if self.state.directory.is_some() && pwd_physical(rest).is_some() => {
+                let logical = self.state.directory.clone().unwrap();
+                // `pwd -P` prints the physical directory: links resolved,
+                // as the kernel reads it (TSK-1002 review 06). A UNC or
+                // namespace place is never resolved.
+                let shown = if pwd_physical(rest) == Some(true) {
+                    logical
+                        .to_str()
+                        .filter(|text| !crate::security::outward::remote_or_namespace_operand(text))
+                        .and_then(|_| crate::portable_path::canonicalize(&logical).ok())
+                } else {
+                    Some(logical)
+                };
+                self.output(match shown {
+                    Some(dir) => {
+                        match crate::git::GitName::from_os_str(dir.as_os_str()).rule_text() {
+                            Ok(text) => Ok(Value::text(&format!("{text}\n"))),
+                            Err(_) => Err("working directory is not UTF-8"),
+                        }
+                    }
+                    None => Err("cannot establish the physical working directory"),
                 });
             }
             "printf" => self.printf(rest, certain),

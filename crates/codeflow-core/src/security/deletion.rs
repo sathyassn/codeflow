@@ -5294,6 +5294,15 @@ impl Reader<'_> {
                 "printf" if operands.first().map(String::as_str) != Some("-v") => {
                     printf(operands).map_or(Output::Unknown, |text| Output::Known([text].into()))
                 }
+                // `pwd -P` prints the physical directory, which the logical
+                // set does not hold (TSK-1002 review 06).
+                "pwd"
+                    if operands
+                        .iter()
+                        .any(|a| a.starts_with('-') && a.contains('P')) =>
+                {
+                    Output::Unknown
+                }
                 "pwd" => Output::Known(
                     st.cwd
                         .iter()
@@ -5324,6 +5333,13 @@ impl Reader<'_> {
             "echo" => Output::Known(echo_output(&run.argv[1..])),
             "printf" => {
                 printf(&run.argv[1..]).map_or(Output::Unknown, |text| Output::Known([text].into()))
+            }
+            "pwd"
+                if run.argv[1..]
+                    .iter()
+                    .any(|a| a.starts_with('-') && a.contains('P')) =>
+            {
+                Output::Unknown
             }
             "pwd" => Output::Known(
                 st.cwd

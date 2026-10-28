@@ -376,6 +376,15 @@ fn inspect_operand(
     if value == "__unverified_transfer_input" {
         return Err("cannot establish a transfer option's quoted input filename");
     }
+    // A Git object name's path part (`HEAD:id_rsa`, `main~2:.ssh/x`,
+    // `:0:id_rsa`) names a file in the tree, so it keeps the secret-name
+    // policy of a file operand whatever the revision's shape and on every
+    // platform (TSK-1002 review 04). The word's other readings follow.
+    if let Some(path) = git_object_operand(call, at, value) {
+        if secret_path_result(path, cwd, home, Some(false))? {
+            return Ok(true);
+        }
+    }
     if git_revision_word(call, at, value, cwd) {
         // The revision needs no filename mapping, but the object path in
         // `REV:PATH` names a file in the tree: it keeps the secret-name
@@ -484,6 +493,34 @@ fn object_path(word: &str) -> Option<&str> {
         }
     }
     None
+}
+
+/// The object path of a Git subcommand operand before any `--` written as
+/// `REV:PATH` or `:PATH`, where the revision part is revision-shaped (no
+/// leading `-`, only the characters Git revision syntax uses). A URL
+/// (`https://host/x`) has no object path.
+fn git_object_operand<'a>(call: &outward::Unwrapped, at: usize, value: &'a str) -> Option<&'a str> {
+    let (program, rest) = call.args.split_first()?;
+    let git = crate::hooks::git_guard::git_arguments(program, rest)?;
+    let (_, tail) = crate::hooks::git_guard::git_subcommand(&git)?;
+    let start = call.args.len() - tail.len();
+    if at < start || call.args[start..at].iter().any(|word| word == "--") {
+        return None;
+    }
+    let path = object_path(value)?;
+    let revision = &value[..value.len() - path.len() - 1];
+    let shaped = !revision.starts_with('-')
+        && revision
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || "_./@-~^{}:+ ".contains(ch));
+    // An index entry names its stage first (`:0:path`).
+    let path = match path.split_once(':') {
+        Some((stage, staged)) if revision.is_empty() && matches!(stage, "0" | "1" | "2" | "3") => {
+            staged
+        }
+        _ => path,
+    };
+    (shaped && !path.is_empty() && !path.starts_with("//")).then_some(path)
 }
 
 /// A Git operand in revision form that names a short-name component but no
@@ -2789,14 +2826,25 @@ mod tests {
             "git show HEAD~1:copies/id_rsa",
             "git show HEAD~2:.ssh/id_ed25519",
             "git log -p HEAD~1:fixture/id_rsa",
+            // Review 04: every revision shape, not only short-name ones.
+            "git show HEAD:id_rsa",
+            "git cat-file -p main:id_rsa",
+            "git show :0:id_rsa",
+            "git show :id_rsa",
+            "git show 'HEAD^{tree}:id_rsa'",
+            "git diff HEAD:README.md v1.0:id_rsa",
         ] {
             assert!(glob_fixture_read(line, &root, &root), "allowed: {line}");
         }
-        assert!(!glob_fixture_read(
+        for line in [
             "git show HEAD~1:README.md",
-            &root,
-            &root
-        ));
+            "git show HEAD:README.md",
+            "git show :0:README.md",
+            "git log --format=%H:%s",
+            "git -C . show HEAD~1",
+        ] {
+            assert!(!glob_fixture_read(line, &root, &root), "refused: {line}");
+        }
     }
 
     /// Review 03, ruling 1: a bracket class grep reads (`[[:alpha:]]`) is
@@ -3699,13 +3747,16 @@ mod tests {
             format!("{}\n", moved.join(".git").display()),
         )
         .unwrap();
+        // The drive spelling: a verbatim `\\?\` directory option is unknown
+        // before any access (TSK-1002 review 03, ruling 7), which would
+        // refuse for that reason instead of the checkout check under test.
         assert_refused(
             &repo,
             &repo.root,
             &repo.root,
             &[&format!(
                 "env -C '{}' python3 tool.py away/w",
-                other.root.display()
+                crate::portable_path::without_verbatim(other.root.clone()).display()
             )],
         );
     }
