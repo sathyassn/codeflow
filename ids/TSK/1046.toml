@@ -1,0 +1,11 @@
+id = "TSK-1046"
+uid = "cf06e7d5-54b9-4b67-a9b9-6eb7ba56c860"
+kind = "TSK"
+title = "A session set away keeps the work going and on its procedures, and hands back one report"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T04:14:41Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
