@@ -581,7 +581,7 @@
     ".agents/skills/cf-model-orchestrator/resources/quality/plan.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/plan.md",
       "ownership": "managed",
-      "sha256": "b6ef7fb3dbf7c7d00e0b143d5ec71a956a0b725b62726e3bdcfe675f2ba9a335",
+      "sha256": "56c84531611296e474176f57660fe3e7fb0059ad4f4a70e45f28aec2ca7784b2",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality/research-planning.md": {
@@ -1421,7 +1421,7 @@
     ".claude/skills/cf-model-orchestrator/resources/quality/plan.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/plan.md",
       "ownership": "managed",
-      "sha256": "b6ef7fb3dbf7c7d00e0b143d5ec71a956a0b725b62726e3bdcfe675f2ba9a335",
+      "sha256": "56c84531611296e474176f57660fe3e7fb0059ad4f4a70e45f28aec2ca7784b2",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality/research-planning.md": {
