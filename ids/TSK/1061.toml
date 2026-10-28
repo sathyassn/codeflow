@@ -1,0 +1,11 @@
+id = "TSK-1061"
+uid = "d455e59f-eb6c-4161-8fbc-78f4fc16aa02"
+kind = "TSK"
+title = "A planning amendment reports epic criteria it adds, removes or rewords"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T22:31:13Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
