@@ -1,0 +1,11 @@
+id = "TSK-1052"
+uid = "4c25e9cf-7554-4de3-9eda-6011bf0f2f91"
+kind = "TSK"
+title = "Runs after a same-line write fail closed on an unsandboxed host"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T19:04:18Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
