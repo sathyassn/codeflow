@@ -253,7 +253,14 @@ changes that criterion and planning records only, and the completion
 contains it. A task may name an amendment on its target. Before its first
 landing, its own record-only amendment may also be after the range's
 merge-base and strictly before `reviewed` in ancestry, never equal to either
-endpoint. Reopened ranges do not use that own-range allowance.
+endpoint. A range that reopens a completion that never landed keeps that
+own-range allowance, whatever caused the reopen; a range that reopens a
+landed completion does not. A waiver refused as not on the target says what
+that requires: a receiving line the run pins holds the commit (the pull
+request's base in `codeflow ci`, `--base` in `task status`). The refusal also
+names the route: amend the criterion through a planning pull request into
+the target, merge the target into the branch before the review, and name
+that planning commit.
 
 The installed `cf-method/references/project-organization.md` section
 "Acceptance waivers and redactions" owns the field definitions and workflow.
