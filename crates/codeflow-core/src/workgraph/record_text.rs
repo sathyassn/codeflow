@@ -593,7 +593,8 @@ pub fn has_section(body: &str, heading: &str) -> bool {
 /// template's `<output>` and `<path>` tokens fill nothing.
 #[must_use]
 pub fn names_deliverables(body: &str) -> bool {
-    section_markdown(body, "## Deliverables").is_some_and(|text| has_entry(&text))
+    section_markdown(body, "## Deliverables")
+        .is_some_and(|text| has_entry(&text, Form::Deliverables))
         || section_markdown(body, "## Description").is_some_and(|text| names_path(&text))
 }
 
@@ -602,16 +603,18 @@ pub fn names_deliverables(body: &str) -> bool {
 /// An epic has no Description, so a path elsewhere never counts.
 #[must_use]
 pub fn epic_names_deliverables(body: &str) -> bool {
-    section_markdown(body, "## Deliverables").is_some_and(|text| has_entry(&text))
+    section_markdown(body, "## Deliverables")
+        .is_some_and(|text| has_entry(&text, Form::Deliverables))
 }
 
 /// Whether a record states its Outcome (TSK-435): its `## Outcome` section
 /// has a substantive line. Comments never count, so the section as the
 /// template writes it, holding only its comment, states nothing; a line
-/// keeping the template's `<who>` or `<do what>` token states nothing either.
+/// that keeps the template's `<who>` or `<do what>` as written states
+/// nothing either, while one quoting the token in a code span does.
 #[must_use]
 pub fn states_outcome(body: &str) -> bool {
-    section_markdown(body, "## Outcome").is_some_and(|text| has_entry(&text))
+    section_markdown(body, "## Outcome").is_some_and(|text| has_entry(&text, Form::Outcome))
 }
 
 /// The Markdown of a section as written, with its comment lines blank;
@@ -651,19 +654,26 @@ const PLACEHOLDERS: &[&str] = &[
 /// placeholders. An inline HTML comment, delimited by `<!--` and `-->`
 /// and possibly spanning lines, never reaches the entry, so it never
 /// changes the result; other inline HTML is dropped too, except the
-/// templates' tokens ([`TEMPLATE_TOKENS`]), which empty their entry.
-fn has_entry(markdown: &str) -> bool {
+/// section template's own tokens ([`Form`]), which empty their entry.
+fn has_entry(markdown: &str, form: Form) -> bool {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
     let mut entry = String::new();
+    // An Outcome entry that keeps a template token as written.
+    let mut unfilled = false;
     let mut filled = false;
     let mut in_heading = false;
     let mut in_comment = false;
+    let close = |entry: &mut String, unfilled: &mut bool| {
+        let substantive = !*unfilled && is_entry(entry, form);
+        entry.clear();
+        *unfilled = false;
+        substantive
+    };
     for event in TextMergeStream::new(Parser::new_ext(markdown, Options::empty())) {
         match event {
             Event::Start(Tag::Heading { .. }) => {
-                filled |= is_entry(&entry);
-                entry.clear();
+                filled |= close(&mut entry, &mut unfilled);
                 in_heading = true;
             }
             Event::End(TagEnd::Heading(_)) => in_heading = false,
@@ -673,9 +683,14 @@ fn has_entry(markdown: &str) -> bool {
                     in_comment = !html.contains("-->");
                 } else if let Some(rest) = html.strip_prefix("<!--") {
                     in_comment = !rest.contains("-->");
-                } else if is_template_token(&html) {
-                    entry.push_str(&html);
-                    entry.push(' ');
+                } else if form.is_token(&html) {
+                    match form {
+                        Form::Deliverables => {
+                            entry.push_str(&html);
+                            entry.push(' ');
+                        }
+                        Form::Outcome => unfilled = true,
+                    }
                 }
             }
             Event::Text(text) | Event::Code(text) => {
@@ -688,30 +703,46 @@ fn has_entry(markdown: &str) -> bool {
             }
             Event::Start(Tag::Item)
             | Event::End(TagEnd::Item | TagEnd::Paragraph | TagEnd::CodeBlock) => {
-                filled |= is_entry(&entry);
-                entry.clear();
+                filled |= close(&mut entry, &mut unfilled);
             }
             _ => {}
         }
     }
-    filled || is_entry(&entry)
+    filled || close(&mut entry, &mut unfilled)
 }
 
-/// The templates' placeholder tokens: Deliverables' `<output>` and
-/// `<path>`, and Outcome's `<who>` and `<do what>`.
-const TEMPLATE_TOKENS: &[&str] = &["<output>", "<path>", "<who>", "<do what>"];
-
-/// Whether inline HTML is one of the template's placeholder tokens.
-fn is_template_token(html: &str) -> bool {
-    let html = html.trim_matches([' ', '\t']).to_lowercase();
-    TEMPLATE_TOKENS.contains(&html.as_str())
+/// The section whose template a reading follows, and so its placeholder
+/// tokens. Deliverables keeps its rule that `<output>` or `<path>`
+/// anywhere in an entry, quoted or not, leaves it empty. Outcome's `<who>`
+/// and `<do what>` leave an entry empty only as the template writes them,
+/// as inline HTML; a code span quoting one is an example, not a gap.
+#[derive(Clone, Copy)]
+enum Form {
+    Deliverables,
+    Outcome,
 }
 
-/// Whether one entry is substantive: an entry holding a template token
-/// is not, whatever else it says.
-fn is_entry(text: &str) -> bool {
+impl Form {
+    fn tokens(self) -> &'static [&'static str] {
+        match self {
+            Self::Deliverables => &["<output>", "<path>"],
+            Self::Outcome => &["<who>", "<do what>"],
+        }
+    }
+
+    /// Whether inline HTML is one of this template's placeholder tokens.
+    fn is_token(self, html: &str) -> bool {
+        let html = html.trim_matches([' ', '\t']).to_lowercase();
+        self.tokens().contains(&html.as_str())
+    }
+}
+
+/// Whether one entry is substantive: a Deliverables entry holding its
+/// template's token is not, whatever else it says.
+fn is_entry(text: &str, form: Form) -> bool {
     let lower = text.to_lowercase();
-    if TEMPLATE_TOKENS.iter().any(|token| lower.contains(token)) {
+    if matches!(form, Form::Deliverables) && form.tokens().iter().any(|token| lower.contains(token))
+    {
         return false;
     }
     let visible = text.trim_start_matches([' ', '\t']);

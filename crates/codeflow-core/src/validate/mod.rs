@@ -1450,6 +1450,23 @@ Criteria
         assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
     }
 
+    /// TSK-435: the Outcome template's `<who>` and `<do what>` are its own
+    /// tokens; a Deliverables entry naming them, quoted or not, still fills
+    /// the section.
+    #[test]
+    fn outcome_tokens_never_empty_a_deliverables_entry() {
+        let section = |text: &str| task_body("Some description", Some(text));
+        let wrong = wrong_cases(
+            &[
+                "- the <who> field reference: `docs/who.md`",
+                "- the `<do what>` guide: `docs/guide.md`",
+            ],
+            false,
+            section,
+        );
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
     /// sathyassn/codeflow#40: a complete or cancelled record never warns, so
     /// closed history stays quiet.
     #[test]

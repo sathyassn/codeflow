@@ -180,6 +180,27 @@ fn the_template_form_left_unfilled_is_refused() {
     }
 }
 
+/// An Outcome that quotes a template token in a code span is an example,
+/// not the unfilled form, so it states the Outcome.
+#[test]
+fn an_outcome_quoting_a_token_is_clean() {
+    let marker = marked(&[OLD]);
+    for outcome in [
+        "After this merges, authors can document the literal `<who>` token.",
+        "After this merges, reviewers can spot an unfilled `<do what>`.",
+    ] {
+        let body = Body {
+            outcome: Some(outcome),
+            deliverables: true,
+        };
+        for kind in [Kind::Task, Kind::Epic] {
+            let (errors, warnings) = findings(Some(&marker), kind, open(kind)[0], NEW, body);
+            assert!(errors.is_empty(), "{outcome}: {errors:?}");
+            assert!(warnings.is_empty(), "{outcome}: {warnings:?}");
+        }
+    }
+}
+
 /// AC-2: a later record that states its Outcome is clean.
 #[test]
 fn a_later_record_with_an_outcome_is_clean() {
