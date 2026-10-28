@@ -1557,8 +1557,35 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // accepted.
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
-        "codex_builder_line",
+        "codex_builder_load",
         "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // TSK-337: outside a repository the builder launch root is the project
+    // folder itself, so the probe runs there and reports what it observed;
+    // nothing is granted or skipped on that fallback.
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "builder_launch_root",
+        "obtain-absent:Repository::discover",
+        1,
+        "display",
+    ),
+    // TSK-337: the write probe's lines are read by their format; a line
+    // that does not fit leaves the grant check unavailable, never
+    // effective. The sandbox's error text is split only to print it.
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "probe_lines",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "error_text",
+        "lines",
         1,
         "display",
     ),
