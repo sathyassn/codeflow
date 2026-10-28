@@ -512,7 +512,11 @@ const REPOSITORY_CONTENT_PINS: &[(&str, &[(&str, &str)])] = &[
             ),
             (
                 "evidence path condition",
-                "a summary of evidence that a live record cites and the PR body cannot carry. A live record is one still in force, such as a task record, an ADR or a research note.",
+                "a summary of evidence that a live record cites and the PR body cannot carry. A live record is one still in force, such as a task record, an ADR or a research note; a completed task or a past decision stays live while work still relies on it.",
+            ),
+            (
+                "admitted uses outrank exclusions",
+                "An admitted use above outranks these exclusions: a generated file that is the shipped product, such as a GitHub action's bundled `dist/index.js`, is not refused as build output.",
             ),
             (
                 "one vendoring rule",
@@ -528,7 +532,7 @@ const REPOSITORY_CONTENT_PINS: &[(&str, &[(&str, &str)])] = &[
             ),
             (
                 "unneeded file is material",
-                "add a file the repository does not need long term, or one larger than the smallest form that serves its use",
+                "add a file the repository does not need long term, or one larger than the smallest form that serves its use: shown unnecessary content or avoidable bulk, never a wording or structure preference",
             ),
         ],
     ),
@@ -578,6 +582,10 @@ const REPOSITORY_CONTENT_PINS: &[(&str, &[(&str, &str)])] = &[
                 "Ask of every file the diff adds whether the project needs it long term and whether this is the smallest form that serves its use",
             ),
             (
+                "oversized is bounded",
+                "Oversized means shown unnecessary content or avoidable bulk, never a wording or structure preference, and an admitted use outranks the exclusions: fixtures, a lockfile or a bundle the project ships stay.",
+            ),
+            (
                 "verdict reports added files",
                 "added_files: <how many added files were checked; each unneeded or oversized one is a finding below | none added>",
             ),
@@ -605,9 +613,69 @@ fn repository_content_rule_has_one_home_and_its_pointers() {
     }
 }
 
+/// The passages of `text` that present `docs/verification` as an ordinary
+/// place: a paragraph (text between blank lines; a line in a JSON file) that
+/// names it and carries no word that refuses it. A warning or prohibition
+/// that names the folder stays allowed.
+fn verification_folder_presented(text: &str, json: bool) -> Vec<String> {
+    const REFUSALS: &[&str] = &["never", "not ", "no per-task", "stays out", "refuse"];
+    let passages: Vec<&str> = if json {
+        text.lines().collect()
+    } else {
+        text.split("\n\n").collect()
+    };
+    passages
+        .into_iter()
+        .filter(|passage| passage.contains("docs/verification"))
+        .filter(|passage| {
+            let lower = passage.to_lowercase();
+            !REFUSALS.iter().any(|word| lower.contains(word))
+        })
+        .map(normalized)
+        .collect()
+}
+
+/// The predicate flags the shipped forms that made the folder look standard
+/// and passes a sentence that refuses it.
+#[test]
+fn verification_folder_check_flags_presentation_and_passes_refusal() {
+    let old_row = "| Retained comparison evidence | `docs/verification/<task>/` | Yes, as evidence, not as a product runtime. |";
+    // The old row carries "not as a product runtime", so a row is judged by
+    // its cells, not its words alone: the home cell names the folder.
+    assert!(!verification_folder_presented(
+        "Example, from CodeFlow's `docs/verification/tsk-006/prototype.html`:",
+        false
+    )
+    .is_empty());
+    assert!(
+        !verification_folder_presented("  \"exclude\": [\"docs/verification\"],", true).is_empty()
+    );
+    assert!(verification_folder_presented(
+        "Never keep a per-task folder such as `docs/verification/<task>/`.",
+        false
+    )
+    .is_empty());
+    assert!(!table_rows_with_verification_home(old_row).is_empty());
+}
+
+/// Table rows whose second cell (a home or location column) names
+/// `docs/verification`: the shape of the row TSK-1030 replaced.
+fn table_rows_with_verification_home(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| line.trim_start().starts_with('|'))
+        .filter(|line| {
+            line.split('|')
+                .nth(2)
+                .is_some_and(|cell| cell.contains("docs/verification"))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 /// TSK-1030 AC-3: no shipped asset presents the project's own
 /// `docs/verification/` folder as a standard place, in an example, a
-/// default or a fixture.
+/// default, a fixture or a table row that names it as a home. A mention
+/// that refuses the folder is allowed.
 #[test]
 fn shipped_assets_name_no_per_task_verification_folder() {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -627,17 +695,28 @@ fn shipped_assets_name_no_per_task_verification_folder() {
     let mut files = Vec::new();
     walk(&assets, &mut files);
     assert!(files.len() > 100, "the asset walk found the shipped files");
-    let named: Vec<String> = files
-        .iter()
-        .filter(|path| {
-            std::fs::read(path)
-                .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).contains("docs/verification"))
-        })
-        .map(|path| path.strip_prefix(&assets).unwrap().display().to_string())
-        .collect();
+    let mut problems = Vec::new();
+    for path in &files {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        if !text.contains("docs/verification") {
+            continue;
+        }
+        let json = path.extension().is_some_and(|ext| ext == "json");
+        let relative = path.strip_prefix(&assets).unwrap().display().to_string();
+        for passage in verification_folder_presented(&text, json)
+            .into_iter()
+            .chain(table_rows_with_verification_home(&text))
+        {
+            problems.push(format!("{relative}: {passage}"));
+        }
+    }
     assert!(
-        named.is_empty(),
-        "shipped assets name docs/verification: {named:?}"
+        problems.is_empty(),
+        "shipped assets present docs/verification as a standard folder:\n  {}",
+        problems.join("\n  ")
     );
 }
 
