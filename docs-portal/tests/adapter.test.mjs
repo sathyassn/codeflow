@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, compareIdAwareText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recordFilesFor, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validateRecordsSwitch, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareBacklinks, compareDeterministicText, compareIdAwareText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recordFilesFor, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validateRecordsSwitch, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
@@ -497,6 +497,14 @@ test("ids order by number past 999 in record pages, routes and sources", () => {
   // Routes and source paths that carry an id order by it; other text keeps code unit order.
   assert.deepEqual(["records/tasks/TSK-1000", "records/tasks/TSK-999"].sort(compareIdAwareText), ["records/tasks/TSK-999", "records/tasks/TSK-1000"]);
   assert.deepEqual(["docs/guide-10.md", "docs/guide-2.md"].sort(compareIdAwareText), ["docs/guide-10.md", "docs/guide-2.md"]);
+  // Runs longer than 9,999 digits still order by number.
+  const nines = `TSK-${"9".repeat(9999)}`;
+  const tenThousandDigits = `TSK-1${"0".repeat(9999)}`;
+  assert.equal(compareIdAwareText(nines, tenThousandDigits), -1);
+  assert.equal(compareIdAwareText(tenThousandDigits, nines), 1);
+  assert.equal(compareIdAwareText(`TSK-${"9".repeat(99999)}`, `TSK-1${"0".repeat(99999)}`), -1);
+  const backlink = (id) => ({ type: "depends_on", source_route: `records/tasks/${id}`, source_id: id, target: "TSK-001" });
+  assert.deepEqual([backlink("TSK-1000"), backlink("TSK-999")].sort(compareBacklinks).map((item) => item.source_id), ["TSK-999", "TSK-1000"]);
   assert.equal(compareIdAwareText("TSK-001", "TSK-001"), 0);
   assert.notEqual(compareIdAwareText("TSK-01", "TSK-001"), 0);
   const pointer = { id_prefix: "TSK", folder: "project-management/tasks" };

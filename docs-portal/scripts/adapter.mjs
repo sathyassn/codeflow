@@ -3,7 +3,7 @@ import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  amendmentHeadings, capabilityFenceRecords, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, compareIdAwareText, decorateAltitude, excerptFor, extractPageRelationships,
+  amendmentHeadings, capabilityFenceRecords, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareBacklinks, compareDeterministicText, compareIdAwareText, decorateAltitude, excerptFor, extractPageRelationships,
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown, placeCapabilityTable,
   pinnedSourceUrl as providerSourceUrl, recordFilesFor, referencedIds, renderCapabilityFences, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
@@ -226,7 +226,7 @@ for (const page of pages) {
     if (!page.stale && !target.stale) target.backlinks.push({ type: relationship.type, source_route: page.route, source_id: relationship.source_id, target: relationship.target });
   }
 }
-for (const page of pages) page.backlinks.sort((a, b) => compareDeterministicText(JSON.stringify(a), JSON.stringify(b)));
+for (const page of pages) page.backlinks.sort(compareBacklinks);
 for (const page of pages) if (page.backlinks.length > EVIDENCE_LIMITS.backlinksPerPage) throw new Error(`${page.source_path}: backlink count exceeds ${EVIDENCE_LIMITS.backlinksPerPage}`);
 const previewMetadata = new Map([...ownerById].filter(([, owner]) => !owner.stale).map(([id, owner]) => [id, {
   route: withBase(base, owner.route), title: owner.title,

@@ -365,12 +365,18 @@ fn collect_cleanup(
         }
     }
 
-    out.sort_by(|left, right| {
+    sort_cleanup(&mut out);
+    out
+}
+
+/// Candidates by kind, then name with ids read as numbers (a branch for
+/// TSK-999 before one for TSK-1000).
+fn sort_cleanup(items: &mut [CleanupInfo]) {
+    items.sort_by(|left, right| {
         left.kind
             .cmp(&right.kind)
-            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| crate::ids::compare_id_bytes(left.name.bytes(), right.name.bytes()))
     });
-    out
 }
 
 fn target_matches_branch(target: Option<&CleanupTarget>, branch: &str) -> bool {
@@ -942,6 +948,28 @@ fn format_counts(counts: &BTreeMap<String, usize>) -> String {
 mod tests {
     use super::*;
     use crate::models::{Epic, EpicStatus, Task, TaskStatus};
+
+    #[test]
+    fn cleanup_candidates_order_by_id_number_past_three_digits() {
+        let branch = |name: &str| CleanupInfo {
+            kind: "branch".to_string(),
+            name: crate::git::GitName::from_text(name),
+            path: None,
+            disposition: CleanupDisposition::Removable,
+            proof: String::new(),
+        };
+        let mut items = vec![
+            branch("task/TSK-10000-c"),
+            branch("task/TSK-1000-b"),
+            branch("task/TSK-999-a"),
+        ];
+        sort_cleanup(&mut items);
+        let names: Vec<String> = items.iter().map(|i| i.name.display().to_string()).collect();
+        assert_eq!(
+            names,
+            ["task/TSK-999-a", "task/TSK-1000-b", "task/TSK-10000-c"]
+        );
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let output = crate::git::command()

@@ -44,9 +44,13 @@ export function compareDeterministicText(left, right) {
 // that read equal fall back to that order, so the result is a total order.
 const ID_IN_TEXT = /\b((?:ADR|EPC|SPC|TSK|CAP)-)(\d+)((?:-\d+)?)/gi;
 
+// A number sorts by its significant digit count, then by its digits. The count
+// is written as its own text with a four-digit length in front, so the order
+// holds for a run of any length, not only up to 9,999 digits.
 function numberKey(digits) {
   const trimmed = digits.replace(/^0+/, "");
-  return `${String(trimmed.length).padStart(4, "0")}${trimmed}`;
+  const count = String(trimmed.length);
+  return `${String(count.length).padStart(4, "0")}${count}${trimmed}`;
 }
 
 function idOrderKey(text) {
@@ -56,6 +60,11 @@ function idOrderKey(text) {
 export function compareIdAwareText(left, right) {
   const order = compareDeterministicText(idOrderKey(left), idOrderKey(right));
   return order !== 0 ? order : compareDeterministicText(left, right);
+}
+
+// Backlinks order by their JSON text, with each id read by its number.
+export function compareBacklinks(left, right) {
+  return compareIdAwareText(JSON.stringify(left), JSON.stringify(right));
 }
 
 export function safeRelative(value, label = "path") {

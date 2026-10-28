@@ -287,28 +287,52 @@ pub fn next_adr_id(repo_root: &Path) -> Result<String, StoreError> {
         }
         Err(error) => return Err(error.into()),
     };
-    let mut highest = 0;
+    let mut highest: u64 = 0;
     for entry in entries {
         let entry = entry?;
         // Non-ASCII/non-ID names are not ADR identities, but directory I/O errors refuse allocation.
-        if let Some(number) = adr_number(entry.file_name().as_encoded_bytes()) {
-            highest = highest.max(number);
+        match adr_number(entry.file_name().as_encoded_bytes()) {
+            Ok(Some(number)) => highest = highest.max(number),
+            Ok(None) => {}
+            Err(OutOfRange) => {
+                return Err(StoreError::Invalid(format!(
+                    "the ADR file name {} has a number above {}, so the next ADR id cannot be chosen; rename or remove it",
+                    crate::git::GitName::from_os_str(&entry.file_name()).display(),
+                    u64::MAX
+                )))
+            }
         }
     }
-    Ok(format!("ADR-{:04}", highest + 1))
+    let next = highest.checked_add(1).ok_or_else(|| {
+        StoreError::Invalid(format!(
+            "ADR-{highest} is the last ADR number there is, so no next ADR id exists"
+        ))
+    })?;
+    Ok(format!("ADR-{next:04}"))
 }
+
+/// An ADR file name whose number does not fit in 64 bits.
+#[derive(Debug, PartialEq, Eq)]
+struct OutOfRange;
 
 /// The number an `ADR-NNNN` file name starts with: every digit after the
 /// prefix, at least four, so `ADR-10000` reads as 10000 and not 1000.
-fn adr_number(name: &[u8]) -> Option<u64> {
-    let rest = name.strip_prefix(b"ADR-")?;
+/// `Ok(None)` is a name that is no ADR; a number above `u64::MAX` is an
+/// error, never skipped, so it cannot hide the true highest number.
+fn adr_number(name: &[u8]) -> Result<Option<u64>, OutOfRange> {
+    let Some(rest) = name.strip_prefix(b"ADR-") else {
+        return Ok(None);
+    };
     let mut digits = rest.iter().take_while(|byte| byte.is_ascii_digit());
     if digits.clone().count() < 4 {
-        return None;
+        return Ok(None);
     }
-    digits.try_fold(0u64, |value, digit| {
-        value.checked_mul(10)?.checked_add(u64::from(*digit - b'0'))
-    })
+    digits
+        .try_fold(0u64, |value, digit| {
+            value.checked_mul(10)?.checked_add(u64::from(*digit - b'0'))
+        })
+        .map(Some)
+        .ok_or(OutOfRange)
 }
 
 /// Write the next ADR from `template` with `status: proposed` (R-36),
@@ -453,13 +477,46 @@ mod tests {
 
     #[test]
     fn r22_adr_number_uses_ascii_prefix_only() {
-        assert_eq!(adr_number(b"ADR-0042-\xff.md"), Some(42));
-        assert_eq!(adr_number(b"not-an-adr"), None);
-        assert_eq!(adr_number(b"ADR-nope.md"), None);
-        assert_eq!(adr_number(b"ADR-9999-last-four-digit.md"), Some(9999));
-        assert_eq!(adr_number(b"ADR-10000-first-five-digit.md"), Some(10000));
-        assert_eq!(adr_number(b"ADR-123456.md"), Some(123_456));
-        assert_eq!(adr_number(b"ADR-123-too-short.md"), None);
+        assert_eq!(adr_number(b"ADR-0042-\xff.md"), Ok(Some(42)));
+        assert_eq!(adr_number(b"not-an-adr"), Ok(None));
+        assert_eq!(adr_number(b"ADR-nope.md"), Ok(None));
+        assert_eq!(adr_number(b"ADR-9999-last-four-digit.md"), Ok(Some(9999)));
+        assert_eq!(
+            adr_number(b"ADR-10000-first-five-digit.md"),
+            Ok(Some(10000))
+        );
+        assert_eq!(adr_number(b"ADR-123456.md"), Ok(Some(123_456)));
+        assert_eq!(adr_number(b"ADR-123-too-short.md"), Ok(None));
+        assert_eq!(
+            adr_number(b"ADR-18446744073709551615.md"),
+            Ok(Some(u64::MAX))
+        );
+        assert_eq!(adr_number(b"ADR-18446744073709551616.md"), Err(OutOfRange));
+        assert_eq!(
+            adr_number(b"ADR-00018446744073709551615.md"),
+            Ok(Some(u64::MAX))
+        );
+    }
+
+    /// The last number there is has no successor, and a number past it is
+    /// refused rather than skipped (a wrap would reissue ADR-0000).
+    #[test]
+    fn next_adr_id_refuses_an_exhausted_or_out_of_range_number() {
+        let last = tempfile::tempdir().unwrap();
+        let decisions = last.path().join("docs/decisions");
+        fs::create_dir_all(&decisions).unwrap();
+        fs::write(decisions.join("ADR-18446744073709551614-x.md"), "adr").unwrap();
+        assert_eq!(
+            next_adr_id(last.path()).unwrap(),
+            "ADR-18446744073709551615"
+        );
+        fs::write(decisions.join("ADR-18446744073709551615-x.md"), "adr").unwrap();
+        let error = next_adr_id(last.path()).unwrap_err().to_string();
+        assert!(error.contains("no next ADR id exists"), "{error}");
+        fs::write(decisions.join("ADR-18446744073709551616-x.md"), "adr").unwrap();
+        let error = next_adr_id(last.path()).unwrap_err().to_string();
+        assert!(error.contains("above 18446744073709551615"), "{error}");
+        assert!(error.contains("ADR-18446744073709551616-x.md"), "{error}");
     }
 
     #[test]

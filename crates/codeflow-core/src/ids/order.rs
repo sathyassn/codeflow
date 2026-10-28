@@ -6,8 +6,10 @@
 //! orders by its prefix, then its number, then any `-NNN` group of a
 //! historical `TSK-NNN-NNN` id. It also orders text that carries an id, such
 //! as a path (`tasks/TSK-1000.md`), a branch name or a message that starts
-//! with a path. Every list of ids or id-bearing paths that a reader sees or a
-//! command prints uses it, not `str::cmp`.
+//! with a path. The lists a reader sees or a command prints use it, not
+//! `str::cmp`. Internal inventories keep byte order where no reader sees
+//! the order: set membership, hash input, ref and path scans, and registry
+//! files. A scan may hand its order to a reader, so check what consumes it.
 
 use std::cmp::Ordering;
 use std::path::Path;
@@ -41,6 +43,13 @@ fn compare_bytes(a: &[u8], b: &[u8]) -> Ordering {
         }
     }
     (a.len() - i).cmp(&(b.len() - j))
+}
+
+/// [`compare_ids`] on raw bytes, for names that are not text (a git branch
+/// or worktree name).
+#[must_use]
+pub fn compare_id_bytes(left: &[u8], right: &[u8]) -> Ordering {
+    compare_bytes(left, right).then_with(|| left.cmp(right))
 }
 
 /// Compare two paths component by component with the same digit-aware

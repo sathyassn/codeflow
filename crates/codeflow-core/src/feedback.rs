@@ -989,9 +989,17 @@ pub fn lint(root: &Path) -> Lint {
             ));
         }
     }
-    lint.errors
-        .sort_by(|a, b| (&a.path, a.line, &a.message).cmp(&(&b.path, b.line, &b.message)));
+    sort_findings(&mut lint.errors);
     lint
+}
+
+/// Findings by file (FB-999 before FB-1000), then line, then message.
+fn sort_findings(findings: &mut [LintFinding]) {
+    findings.sort_by(|a, b| {
+        crate::ids::compare_ids(&a.path, &b.path)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.message.cmp(&b.message))
+    });
 }
 
 /// One item's structure, each finding pushed to `errors`.
@@ -1302,6 +1310,35 @@ mod tests {
 
     /// Ids past 999 list after 999 in a group: open items first, then by
     /// number, not by text.
+    #[test]
+    fn lint_findings_order_by_file_number_past_three_digits() {
+        let finding = |id: &str, line: usize| LintFinding {
+            path: format!("{FEEDBACK_DIR}/{id}.md"),
+            line,
+            message: "m".to_string(),
+        };
+        let mut findings = vec![
+            finding("FB-10000", 1),
+            finding("FB-1000", 2),
+            finding("FB-999", 9),
+            finding("FB-999", 3),
+        ];
+        sort_findings(&mut findings);
+        let shown: Vec<(String, usize)> = findings
+            .iter()
+            .map(|f| (f.path.rsplit('/').next().unwrap().to_string(), f.line))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("FB-999.md".to_string(), 3),
+                ("FB-999.md".to_string(), 9),
+                ("FB-1000.md".to_string(), 2),
+                ("FB-10000.md".to_string(), 1)
+            ]
+        );
+    }
+
     #[test]
     fn grouped_items_order_by_id_number_past_three_digits() {
         let items = [
