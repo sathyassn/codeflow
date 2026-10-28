@@ -5666,14 +5666,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:installer-awk-lines",
     ),
-    // Drops the line break from the line shown in doctor's label, which is printed escaped.
-    (
-        "crates/codeflow-core/src/scaffold/release_pin.rs",
-        "unread_line",
-        "trim_end_matches",
-        1,
-        "display",
-    ),
     // A forecast whose bytes do not deserialize is reported as forecast_invalid with its path and joins nothing; the report says so instead of reading it as absent.
     (
         "crates/codeflow-core/src/estimate/outcomes/mod.rs",

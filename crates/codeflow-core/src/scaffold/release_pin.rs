@@ -194,20 +194,28 @@ fn byte_line(line: &str) -> Result<Option<&str>, &'static str> {
     Ok(Some(trimmed))
 }
 
+/// The reason for a key the digest table lists twice. The key is named only
+/// when `CodeFlow` defines it; any other key is the project's own text, which
+/// can hold a secret (TSK-1029).
+fn listed_twice(key: &str) -> String {
+    if key == "version" || TRIPLES.contains(&key) {
+        format!("lists {key} twice")
+    } else {
+        "lists one of its own keys twice".to_string()
+    }
+}
+
 /// The first line at which the installers stop reading `state` as a digest
-/// table they can use: its number from 1, and a label naming it with its
-/// escapes shown, or `None` when they read it.
+/// table they can use: its number from 1, and a label naming it by number,
+/// or `None` when they read it. The line's text is never shown: the
+/// project wrote it and it can hold a secret (TSK-1029).
 #[must_use]
 pub fn unread_line(state: &str) -> Option<(usize, String)> {
     let mut end = 0;
     for (index, line) in state.split_inclusive('\n').enumerate() {
         end += line.len();
         if matches!(pinned_digests(&state[..end]), PinnedDigests::Unreadable(_)) {
-            let shown: String = format!("{:?}", line.trim_end_matches(['\n', '\r']))
-                .chars()
-                .take(120)
-                .collect();
-            return Some((index + 1, format!("line {} ({shown})", index + 1)));
+            return Some((index + 1, format!("line {}", index + 1)));
         }
     }
     None
@@ -297,7 +305,7 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
             continue;
         };
         if (&key[1] == "version" && version.is_some()) || values.contains_key(&key[1]) {
-            flag(format!("lists {} twice", &key[1]));
+            flag(listed_twice(&key[1]));
         }
         let rest = line
             .split_once('=')
@@ -624,6 +632,18 @@ mod tests {
         );
     }
 
+    /// TSK-1029: a key `CodeFlow` does not define is the project's own text,
+    /// so a duplicate is reported without naming it.
+    #[test]
+    fn a_duplicate_project_key_is_not_named() {
+        assert_eq!(
+            pinned_digests(&format!(
+                "[scaffold_sha256]\nopaque-31337 = \"{DIGEST}\"\nopaque-31337 = \"{DIGEST}\"\n"
+            )),
+            PinnedDigests::Unreadable("lists one of its own keys twice".to_string())
+        );
+    }
+
     #[test]
     fn an_unparseable_pinned_version_is_named_not_compared() {
         // As strings "9.9.9" is not older than "10.0", so a text order would
@@ -634,7 +654,7 @@ mod tests {
         let files = release("9.9.9");
         let error = pin_release(dir.path(), "9.9.9", "base", &served(&files)).unwrap_err();
         assert!(
-            error.contains("\"10.0\" is not a parseable version"),
+            error.contains("scaffold_version is not a parseable version"),
             "{error}"
         );
         assert!(

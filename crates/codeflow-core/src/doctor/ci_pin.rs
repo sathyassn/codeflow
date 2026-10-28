@@ -652,7 +652,7 @@ fn policy_keys(text: &str) -> Result<BTreeSet<String>, String> {
     let value = serde_json::from_str::<serde_json::Value>(text).map_err(|error| {
         format!(
             "cannot parse policy: {}",
-            crate::scaffold::unquoted(&error.to_string())
+            crate::scaffold::json_error(&error)
         )
     })?;
     walk(&value, "", &mut out);
@@ -811,7 +811,7 @@ mod tests {
         assert!(
             shown
                 .message
-                .contains("\"10.0\" is not a parseable version"),
+                .contains("scaffold_version is not a parseable version"),
             "{}",
             shown.message
         );
@@ -822,7 +822,7 @@ mod tests {
         let shown = report(dir.path());
         assert!(shown
             .message
-            .contains("\"3.10\" is not a parseable version"));
+            .contains("scaffold_version is not a parseable version"));
     }
 
     #[test]
@@ -834,7 +834,7 @@ mod tests {
         assert!(
             shown
                 .message
-                .contains("\"10.0\" is not a parseable version"),
+                .contains("scaffold_version is not a parseable version"),
             "{}",
             shown.message
         );
@@ -848,7 +848,7 @@ mod tests {
         assert!(
             shown
                 .message
-                .contains("\"10.0\" is not a parseable version"),
+                .contains("scaffold_version is not a parseable version"),
             "{}",
             shown.message
         );

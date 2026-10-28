@@ -59,8 +59,9 @@ impl PendingResolution {
             invalid(
                 dest,
                 &format!(
-                    "cannot read {}: {error}; restore the pending record",
-                    path(dest)
+                    "cannot read {}: {}; restore the pending record",
+                    path(dest),
+                    crate::scaffold::json_error(&error)
                 ),
             )
         })?;

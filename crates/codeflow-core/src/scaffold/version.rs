@@ -54,7 +54,9 @@ pub struct Unparseable(pub String);
 
 impl std::fmt::Display for Unparseable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} is not a parseable version", self.0)
+        // The value is not shown: it is free text the project wrote, and can
+        // hold a secret (TSK-1029).
+        write!(f, "is not a parseable version")
     }
 }
 
@@ -79,11 +81,13 @@ pub(super) fn check_write_version(
             "install a build with a valid version",
         ),
     ] {
+        // The value is not shown: a pin that does not parse is free text the
+        // project wrote, and can hold a secret (TSK-1029).
         if !is_parseable(value) {
             return Err(super::ScaffoldError::InvalidState {
                 what: name.to_string(),
                 detail: format!(
-                    "{value:?}{location} is not a parseable version; {remedy} and retry; {command} wrote no project files"
+                    "the value{location} is not a parseable version; {remedy} and retry; {command} wrote no project files"
                 ),
             });
         }

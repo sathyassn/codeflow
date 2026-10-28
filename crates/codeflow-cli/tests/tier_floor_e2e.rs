@@ -1574,6 +1574,97 @@ fn update_reports_never_show_project_values() {
     assert_nowhere(&outputs, SECRET, "malformed project.toml");
 }
 
+/// TSK-1029 review 03, second pass: every refusal update reaches names the
+/// file and place of a bad value and never the value, even when the value
+/// holds the delimiters a parser puts around it. Each case checks that its
+/// own diagnostic fired and that update still refuses or warns as before.
+#[test]
+fn update_refusals_never_show_adversarial_values() {
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    const PROJECT: &str = ".codeflow/project.toml";
+    const POLICY: &str = ".codeflow/policy.json";
+    const PENDING: &str = ".codeflow/.pending-update/.codeflow/rules/writing.md.json";
+
+    /// Plants one bad value in a fresh install.
+    type Plant = fn(&Path);
+    // Each case: its name, how it plants the value, whether update must
+    // refuse (`None`: a warning only, the outcome is not judged), and the
+    // texts its own diagnostic prints in stderr.
+    let cases: [(&str, Plant, Option<bool>, &[&str]); 4] = [
+        (
+            "unparseable scaffold_version",
+            |root| {
+                let text = read(root, PROJECT);
+                let pinned = text
+                    .lines()
+                    .find(|line| line.starts_with("scaffold_version"))
+                    .expect("scaffold_version line")
+                    .to_string();
+                let bad = format!("scaffold_version = \"1.0` {SECRET}\"");
+                std::fs::write(root.join(PROJECT), text.replace(&pinned, &bad)).unwrap();
+            },
+            Some(false),
+            &["scaffold_version", PROJECT, "not a parseable version"],
+        ),
+        (
+            "duplicate project key",
+            |root| {
+                let text = read(root, PROJECT);
+                let planted = format!("{text}\n\"{SECRET}\" = 1\n\"{SECRET}\" = 2\n");
+                std::fs::write(root.join(PROJECT), planted).unwrap();
+            },
+            Some(false),
+            &["project.toml", "TOML parse error at line "],
+        ),
+        (
+            "pending resolution holding an escaped quote",
+            |root| {
+                let folder = Path::new(PENDING).parent().expect("pending folder");
+                std::fs::create_dir_all(root.join(folder)).unwrap();
+                std::fs::write(root.join(PENDING), format!("\"x\\\" {SECRET}\"")).unwrap();
+            },
+            Some(false),
+            &[PENDING, "line 1, column "],
+        ),
+        (
+            "policy value holding a backtick",
+            |root| {
+                let mut policy = read_json(root, POLICY);
+                policy["git"]["test_gate_on_push"] = serde_json::json!(format!("x` {SECRET}"));
+                write_json(root, POLICY, &policy);
+            },
+            None,
+            &["cannot parse policy", ", column "],
+        ),
+    ];
+
+    let mut problems = Vec::new();
+    for (case, plant, succeeds, expected) in cases {
+        let (_tmp, root) = project();
+        init(&root, "--minimal");
+        plant(&root);
+        let out = codeflow(&root, &["update"]);
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        );
+        for (name, text) in [("stdout", &stdout), ("stderr", &stderr)] {
+            if text.contains(SECRET) {
+                problems.push(format!("{case}: {name} shows the value:\n{text}"));
+            }
+        }
+        if succeeds.is_some_and(|succeeds| succeeds != out.status.success()) {
+            problems.push(format!("{case}: the outcome changed:\n{stderr}"));
+        }
+        for text in expected {
+            if !stderr.contains(text) {
+                problems.push(format!("{case}: stderr lacks {text:?}:\n{stderr}"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n\n"));
+}
+
 /// TSK-1029 review: when the shipped default changes and the project keeps
 /// its own value, the update says so by key, even when nothing else in the
 /// settings changes; the next update, with nothing new shipped, is quiet.

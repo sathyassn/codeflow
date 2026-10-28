@@ -142,74 +142,59 @@ pub enum ScaffoldError {
     InvalidState { what: String, detail: String },
     #[error("git: {0}")]
     Git(String),
-    /// A JSON error from a file the project writes; any value the parser
-    /// quotes is replaced ([`unquoted`], TSK-1029).
-    #[error("json: {}", unquoted(&.0.to_string()))]
+    /// A JSON error from a file the project writes, named by its place only
+    /// ([`json_error`], TSK-1029).
+    #[error("{}", json_error(.0))]
     Json(#[from] serde_json::Error),
 }
 
-/// A parse error for a TOML file the project writes, named by its place:
-/// the line and column and the parser's message with any quoted text
-/// replaced. The parser's own rendering quotes the offending source line,
-/// which can hold a secret, so it is never passed on (TSK-1029).
+/// A TOML error for a file the project writes, named by its line and
+/// column only. The parser's message and its rendering quote keys, values
+/// and the offending source line, all written by the project and possibly
+/// secret, and a value can hold any delimiter the message puts around it,
+/// so no part of the message is passed on (TSK-1029).
 pub(crate) fn toml_error(text: &str, error: &toml::de::Error) -> String {
-    let message = unquoted(error.message());
-    match error.span() {
-        Some(span) => {
-            let before = &text[..span.start.min(text.len())];
+    let place = error
+        .span()
+        .and_then(|span| text.get(..span.start))
+        .map(|before| {
             let line = before.matches('\n').count() + 1;
             let column = before
                 .rsplit('\n')
                 .next()
                 .map_or(0, |tail| tail.chars().count())
                 + 1;
-            format!("TOML parse error at line {line}, column {column}: {message}")
-        }
-        None => format!("TOML parse error: {message}"),
-    }
+            format!(" at line {line}, column {column}")
+        });
+    format!(
+        "TOML parse error{}",
+        place.as_deref().unwrap_or(" (the parser gave no position)")
+    )
 }
 
-/// `message` with every value a parser quotes replaced by `<value>`: a span
-/// in double quotes, one in single quotes that opens after a space or at
-/// the start (an apostrophe inside a word is kept), and a backticked span
-/// serde uses for a value or an unknown name (`unknown variant`, `unknown
-/// field`, `invalid type: integer` and the like). Any other backticked name
-/// is a schema name and stays. An unclosed quote hides the rest
-/// (TSK-1029).
+/// A JSON error for a file the project writes, named by its kind and its
+/// line and column only. The parser's message quotes keys and values the
+/// project wrote, and a value can hold any delimiter the message puts
+/// around it, so no part of the message is passed on (TSK-1029).
 #[must_use]
-pub fn unquoted(message: &str) -> String {
-    /// The words serde puts before a backticked value or project-written
-    /// name.
-    const VALUE_BEFORE: [&str; 8] = [
-        "unknown variant ",
-        "unknown field ",
-        "integer ",
-        "floating point ",
-        "boolean ",
-        "char ",
-        "string ",
-        "map key ",
-    ];
-    let mut out = String::with_capacity(message.len());
-    let mut quote: Option<char> = None;
-    let mut previous = ' ';
-    for c in message.chars() {
-        match quote {
-            Some(open) if c == open => quote = None,
-            Some(_) => {}
-            None if c == '"' || (c == '\'' && previous == ' ') => {
-                quote = Some(c);
-                out.push_str("<value>");
-            }
-            None if c == '`' && VALUE_BEFORE.iter().any(|word| out.ends_with(word)) => {
-                quote = Some(c);
-                out.push_str("<value>");
-            }
-            None => out.push(c),
+pub fn json_error(error: &serde_json::Error) -> String {
+    let kind = match error.classify() {
+        serde_json::error::Category::Io => "read error",
+        serde_json::error::Category::Syntax => "syntax error",
+        serde_json::error::Category::Data => {
+            "error: a key or value does not fit the expected shape"
         }
-        previous = c;
+        serde_json::error::Category::Eof => "error: the input ends early",
+    };
+    if error.line() == 0 {
+        format!("JSON {kind}")
+    } else {
+        format!(
+            "JSON {kind} at line {}, column {}",
+            error.line(),
+            error.column()
+        )
     }
-    out
 }
 
 impl ScaffoldError {
@@ -268,7 +253,7 @@ mod r22_tests {
 
 #[cfg(test)]
 mod parse_error_tests {
-    use super::{toml_error, unquoted};
+    use super::{json_error, toml_error, ScaffoldError};
 
     /// A synthetic value no message may show.
     const SECRET: &str = "opaque-neighbour-value-31337";
@@ -292,13 +277,93 @@ mod parse_error_tests {
     #[test]
     fn a_typed_error_loses_its_quoted_value() {
         let error = serde_json::from_str::<bool>(&format!("\"{SECRET}\"")).unwrap_err();
-        let shown = unquoted(&error.to_string());
+        let shown = json_error(&error);
         assert!(!shown.contains(SECRET), "{shown}");
-        assert!(
-            shown.contains("<value>") && shown.contains("line 1"),
-            "{shown}"
+        assert_eq!(
+            shown,
+            "JSON error: a key or value does not fit the expected shape at line 1, column 30"
         );
-        assert_eq!(unquoted("can't read `key`"), "can't read `key`");
-        assert_eq!(unquoted("bad 'x' here"), "bad <value> here");
+        let early = serde_json::from_str::<Vec<bool>>("[").unwrap_err();
+        assert_eq!(
+            json_error(&early),
+            "JSON error: the input ends early at line 1, column 1"
+        );
+        let syntax = serde_json::from_str::<Vec<bool>>("[tru]").unwrap_err();
+        assert!(
+            json_error(&syntax).starts_with("JSON syntax error at line 1, column "),
+            "{}",
+            json_error(&syntax)
+        );
+    }
+
+    /// A shape with a closed set of keys and one enum, as the project
+    /// files update reads have.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Shape {
+        mode: Option<Mode>,
+        flag: Option<bool>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    enum Mode {
+        Block,
+        Warn,
+    }
+
+    /// Why `shown` fails, if it shows the value or does not name its line.
+    fn misplaced(shown: &str, line: usize) -> Option<String> {
+        if shown.contains(SECRET) {
+            Some(format!("a project value is shown: {shown}"))
+        } else if !shown.contains(&format!("line {line}, column ")) {
+            Some(format!("the diagnostic does not name its place: {shown}"))
+        } else {
+            None
+        }
+    }
+
+    /// TSK-1029 review: values a project writes can hold the delimiters
+    /// the parser puts around them, so no message may depend on finding
+    /// where a quoted value ends.
+    #[test]
+    fn adversarial_json_values_and_keys_never_show() {
+        let mut failures = Vec::new();
+        for (text, line) in [
+            // An escaped double quote inside a string value.
+            (format!("\n{{\"flag\": \"a\\\" {SECRET}\"}}"), 2),
+            // A backtick inside an enum value serde puts in backticks.
+            (format!("{{\"mode\": \"x` {SECRET}\"}}"), 1),
+            // A backtick inside a key the project wrote.
+            (format!("{{\"x` {SECRET}\": 1}}"), 1),
+            // A single quote and a space inside an enum value.
+            (format!("{{\"mode\": \"it' {SECRET}\"}}"), 1),
+        ] {
+            let error = serde_json::from_str::<Shape>(&text).unwrap_err();
+            assert!(error.to_string().contains(SECRET), "{error}");
+            failures.extend(misplaced(&ScaffoldError::Json(error).to_string(), line));
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn adversarial_toml_values_and_keys_never_show() {
+        let mut failures = Vec::new();
+        for (text, line) in [
+            // A duplicate key the project wrote.
+            (format!("{SECRET} = 1\n{SECRET} = 2\n"), 2),
+            // A backtick inside an enum value.
+            (format!("mode = \"x` {SECRET}\"\n"), 1),
+            // A backtick inside a quoted key the project wrote.
+            (format!("\"x` {SECRET}\" = 1\n"), 1),
+            // An escaped quote inside a string of the wrong type.
+            (format!("\nflag = \"a\\\" {SECRET}\"\n"), 2),
+        ] {
+            let error = toml::from_str::<Shape>(&text).unwrap_err();
+            assert!(error.to_string().contains(SECRET), "{error}");
+            failures.extend(misplaced(&toml_error(&text, &error), line));
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

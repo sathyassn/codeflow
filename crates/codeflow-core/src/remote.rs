@@ -235,7 +235,7 @@ impl ProtectionPlan {
                 format!(
                     "cannot parse policy {}: {}",
                     path.display(),
-                    crate::scaffold::unquoted(&error.to_string())
+                    crate::scaffold::json_error(&error)
                 )
             })?
         };
