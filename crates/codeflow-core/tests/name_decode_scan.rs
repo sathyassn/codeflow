@@ -4956,6 +4956,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // TSK-435: lets a respaced Outcome token such as `< do  what >` run across whitespace while it is scanned; prose only, never a path or Git name.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "token_spans",
+        "is_whitespace",
+        1,
+        "prose",
+    ),
     // Public raw acceptance-text reader removes LF/CRLF once. acceptance_blocks passes already-framed lines directly to parse_acceptance_lines so content CR is never stripped again.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",

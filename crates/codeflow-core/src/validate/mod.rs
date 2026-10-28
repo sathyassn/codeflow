@@ -724,7 +724,8 @@ fn outcome_findings(
     epic: bool,
 ) -> (Vec<ValidationError>, Vec<ValidationWarning>) {
     use crate::workgraph::outcome::{Adoption, MARKER_KEY};
-    use crate::workgraph::record_text::{epic_names_deliverables, states_outcome};
+    use crate::workgraph::record_text::{epic_names_deliverables, outcome_line, OutcomeLine};
+    const RAW: &str = "a raw `<who>` or `<do what>` renders as HTML, so readers see nothing; put a token you mean to show in a code span";
 
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -737,10 +738,16 @@ fn outcome_findings(
     let adoption = repo_root.map_or(Adoption::Unmarked, Adoption::of);
     let uid = get_string_field(data, "uid");
     let later = matches!(&adoption, Adoption::Marked(present) if !uid.is_empty() && !present.contains(&uid));
-    if !states_outcome(body) {
+    let line = outcome_line(body);
+    if line != OutcomeLine::Stated {
+        let raw = line == OutcomeLine::RawToken;
         let warn = || ValidationWarning {
             field: "outcome".into(),
-            message: "open record has no filled `## Outcome` section".into(),
+            message: if raw {
+                format!("open record has no filled `## Outcome` section: {RAW}")
+            } else {
+                "open record has no filled `## Outcome` section".into()
+            },
             clearing: &crate::remedy::RECORD_OUTCOME,
         };
         match &adoption {
@@ -748,6 +755,12 @@ fn outcome_findings(
                 field: "outcome".into(),
                 message: format!(
                     "cannot tell whether this record must state its `## Outcome`: {why}; fix `{MARKER_KEY}` in .codeflow/project.toml or add the section"
+                ),
+            }),
+            _ if later && raw => errors.push(ValidationError {
+                field: "outcome".into(),
+                message: format!(
+                    "record created after this project adopted the `## Outcome` section has a template token in its line: {RAW}, and fill the line as: after this merges, <who> can <do what>"
                 ),
             }),
             _ if later => errors.push(ValidationError {

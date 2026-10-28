@@ -607,14 +607,39 @@ pub fn epic_names_deliverables(body: &str) -> bool {
         .is_some_and(|text| has_entry(&text, Form::Deliverables))
 }
 
-/// Whether a record states its Outcome (TSK-435): its `## Outcome` section
-/// has a substantive line. Comments never count, so the section as the
-/// template writes it, holding only its comment, states nothing; a line
-/// that keeps the template's `<who>` or `<do what>` as written states
-/// nothing either, while one quoting the token in a code span does.
+/// What a record's `## Outcome` section states (TSK-435).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutcomeLine {
+    /// A line with a word beyond the template's own tokens and words.
+    Stated,
+    /// No line, only the template's comment, or a line holding nothing but
+    /// the template's tokens and words in any formatting.
+    Unfilled,
+    /// A template token, `<who>` or `<do what>` in any case or spacing,
+    /// outside a code span. Markdown renders it as HTML, so a reader sees
+    /// nothing; quoted in a code span it shows.
+    RawToken,
+}
+
+/// What a record's `## Outcome` section states (TSK-435). Two small rules
+/// judge it, never the sentence's grammar: a template token outside a code
+/// span is [`OutcomeLine::RawToken`] wherever it stands, and a section
+/// whose every line holds nothing but the template's tokens and words
+/// (after, this, merges, can), formatting, quotes and punctuation set
+/// aside, is [`OutcomeLine::Unfilled`]. Comments never count.
 #[must_use]
-pub fn states_outcome(body: &str) -> bool {
-    section_markdown(body, "## Outcome").is_some_and(|text| has_entry(&text, Form::Outcome))
+pub fn outcome_line(body: &str) -> OutcomeLine {
+    let Some(text) = section_markdown(body, "## Outcome") else {
+        return OutcomeLine::Unfilled;
+    };
+    let reading = read_entries(&text, Form::Outcome);
+    if reading.raw_token {
+        OutcomeLine::RawToken
+    } else if reading.filled {
+        OutcomeLine::Stated
+    } else {
+        OutcomeLine::Unfilled
+    }
 }
 
 /// The Markdown of a section as written, with its comment lines blank;
@@ -656,30 +681,41 @@ const PLACEHOLDERS: &[&str] = &[
 /// changes the result; other inline HTML is dropped too, except the
 /// section template's own tokens ([`Form`]), which empty their entry.
 fn has_entry(markdown: &str, form: Form) -> bool {
+    read_entries(markdown, form).filled
+}
+
+/// A section read entry by entry.
+struct Reading {
+    /// One entry is substantive.
+    filled: bool,
+    /// An Outcome template token stands outside a code span.
+    raw_token: bool,
+}
+
+/// Reads a section's entries as [`has_entry`] describes. Only an Outcome
+/// section looks for its tokens in text ([`token_spans`]); a Deliverables
+/// code span is pushed as written and never scanned.
+fn read_entries(markdown: &str, form: Form) -> Reading {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
+    let outcome = matches!(form, Form::Outcome);
     let mut entry = String::new();
-    // The Outcome entry as its slots are judged: each code span stands in
-    // as one opaque word ([`quoted_span`]).
-    let mut judged = String::new();
-    // An Outcome entry that keeps a template token as written.
-    let mut unfilled = false;
-    let mut filled = false;
+    let mut reading = Reading {
+        filled: false,
+        raw_token: false,
+    };
     let mut in_heading = false;
     let mut in_comment = false;
-    let close = |entry: &mut String, judged: &mut String, unfilled: &mut bool| {
-        let substantive = !*unfilled
-            && is_entry(entry, form)
-            && !(matches!(form, Form::Outcome) && unfilled_outcome(judged));
+    let mut in_code_block = false;
+    let close = |entry: &mut String| {
+        let substantive = is_entry(entry, form) && !(outcome && only_template(entry));
         entry.clear();
-        judged.clear();
-        *unfilled = false;
         substantive
     };
     for event in TextMergeStream::new(Parser::new_ext(markdown, Options::empty())) {
         match event {
             Event::Start(Tag::Heading { .. }) => {
-                filled |= close(&mut entry, &mut judged, &mut unfilled);
+                reading.filled |= close(&mut entry);
                 in_heading = true;
             }
             Event::End(TagEnd::Heading(_)) => in_heading = false,
@@ -690,49 +726,43 @@ fn has_entry(markdown: &str, form: Form) -> bool {
                 } else if let Some(rest) = html.strip_prefix("<!--") {
                     in_comment = !rest.contains("-->");
                 } else if form.is_token(&html) {
-                    match form {
-                        Form::Deliverables => {
-                            entry.push_str(&html);
-                            entry.push(' ');
-                        }
-                        Form::Outcome => unfilled = true,
-                    }
+                    reading.raw_token |= outcome;
+                    entry.push_str(&html);
+                    entry.push(' ');
                 }
             }
             Event::Text(text) => {
+                if outcome && !in_code_block && !token_spans(&text).is_empty() {
+                    reading.raw_token = true;
+                }
                 entry.push_str(&text);
                 entry.push(' ');
-                judged.push_str(&text);
-                judged.push(' ');
             }
             Event::Code(text) => {
                 entry.push_str(&text);
                 entry.push(' ');
-                judged.push(' ');
-                judged.push_str(quoted_span(&text));
-                judged.push(' ');
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 entry.push_str(&dest_url);
                 entry.push(' ');
             }
+            Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
             Event::Start(Tag::Item)
             | Event::End(TagEnd::Item | TagEnd::Paragraph | TagEnd::CodeBlock) => {
-                filled |= close(&mut entry, &mut judged, &mut unfilled);
+                in_code_block = false;
+                reading.filled |= close(&mut entry);
             }
             _ => {}
         }
     }
-    filled || close(&mut entry, &mut judged, &mut unfilled)
+    reading.filled |= close(&mut entry);
+    reading
 }
 
 /// The section whose template a reading follows, and so its placeholder
 /// tokens. Deliverables keeps its rule that `<output>` or `<path>`
 /// anywhere in an entry, quoted or not, leaves it empty. Outcome's `<who>`
-/// and `<do what>`, in any case or spacing, leave an entry empty when
-/// written outside quotes, and when a quoted one stands in the sentence's
-/// own actor or action ([`unfilled_outcome`]); a sentence that quotes one
-/// as an example states an Outcome.
+/// and `<do what>` are read by [`outcome_line`]'s two rules.
 #[derive(Clone, Copy)]
 enum Form {
     Deliverables,
@@ -773,13 +803,6 @@ fn spaced(text: &str) -> String {
     text
 }
 
-/// Stands in for a template token while an Outcome is judged, so a token
-/// is never mistaken for a real word.
-const TOKEN: &str = "\u{0}";
-
-/// Stands in for a quoted span that says something: one opaque word.
-const QUOTED: &str = "\u{1}";
-
 /// The template's own words, in any case.
 fn template_word(word: &str) -> bool {
     ["after", "this", "merges", "can"]
@@ -787,114 +810,51 @@ fn template_word(word: &str) -> bool {
         .any(|template| word.eq_ignore_ascii_case(template))
 }
 
-/// An Outcome's words, punctuation trimmed and stand-ins kept.
+/// An Outcome's words, punctuation trimmed.
 fn outcome_words(text: &str) -> Vec<&str> {
     text.split_whitespace()
-        .map(|word| {
-            word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\u{0}' && c != '\u{1}')
-        })
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
         .filter(|word| !word.is_empty())
         .collect()
 }
 
-/// `text` with each template token, in any case or spacing, as [`TOKEN`],
-/// and whether it held one.
-fn mark_tokens(text: &str) -> (String, bool) {
-    let mut marked = String::new();
-    let mut found = false;
-    let mut rest = text;
-    while let Some(open) = rest.find('<') {
-        let candidate = rest[open..]
-            .find('>')
-            .map(|close| &rest[open..=open + close])
-            .filter(|candidate| Form::Outcome.is_token(candidate));
-        marked.push_str(&rest[..open]);
-        if let Some(token) = candidate {
-            marked.push(' ');
-            marked.push_str(TOKEN);
-            marked.push(' ');
-            rest = &rest[open + token.len()..];
-            found = true;
-        } else {
-            marked.push('<');
-            rest = &rest[open + 1..];
+/// The byte range of each Outcome template token in `text`, in any case or
+/// spacing, found in one forward pass. A candidate runs from the latest
+/// `<` to the next `>` through letters and whitespace only; any other
+/// character, another `<` included, ends it, so no character is read more
+/// than twice and a long run of `<` stays linear.
+fn token_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut open = None;
+    for (at, c) in text.char_indices() {
+        match c {
+            '<' => open = Some(at),
+            '>' => {
+                if let Some(start) = open.take() {
+                    if Form::Outcome.is_token(&text[start..=at]) {
+                        spans.push((start, at + 1));
+                    }
+                }
+            }
+            c if c.is_alphabetic() || c.is_whitespace() => {}
+            _ => open = None,
         }
     }
-    marked.push_str(rest);
-    (marked, found)
+    spans
 }
 
-/// The stand-in for a quoted span, a code span or a double-quoted string.
-/// Its content is opaque, so it reads as one word ([`QUOTED`]), except
-/// when nothing in it is more than template tokens and the template's
-/// words, such as `` `<who>` `` or `` `after this merges, <who> can <do
-/// what>` ``: that quotes the template itself and reads as a [`TOKEN`].
-fn quoted_span(content: &str) -> &'static str {
-    let (marked, _) = mark_tokens(content);
-    if outcome_words(&marked)
-        .iter()
-        .all(|word| *word == TOKEN || template_word(word))
-    {
-        TOKEN
-    } else {
-        QUOTED
+/// Whether an Outcome entry holds nothing but the template's tokens and
+/// words once its tokens, formatting, quotes and punctuation are set aside.
+fn only_template(entry: &str) -> bool {
+    let mut words = String::with_capacity(entry.len());
+    let mut last = 0;
+    for (start, end) in token_spans(entry) {
+        words.push_str(&entry[last..start]);
+        words.push(' ');
+        last = end;
     }
-}
-
-/// `text` with each double-quoted string, straight or curly, as its
-/// [`quoted_span`] stand-in; an unclosed quote stays as written.
-fn quote_strings(text: &str) -> String {
-    let mut judged = String::new();
-    let mut rest = text;
-    while let Some(open) = rest.find(['"', '\u{201c}']) {
-        let quote = rest[open..].chars().next().unwrap_or('"');
-        let closing = if quote == '"' { '"' } else { '\u{201d}' };
-        let after = &rest[open + quote.len_utf8()..];
-        let Some(close) = after.find(closing) else {
-            break;
-        };
-        judged.push_str(&rest[..open]);
-        judged.push(' ');
-        judged.push_str(quoted_span(&after[..close]));
-        judged.push(' ');
-        rest = &after[close + closing.len_utf8()..];
-    }
-    judged.push_str(rest);
-    judged
-}
-
-/// Whether an Outcome entry leaves the template unfilled. Quoted spans are
-/// opaque ([`quoted_span`]), so only the sentence's own words are judged:
-/// - a template token outside quotes leaves it unfilled;
-/// - after a leading "after this merges", in any case, the first lowercase
-///   "can" with words before it splits the sentence into its actor and
-///   action, and either slot holding nothing but tokens is unfilled;
-/// - when every "can" leads the sentence, its actor is empty;
-/// - with no "can", nothing left but tokens and template words is
-///   unfilled.
-///
-/// So "authors can document the template `<who> can <do what>`" and "CAN
-/// bus operators can inspect dropped frames" state an Outcome.
-fn unfilled_outcome(judged: &str) -> bool {
-    let (marked, unquoted_token) = mark_tokens(&quote_strings(judged));
-    if unquoted_token {
-        return true;
-    }
-    let words = outcome_words(&marked);
-    let leads = words.len() >= 3
-        && words
-            .iter()
-            .zip(["after", "this", "merges"])
-            .all(|(word, template)| word.eq_ignore_ascii_case(template));
-    let rest = if leads { &words[3..] } else { &words[..] };
-    let real = |slot: &[&str]| slot.iter().any(|word| *word != TOKEN);
-    match rest.iter().skip(1).position(|word| *word == "can") {
-        Some(at) => !real(&rest[..=at]) || !real(&rest[at + 2..]),
-        None if rest.first() == Some(&"can") => true,
-        None => rest
-            .iter()
-            .all(|word| *word == TOKEN || template_word(word)),
-    }
+    words.push_str(&entry[last..]);
+    outcome_words(&words).iter().all(|word| template_word(word))
 }
 
 /// Whether one entry is substantive: a Deliverables entry holding its

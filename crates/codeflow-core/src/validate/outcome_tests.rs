@@ -181,8 +181,8 @@ fn the_template_form_left_unfilled_is_refused() {
 }
 
 /// Formatting or spacing never fills the template: a sole quoted token,
-/// the whole template in a code span or emphasis, a token left in its
-/// place after a real actor, and respaced tokens are each refused.
+/// the whole template in a code span or emphasis, and a raw or respaced
+/// token are each refused.
 #[test]
 fn the_template_formatted_or_respaced_is_refused() {
     let marker = marked(&[OLD]);
@@ -193,7 +193,6 @@ fn the_template_formatted_or_respaced_is_refused() {
         "`after this merges, <who> can <do what>`",
         "*after this merges, `<who>` can `<do what>`*",
         "after this merges, maintainers can <do  what>",
-        "after this merges, maintainers can `<do   what>`",
         "after this merges, < who > can run the audit",
         "after this merges,  <who>   can   <do what>",
         "after  this\n  merges, `<who>`\tcan `<do what>`",
@@ -212,9 +211,100 @@ fn the_template_formatted_or_respaced_is_refused() {
     assert!(wrong.is_empty(), "accepted:\n{}", wrong.join("\n"));
 }
 
-/// An Outcome that quotes a template token or phrase in a code span is an
-/// example, not the unfilled form: its own actor and action are real, so it
-/// states the Outcome.
+/// A raw template token outside a code span renders as HTML, so a reader
+/// sees nothing: it is refused wherever it stands, inside quotation marks
+/// too, and the message says to put a token meant to show in a code span.
+#[test]
+fn a_raw_token_is_refused_even_inside_quotation_marks() {
+    let marker = marked(&[OLD]);
+    let mut wrong = Vec::new();
+    for outcome in [
+        "After this merges, authors can explain \"<who> placeholder\" to contributors.",
+        "After this merges, authors can explain \u{201c}<who> placeholder\u{201d} to contributors.",
+        "After this merges, authors can explain the < Do What > slot to contributors.",
+        "after this merges, maintainers can <do  what>",
+    ] {
+        let body = Body {
+            outcome: Some(outcome),
+            deliverables: true,
+        };
+        for kind in [Kind::Task, Kind::Epic] {
+            let (errors, _) = findings(Some(&marker), kind, open(kind)[0], NEW, body);
+            if !(errors.len() == 1 && errors[0].contains("code span")) {
+                wrong.push(format!("{outcome:?}: {errors:?}"));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "not refused as raw:\n{}",
+        wrong.join("\n")
+    );
+}
+
+/// The rule is small on purpose: a line with any word beyond the template's
+/// tokens and words states an Outcome, so a real actor beside a quoted
+/// token, an empty actor or an empty action passes, and review judges it.
+#[test]
+fn a_line_with_one_real_word_passes() {
+    let marker = marked(&[OLD]);
+    let mut wrong = Vec::new();
+    for outcome in [
+        "Maintainers can `<do what>`",
+        "after this merges, maintainers can `<do   what>`",
+        "after this merges, can run the audit",
+        "After this merges, operators can",
+    ] {
+        let body = Body {
+            outcome: Some(outcome),
+            deliverables: true,
+        };
+        for kind in [Kind::Task, Kind::Epic] {
+            let (errors, _) = findings(Some(&marker), kind, open(kind)[0], NEW, body);
+            if !errors.is_empty() {
+                wrong.push(format!("{outcome:?}: {errors:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "refused:\n{}", wrong.join("\n"));
+}
+
+/// A long run of `<` is read in one pass: neither an Outcome nor a
+/// Deliverables entry holding 50,000 of them takes long to judge.
+#[test]
+fn a_long_run_of_openers_is_read_in_linear_time() {
+    let marker = marked(&[OLD]);
+    let run = "<".repeat(50_000);
+    let span: &'static str = Box::leak(
+        format!("After this merges, operators can read `{run}x>` in the log.").into_boxed_str(),
+    );
+    let started = std::time::Instant::now();
+    let (errors, _) = findings(
+        Some(&marker),
+        Kind::Task,
+        "todo",
+        NEW,
+        Body {
+            outcome: Some(span),
+            deliverables: true,
+        },
+    );
+    let outcome = started.elapsed();
+    assert!(errors.is_empty(), "{errors:?}");
+    let body = format!("## Deliverables\n\n- the log: `{run}x>` in `logs/run.txt`\n");
+    let started = std::time::Instant::now();
+    assert!(crate::workgraph::record_text::epic_names_deliverables(
+        &body
+    ));
+    let deliverables = started.elapsed();
+    assert!(
+        outcome.as_millis() < 500 && deliverables.as_millis() < 500,
+        "Outcome {outcome:?}, Deliverables {deliverables:?}"
+    );
+}
+
+/// An Outcome that quotes a template token, phrase or word in a code span
+/// is an example, not the unfilled form, so it states the Outcome.
 #[test]
 fn an_outcome_quoting_a_token_is_clean() {
     let marker = marked(&[OLD]);
@@ -230,6 +320,8 @@ fn an_outcome_quoting_a_token_is_clean() {
         "`can <do what>` examples help authors write Outcomes.",
         "`can` commands let maintainers retry a refused push.",
         "After this merges, `can` users can review their granted permissions.",
+        "After this merges, `can` can report the permissions granted to operators.",
+        "After this merges, `after` can schedule callbacks for application authors.",
     ] {
         let body = Body {
             outcome: Some(outcome),
