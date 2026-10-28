@@ -593,8 +593,55 @@ pub fn has_section(body: &str, heading: &str) -> bool {
 /// template's `<output>` and `<path>` tokens fill nothing.
 #[must_use]
 pub fn names_deliverables(body: &str) -> bool {
-    section_markdown(body, "## Deliverables").is_some_and(|text| has_entry(&text))
+    section_markdown(body, "## Deliverables")
+        .is_some_and(|text| has_entry(&text, Form::Deliverables))
         || section_markdown(body, "## Description").is_some_and(|text| names_path(&text))
+}
+
+/// Whether an epic names what it delivers: its `## Deliverables` section
+/// has a substantive entry, read as [`names_deliverables`] reads a task's.
+/// An epic has no Description, so a path elsewhere never counts.
+#[must_use]
+pub fn epic_names_deliverables(body: &str) -> bool {
+    section_markdown(body, "## Deliverables")
+        .is_some_and(|text| has_entry(&text, Form::Deliverables))
+}
+
+/// What a record's `## Outcome` section states (TSK-435).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutcomeLine {
+    /// A line with a word beyond the template's own tokens and words.
+    Stated,
+    /// No line, only the template's comment, or a line holding nothing but
+    /// the template's tokens and words in any formatting.
+    Unfilled,
+    /// A template token, `<who>` or `<do what>` in any case or spacing,
+    /// outside a code span. A token in an Outcome must be in a code span, so
+    /// a raw one is refused, and so is an escaped, entity-encoded or
+    /// respaced one.
+    RawToken,
+}
+
+/// What a record's `## Outcome` section states (TSK-435). Two small rules
+/// judge it, never the sentence's grammar: a template token outside a code
+/// span is [`OutcomeLine::RawToken`] wherever it stands, and a section
+/// whose every line holds nothing but the template's tokens and words
+/// (after, this, merges, can) in its visible text, formatting, quotes,
+/// punctuation and link destinations set aside, is
+/// [`OutcomeLine::Unfilled`]. Comments never count.
+#[must_use]
+pub fn outcome_line(body: &str) -> OutcomeLine {
+    let Some(text) = section_markdown(body, "## Outcome") else {
+        return OutcomeLine::Unfilled;
+    };
+    let reading = read_entries(&text, Form::Outcome);
+    if reading.raw_token {
+        OutcomeLine::RawToken
+    } else if reading.filled {
+        OutcomeLine::Stated
+    } else {
+        OutcomeLine::Unfilled
+    }
 }
 
 /// The Markdown of a section as written, with its comment lines blank;
@@ -634,19 +681,47 @@ const PLACEHOLDERS: &[&str] = &[
 /// placeholders. An inline HTML comment, delimited by `<!--` and `-->`
 /// and possibly spanning lines, never reaches the entry, so it never
 /// changes the result; other inline HTML is dropped too, except the
-/// template's `<output>` and `<path>` tokens, which empty their entry.
-fn has_entry(markdown: &str) -> bool {
+/// section template's own tokens ([`Form`]), which empty their entry.
+fn has_entry(markdown: &str, form: Form) -> bool {
+    read_entries(markdown, form).filled
+}
+
+/// A section read entry by entry.
+struct Reading {
+    /// One entry is substantive.
+    filled: bool,
+    /// An Outcome template token stands outside a code span.
+    raw_token: bool,
+}
+
+/// Reads a section's entries as [`has_entry`] describes. Only an Outcome
+/// section looks for its tokens in text ([`token_spans`]); a Deliverables
+/// code span is pushed as written and never scanned. An Outcome entry is
+/// its visible text: inline text and code joined as written, with no
+/// separator added where formatting splits a word, line breaks as spaces,
+/// and link destinations left out.
+fn read_entries(markdown: &str, form: Form) -> Reading {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
+    let outcome = matches!(form, Form::Outcome);
+    let separator = if outcome { "" } else { " " };
     let mut entry = String::new();
-    let mut filled = false;
+    let mut reading = Reading {
+        filled: false,
+        raw_token: false,
+    };
     let mut in_heading = false;
     let mut in_comment = false;
+    let mut in_code_block = false;
+    let close = |entry: &mut String| {
+        let substantive = is_entry(entry, form) && !(outcome && only_template(entry));
+        entry.clear();
+        substantive
+    };
     for event in TextMergeStream::new(Parser::new_ext(markdown, Options::empty())) {
         match event {
             Event::Start(Tag::Heading { .. }) => {
-                filled |= is_entry(&entry);
-                entry.clear();
+                reading.filled |= close(&mut entry);
                 in_heading = true;
             }
             Event::End(TagEnd::Heading(_)) => in_heading = false,
@@ -656,41 +731,148 @@ fn has_entry(markdown: &str) -> bool {
                     in_comment = !html.contains("-->");
                 } else if let Some(rest) = html.strip_prefix("<!--") {
                     in_comment = !rest.contains("-->");
-                } else if is_template_token(&html) {
+                } else if form.is_token(&html) {
+                    reading.raw_token |= outcome;
                     entry.push_str(&html);
+                    entry.push_str(separator);
+                } else if matches!(spaced(&html).as_str(), "<br>" | "<br/>" | "<br />") {
+                    // An HTML line break separates words as a newline does.
                     entry.push(' ');
                 }
             }
-            Event::Text(text) | Event::Code(text) => {
+            Event::Text(text) => {
+                if outcome && !in_code_block && !token_spans(&text).is_empty() {
+                    reading.raw_token = true;
+                }
                 entry.push_str(&text);
-                entry.push(' ');
+                entry.push_str(separator);
             }
-            Event::Start(Tag::Link { dest_url, .. }) => {
+            Event::Code(text) => {
+                entry.push_str(&text);
+                entry.push_str(separator);
+            }
+            Event::SoftBreak | Event::HardBreak => entry.push(' '),
+            Event::Start(Tag::Link { dest_url, .. }) if !outcome => {
                 entry.push_str(&dest_url);
                 entry.push(' ');
             }
+            Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
             Event::Start(Tag::Item)
             | Event::End(TagEnd::Item | TagEnd::Paragraph | TagEnd::CodeBlock) => {
-                filled |= is_entry(&entry);
-                entry.clear();
+                in_code_block = false;
+                reading.filled |= close(&mut entry);
             }
             _ => {}
         }
     }
-    filled || is_entry(&entry)
+    reading.filled |= close(&mut entry);
+    reading
 }
 
-/// Whether inline HTML is one of the template's placeholder tokens.
-fn is_template_token(html: &str) -> bool {
-    let html = html.trim_matches([' ', '\t']).to_lowercase();
-    html == "<output>" || html == "<path>"
+/// The section whose template a reading follows, and so its placeholder
+/// tokens. Deliverables keeps its rule that `<output>` or `<path>`
+/// anywhere in an entry, quoted or not, leaves it empty. Outcome's `<who>`
+/// and `<do what>` are read by [`outcome_line`]'s two rules.
+#[derive(Clone, Copy)]
+enum Form {
+    Deliverables,
+    Outcome,
 }
 
-/// Whether one entry is substantive: an entry holding the template's
-/// `<output>` or `<path>` token is not, whatever else it says.
-fn is_entry(text: &str) -> bool {
+impl Form {
+    fn tokens(self) -> &'static [&'static str] {
+        match self {
+            Self::Deliverables => &["<output>", "<path>"],
+            Self::Outcome => &["<who>", "<do what>"],
+        }
+    }
+
+    /// Whether inline HTML is one of this template's placeholder tokens.
+    fn is_token(self, html: &str) -> bool {
+        let html = match self {
+            Self::Deliverables => html.trim_matches([' ', '\t']).to_lowercase(),
+            Self::Outcome => spaced(html),
+        };
+        self.tokens().contains(&html.as_str())
+    }
+}
+
+/// `text` in lower case with each run of whitespace one space, and none
+/// just inside `<` or `>`, so `< do  what >` reads `<do what>`.
+fn spaced(text: &str) -> String {
+    let mut text = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    for (from, to) in [("< ", "<"), (" >", ">")] {
+        while text.contains(from) {
+            text = text.replace(from, to);
+        }
+    }
+    text
+}
+
+/// The template's own words, in any case.
+fn template_word(word: &str) -> bool {
+    ["after", "this", "merges", "can"]
+        .iter()
+        .any(|template| word.eq_ignore_ascii_case(template))
+}
+
+/// An Outcome's words: runs of letters and digits, split at every other
+/// character, so `after,this` reads as two words.
+fn outcome_words(text: &str) -> Vec<&str> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// The byte range of each Outcome template token in `text`, in any case or
+/// spacing, found in one forward pass. A candidate runs from the latest
+/// `<` to the next `>` through letters and whitespace only; any other
+/// character, another `<` included, ends it, so no character is read more
+/// than twice and a long run of `<` stays linear.
+fn token_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut open = None;
+    for (at, c) in text.char_indices() {
+        match c {
+            '<' => open = Some(at),
+            '>' => {
+                if let Some(start) = open.take() {
+                    if Form::Outcome.is_token(&text[start..=at]) {
+                        spans.push((start, at + 1));
+                    }
+                }
+            }
+            c if c.is_alphabetic() || c.is_whitespace() => {}
+            _ => open = None,
+        }
+    }
+    spans
+}
+
+/// Whether an Outcome entry holds nothing but the template's tokens and
+/// words once its tokens, formatting, quotes and punctuation are set aside.
+fn only_template(entry: &str) -> bool {
+    let mut words = String::with_capacity(entry.len());
+    let mut last = 0;
+    for (start, end) in token_spans(entry) {
+        words.push_str(&entry[last..start]);
+        words.push(' ');
+        last = end;
+    }
+    words.push_str(&entry[last..]);
+    outcome_words(&words).iter().all(|word| template_word(word))
+}
+
+/// Whether one entry is substantive: a Deliverables entry holding its
+/// template's token is not, whatever else it says.
+fn is_entry(text: &str, form: Form) -> bool {
     let lower = text.to_lowercase();
-    if lower.contains("<output>") || lower.contains("<path>") {
+    if matches!(form, Form::Deliverables) && form.tokens().iter().any(|token| lower.contains(token))
+    {
         return false;
     }
     let visible = text.trim_start_matches([' ', '\t']);

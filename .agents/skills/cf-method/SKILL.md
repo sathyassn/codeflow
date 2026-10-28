@@ -69,7 +69,11 @@ orchestrator point here). Do not draft until you can state all six:
 
 1. **Problem and audience.** What hurts, for whom, in one or two sentences.
 2. **Outcome and public behavior.** The intended result and what users or
-   adopters will observe.
+   adopters will observe. Its home is the record's `## Outcome` section:
+   the epic's value line and each task's outcome, one line each, in the
+   form "after this merges, <who> can <do what>". `codeflow validate
+   --docs` refuses an open record created after the project adopted the
+   section without it.
 3. **Scope boundary.** What is in, and, more important, what is explicitly
    out. Check `docs/product.md` non-goals; an epic that violates a non-goal is
    a conversation with the human, not a workaround. Name material authority,
@@ -86,7 +90,8 @@ orchestrator point here). Do not draft until you can state all six:
 6. **Deliverables and homes.** What each task produces (files or a folder,
    a decision record, a research note, evidence, a record update, a human
    board) and its home as a path in the project's structure, in the task's
-   `## Deliverables`. Before materializing records, check every home
+   `## Deliverables`; the epic's own `## Deliverables` names what the body
+   delivers as a whole. Before materializing records, check every home
    against the project's structure authority, the document that says where
    things live (an agreed target tree, an architecture doc, the "Where
    things live" line of `AGENTS.md`), where one exists. A home not known

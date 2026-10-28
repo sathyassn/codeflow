@@ -93,6 +93,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DUAL_IDENTITY", Runs),
     ("STANDALONE_SPLIT", Runs),
     ("TASK_DELIVERABLES", Runs),
+    ("RECORD_OUTCOME", Runs),
+    ("EPIC_DELIVERABLES", Runs),
     ("DOCS_LAYER_ABSENT", Runs),
     ("DOCS_EPICS_UNCHECKED", Runs),
     ("DOCS_SPECS_UNCHECKED", Runs),
@@ -188,6 +190,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("RELEASE_PREFLIGHT", Runs),
     ("DOCTOR_HOOKS_PATH", Runs),
     ("DOCTOR_INIT", Runs),
+    ("DOCTOR_OUTCOME_MARKER", Runs),
     ("DOCTOR_TOOL_MISSING", Runs),
     ("DOCTOR_HOOK_MANAGER", Runs),
     ("DOCTOR_HOOK_WIRING_UNSEEN", Confirms),
@@ -1250,10 +1253,37 @@ fn planned() -> tempfile::TempDir {
         let out = codeflow(&root, &args);
         assert!(!out.contains("error"), "{args:?}: {out}");
     }
+    // A record made after the project adopted the Outcome section states
+    // it, and an epic names its Deliverables (TSK-435).
+    for rel in [EPIC, TASK] {
+        state_outcome(&root, rel);
+    }
+    let epic = read(&root, EPIC).replacen(
+        "\n## Acceptance Criteria\n",
+        &format!("\n{EPIC_DELIVERABLE}\n\n## Acceptance Criteria\n"),
+        1,
+    );
+    write(&root, EPIC, &epic);
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-q", "-m", "docs: plan the work"]);
     dir
 }
+
+/// Write `OUTCOME_LINE` under the `## Outcome` section of the record at
+/// `rel`, as its author does after `task new` or `epic new` (TSK-435).
+fn state_outcome(root: &Path, rel: &str) {
+    let filled = read(root, rel).replacen(
+        "\n## Deliverables\n",
+        &format!("\n{OUTCOME_LINE}\n\n## Deliverables\n"),
+        1,
+    );
+    write(root, rel, &filled);
+}
+
+/// The Outcome line `planned` writes into each record.
+const OUTCOME_LINE: &str = "after this merges, an adopter can use the outcome";
+/// The Deliverables entry `planned` writes into the epic.
+const EPIC_DELIVERABLE: &str = "- the outcome: `docs/outcome.md`";
 
 /// Replace the frontmatter line `field: ...` of a record with
 /// `field: value`.
@@ -1437,6 +1467,61 @@ fn clears_task_deliverables() {
                 1,
             );
             write(&root, TASK, &filled);
+        },
+    );
+}
+
+/// TSK-435: an open record with no filled `## Outcome` warns where the
+/// project has no adoption marker, until the section states one line.
+#[test]
+fn clears_record_outcome() {
+    let dir = planned();
+    let root = project(&dir);
+    let state: String = read(&root, ".codeflow/project.toml")
+        .lines()
+        .filter(|line| !line.starts_with("outcome_"))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    write(&root, ".codeflow/project.toml", &state);
+    let record = read(&root, TASK).replacen(&format!("\n{OUTCOME_LINE}\n"), "\n", 1);
+    write(&root, TASK, &record);
+    prove(
+        "RECORD_OUTCOME",
+        "open record has no filled `## Outcome` section",
+        || validate(&root),
+        |printed| {
+            assert!(
+                printed.contains(&format!("in {TASK}, add one line")),
+                "{printed}"
+            );
+            state_outcome(&root, TASK);
+        },
+    );
+}
+
+/// TSK-435: an open epic made after adoption warns until its
+/// `## Deliverables` names an output and its home.
+#[test]
+fn clears_epic_deliverables() {
+    let dir = planned();
+    let root = project(&dir);
+    let epic = read(&root, EPIC).replacen(&format!("\n{EPIC_DELIVERABLE}\n"), "\n", 1);
+    write(&root, EPIC, &epic);
+    prove(
+        "EPIC_DELIVERABLES",
+        "open epic names no deliverables",
+        || validate(&root),
+        |printed| {
+            assert!(
+                printed.contains(&format!("in {EPIC}, list each output")),
+                "{printed}"
+            );
+            let filled = read(&root, EPIC).replacen(
+                "\n## Acceptance Criteria\n",
+                &format!("\n{EPIC_DELIVERABLE}\n\n## Acceptance Criteria\n"),
+                1,
+            );
+            write(&root, EPIC, &filled);
         },
     );
 }
@@ -1826,6 +1911,7 @@ fn a_target_behind_its_upstream_prints_no_step() {
         ],
     );
     assert!(out.contains("TSK-001"), "{out}");
+    state_outcome(&root, TASK);
     commit_all(&root, "docs: plan the work");
     git(
         &dest,
@@ -2499,6 +2585,29 @@ fn clears_doctor_init() {
         |printed| {
             let step = printed_command(printed, "DOCTOR_INIT", None);
             run_printed(&root, &step, &[], &["--yes", "--minimal"]);
+        },
+    );
+}
+
+/// TSK-435: a project with no Outcome adoption marker warns in `doctor
+/// --check config` until `codeflow update` writes it.
+#[test]
+fn clears_doctor_outcome_marker() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let state: String = read(&root, ".codeflow/project.toml")
+        .lines()
+        .filter(|line| !line.starts_with("outcome_"))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    write(&root, ".codeflow/project.toml", &state);
+    prove(
+        "DOCTOR_OUTCOME_MARKER",
+        "no `outcome_present_uids` marker",
+        || doctor(&root, "config"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_OUTCOME_MARKER", None);
+            run_printed(&root, &step, &[], &[]);
         },
     );
 }
