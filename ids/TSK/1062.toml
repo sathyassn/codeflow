@@ -1,0 +1,11 @@
+id = "TSK-1062"
+uid = "fe591ee8-df4e-49eb-a229-c088e7f26ef9"
+kind = "TSK"
+title = "The Windows killed-gate test waits on a signal, not a fixed deadline"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T22:35:36Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
