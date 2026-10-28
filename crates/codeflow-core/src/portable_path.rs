@@ -238,7 +238,7 @@ fn verbatim_names_survive(rest: &str) -> bool {
 /// name other than a drive ends at its first `:`, so `auth.json:notes`
 /// is judged as `auth.json`, the file whose stream it opens (review 01).
 /// Stream type syntax (`::$DATA`, `:$I30`) refuses earlier.
-fn without_streams(text: &str) -> String {
+pub(crate) fn without_streams(text: &str) -> String {
     text.split('/')
         .enumerate()
         .map(|(at, part)| {

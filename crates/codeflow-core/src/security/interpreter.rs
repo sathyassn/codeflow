@@ -450,13 +450,22 @@ fn inspect_operand(
 /// that name exists in the directory Git runs in or its work tree, after
 /// `--`, with `--no-index`, with a `-C` or work tree the guard cannot read,
 /// beside a link made earlier on the line, or when its path cannot be
-/// classified.
+/// classified. A `REV:PATH` object name (`HEAD~1:README.md`) is judged by
+/// its revision part, the name a Windows stream suffix would leave.
 fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Path) -> bool {
     let Some((program, rest)) = call.args.split_first() else {
         return false;
     };
+    // On Windows `HEAD~1:README.md` opens a stream of the file `HEAD~1`, so
+    // that file is what must not exist (hosted run 40693120060).
+    let probe = if cfg!(windows) {
+        stream_base(value)
+    } else {
+        value.to_string()
+    };
     if !call.links.is_empty()
-        || !crate::portable_path::has_short_component(value)
+        || !(crate::portable_path::has_short_component(value)
+            || crate::portable_path::has_short_component(&stream_base(value)))
         || !crate::hooks::git_guard::revision_word(value)
     {
         return false;
@@ -514,7 +523,7 @@ fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Pa
     }
     std::iter::once(directory).chain(trees).all(|base| {
         matches!(
-            crate::absence::entry(&outward::lexical_join(&base, Path::new(value))),
+            crate::absence::entry(&outward::lexical_join(&base, Path::new(&probe))),
             Ok(crate::absence::Entry::Creatable | crate::absence::Entry::Impossible)
         )
     })
@@ -2257,10 +2266,18 @@ mod tests {
             "git -C sub log HEAD~2",
             "git --git-dir=.git --work-tree=sub rebase -x 'cargo test' HEAD~3",
             "git -c core.worktree=sub log HEAD~2",
+            // A `REV:PATH` object name is a revision (hosted run 40693120060).
+            "git show HEAD~1:README.md",
         ] {
             let value = command.rsplit(' ').next().unwrap();
             assert!(revision(command, value), "{command}");
         }
+        // On Windows the word opens a stream of `TAG~1`, which exists, so it
+        // stays a file operand; elsewhere `TAG~1:notes` names no file.
+        assert_eq!(
+            revision("git -C sub show TAG~1:notes", "TAG~1:notes"),
+            !cfg!(windows)
+        );
         for (command, value) in [
             ("git diff -- HEAD~1", "HEAD~1"),
             ("git diff --no-index HEAD~1 other", "HEAD~1"),
@@ -2499,7 +2516,19 @@ mod tests {
     /// so a secret it names refuses; the same code on a public path passes.
     #[test]
     fn code_in_every_option_form_is_judged() {
+        // Absolute directories on every host: `/fixture` has no drive on
+        // Windows, where a relative code word could not be placed (hosted
+        // run 40693120060).
+        let temp = tempfile::tempdir().unwrap();
+        let base = crate::portable_path::canonicalize(temp.path()).unwrap();
+        let (root, home) = (base.join("repo"), base.join("home"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
         let levels = SecuritySection::default();
+        let judge =
+            |code: &str| evaluate(code, &levels, PolicyLevel::Block, &root, &root, Some(&home));
+        let secret_path = crate::portable_path::slashed(&home.join(".ssh/id_rsa"));
+        let public_path = crate::portable_path::slashed(&root.join("notes.md"));
         for form in [
             "node --print='%'",
             "node --print '%'",
@@ -2509,11 +2538,14 @@ mod tests {
         ] {
             let secret = form.replace(
                 '%',
-                r#"require("fs").readFileSync("/fixture-home/.ssh/id_rsa")"#,
+                &format!(r#"require("fs").readFileSync("{secret_path}")"#),
             );
-            assert!(!check(&secret, &levels).is_empty(), "allowed: {secret}");
-            let public = form.replace('%', r#"require("fs").readFileSync("/fixture/notes.md")"#);
-            let found = check(&public, &levels);
+            assert!(!judge(&secret).is_empty(), "allowed: {secret}");
+            let public = form.replace(
+                '%',
+                &format!(r#"require("fs").readFileSync("{public_path}")"#),
+            );
+            let found = judge(&public);
             assert!(found.is_empty(), "{public}: {found:?}");
         }
     }
@@ -3919,6 +3951,23 @@ mod tests {
             for root in &native_roots {
                 for suffix in ["", ".", ".."] {
                     let path = format!("{root}{suffix}");
+                    if root.starts_with(r"\\?\") && !suffix.is_empty() {
+                        // A verbatim `.` or `..` is a name Windows reads
+                        // differently in an ordinary path, so both readings
+                        // refuse rather than map it (review 01, B6).
+                        for literal in [Some(path.as_str()), None] {
+                            assert!(
+                                crate::hooks::edit_guard::is_own_checkout_location(
+                                    Path::new(&path),
+                                    cwd,
+                                    literal,
+                                )
+                                .is_err(),
+                                "verbatim {path:?} in {cwd:?}"
+                            );
+                        }
+                        continue;
+                    }
                     assert!(
                         crate::hooks::edit_guard::is_own_checkout_location(
                             Path::new(&path),

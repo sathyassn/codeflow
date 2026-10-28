@@ -2318,6 +2318,17 @@ fn token_integrity_path_spelled(token: &str, cwd: &Path, payload_cwd: &Path) -> 
     if token.is_empty() {
         return None;
     }
+    // On Windows a named stream (`.git\config:notes`) writes into the file
+    // it names, so the file is judged too (hosted run 40693120060).
+    if cfg!(windows) {
+        let slashed = token.replace('\\', "/");
+        let base = crate::portable_path::without_streams(&slashed);
+        if base != slashed {
+            if let Some(found) = token_integrity_path_spelled(&base, cwd, payload_cwd) {
+                return Some(found);
+            }
+        }
+    }
     // A directory the guard cannot resolve (`~-`, `~user`, a value filled
     // in at run time): what follows it is read by name, and a last part
     // filled in at run time counts inside an enforcement directory it
