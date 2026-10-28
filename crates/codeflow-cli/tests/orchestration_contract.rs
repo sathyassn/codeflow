@@ -2870,8 +2870,62 @@ const LIVE_STATE_OBLIGATIONS: &[LiveStateObligation] = &[
     LiveStateObligation {
         path: "assets/base/rules/workflow-discipline.md",
         section: "Check changeable state live",
-        clause: "say the fact is unverified and give the time of the last check,",
-        reversed: "state the last known value as current,",
+        clause: "**When a live check is impossible,** say the fact is unverified and give the time of the last check,",
+        reversed: "**When a live check is impossible,** state the last known value as current,",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "This is the one statement of how a session treats state that can change; other files point here.",
+        reversed: "This is one of several statements of how a session treats state that can change; other files may restate it.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "Changeable state is anything that can differ from the last time you looked: seat and model availability and usage limits; tools, MCP servers and credentials; CI runs, required checks and rulesets; PR, branch and integration-line state; task record status; host load and locks; and other agents' progress.",
+        reversed: "Changeable state is limited to seat and model availability.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**Check it at the moment of use.**",
+        reversed: "**Check it once per session.**",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "Before you state such a fact, route on it or act on it, check it live with a probe that observes it now:",
+        reversed: "Before you state such a fact, route on it or act on it, rely on the last result you saw:",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**A fresh check is not a retry.**",
+        reversed: "**A fresh check is a retry.**",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "\"Navigate blockers\" bounds recovery within one attempt: one confirmation of a failure, then a new hypothesis, never the same retry unchanged.",
+        reversed: "\"Navigate blockers\" allows unlimited recovery within one attempt: repeat the same failed probe unchanged.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**Facts bound to an immutable identity need no re-check.**",
+        reversed: "**Facts bound to an immutable identity are trusted for good.**",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**An earlier result is a lead, never a fact.**",
+        reversed: "**An earlier result is a fact.**",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**Resume, compaction and summaries change nothing.**",
+        reversed: "**Resume, compaction and summaries refresh every fact.**",
     },
     LiveStateObligation {
         path: "assets/base/rules/workflow-discipline.md",
@@ -3046,6 +3100,89 @@ fn live_state_obligations_hold_and_a_reversed_clause_fails() {
                 duty.path
             );
         }
+    }
+}
+
+/// A section whose every sentence is accounted for: each is an obligation
+/// above or one of these non-operative fragments (a label, an example), so
+/// a sentence added or left out of the table fails the coverage check.
+struct CoveredSection {
+    path: &'static str,
+    section: &'static str,
+    non_operative: &'static [&'static str],
+}
+
+/// The rule's one home (TSK-455 AC-1), sentence by sentence.
+const LIVE_STATE_COVERED: &[CoveredSection] = &[CoveredSection {
+    path: "assets/base/rules/workflow-discipline.md",
+    section: "Check changeable state live",
+    non_operative: &[
+        "**What counts.**",
+        "a command, an API read or a native canary.",
+        "for example \"Codex unverified, last probed at 14:05\".",
+    ],
+}];
+
+/// What a covered section holds beyond its obligations and listed
+/// non-operative fragments, each of which must occur in it exactly once;
+/// list markers and whitespace are not content.
+fn coverage_residue(
+    files: &BTreeMap<&str, BTreeMap<String, String>>,
+    covered: &CoveredSection,
+) -> String {
+    let mut body = files
+        .get(covered.path)
+        .and_then(|sections| sections.get(covered.section))
+        .cloned()
+        .unwrap_or_default();
+    let clauses = LIVE_STATE_OBLIGATIONS
+        .iter()
+        .filter(|duty| duty.path == covered.path && duty.section == covered.section)
+        .map(|duty| duty.clause);
+    let mut repeated = Vec::new();
+    for fragment in clauses.chain(covered.non_operative.iter().copied()) {
+        if body.matches(fragment).count() > 1 {
+            repeated.push(fragment);
+        }
+        body = body.replace(fragment, "");
+    }
+    let rest = body
+        .split_whitespace()
+        .filter(|word| *word != "-")
+        .collect::<Vec<_>>()
+        .join(" ");
+    if repeated.is_empty() {
+        rest
+    } else {
+        format!("{rest} [repeated: {repeated:?}]")
+    }
+}
+
+/// TSK-455 review round 4: every sentence of the rule's home is an
+/// obligation or a listed non-operative fragment, and an unlisted sentence
+/// added to the section fails.
+#[test]
+fn every_sentence_of_the_live_state_home_is_accounted_for() {
+    let files = live_state_files();
+    for covered in LIVE_STATE_COVERED {
+        assert_eq!(
+            coverage_residue(&files, covered),
+            "",
+            "{} \"{}\" holds a sentence that is neither pinned nor listed as non-operative",
+            covered.path,
+            covered.section
+        );
+        let mut mutated = files.clone();
+        mutated
+            .get_mut(covered.path)
+            .and_then(|sections| sections.get_mut(covered.section))
+            .expect("section present")
+            .push_str(" Agents may skip the check when they are busy.");
+        assert!(
+            coverage_residue(&mutated, covered).contains("skip the check"),
+            "an unlisted sentence in {} must fail the coverage check",
+            covered.path
+        );
     }
 }
 
