@@ -2696,7 +2696,10 @@ fn waiver_problem(
             Err(error) => return Some(error),
         };
         if before_base || reviewed == Some(amendment) || !before_review {
-            return Some("is not on the target or a record-only amendment strictly before the reviewed revision in this task's range".into());
+            return Some(format!(
+                "names {}, which is not on the target or a record-only amendment strictly before the reviewed revision in this task's range; {ON_TARGET}; {WAIVER_ROUTE}",
+                evidence.trim()
+            ));
         }
         let Ok(commit) = repo.find_commit(amendment) else {
             return Some("amendment cannot be read".into());
@@ -2710,7 +2713,10 @@ fn waiver_problem(
             || paths
                 .is_ok_and(|paths| paths.is_empty() || paths.iter().any(|path| path != &task.path))
         {
-            return Some("must change only this task's record".into());
+            return Some(format!(
+                "names {}, which must change only this task's record to count as an amendment in its own range, and is not on the target; {ON_TARGET}; {WAIVER_ROUTE}",
+                evidence.trim()
+            ));
         }
     }
     let contains = match is_ancestor_or_same(repo, amendment, landing.commit()) {

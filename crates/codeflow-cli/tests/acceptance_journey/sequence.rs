@@ -1197,6 +1197,32 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
     );
     let reopened = commit(&root, "chore: reopen TSK-002");
 
+    // Waivers that fit neither route explain themselves: the reviewed
+    // commit itself, and a commit that changes another record.
+    for (name, named, reason) in [
+        (
+            "reviewed",
+            &reopened,
+            "strictly before the reviewed revision",
+        ),
+        ("filed", &filed, "must change only this task's record"),
+    ] {
+        let block = waived_block(dir.path(), name, &reopened, named);
+        let refused = status(
+            &root,
+            "task",
+            "TSK-002",
+            &["complete", "--acceptance", &block],
+        );
+        for expected in [reason, ON_TARGET, ROUTE] {
+            fails(
+                &refused,
+                &format!("the {name} commit as the waiver"),
+                expected,
+            );
+        }
+    }
+
     // Completing again names the same waiver commit, which is an ancestor
     // of the new reviewed commit: accepted, as before the reopen.
     let block = waived_block(dir.path(), "again", &reopened, &waiver);
