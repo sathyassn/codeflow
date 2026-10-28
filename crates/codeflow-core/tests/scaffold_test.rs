@@ -2363,6 +2363,100 @@ fn update_records_the_work_records_baseline_once_for_existing_records() {
     );
 }
 
+// --- the Outcome adoption marker (TSK-435) -----------------------------------
+
+/// The marker's `commit` and `uids`, or `None` when it is absent.
+fn outcome_marker(root: &Path) -> Option<(Option<String>, Vec<String>)> {
+    let state: toml::Table = toml::from_str(&read(root, ".codeflow/project.toml")).unwrap();
+    let uids = state.get("outcome_present_uids")?;
+    let commit = state
+        .get("outcome_required_since")
+        .and_then(toml::Value::as_str)
+        .map(str::to_string);
+    let uids = uids
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|uid| uid.as_str().unwrap().to_string())
+        .collect();
+    Some((commit, uids))
+}
+
+/// AC-3, AC-6: a fresh init lists no record, so every record the project
+/// creates must state its Outcome; the first update of a project made by
+/// an older release lists every task and epic record in its working tree,
+/// committed or not, at its HEAD, and a later update never moves it.
+#[test]
+fn update_writes_the_outcome_marker_once_listing_present_records() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let (_, fresh) = outcome_marker(&root).expect("a fresh init writes the marker");
+    assert!(fresh.is_empty(), "{fresh:?}");
+
+    // A project the previous release made has no marker.
+    let mut state: toml::Table = toml::from_str(&read(&root, ".codeflow/project.toml")).unwrap();
+    state.remove("outcome_present_uids");
+    state.remove("outcome_required_since");
+    std::fs::write(
+        root.join(".codeflow/project.toml"),
+        toml::to_string(&state).unwrap(),
+    )
+    .unwrap();
+    let record = |dir: &str, id: &str, uid: &str, status: &str| {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+        std::fs::write(
+            root.join(dir).join(format!("{id}.md")),
+            format!(
+                "---\nid: {id}\nuid: {uid}\ntitle: t\nstatus: {status}\nwork_type: feat\n---\n"
+            ),
+        )
+        .unwrap();
+    };
+    let closed = "11111111-1111-4111-8111-111111111111";
+    let open = "22222222-2222-4222-8222-222222222222";
+    let morning = "33333333-3333-4333-8333-333333333333";
+    record("project-management/tasks", "TSK-001", closed, "complete");
+    record("project-management/epics", "EPC-001", open, "in_progress");
+    git(&root, &["config", "user.name", "Scaffold fixture"]);
+    git(&root, &["config", "user.email", "scaffold@example.test"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "chore: add records"]);
+    let head = git(&root, &["rev-parse", "HEAD"]);
+    // Made the same morning by the older release and not yet committed.
+    record("project-management/tasks", "TSK-002", morning, "todo");
+
+    let (_a2, assets) = fixture_assets(true);
+    let report = scaffold::update(&assets, &root, &update_opts("2.2.0")).unwrap();
+    let (commit, mut uids) = outcome_marker(&root).expect("update writes the marker");
+    uids.sort();
+    assert_eq!(commit.as_deref(), Some(head.as_str()));
+    assert_eq!(uids, [closed, open, morning]);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("outcome_present_uids") && n.contains("3 present")),
+        "{:?}",
+        report.notes
+    );
+
+    record(
+        "project-management/tasks",
+        "TSK-003",
+        "44444444-4444-4444-8444-444444444444",
+        "todo",
+    );
+    scaffold::update(&assets, &root, &update_opts("2.3.0")).unwrap();
+    let (again, mut kept) = outcome_marker(&root).unwrap();
+    kept.sort();
+    assert_eq!(
+        (again, kept),
+        (commit, uids),
+        "a written marker is never moved"
+    );
+}
+
 // --- product paths (SPC-013 R-70, R-114; TSK-104) ---------------------------
 
 fn product_paths(root: &Path) -> serde_json::Value {

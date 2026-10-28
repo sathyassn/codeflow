@@ -72,6 +72,7 @@ impl Hosted {
         assert!(out.contains("TSK-001"), "{out}");
         let task = read(&self.root, TASK).replacen("- AC-1\n", CRITERION, 1);
         write(&self.root, TASK, &task);
+        state_outcome(&self.root, TASK);
         commit_all(&self.root, "docs: plan the work");
     }
 
@@ -585,6 +586,7 @@ fn clears_work_start_merge_planning() {
     hosted.seed();
     let out = codeflow(root, &["epic", "new", "an outcome"]);
     assert!(out.contains("EPC-001"), "{out}");
+    state_outcome(root, EPIC);
     set_field(root, TASK, "epic_id", "EPC-001");
     set_field(root, TASK, "standalone_reason", "null");
     commit_all(root, "docs: plan the epic");

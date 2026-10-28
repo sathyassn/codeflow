@@ -16,6 +16,8 @@ use codeflow_core::security::git::GLOBAL_VALUE_OPTIONS;
 
 const LINE: &str = "integration/EPC-001-offline";
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -141,6 +143,7 @@ fn planned_project(tasks: usize) -> (tempfile::TempDir, PathBuf) {
             &format!("{criterion}- AC-2 (journey) On a fresh project, the flow shall pass.\n"),
         );
     }
+    outcome::state_outcomes(&root);
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-q", "-m", "chore: plan the line"]);
     git(&root, &["switch", "-q", LINE]);
