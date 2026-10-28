@@ -284,18 +284,24 @@ the inline-code checks. Makefiles supplied on stdin or through `make --eval`
 are code too.
 Unknown PowerShell or deno parameter grammar and encoded PowerShell bodies
 refuse as cannot-verify. AppleScript bodies receive literal-path inspection;
-constructed shell commands refuse. A file written earlier on the same line,
-by a heredoc, `echo`, `printf`, an append, `tee` or a copy, must receive a
-verified code reading before it runs by path, interpreter or Make, or
-before an interpreter that loads its extension runs. Otherwise it refuses.
-A copy into a directory writes the file of the source's name there. After
-a recursive copy, any interpreter, shell, Make or launcher later on the
-line refuses, since it may load a copied file by import, module search or
-`PATH`. A script operand is opened in the directory a launcher such as
-`env -C` moves to. After a write on the line, a relative or bare-name run
-refuses when the line changes `PATH` in the shell or in a launcher
-(`env PATH=`), or runs through an execution context the guard does not
-model (`env -S`, `env -P`, `ruby -C`, `pwsh -wd`).
+constructed shell commands refuse.
+What a program does once it runs is outside the text guard's promise: a
+file the line wrote and then runs, a copied or extracted tree, and the
+directory an unmodelled runner gives its child. TSK-397 option D assigns
+them to the sandbox on a proven-sandboxed host and to its strict rule
+elsewhere. The written-file checks below are a conservative filter that
+only refuses, not a boundary: a file written earlier on the same line, by a
+heredoc, `echo`, `printf`, an append, `tee` or a copy, refuses when it runs
+by path, interpreter or Make, or before an interpreter that loads its
+extension runs, unless the guard read its code exactly. A copy into a
+directory writes the file of the source's name there. After a recursive
+copy, any interpreter, shell, Make or launcher later on the line refuses. A
+script operand is opened in the directory a launcher such as `env -C` moves
+to. After a write on the line, a relative or bare-name run refuses when the
+line changes `PATH` in the shell or in a launcher (`env PATH=`), or runs
+through an execution context the guard does not model (`env -S`, `env -P`,
+`ruby -C` in any option spelling, `pwsh -wd`). Run routes the filter does
+not name are left to the sandbox or the strict rule.
 Every inline-code option form, attached or separate (`node --print=CODE`),
 is read as code.
 A command runs in the directory `env` moves it to in any option spelling
@@ -312,8 +318,15 @@ or after a directory reached through a link, is the parent of the link's
 target, and a missing component before a parent component leaves the
 directory unknown. A UNC, device or verbatim directory option is unknown
 before any filesystem access. A physical shell change (`cd -P`, `pushd -P`,
-or any `cd` after `set -P` or `set -o physical`) through a link or `..`
-leaves the directory unknown.
+or any `cd` after `set -P`, `set -o physical`, or zsh's `CHASE_LINKS` or
+`CHASE_DOTS` in any spelling through `setopt`, `set -w`, `set -o` or
+`emulate -o`) through a link or `..`, or to a UNC or namespace place,
+leaves the directory unknown; a `set`, `setopt` or `emulate` option word
+the guard does not read counts as physical. `pwd -P` prints the physical
+directory. As part of the filter, inline code and file readers that a
+program the guard does not model may run (`uv run --directory DIR cat
+auth.json`) are judged in an unknown directory; the runner's real child
+directory is outside the promise.
 A directory that a launcher or interpreter option moves to and the guard
 cannot establish refuses as cannot-verify. After any other directory change
 the guard cannot establish, such as `cd "$DIR"` or `pushd "$DIR"`, inline
@@ -342,7 +355,8 @@ guard cannot map refuse. A short name that does not exist yet refuses
 unless nothing can exist there, since a command earlier on the line could
 create the entry it aliases. A Git revision such as `HEAD~1` that names no
 path, and inline interpreter code, are not file operands; the object path
-in `REV:PATH` keeps the secret-name rules of a file operand.
+in `REV:PATH` or `:PATH` keeps the secret-name rules of a file operand
+whatever the revision's shape (`git show HEAD:id_rsa` refuses).
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the
