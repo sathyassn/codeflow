@@ -2893,6 +2893,42 @@ const LIVE_STATE_OBLIGATIONS: &[LiveStateObligation] = &[
     },
     LiveStateObligation {
         path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "What can change is whether that identity is still the one that matters, such as where a branch points now; check that live.",
+        reversed: "What can change is whether that identity is still the one that matters, such as where a branch points now; never check that live.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "Each claim and routing decision gets its own check.",
+        reversed: "One check covers every claim and routing decision in the session.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "If it fails, that decision takes its fallback with no further retries; if it succeeds, the decision uses the recovered state.",
+        reversed: "If it fails, that decision keeps retrying; if it succeeds, the decision keeps the earlier result.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "A previous probe, an error or usage-limit message, a peer's report or a note in a record tells you where to look.",
+        reversed: "A previous probe, an error or usage-limit message, a peer's report or a note in a record establishes the current state.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "It never establishes the current state, and a stated expiry or reset time is not proof that the state still holds.",
+        reversed: "It establishes the current state until a stated expiry or reset time passes.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "Never present it as current.",
+        reversed: "Present it as current.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
         section: "Navigate blockers",
         clause: "A fresh check before a later decision is not such a retry (\"Check changeable state live\").",
         reversed: "A fresh check before a later decision is such a retry.",
@@ -2918,8 +2954,14 @@ const LIVE_STATE_OBLIGATIONS: &[LiveStateObligation] = &[
     LiveStateObligation {
         path: "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
         section: "Invariants",
-        clause: "A seat recorded unavailable is probed live again before every later assignment and review routing;",
-        reversed: "A seat recorded unavailable stays unavailable for later assignments and review routing;",
+        clause: "A seat recorded unavailable is probed live again before every later assignment and review routing; an earlier failure or usage-limit message is a lead, never a fact.",
+        reversed: "A seat recorded unavailable stays unavailable for later assignments and review routing; an earlier failure or usage-limit message settles it.",
+    },
+    LiveStateObligation {
+        path: "assets/base/agents/skills/cf-model-orchestrator/resources/quality/plan.md",
+        section: "Plan fields",
+        clause: "A recorded exclusion is a lead for the next routing decision, never a fact: that decision probes the route live first",
+        reversed: "A recorded exclusion holds for every later routing decision in the task",
     },
     LiveStateObligation {
         path: "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
@@ -2981,26 +3023,29 @@ fn live_state_files() -> BTreeMap<&'static str, BTreeMap<String, String>> {
         .collect()
 }
 
-/// TSK-455 review round 1: the operative clauses, not their headings, are
-/// pinned inside their sections, and a reversed wording of each one fails.
+/// TSK-455 review rounds 1 and 3: the operative clauses, not their headings,
+/// are pinned inside their sections, and a reversed or removed wording of
+/// each one fails.
 #[test]
 fn live_state_obligations_hold_and_a_reversed_clause_fails() {
     let files = live_state_files();
     assert_eq!(live_state_gaps(&files), Vec::<String>::new());
     for duty in LIVE_STATE_OBLIGATIONS {
-        let mut mutated = files.clone();
-        let body = mutated
-            .get_mut(duty.path)
-            .and_then(|sections| sections.get_mut(duty.section))
-            .expect("section present");
-        *body = body.replace(duty.clause, duty.reversed);
-        let gaps = live_state_gaps(&mutated);
-        assert!(
-            gaps.iter().any(|gap| gap.ends_with(duty.clause)),
-            "reversing {:?} in {} must fail the check",
-            duty.clause,
-            duty.path
-        );
+        for (change, replacement) in [("reversing", duty.reversed), ("removing", "")] {
+            let mut mutated = files.clone();
+            let body = mutated
+                .get_mut(duty.path)
+                .and_then(|sections| sections.get_mut(duty.section))
+                .expect("section present");
+            *body = body.replace(duty.clause, replacement);
+            let gaps = live_state_gaps(&mutated);
+            assert!(
+                gaps.iter().any(|gap| gap.ends_with(duty.clause)),
+                "{change} {:?} in {} must fail the check",
+                duty.clause,
+                duty.path
+            );
+        }
     }
 }
 
