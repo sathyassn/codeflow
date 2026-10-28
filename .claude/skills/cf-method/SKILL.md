@@ -189,7 +189,11 @@ waive the clarity, safety, review or protected-branch conditions.
    integration branch (the full gate over everything, `validate --docs`, the
    capability, doc and epic-record updates), close the epic, and raise
    **one** PR `integration -> main`. The human reviews and merges; cleanup
-   follows the worktree rules' "Cleanup" section, merge proof first.
+   follows the worktree rules' "Cleanup" section, merge proof first. That
+   PR's `codeflow ci` judges each task of the line, and of a verified epic
+   line that joined it, at the task's landing on its line, so a task
+   reopened and re-completed in its own PR passes as it did there. An
+   early checkpoint PR from the line gets the same judgment.
 
 Boundaries are unchanged: `main` and every protected branch stay
 human-merge-only. The integration branch is not a backdoor: its content
