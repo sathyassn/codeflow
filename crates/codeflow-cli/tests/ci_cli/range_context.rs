@@ -1,5 +1,5 @@
 //! Range spelling and context regressions for issues 130, 141 and 165.
-use super::line_adoption::fixture::{output, passes, Line, LINE};
+use super::line_adoption::fixture::{blocks, output, passes, Line, LINE};
 use std::process::Output;
 
 fn ci(f: &Line, args: &[&str], env: Option<(&str, &str)>) -> Output {
@@ -524,7 +524,13 @@ fn unresolved_explicit_and_ci_targets_name_their_source() {
         ),
     ] {
         let out = ci(&f, &args, env);
-        passes(&out);
+        // The range falls back to the protected branches, but the Outcome
+        // marker is judged only against the target's own tip, so a target
+        // that does not resolve refuses (TSK-435).
+        blocks(
+            &out,
+            "the tip of the target branch 'integration/missing' cannot be resolved",
+        );
         let text = output(&out);
         assert!(
             text.contains(&format!("{source} 'integration/missing' does not resolve")),
