@@ -225,6 +225,11 @@ fn an_outcome_quoting_a_token_is_clean() {
         "After this merges, reviewers can spot an unfilled `<do what>`.",
         "After this merges, authors can document the template `<who> can <do what>`.",
         "After this merges, maintainers can explain why `can <do what>` is unfinished.",
+        "After this merges, CAN bus operators can inspect dropped frames.",
+        "After this merges, \"can deploy\" examples teach authors the required permissions.",
+        "`can <do what>` examples help authors write Outcomes.",
+        "`can` commands let maintainers retry a refused push.",
+        "After this merges, `can` users can review their granted permissions.",
     ] {
         let body = Body {
             outcome: Some(outcome),

@@ -4913,10 +4913,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // TSK-435: splits an Outcome line into words to see whether anything beyond the template's own words remains; prose only, never a path or Git name.
+    // TSK-435: splits an Outcome line into words to find its actor and action slots; prose only, never a path or Git name.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
-        "unfilled_outcome",
+        "outcome_words",
         "split_whitespace",
         1,
         "prose",
@@ -4924,7 +4924,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-435: strips punctuation from an Outcome word before comparing it with the template's words; prose only, never a path or Git name.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
-        "unfilled_outcome",
+        "outcome_words",
         "trim_matches",
         1,
         "prose",

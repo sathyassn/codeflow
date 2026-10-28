@@ -659,23 +659,27 @@ fn has_entry(markdown: &str, form: Form) -> bool {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
     let mut entry = String::new();
+    // The Outcome entry as its slots are judged: each code span stands in
+    // as one opaque word ([`quoted_span`]).
+    let mut judged = String::new();
     // An Outcome entry that keeps a template token as written.
     let mut unfilled = false;
     let mut filled = false;
     let mut in_heading = false;
     let mut in_comment = false;
-    let close = |entry: &mut String, unfilled: &mut bool| {
+    let close = |entry: &mut String, judged: &mut String, unfilled: &mut bool| {
         let substantive = !*unfilled
             && is_entry(entry, form)
-            && !(matches!(form, Form::Outcome) && unfilled_outcome(entry));
+            && !(matches!(form, Form::Outcome) && unfilled_outcome(judged));
         entry.clear();
+        judged.clear();
         *unfilled = false;
         substantive
     };
     for event in TextMergeStream::new(Parser::new_ext(markdown, Options::empty())) {
         match event {
             Event::Start(Tag::Heading { .. }) => {
-                filled |= close(&mut entry, &mut unfilled);
+                filled |= close(&mut entry, &mut judged, &mut unfilled);
                 in_heading = true;
             }
             Event::End(TagEnd::Heading(_)) => in_heading = false,
@@ -695,9 +699,18 @@ fn has_entry(markdown: &str, form: Form) -> bool {
                     }
                 }
             }
-            Event::Text(text) | Event::Code(text) => {
+            Event::Text(text) => {
                 entry.push_str(&text);
                 entry.push(' ');
+                judged.push_str(&text);
+                judged.push(' ');
+            }
+            Event::Code(text) => {
+                entry.push_str(&text);
+                entry.push(' ');
+                judged.push(' ');
+                judged.push_str(quoted_span(&text));
+                judged.push(' ');
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 entry.push_str(&dest_url);
@@ -705,20 +718,20 @@ fn has_entry(markdown: &str, form: Form) -> bool {
             }
             Event::Start(Tag::Item)
             | Event::End(TagEnd::Item | TagEnd::Paragraph | TagEnd::CodeBlock) => {
-                filled |= close(&mut entry, &mut unfilled);
+                filled |= close(&mut entry, &mut judged, &mut unfilled);
             }
             _ => {}
         }
     }
-    filled || close(&mut entry, &mut unfilled)
+    filled || close(&mut entry, &mut judged, &mut unfilled)
 }
 
 /// The section whose template a reading follows, and so its placeholder
 /// tokens. Deliverables keeps its rule that `<output>` or `<path>`
 /// anywhere in an entry, quoted or not, leaves it empty. Outcome's `<who>`
-/// and `<do what>`, in any spacing, leave an entry empty when written as
-/// the template writes them, as inline HTML, and when formatting only
-/// wraps the template ([`unfilled_outcome`]); a sentence that quotes one
+/// and `<do what>`, in any case or spacing, leave an entry empty when
+/// written outside quotes, and when a quoted one stands in the sentence's
+/// own actor or action ([`unfilled_outcome`]); a sentence that quotes one
 /// as an example states an Outcome.
 #[derive(Clone, Copy)]
 enum Form {
@@ -760,36 +773,127 @@ fn spaced(text: &str) -> String {
     text
 }
 
-/// Stands in for a template token while an Outcome is split into words, so
-/// a token is never mistaken for a real word.
-const TOKEN: &str = "\0";
+/// Stands in for a template token while an Outcome is judged, so a token
+/// is never mistaken for a real word.
+const TOKEN: &str = "\u{0}";
 
-/// Whether an Outcome entry, its formatting and spacing set aside, leaves
-/// one of the template's own slots unfilled. After the leading "after this
-/// merges", the sentence's first "can" splits it into its actor and its
-/// action; either slot holding nothing but tokens is unfilled. With no
-/// "can", the entry is unfilled when nothing remains but tokens and the
-/// template's words. A token or template phrase quoted inside a real action,
-/// such as "authors can document the template `<who> can <do what>`", is an
-/// example and leaves the slots filled.
-fn unfilled_outcome(entry: &str) -> bool {
-    let text = spaced(entry)
-        .replace("<who>", &format!(" {TOKEN} "))
-        .replace("<do what>", &format!(" {TOKEN} "));
-    let words: Vec<&str> = text
-        .split_whitespace()
-        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\0'))
+/// Stands in for a quoted span that says something: one opaque word.
+const QUOTED: &str = "\u{1}";
+
+/// The template's own words, in any case.
+fn template_word(word: &str) -> bool {
+    ["after", "this", "merges", "can"]
+        .iter()
+        .any(|template| word.eq_ignore_ascii_case(template))
+}
+
+/// An Outcome's words, punctuation trimmed and stand-ins kept.
+fn outcome_words(text: &str) -> Vec<&str> {
+    text.split_whitespace()
+        .map(|word| {
+            word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\u{0}' && c != '\u{1}')
+        })
         .filter(|word| !word.is_empty())
-        .collect();
-    let rest = words
-        .strip_prefix(&["after", "this", "merges"][..])
-        .unwrap_or(&words);
-    let real = |slot: &[&str]| slot.iter().any(|word| *word != TOKEN);
-    match rest.iter().position(|word| *word == "can") {
-        Some(at) => !real(&rest[..at]) || !real(&rest[at + 1..]),
-        None => !rest
+        .collect()
+}
+
+/// `text` with each template token, in any case or spacing, as [`TOKEN`],
+/// and whether it held one.
+fn mark_tokens(text: &str) -> (String, bool) {
+    let mut marked = String::new();
+    let mut found = false;
+    let mut rest = text;
+    while let Some(open) = rest.find('<') {
+        let candidate = rest[open..]
+            .find('>')
+            .map(|close| &rest[open..=open + close])
+            .filter(|candidate| Form::Outcome.is_token(candidate));
+        marked.push_str(&rest[..open]);
+        if let Some(token) = candidate {
+            marked.push(' ');
+            marked.push_str(TOKEN);
+            marked.push(' ');
+            rest = &rest[open + token.len()..];
+            found = true;
+        } else {
+            marked.push('<');
+            rest = &rest[open + 1..];
+        }
+    }
+    marked.push_str(rest);
+    (marked, found)
+}
+
+/// The stand-in for a quoted span, a code span or a double-quoted string.
+/// Its content is opaque, so it reads as one word ([`QUOTED`]), except
+/// when nothing in it is more than template tokens and the template's
+/// words, such as `` `<who>` `` or `` `after this merges, <who> can <do
+/// what>` ``: that quotes the template itself and reads as a [`TOKEN`].
+fn quoted_span(content: &str) -> &'static str {
+    let (marked, _) = mark_tokens(content);
+    if outcome_words(&marked)
+        .iter()
+        .all(|word| *word == TOKEN || template_word(word))
+    {
+        TOKEN
+    } else {
+        QUOTED
+    }
+}
+
+/// `text` with each double-quoted string, straight or curly, as its
+/// [`quoted_span`] stand-in; an unclosed quote stays as written.
+fn quote_strings(text: &str) -> String {
+    let mut judged = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find(['"', '\u{201c}']) {
+        let quote = rest[open..].chars().next().unwrap_or('"');
+        let closing = if quote == '"' { '"' } else { '\u{201d}' };
+        let after = &rest[open + quote.len_utf8()..];
+        let Some(close) = after.find(closing) else {
+            break;
+        };
+        judged.push_str(&rest[..open]);
+        judged.push(' ');
+        judged.push_str(quoted_span(&after[..close]));
+        judged.push(' ');
+        rest = &after[close + closing.len_utf8()..];
+    }
+    judged.push_str(rest);
+    judged
+}
+
+/// Whether an Outcome entry leaves the template unfilled. Quoted spans are
+/// opaque ([`quoted_span`]), so only the sentence's own words are judged:
+/// - a template token outside quotes leaves it unfilled;
+/// - after a leading "after this merges", in any case, the first lowercase
+///   "can" with words before it splits the sentence into its actor and
+///   action, and either slot holding nothing but tokens is unfilled;
+/// - when every "can" leads the sentence, its actor is empty;
+/// - with no "can", nothing left but tokens and template words is
+///   unfilled.
+///
+/// So "authors can document the template `<who> can <do what>`" and "CAN
+/// bus operators can inspect dropped frames" state an Outcome.
+fn unfilled_outcome(judged: &str) -> bool {
+    let (marked, unquoted_token) = mark_tokens(&quote_strings(judged));
+    if unquoted_token {
+        return true;
+    }
+    let words = outcome_words(&marked);
+    let leads = words.len() >= 3
+        && words
             .iter()
-            .any(|word| *word != TOKEN && !matches!(*word, "after" | "this" | "merges")),
+            .zip(["after", "this", "merges"])
+            .all(|(word, template)| word.eq_ignore_ascii_case(template));
+    let rest = if leads { &words[3..] } else { &words[..] };
+    let real = |slot: &[&str]| slot.iter().any(|word| *word != TOKEN);
+    match rest.iter().skip(1).position(|word| *word == "can") {
+        Some(at) => !real(&rest[..=at]) || !real(&rest[at + 2..]),
+        None if rest.first() == Some(&"can") => true,
+        None => rest
+            .iter()
+            .all(|word| *word == TOKEN || template_word(word)),
     }
 }
 
