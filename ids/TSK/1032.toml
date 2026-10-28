@@ -1,0 +1,11 @@
+id = "TSK-1032"
+uid = "fa014176-22eb-4ca8-91d3-caeafd145828"
+kind = "TSK"
+title = "The shipped instructions require typed code and typed data at every boundary"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-28T00:06:43Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
