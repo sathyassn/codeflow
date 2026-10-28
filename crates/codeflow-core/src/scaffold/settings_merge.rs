@@ -247,9 +247,10 @@ fn merge(
 
 /// The top-level keys that are each person's preference, not policy
 /// (TSK-1028, ADR-0087): update moves, keeps or retires them against the
-/// recorded baseline. Every other plain key, such as the attribution
-/// controls, is restored whenever a project lacks it, so a deletion never
-/// weakens what it guarantees.
+/// recorded baseline. Every other plain top-level key, such as the
+/// attribution controls, is restored whenever a project lacks it, so a
+/// deletion never weakens what it guarantees; `hooks`, `permissions`,
+/// `sandbox` and `env` follow their own merge rules.
 pub const PREFERENCE_KEYS: [&str; 2] = ["statusLine", "effortLevel"];
 
 /// Merge one shipped top-level value such as `statusLine` (TSK-1028).
@@ -1036,9 +1037,12 @@ mod tests {
     /// The shipped default preset, the recorded baseline of a fresh install.
     const SHIPPED: &str = include_str!("../../../../assets/base/settings/default.json");
 
-    /// Review of PR 368: a deleted attribution control, or any other
-    /// security key, comes back on update even with a recorded baseline;
-    /// only the preference keys keep a project's deletion.
+    /// Review of PR 368: a deleted attribution control or `$schema`, a
+    /// deleted `hooks` object (CodeFlow's hook commands) and a deleted
+    /// `sandbox` object come back on update even with a recorded baseline.
+    /// A deleted `permissions` array or `env` key follows its own rule and
+    /// stays removed (`a_removed_env_object_stays_removed`, and
+    /// `permission_presets_update`).
     #[test]
     fn deleted_security_keys_are_restored_with_a_recorded_baseline() {
         let shipped: Value = serde_json::from_str(SHIPPED).unwrap();

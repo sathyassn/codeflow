@@ -73,9 +73,13 @@ high. Ask before adding it, and add it only when the project chooses it.
   baseline: the shipped `model_reasoning_effort` line is removed, and a line
   the project added or changed is kept or reported as a conflict.
 - Only `statusLine` and `effortLevel` follow these rules. Every other
-  shipped key, including `attribution` and `includeCoAuthoredBy`, which keep
-  the host from adding the AI attribution project policy forbids, is
-  restored whenever the project lacks it.
+  plain top-level key, including `attribution` and `includeCoAuthoredBy`,
+  which keep the host from adding the AI attribution project policy
+  forbids, is restored whenever the project lacks it. `hooks`,
+  `permissions`, `sandbox` and `env` follow their own merge rules:
+  CodeFlow's own hook commands and missing sandbox entries are added back,
+  while a shipped permission entry or `env` key the project removed stays
+  removed when the recorded baseline shows CodeFlow shipped it.
 - Update never reads or writes `.claude/settings.local.json` or a user file.
 - With no recorded baseline, update cannot tell a shipped value from the
   project's own, so it keeps every value and adds only a missing

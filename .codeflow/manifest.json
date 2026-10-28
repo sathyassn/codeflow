@@ -23,7 +23,7 @@
     ".agents/skills/cf-customize/references/personal-settings.md": {
       "src": "agents/skills/cf-customize/references/personal-settings.md",
       "ownership": "managed",
-      "sha256": "d2d01468d7fc2714b0d2bbc352479b8d15e1287d6e7e2a7f815b2cf9d8b9a027",
+      "sha256": "14414f0ef8d236bb43037741ff8d89ad8553410370b35f695f5d7916096a6211",
       "exec": false
     },
     ".agents/skills/cf-delegate/SKILL.md": {
@@ -869,7 +869,7 @@
     ".claude/skills/cf-customize/references/personal-settings.md": {
       "src": "agents/skills/cf-customize/references/personal-settings.md",
       "ownership": "managed",
-      "sha256": "d2d01468d7fc2714b0d2bbc352479b8d15e1287d6e7e2a7f815b2cf9d8b9a027",
+      "sha256": "14414f0ef8d236bb43037741ff8d89ad8553410370b35f695f5d7916096a6211",
       "exec": false
     },
     ".claude/skills/cf-delegate/SKILL.md": {

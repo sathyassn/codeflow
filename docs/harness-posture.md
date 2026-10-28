@@ -178,8 +178,12 @@ scaffold ships a status line and leaves effort to each person (ADR-0087).
   and `effortLevel`: it moves a value still equal to the one it recorded as
   shipped, keeps and reports a value the project changed, keeps a deletion,
   and removes a key it no longer ships only while the key holds the
-  recorded value. Every other shipped key, the attribution controls
-  included, is restored whenever a project lacks it.
+  recorded value. Every other plain top-level key, the attribution
+  controls included, is restored whenever a project lacks it. `hooks`,
+  `permissions`, `sandbox` and `env` follow their own merge rules:
+  CodeFlow's own hook commands and missing sandbox entries are added back,
+  while a shipped permission entry or `env` key the project removed stays
+  removed when the recorded baseline shows CodeFlow shipped it.
 
 ### Hosting the duo from either seat
 
