@@ -9,10 +9,9 @@ runs `codeflow hook exec-guard` on each with the `before` and the `after`
 binary in turn, and prints the best of `reps` runs as a Markdown table,
 headed by each binary's `--version` line and sha256 and the host load.
 
-The fixture lives at the physical path of a new temporary directory. On
-macOS the temporary directory is reached through the `/var` symlink, and a
-session spelled that way gives each target two spellings of one owner,
-which the guard reads afresh for every target.
+The fixture lives at the physical path of a new temporary directory (on
+macOS, past the `/var` symlink), so the session and every target are
+spelled one way.
 
 Usage: timing.py <before binary> <after binary> <reps> [counts, default 20,40,80,160]
 """
