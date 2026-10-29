@@ -31,11 +31,10 @@ A test the data has not measured is placed from the build's test list
 (`--list`), which the partition jobs and `check` read, and sized at
 `default_seconds`. An unmeasured test of a binary the data knows is its own
 unit, so a binary that gained many tests spreads them (a whole binary becomes
-a split one for the run). A binary the data does not know is one unit sized by
-its listed test count, or, when that is more than SPLIT_SHARE of a partition,
-split into one unit per test. Without a list, such tests run with their binary
-(or its home partition when split), or in the rest partition, the one with the
-least planned time. A filterset that would pass FILTERSET_LIMIT characters is
+a split one for the run). A binary the data does not know is split into one
+unit per test, so even a small new binary spreads. Without a list, such
+tests run with their binary (or its home partition when split), or in the
+rest partition, the one with the least planned time. A filterset that would pass FILTERSET_LIMIT characters is
 refused, because Windows limits a command line to 32,767.
 
 Two checks keep the plan honest (TSK-1063):
@@ -174,8 +173,8 @@ def with_unmeasured(data: dict, listed: set[tuple[str, str]]) -> dict:
 
     - an unmeasured test of a known binary is its own named test (a whole
       binary becomes a split one, its measured rest staying where it is);
-    - a binary the data does not know is one unit by its listed test count,
-      or, past SPLIT_SHARE of a partition's seconds, one unit per test.
+    - a binary the data does not know is one unit per listed test, however
+      small, so new tests cannot gather in one partition.
 
     Data without `default_seconds`, or a test list, is returned as it is."""
     default = float(data.get("default_seconds", 0))
@@ -186,9 +185,6 @@ def with_unmeasured(data: dict, listed: set[tuple[str, str]]) -> dict:
     split = {binary: {"rest": list(entry["rest"]), "tests": dict(entry["tests"]),
                       **({"listed": True} if entry.get("listed") else {})}
              for binary, entry in data["split"].items()}
-    total = sum(s for s, _ in binaries.values()) + sum(
-        entry["rest"][0] + sum(entry["tests"].values()) for entry in split.values())
-    share = total / int(data["partitions"]) * SPLIT_SHARE
     by_binary: dict[str, list[str]] = {}
     for binary, name in sorted(missing):
         if not BINARY_ID.match(binary):
@@ -196,10 +192,6 @@ def with_unmeasured(data: dict, listed: set[tuple[str, str]]) -> dict:
         by_binary.setdefault(binary, []).append(name)
     for binary, tests in by_binary.items():
         known = binary in binaries or binary in split
-        if not known and len(tests) * default <= share:
-            serial_seconds = sum(default for name in tests if serial(binary, name))
-            binaries[binary] = [round(len(tests) * default, 3), round(serial_seconds, 3)]
-            continue
         for name in tests:
             if not TEST_NAME.match(name):
                 raise SystemExit(f"windows-partitions: listed test {binary} {name!r} cannot be written in a filterset")

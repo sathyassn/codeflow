@@ -247,10 +247,33 @@ class UnmeasuredTests(unittest.TestCase):
         for partition in range(1, plan.count + 1):
             self.assertNotIn("not (test(=t", plan.filterset(partition))
 
-    def test_a_small_new_binary_stays_one_unit(self):
-        new = {("cli::tiny", f"t{i}") for i in range(3)}
-        plan = wp.Plan(wp.with_unmeasured(DATA, self.measured() | new))
-        self.assertEqual(len({plan.partition_of(*test) for test in new}), 1)
+    def test_a_small_new_binary_spreads_too(self):
+        new = {("cli::tiny", f"t{i}") for i in range(6)}
+        listed = self.measured() | new
+        plan = wp.Plan(wp.with_unmeasured(DATA, listed))
+        self.assertGreater(len({plan.partition_of(*test) for test in new}), 1)
+        self.assert_each_test_runs_once_where_planned(plan, listed)
+
+    def test_a_small_new_binary_under_every_drift_trigger_still_spreads(self):
+        """59 new tests in one binary on the committed measurements: 1.1 guessed
+        minutes if they gather in one partition, which passes `drift`. They must
+        spread over the partitions all the same, and each run in one filterset."""
+        data = wp.load()
+        measured = {(binary, name) for binary, names in data["names"].items() for name in names}
+        new = {("codeflow-cli::brand_new_suite", f"t{i}") for i in range(59)}
+        listed = measured | new
+        with redirect_stdout(StringIO()):
+            self.assertEqual(wp.drift(data, listed), [])  # under both triggers
+        plan = wp.Plan(wp.with_unmeasured(data, listed))
+        placed = [plan.partition_of(*test) for test in sorted(new)]
+        self.assertGreater(len(set(placed)), 6, "the new tests must spread over the partitions")
+        self.assertLessEqual(max(placed.count(p) for p in set(placed)), 10)
+        before = wp.Plan(data)
+        self.assertAlmostEqual(sum(plan.seconds) - sum(before.seconds), 59 * data["default_seconds"], places=2)
+        expressions = {p: plan.filterset(p) for p in range(1, plan.count + 1)}
+        for binary, test in sorted(new):
+            matched = [p for p, expression in expressions.items() if evaluate(expression, binary, test)]
+            self.assertEqual(matched, [plan.partition_of(binary, test)])
 
     def test_a_replaced_test_is_unmeasured_and_the_old_name_costs_nothing(self):
         listed = (self.measured() - {("cli::slow", "y")}) | {("cli::slow", "y_renamed")}
@@ -584,8 +607,8 @@ class WorkflowStructureTests(unittest.TestCase):
         reports = [s for s in steps if s.get("id") == "reports"]
         self.assertEqual(len(reports), 1, "the reports step must exist once")
         step = reports[0]
-        self.assertIn("windows-partitions.py reports --results target/nextest/partitions", step["text"])
-        self.assertIn("--list target/nextest/list/windows-tests.json", step["text"])
+        self.assertEqual(step["run"], "python -B scripts/windows-partitions.py reports --results "
+                         "target/nextest/partitions --list target/nextest/list/windows-tests.json")
         for forbidden in ("if", "continue-on-error"):
             self.assertNotIn(forbidden, step, f"the reports step must not carry `{forbidden}`")
         for other in steps:
@@ -596,7 +619,8 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertLess(at, names.index("Every test ran in exactly one partition"))
         self.assertNotIn("if", steps[names.index("journey gate")], "the journey gate must run only after the reports step passed")
         placement = steps[names.index("Every test ran in exactly one partition")]
-        self.assertIn("steps.reports.outcome == 'success'", placement["if"])
+        # The whole condition, so `... || true` or a dropped `!cancelled()` fails here.
+        self.assertEqual(placement["if"], "${{ !cancelled() && steps.reports.outcome == 'success' }}")
         self.assertIn("windows-partitions.py check", placement["text"])
 
     def test_the_journeys_job_hands_the_missing_partitions_to_the_verdict(self):
