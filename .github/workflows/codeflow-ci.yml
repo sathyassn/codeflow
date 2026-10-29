@@ -822,11 +822,13 @@ jobs:
 
       # A partition that timed out or was cancelled wrote no report. Name it
       # here, so the steps below do not read the gap as renamed journeys or
-      # failing tests; they run only when every report exists.
+      # failing tests; they run only when every report exists. When one
+      # report survives, download-artifact writes it without its numbered
+      # directory, so the script numbers it by the tests the plan gives it.
       - name: Every partition wrote its report
         id: reports
         shell: bash
-        run: python -B scripts/windows-partitions.py reports --results target/nextest/partitions
+        run: python -B scripts/windows-partitions.py reports --results target/nextest/partitions --list target/nextest/list/windows-tests.json
 
       - name: journey gate
         shell: bash
