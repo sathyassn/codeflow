@@ -972,10 +972,13 @@ fn run_wired(root: &Path, hook: &str, command: &str) -> Output {
         "tool_name": "Bash",
         "tool_input": {"command": command},
         "cwd": root,
+        "prompt_id": "wiring",
+        "scratchpad_dir": "/tmp/wiring",
     });
     // TSK-397 design D: these wiring checks pin the line's decisions, so
-    // the call is judged in the baseline outcome on every host: an empty
-    // home and no managed settings layer, beside the shipped presets.
+    // the call is a Claude Code call from a session in the project, judged
+    // in the baseline outcome on every host: an empty home and no managed
+    // settings layer, beside the shipped presets.
     let harness_home = tempfile::tempdir().unwrap();
     let mut child = Command::new("sh")
         .args(["-c", hook])
@@ -983,6 +986,7 @@ fn run_wired(root: &Path, hook: &str, command: &str) -> Output {
         .env("CODEFLOW_HOME", isolated_home())
         .env("PATH", path)
         .env("HOME", harness_home.path())
+        .env("CLAUDE_PROJECT_DIR", root)
         .env(
             "CODEFLOW_TEST_CLAUDE_MANAGED_DIR",
             harness_home.path().join("managed"),

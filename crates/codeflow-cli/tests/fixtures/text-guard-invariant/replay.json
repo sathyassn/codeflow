@@ -6,7 +6,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument ``: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument ``: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -15,7 +15,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$MSG`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$MSG`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -24,7 +24,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$BASE...HEAD`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$BASE...HEAD`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -33,7 +33,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$SHA`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$SHA`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -51,7 +51,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$TMPDIR`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$TMPDIR`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -60,7 +60,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$TMPDIR/x`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$TMPDIR/x`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -69,7 +69,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$TMPDIR/x`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$TMPDIR/x`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -78,7 +78,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$A`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$A`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -87,7 +87,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `PATH=$HOME/bin:$PATH`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `PATH=$HOME/bin:$PATH`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -96,7 +96,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `X=$PWD/src`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `X=$PWD/src`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -105,7 +105,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$TMPDIR/t`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$TMPDIR/t`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -123,7 +123,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$PWD/Cargo.toml`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$PWD/Cargo.toml`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -132,7 +132,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$OUT`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$OUT`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -141,7 +141,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$DIR`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$DIR`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -168,7 +168,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -177,7 +177,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$X`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$X`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -186,7 +186,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -195,7 +195,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$#`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$#`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -204,7 +204,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$X`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$X`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -213,7 +213,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$HOME`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$HOME`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -222,7 +222,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$PATH`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$PATH`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -231,7 +231,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$X`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$X`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -240,7 +240,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -249,7 +249,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -258,7 +258,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -267,7 +267,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$PAT`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$PAT`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -276,7 +276,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$PAT`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$PAT`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -285,7 +285,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -294,7 +294,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `~/x`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `~/x`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -303,7 +303,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -312,7 +312,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -330,7 +330,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -339,7 +339,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -348,7 +348,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$f`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -357,7 +357,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$A`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$A`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -366,7 +366,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$URL`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$URL`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -375,7 +375,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$N`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$N`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -384,7 +384,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$D`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -393,7 +393,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$LOG`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$LOG`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
@@ -402,7 +402,7 @@
   "line": 0,
   "baseline": 0,
   "tightened": 2,
-  "tightened_reason": "the strict text rule cannot verify the run-time argument `$P`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
+  "tightened_reason": "the strict text rule cannot verify the run-time argument `$P`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved; this is outside the guard's model, and the strict rule applies because the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)"
  },
  {
   "set": "everyday-sample",
