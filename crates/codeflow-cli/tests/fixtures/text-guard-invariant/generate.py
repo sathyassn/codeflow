@@ -5,11 +5,13 @@ nothing in a row runs).
     python3 generate.py <codeflow> measure OUT   # both outcomes; the sample to OUT
 
 `line` records the decision of the 3.2.0 line binary (5f2fe3827) for each
-row: the baseline column `text_guard_invariant.rs` checks against.
+row: the baseline column `text_guard_invariant.rs` checks against. It also
+writes that binary's `--version` and SHA-256 to `line-binary.txt`.
 `measure` records a head binary's decisions in the baseline and the
 tightened outcome (AC-6). The fixture is the tree `tree.json` describes,
 rebuilt under a temporary folder exactly as the Rust test rebuilds it.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -58,6 +60,8 @@ def git_env(t):
         'PATH': '/usr/bin:/bin',
         'CODEFLOW_HOME': os.path.join(t, 'cfhome'),
         'CODEFLOW_TEST_CLAUDE_MANAGED_DIR': os.path.join(t, 'managed'),
+        # The session's project: Claude Code exports it to hooks.
+        'CLAUDE_PROJECT_DIR': os.path.join(t, 'repo'),
         'GIT_CONFIG_GLOBAL': '/dev/null',
         'GIT_CONFIG_SYSTEM': '/dev/null',
         'LANG': 'C.UTF-8',
@@ -103,6 +107,10 @@ def main():
                 row['line'] = code
             json.dump(rows, open(os.path.join(HERE, 'rows.json'), 'w'), indent=1, ensure_ascii=False)
             print('rows', len(rows), 'line refused', sum(1 for c in found if c == 2))
+            version = subprocess.run([binary, '--version'], text=True, capture_output=True).stdout.strip()
+            digest = hashlib.sha256(open(binary, 'rb').read()).hexdigest()
+            open(os.path.join(HERE, 'line-binary.txt'), 'w').write(
+                f'{version}\nsha256 {digest}\nbuilt at 5f2fe3827 in its own target directory\n')
         else:
             def both(row):
                 base, base_err = judge(binary, t, row, False)

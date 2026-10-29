@@ -3,13 +3,22 @@
 //!
 //! The corpus (`fixtures/text-guard-invariant/rows.json`) holds the Codex
 //! and security round probes of PR 331 as the round 15 replay assembled
-//! them, the 49-line everyday sample and the two shell review fixtures. Its
-//! `line` column is the decision of the line binary at `5f2fe3827`, built in
-//! its own target directory and run by `generate.py` on the fixture tree
-//! this test rebuilds. Each row is judged twice by this build: in the
-//! baseline outcome (a Claude payload on a host whose settings show the
-//! shipped sandbox) and in the tightened outcome (the same payload as a
-//! recognised unsandboxed retry).
+//! them, the 49-line everyday sample, the two shell review fixtures and the
+//! three directory-change rows of the Fable review. Its `line` column is the
+//! decision of the line binary at `5f2fe3827`, built in its own target
+//! directory and run by `generate.py` on the fixture tree this test
+//! rebuilds; `line-binary.txt` records that binary's version and digest.
+//! Each row is judged twice by this build: in the baseline outcome (a Claude
+//! payload from a session whose settings show the shipped sandbox) and in
+//! the tightened outcome (the same payload as a recognised unsandboxed
+//! retry). Every judgement must exit 0 (allowed) or 2 (refused).
+//!
+//! The one exception is the H-3 class (issue 342), defined by
+//! [`directory_change_only`]: a line made only of bare `cd`, `pushd` and
+//! `popd` builtins writes nothing, so the baseline may allow it where the
+//! line refused it. The tightened outcome must still refuse it. The class is
+//! written out here, apart from the guard's own predicate, so a widening of
+//! the guard's predicate fails this test instead of passing as an exception.
 //!
 //! The paths are macOS paths and the column was recorded on macOS, so the
 //! test runs there.
@@ -36,6 +45,7 @@ fn environment(t: &Path) -> Vec<(&'static str, PathBuf)> {
         ("PATH", PathBuf::from("/usr/bin:/bin")),
         ("CODEFLOW_HOME", t.join("cfhome")),
         ("CODEFLOW_TEST_CLAUDE_MANAGED_DIR", t.join("managed")),
+        ("CLAUDE_PROJECT_DIR", t.join("repo")),
         ("GIT_CONFIG_GLOBAL", PathBuf::from("/dev/null")),
         ("GIT_CONFIG_SYSTEM", PathBuf::from("/dev/null")),
         ("LANG", PathBuf::from("C.UTF-8")),
@@ -146,6 +156,41 @@ fn judge(t: &Path, row: &Value, tightened: bool) -> i32 {
     child.wait().unwrap().code().unwrap_or(-1)
 }
 
+/// The H-3 class: every simple command is a bare `cd`, `pushd` or `popd`,
+/// joined only by `&&`, `;` or newlines, and each argument is a literal
+/// word or a plain `"$NAME"`. No other command, quoting, expansion or
+/// operator appears.
+fn directory_change_only(text: &str) -> bool {
+    let literal = |word: &str| {
+        !word.is_empty()
+            && word.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '/' | '.' | '_' | '-' | '~' | '+' | ':' | '@' | ',')
+            })
+    };
+    let plain_variable = |word: &str| {
+        word.strip_prefix("\"$")
+            .and_then(|rest| rest.strip_suffix('"'))
+            .is_some_and(|name| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+    };
+    let mut commands = 0;
+    for command in text.split("&&").flat_map(|part| part.split([';', '\n'])) {
+        let mut words = command.split([' ', '\t']).filter(|word| !word.is_empty());
+        let Some(program) = words.next() else {
+            continue;
+        };
+        if !matches!(program, "cd" | "pushd" | "popd")
+            || !words.all(|word| literal(word) || plain_variable(word))
+        {
+            return false;
+        }
+        commands += 1;
+    }
+    commands > 0
+}
+
 #[test]
 fn no_row_the_line_refuses_is_allowed_in_either_outcome() {
     let dir = tempfile::tempdir().unwrap();
@@ -153,14 +198,6 @@ fn no_row_the_line_refuses_is_allowed_in_either_outcome() {
     build(&t);
     let rows = read_json("rows.json");
     let rows = rows.as_array().unwrap();
-    let exceptions = read_json("exceptions.json");
-    let excepted = |row: &Value, outcome: &str| {
-        exceptions.as_array().unwrap().iter().any(|e| {
-            e["source"] == row["source"]
-                && e["command"] == row["command"]
-                && e["allowed_in"].as_str() == Some(outcome)
-        })
-    };
     // Four workers, as the gate's test-thread cap allows.
     let judged: Vec<(i32, i32)> = std::thread::scope(|scope| {
         let chunk = rows.len().div_ceil(4);
@@ -190,13 +227,20 @@ fn no_row_the_line_refuses_is_allowed_in_either_outcome() {
             row["source"].as_str().unwrap(),
             row["command"].as_str().unwrap()
         );
-        // The invariant: what the line refuses stays refused.
-        if line == 2 && *baseline != 2 && !excepted(row, "baseline") {
+        for (outcome, code) in [("baseline", baseline), ("tightened", tightened)] {
+            if !matches!(code, 0 | 2) {
+                wrong.push(format!("the {outcome} outcome exited {code}: {shown}"));
+            }
+        }
+        // The invariant: what the line refuses stays refused, apart from
+        // the H-3 class in the baseline.
+        let command = row["command"].as_str().unwrap();
+        if line == 2 && *baseline != 2 && !directory_change_only(command) {
             wrong.push(format!(
                 "the baseline allows a row the line refuses: {shown}"
             ));
         }
-        if line == 2 && *tightened != 2 && !excepted(row, "tightened") {
+        if line == 2 && *tightened != 2 {
             wrong.push(format!(
                 "the tightened outcome allows a row the line refuses: {shown}"
             ));
@@ -209,7 +253,7 @@ fn no_row_the_line_refuses_is_allowed_in_either_outcome() {
         }
         // The baseline is the line's rule: it refuses more only where a
         // hardening item says so (H-1, a NUL byte).
-        if line == 0 && *baseline == 2 && !row["command"].as_str().unwrap().contains('\0') {
+        if line == 0 && *baseline == 2 && !command.contains('\0') {
             wrong.push(format!(
                 "the baseline refuses a row the line allows: {shown}"
             ));

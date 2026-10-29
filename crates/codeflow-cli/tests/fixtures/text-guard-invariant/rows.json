@@ -13774,5 +13774,26 @@
   "cwd": "@T@/repo",
   "command": "busybox ln -s src L && printf x > L/app.py",
   "line": 0
+ },
+ {
+  "set": "fable-review-differential",
+  "source": "review-fable-01:F5-1",
+  "cwd": "@T@/repo",
+  "command": "cd ~/.zsh",
+  "line": 2
+ },
+ {
+  "set": "fable-review-differential",
+  "source": "review-fable-01:F5-2",
+  "cwd": "@T@/repo",
+  "command": "cd ~user/.zsh",
+  "line": 2
+ },
+ {
+  "set": "fable-review-differential",
+  "source": "review-fable-01:F5-3",
+  "cwd": "@T@/repo",
+  "command": "cd ~ && cd \"$p\" ; cd \"$r\"",
+  "line": 2
  }
 ]

@@ -1,0 +1,4 @@
+codeflow 3.2.0 source=5f2fe3827af90623258baeda6e1187e1dd1709d2 dirty=true inputs=4d6bc8929722dfb1059d6735b22fa903d68d5070a2984a3a31c9a16a0f6a3eeb
+sha256 f2ce0684f4ceb1ce431f7f5d7acf6289b7ebf91aceedb3fbf897c5e67fece4d5
+built at 5f2fe3827 in its own target directory
+dirty=true comes from one untracked file, the build log at the worktree root; no tracked file differed from 5f2fe3827
