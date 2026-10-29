@@ -333,7 +333,13 @@ modes; blocks instead of prompts.
   or `git rebase`; `git pull` is refused there and unaffected in a human
   terminal. An agent merge whose changed paths use a custom merge driver or
   a defined filter is refused, and the operator runs it.
-- Residuals stated: hook timeouts; a harness-level hook disable by the
+- Residuals stated: hook timeouts, narrowed by TSK-1082 (2026-10-29): a
+  guard refuses on its own with exit 2 after 20 seconds, every shipped guard
+  entry carries a 30 second timeout and Claude's carry
+  `"onFailure": "block"`, but Codex and Grok have no fail-closed setting, so
+  a guard that cannot reach its own deadline (it does not start, or is
+  starved past 30 seconds) still fails open there, which `codeflow doctor
+  --check guard-timeouts` states; a harness-level hook disable by the
   operator; a hook trust change between guard-readiness preflights, which the next guard-readiness preflight
   catches; guard-readiness preflight receipts on Grok and on Codex under full access are
   seat-writable, so a seat, an unguarded file or MCP write tool, or a direct

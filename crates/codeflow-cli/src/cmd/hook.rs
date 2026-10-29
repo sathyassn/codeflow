@@ -93,6 +93,21 @@ pub fn run(args: &HookArgs) -> i32 {
         );
         return 2;
     }
+    let guard = match args.name {
+        HookName::GitGuard => Some("git-guard"),
+        HookName::ExecGuard => Some("exec-guard"),
+        HookName::EditGuard => Some("edit-guard"),
+        _ => None,
+    };
+    if let Some(guard) = guard {
+        if let Err(error) = arm_guard_deadline(guard) {
+            eprintln!(
+                "codeflow {guard}: cannot start the guard's deadline ({error}); refusing",
+                error = shown(&error)
+            );
+            return 2;
+        }
+    }
     let stdin = if matches!(args.name, HookName::DelegateTurn) && args.state_dir.is_some() {
         match read_bounded_utf8(std::io::stdin(), MAX_SCHEMA_HOOK_INPUT_BYTES) {
             Ok(stdin) => stdin,
@@ -125,6 +140,34 @@ pub fn run(args: &HookArgs) -> i32 {
         HookName::SessionSummary => session_summary(&stdin),
         HookName::DelegateTurn => delegate_turn(args, &stdin),
     }
+}
+
+/// Refuse on the guard's own clock (TSK-1082). A harness that times a
+/// guard out lets the tool call through in Grok and Codex, and in Claude
+/// without `onFailure`, so a guard that has not decided within
+/// [`GUARD_DEADLINE_SECS`](codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS),
+/// inside the shipped hook timeout, ends its own process with exit 2 and a
+/// reason on stderr, which every harness reads as a block. The thread
+/// starts before the payload is read, so a stalled stdin counts too; a
+/// guard that decides in time exits first and the thread dies with it.
+fn arm_guard_deadline(guard: &'static str) -> std::io::Result<()> {
+    use codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS;
+    std::thread::Builder::new()
+        .name("guard-deadline".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(GUARD_DEADLINE_SECS));
+            let finding = codeflow_core::remedy::Finding::new(
+                format!(
+                    "BLOCKED: the guard reached no decision within {GUARD_DEADLINE_SECS} seconds, so it cannot show the call is allowed; refusing"
+                ),
+                codeflow_core::remedy::GUARD_DEADLINE.remedy(),
+            );
+            let mut err = std::io::stderr();
+            let _ = writeln!(err, "{}", finding.line(&format!("codeflow {guard}"), "error"));
+            let _ = err.flush();
+            std::process::exit(2);
+        })
+        .map(drop)
 }
 
 /// The advisory entry: dispatch on the payload's event. Output writes do not

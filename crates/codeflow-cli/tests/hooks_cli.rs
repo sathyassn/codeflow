@@ -10606,3 +10606,112 @@ fn the_guards_allow_codeflow_follow_and_refuse_a_direct_ledger_edit() {
         );
     }
 }
+
+/// TSK-1082: on an ordinary call each guard decides well inside the
+/// deadline it refuses at and the hook timeout every harness entry
+/// carries, so the bounds stop only a stalled guard.
+#[test]
+fn each_guard_decides_well_inside_its_deadline() {
+    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_HOOK_TIMEOUT_SECS};
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let edit = format!(
+        r#"{{"tool_name":"Write","tool_input":{{"file_path":{},"content":"x"}},"cwd":{}}}"#,
+        json_string(&dir.path().join("notes.txt").to_string_lossy()),
+        json_string(&dir.path().to_string_lossy()),
+    );
+    for (guard, payload) in [
+        ("git-guard", guard_payload("git status", dir.path())),
+        ("exec-guard", guard_payload("ls", dir.path())),
+        ("edit-guard", edit),
+    ] {
+        let started = std::time::Instant::now();
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", guard, "--contract", "3"])
+                .current_dir(dir.path()),
+            &payload,
+        );
+        let took = started.elapsed();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{guard}: {stderr}");
+        assert!(
+            took < std::time::Duration::from_secs(GUARD_DEADLINE_SECS / 2),
+            "{guard} took {took:?}, near its {GUARD_DEADLINE_SECS} s deadline \
+             and {GUARD_HOOK_TIMEOUT_SECS} s hook timeout"
+        );
+        eprintln!("{guard} decided in {took:?}");
+    }
+}
+
+/// TSK-1082, and TSK-283's F3: a FIFO named by a git configuration include
+/// blocks repository discovery inside the guard process. Before the fix the
+/// guard waited until the harness killed it, and a killed guard lets the
+/// tool call through in Grok and Codex. Now each shell guard refuses on its
+/// own, with exit 2 and the reason on stderr, at its deadline and before
+/// the hook timeout.
+#[cfg(unix)]
+#[test]
+fn a_guard_stalled_on_a_fifo_include_refuses_at_its_deadline() {
+    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_HOOK_TIMEOUT_SECS};
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&repo, "feat/x");
+    let fifo = dir.path().join("include.fifo");
+    let c_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    // SAFETY: a valid NUL-terminated path; mkfifo has no other precondition.
+    assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo.join(".git/config"))
+        .unwrap();
+    writeln!(config, "[include]\n\tpath = {}", fifo.display()).unwrap();
+    drop(config);
+
+    let started = Instant::now();
+    let mut children = Vec::new();
+    for (guard, command) in [("git-guard", "git status"), ("exec-guard", "ls")] {
+        let mut child = codeflow()
+            .args(["hook", guard, "--contract", "3"])
+            .current_dir(&repo)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(guard_payload(command, &repo).as_bytes())
+            .unwrap();
+        children.push((guard, child));
+    }
+    let limit = Duration::from_secs(GUARD_HOOK_TIMEOUT_SECS);
+    for (guard, mut child) in children {
+        while child.try_wait().unwrap().is_none() {
+            if started.elapsed() > limit {
+                child.kill().unwrap();
+                panic!("{guard} still ran after the {GUARD_HOOK_TIMEOUT_SECS} s hook timeout");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let took = started.elapsed();
+        let out = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{guard}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "codeflow {guard}: error: BLOCKED: the guard reached no decision within {GUARD_DEADLINE_SECS} seconds"
+            )),
+            "{guard}: {stderr}"
+        );
+        assert!(stderr.contains("git-config-includes"), "{guard}: {stderr}");
+        assert!(
+            took >= Duration::from_secs(GUARD_DEADLINE_SECS),
+            "{guard} answered in {took:?}, before its deadline: {stderr}"
+        );
+    }
+}

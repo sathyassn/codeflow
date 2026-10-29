@@ -5,7 +5,8 @@
 //! - **hook entries** whose command starts with the `codeflow` binary name
 //!   (`"codeflow hook git-guard"` etc.) — added on init, regenerated on
 //!   update (stale codeflow hooks not present in the shipped preset are
-//!   removed); user hooks are never touched;
+//!   removed, and a kept one takes the shipped fields, such as a guard's
+//!   `timeout` and `onFailure`); user hooks are never touched;
 //! - **permission entries** (`permissions.deny` / `ask` / `allow` arrays) —
 //!   merged three ways on update against the prior shipped baseline
 //!   (ADR-0075, TSK-171): an entry the preset retired is removed, an entry
@@ -664,17 +665,7 @@ fn merge_hooks(
                     .entry("hooks")
                     .or_insert_with(|| Value::Array(vec![]));
                 if let Some(hooks) = hooks.as_array_mut() {
-                    for h in codeflow_hooks {
-                        let cmd = hook_command(h).unwrap_or_default();
-                        if !hooks.iter().any(|e| hook_command(e) == Some(cmd)) {
-                            hooks.push(h.clone());
-                            report.push(shown!(
-                                "settings: added hook {}: \"{}\"",
-                                event_name,
-                                preset.name(cmd)
-                            ));
-                        }
-                    }
+                    place_codeflow_hooks(hooks, &codeflow_hooks, &event_name, preset, report);
                 }
             } else {
                 cur_groups.push(inc_group.clone());
@@ -686,6 +677,42 @@ fn merge_hooks(
                         preset.name(cmd)
                     ));
                 }
+            }
+        }
+    }
+}
+
+/// Put each shipped codeflow hook into a group that has the shipped matcher:
+/// added when the group lacks its command, and given the shipped fields
+/// when it has the command with other ones. A codeflow hook is codeflow's,
+/// so its other fields, such as the `timeout` and `onFailure` that make a
+/// guard block when it cannot answer (TSK-1082), move with the preset.
+fn place_codeflow_hooks(
+    hooks: &mut Vec<Value>,
+    shipped: &[&Value],
+    event_name: &Shown,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
+) {
+    for h in shipped {
+        let cmd = hook_command(h).unwrap_or_default();
+        match hooks.iter_mut().find(|e| hook_command(e) == Some(cmd)) {
+            Some(existing) if existing != *h => {
+                *existing = (*h).clone();
+                report.push(shown!(
+                    "settings: updated hook {}: \"{}\" to its shipped fields",
+                    event_name,
+                    preset.name(cmd)
+                ));
+            }
+            Some(_) => {}
+            None => {
+                hooks.push((*h).clone());
+                report.push(shown!(
+                    "settings: added hook {}: \"{}\"",
+                    event_name,
+                    preset.name(cmd)
+                ));
             }
         }
     }
@@ -1693,6 +1720,75 @@ mod tests {
 
         let mut again = vec![];
         let twice = merge_settings(&merged, incoming, &mut again).unwrap();
+        assert_eq!(merged, twice);
+        assert!(again.is_empty(), "{again:?}");
+    }
+
+    /// TSK-1082: a project on a preset from before the guards carried a
+    /// `timeout` and `"onFailure": "block"` gets both on update, while its
+    /// own hook in the same group and its other hooks stay as they are; a
+    /// second update changes nothing.
+    #[test]
+    fn update_gives_the_guards_the_shipped_timeout_and_failure_handling() {
+        let shipped = include_str!("../../../../assets/base/settings/default.json");
+        let timeout = format!(
+            ",\n            \"timeout\": {}",
+            crate::hooks::guard_deadline::GUARD_HOOK_TIMEOUT_SECS
+        );
+        let before = shipped
+            .replace(&timeout, "")
+            .replace(",\n            \"onFailure\": \"block\"", "");
+        assert_ne!(before, shipped);
+        let mut current: Value = serde_json::from_str(&before).unwrap();
+        current["hooks"]["PreToolUse"][0]["hooks"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"type": "command", "command": "./mine.sh", "timeout": 3}));
+        let current = serde_json::to_string_pretty(&current).unwrap();
+
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(&current, Some(&before), shipped, &mut report).unwrap();
+        let v: Value = serde_json::from_str(&merged).unwrap();
+        let hooks = v["hooks"]["PreToolUse"][0]["hooks"].as_array().unwrap();
+        let guards: Vec<&Value> = hooks
+            .iter()
+            .filter(|h| {
+                h["command"]
+                    .as_str()
+                    .and_then(crate::hooks::guard_deadline::guard_of)
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(guards.len(), 2, "{merged}");
+        for guard in guards {
+            assert_eq!(
+                guard["timeout"],
+                crate::hooks::guard_deadline::GUARD_HOOK_TIMEOUT_SECS,
+                "{guard}"
+            );
+            assert_eq!(guard["onFailure"], "block", "{guard}");
+        }
+        assert!(hooks
+            .iter()
+            .any(|h| h["command"] == "./mine.sh" && h["timeout"] == 3));
+        assert_eq!(
+            report
+                .iter()
+                .filter(|l| l.contains("updated hook PreToolUse:")
+                    && l.contains("to its shipped fields"))
+                .count(),
+            2,
+            "{report:?}"
+        );
+        assert!(
+            !report.iter().any(|l| l.contains("added hook")),
+            "{report:?}"
+        );
+
+        let mut again = vec![];
+        let twice =
+            merge_settings_from_baseline(&merged, Some(shipped), shipped, &mut again).unwrap();
         assert_eq!(merged, twice);
         assert!(again.is_empty(), "{again:?}");
     }
