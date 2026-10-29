@@ -276,6 +276,36 @@ fn protected_dirs() -> &'static [String] {
     })
 }
 
+/// The refusal a Git input verdict makes, if any.
+fn git_input_violation(
+    levels: &SecuritySection,
+    result: Result<bool, &'static str>,
+) -> Option<Violation> {
+    let reason = match result {
+        Ok(false) => return None,
+        Ok(true) => "Git input names a secret file or object path".to_string(),
+        Err(why) => format!("cannot verify Git input: {why}"),
+    };
+    Some(Violation::new(
+        "security.secret_reads",
+        levels.secret_reads,
+        reason,
+        crate::remedy::SECRET_SELECTION.remedy(),
+    ))
+}
+
+/// `call` with a Git alias expanded, so it is judged by its expansion
+/// (TSK-1002 review 07). A share or namespace directory refuses before the
+/// lookup touches it (review 08).
+fn expanded_alias(
+    call: outward::Unwrapped,
+    command: &str,
+) -> Result<outward::Unwrapped, &'static str> {
+    let share =
+        |dir: &Path| unmapped_share_root(Path::new("/"), &crate::portable_path::slashed(dir));
+    Ok(git_reads::expand_alias(&call, command, &share)?.unwrap_or(call))
+}
+
 fn secret_reads(
     command: &str,
     levels: &SecuritySection,
@@ -296,20 +326,13 @@ fn secret_reads(
     let line = CommandLine::new(command);
     if levels.secret_reads.is_active() {
         for unwrapped in outward::unwrapped_commands(command, cwd, home) {
-            // A Git alias is judged by its expansion (TSK-1002 review 07).
-            let expanded = match git_reads::expand_alias(&unwrapped, command) {
-                Ok(expanded) => expanded,
+            let unwrapped = match expanded_alias(unwrapped, command) {
+                Ok(unwrapped) => unwrapped,
                 Err(why) => {
-                    violations.push(Violation::new(
-                        "security.secret_reads",
-                        levels.secret_reads,
-                        format!("cannot verify Git input: {why}"),
-                        crate::remedy::SECRET_SELECTION.remedy(),
-                    ));
+                    violations.extend(git_input_violation(levels, Err(why)));
                     continue;
                 }
             };
-            let unwrapped = expanded.unwrap_or(unwrapped);
             let args = &unwrapped.args;
             let name = args
                 .first()
@@ -341,19 +364,16 @@ fn secret_reads(
                 }
                 secret_path_result(path, reader_cwd, home, Some(false))
             };
-            if let Some(result) = git_reads::reads(&unwrapped, &judge) {
-                if result.as_ref().map_or(true, |secret| *secret) {
-                    violations.push(Violation::new(
-                        "security.secret_reads",
-                        levels.secret_reads,
-                        match result {
-                            Ok(_) => "Git input names a secret file or object path".into(),
-                            Err(why) => format!("cannot verify Git input: {why}"),
-                        },
-                        crate::remedy::SECRET_SELECTION.remedy(),
-                    ));
-                    continue;
-                }
+            let pattern = |spelling: &str| secret_path_spelling(spelling, home, Some(true));
+            let judges = git_reads::Judges {
+                path: &judge,
+                pattern: &pattern,
+            };
+            if let Some(violation) = git_reads::reads(&unwrapped, &judges)
+                .and_then(|result| git_input_violation(levels, result))
+            {
+                violations.push(violation);
+                continue;
             }
             for (at, value, glob) in
                 file_operands(name, args, unwrapped.expands.as_deref(), &line, reader_cwd)
@@ -423,9 +443,7 @@ fn git_operand(
                 .iter()
                 .any(|spelling| secret_path_spelling(spelling, home, Some(true)))
             {
-                return Some(Err(
-                    "cannot establish which tracked paths a Git pathspec selects",
-                ));
+                return Some(Err(git_reads::PATTERN));
             }
         }
         None => {}

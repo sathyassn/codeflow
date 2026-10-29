@@ -915,7 +915,7 @@ fn tsk1002_codex07_git_forms_are_parsed_completely() {
         "git cat-file --batch-command <<< 'info HEAD:id_rsa'",
         "git cat-file --batch-check <<< HEAD:id_rsa",
         "git rev-parse HEAD | git cat-file --batch-check",
-        "git log -p -- ':!README.md'",
+        "git log -p -- README.md ':!docs'",
         "git log -p -- ':(glob)src/main*.rs'",
         "git fetch origin 'refs/heads/*:refs/remotes/origin/*'",
         "git tag -l 'v*'",
@@ -926,6 +926,102 @@ fn tsk1002_codex07_git_forms_are_parsed_completely() {
         }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 Codex review 08 and Fable review 10, one test per class:
+/// exclusions never narrow a read and alone select the whole tree; pathspec
+/// magic applies only to a command's pathspec operands; pathspecs on stdin
+/// meet the argv rules, read in the record format Git uses; a Git list on
+/// stdin is read only from a literal input, so a descriptor an earlier
+/// construct rebinds refuses; and stdin a command does not read never
+/// refuses it. Each refusal was allowed at `e2e350afd` and each allowed
+/// control there refused or still allows.
+#[test]
+fn tsk1002_codex08_git_selection_and_stdin_classes() {
+    let f = Fixture::new();
+    std::fs::write(f.linked.join("list.txt"), "HEAD:id_rsa\n").unwrap();
+    let mut wrong = Vec::new();
+    for line in [
+        // Exclusions alone, in argv and on stdin.
+        "git log -p -- ':!README.md'",
+        "git grep needle -- ':(exclude)README.md'",
+        "git add ':!README.md'",
+        "git diff -- ':^docs'",
+        "git add --pathspec-from-file=- <<< ':!README.md'",
+        // Pathspecs on stdin meet the argv rules.
+        "git add --pathspec-from-file=- <<< ':(icase)ID_RSA'",
+        "git add --pathspec-from-file=- <<< ':(glob)**/id_*'",
+        "git add --pathspec-from-file=- <<< ':(top)id_rsa'",
+        "git rm --cached --pathspec-from-file=- <<< 'id_rs?'",
+        "printf '%s\\n' '\"id_rsa\"' | git add --pathspec-from-file=-",
+        // A list on stdin the line rebinds or does not give.
+        "exec < list.txt; git cat-file --batch",
+        "exec 0< list.txt; git update-index --stdin",
+        "{ git cat-file --batch; } < list.txt",
+        "while read x; do git cat-file --batch; done < list.txt",
+        "git cat-file --batch",
+        "git hash-object --stdin-paths",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "git log -p -- README.md ':!docs'",
+        "git add src ':!src/x'",
+        "git add --pathspec-from-file=- <<< 'README.md'",
+        "printf '%s\\0' '\"id_rsa\"' | git add --pathspec-from-file=- --pathspec-file-nul",
+        // Stdin a command does not read.
+        "git status </dev/null",
+        "true | git status",
+        "yes | git add -p",
+        "git log --oneline -3 </dev/null",
+        "git show HEAD:README.md </dev/null",
+        "exec < list.txt; git status",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 Codex review 08 B3: pathspec magic never clears a file-name
+/// operand. `hash-object` opens `:(exclude)link` as a file, which a link
+/// into a store makes a secret read.
+#[cfg(unix)]
+#[test]
+fn tsk1002_codex08_magic_is_read_only_on_pathspec_operands() {
+    let f = Fixture::new();
+    let store = f.temp.path().join(".codex");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("auth.json"), "planted fixture").unwrap();
+    std::os::unix::fs::symlink(store.join("auth.json"), f.linked.join(":(exclude)link")).unwrap();
+    for line in [
+        "git hash-object -- ':(exclude)link'",
+        "git hash-object ':(exclude)link'",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
+    }
+}
+
+/// TSK-1002 Codex review 08 major: a share named for a Git alias lookup
+/// refuses before the lookup touches it; the message is the share rule's,
+/// not a configuration read's.
+#[cfg(windows)]
+#[test]
+fn tsk1002_codex08_alias_lookup_refuses_a_share_first() {
+    let f = Fixture::new();
+    let out = f.command(
+        &f.linked,
+        "exec-guard",
+        "git -C '//fixture-host/fixture-share' fixture-alias",
+    );
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(message.contains("network share"), "{message}");
 }
 
 /// TSK-1002 Codex review 07: a Git alias is judged by its expansion, the
