@@ -1,0 +1,11 @@
+id = "TSK-1065"
+uid = "b6f6afd6-0309-4c73-b395-4f210dd9fb6b"
+kind = "TSK"
+title = "A program-valued Git setting cannot read a protected path through the program it runs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T06:26:47Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
