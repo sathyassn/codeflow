@@ -2212,7 +2212,8 @@ fn sed_read_flags(args: &[String]) -> Vec<bool> {
 /// more than one, has that argument list, the position cannot be
 /// established and the whole line is kept.
 fn line_without_reads(line: &str, program: &str, args: &[String], reads: &[bool]) -> String {
-    let segments = expand_commands(line);
+    let expansion = line_expansion(line);
+    let segments = &expansion.segments;
     let mut own = Vec::new();
     for (at, segment) in segments.iter().enumerate() {
         let mut tokens = shell_tokens(segment);
@@ -4413,7 +4414,20 @@ pub(crate) fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<S
 /// and the value of an assignment (`x=alias/policy.json`), before brace
 /// expansion.
 pub(crate) fn line_path_words(line: &str) -> Vec<String> {
-    let tokens: Vec<String> = expand_commands(line)
+    kept_line_read(
+        line,
+        |reads| &mut reads.path_words,
+        || {
+            note_segment_line_read();
+            read_line_path_words(line).into()
+        },
+    )
+    .to_vec()
+}
+
+fn read_line_path_words(line: &str) -> Vec<String> {
+    let tokens: Vec<String> = line_expansion(line)
+        .segments
         .iter()
         .flat_map(|segment| shell_tokens(segment))
         .collect();
@@ -4433,7 +4447,20 @@ pub(crate) fn line_path_words(line: &str) -> Vec<String> {
 /// Line evidence with the parser's expansion provenance. Raw fragments
 /// still supply literal name evidence; only parsed shell words expand.
 pub(crate) fn line_path_readings(line: &str) -> Vec<(String, bool)> {
-    let tokens = expand_commands(line)
+    kept_line_read(
+        line,
+        |reads| &mut reads.path_readings,
+        || {
+            note_segment_line_read();
+            read_line_path_readings(line).into()
+        },
+    )
+    .to_vec()
+}
+
+fn read_line_path_readings(line: &str) -> Vec<(String, bool)> {
+    let tokens = line_expansion(line)
+        .segments
         .iter()
         .flat_map(|segment| shell_words(segment))
         .map(|word| (word.text, word.pattern))
@@ -4949,8 +4976,8 @@ const SED_SCRIPT_LIMIT: u64 = 1 << 24;
 /// found in one place on the line.
 fn sed_args_fill(line: &str, args: &[String]) -> Option<Vec<bool>> {
     let mut own = None;
-    for segment in expand_commands(line) {
-        let words = shell_words(&segment);
+    for segment in &line_expansion(line).segments {
+        let words = shell_words(segment);
         let mut tokens: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
         strip_reserved_words(&mut tokens);
         let matches = strip_launchers(&tokens)
@@ -5506,6 +5533,172 @@ pub(crate) fn xargs_command(args: &[String]) -> Option<&[String]> {
     args.get(at..).filter(|c| !c.is_empty())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times a check of one segment expanded or re-read its whole
+    /// line (TSK-1050): [`own_literal`], the write checks and the path-word
+    /// readers.
+    static SEGMENT_LINE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Whether [`kept_line_read`] reads every line afresh, for tests that
+    /// compare kept readings and verdicts with uncached ones.
+    static LINE_READS_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How many times [`line_names_ripgrep_config`] read a whole line.
+    static RIPGREP_LINE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
+    /// What the guard reads from a line's text alone, for one guard
+    /// evaluation (TSK-1050), present only while a
+    /// [`super::edit_guard::RepoFactsScope`] is open.
+    pub(super) static LINE_READS: std::cell::RefCell<Option<LineReads>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The readings of a line that depend on its text alone, keyed by that
+/// text. The checks of one segment ask for them for every segment of a
+/// line, and each reading expands or tokenizes the whole line, so a long
+/// chain did quadratic work. A kept reading is the one a new read gives;
+/// outside a scope every call reads the line again.
+#[derive(Default)]
+pub(super) struct LineReads {
+    ripgrep: std::collections::HashMap<String, bool>,
+    expansions: std::collections::HashMap<String, std::rc::Rc<Expanded>>,
+    argvs: std::collections::HashMap<String, std::rc::Rc<[Vec<String>]>>,
+    commands: std::collections::HashMap<String, std::rc::Rc<[LineCommand]>>,
+    assignments: std::collections::HashMap<String, std::rc::Rc<[(String, String)]>>,
+    path_words: std::collections::HashMap<String, std::rc::Rc<[String]>>,
+    path_readings: std::collections::HashMap<String, std::rc::Rc<[(String, bool)]>>,
+}
+
+/// The reading `field` keeps for `line`, or `read`'s, kept for the rest of
+/// the scope. `read` runs with no borrow held, so it may ask for another
+/// reading of the line.
+fn kept_line_read<T: Clone>(
+    line: &str,
+    field: fn(&mut LineReads) -> &mut std::collections::HashMap<String, T>,
+    read: impl FnOnce() -> T,
+) -> T {
+    #[cfg(test)]
+    if LINE_READS_OFF.with(std::cell::Cell::get) {
+        return read();
+    }
+    let kept = LINE_READS.with(|reads| {
+        reads
+            .borrow_mut()
+            .as_mut()
+            .and_then(|reads| field(reads).get(line).cloned())
+    });
+    if let Some(kept) = kept {
+        return kept;
+    }
+    let value = read();
+    LINE_READS.with(|reads| {
+        if let Some(reads) = reads.borrow_mut().as_mut() {
+            field(reads).insert(line.to_owned(), value.clone());
+        }
+    });
+    value
+}
+
+/// Count a whole-line reading made for one segment, for the tests.
+fn note_segment_line_read() {
+    #[cfg(test)]
+    SEGMENT_LINE_READS.with(|reads| reads.set(reads.get() + 1));
+}
+
+/// [`expand_commands_read`] of `line`, read once per scope.
+fn line_expansion(line: &str) -> std::rc::Rc<Expanded> {
+    kept_line_read(
+        line,
+        |reads| &mut reads.expansions,
+        || {
+            note_segment_line_read();
+            std::rc::Rc::new(expand_commands_read(line))
+        },
+    )
+}
+
+/// The argument vector ([`command_argv`]) of each command `line` runs,
+/// read once per scope.
+fn line_argvs(line: &str) -> std::rc::Rc<[Vec<String>]> {
+    kept_line_read(
+        line,
+        |reads| &mut reads.argvs,
+        || {
+            note_segment_line_read();
+            line_expansion(line)
+                .segments
+                .iter()
+                .map(|segment| command_argv(segment))
+                .collect()
+        },
+    )
+}
+
+/// The literals `line` assigns
+/// ([`crate::security::unresolved::line_assignments`]), read once per scope.
+fn line_assignments(line: &str) -> std::rc::Rc<[(String, String)]> {
+    kept_line_read(
+        line,
+        |reads| &mut reads.assignments,
+        || {
+            note_segment_line_read();
+            crate::security::unresolved::line_assignments(&line_expansion(line).segments).into()
+        },
+    )
+}
+
+/// A command a line runs, as [`own_literal`] matches it: its program name,
+/// its arguments and whether the shell passes each one as written.
+#[derive(Clone, Debug)]
+pub(super) struct LineCommand {
+    program: String,
+    rest: Vec<String>,
+    literal: Vec<bool>,
+}
+
+/// The commands `line` runs ([`LineCommand`]), read once per scope.
+fn line_commands(line: &str) -> std::rc::Rc<[LineCommand]> {
+    kept_line_read(
+        line,
+        |reads| &mut reads.commands,
+        || {
+            note_segment_line_read();
+            line_expansion(line)
+                .segments
+                .iter()
+                .filter_map(|segment| {
+                    let words = shell_words(segment);
+                    let literal: Vec<bool> = words.iter().map(ShellWord::literal).collect();
+                    let mut tokens: Vec<String> = words.into_iter().map(|word| word.text).collect();
+                    strip_reserved_words(&mut tokens);
+                    let (name, rest) = strip_launchers(&tokens)?;
+                    Some(LineCommand {
+                        program: program_name(name).to_string(),
+                        rest: rest.to_vec(),
+                        literal: literal[literal.len() - rest.len()..].to_vec(),
+                    })
+                })
+                .collect()
+        },
+    )
+}
+
+/// Whether `line` names `RIPGREP_CONFIG_PATH`
+/// ([`crate::security::search_pattern::names_ripgrep_config`]), read once
+/// per scope.
+fn line_names_ripgrep_config(line: &str) -> bool {
+    kept_line_read(
+        line,
+        |reads| &mut reads.ripgrep,
+        || {
+            #[cfg(test)]
+            RIPGREP_LINE_READS.with(|reads| reads.set(reads.get() + 1));
+            crate::security::search_pattern::names_ripgrep_config(line)
+        },
+    )
+}
+
 /// The command line an `xargs` or a `find` is judged against, without the
 /// search patterns of the command it runs, and the positions of those
 /// patterns in `args` (TSK-380): a pattern is text the search matches,
@@ -5517,7 +5710,7 @@ fn line_without_patterns(cmd: &str, args: &[String], line: &str) -> (String, Vec
         cmd,
         args,
         &own_literal(line, cmd, args),
-        crate::security::search_pattern::names_ripgrep_config(line),
+        line_names_ripgrep_config(line),
     );
     if patterns.is_empty() {
         return (line.to_string(), patterns);
@@ -5531,20 +5724,13 @@ fn line_without_patterns(cmd: &str, args: &[String], line: &str) -> (String, Vec
 /// `line` that runs `program` with that argument list. When no command, or
 /// more than one, has it, no word counts as written.
 fn own_literal(line: &str, program: &str, args: &[String]) -> Vec<bool> {
-    let mut found = Vec::new();
-    for segment in expand_commands(line) {
-        let words = shell_words(&segment);
-        let literal: Vec<bool> = words.iter().map(ShellWord::literal).collect();
-        let mut tokens: Vec<String> = words.into_iter().map(|word| word.text).collect();
-        strip_reserved_words(&mut tokens);
-        if let Some((name, rest)) = strip_launchers(&tokens) {
-            if program_name(name) == program_name(program) && rest == args {
-                found.push(literal[literal.len() - rest.len()..].to_vec());
-            }
-        }
-    }
-    match found.as_slice() {
-        [one] => one.clone(),
+    let commands = line_commands(line);
+    let program = program_name(program);
+    let mut found = commands
+        .iter()
+        .filter(|command| command.program == program && command.rest == args);
+    match (found.next(), found.next()) {
+        (Some(one), None) => one.literal.clone(),
         _ => vec![false; args.len()],
     }
 }
@@ -5564,7 +5750,7 @@ fn preprocessor_write_violation(
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
-    use crate::security::search_pattern::{names_ripgrep_config, preprocessor, Preprocessor};
+    use crate::security::search_pattern::{preprocessor, Preprocessor};
     let refuse = |why: String| {
         Some(hook_integrity_violation(
             level,
@@ -5572,7 +5758,7 @@ fn preprocessor_write_violation(
         ))
     };
     let literal = own_literal(line, cmd, args);
-    let roots = match preprocessor(cmd, args, &literal, names_ripgrep_config(line)) {
+    let roots = match preprocessor(cmd, args, &literal, line_names_ripgrep_config(line)) {
         Preprocessor::None => return None,
         Preprocessor::FromInput => {
             return refuse(format!(
@@ -5886,14 +6072,13 @@ pub(crate) fn git_command_write_violation(
     }
     if cmd == "git" {
         let mut literals = Literals::default();
-        for segment in expand_commands_read(line).segments {
-            let words = command_argv(&segment);
-            if strip_launchers(&words)
+        for words in &*line_argvs(line) {
+            if strip_launchers(words)
                 .is_some_and(|(program, rest)| basename(program) == cmd && rest == args)
             {
                 break;
             }
-            literals.note(&words);
+            literals.note(words);
         }
         let filled: Vec<_> = args.iter().map(|word| literals.fill(word)).collect();
         if let Some((verb, rest)) = git_subcommand(&filled) {
@@ -6190,8 +6375,7 @@ fn direct_write_violation(
         payload_cwd,
         line,
     };
-    let assigned =
-        crate::security::unresolved::line_assignments(&expand_commands_read(line).segments);
+    let assigned = line_assignments(line);
     if let Some(v) = crate::security::unresolved::judge_writer(cmd, args, &assigned, &guard) {
         return Some(v);
     }
@@ -14492,6 +14676,131 @@ mod tests {
                 .any(|finding| finding.rule == "git.push_to_protected"),
             "{findings:?}"
         );
+    }
+
+    /// TSK-1050: git-guard reads whether a line names `RIPGREP_CONFIG_PATH`
+    /// once per line, not once per segment. The read expands the whole line,
+    /// so a read per segment made a long chain quadratic. Verdicts stay the
+    /// same, including a line that names the variable.
+    #[test]
+    fn a_long_chain_reads_the_ripgrep_config_name_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        let policy = GitPolicy::default();
+        let context = ctx(&policy, "task/example");
+        let judge = |command: &str| {
+            super::RIPGREP_LINE_READS.with(|reads| reads.set(0));
+            let rules: Vec<_> = super::evaluate_report_at(command, &context, &root)
+                .violations
+                .into_iter()
+                .map(|violation| violation.rule)
+                .collect();
+            (super::RIPGREP_LINE_READS.with(std::cell::Cell::get), rules)
+        };
+        let one = "rg needle docs && cat notes.txt";
+        let (single, single_rules) = judge(one);
+        assert!(single >= 1, "the check reads the line: {single}");
+        let long = vec![one; 40].join(" && ");
+        let (reads, rules) = judge(&long);
+        assert_eq!(reads, single, "reads grew with the segment count");
+        assert_eq!(rules, single_rules);
+        let named = format!("RIPGREP_CONFIG_PATH=rc {long}");
+        let (reads, _) = judge(&named);
+        assert_eq!(reads, single, "a line naming the variable");
+    }
+
+    /// The checks of one segment that read the whole line (`own_literal`,
+    /// the write checks' line assignments and Git literals, the path-word
+    /// readers) read it once per guard evaluation, so a chain of many
+    /// segments costs what one does (TSK-1050 AC-8).
+    #[test]
+    fn a_long_chain_reads_its_whole_line_once_per_reader() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        let policy = GitPolicy::default();
+        let context = ctx(&policy, "task/example");
+        let judge = |command: &str| {
+            super::SEGMENT_LINE_READS.with(|reads| reads.set(0));
+            let mut rules: Vec<_> = super::evaluate_report_at(command, &context, &root)
+                .violations
+                .into_iter()
+                .map(|violation| violation.rule)
+                .collect();
+            rules.sort();
+            rules.dedup();
+            (super::SEGMENT_LINE_READS.with(std::cell::Cell::get), rules)
+        };
+        let one = "rg needle docs && cat notes.txt && rm -f \"$D/x\" && git status";
+        let (single, single_rules) = judge(one);
+        // Each kept reading is made once per form of the line the checks
+        // read (the line as written and the forms they derive from it).
+        assert!(single >= 4, "each reader reads the line: {single}");
+        let long = vec![one; 40].join(" && ");
+        let (reads, rules) = judge(&long);
+        assert_eq!(reads, single, "reads grew with the segment count");
+        assert_eq!(rules, single_rules);
+    }
+
+    /// Every kept line reading equals the reading made with no cache, for a
+    /// corpus of distinct lines read in one scope, and every verdict, the
+    /// line naming `RIPGREP_CONFIG_PATH` included, is the same with and
+    /// without the cache (Codex review 02 of PR 386).
+    #[test]
+    fn kept_line_readings_match_fresh_readings_and_verdicts() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        let policy = GitPolicy::default();
+        let context = ctx(&policy, "task/example");
+        let one = "rg needle docs && cat notes.txt";
+        let chain = vec![one; 40].join(" && ");
+        let corpus = [
+            one.to_string(),
+            format!("RIPGREP_CONFIG_PATH=rc {chain}"),
+            chain.clone(),
+            "rg --pre ./x needle docs".into(),
+            "x=.claude/settings.json; rm -f \"$x\" && git status".into(),
+            "find . -name '*.md' -exec sed -i s/a/b/ {} +".into(),
+            "printf x | xargs rm && printf y | xargs rm".into(),
+            "sed -i 's/a/b/' .claude/settings.json".into(),
+            "git -c core.hooksPath=/tmp/h commit -m x && cat a".into(),
+            "rm -rf \"$D/x\" && echo ok".into(),
+            "bash -c 'rg -n x docs; cat y'".into(),
+        ];
+        let readings = |line: &str| {
+            format!(
+                "{:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+                super::line_expansion(line),
+                super::line_argvs(line),
+                super::line_commands(line),
+                super::line_assignments(line),
+                super::line_path_words(line),
+                super::line_path_readings(line),
+                super::line_names_ripgrep_config(line),
+            )
+        };
+        let set_off = |off: bool| super::LINE_READS_OFF.with(|flag| flag.set(off));
+        set_off(true);
+        let fresh: Vec<String> = corpus.iter().map(|line| readings(line)).collect();
+        let fresh_verdicts: Vec<String> = corpus
+            .iter()
+            .map(|line| format!("{:?}", super::evaluate_report_at(line, &context, &root)))
+            .collect();
+        set_off(false);
+        {
+            let _scope = super::super::edit_guard::RepoFactsScope::enter();
+            for _ in 0..2 {
+                for (line, fresh) in corpus.iter().zip(&fresh) {
+                    assert_eq!(&readings(line), fresh, "{line}");
+                }
+            }
+        }
+        for (line, fresh) in corpus.iter().zip(&fresh_verdicts) {
+            let kept = format!("{:?}", super::evaluate_report_at(line, &context, &root));
+            assert_eq!(&kept, fresh, "{line}");
+        }
     }
 
     /// A guard context with an injected `gh pr merge` base-branch resolver.

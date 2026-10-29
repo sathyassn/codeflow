@@ -1251,7 +1251,7 @@ fn check_grok(opts: &Options) -> CheckResult {
             let decision = opts.update_plan.and_then(|plan| match plan(root, path) {
                 Ok(decision) => decision,
                 Err(error) => Some(crate::scaffold::update::Decision::Unproven(
-                    error.to_string(),
+                    crate::scaffold::Shown::from(&error),
                 )),
             });
             let repairs = match &decision {
@@ -1355,7 +1355,7 @@ fn missing_guard_repair(opts: &Options, root: &Path) -> (remedy::Remedy, String)
         let decision = opts.update_plan.and_then(|plan| match plan(root, path) {
             Ok(decision) => decision,
             Err(error) => Some(crate::scaffold::update::Decision::Unproven(
-                error.to_string(),
+                crate::scaffold::Shown::from(&error),
             )),
         });
         let restores = match &decision {
@@ -3254,7 +3254,7 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
                 if !status.is_warn() {
                     status = Status::Warn(remedy::DOCTOR_RELEASE_BACKEND.remedy());
                 }
-                parts.push(finding);
+                parts.push(finding.into_string());
             }
         }
         Err(error) => {

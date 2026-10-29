@@ -1002,7 +1002,8 @@ fn init_tier_upgrade_refuses_an_unparsable_pin_without_writing_any_file() {
     let result = scaffold::init(&assets, &root, &opts(Some(Tier::Standard), "2.1.0"));
     assert_eq!(tree_bytes(&root), before);
     let message = result.unwrap_err().to_string();
-    assert!(message.contains("\"broken\""), "{message}");
+    // TSK-1029: the refusal names the file, never the value it holds.
+    assert!(!message.contains("broken"), "{message}");
     assert!(message.contains(".codeflow/project.toml"), "{message}");
     assert!(message.contains("correct it and retry"), "{message}");
     assert!(!message.contains("older"), "{message}");
@@ -1061,7 +1062,8 @@ fn update_refuses_an_unparsable_pin_without_writing_any_file() {
         let result = scaffold::update(&assets_v2, &root, &update_opts("2.1.0"));
         assert_eq!(tree_bytes(&root), before, "invalid pin {pin:?}");
         let message = result.unwrap_err().to_string();
-        assert!(message.contains(&format!("{pin:?}")), "{message}");
+        // TSK-1029: the refusal names the file, never the value it holds.
+        assert!(pin.is_empty() || !message.contains(pin), "{message}");
         assert!(message.contains("scaffold_version"), "{message}");
         assert!(message.contains(".codeflow/project.toml"), "{message}");
         assert!(message.contains("correct it and retry"), "{message}");
@@ -1908,13 +1910,17 @@ fn update_moves_test_gate_on_push_at_the_old_default_and_recommends_block() {
         (
             "warn",
             "block",
-            Some("moved git.test_gate_on_push from \"warn\" to \"block\""),
+            Some("moved git.test_gate_on_push to \"block\""),
         ),
-        ("off", "off", Some("kept git.test_gate_on_push = \"off\"")),
+        (
+            "off",
+            "off",
+            Some("kept the project's git.test_gate_on_push"),
+        ),
         (
             "allow",
             "allow",
-            Some("kept git.test_gate_on_push = \"allow\""),
+            Some("kept the project's git.test_gate_on_push"),
         ),
         ("block", "block", None),
     ] {
@@ -2151,7 +2157,7 @@ fn update_diff_output_ignores_planted_temporary_link() {
     assert!(std::fs::symlink_metadata(planted).unwrap().is_symlink());
     assert!(std::fs::read_to_string(root.join("update.diff"))
         .unwrap()
-        .contains("+step one (improved)"));
+        .contains("+ step one (improved)"));
 }
 
 #[test]
@@ -2168,7 +2174,7 @@ fn update_writes_diff_file() {
 
     let diff = std::fs::read_to_string(&diff_path).unwrap();
     assert!(diff.contains("=== .claude/workflows/develop.md"));
-    assert!(diff.contains("+step one (improved)"));
+    assert!(diff.contains("+ step one (improved)"));
 }
 
 // --- version skew -------------------------------------------------------------
@@ -2631,13 +2637,10 @@ fn update_warns_about_a_kept_step_before_the_secret_scan() {
     const INSTALL: &str =
         "      - run: curl -sSfL https://example.invalid/gitleaks.tar.gz | tar -xz gitleaks\n";
     let layouts = [
-        (vec![SETUP], "`setup`"),
-        (vec![CANARY, SETUP], "`canary`, `setup`"),
-        (
-            vec![INSTALL, SETUP],
-            "`run: curl -sSfL https://example.invalid/gitleaks.tar.gz | tar -xz gitleaks`, `setup`",
-        ),
-        (vec![SETUP, CANARY], "`setup`, `canary`"),
+        (vec![SETUP], "step 2"),
+        (vec![CANARY, SETUP], "step 2, step 3"),
+        (vec![INSTALL, SETUP], "step 2, step 3"),
+        (vec![SETUP, CANARY], "step 2, step 3"),
     ];
     for (steps, named) in layouts {
         kept_steps_are_warned_about(&steps.concat(), named);

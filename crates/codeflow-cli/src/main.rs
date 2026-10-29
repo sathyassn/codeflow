@@ -122,7 +122,12 @@ enum Command {
     },
     /// Refresh managed scaffold files (3-way merge; never clobbers).
     Update {
-        /// Write the report plus unified diffs of applied changes to a file.
+        /// Write the report plus each applied change to a file. The export
+        /// never shows a value, key name or line from the project's files or
+        /// the recorded baseline: JSON, TOML and YAML list the changed key
+        /// paths with the shipped value and a marker for the project's side;
+        /// text shows the shipped lines written and counts the rest; any
+        /// other format, or a file that does not parse, is withheld.
         #[arg(long, value_name = "FILE")]
         diff: Option<PathBuf>,
         /// Replace user-modified managed files instead of merging.
@@ -221,13 +226,16 @@ fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> 
     let Some(kept) = report.pending_pr_template.clone() else {
         return Ok(());
     };
-    if let Some(decision) = prompts::decide_pr_template(&mut std::io::stdin().lock(), &kept.path)? {
+    let decision = prompts::decide_pr_template(&mut std::io::stdin().lock(), &kept.path)
+        .map_err(|error| anyhow::Error::msg(scaffold::Shown::io(&error).into_string()))?;
+    if let Some(decision) = decision {
         let line = scaffold::pr_template::record_decision(
             root,
             &kept,
             decision,
             &scaffold::pr_template::today(),
-        )?;
+        )
+        .map_err(boundary_error)?;
         report.notes.push(line);
         report.pending_pr_template = None;
     }
@@ -247,7 +255,10 @@ fn update(
         binary_version: BINARY_VERSION.to_string(),
         diff_out: diff,
     };
-    let mut report = scaffold::update(assets, cwd, &options)?;
+    // The display boundary (TSK-1029): everything update prints is a
+    // `scaffold::Shown`, and its errors are turned into one here, with no
+    // source, so the chain `main` prints holds nothing else.
+    let mut report = scaffold::update(assets, cwd, &options).map_err(boundary_error)?;
     for file in &mut report.files {
         file.notes
             .retain(|note| codeflow_core::hooks::policy_schema::first_unsupported_warning(note));
@@ -255,17 +266,26 @@ fn update(
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         decide_pr_template(cwd, &mut report)?;
     }
-    print_block!(report.block());
+    say_report(&report);
     cmd::present::provision_state_root_or_warn();
     print_workspace_hint(cwd);
-    let portal_report = scaffold::portal::update_adopted_portal(assets, cwd)?;
+    let portal_report =
+        scaffold::portal::update_adopted_portal(assets, cwd).map_err(boundary_error)?;
     if let Some(portal_report) = &portal_report {
-        print_block!(portal_report.block());
+        say_report(portal_report);
     }
     if report.has_conflicts() || portal_report.is_some_and(|report| report.has_conflicts()) {
         std::process::exit(2);
     }
     Ok(())
+}
+
+/// A scaffold error at the display boundary of `codeflow update`
+/// (TSK-1029): its text only, which every variant builds from `Shown`
+/// fragments, as an error with no source.
+#[allow(clippy::needless_pass_by_value)] // `map_err` hands the error over by value
+fn boundary_error(error: scaffold::ScaffoldError) -> anyhow::Error {
+    anyhow::Error::msg(scaffold::Shown::from(&error).into_string())
 }
 
 /// `codeflow update --pin <version>`: pin that release and its archive
@@ -274,10 +294,10 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
     let base = match scaffold::release_pin::release_url() {
         Ok(base) => base,
         Err(error) => {
-            eprintln!(
-                "codeflow update --pin: error: {error}",
-                error = crate::cmd::shown(&error)
-            );
+            cmd::warn(&codeflow_core::shown!(
+                "codeflow update --pin: error: {}",
+                error
+            ));
             return 1;
         }
     };
@@ -288,14 +308,14 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
         &scaffold::release_pin::fetch_with_curl,
     ) {
         Ok(report) => {
-            println!("{report}");
+            cmd::say(&report.shown());
             0
         }
         Err(error) => {
-            eprintln!(
-                "codeflow update --pin: error: {error}",
-                error = crate::cmd::shown(&error)
-            );
+            cmd::warn(&codeflow_core::shown!(
+                "codeflow update --pin: error: {}",
+                error
+            ));
             1
         }
     }
@@ -304,19 +324,27 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
 /// Plain `init` and `update` switch nothing in a folder that holds nested
 /// repositories; they name `codeflow init --workspace` instead.
 fn print_workspace_hint(root: &std::path::Path) {
-    let policy = match codeflow_core::hooks::policy::Policy::load(root) {
-        Ok(policy) => policy.git,
+    // `update` calls this after its report, so it prints only `Shown` text
+    // (TSK-1029).
+    let policy = match codeflow_core::hooks::policy::Policy::load_shown(root) {
+        Ok(policy) => policy,
         Err(error) => {
-            eprintln!(
-                "codeflow: cannot read workspace policy: {error}",
-                error = crate::cmd::shown(&error)
-            );
+            cmd::warn(&codeflow_core::shown!(
+                "codeflow: cannot read workspace policy: {}",
+                error
+            ));
             return;
         }
     };
-    if let Some(hint) = root_checkout::workspace_hint(root, &policy) {
-        println!("{hint}");
+    if let Some(hint) = root_checkout::workspace_hint_shown(root, &policy.git) {
+        cmd::say(&hint);
     }
+}
+
+/// Prints an init or update report: its block is built from the report's
+/// `Shown` lines.
+fn say_report(report: &scaffold::Report) {
+    print_block!(report.block());
 }
 
 /// `init --workspace` switches the root checkout before anything is
