@@ -266,7 +266,11 @@ pub const SCHEMA: [KeySpec; 74] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
-        notes: "Agent guards (ADR-0009). Local-edit relief never disables protection \
+        notes: "Agent guards (ADR-0009). A write to Git's alternate object lists \
+                (`objects/info/alternates`, `objects/info/http-alternates`, in the common \
+                directory a linked worktree shares) refuses like a write to hooks, refs or \
+                config, since an alternate store adds objects Git reads as its own; reading \
+                them stays allowed. Local-edit relief never disables protection \
                 of remote-tracking refs, packed-refs or Git config authority metadata. \
                 git-guard refuses a `sed`, `find`, `xargs` or `parallel` that \
                 can change files when its command line names an enforcement \
