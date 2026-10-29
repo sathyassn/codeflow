@@ -140,14 +140,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
-    // Failed Git stderr is displayed inside Err. Successful ignore-rule stdout remains exact bytes.
-    (
-        "codeflow-core/src/root_checkout.rs",
-        "git_stdin",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-cli/src/cmd/ci.rs",
@@ -491,14 +483,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "name",
         1,
         "format-contract",
-    ),
-    // an object id or fixed ASCII word git prints, compared with ASCII only (`true`)
-    (
-        "codeflow-core/src/root_checkout.rs",
-        "effective_ignore_case",
-        "from_utf8_lossy",
-        1,
-        "ascii-marker",
     ),
     // BranchStep::name returns the already validated branch String by reference unchanged; no native bytes are decoded or replaced.
     (
@@ -3757,6 +3741,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:head",
         1,
         "unproven",
+    ),
+    // Any HEAD read error prints the fixed "cannot read the repository" hint; nothing is switched or decided from it.
+    (
+        "crates/codeflow-core/src/root_checkout.rs",
+        "workspace_hint_shown",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    // `Shipped::as_str` returns the shipped default's text, not an Option; a key it does not hold is a placeholder in the report line only.
+    (
+        "crates/codeflow-core/src/scaffold/update.rs",
+        "policy_key",
+        "obtain-absent:as_str",
+        1,
+        "display",
     ),
     // The name is compared with GIT_HOOK_NAMES, all ASCII, so a name that is not UTF-8 is none of them; the list feeds only advisory doctor and update notes.
     (

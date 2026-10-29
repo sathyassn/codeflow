@@ -782,17 +782,20 @@ fn update_and_pin_never_print_a_planted_canary() {
         },
     );
     let mut problems = Vec::new();
-    let mut count = 0;
+    let (mut count, mut failed) = (0, 0);
     for case in file_runs(base.path())
         .into_iter()
         .chain(version_runs(base.path()))
     {
         count += 1;
         let outcome = run(base.path(), &case);
+        let before = problems.len();
         check(&case.name, &outcome, &clean, &case.expect, &mut problems);
+        failed += usize::from(problems.len() > before);
     }
     for (name, sums, archive, expect) in served_runs() {
         count += 1;
+        let before = problems.len();
         // The release is served from its own folder, named with the canary.
         let dir = tempfile::tempdir().unwrap();
         let url = served(&dir.path().join("proj"), &sums, &archive);
@@ -807,12 +810,58 @@ fn update_and_pin_never_print_a_planted_canary() {
             },
         );
         check(name, &outcome, &clean, &[expect], &mut problems);
+        failed += usize::from(problems.len() > before);
     }
     assert!(count > 100, "the sweep ran only {count} cases");
     assert!(
         problems.is_empty(),
-        "{} of {count} runs failed:\n\n{}",
+        "{failed} of {count} runs failed ({} failed assertions):\n\n{}",
         problems.len(),
         problems.join("\n\n")
+    );
+}
+
+/// TSK-1029 review 06: the workspace hint update prints after its report
+/// runs git in a root checkout, and git quotes a bad configuration value in
+/// its own error. A normal root checkout whose migration markers are already
+/// recorded, with a nested repository and a hostile `core.ignoreCase`, runs
+/// update; the value appears in no output, and the hint's step still
+/// reports that it could not read the repository.
+#[test]
+fn update_in_a_root_checkout_never_prints_a_git_config_value() {
+    let base = base();
+    let (root, home) = (base.path().join("proj"), base.path().join("home"));
+    // The first update records the migration markers; commit them.
+    let out = codeflow_command(&root, &home, &["update"])
+        .output()
+        .expect("codeflow runs");
+    assert!(out.status.success(), "{}", text(&out));
+    commit(&root);
+    let nested = root.join("nested");
+    git2::Repository::init(&nested).unwrap();
+    std::fs::write(nested.join("README.md"), "nested\n").unwrap();
+    let state = std::fs::read_to_string(root.join(".codeflow/project.toml")).unwrap();
+    assert!(
+        state.contains("work_records_baseline") || state.contains("outcome_present_uids"),
+        "no migration marker recorded:\n{state}"
+    );
+    git2::Repository::open(&root)
+        .unwrap()
+        .config()
+        .unwrap()
+        .set_str("core.ignorecase", CANARY)
+        .unwrap();
+
+    let out = codeflow_command(&root, &home, &["update"])
+        .output()
+        .expect("codeflow runs");
+    let all = text(&out);
+    assert!(
+        !all.contains(CANARY),
+        "update printed the git config value:\n{all}"
+    );
+    assert!(
+        all.contains("git.root_branch"),
+        "the workspace hint step did not report:\n{all}"
     );
 }
