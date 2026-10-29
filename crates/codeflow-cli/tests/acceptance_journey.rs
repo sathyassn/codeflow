@@ -308,7 +308,7 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
     fails(
         &ci(&root, branch, "TSK-001"),
         "a stale block after a later code change",
-        "src/lib.rs changed after the reviewed commit",
+        "first: src/lib.rs",
     );
     git(&root, &["reset", "-q", "--hard", &completed]);
 
@@ -1168,7 +1168,7 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
     // its pull request is: the late code follows the owner's completion.
     assert!(
         said.contains(&format!(
-            "TSK-003 (completed directly on the release line at {}): src/late.rs changed after the reviewed commit",
+            "TSK-003 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
             &completed[..9]
         )),
         "{said}"
@@ -1190,7 +1190,7 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
         ),
         "code after the completion",
         &format!(
-            "TSK-003 (completed directly on the release line at {}): src/late.rs changed after the reviewed commit",
+            "TSK-003 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
             &completed[..9]
         ),
     );
