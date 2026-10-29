@@ -65,9 +65,9 @@ failed check never hides the others. Each line starts with a status badge.
 Doctor exits 0 when no check failed, with or without warnings, and 1 when any
 check failed. Nine checks can fail: `hooks`, `config`, `permissions`,
 `policy-source`, `model-bindings`, `delegate-roundtrip`, `repo-integrity`,
-`id-registry` and `adopter-fit`. The other fourteen warn at most.
+`id-registry` and `adopter-fit`. The other fifteen warn at most.
 
-- `codeflow doctor --list` prints the twenty-three names and exits 0.
+- `codeflow doctor --list` prints the twenty-four names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an
   error to stderr and exits 1.
 
