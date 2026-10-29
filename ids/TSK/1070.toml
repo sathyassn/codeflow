@@ -1,0 +1,11 @@
+id = "TSK-1070"
+uid = "595dbffc-bae4-44d9-bbab-866b01f9d841"
+kind = "TSK"
+title = "The status line shows effort, pull request, usage and worktree when Claude Code supplies them"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T17:27:02Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
