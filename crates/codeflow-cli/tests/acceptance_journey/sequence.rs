@@ -1180,7 +1180,7 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
     fails(
         &task_ci(&root, own, "TSK-002"),
         "a records-only change after the review",
-        "changed after the reviewed commit",
+        "changed between the reviewed commit",
     );
     ok(
         &status(
