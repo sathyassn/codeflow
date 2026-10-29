@@ -666,7 +666,7 @@ fn an_epic_own_block_binds_its_review_and_its_waivers() {
         (
             "a stale review",
             own(&amendment, verified, verified),
-            "changed after the reviewed commit",
+            "changed between the reviewed commit",
         ),
         (
             "a nonexistent amendment for the cancelled-only criterion",
