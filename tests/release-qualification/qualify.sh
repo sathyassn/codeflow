@@ -1009,6 +1009,16 @@ qualify_records() {
   record "$SAMPLE" "$TIER" "task new" "allocate an epic-linked task" \
     "$(status_for_match 0 'TSK-')" "exit 0 and an allocated TSK-NNN record" "$(observed_exit)"
 
+  # Their author states the Outcome before committing them: validate --docs
+  # refuses a record made after the project adopted `## Outcome` without one.
+  for _record in epics/EPC-001.md tasks/TSK-001.md; do
+    _path="$DIR/project-management/$_record"
+    [ -f "$_path" ] || continue
+    awk '{ print } $0 == "## Outcome" { print ""; print "after this merges, a qualification user can run the sample flow" }' \
+      "$_path" >"$WORK/record.tmp"
+    mv "$WORK/record.tmp" "$_path"
+  done
+
   cf spec new --for EPC-001 "sample spec for qualification"
   record "$SAMPLE" "$TIER" "spec new" "allocate a spec and link its consumer" \
     "$(status_for_match 0 'SPC-')" "exit 0 and an allocated SPC-NNN record" "$(observed_exit)"
