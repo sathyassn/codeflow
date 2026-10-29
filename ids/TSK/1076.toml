@@ -1,0 +1,11 @@
+id = "TSK-1076"
+uid = "d0ecb0e4-f6b4-4f51-bda2-daf9cd4ae101"
+kind = "TSK"
+title = "A qualified usage reading stops an away session's new admissions at a threshold"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T22:04:57Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
