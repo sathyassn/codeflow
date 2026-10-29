@@ -68,12 +68,12 @@ dated evidence.
 
 ### The exec guard's text rule
 
-The exec guard reads the harness configuration this host shows before it judges a shell call (ADR-0088):
+The exec guard reads the harness configuration of the call's session and repository before it judges a shell call (ADR-0088):
 
-- **Baseline:** the line's rule. It applies where the configuration shows the sandbox enabled, failing closed and carrying the shipped floor, the common posture of the presets on macOS and Linux.
-- **Tightened:** adds a strict rule that judges every word after a program the guard cannot read through, with no program exempt by name. It applies on native Windows under Claude Code or Grok Build, on a disabled, fail-open, drifted or unreadable configuration, on any `excludedCommands`, on a call marked `dangerouslyDisableSandbox`, and under `security.text_guard: strict`. It refuses about 42 of 49 everyday lines where the baseline refuses 5.
+- **Baseline:** the line's rule. It applies where that configuration shows no tightening trigger, as the shipped presets on macOS and Linux do. That is a reading of files, not proof that a sandbox contains the call.
+- **Tightened:** adds a strict rule that judges every word after a program the guard cannot read through, with no program exempt by name. It applies on native Windows under Claude Code or Grok Build; on a disabled, fail-open, drifted, unreadable or widened configuration (any `excludedCommands`, an extra `allowRead`, an allow entry at a protected path, a startup file or a git configuration file, an escape setting, a Codex or Grok profile that grants more than the shipped one); on a Codex or Grok call with no configuration of its harness; on a call marked `dangerouslyDisableSandbox`; and under `security.text_guard: strict`. It refuses 42 lines of the 49-line everyday sample where the baseline refuses 2.
 
-Neither outcome allows what the baseline refuses. `codeflow doctor --check sandbox` names the outcome and the trigger. A `--settings` file, server-managed settings, MDM policy, a Codex launch flag and an unsandboxed retry the harness does not mark cannot be read, so those calls get the baseline.
+Neither outcome allows what the line refuses, except a line made only of bare `cd`, `pushd` and `popd` builtins, which the baseline allows and the strict rule refuses (issue 342). `codeflow doctor --check sandbox` prints one line per harness with each trigger; to clear the strict rule, fix each trigger or accept it on that host. Native Windows under Claude Code has no remedy. A `--settings` file, server-managed settings, MDM policy, a Codex launch flag and an unsandboxed retry the harness does not mark cannot be read, so those calls get the baseline today; failing closed there is tracked as TSK-1052.
 
 The test runner's per-target `shell` is `auto` by default (`sh` on
 macOS/Linux/WSL2, `cmd.exe` on native Windows). This keeps generated `&&`
