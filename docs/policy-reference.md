@@ -440,6 +440,21 @@ the form refuses:
   guard's grammar all knows, since an unknown option may take the next
   word. `git log` operands are file operands (`git log -p -- id_rsa`
   refuses).
+- An object named without a path (an object id or its abbreviation, a
+  tag, a peel such as `X^{blob}`) holds content the guard does not map
+  back to a path. A command that may print, copy, relabel or send an
+  object (`show`, `cat-file`, `diff`, `grep`, `archive`, `restore`,
+  `checkout`, `tag`, `update-ref`, `notes`, `push` and the like) accepts
+  such a name only when a lookup in the repository proves it peels to a
+  commit, whose readings these rules already cover; a blob, tree or tag
+  of either refuses (`git cat-file -p 7898192`, `git show v-blob`). The
+  lookup is skipped, and only `HEAD` forms and existing paths pass, after
+  a Git call on the line that may move a ref, or on a line that sets
+  `GIT_DIR`. A content batch names each object as `REV:PATH`; a stream
+  or index entry that names an object by id (`mktree`, `update-index
+  --cacheinfo`), a fetch refspec whose source is an id and a `%(raw)`
+  format refuse. `cat-file -t`, `-s` and `-e` stay available. Name the
+  object as `REV:PATH` instead (`git show HEAD:README.md`).
 - An alias is judged by its expansion, read from the configuration Git
   would use, and the expansion meets these rules too. One the guard
   cannot read refuses: a `!` shell alias, an alias on a line that
@@ -488,11 +503,14 @@ These rules refuse some ordinary commands by design: a pathspec glob,
 quoted or not (`git diff -- '*.rs'`, because `id_rsa.rs` matches both
 that pattern and the `id_rsa*` secret rule), any pathspec magic, a Git
 name list piped from a program (`git ls-files | git update-index
---stdin`) and a NUL-separated list. Name the paths (`git diff --
-src/main.rs`), or pass the names one per line. Measured on a corpus of 120 ordinary Git commands
-(TSK-1002), these rules refuse 2 where the earlier ones refused 1; the
-added refusal is `git grep -n needle -- '*.rs'`. The corpus holds no
-magic, NUL list or `GIT_*` assignment, so it does not measure those
+--stdin`), a NUL-separated list, a blob, tree or tag named by id, and a
+branch or tag name after a Git call that may move a ref (`git fetch &&
+git diff origin/main`). Name the paths (`git diff -- src/main.rs`), pass
+the names one per line, or run the fetch as its own command. Measured on
+a corpus of 120 ordinary Git commands (TSK-1002), these rules refuse 2
+where the earlier ones refused 1; the added refusal is `git grep -n
+needle -- '*.rs'`. The corpus holds no magic, NUL list, `GIT_*`
+assignment, object id or chained fetch, so it does not measure those
 costs.
 
 Expansion observes the filesystem before execution. File creation, concurrent
