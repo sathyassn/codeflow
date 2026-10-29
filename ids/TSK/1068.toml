@@ -1,0 +1,11 @@
+id = "TSK-1068"
+uid = "6dc25b94-5749-4aca-a2a5-ed43a844eb96"
+kind = "TSK"
+title = "The release benchmark and release qualification state an Outcome on the records they create"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T12:03:36Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
