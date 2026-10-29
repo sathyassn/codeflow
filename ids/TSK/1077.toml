@@ -1,0 +1,11 @@
+id = "TSK-1077"
+uid = "718a7455-261f-46ff-9d39-765371f66206"
+kind = "TSK"
+title = "The default branch is the only local policy authority"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T22:05:08Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
