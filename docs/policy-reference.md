@@ -416,22 +416,33 @@ the form refuses:
   configuration files on disk are read as Git reads them; those files are
   the user's own or protected checkout state. The order is proved by test
   on macOS and Linux; Windows execution is not verified.
-- A `GIT_*` environment variable on a line that runs Git refuses unless
-  the guard classifies it (`git help git`, "Environment Variables"):
-  identity (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`), the programs Git runs
-  (`GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_SSH`,
-  `GIT_SSH_COMMAND`, `GIT_SSH_VARIANT`, `GIT_ASKPASS`,
-  `GIT_EXTERNAL_DIFF`, `GIT_EXEC_PATH`), output and prompt settings (`GIT_TERMINAL_PROMPT`,
-  `GIT_FLUSH`, `GIT_PROGRESS_DELAY`, `GIT_MERGE_VERBOSITY`, `GIT_ADVICE`,
-  `GIT_OPTIONAL_LOCKS`, `GIT_DIFF_OPTS`, `GIT_HTTP_USER_AGENT`), the
+- A `GIT_*` variable that a line running Git sets, exports or clears
+  refuses unless the guard classifies it (`git help git`, "Environment
+  Variables"): identity (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`), output and
+  prompt settings (`GIT_TERMINAL_PROMPT`, `GIT_FLUSH`,
+  `GIT_PROGRESS_DELAY`, `GIT_MERGE_VERBOSITY`, `GIT_MERGE_AUTOEDIT`,
+  `GIT_ADVICE`, `GIT_OPTIONAL_LOCKS`, `GIT_DIFF_OPTS`,
+  `GIT_HTTP_USER_AGENT`, `GIT_SSH_VARIANT`, `GIT_LFS_SKIP_SMUDGE`), the
   pathspec modes `GIT_GLOB_PATHSPECS`, `GIT_NOGLOB_PATHSPECS` and
-  `GIT_LITERAL_PATHSPECS`, and `GIT_DIR`. The others move
-  what Git reads or writes and refuse as unverified: `GIT_WORK_TREE`,
-  `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_NAMESPACE`, every
-  `GIT_CONFIG*`, the `GIT_TRACE*` family and any name not listed. The
-  name is found anywhere in the line's text, since a shell can build an
-  assignment from it, so `git grep GIT_WORK_TREE` refuses too; search
-  such text with `rg`.
+  `GIT_LITERAL_PATHSPECS`, and `GIT_DIR` under the repository rule below.
+  A variable whose value is a program Git runs (`GIT_PAGER`,
+  `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_SSH`, `GIT_SSH_COMMAND`,
+  `GIT_ASKPASS`, `GIT_EXTERNAL_DIFF`) is allowed, and its value is judged
+  as a command on the line (`GIT_EXTERNAL_DIFF='cat ~/.ssh/id_rsa'`
+  refuses as that `cat` would). The others move what Git reads or writes
+  and refuse as unverified: `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
+  `GIT_OBJECT_DIRECTORY`, `GIT_NAMESPACE`, `GIT_EXEC_PATH`, every
+  `GIT_CONFIG*`, the `GIT_TRACE*` family, any name not listed, and a
+  name a declaring builtin builds (`export "$N=x"`). A name in text, such
+  as a commit message or `git grep GIT_WORK_TREE`, is not judged.
+- A Git directory or work tree a line sets (`--git-dir`, `--work-tree`,
+  `GIT_DIR`) refuses unless it names exactly the Git directory and work
+  tree Git finds without it from the directory the call runs in; with a
+  Git directory alone, Git takes the current directory as the work tree,
+  so it must be the top of the work tree. A `.git` file is read as Git
+  reads it. Anything the guard cannot establish refuses: `git
+  --work-tree=~/.ssh add -A && git diff --cached` and `cd ~/.ssh && git
+  --git-dir=/repo/.git add -A` would stage a store and print it.
 - Every operand before `--`, a separate option value included, is read as
   a possible object name, unless it is proven to be text: a commit
   message, a configuration value, a repository URL or remote ref of
@@ -441,20 +452,21 @@ the form refuses:
   word. `git log` operands are file operands (`git log -p -- id_rsa`
   refuses).
 - An object named without a path (an object id or its abbreviation, a
-  tag, a peel such as `X^{blob}`) holds content the guard does not map
-  back to a path. A command that may print, copy, relabel or send an
-  object (`show`, `cat-file`, `diff`, `grep`, `archive`, `restore`,
-  `checkout`, `tag`, `update-ref`, `notes`, `push` and the like) accepts
-  such a name only when a lookup in the repository proves it peels to a
-  commit, whose readings these rules already cover; a blob, tree or tag
-  of either refuses (`git cat-file -p 7898192`, `git show v-blob`). The
-  lookup is skipped, and only `HEAD` forms and existing paths pass, after
-  a Git call on the line that may move a ref, or on a line that sets
-  `GIT_DIR`. A content batch names each object as `REV:PATH`; a stream
-  or index entry that names an object by id (`mktree`, `update-index
-  --cacheinfo`), a fetch refspec whose source is an id and a `%(raw)`
-  format refuse. `cat-file -t`, `-s` and `-e` stay available. Name the
-  object as `REV:PATH` instead (`git show HEAD:README.md`).
+  tag, a peel such as `X^{blob}`) before `--`, in a command that may
+  print, copy, relabel or send an object (`show`, `cat-file`, `diff`,
+  `archive`, `restore`, `checkout`, `tag`, `update-ref`, `notes`, `push`
+  and the like), refuses unless a lookup in the repository proves it
+  peels to a commit (`git cat-file -p 7898192`, `git show v-blob`
+  refuse). `grep`'s search patterns are text. The lookup is skipped, and
+  only `HEAD` forms and existing paths pass, after a Git call on the line
+  that may move a ref, or on a line that sets `GIT_DIR`. A content batch
+  record without a `:` path, a stream or index entry that names an
+  object by id (`mktree`, `update-index --cacheinfo` in any spelling Git
+  accepts), a fetch refspec whose source is an id and a `%(raw)` format
+  refuse. `cat-file -t`, `-s` and `-e` stay available. What a proven
+  commit, an archive or a history shows from content already committed
+  is not judged by path, nor is a name after `--`: these rules do not
+  promise that content already in Git's object store stays unread.
 - An alias is judged by its expansion, read from the configuration Git
   would use, and the expansion meets these rules too. One the guard
   cannot read refuses: a `!` shell alias, an alias on a line that
@@ -488,10 +500,11 @@ the form refuses:
   secret name could match it (`'id_rs?'`). Git's `*` also matches `/`,
   so any glob whose cross-directory match could hit a secret name
   refuses, quoted or not, `git add '*.rs'` and `git diff -- '*.md'`
-  included. `status` is judged too, since `status -v` prints staged
-  changes. `ls-files` prints names, modes, object names and line-ending
-  facts in every mode, never content (`git help ls-files`), so its
-  patterns are not judged.
+  included. Every `status` operand is judged as a file operand and its
+  patterns as pathspecs, since `status -v` prints changes (`git status
+  -vv -- id_rsa` refuses). `ls-files` prints names, modes, object names
+  and line-ending facts in every mode, never content (`git help
+  ls-files`), so its patterns are not judged.
   `--icase-pathspecs` refuses. Ref and refspec patterns (`git fetch
   origin 'refs/heads/*:refs/remotes/origin/*'`, `git tag -l 'v*'`) are not
   pathspecs.
@@ -505,8 +518,10 @@ that pattern and the `id_rsa*` secret rule), any pathspec magic, a Git
 name list piped from a program (`git ls-files | git update-index
 --stdin`), a NUL-separated list, a blob, tree or tag named by id, and a
 branch or tag name after a Git call that may move a ref (`git fetch &&
-git diff origin/main`). Name the paths (`git diff -- src/main.rs`), pass
-the names one per line, or run the fetch as its own command. Measured on
+git diff origin/main`), and a `--git-dir` or `--work-tree` Git cannot be
+shown to use anyway (a bare repository, a dotfiles work tree). Name the
+paths (`git diff -- src/main.rs`), pass the names one per line, run the
+fetch as its own command, or run Git inside the repository. Measured on
 a corpus of 120 ordinary Git commands (TSK-1002), these rules refuse 2
 where the earlier ones refused 1; the added refusal is `git grep -n
 needle -- '*.rs'`. The corpus holds no magic, NUL list, `GIT_*`
