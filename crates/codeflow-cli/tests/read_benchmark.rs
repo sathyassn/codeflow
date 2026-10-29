@@ -395,8 +395,10 @@ fn measure(root: &Path, program: &str, args: &[&str], trace: &Path) -> Measure {
     assert_eq!(waited, pid, "wait4");
     if !(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0) {
         // The measured run discards its output; run it again to say why.
-        // On ten thousand records the output is long and its verdict comes
-        // last, so the message keeps the end.
+        // The failure reported is the measured run's; the rerun only shows
+        // its output, under its own status. On ten thousand records the
+        // output is long and its verdict comes last, so the message keeps
+        // the end.
         let out = with_env(&mut Command::new(program))
             .args(args)
             .current_dir(root)
@@ -410,7 +412,8 @@ fn measure(root: &Path, program: &str, args: &[&str], trace: &Path) -> Measure {
         let lines: Vec<&str> = text.lines().collect();
         let tail = lines[lines.len().saturating_sub(40)..].join("\n");
         panic!(
-            "{program} {args:?} failed ({}); the last {} of {} output lines:\n{tail}",
+            "{program} {args:?} failed with {}; a rerun to show why ended with {}, and the last {} of its {} output lines are:\n{tail}",
+            wait_status(status),
             out.status,
             lines.len().min(40),
             lines.len()
@@ -433,6 +436,18 @@ fn measure(root: &Path, program: &str, args: &[&str], trace: &Path) -> Measure {
         wall,
         peak_kib,
         git_processes,
+    }
+}
+
+/// A `wait4` status in words: the exit code, or the signal that ended the
+/// process.
+fn wait_status(status: libc::c_int) -> String {
+    if libc::WIFEXITED(status) {
+        format!("exit code {}", libc::WEXITSTATUS(status))
+    } else if libc::WIFSIGNALED(status) {
+        format!("signal {}", libc::WTERMSIG(status))
+    } else {
+        format!("wait status {status}")
     }
 }
 
@@ -550,7 +565,9 @@ fn read_commands_on_ten_thousand_records_stay_within_their_budgets() {
 /// The inventory's records pass `validate --docs`, which the benchmark times
 /// (TSK-1068). The benchmark is ignored and runs only in the release gate,
 /// so this small inventory, built from the same templates and record
-/// builders, catches a record rule the generator misses in every test run.
+/// builders, catches a record rule the generator misses in the ordinary Unix
+/// workspace test runs. It checks that validation passes, not that the
+/// records raise no warnings.
 #[test]
 fn the_inventory_records_pass_validate_docs() {
     let dir = tempfile::tempdir().unwrap();
@@ -578,17 +595,37 @@ fn the_inventory_records_pass_validate_docs() {
 }
 
 /// A measured command that fails says how, with its own output, rather
-/// than a raw wait status (TSK-1068).
+/// than a raw wait status (TSK-1068): the measured run's status, then the
+/// rerun's status and output, each named.
 #[test]
-#[should_panic(expected = "is not a git command")]
 fn a_failed_measured_command_shows_its_output() {
     let dir = tempfile::tempdir().unwrap();
-    measure(
-        dir.path(),
-        "git",
-        &["no-such-command"],
-        &dir.path().join("trace.json"),
+    let panic = std::panic::catch_unwind(|| {
+        measure(
+            dir.path(),
+            "git",
+            &["no-such-command"],
+            &dir.path().join("trace.json"),
+        );
+    })
+    .expect_err("a failed command panics");
+    let message = panic.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(
+        message.contains("failed with exit code 1; a rerun to show why ended with exit status: 1")
+            && message.contains("is not a git command"),
+        "{message}"
     );
+}
+
+/// The measured run's own status is what a failure reports, whether the
+/// process exited or was killed.
+#[test]
+fn a_wait_status_names_its_exit_code_or_signal() {
+    // The encodings wait4 returns on Linux and macOS: the exit code in the
+    // second byte; a terminating signal in the low seven bits.
+    assert_eq!(wait_status(1 << 8), "exit code 1");
+    assert_eq!(wait_status(0), "exit code 0");
+    assert_eq!(wait_status(libc::SIGKILL), "signal 9");
 }
 
 /// The budgets a run is held to, from the recorded baseline: no more git
