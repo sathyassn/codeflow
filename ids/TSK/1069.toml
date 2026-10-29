@@ -1,0 +1,11 @@
+id = "TSK-1069"
+uid = "9f6d6de5-6af8-4630-8d59-9adbc677f265"
+kind = "TSK"
+title = "The dependency audit passes again after the zlib binding advisory"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T14:48:00Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
