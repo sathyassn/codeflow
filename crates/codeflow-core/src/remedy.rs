@@ -301,6 +301,11 @@ catalog! {
     /// range (SPC-013 R-52, TSK-248): evidence, not a refusal.
     LINE_ADOPTION_OUTSIDE_RANGE = Step::Codeflow("codeflow ci"),
         "nothing to change: the entry adopts nothing in this range, and `codeflow ci` still refuses any direct commit in it that no entry adopts; a human reviewer confirms the entry names a commit that landed earlier, and a planning pull request that removes it from `line_adoptions` in {epic} ends this note";
+    /// An `integration/` head judged without a pull request body that fails
+    /// the epic-line proof, so its completions bind at the range head with
+    /// frozen criteria (TSK-433 AC-7).
+    UNVERIFIED_LINE_FROZEN = Step::Codeflow("codeflow ci"),
+        "land work on the line only by classified pull requests, and adopt each direct commit with a `line_adoptions` entry in its epic that a human reviewer approves in a planning pull request that lands on the line, so the line passes the epic-line proof; then rerun `codeflow ci`";
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";
