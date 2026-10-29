@@ -514,13 +514,14 @@ const GIT_OBJECT_SUBCOMMANDS: &[&str] = &[
 ];
 
 /// Options of those subcommands whose separate value is text, not an object.
+/// The pickaxe regex option is not listed, so its separate value is still
+/// read as an operand (fail closed; `--grep=` or an attached value avoids it).
 const GIT_VALUE_OPTIONS: &[&str] = &[
     "-m",
     "-F",
     "-e",
     "-f",
     "-S",
-    "-G",
     "--grep",
     "--author",
     "--committer",
