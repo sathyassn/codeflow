@@ -1,0 +1,11 @@
+id = "TSK-1078"
+uid = "854a2cb7-6b8d-40d4-a2c3-321cda01bb0d"
+kind = "TSK"
+title = "Pre-commit scans run at the landed policy level"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T22:05:20Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
