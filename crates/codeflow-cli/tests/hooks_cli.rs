@@ -42,6 +42,10 @@ impl Drop for RestorePermissions {
     }
 }
 
+#[allow(dead_code)]
+#[path = "support/drain_pipe.rs"]
+mod drain_pipe;
+
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -10677,20 +10681,21 @@ fn a_guard_stalled_on_a_fifo_include_refuses_at_its_deadline() {
             .args(["hook", guard, "--contract", "3"])
             .current_dir(&repo)
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
+        let stderr = drain_pipe::drain_pipe(child.stderr.take());
         child
             .stdin
             .take()
             .unwrap()
             .write_all(guard_payload(command, &repo).as_bytes())
             .unwrap();
-        children.push((guard, child));
+        children.push((guard, child, stderr));
     }
     let limit = Duration::from_secs(GUARD_HOOK_TIMEOUT_SECS);
-    for (guard, mut child) in children {
+    for (guard, mut child, stderr) in children {
         while child.try_wait().unwrap().is_none() {
             if started.elapsed() > limit {
                 child.kill().unwrap();
@@ -10699,9 +10704,9 @@ fn a_guard_stalled_on_a_fifo_include_refuses_at_its_deadline() {
             std::thread::sleep(Duration::from_millis(100));
         }
         let took = started.elapsed();
-        let out = child.wait_with_output().unwrap();
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(2), "{guard}: {stderr}");
+        let status = child.wait().unwrap();
+        let stderr = String::from_utf8_lossy(&stderr.join().unwrap()).into_owned();
+        assert_eq!(status.code(), Some(2), "{guard}: {stderr}");
         assert!(
             stderr.contains(&format!(
                 "codeflow {guard}: error: BLOCKED: the guard reached no decision within {GUARD_DEADLINE_SECS} seconds"
