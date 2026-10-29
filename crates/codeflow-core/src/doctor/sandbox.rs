@@ -171,7 +171,8 @@ fn state_root(host: &Host, home: &Path, temporary: &[PathBuf]) -> Result<Option<
             }
         } else if let Some(rest) = entry.strip_prefix("//") {
             Path::new("/").join(rest)
-        } else if entry.starts_with('/') {
+        } else if entry.starts_with('/') || Path::new(&entry).is_absolute() {
+            // A Windows drive path is absolute there too.
             PathBuf::from(&entry)
         } else {
             return Err(format!(
