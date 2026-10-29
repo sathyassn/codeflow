@@ -68,13 +68,13 @@ dated evidence.
 
 ### The exec guard's text rule
 
-The exec guard reads the harness configuration of the call's session and repository before it judges a shell call (ADR-0088):
+The exec guard applies one of two text rules to each shell call (ADR-0088):
 
-- **Baseline:** the line's rule. It applies only when the guard attests that configuration: the payload identifies one harness, every layer that harness reads is read, and each layer's containment settings equal the shipped preset or a narrower form the guard lists (more denies, fewer grants). The shipped presets on macOS and Linux are attested. That is a reading of files, not proof that a sandbox contains the call.
-- **Tightened:** adds a strict rule that judges every word after a program the guard cannot read through, with no program exempt by name. It applies to anything not attested (unreadable, unknown, ambiguous or customised), on native Windows under Claude Code or Grok Build, on a call marked `dangerouslyDisableSandbox`, and when the policy of the call's repository or of the session's project sets `security.text_guard: strict` or cannot be read. It refuses 42 lines of the 49-line everyday sample where the baseline refuses 2.
-- **What each harness needs for the baseline:** Claude Code, the shipped preset in every settings layer, or a narrower form, with the session project named; Codex, the project trusted in the user configuration and the shipped containment values (`approval_policy = "never"`, a shipped `default_permissions` profile, the network proxy and hooks on); Grok Build, `GROK_SANDBOX=cf-guard` (or `cf-guard-worktree`) or `[sandbox] profile` in the user configuration, since a `--sandbox` launch flag is not visible to the guard.
+- **Strict**, the default: judges every word after a program the guard cannot read through, with no program exempt by name. It applies to every call unless the operator chose relaxed. It refuses 42 lines of the 49-line everyday sample where relaxed refuses 2.
+- **Relaxed:** the previous rule, by the operator's choice. It applies when `security.text_guard` is `relaxed` in every policy the hook reads at the protected remote-tracking refs: the call's repository (its default branch and any declared line, where `strict` wins) and, for a Claude Code call, the session's project. A working copy, a branch and a repository without a remote stay strict, so the setting takes effect once it lands on every one of those refs. The guard verifies no sandbox under relaxed.
+- **Always strict:** a call marked `dangerouslyDisableSandbox`, and every call on native Windows.
 
-Neither outcome allows what the line refuses, except a line made only of bare `cd`, `pushd` and `popd` builtins, which the baseline allows and the strict rule refuses (issue 342). `codeflow doctor --check sandbox` prints one line per harness with each reason and what to change; to clear the strict rule, make each change or accept the strict rule on that host. Native Windows under Claude Code has no remedy. Launch flags, server-managed settings that are not cached on disk and an unsandboxed retry the harness does not mark cannot be read, so those calls can get the baseline today; TSK-1052 fails closed there for a command that runs code after a same-line write.
+Neither rule allows what the previous rule refused, except a line made only of bare `cd`, `pushd` and `popd` builtins, which relaxed allows and strict refuses (issue 342). `codeflow doctor --check sandbox` prints the rule in force and, for relaxed, the ref it was read from.
 
 The test runner's per-target `shell` is `auto` by default (`sh` on
 macOS/Linux/WSL2, `cmd.exe` on native Windows). This keeps generated `&&`
