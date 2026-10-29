@@ -49,8 +49,15 @@ pub fn is_parseable(version: &str) -> bool {
 
 /// A version the strict parser rejects. Two versions with one of these never
 /// compare, so no caller can fall back to a string order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Unparseable(pub String);
+
+impl std::fmt::Debug for Unparseable {
+    /// The value is left out, as in `Display` (TSK-1029).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Unparseable(<not shown>)")
+    }
+}
 
 impl std::fmt::Display for Unparseable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

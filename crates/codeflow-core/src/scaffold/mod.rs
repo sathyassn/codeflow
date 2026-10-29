@@ -472,4 +472,27 @@ mod parse_error_tests {
             assert!(debug.contains("headings: 1"), "{debug}");
         }
     }
+
+    /// TSK-1029 review: the other public report and error types on the
+    /// update path keep project text out of `Debug` too.
+    #[test]
+    fn update_report_and_error_types_never_show_project_text_in_debug() {
+        use super::pr_template::Diagnosis;
+        let unparseable = super::version::Unparseable(SECRET.into());
+        let unreadable = crate::registry::RootUnreadable {
+            path: "proj/.codeflow".into(),
+            error: std::io::Error::other(format!("custom {SECRET}")),
+        };
+        let diagnosis = Diagnosis::Diagnosed {
+            mapping: [("Summary".to_string(), format!("## {SECRET}"))].into(),
+            unmatched: vec![SECRET.into()],
+        };
+        for debug in [
+            format!("{unparseable:?}"),
+            format!("{unreadable:?}"),
+            format!("{diagnosis:?}"),
+        ] {
+            assert!(!debug.contains(SECRET), "{debug}");
+        }
+    }
 }

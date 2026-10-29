@@ -317,7 +317,7 @@ pub fn automation_notes(root: &Path) -> Vec<Shown> {
 }
 
 /// What [`diagnose`] did.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Diagnosis {
     /// The template carries every required heading; nothing recorded.
     Satisfied,
@@ -329,6 +329,22 @@ pub enum Diagnosis {
         /// Required headings with no counterpart in the template.
         unmatched: Vec<String>,
     },
+}
+
+impl std::fmt::Debug for Diagnosis {
+    /// Counts in place of the mapping and the unmatched headings, which name
+    /// the template's own headings (TSK-1029).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Satisfied => f.write_str("Satisfied"),
+            Self::Recorded(state) => f.debug_tuple("Recorded").field(state).finish(),
+            Self::Diagnosed { mapping, unmatched } => f
+                .debug_struct("Diagnosed")
+                .field("mapping", &mapping.len())
+                .field("unmatched", &unmatched.len())
+                .finish(),
+        }
+    }
 }
 
 /// Diagnose a kept template against the policy's required sections and

@@ -90,12 +90,22 @@ pub fn qualified_bindings_path(home: &Path) -> PathBuf {
 
 /// A candidate project root whose `CodeFlow` state could not be inspected:
 /// the file read and the error, so a caller can name what to repair.
-#[derive(Debug)]
 pub struct RootUnreadable {
     /// The `.codeflow` file whose presence could not be established.
     pub path: PathBuf,
     /// The metadata error.
     pub error: std::io::Error,
+}
+
+impl std::fmt::Debug for RootUnreadable {
+    /// The path and the error's category: a custom I/O error's message can
+    /// hold any text (TSK-1029).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RootUnreadable")
+            .field("path", &self.path)
+            .field("error", &self.error.kind())
+            .finish()
+    }
 }
 
 impl std::fmt::Display for RootUnreadable {

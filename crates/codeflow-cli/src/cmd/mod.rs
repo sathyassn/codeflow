@@ -238,7 +238,8 @@ fn operation_of(plane: &str) -> &'static str {
 /// --pin` take (TSK-1029): what they print is a `Shown`, so the type, not
 /// the call site, keeps a project's text out. The scan test
 /// `update_display_boundary` checks that no other print reaches those
-/// paths.
+/// paths. The crate's own `println!` family applies the terminal sink rule
+/// (`display_print`), so a control character in a path prints escaped.
 pub fn say(line: &Shown) {
     println!("{line}");
 }
@@ -273,25 +274,27 @@ pub fn touch_registry_best_effort() {
     let root = match registry::find_repo_root_checked(&cwd) {
         Ok(root) => root,
         Err(unreadable) => {
-            warn(&shown!(
-                "codeflow: warning: registry touch skipped: cannot inspect {} ({})\n  clear it: \
-                 repair {} or its parent directories, or remove it where that directory is no \
-                 CodeFlow project; the next codeflow command then records the project in the \
-                 per-user registry",
-                Shown::path(&unreadable.path),
-                Shown::io(&unreadable.error),
-                Shown::path(&unreadable.path)
+            warn(&codeflow_core::remedy::shown_line(
+                "codeflow",
+                "warning",
+                &shown!(
+                    "registry touch skipped: cannot inspect {} ({})",
+                    Shown::path(&unreadable.path),
+                    Shown::io(&unreadable.error)
+                ),
+                &codeflow_core::remedy::REGISTRY_ROOT_UNREADABLE.shown_for(&unreadable.path),
             ));
             return;
         }
     };
     if let Some(root) = root {
         if let Err(e) = registry::touch_registry(&home, &root) {
-            warn(&shown!(
-                "codeflow: warning: registry touch failed: {}\n  clear it: repair or delete {}, \
-                 the per-user project registry; the next codeflow command writes it again",
-                e,
-                Shown::path(registry::registry_path(&home))
+            warn(&codeflow_core::remedy::shown_line(
+                "codeflow",
+                "warning",
+                &shown!("registry touch failed: {}", e),
+                &codeflow_core::remedy::REGISTRY_UNWRITTEN
+                    .shown_for(&registry::registry_path(&home)),
             ));
         }
     }

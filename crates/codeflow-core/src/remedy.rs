@@ -75,6 +75,51 @@ impl Clearing {
         );
         Remedy(text)
     }
+
+    /// The remedy with each `{path}` filled by `path`, as [`Shown`] text,
+    /// for a warning inside the display boundary of `codeflow update`
+    /// (TSK-1029).
+    ///
+    /// [`Shown`]: crate::scaffold::Shown
+    #[must_use]
+    pub fn shown_for(&'static self, path: &std::path::Path) -> crate::scaffold::Shown {
+        use crate::scaffold::Shown;
+        let mut text = Shown::default();
+        for (index, piece) in self.text.split("{path}").enumerate() {
+            if index > 0 {
+                text.push(&Shown::path(path));
+            }
+            text.push(&Shown::fixed(piece));
+        }
+        debug_assert!(
+            !text.contains('{'),
+            "{} left a placeholder: {text}",
+            self.name
+        );
+        text
+    }
+}
+
+/// A warning or note in the form [`Finding::line`] writes, built from
+/// [`Shown`] text: what was found, then the catalogued step that clears it
+/// (TSK-1029).
+///
+/// [`Shown`]: crate::scaffold::Shown
+#[must_use]
+pub fn shown_line(
+    plane: &'static str,
+    kind: &'static str,
+    text: &crate::scaffold::Shown,
+    remedy: &crate::scaffold::Shown,
+) -> crate::scaffold::Shown {
+    use crate::scaffold::Shown;
+    crate::shown!(
+        "{}: {}: {}\n  clear it: {}",
+        Shown::fixed(plane),
+        Shown::fixed(kind),
+        text,
+        remedy
+    )
 }
 
 /// A rendered remedy, made only from a [`Clearing`], or from the sanctioned

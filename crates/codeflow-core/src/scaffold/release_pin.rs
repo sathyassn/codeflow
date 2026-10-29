@@ -55,7 +55,7 @@ pub const TABLE: &str = "scaffold_sha256";
 pub const DEFAULT_RELEASE_URL: &str = "https://github.com/sathyassn/codeflow/releases/download";
 
 /// What `codeflow update --pin` wrote.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PinReport {
     /// The version pinned before, if any.
     pub previous: Option<String>,
@@ -102,6 +102,14 @@ impl PinReport {
     }
 }
 
+impl fmt::Debug for PinReport {
+    /// The same text as [`PinReport::shown`]: a derived form would print
+    /// both versions with any suffix the project wrote (TSK-1029).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PinReport({})", self.shown())
+    }
+}
+
 impl fmt::Display for PinReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.shown())
@@ -109,7 +117,7 @@ impl fmt::Display for PinReport {
 }
 
 /// The digest table a project state pins, as read from its text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum PinnedDigests {
     /// No `[scaffold_sha256]` table.
     Absent,
@@ -123,6 +131,32 @@ pub enum PinnedDigests {
     /// A table the installers refuse to read, with the reason: declared
     /// twice, a key listed twice, or written in a form they do not read.
     Unreadable(Shown),
+}
+
+impl fmt::Debug for PinnedDigests {
+    /// The table's `version` as [`Shown::version`] shows it: a derived form
+    /// would print any suffix the project wrote (TSK-1029).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Absent => f.write_str("Absent"),
+            Self::Table {
+                version,
+                listed,
+                missing,
+            } => f
+                .debug_struct("Table")
+                .field(
+                    "version",
+                    &version
+                        .as_deref()
+                        .map(|version| Shown::version(version).into_string()),
+                )
+                .field("listed", listed)
+                .field("missing", missing)
+                .finish(),
+            Self::Unreadable(reason) => f.debug_tuple("Unreadable").field(reason).finish(),
+        }
+    }
 }
 
 /// Why the installers refuse a table: it is declared twice.
@@ -971,5 +1005,33 @@ mod tests {
                 missing: vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
             }
         );
+    }
+
+    /// TSK-1029 review: a version suffix the project wrote shows in neither
+    /// the pin report's text nor its `Debug` form, for the version before or
+    /// after, nor in the read table's `Debug`.
+    #[test]
+    fn private_version_suffixes_stay_out_of_debug() {
+        let report = PinReport {
+            previous: Some("1.0.0+private-label".into()),
+            version: "1.1.0-private-pre".into(),
+            digests: vec![("aarch64-apple-darwin", Shown::sha256_of(b"archive"))],
+        };
+        let table = PinnedDigests::Table {
+            version: Some("1.0.0+private-label".into()),
+            listed: vec!["aarch64-apple-darwin"],
+            missing: Vec::new(),
+        };
+        for text in [
+            report.to_string(),
+            format!("{report:?}"),
+            format!("{table:?}"),
+        ] {
+            assert!(!text.contains("private"), "{text}");
+            assert!(
+                text.contains("1.0.0 (with a suffix)") || text.contains("1.1.0"),
+                "{text}"
+            );
+        }
     }
 }
