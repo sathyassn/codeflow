@@ -46,7 +46,7 @@ fn hook_files(root: &Path) -> Result<Vec<(PathBuf, Format)>, String> {
         files.push((root.join(".claude").join(name), Format::Claude));
     }
     let grok = root.join(".grok/hooks");
-    if grok.try_exists().map_err(|error| {
+    if !super::input_absent(&grok).map_err(|error| {
         format!(
             "cannot inspect {}: {error}",
             crate::git::display_path(&grok)
@@ -72,7 +72,7 @@ fn hook_files(root: &Path) -> Result<Vec<(PathBuf, Format)>, String> {
     files.push((root.join(".codex/hooks.json"), Format::Codex));
     let mut present = Vec::new();
     for (path, format) in files {
-        if path.try_exists().map_err(|error| {
+        if !super::input_absent(&path).map_err(|error| {
             format!(
                 "cannot inspect {}: {error}",
                 crate::git::display_path(&path)
