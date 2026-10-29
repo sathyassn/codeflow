@@ -21,8 +21,33 @@ seconds over the runner's threads and its serial-group seconds, which run one
 at a time. Every test lands in exactly one partition by construction: each
 known binary belongs to one partition, or, when split, each named test to one
 partition and every other test of that binary to the partition of its rest;
-a binary the measurements do not know goes to the rest partition. A new test
+a binary the measurements do not know is placed by the rule below. A new test
 therefore runs without a data refresh, only less evenly.
+
+A binary the data does not know is a unit of its own, sized by its listed test
+count times `default_seconds` (the mean test of the measured suite) and placed
+like every other unit, so new binaries spread over the partitions by the
+least planned time. This needs the test list, which the partition jobs and
+`check` read from the build's list (`--list`); without one, such a binary
+runs in the rest partition, the one with the least planned time. A new test
+of a binary the data knows runs with that binary (or its home partition when
+split), so it is bounded by the drift check below, not placed alone.
+
+Two checks keep the plan honest (TSK-1063):
+
+- `drift` fails when more than UNMEASURED_SHARE of the listed tests are
+  outside the measurements (counted per binary against `counts`), or when
+  the plan, with the unmeasured binaries sized as above, puts a partition
+  past PLAN_MINUTES. It runs in the build job, before any partition starts.
+- `check` also fails a run when a partition's test minutes plus SETUP_MINUTES
+  pass MARGIN_MINUTES, the 80 percent bound of the 30 minute job limit, and
+  names a partition whose report is missing (a timeout or a cancellation)
+  as not run, never as failing tests. `reports` names the missing
+  partitions on their own, for the job that reads the reports.
+
+The margin: PLAN_MINUTES of planned test time plus SETUP_MINUTES of job setup
+is 14 job minutes on a typical runner, so a runner 1.7 times slower (the worst
+spread in TSK-1063's findings) still finishes at 22.4, under MARGIN_MINUTES.
 
 `check` proves it on a run: it reads the test list (the archive's, or each
 coverage shard's, which must agree) and every partition's JUnit report, and
@@ -37,8 +62,10 @@ half the time (TSK-265):
     gh run download <run id> --repo sathyassn/codeflow -p 'windows-junit-*' -D runs/<run id>
     python3 -B scripts/windows-partitions.py measure runs/<oldest> ... runs/<newest>
 
-Usage: windows-partitions.py filter <partition>
-       windows-partitions.py plan
+Usage: windows-partitions.py filter <partition> [--list <nextest list json>...]
+       windows-partitions.py plan [--list <nextest list json>...]
+       windows-partitions.py drift --list <nextest list json>...
+       windows-partitions.py reports --results <dir>
        windows-partitions.py check --list <nextest list json>... --results <dir>
        windows-partitions.py measure <junit dir>...
 """
@@ -47,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import statistics
 import sys
@@ -66,13 +94,28 @@ TEST_NAME = re.compile(r"^[A-Za-z0-9_:]+$")
 # A binary larger than this share of one partition's seconds is split by test.
 SPLIT_SHARE = 0.6
 # A split binary names its slowest tests until the rest is this share of a
-# partition or less.
-REST_SHARE = 0.25
+# partition or less. A larger share names fewer tests: the home partition's
+# filterset excludes every test named elsewhere, and Windows limits a command
+# line to 32,767 characters (at 0.25 the suite's 3000-test unit binary alone
+# needed 31,000; at this share the longest filterset is about 13,000).
+REST_SHARE = 0.75
 # A test at least this slow (median seconds) is always its own unit.
 NAMED_SECONDS = 20.0
 # Defaults for `measure`; the data file records the values in use.
 PARTITIONS = 12
 THREADS = 4
+# The job limit is 30 minutes. A partition should stay at 80 percent of it or
+# less on a typical runner, so a run whose job would pass MARGIN_MINUTES fails
+# `check` while it still finishes. SETUP_MINUTES is a job's time outside the
+# test run (checkout, shells, downloads): median 1.1 and largest 1.9 over the
+# 72 jobs of six runs. A plan keeps every partition's estimate at PLAN_MINUTES
+# or less. More than UNMEASURED_SHARE of the listed tests outside the data
+# makes the plan unreliable, so `drift` fails.
+JOB_LIMIT_MINUTES = 30
+MARGIN_MINUTES = 24
+SETUP_MINUTES = 2
+PLAN_MINUTES = 12
+UNMEASURED_SHARE = 0.10
 
 
 def serial(binary: str, test: str) -> bool:
@@ -85,7 +128,7 @@ def serial(binary: str, test: str) -> bool:
 
 def load(path: Path = DATA) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
-    for binary in [*data["binaries"], *data["split"]]:
+    for binary in [*data["binaries"], *data["split"], *data.get("counts", {})]:
         if not BINARY_ID.match(binary):
             raise SystemExit(f"windows-partitions: binary id {binary!r} cannot be written in a filterset")
     for binary, split in data["split"].items():
@@ -95,6 +138,39 @@ def load(path: Path = DATA) -> dict:
             if not TEST_NAME.match(name):
                 raise SystemExit(f"windows-partitions: test name {binary} {name!r} cannot be written in a filterset")
     return data
+
+
+def with_unmeasured(data: dict, listed: set[tuple[str, str]]) -> dict:
+    """The data plus a whole-binary unit for each listed binary it does not
+    know, sized by its test count times `default_seconds`. The planner then
+    places such a binary like any other, so new binaries spread over the
+    partitions. Data without `default_seconds` is returned as it is."""
+    default = float(data.get("default_seconds", 0))
+    if not default:
+        return data
+    known = {*data["binaries"], *data["split"]}
+    extra: dict[str, list[float]] = {}
+    for binary, name in sorted(listed):
+        if binary in known:
+            continue
+        if not BINARY_ID.match(binary):
+            raise SystemExit(f"windows-partitions: listed binary id {binary!r} cannot be written in a filterset")
+        seconds, serial_seconds = extra.setdefault(binary, [0.0, 0.0])
+        extra[binary] = [seconds + default, serial_seconds + (default if serial(binary, name) else 0.0)]
+    return {**data, "binaries": {**data["binaries"], **{b: [round(s, 3), round(t, 3)] for b, (s, t) in extra.items()}}}
+
+
+def unmeasured_tests(data: dict, listed: set[tuple[str, str]]) -> int | None:
+    """How many listed tests the measurements do not cover: per binary, the
+    listed count beyond the measured `counts`. None when the data has no
+    counts (it was written before they were recorded)."""
+    counts = data.get("counts")
+    if counts is None:
+        return None
+    listed_counts: dict[str, int] = {}
+    for binary, _ in listed:
+        listed_counts[binary] = listed_counts.get(binary, 0) + 1
+    return sum(max(0, n - counts.get(binary, 0)) for binary, n in listed_counts.items())
 
 
 class Plan:
@@ -198,11 +274,20 @@ def ran(report: Path) -> tuple[list[tuple[str, str]], float]:
     return tests, float(root.get("time") or 0)
 
 
-def check(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path]) -> list[str]:
+def missing_message(missing: list[int], planned: int) -> str:
+    """A partition without a report did not finish; none of its tests failed."""
+    return (f"no JUnit report from partition(s) {missing}: the job ended without writing its report "
+            f"(a timeout or a cancellation), so its {planned} planned tests did not finish; "
+            "none of them is known to have failed")
+
+
+def check(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path], refresh: str = REFRESH,
+          setup: float = SETUP_MINUTES) -> list[str]:
     problems = []
     missing = sorted(set(range(1, plan.count + 1)) - set(reports))
     if missing:
-        problems.append(f"no JUnit report from partition(s) {missing}")
+        planned = sum(1 for test in listed if plan.partition_of(*test) in missing)
+        problems.append(missing_message(missing, planned))
     extra = sorted(set(reports) - set(range(1, plan.count + 1)))
     if extra:
         problems.append(f"JUnit reports from partition(s) {extra}, outside 1 to {plan.count}")
@@ -215,7 +300,9 @@ def check(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path]) ->
     for test in sorted(listed):
         found = where.get(test, [])
         if not found:
-            problems.append(f"{test[0]} {test[1]} ran in no partition")
+            # A missing partition is named once above, not once per test.
+            if plan.partition_of(*test) not in missing:
+                problems.append(f"{test[0]} {test[1]} ran in no partition")
         elif len(found) > 1:
             problems.append(f"{test[0]} {test[1]} ran in partitions {found}")
         elif found[0] != plan.partition_of(*test):
@@ -226,10 +313,50 @@ def check(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path]) ->
     print(f"windows-partitions: {len(listed)} listed tests, {sum(counts.values())} ran; per partition {counts}")
     if times:
         mean = sum(times.values()) / len(times)
-        shown = ", ".join(f"{p}: {seconds / 60:.1f}" for p, seconds in sorted(times.items()))
-        print(f"windows-partitions: test minutes per partition {{{shown}}}; "
+        shown = ", ".join(f"{p}: {seconds / 60:.1f} of {plan.estimates[p - 1] / 60:.1f}"
+                          for p, seconds in sorted(times.items()) if 1 <= p <= plan.count)
+        print(f"windows-partitions: test minutes per partition, measured of planned {{{shown}}}; "
               f"mean {mean / 60:.1f}, longest {max(times.values()) / mean:.2f} of the mean")
+    for partition, seconds in sorted(times.items()):
+        job = seconds / 60 + setup
+        if job > MARGIN_MINUTES:
+            problems.append(f"partition {partition} took {seconds / 60:.1f} test minutes, about {job:.1f} job minutes "
+                            f"with setup, past the {MARGIN_MINUTES} minute margin of the {JOB_LIMIT_MINUTES} minute job "
+                            f"limit; the plan's data has drifted from the suite: refresh it with `{refresh}` "
+                            "on a few recent green runs (see the header of this script)")
     return problems
+
+
+def drift(data: dict, listed: set[tuple[str, str]], refresh: str = REFRESH,
+          plan_minutes: float = PLAN_MINUTES, spread: bool = True, setup: float = SETUP_MINUTES) -> list[str]:
+    """Problems found before any partition runs: the data no longer covers the
+    suite, or the plan it gives passes the planned-minutes margin."""
+    problems = []
+    unmeasured = unmeasured_tests(data, listed)
+    if unmeasured is None:
+        problems.append("the data records no test counts, so its coverage of the suite cannot be read: "
+                        f"refresh it with `{refresh}`")
+    else:
+        share = unmeasured / max(1, len(listed))
+        print(f"windows-partitions: {unmeasured} of {len(listed)} listed tests are outside the measurements "
+              f"({share * 100:.1f} percent; at most {UNMEASURED_SHARE * 100:.0f} percent)")
+        if share > UNMEASURED_SHARE:
+            problems.append(f"{unmeasured} of {len(listed)} listed tests ({share * 100:.1f} percent) are outside the "
+                            f"measurements, more than {UNMEASURED_SHARE * 100:.0f} percent: refresh the data with "
+                            f"`{refresh}` on a few recent green runs (see the header of this script)")
+    plan = Plan(with_unmeasured(data, listed) if spread else data)
+    longest = max(plan.estimates) / 60
+    print(f"windows-partitions: planned test minutes per partition, longest {longest:.1f} "
+          f"(at most {plan_minutes:g}); setup adds up to {setup:g} job minutes, against the {MARGIN_MINUTES} minute margin")
+    if longest > plan_minutes:
+        problems.append(f"the plan puts a partition at {longest:.1f} test minutes, past {plan_minutes:g}: "
+                        f"refresh the data with `{refresh}`, or raise the partition count when the suite itself grew")
+    return problems
+
+
+def reports_missing(results: Path, count: int, prefix: str = RESULTS) -> list[int]:
+    """The partitions (1 to count) with no JUnit report under the results."""
+    return sorted(set(range(1, count + 1)) - set(junit_reports(results, prefix)))
 
 
 def measure(directories: list[Path], partitions: int, threads: int, source: str = SOURCE,
@@ -286,6 +413,10 @@ def measure(directories: list[Path], partitions: int, threads: int, source: str 
                    + f"; regenerate with `{refresh}`",
         "partitions": partitions,
         "threads": threads,
+        # The mean test, which sizes a binary the data does not know.
+        "default_seconds": round(sum(seconds.values()) / max(1, len(seconds)), 3),
+        # Tests measured per binary, which `drift` compares with the list.
+        "counts": {binary: len(tests) for binary, tests in sorted(by_binary.items())},
         "binaries": whole,
         "split": split,
     }
@@ -302,12 +433,22 @@ def listed_once(paths: list[Path]) -> set[tuple[str, str]]:
 
 
 def main(data_path: Path = DATA, prefix: str = RESULTS, source: str = SOURCE, refresh: str = REFRESH,
-         description: str = __doc__) -> int:
+         description: str = __doc__, setup: float = SETUP_MINUTES, plan_minutes: float = PLAN_MINUTES,
+         spread: bool = True) -> int:
+    """`spread` places binaries the data does not know from the test list. A
+    caller whose jobs cannot read the list before they run (the coverage
+    shards) leaves it off, and then every command uses the rest-partition rule."""
     parser = argparse.ArgumentParser(description=description.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     one = commands.add_parser("filter", help="print one partition's nextest filterset")
     one.add_argument("partition", type=int)
-    commands.add_parser("plan", help="print each partition's estimated minutes")
+    one.add_argument("--list", type=Path, nargs="+", help="the build's test list, to place unmeasured binaries")
+    show = commands.add_parser("plan", help="print each partition's estimated minutes; fails past the plan margin")
+    show.add_argument("--list", type=Path, nargs="+")
+    gap = commands.add_parser("drift", help="fail when the data no longer covers the suite or the plan is too long")
+    gap.add_argument("--list", type=Path, nargs="+", required=True)
+    gone = commands.add_parser("reports", help="name the partitions whose JUnit report is missing")
+    gone.add_argument("--results", type=Path, required=True)
     proof = commands.add_parser("check", help="prove every listed test ran in exactly its one partition")
     proof.add_argument("--list", type=Path, nargs="+", required=True)
     proof.add_argument("--results", type=Path, required=True)
@@ -328,7 +469,9 @@ def main(data_path: Path = DATA, prefix: str = RESULTS, source: str = SOURCE, re
         data_path.write_text(text + "\n")
         print(f"windows-partitions: wrote {data_path.relative_to(ROOT)}")
         return 0
-    plan = Plan(load(data_path))
+    base = load(data_path)
+    listed = listed_once(args.list) if getattr(args, "list", None) else None
+    plan = Plan(with_unmeasured(base, listed) if listed is not None and spread else base)
     if args.command == "filter":
         # No line ending: Windows Python would end the line with CR, which a
         # shell's command substitution keeps.
@@ -338,8 +481,29 @@ def main(data_path: Path = DATA, prefix: str = RESULTS, source: str = SOURCE, re
         for index, estimate in enumerate(plan.estimates):
             print(f"partition {index + 1}: about {estimate / 60:.1f} minutes "
                   f"({plan.seconds[index] / 60:.1f} test minutes, {plan.serial[index] / 60:.1f} serial)")
+        if max(plan.estimates) / 60 > plan_minutes:
+            print(f"windows-partitions: FAILED a partition is planned past {plan_minutes:g} minutes; "
+                  f"refresh the data with `{refresh}`")
+            return 1
         return 0
-    problems = check(plan, listed_once(args.list), junit_reports(args.results, prefix))
+    if args.command == "drift":
+        problems = drift(base, listed, refresh, plan_minutes, spread, setup)
+    elif args.command == "reports":
+        missing = reports_missing(args.results, plan.count, prefix)
+        github_output = os.environ.get("GITHUB_OUTPUT")
+        if github_output:
+            with open(github_output, "a", encoding="utf-8") as handle:
+                handle.write("missing=" + " ".join(map(str, missing)) + "\n")
+        if missing:
+            line = (f"partition(s) {' '.join(map(str, missing))} ended without a JUnit report (a timeout or a "
+                    "cancellation); their tests did not finish, and none is known to have failed")
+            print(f"::error::windows tests: {line}")
+            print(f"windows-partitions: FAILED {line}")
+            return 1
+        print(f"windows-partitions: all {plan.count} partitions wrote a report")
+        return 0
+    else:
+        problems = check(plan, listed, junit_reports(args.results, prefix), refresh, setup)
     for problem in problems:
         print(f"windows-partitions: FAILED {problem}")
     return 1 if problems else 0

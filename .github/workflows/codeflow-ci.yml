@@ -397,9 +397,10 @@ jobs:
   # results and checks that each listed test ran in exactly its one shard.
   # Locally, `codeflow test` still runs the one rust-coverage command.
   # Both shards build the same thing, so only the first saves the cache.
-  # Timeouts: a shard is planned at about 5 minutes of tests after a build of
-  # 1 to 2 minutes, and gets the Windows partitions' 30; the report job only
-  # reads files.
+  # Timeouts: a shard is planned at about 11 minutes of tests (14 at most)
+  # after a build and setup of about 4 to 6 minutes, and gets the Windows
+  # partitions' 30; the report job only reads files and fails a shard past
+  # the 24 minute margin (TSK-1063).
   gates-coverage:
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow gates (coverage ${{ matrix.shard }} of 2)
@@ -582,9 +583,16 @@ jobs:
   # that each listed test ran in exactly its one partition. The `windows`
   # verdict below is the one check branch rules and .release/config.json
   # read. Timeouts: the build compiled in about 3 minutes inside the old
-  # partitions (p95 about 4) and gets room for a cold dependency build; a
-  # partition is planned at about 5.5 minutes of tests, a fifth of the old
-  # 27.2 minute peak; the release journey took 4.3 to 4.7 minutes.
+  # partitions (p95 about 4) and gets room for a cold dependency build; the
+  # release journey took 4.3 to 4.7 minutes. A partition is planned at 12
+  # minutes of tests or less (about 9 today), plus up to 2 minutes of job
+  # setup, so a typical job takes about 11 minutes and a runner 1.7 times
+  # slower, the worst read, stays under 24: 80 percent of the 30 minute limit
+  # (TSK-1063). The build checks before any partition starts that the data
+  # still covers the suite and the plan is inside that margin
+  # (`windows-partitions.py drift`); the journey job fails a run whose
+  # partition took more than the margin, and names a partition that ended
+  # without its report (a timeout or a cancellation) as not finished.
   windows-build:
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows test build
@@ -623,6 +631,13 @@ jobs:
         run: |
           cargo nextest list --archive-file target/windows-tests.tar.zst --workspace-remap . --profile codeflow --message-format json > target/windows-tests.json
           printf '%s\n' "$GITHUB_WORKSPACE" > target/windows-workspace.txt
+
+      # Fails before any partition starts when the measurements no longer
+      # cover the suite, or the plan for this exact list puts a partition
+      # past the margin; the message names the refresh command.
+      - name: The partition plan still fits the suite
+        shell: bash
+        run: python -B scripts/windows-partitions.py drift --list target/windows-tests.json
 
       - name: Keep the archive for the partitions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -701,7 +716,7 @@ jobs:
       # compiled in, and the report at target/nextest/codeflow/junit.xml.
       - name: cargo nextest run (one partition, from the archive)
         shell: bash
-        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile codeflow -E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }})"
+        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile codeflow -E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }} --list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"
 
       - name: Keep this partition's results for the journey gate
         if: always()
@@ -782,6 +797,8 @@ jobs:
     needs: windows-tests
     runs-on: windows-latest
     timeout-minutes: 10
+    outputs:
+      missing: ${{ steps.reports.outputs.missing }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
@@ -803,14 +820,23 @@ jobs:
           name: windows-test-list
           path: target/nextest/list
 
+      # A partition that timed out or was cancelled wrote no report. Name it
+      # here, so the steps below do not read the gap as renamed journeys or
+      # failing tests; they run only when every report exists.
+      - name: Every partition wrote its report
+        id: reports
+        shell: bash
+        run: python -B scripts/windows-partitions.py reports --results target/nextest/partitions
+
       - name: journey gate
         shell: bash
         run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/partitions --skip-benchmark --part results
 
       # Fails when a listed test ran in no partition, in two, or outside the
-      # partition the plan gives it, and prints each partition's test time.
+      # partition the plan gives it, or a partition's time passes the margin,
+      # and prints each partition's test time against its plan.
       - name: Every test ran in exactly one partition
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.reports.outcome == 'success' }}
         shell: bash
         run: python scripts/test_windows_partitions.py && python scripts/windows-partitions.py check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
 
@@ -835,6 +861,7 @@ jobs:
           TESTS: ${{ needs.windows-tests.result }}
           JOURNEYS: ${{ needs.windows-journeys.result }}
           RELEASE: ${{ needs.windows-release-journey.result }}
+          MISSING: ${{ needs.windows-journeys.outputs.missing }}
         run: |
           if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \
             && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
@@ -846,6 +873,9 @@ jobs:
             exit 1
           fi
           if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
+            if [ -n "$MISSING" ]; then
+              echo "::error::Windows test partition(s) ${MISSING} ended without a report (a timeout or a cancellation); their tests did not finish, none is known to have failed"
+            fi
             echo "::error::Windows concluded checks=${CHECKS} build=${BUILD} tests=${TESTS} journeys=${JOURNEYS} release journey=${RELEASE}; see the windows jobs"
             exit 1
           fi
