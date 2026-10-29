@@ -617,6 +617,41 @@ fn a_failed_measured_command_shows_its_output() {
     );
 }
 
+/// When the measured run and the rerun end differently, the failure reported
+/// first is the measured run's, and the output shown is the rerun's under
+/// the rerun's own status: here the measured run exits 3 and the rerun
+/// succeeds.
+#[test]
+fn a_failure_reports_the_measured_status_not_the_rerun_s() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = "if [ -e ran ]; then echo second run; exit 0; fi; : >ran; echo first run; exit 3";
+    let panic = std::panic::catch_unwind(|| {
+        measure(
+            dir.path(),
+            "sh",
+            &["-c", script],
+            &dir.path().join("trace.json"),
+        );
+    })
+    .expect_err("a failed command panics");
+    let message = panic.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(
+        message.starts_with(&format!(
+            "sh [\"-c\", {script:?}] failed with exit code 3; a rerun to show why ended with exit status: 0"
+        )),
+        "{message}"
+    );
+    // The arguments printed above hold the script text, so only the output
+    // section after them is compared.
+    assert_eq!(
+        message
+            .split_once(" output lines are:\n")
+            .map(|(_, output)| output),
+        Some("second run"),
+        "{message}"
+    );
+}
+
 /// The measured run's own status is what a failure reports, whether the
 /// process exited or was killed.
 #[test]
