@@ -116,6 +116,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
     ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),
     ("LINE_ADOPTION_OUTSIDE_RANGE", Excluded(HumanAuthority)),
+    ("UNVERIFIED_LINE_FROZEN", Excluded(HumanAuthority)),
     ("CRITERIA_DELTA", Excluded(HumanAuthority)),
     ("CRITERIA_AUTHORITY", Excluded(HumanAuthority)),
     ("CRITERIA_CORRECTION", Excluded(HumanAuthority)),
