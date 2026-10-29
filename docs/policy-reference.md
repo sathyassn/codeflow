@@ -439,7 +439,9 @@ refuses because `id_rsa.rs` matches both that pattern and the `id_rsa*`
 secret rule; name the files, or use a pattern no secret name matches
 (`':(glob)src/main*.rs'`). `git ls-files | git update-index --stdin`
 refuses because the guard cannot read the list; pass the paths as
-operands.
+operands. Measured on a corpus of 120 ordinary Git commands (TSK-1002),
+these rules refuse 2 where the earlier ones refused 1; the added refusal
+is `git grep -n needle -- '*.rs'`, a pattern `id_rsa.rs` could match.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the
