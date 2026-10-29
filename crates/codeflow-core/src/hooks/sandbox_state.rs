@@ -1,36 +1,47 @@
-//! Which text rule judges a shell call (TSK-397 design D, A2).
+//! Which text rule judges a shell call (TSK-397 design D, A2), by
+//! attestation.
 //!
 //! The exec guard has two outcomes. **Baseline** is the line's rule. It
-//! applies when no tightening trigger below is found in the harness
-//! configuration this module reads; that is not a proof that the sandbox
-//! contains the call. **Tightened** adds the strict branch, which judges
-//! every word after a program the guard cannot read through. The tightened
-//! outcome keeps every baseline finding, so neither outcome allows what the
-//! baseline refuses.
+//! applies only when this module can attest the configuration the call's
+//! harness runs under: the payload identifies one harness, every
+//! configuration layer that harness reads is read, and each layer's
+//! containment settings equal the shipped preset or a narrower form listed
+//! here. **Tightened** adds the strict branch, which judges every word after
+//! a program the guard cannot read through. Anything unreadable, unknown,
+//! ambiguous, customised or unattested tightens, with a reason that names
+//! what to change. The tightened outcome keeps every baseline finding.
 //!
-//! What is read. A Claude call is judged against the project its session
-//! started in, which Claude Code exports to every hook as
-//! `CLAUDE_PROJECT_DIR`; a Claude call without it tightens. Any other call
-//! is judged against the repository of its working directory, each
-//! directory between that and the repository root that holds harness
-//! settings, and the session project when the environment names one. A
-//! linked worktree adds its main checkout, found through Git's worktree
-//! metadata; when that cannot be established the call tightens. Each
-//! project is judged on its own and the triggers are combined, so one
-//! loosened project tightens the call.
+//! An earlier revision listed loosening settings and tightened on each one.
+//! Three review rounds each found a loosening the list lacked, in formats
+//! the guard does not own, so the list is replaced by the attestation.
 //!
-//! Every unreadable, malformed or non-regular file tightens. An absent file
-//! contributes nothing, except that a call identified as Codex or Grok
-//! tightens when no configuration of that harness is present. What this
-//! module cannot read (a `--settings` file, server-managed settings, MDM
-//! policy, a Codex launch flag, and the session of a call whose harness is
-//! not identified) gets the baseline; TSK-1052 tracks failing closed there.
+//! What is attested, per harness:
 //!
-//! Harnesses are identified by a union rule: the guard reads the layers of
-//! every harness whose shape the payload does not contradict. Only a key
-//! unique to one harness excludes the others; shared keys never identify.
+//! - **Claude Code**: the session project (`CLAUDE_PROJECT_DIR`, required),
+//!   its repository root and a linked worktree's main checkout, each with
+//!   its shared and local settings; the user settings; the managed settings
+//!   file and drop-ins. In every layer the `sandbox` and `permissions`
+//!   objects may hold only the keys listed in `claude_layer`, each with
+//!   its shipped value or a narrower one; together the layers must enable a
+//!   fail-closed sandbox and carry the floor. Other top-level keys (model,
+//!   hooks, status line and the like) configure no containment and are not
+//!   judged. Managed preferences (a macOS profile) and a cached
+//!   server-managed file are not attested and tighten when present.
+//! - **Codex**: the user configuration, profile files beside it, and the
+//!   project configuration when the user configuration trusts the project.
+//!   Every top-level key must be known; containment keys must hold shipped
+//!   values; a shipped permission profile may only add denies or narrow an
+//!   access. System and managed configuration files tighten when present.
+//! - **Grok Build**: the profile selected by `GROK_SANDBOX` or the user
+//!   configuration's `[sandbox] profile` must be a shipped profile, and its
+//!   definition in the user and project profile files must equal the
+//!   shipped one or narrow it. Grok's default is no sandbox.
+//!
+//! What no file or variable shows is not read: launch flags (`--settings`,
+//! `--sandbox`, `-c`, `--profile`), server-managed settings that are not
+//! cached on disk, and unmarked unsandboxed retries. Failing closed there is
+//! tracked as TSK-1052.
 
-use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -46,7 +57,9 @@ pub struct Harnesses {
 }
 
 impl Harnesses {
-    /// Every harness: the reading for a payload that names none.
+    /// A payload that identifies no single harness. Its configuration
+    /// cannot be attested, so it tightens; every harness is read so the
+    /// reasons are complete.
     pub const ALL: Self = Self {
         claude: true,
         codex: true,
@@ -71,26 +84,27 @@ impl Harnesses {
         grok: true,
     };
 
-    /// The harnesses a payload's top-level keys do not contradict. Grok
-    /// alone sends the camelCase `toolName`; Codex sends `turn_id` and
-    /// `model` together; Claude Code sends `prompt_id` and `scratchpad_dir`
-    /// together (TSK-397 canary, Claude Code 2.1.312). A payload carrying
-    /// the unique keys of more than one harness contradicts itself and is
-    /// read against all of them.
+    /// The harness a payload's top-level keys identify: Grok alone sends
+    /// the camelCase `toolName`; Codex sends `turn_id` and `model`
+    /// together; Claude Code sends `prompt_id` and `scratchpad_dir`
+    /// together (TSK-397 canary, Claude Code 2.1.312). A payload with the
+    /// keys of none or of several is [`Self::ALL`].
     #[must_use]
     pub fn from_keys(keys: &[String]) -> Self {
         let has = |key: &str| keys.iter().any(|k| k == key);
         let grok = has("toolName");
         let codex = has("turn_id") && has("model");
         let claude = has("prompt_id") && has("scratchpad_dir");
-        if u8::from(grok) + u8::from(codex) + u8::from(claude) != 1 {
-            return Self::ALL;
+        match (claude, codex, grok) {
+            (true, false, false) => Self::CLAUDE,
+            (false, true, false) => Self::CODEX,
+            (false, false, true) => Self::GROK,
+            _ => Self::ALL,
         }
-        Self {
-            claude: !(grok || codex),
-            codex: !(grok || claude),
-            grok: !(codex || claude),
-        }
+    }
+
+    fn identified(self) -> bool {
+        self == Self::CLAUDE || self == Self::CODEX || self == Self::GROK
     }
 }
 
@@ -110,16 +124,25 @@ pub struct Host {
     pub claude_config_dir: Option<PathBuf>,
     /// `CODEX_HOME` when set.
     pub codex_home: Option<PathBuf>,
+    /// `GROK_HOME` when set.
+    pub grok_home: Option<PathBuf>,
+    /// `GROK_SANDBOX` when set: the Grok profile the environment selects.
+    pub grok_sandbox: Option<String>,
     /// Claude Code's managed settings file and its drop-in directory.
     pub managed_file: Option<PathBuf>,
     pub managed_dir: Option<PathBuf>,
+    /// Claude Code managed preference files, which this module does not
+    /// attest and which tighten when present.
+    pub claude_unattested: Vec<PathBuf>,
+    /// Codex system and managed configuration files, likewise.
+    pub codex_unattested: Vec<PathBuf>,
     /// Native Windows, where Claude Code and Grok Build have no sandbox.
     pub native_windows: bool,
 }
 
-/// The debug-build variable that moves the managed settings location, so a
-/// test is not judged by the host's own managed policy. A release build
-/// never reads it.
+/// The debug-build variable that moves the managed and system
+/// configuration locations, so a test is not judged by the host's own
+/// policy. A release build never reads it.
 pub const TEST_MANAGED_DIR: &str = "CODEFLOW_TEST_CLAUDE_MANAGED_DIR";
 
 /// The variable Claude Code exports to every hook: the directory its
@@ -142,23 +165,53 @@ impl Host {
     }
 
     fn with_session(session: Option<PathBuf>, cwd: &Path, root: &Path) -> Self {
-        let managed_base = managed_base();
-        #[cfg(debug_assertions)]
-        let managed_base = env_path(TEST_MANAGED_DIR).or(managed_base);
+        let home = crate::portable_path::user_home();
+        let test = test_managed_dir();
+        let (claude_unattested, codex_unattested) = match &test {
+            Some(dir) => (
+                vec![dir.join("com.anthropic.claudecode.plist")],
+                codex_system(&dir.join("codex")),
+            ),
+            None => (
+                claude_preferences(home.as_deref()),
+                if cfg!(unix) {
+                    codex_system(Path::new("/etc/codex"))
+                } else {
+                    Vec::new()
+                },
+            ),
+        };
+        let managed_base = test.or_else(managed_base);
         Self {
             session,
             cwd: cwd.to_path_buf(),
             root: root.to_path_buf(),
-            home: crate::portable_path::user_home(),
+            home,
             claude_config_dir: env_path("CLAUDE_CONFIG_DIR"),
             codex_home: env_path("CODEX_HOME"),
+            grok_home: env_path("GROK_HOME"),
+            grok_sandbox: grok_selection(std::env::var_os("GROK_SANDBOX")),
             managed_file: managed_base
                 .as_ref()
                 .map(|base| base.join("managed-settings.json")),
             managed_dir: managed_base.map(|base| base.join("managed-settings.d")),
+            claude_unattested,
+            codex_unattested,
             native_windows: cfg!(windows),
         }
     }
+}
+
+/// The Grok profile a `GROK_SANDBOX` value selects. An empty value counts as
+/// unset. A value that is not UTF-8 names no shipped profile, so it is kept
+/// as a selection that never matches one and the call tightens.
+#[must_use]
+pub fn grok_selection(value: Option<std::ffi::OsString>) -> Option<String> {
+    let value = value.filter(|value| !value.is_empty())?;
+    Some(match value.into_string() {
+        Ok(name) => name,
+        Err(_) => "(a value that is not UTF-8)".to_string(),
+    })
 }
 
 /// A non-empty environment value as a path; an empty one counts as unset,
@@ -182,6 +235,41 @@ fn managed_base() -> Option<PathBuf> {
     }
 }
 
+/// The test location of the managed and system configuration, in a debug
+/// build only.
+fn test_managed_dir() -> Option<PathBuf> {
+    if cfg!(debug_assertions) {
+        env_path(TEST_MANAGED_DIR)
+    } else {
+        None
+    }
+}
+
+/// Claude Code's managed preference files on macOS.
+fn claude_preferences(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if cfg!(target_os = "macos") {
+        let preferences = Path::new("/Library/Managed Preferences");
+        files.push(preferences.join("com.anthropic.claudecode.plist"));
+        if let Some(user) = home.and_then(Path::file_name) {
+            files.push(
+                preferences
+                    .join(user)
+                    .join("com.anthropic.claudecode.plist"),
+            );
+        }
+    }
+    files
+}
+
+/// Codex's system and managed configuration files in `dir`.
+fn codex_system(dir: &Path) -> Vec<PathBuf> {
+    ["config.toml", "managed_config.toml", "requirements.toml"]
+        .iter()
+        .map(|name| dir.join(name))
+        .collect()
+}
+
 /// The settings files whose presence makes a directory a project a session
 /// may have started in.
 const HARNESS_FILES: &[&str] = &[
@@ -194,12 +282,22 @@ const HARNESS_FILES: &[&str] = &[
 /// Whether `dir` holds a harness settings file. A file whose presence
 /// cannot be read counts as present, so it is read and reported.
 fn holds_settings(dir: &Path) -> bool {
-    HARNESS_FILES.iter().any(|file| {
-        !matches!(
-            crate::absence::symlink_metadata_optional(&dir.join(file)),
-            Ok(None)
-        )
-    })
+    HARNESS_FILES.iter().any(|file| present(&dir.join(file)))
+}
+
+/// Whether anything, readable or not, is at `path`.
+fn present(path: &Path) -> bool {
+    !matches!(crate::absence::symlink_metadata_optional(path), Ok(None))
+}
+
+/// The working tree root of the repository holding `dir`: `Ok(None)`
+/// outside a repository.
+fn repository_root(dir: &Path) -> Result<Option<PathBuf>, String> {
+    match git2::Repository::discover(dir) {
+        Ok(repo) => Ok(repo.workdir().map(Path::to_path_buf)),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(error.message().to_string()),
+    }
 }
 
 /// The main checkout of the linked worktree that holds `dir`: `Ok(None)`
@@ -259,8 +357,8 @@ fn main_checkout(dir: &Path) -> Result<Option<PathBuf>, String> {
     }
 }
 
-/// The project directories a call may run under, and why any could not be
-/// established.
+/// The project directories whose settings a harness may read, and why any
+/// could not be established.
 #[derive(Debug, Default)]
 struct Projects {
     dirs: Vec<PathBuf>,
@@ -274,13 +372,12 @@ impl Projects {
         }
     }
 
-    /// Add the main checkout of each linked worktree among the projects,
-    /// when it holds settings.
+    /// Add the main checkout of each linked worktree among the projects.
     fn with_main_checkouts(mut self) -> Self {
         for dir in self.dirs.clone() {
             match main_checkout(&dir) {
-                Ok(Some(main)) if holds_settings(&main) => self.push(main),
-                Ok(_) => {}
+                Ok(Some(main)) => self.push(main),
+                Ok(None) => {}
                 Err(why) => self.unresolved.push(format!(
                     "the main checkout of the worktree at `{}` cannot be established ({why})",
                     dir.display()
@@ -291,35 +388,42 @@ impl Projects {
     }
 }
 
-/// The session project, with its main checkout.
-fn session_projects(host: &Host) -> Projects {
+/// The directories whose Claude settings a session started in `session`
+/// may read: the session directory, its repository root and, for a linked
+/// worktree, the main checkout. Claude Code reads shared settings from the
+/// session directory and local settings from the repository root (or the
+/// main checkout); every candidate is read, so a file Claude Code does not
+/// read can only tighten.
+fn claude_projects(session: &Path) -> Projects {
     let mut projects = Projects::default();
-    if let Some(session) = &host.session {
-        projects.push(session.clone());
+    projects.push(session.to_path_buf());
+    match repository_root(session) {
+        Ok(Some(root)) => projects.push(root),
+        Ok(None) => {}
+        Err(why) => projects.unresolved.push(format!(
+            "the repository of the session project `{}` cannot be read ({why})",
+            session.display()
+        )),
     }
     projects.with_main_checkouts()
 }
 
-/// The call's repository root, each directory between the working
-/// directory and that root that holds settings, the session project when
-/// named, and their main checkouts.
-fn call_projects(host: &Host) -> Projects {
-    let mut projects = Projects::default();
-    if let Some(session) = &host.session {
-        projects.push(session.clone());
-    }
-    projects.push(host.root.clone());
+/// The call's repository root and each directory between the working
+/// directory and that root that holds settings, from the root down.
+fn call_dirs(host: &Host) -> Vec<PathBuf> {
+    let mut dirs = vec![host.root.clone()];
     if host.cwd.starts_with(&host.root) {
-        for dir in host.cwd.ancestors() {
-            if dir == host.root {
-                break;
-            }
-            if holds_settings(dir) {
-                projects.push(dir.to_path_buf());
-            }
-        }
+        let mut between: Vec<PathBuf> = host
+            .cwd
+            .ancestors()
+            .take_while(|dir| *dir != host.root)
+            .filter(|dir| holds_settings(dir))
+            .map(Path::to_path_buf)
+            .collect();
+        between.reverse();
+        dirs.extend(between);
     }
-    projects.with_main_checkouts()
+    dirs
 }
 
 /// Which rule judges a call.
@@ -327,13 +431,13 @@ fn call_projects(host: &Host) -> Projects {
 pub enum Outcome {
     /// The line's rule.
     Baseline,
-    /// The baseline and the strict branch, with the first trigger that
+    /// The baseline and the strict branch, with the first reason that
     /// selected it.
     Tightened(String),
 }
 
 impl Outcome {
-    /// The trigger text the strict branch's findings name, if tightened.
+    /// The reason the strict branch's findings name, if tightened.
     #[must_use]
     pub fn trigger(&self) -> Option<&str> {
         match self {
@@ -343,15 +447,13 @@ impl Outcome {
     }
 }
 
-/// Every reason the call is tightened, in a fixed order: the policy, the
-/// retry flag, then the configuration triggers. Empty means the baseline.
-/// The hook and `codeflow doctor` both decide through this function.
+/// Every reason the call is tightened, in a fixed order: the policy
+/// reasons the caller passes, the retry flag, then what the configuration
+/// does not attest. Empty means the baseline. The hook and `codeflow
+/// doctor` both decide through this function.
 #[must_use]
-pub fn reasons(host: &Host, harnesses: Harnesses, retry: bool, policy_strict: bool) -> Vec<String> {
-    let mut found = Vec::new();
-    if policy_strict {
-        found.push("the project policy sets `security.text_guard` to `strict`".to_string());
-    }
+pub fn reasons(host: &Host, harnesses: Harnesses, retry: bool, policy: &[String]) -> Vec<String> {
+    let mut found = policy.to_vec();
     if retry {
         found.push(
             "the call asks to run outside the sandbox (`dangerouslyDisableSandbox`)".to_string(),
@@ -363,49 +465,38 @@ pub fn reasons(host: &Host, harnesses: Harnesses, retry: bool, policy_strict: bo
 
 /// The outcome for one call: the first of [`reasons`], or the baseline.
 #[must_use]
-pub fn outcome(host: &Host, harnesses: Harnesses, retry: bool, policy_strict: bool) -> Outcome {
-    reasons(host, harnesses, retry, policy_strict)
+pub fn outcome(host: &Host, harnesses: Harnesses, retry: bool, policy: &[String]) -> Outcome {
+    reasons(host, harnesses, retry, policy)
         .into_iter()
         .next()
         .map_or(Outcome::Baseline, Outcome::Tightened)
 }
 
-/// Every configuration trigger that holds for a call, in a fixed order.
+/// What keeps the configuration of a call from being attested, in a fixed
+/// order. Empty means it is attested.
 #[must_use]
 pub fn triggers(host: &Host, harnesses: Harnesses) -> Vec<String> {
     let mut found = Vec::new();
+    if !harnesses.identified() {
+        found.push(
+            "the call's payload does not identify one harness (Claude Code, Codex or Grok Build), so the configuration it runs under cannot be attested"
+                .to_string(),
+        );
+    }
     if host.native_windows && (harnesses.claude || harnesses.grok) {
         found.push("native Windows has no sandbox under Claude Code or Grok Build".to_string());
     }
-    let every = call_projects(host);
     if harnesses.claude {
-        let projects = if harnesses == Harnesses::CLAUDE && host.session.is_some() {
-            session_projects(host)
-        } else {
-            if harnesses == Harnesses::CLAUDE {
-                found.push(format!(
-                    "the hook environment does not name the Claude Code session's project (`{CLAUDE_PROJECT_DIR}`), so the settings in force cannot be read"
-                ));
-            }
-            call_projects(host)
-        };
-        found.extend(projects.unresolved.iter().cloned());
-        for dir in &projects.dirs {
-            claude_triggers(host, dir, &mut found);
-        }
-    }
-    if harnesses.codex || harnesses.grok {
-        found.extend(every.unresolved.iter().cloned());
+        claude_attest(host, &mut found);
     }
     if harnesses.codex {
-        codex_triggers(host, &every.dirs, harnesses == Harnesses::CODEX, &mut found);
+        codex_attest(host, &mut found);
     }
     if harnesses.grok {
-        grok_triggers(&every.dirs, harnesses == Harnesses::GROK, &mut found);
+        grok_attest(host, &mut found);
     }
-    // One entry per trigger, though several layers may carry it.
-    let mut seen = HashSet::new();
-    found.retain(|trigger| seen.insert(trigger.clone()));
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|reason| seen.insert(reason.clone()));
     found
 }
 
@@ -470,38 +561,69 @@ fn read_text(path: &Path) -> Read<String> {
     }
 }
 
-/// Where a Claude settings layer sits in the documented precedence, lowest
-/// first. Two layers at the same rank that disagree make a value
-/// uncomputable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Rank {
-    User,
-    Project,
-    Local,
-    Managed,
-}
+// ---------------------------------------------------------------- Claude
 
+/// One Claude settings file, read.
 struct Layer {
-    rank: Rank,
     name: String,
     value: Value,
 }
 
-/// The Claude settings layers of a session started in `project`, read;
-/// each unreadable or malformed one is a trigger.
-fn claude_layers(host: &Host, project: &Path, found: &mut Vec<String>) -> Vec<Layer> {
-    let mut paths: Vec<(Rank, PathBuf)> = Vec::new();
+/// The shipped Claude presets, each as `codeflow update` writes it.
+fn shipped_claude() -> Vec<Value> {
+    [
+        include_str!("../../../../assets/base/settings/default.json"),
+        include_str!("../../../../assets/base/settings/acceptEdits.json"),
+        include_str!("../../../../assets/base/settings/bypass-sandboxed.json"),
+    ]
+    .iter()
+    .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+    .map(|mut value| {
+        actions::table().apply_to_claude_preset(&mut value);
+        value
+    })
+    .collect()
+}
+
+/// Every string a shipped preset holds at `pointer`.
+fn shipped_strings(pointer: &str) -> Vec<String> {
+    shipped_claude()
+        .iter()
+        .filter_map(|preset| preset.pointer(pointer).and_then(Value::as_array))
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
+}
+
+/// The Claude settings files a session in `host.session` may read, read;
+/// each unreadable or malformed one, and each unattested host file, is a
+/// reason in `found`.
+fn claude_layers(host: &Host, found: &mut Vec<String>) -> Vec<Layer> {
+    let mut paths: Vec<PathBuf> = Vec::new();
     let user_dir = host
         .claude_config_dir
         .clone()
         .or_else(|| host.home.as_ref().map(|home| home.join(".claude")));
-    if let Some(dir) = user_dir {
-        paths.push((Rank::User, dir.join("settings.json")));
+    if let Some(dir) = &user_dir {
+        paths.push(dir.join("settings.json"));
+        let cached = dir.join("remote-settings.json");
+        if present(&cached) {
+            found.push(format!(
+                "server-managed Claude settings are cached at `{}`; the guard does not attest them",
+                cached.display()
+            ));
+        }
     }
-    paths.push((Rank::Project, project.join(".claude/settings.json")));
-    paths.push((Rank::Local, project.join(".claude/settings.local.json")));
+    if let Some(session) = &host.session {
+        let projects = claude_projects(session);
+        found.extend(projects.unresolved);
+        for dir in projects.dirs {
+            paths.push(dir.join(".claude/settings.json"));
+            paths.push(dir.join(".claude/settings.local.json"));
+        }
+    }
     if let Some(file) = &host.managed_file {
-        paths.push((Rank::Managed, file.clone()));
+        paths.push(file.clone());
     }
     if let Some(dir) = &host.managed_dir {
         match std::fs::read_dir(dir) {
@@ -522,7 +644,7 @@ fn claude_layers(host: &Host, project: &Path, found: &mut Vec<String>) -> Vec<La
                     }
                 }
                 files.sort();
-                paths.extend(files.into_iter().map(|file| (Rank::Managed, file)));
+                paths.extend(files);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => found.push(format!(
@@ -532,15 +654,18 @@ fn claude_layers(host: &Host, project: &Path, found: &mut Vec<String>) -> Vec<La
         }
     }
     let mut layers = Vec::new();
-    for (rank, path) in paths {
+    for path in paths {
         let name = format!("`{}`", path.display());
+        if layers.iter().any(|layer: &Layer| layer.name == name) {
+            continue;
+        }
         match read_text(&path) {
             Read::Absent => {}
             Read::Unreadable(why) => {
                 found.push(format!("the Claude settings {name} cannot be read ({why})"));
             }
             Read::Parsed(text) => match serde_json::from_str::<Value>(&text) {
-                Ok(value) if value.is_object() => layers.push(Layer { rank, name, value }),
+                Ok(value) if value.is_object() => layers.push(Layer { name, value }),
                 Ok(_) | Err(_) => {
                     found.push(format!("the Claude settings {name} are not a JSON object"));
                 }
@@ -550,201 +675,340 @@ fn claude_layers(host: &Host, project: &Path, found: &mut Vec<String>) -> Vec<La
     layers
 }
 
-/// The effective value of `pointer` by precedence: the highest-ranked
-/// layer that sets it. `Err` when two layers of that rank disagree.
-fn effective<'a>(layers: &'a [Layer], pointer: &str) -> Result<Option<&'a Value>, ()> {
-    let mut best: Option<(Rank, &Value)> = None;
-    for layer in layers {
-        let Some(value) = layer.value.pointer(pointer) else {
-            continue;
-        };
-        match best {
-            Some((rank, _)) if rank > layer.rank => {}
-            Some((rank, current)) if rank == layer.rank && current != value => return Err(()),
-            _ => best = Some((layer.rank, value)),
-        }
-    }
-    Ok(best.map(|(_, value)| value))
-}
-
-/// Every string of the array at `pointer` across the layers; a value that
-/// is not an array of strings is named in `found`.
-fn merged(layers: &[Layer], pointer: &str, found: &mut Vec<String>) -> Vec<String> {
-    let mut items = Vec::new();
-    for layer in layers {
-        match layer.value.pointer(pointer) {
-            None => {}
-            Some(Value::Array(values)) => {
-                for value in values {
-                    match value.as_str() {
-                        Some(text) => items.push(text.to_string()),
-                        None => found.push(format!(
-                            "`{pointer}` in {} holds a value that is not a string",
-                            layer.name
-                        )),
-                    }
-                }
-            }
-            Some(_) => found.push(format!("`{pointer}` in {} is not an array", layer.name)),
-        }
-    }
-    items
-}
-
-/// The `sandbox.filesystem.allowWrite` entries of every Claude layer of the
-/// session project, and why any layer could not be read; `codeflow doctor`
-/// checks the state root against them.
-#[must_use]
-pub fn claude_allow_write(host: &Host) -> (Vec<String>, Vec<String>) {
-    let mut problems = Vec::new();
-    let mut entries = Vec::new();
-    let projects = session_projects(host);
-    problems.extend(projects.unresolved.iter().cloned());
-    for dir in &projects.dirs {
-        let layers = claude_layers(host, dir, &mut problems);
-        entries.extend(merged(
-            &layers,
-            "/sandbox/filesystem/allowWrite",
-            &mut problems,
+fn claude_attest(host: &Host, found: &mut Vec<String>) {
+    if host.session.is_none() {
+        found.push(format!(
+            "the hook environment does not name the Claude Code session's project (`{CLAUDE_PROJECT_DIR}`), so the settings in force cannot be read"
         ));
     }
-    (entries, problems)
-}
-
-fn claude_triggers(host: &Host, project: &Path, found: &mut Vec<String>) {
-    let layers = claude_layers(host, project, found);
+    for path in &host.claude_unattested {
+        if present(path) {
+            found.push(format!(
+                "managed Claude preferences are present at `{}`; the guard does not attest them",
+                path.display()
+            ));
+        }
+    }
+    let layers = claude_layers(host, found);
+    for layer in &layers {
+        claude_layer(layer, found);
+    }
     for (pointer, key) in [
         ("/sandbox/enabled", "sandbox.enabled"),
         ("/sandbox/failIfUnavailable", "sandbox.failIfUnavailable"),
     ] {
-        match effective(&layers, pointer) {
-            Ok(Some(Value::Bool(true))) => {}
-            Ok(_) => found.push(format!(
-                "the Claude settings of `{}` do not set `{key}` to true",
-                project.display()
-            )),
-            Err(()) => found.push(format!(
-                "the Claude settings layers of `{}` disagree on `{key}`, so its value cannot be computed",
-                project.display()
-            )),
+        if !layers
+            .iter()
+            .any(|layer| layer.value.pointer(pointer) == Some(&Value::Bool(true)))
+        {
+            found.push(format!(
+                "no Claude settings layer sets `{key}` to true; the shipped preset does"
+            ));
         }
     }
-    for layer in &layers {
-        if let Some(value) = layer.value.pointer("/sandbox/filesystem/disabled") {
-            if value != &Value::Bool(false) {
-                found.push(format!("{} sets `sandbox.filesystem.disabled`", layer.name));
-            }
-        }
-        escape_settings(layer, found);
-    }
-    let excluded = merged(&layers, "/sandbox/excludedCommands", found);
-    if !excluded.is_empty() {
-        found.push(format!(
-            "the Claude settings list `sandbox.excludedCommands` ({}), which run outside the sandbox",
-            excluded.join(", ")
-        ));
-    }
-    let deny = merged(&layers, "/permissions/deny", found);
-    let deny_write = merged(&layers, "/sandbox/filesystem/denyWrite", found);
-    let deny_read = merged(&layers, "/sandbox/filesystem/denyRead", found);
+    let deny = merged(&layers, "/permissions/deny");
+    let deny_write = merged(&layers, "/sandbox/filesystem/denyWrite");
+    let deny_read = merged(&layers, "/sandbox/filesystem/denyRead");
     for missing in missing_floor(&deny, &deny_write, &deny_read) {
         found.push(format!(
             "the Claude settings are missing the floor entry {missing}; `codeflow update` restores it"
         ));
     }
-    let shipped_reads = shipped_allow_read();
-    for entry in merged(&layers, "/sandbox/filesystem/allowRead", found) {
-        if !shipped_reads.contains(&entry) {
+    let credentials = merged_credentials(&layers);
+    for name in shipped_credential_denies() {
+        if !credentials.contains(&name) {
             found.push(format!(
-                "`sandbox.filesystem.allowRead` entry `{entry}` can reopen a read the secret floor denies, which covers `**/.env` and `**/*secret*` in every directory"
+                "the Claude settings do not deny the credential variable `{name}` (`sandbox.credentials.envVars`); `codeflow update` restores it"
             ));
         }
     }
-    let floor = floor_paths(host, project);
-    let allow_write = merged(&layers, "/sandbox/filesystem/allowWrite", found);
-    let allow = merged(&layers, "/permissions/allow", found);
-    let directories = merged(&layers, "/permissions/additionalDirectories", found);
-    let edit_allows = allow.iter().filter_map(|rule| {
-        let rule = rule.trim();
-        if rule == "Edit" || rule == "Write" {
-            return Some("**".to_string());
-        }
-        rule.strip_prefix("Edit(")
-            .or_else(|| rule.strip_prefix("Write("))
-            .and_then(|inner| inner.strip_suffix(')'))
-            .map(str::to_string)
-    });
-    for (kind, entry) in allow_write
+}
+
+/// Every string of the array at `pointer` across the layers. A value of
+/// another shape is reported by [`claude_layer`].
+fn merged(layers: &[Layer], pointer: &str) -> Vec<String> {
+    layers
         .iter()
-        .map(|e| ("`sandbox.filesystem.allowWrite`", e.clone()))
-        .chain(edit_allows.map(|e| ("an `Edit` allow rule", e)))
-        .chain(
-            directories
-                .iter()
-                .map(|e| ("`permissions.additionalDirectories`", e.clone())),
-        )
-    {
-        if reaches_floor(&entry, host, project, &floor) {
-            found.push(format!(
-                "{kind} entry `{entry}` reaches a protected path the sandbox floor denies"
-            ));
-        }
-    }
+        .filter_map(|layer| layer.value.pointer(pointer).and_then(Value::as_array))
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
 }
 
-/// The `allowRead` entries the shipped presets carry.
-fn shipped_allow_read() -> Vec<String> {
-    let shipped: Value = serde_json::from_str(include_str!(
-        "../../../../assets/base/settings/default.json"
-    ))
-    .unwrap_or(Value::Null);
-    shipped
-        .pointer("/sandbox/filesystem/allowRead")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(str::to_string))
-                .collect()
+/// The variable names the layers deny through `sandbox.credentials`.
+fn merged_credentials(layers: &[Layer]) -> Vec<String> {
+    layers
+        .iter()
+        .filter_map(|layer| {
+            layer
+                .value
+                .pointer("/sandbox/credentials/envVars")
+                .and_then(Value::as_array)
         })
-        .unwrap_or_default()
+        .flatten()
+        .filter(|entry| entry.get("mode").and_then(Value::as_str) == Some("deny"))
+        .filter_map(|entry| {
+            entry
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
 }
 
-/// The settings that weaken containment, anywhere under `sandbox` in a
-/// layer.
-fn escape_settings(layer: &Layer, found: &mut Vec<String>) {
-    fn walk(value: &Value, path: &str, out: &mut Vec<String>) {
-        let Value::Object(map) = value else {
+/// The credential variables every shipped preset denies.
+fn shipped_credential_denies() -> Vec<String> {
+    let presets = shipped_claude();
+    let Some(first) = presets.first() else {
+        return Vec::new();
+    };
+    let names = |preset: &Value| -> Vec<String> {
+        preset
+            .pointer("/sandbox/credentials/envVars")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry.get("mode").and_then(Value::as_str) == Some("deny"))
+            .filter_map(|entry| {
+                entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect()
+    };
+    names(first)
+        .into_iter()
+        .filter(|name| presets.iter().all(|preset| names(preset).contains(name)))
+        .collect()
+}
+
+/// Attest one Claude layer's `sandbox` and `permissions` objects: every
+/// key must be one listed here, with the shipped value or a narrower one.
+fn claude_layer(layer: &Layer, found: &mut Vec<String>) {
+    let name = &layer.name;
+    let mut fail = |what: String| found.push(format!("the Claude settings {name}: {what}"));
+    if let Some(sandbox) = layer.value.get("sandbox") {
+        let Some(sandbox) = sandbox.as_object() else {
+            fail("`sandbox` is not an object".to_string());
             return;
         };
-        for (key, child) in map {
-            let here = format!("{path}.{key}");
-            let set = match key.as_str() {
+        for (key, value) in sandbox {
+            let at = format!("sandbox.{key}");
+            match key.as_str() {
+                "enabled" | "failIfUnavailable" => {
+                    if value != &Value::Bool(true) {
+                        fail(format!("`{at}` is not true, as the shipped preset sets it"));
+                    }
+                }
+                "autoAllowBashIfSandboxed" | "allowUnsandboxedCommands" => {
+                    if !value.is_boolean() {
+                        fail(format!("`{at}` is not a boolean"));
+                    }
+                }
+                "excludedCommands" => {
+                    if value.as_array().is_none_or(|items| !items.is_empty()) {
+                        fail(format!(
+                            "`{at}` lists commands that run outside the sandbox; remove it"
+                        ));
+                    }
+                }
                 "enableWeakerNestedSandbox"
                 | "enableWeakerNetworkIsolation"
-                | "allowNestedUserNamespaces"
-                | "allowAllUnixSockets"
-                | "allowAppleEvents" => child != &Value::Bool(false),
-                "allowUnixSockets" => !matches!(child, Value::Array(items) if items.is_empty()),
-                "ignoreViolations" => !child.is_null(),
-                _ => false,
-            };
-            if set {
-                out.push(here.clone());
+                | "allowAppleEvents"
+                | "allowNestedUserNamespaces" => {
+                    if value != &Value::Bool(false) {
+                        fail(format!("`{at}` weakens the sandbox; remove it"));
+                    }
+                }
+                "filesystem" => claude_filesystem(value, &mut fail),
+                "network" => claude_network(value, &mut fail),
+                "credentials" => claude_credentials(value, &mut fail),
+                _ => fail(format!(
+                    "`{at}` is not a setting the shipped preset uses, so its effect is not attested; remove it"
+                )),
             }
-            walk(child, &here, out);
         }
     }
-    let mut keys = Vec::new();
-    if let Some(sandbox) = layer.value.get("sandbox") {
-        walk(sandbox, "sandbox", &mut keys);
+    if let Some(permissions) = layer.value.get("permissions") {
+        let Some(permissions) = permissions.as_object() else {
+            fail("`permissions` is not an object".to_string());
+            return;
+        };
+        for (key, value) in permissions {
+            let at = format!("permissions.{key}");
+            match key.as_str() {
+                // Deny wins over allow and ask in Claude Code, so neither
+                // can reopen the floor.
+                "allow" | "ask" | "deny" => {
+                    if !strings(value) {
+                        fail(format!("`{at}` is not an array of strings"));
+                    }
+                }
+                "defaultMode" => {
+                    if !value.is_string() {
+                        fail(format!("`{at}` is not a string"));
+                    }
+                }
+                "disableBypassPermissionsMode" => {}
+                "additionalDirectories" => {
+                    if value.as_array().is_none_or(|items| !items.is_empty()) {
+                        fail(format!(
+                            "`{at}` adds directories the sandbox can write; remove it"
+                        ));
+                    }
+                }
+                _ => fail(format!(
+                    "`{at}` is not a setting the shipped preset uses, so its effect is not attested; remove it"
+                )),
+            }
+        }
     }
-    for key in keys {
-        found.push(format!(
-            "{} sets `{key}`, which weakens the sandbox",
-            layer.name
-        ));
+}
+
+/// Whether `value` is an array of strings.
+fn strings(value: &Value) -> bool {
+    value
+        .as_array()
+        .is_some_and(|items| items.iter().all(Value::is_string))
+}
+
+/// `sandbox.filesystem`: denies may grow; reads and writes may only be
+/// ones a shipped preset grants.
+fn claude_filesystem(value: &Value, fail: &mut impl FnMut(String)) {
+    let Some(map) = value.as_object() else {
+        fail("`sandbox.filesystem` is not an object".to_string());
+        return;
+    };
+    for (key, value) in map {
+        let at = format!("sandbox.filesystem.{key}");
+        match key.as_str() {
+            "denyRead" | "denyWrite" => {
+                if !strings(value) {
+                    fail(format!("`{at}` is not an array of strings"));
+                }
+            }
+            "allowRead" | "allowWrite" => {
+                if !strings(value) {
+                    fail(format!("`{at}` is not an array of strings"));
+                    continue;
+                }
+                let shipped = shipped_strings(&format!("/sandbox/filesystem/{key}"));
+                for entry in value.as_array().into_iter().flatten().filter_map(Value::as_str) {
+                    if !shipped.iter().any(|known| known == entry) {
+                        fail(format!(
+                            "`{at}` grants `{entry}`, which no shipped preset grants; remove it"
+                        ));
+                    }
+                }
+            }
+            _ => fail(format!(
+                "`{at}` is not a setting the shipped preset uses, so its effect is not attested; remove it"
+            )),
+        }
     }
+}
+
+/// `sandbox.network`: domain lists are egress rules and may be set; local
+/// binding is a boolean; Unix sockets may not be opened.
+fn claude_network(value: &Value, fail: &mut impl FnMut(String)) {
+    let Some(map) = value.as_object() else {
+        fail("`sandbox.network` is not an object".to_string());
+        return;
+    };
+    for (key, value) in map {
+        let at = format!("sandbox.network.{key}");
+        match key.as_str() {
+            "allowedDomains" | "deniedDomains" => {
+                if !strings(value) {
+                    fail(format!("`{at}` is not an array of strings"));
+                }
+            }
+            "allowLocalBinding" => {
+                if !value.is_boolean() {
+                    fail(format!("`{at}` is not a boolean"));
+                }
+            }
+            "allowUnixSockets" => {
+                if value.as_array().is_none_or(|items| !items.is_empty()) {
+                    fail(format!(
+                        "`{at}` opens Unix sockets, which can reach a process outside the sandbox; remove it"
+                    ));
+                }
+            }
+            "allowAllUnixSockets" => {
+                if value != &Value::Bool(false) {
+                    fail(format!(
+                        "`{at}` opens Unix sockets, which can reach a process outside the sandbox; remove it"
+                    ));
+                }
+            }
+            _ => fail(format!(
+                "`{at}` is not a setting the shipped preset uses, so its effect is not attested; remove it"
+            )),
+        }
+    }
+}
+
+/// `sandbox.credentials`: entries that deny a variable.
+fn claude_credentials(value: &Value, fail: &mut impl FnMut(String)) {
+    let Some(map) = value.as_object() else {
+        fail("`sandbox.credentials` is not an object".to_string());
+        return;
+    };
+    for (key, value) in map {
+        let at = format!("sandbox.credentials.{key}");
+        if key != "envVars" {
+            fail(format!(
+                "`{at}` is not a setting the shipped preset uses, so its effect is not attested; remove it"
+            ));
+            continue;
+        }
+        let denies = value.as_array().is_some_and(|items| {
+            items.iter().all(|entry| {
+                entry.as_object().is_some_and(|entry| {
+                    entry.len() == 2
+                        && entry.get("name").is_some_and(Value::is_string)
+                        && entry.get("mode") == Some(&Value::String("deny".to_string()))
+                })
+            })
+        });
+        if !denies {
+            fail(format!(
+                "`{at}` holds an entry other than a `{{\"name\", \"mode\": \"deny\"}}` deny"
+            ));
+        }
+    }
+}
+
+/// Every `sandbox.filesystem.allowWrite` and
+/// `permissions.additionalDirectories` entry of the Claude layers a
+/// session in `host.session` reads, with the file that holds it, and why
+/// any layer could not be read; `codeflow doctor` checks the state root
+/// against them.
+#[must_use]
+pub fn claude_write_grants(host: &Host) -> (Vec<(String, String)>, Vec<String>) {
+    let mut problems = Vec::new();
+    let layers = claude_layers(host, &mut problems);
+    let mut grants = Vec::new();
+    for layer in &layers {
+        for pointer in [
+            "/sandbox/filesystem/allowWrite",
+            "/permissions/additionalDirectories",
+        ] {
+            for entry in layer
+                .value
+                .pointer(pointer)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                grants.push((entry.to_string(), layer.name.clone()));
+            }
+        }
+    }
+    (grants, problems)
 }
 
 /// The floor entries a merged configuration lacks: each enforcement path
@@ -792,69 +1056,7 @@ fn protected_edit_denies() -> Vec<String> {
         .collect()
 }
 
-/// The protected paths as absolute paths for a session in `project`: the
-/// enforcement paths, startup files and git configuration files.
-fn floor_paths(host: &Host, project: &Path) -> Vec<PathBuf> {
-    protected_edit_denies()
-        .iter()
-        .filter_map(|rule| actions::edit_deny_write_path(rule))
-        .filter_map(|path| absolute(&path, host, project))
-        .collect()
-}
-
-/// A settings path read as absolute: `~/` under the home, `//` and `/`
-/// from the file system root, anything else under `base`.
-fn absolute(entry: &str, host: &Host, base: &Path) -> Option<PathBuf> {
-    if let Some(rest) = entry.strip_prefix("~/") {
-        return host.home.as_ref().map(|home| home.join(rest));
-    }
-    if entry == "~" {
-        return host.home.clone();
-    }
-    if let Some(rest) = entry.strip_prefix("//") {
-        return Some(PathBuf::from("/").join(rest));
-    }
-    if entry.starts_with('/') {
-        return Some(PathBuf::from(entry));
-    }
-    Some(base.join(entry.trim_start_matches("./")))
-}
-
-/// Whether an allow entry is at or under a protected path, or is a pattern
-/// whose literal start could reach one. Every reading the settings
-/// grammars give a path is tried: absolute, under the project and under the
-/// home.
-fn reaches_floor(entry: &str, host: &Host, project: &Path, floor: &[PathBuf]) -> bool {
-    let glob_at = entry.find(['*', '?', '[', '{']);
-    let literal = glob_at.map_or(entry, |at| &entry[..at]);
-    let readings: Vec<PathBuf> = [
-        absolute(literal, host, project),
-        host.home
-            .as_ref()
-            .map(|home| home.join(literal.trim_start_matches('/'))),
-        Some(project.join(literal.trim_start_matches('/'))),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    readings.iter().any(|reading| {
-        let reading = crate::security::outward::lexical_join(Path::new("/"), reading);
-        floor.iter().any(|protected| {
-            reading.starts_with(protected)
-                || (glob_at.is_some() && protected.starts_with(&reading))
-                || (glob_at.is_some() && literal_prefix_overlaps(&reading, protected))
-        })
-    })
-}
-
-/// Whether a pattern's literal start, cut inside a path component, can
-/// still begin a protected path (`.cl*` reaches `.claude`).
-fn literal_prefix_overlaps(reading: &Path, protected: &Path) -> bool {
-    protected
-        .as_os_str()
-        .as_encoded_bytes()
-        .starts_with(reading.as_os_str().as_encoded_bytes())
-}
+// ----------------------------------------------------------------- TOML
 
 /// A TOML configuration file as read: absent, a reason it cannot be used,
 /// or its table.
@@ -888,56 +1090,372 @@ fn overlay(base: &mut toml::Table, over: &toml::Table) {
     }
 }
 
-fn codex_triggers(host: &Host, projects: &[PathBuf], identified: bool, found: &mut Vec<String>) {
-    let user_path = host
-        .codex_home
-        .clone()
-        .or_else(|| host.home.as_ref().map(|home| home.join(".codex")))
-        .map(|dir| dir.join("config.toml"));
-    let user = user_path
-        .as_ref()
-        .and_then(|path| read_toml(path, "Codex configuration", found).map(|t| (path.clone(), t)));
-    let mut layered: Vec<(String, toml::Table)> = Vec::new();
-    for dir in projects {
-        let path = dir.join(".codex/config.toml");
-        if let Some(table) = read_toml(&path, "Codex configuration", found) {
-            if has_key(&table, "sandbox_mode") {
-                found.push(format!(
-                    "the Codex configuration `{}` sets `sandbox_mode`, which a permission profile does not compose with",
-                    path.display()
-                ));
-            }
-            let mut effective = user.as_ref().map(|(_, t)| t.clone()).unwrap_or_default();
-            overlay(&mut effective, &table);
-            layered.push((format!("`{}`", path.display()), effective));
-        }
-    }
-    if let Some((path, table)) = &user {
-        if has_key(table, "sandbox_mode") {
+// ---------------------------------------------------------------- Codex
+
+/// Codex top-level keys that configure no containment: models, prompts,
+/// display, history, telemetry, tools other than the shell, authentication
+/// and project trust. Any value is attested.
+const CODEX_FREE_KEYS: &[&str] = &[
+    "agents",
+    "allow_login_shell",
+    "analytics",
+    "approvals_reviewer",
+    "apps",
+    "auto_review",
+    "background_terminal_max_timeout",
+    "browser_use",
+    "chatgpt_base_url",
+    "check_for_update_on_startup",
+    "cli_auth_credentials_store",
+    "compact_prompt",
+    "computer_use",
+    "desktop",
+    "developer_instructions",
+    "disable_paste_burst",
+    "experimental_compact_prompt_file",
+    "experimental_use_unified_exec_tool",
+    "feedback",
+    "file_opener",
+    "forced_chatgpt_workspace_id",
+    "forced_login_method",
+    "hide_agent_reasoning",
+    "history",
+    "hooks",
+    "instructions",
+    "log_dir",
+    "marketplaces",
+    "mcp_oauth_callback_port",
+    "mcp_oauth_callback_url",
+    "mcp_oauth_credentials_store",
+    "mcp_optional_startup_grace_ms",
+    "mcp_servers",
+    "memories",
+    "model",
+    "model_auto_compact_token_limit",
+    "model_auto_compact_token_limit_scope",
+    "model_catalog_json",
+    "model_context_window",
+    "model_instructions_file",
+    "model_provider",
+    "model_providers",
+    "model_reasoning_effort",
+    "model_reasoning_summary",
+    "model_supports_reasoning_summaries",
+    "model_verbosity",
+    "notice",
+    "notify",
+    "openai_base_url",
+    "oss_provider",
+    "otel",
+    "personality",
+    "plan_mode_reasoning_effort",
+    "plugins",
+    "profile",
+    "project_doc_fallback_filenames",
+    "project_doc_max_bytes",
+    "projects",
+    "review_model",
+    "service_tier",
+    "shell_environment_policy",
+    "show_raw_agent_reasoning",
+    "skills",
+    "sqlite_home",
+    "suppress_unstable_features_warning",
+    "tool_output_token_limit",
+    "tool_suggest",
+    "tools",
+    "tui",
+    "web_search",
+    "windows_wsl_setup_acknowledged",
+];
+
+/// Codex feature flags that configure no containment.
+const CODEX_FREE_FEATURES: &[&str] = &[
+    "apps",
+    "code_mode",
+    "context_management",
+    "enable_request_compression",
+    "fast_mode",
+    "goals",
+    "memories",
+    "multi_agent",
+    "personality",
+    "prevent_idle_sleep",
+    "remote_plugin",
+    "rollout_budget",
+    "shell_snapshot",
+    "shell_tool",
+    "skill_mcp_dependency_install",
+    "ultrafast_mode",
+    "unified_exec",
+    "web_search",
+    "web_search_cached",
+    "web_search_request",
+];
+
+/// The shipped Codex configuration.
+fn shipped_codex() -> toml::Table {
+    include_str!("../../../../assets/base/codex/config.toml")
+        .parse()
+        .unwrap_or_default()
+}
+
+/// The shipped permission profile `name`, if there is one.
+fn shipped_codex_profile(name: &str) -> Option<toml::Table> {
+    shipped_codex()
+        .get("permissions")
+        .and_then(|permissions| permissions.get(name))
+        .and_then(toml::Value::as_table)
+        .cloned()
+}
+
+fn codex_attest(host: &Host, found: &mut Vec<String>) {
+    for path in &host.codex_unattested {
+        if present(path) {
             found.push(format!(
-                "the Codex configuration `{}` sets `sandbox_mode`, which a permission profile does not compose with",
+                "the Codex system configuration `{}` is present; the guard does not attest it",
                 path.display()
             ));
         }
-        if layered.is_empty() {
-            layered.push((format!("`{}`", path.display()), table.clone()));
+    }
+    let user_dir = host
+        .codex_home
+        .clone()
+        .or_else(|| host.home.as_ref().map(|home| home.join(".codex")));
+    let mut user = toml::Table::new();
+    if let Some(dir) = &user_dir {
+        let path = dir.join("config.toml");
+        if let Some(table) = read_toml(&path, "Codex configuration", found) {
+            codex_layer(&table, &format!("`{}`", path.display()), false, found);
+            user = table;
+        }
+        // Profile files beside the user configuration, which `--profile`
+        // lays over it.
+        match std::fs::read_dir(dir) {
+            Ok(entries) => {
+                let mut files: Vec<PathBuf> = Vec::new();
+                for entry in entries {
+                    match entry {
+                        Ok(entry) => files.push(entry.path()),
+                        // An entry that cannot be read could be a profile
+                        // file, so the call tightens.
+                        Err(error) => found.push(format!(
+                            "an entry of the Codex home `{}` cannot be read ({error})",
+                            dir.display()
+                        )),
+                    }
+                }
+                files.retain(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.ends_with(".config.toml"))
+                });
+                files.sort();
+                for path in files {
+                    if let Some(table) = read_toml(&path, "Codex profile file", found) {
+                        codex_layer(&table, &format!("`{}`", path.display()), true, found);
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => found.push(format!(
+                "the Codex home `{}` cannot be listed ({error})",
+                dir.display()
+            )),
         }
     }
-    if layered.is_empty() {
-        if identified {
-            found.push(
-                "no Codex configuration file is present, so the shipped permission profile is not in force"
-                    .to_string(),
+    let trusted = codex_trusts(&user, &host.root);
+    let mut effective = user.clone();
+    let mut name = "the user Codex configuration".to_string();
+    for dir in call_dirs(host) {
+        let path = dir.join(".codex/config.toml");
+        let Some(table) = read_toml(&path, "Codex configuration", found) else {
+            continue;
+        };
+        codex_layer(&table, &format!("`{}`", path.display()), false, found);
+        if !trusted {
+            found.push(format!(
+                "the user Codex configuration does not mark `{}` trusted, so Codex does not apply `{}`; trust the project in the user configuration",
+                host.root.display(),
+                path.display()
+            ));
+        }
+        if trusted {
+            overlay(&mut effective, &table);
+            name = format!(
+                "the Codex configuration in force at `{}`",
+                host.root.display()
             );
         }
-        return;
     }
-    for (name, table) in &layered {
-        codex_profile_triggers(name, table, found);
+    codex_effective(&effective, &name, found);
+}
+
+/// Whether the user configuration marks the project at `root` trusted.
+/// Codex loads a project's `.codex/` layers only then.
+fn codex_trusts(user: &toml::Table, root: &Path) -> bool {
+    let Some(projects) = user.get("projects").and_then(toml::Value::as_table) else {
+        return false;
+    };
+    let mut keys = vec![root.to_path_buf()];
+    if let Ok(canonical) = root.canonicalize() {
+        keys.push(canonical);
+    }
+    // A root that is not UTF-8 cannot be a TOML key, so it is never
+    // trusted, and the project layer is not read as applied.
+    keys.iter().filter_map(|key| key.to_str()).any(|key| {
+        projects
+            .get(key)
+            .and_then(|entry| entry.get("trust_level"))
+            .and_then(toml::Value::as_str)
+            == Some("trusted")
+    })
+}
+
+/// Attest one Codex layer: every key is known, and each containment key
+/// holds its shipped value or a narrower one. `profile_file` marks a file
+/// `--profile` lays over the user configuration.
+fn codex_layer(table: &toml::Table, name: &str, profile_file: bool, found: &mut Vec<String>) {
+    let mut problems: Vec<String> = Vec::new();
+    for (key, value) in table {
+        let mut fail = |what: String| problems.push(what);
+        match key.as_str() {
+            "approval_policy" => {
+                if value.as_str() != Some("never") {
+                    fail(
+                        "`approval_policy` is not `never`, so an escalation can be approved"
+                            .to_string(),
+                    );
+                }
+            }
+            "default_permissions" => {
+                if !matches!(value.as_str(), Some("cf-guard" | "cf-builder")) {
+                    fail(
+                        "`default_permissions` does not select `cf-guard` or `cf-builder`"
+                            .to_string(),
+                    );
+                }
+            }
+            "permissions" => codex_permissions(value, &mut fail),
+            "features" => codex_features(value, &mut fail),
+            "windows" => {
+                let shipped = shipped_codex().get("windows").cloned();
+                if Some(value) != shipped.as_ref() {
+                    fail("`windows` differs from the shipped `[windows]` table".to_string());
+                }
+            }
+            "profiles" => match value.as_table() {
+                Some(profiles) => {
+                    for (profile, inner) in profiles {
+                        match inner.as_table() {
+                            Some(inner) if !inner.contains_key("profiles") => codex_layer(
+                                inner,
+                                &format!("{name} profile `{profile}`"),
+                                true,
+                                found,
+                            ),
+                            _ => fail(format!("profile `{profile}` is not a table of settings")),
+                        }
+                    }
+                }
+                None => fail("`profiles` is not a table".to_string()),
+            },
+            "sandbox_mode" | "sandbox_workspace_write" => {
+                fail(format!(
+                    "`{key}` replaces the permission profile; remove it"
+                ));
+            }
+            "project_root_markers" => fail(
+                "`project_root_markers` changes which project layers Codex loads; remove it"
+                    .to_string(),
+            ),
+            "projects" if profile_file => fail("a profile sets `projects`".to_string()),
+            key if CODEX_FREE_KEYS.contains(&key) => {}
+            _ => fail(format!(
+                "`{key}` is not a key the guard knows, so its effect is not attested; remove it"
+            )),
+        }
+    }
+    found.extend(
+        problems
+            .into_iter()
+            .map(|what| format!("the Codex configuration {name}: {what}")),
+    );
+}
+
+/// `[features]`: the shipped flags keep their values; other flags must be
+/// ones that configure no containment.
+fn codex_features(value: &toml::Value, fail: &mut impl FnMut(String)) {
+    let Some(features) = value.as_table() else {
+        fail("`features` is not a table".to_string());
+        return;
+    };
+    for (key, value) in features {
+        match key.as_str() {
+            "hooks" | "codex_hooks" | "network_proxy" => {
+                if value.as_bool() != Some(true) {
+                    fail(format!(
+                        "`features.{key}` is not `true`, as the shipped configuration sets it"
+                    ));
+                }
+            }
+            key if CODEX_FREE_FEATURES.contains(&key) => {}
+            _ => fail(format!(
+                "`features.{key}` is not a feature the guard knows, so its effect is not attested; remove it"
+            )),
+        }
     }
 }
 
-/// What a Codex filesystem rule grants, strictest first.
+/// `[permissions]`: each shipped profile may only add denies or narrow an
+/// access; another profile is not attested and may not be selected.
+fn codex_permissions(value: &toml::Value, fail: &mut impl FnMut(String)) {
+    let Some(profiles) = value.as_table() else {
+        fail("`permissions` is not a table".to_string());
+        return;
+    };
+    for (name, profile) in profiles {
+        let Some(shipped) = shipped_codex_profile(name) else {
+            continue;
+        };
+        let Some(profile) = profile.as_table() else {
+            fail(format!("`permissions.{name}` is not a table"));
+            continue;
+        };
+        for (key, value) in profile {
+            let at = format!("permissions.{name}.{key}");
+            match key.as_str() {
+                "extends" => {
+                    if Some(value) != shipped.get("extends") {
+                        fail(format!("`{at}` differs from the shipped profile"));
+                    }
+                }
+                "description" => {}
+                "filesystem" => {
+                    let empty = toml::Table::new();
+                    let shipped = shipped
+                        .get("filesystem")
+                        .and_then(toml::Value::as_table)
+                        .unwrap_or(&empty);
+                    codex_filesystem(value, shipped, &at, fail);
+                }
+                "network" => {
+                    let empty = toml::Table::new();
+                    let shipped = shipped
+                        .get("network")
+                        .and_then(toml::Value::as_table)
+                        .unwrap_or(&empty);
+                    codex_network(value, shipped, &at, fail);
+                }
+                _ => fail(format!(
+                    "`{at}` is not in the shipped profile, so its effect is not attested; remove it"
+                )),
+            }
+        }
+    }
+}
+
+/// What a Codex filesystem access grants, strictest first.
 fn access_rank(access: &str) -> Option<u8> {
     match access {
         "deny" | "none" => Some(0),
@@ -947,207 +1465,180 @@ fn access_rank(access: &str) -> Option<u8> {
     }
 }
 
-/// A Codex permission profile's effective filesystem rules, keyed by scope
-/// (empty, or a special root such as `:workspace_roots`) and path, and its
-/// network settings, after `extends` is followed to a built-in profile.
-#[derive(Default)]
-struct Profile {
-    filesystem: BTreeMap<(String, String), String>,
-    network: BTreeMap<String, toml::Value>,
-}
-
-fn resolve_profile(table: &toml::Table, name: &str) -> Result<Profile, String> {
-    let profiles = table
-        .get("permissions")
-        .and_then(toml::Value::as_table)
-        .ok_or_else(|| "no `permissions` table defines it".to_string())?;
-    let mut chain = Vec::new();
-    let mut current = name.to_string();
-    let mut seen = HashSet::new();
-    while !current.starts_with(':') {
-        if !seen.insert(current.clone()) {
-            return Err(format!("`extends` loops through `{current}`"));
-        }
-        let profile = profiles
-            .get(&current)
-            .and_then(toml::Value::as_table)
-            .ok_or_else(|| format!("profile `{current}` is not defined"))?;
-        chain.push(profile);
-        current = match profile.get("extends") {
-            Some(toml::Value::String(next)) => next.clone(),
-            Some(_) => {
-                return Err(format!(
-                    "profile `{current}` has an `extends` that is not a string"
-                ))
-            }
-            None => return Err(format!("profile `{current}` extends no built-in profile")),
-        };
-    }
-    if current != ":workspace" && current != ":read-only" {
-        return Err(format!(
-            "the profile chain ends at `{current}`, not `:workspace` or `:read-only`"
-        ));
-    }
-    let mut resolved = Profile::default();
-    for profile in chain.iter().rev() {
-        if let Some(filesystem) = profile.get("filesystem") {
-            let filesystem = filesystem
-                .as_table()
-                .ok_or_else(|| "a `filesystem` entry is not a table".to_string())?;
-            overlay_rules(&mut resolved.filesystem, "", filesystem)?;
-        }
-        if let Some(network) = profile.get("network") {
-            let network = network
-                .as_table()
-                .ok_or_else(|| "a `network` entry is not a table".to_string())?;
-            for (key, value) in network {
-                if key != "domains" {
-                    resolved.network.insert(key.clone(), value.clone());
-                }
-            }
-        }
-    }
-    Ok(resolved)
-}
-
-fn overlay_rules(
-    rules: &mut BTreeMap<(String, String), String>,
-    scope: &str,
-    table: &toml::Table,
-) -> Result<(), String> {
-    for (key, value) in table {
-        match value {
-            toml::Value::String(access) if access_rank(access).is_some() => {
-                rules.insert((scope.to_string(), key.clone()), access.clone());
-            }
-            toml::Value::Table(inner) if scope.is_empty() && key.starts_with(':') => {
-                overlay_rules(rules, key, inner)?;
-            }
-            toml::Value::Integer(_) if key == "glob_scan_max_depth" => {}
-            _ => {
-                return Err(format!(
-                    "the filesystem entry `{key}` has a value this guard does not model"
-                ))
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Codex filesystem rules keyed by scope and path, with their access.
-type CodexRules = BTreeMap<(String, String), String>;
-
-/// The shipped Codex profiles: what `cf-guard` denies or keeps read-only,
-/// and every write `cf-guard` or `cf-builder` grants.
-fn shipped_codex() -> (CodexRules, HashSet<(String, String)>) {
-    let shipped: toml::Table = include_str!("../../../../assets/base/codex/config.toml")
-        .parse()
-        .unwrap_or_default();
-    let guard = resolve_profile(&shipped, "cf-guard").unwrap_or_default();
-    let builder = resolve_profile(&shipped, "cf-builder").unwrap_or_default();
-    let protected = guard
-        .filesystem
-        .iter()
-        .filter(|(_, access)| access.as_str() != "write")
-        .map(|(key, access)| (key.clone(), access.clone()))
-        .collect();
-    let writes = guard
-        .filesystem
-        .iter()
-        .chain(builder.filesystem.iter())
-        .filter(|(_, access)| access.as_str() == "write")
-        .map(|(key, _)| key.clone())
-        .collect();
-    (protected, writes)
-}
-
-/// The network keys whose `true` widens what a shipped profile allows.
-const CODEX_NETWORK_WIDENERS: &[&str] = &[
-    "allow_local_binding",
-    "allow_upstream_proxy",
-    "dangerously_allow_non_loopback_proxy",
-    "dangerously_allow_all_unix_sockets",
-];
-
-/// Judge the effective Codex configuration `table` by what its default
-/// profile grants, not by the profile's name.
-fn codex_profile_triggers(name: &str, table: &toml::Table, found: &mut Vec<String>) {
-    match table.get("approval_policy").and_then(toml::Value::as_str) {
-        Some("never") => {}
-        other => found.push(format!(
-            "the Codex approval policy in {name} is {} rather than `never`, so an escalation can be approved",
-            other.map_or_else(|| "unset".to_string(), |v| format!("`{v}`"))
-        )),
-    }
-    let Some(profile_name) = table
-        .get("default_permissions")
-        .and_then(toml::Value::as_str)
-    else {
-        found.push(format!(
-            "the Codex configuration {name} selects no default permission profile"
-        ));
+/// A profile's filesystem rules: a shipped entry may only narrow; any
+/// other entry may only deny, since a more specific entry overrides a
+/// broader one. A nested scope such as `:workspace_roots` follows the same
+/// rule.
+fn codex_filesystem(
+    value: &toml::Value,
+    shipped: &toml::Table,
+    at: &str,
+    fail: &mut impl FnMut(String),
+) {
+    let Some(table) = value.as_table() else {
+        fail(format!("`{at}` is not a table"));
         return;
     };
-    let profile = match resolve_profile(table, profile_name) {
-        Ok(profile) => profile,
-        Err(why) => {
-            found.push(format!(
-                "the Codex permission profile `{profile_name}` in {name} cannot be judged: {why}"
-            ));
-            return;
-        }
-    };
-    let (protected, writes) = shipped_codex();
-    for ((scope, path), access) in &protected {
-        let shown = if scope.is_empty() {
-            format!("`{path}`")
-        } else {
-            format!("`{path}` under `{scope}`")
-        };
-        let have = profile.filesystem.get(&(scope.clone(), path.clone()));
-        let weaker = match have {
-            None => true,
-            Some(have) => access_rank(have) > access_rank(access),
-        };
-        if weaker {
-            found.push(format!(
-                "the Codex permission profile `{profile_name}` in {name} does not keep the shipped rule {shown} = `{access}`"
-            ));
-        }
-    }
-    for ((scope, path), access) in &profile.filesystem {
-        if access == "write" && !writes.contains(&(scope.clone(), path.clone())) {
-            found.push(format!(
-                "the Codex permission profile `{profile_name}` in {name} grants a write the shipped profiles do not: `{path}`"
-            ));
-        }
-    }
-    for key in CODEX_NETWORK_WIDENERS {
-        match profile.network.get(*key) {
-            None | Some(toml::Value::Boolean(false)) => {}
-            Some(_) => found.push(format!(
-                "the Codex permission profile `{profile_name}` in {name} sets `network.{key}`"
+    for (key, value) in table {
+        match (key.as_str(), value) {
+            ("glob_scan_max_depth", toml::Value::Integer(depth)) => {
+                let floor = shipped
+                    .get("glob_scan_max_depth")
+                    .and_then(toml::Value::as_integer)
+                    .unwrap_or(0);
+                if *depth < floor {
+                    fail(format!(
+                        "`{at}.glob_scan_max_depth` is below the shipped {floor}, so deep denies stop applying"
+                    ));
+                }
+            }
+            (scope, toml::Value::Table(_)) if scope.starts_with(':') => {
+                let empty = toml::Table::new();
+                let inner = shipped
+                    .get(scope)
+                    .and_then(toml::Value::as_table)
+                    .unwrap_or(&empty);
+                codex_filesystem(value, inner, &format!("{at}.\"{scope}\""), fail);
+            }
+            (path, toml::Value::String(access)) => {
+                let Some(rank) = access_rank(access) else {
+                    fail(format!(
+                        "`{at}` gives `{path}` the unknown access `{access}`"
+                    ));
+                    continue;
+                };
+                let allowed = shipped
+                    .get(path)
+                    .and_then(toml::Value::as_str)
+                    .and_then(access_rank)
+                    .unwrap_or(0);
+                if rank > allowed {
+                    fail(format!(
+                        "`{at}` grants `{path}` = `{access}`, wider than the shipped profile; remove it"
+                    ));
+                }
+            }
+            (path, _) => fail(format!(
+                "`{at}` holds `{path}` with a value the guard does not model"
             )),
         }
     }
 }
 
-/// Whether `key` appears in the table at any depth.
-fn has_key(table: &toml::Table, key: &str) -> bool {
-    table.iter().any(|(name, value)| {
-        name == key || value.as_table().is_some_and(|inner| has_key(inner, key))
+/// A profile's network table: every key keeps its shipped value, except
+/// that a domain may be denied or dropped.
+fn codex_network(
+    value: &toml::Value,
+    shipped: &toml::Table,
+    at: &str,
+    fail: &mut impl FnMut(String),
+) {
+    let Some(table) = value.as_table() else {
+        fail(format!("`{at}` is not a table"));
+        return;
+    };
+    for (key, value) in table {
+        if key == "domains" {
+            let empty = toml::Table::new();
+            let known = shipped
+                .get("domains")
+                .and_then(toml::Value::as_table)
+                .unwrap_or(&empty);
+            let Some(domains) = value.as_table() else {
+                fail(format!("`{at}.domains` is not a table"));
+                continue;
+            };
+            for (domain, rule) in domains {
+                if rule.as_str() != Some("deny") && known.get(domain) != Some(rule) {
+                    fail(format!(
+                        "`{at}.domains` allows `{domain}`, which the shipped profile does not"
+                    ));
+                }
+            }
+        } else if shipped.get(key) != Some(value) {
+            fail(format!("`{at}.{key}` differs from the shipped profile"));
+        }
+    }
+}
+
+/// The configuration Codex applies must select a shipped profile, never
+/// approve escalations, and keep the network proxy and hooks on.
+fn codex_effective(table: &toml::Table, name: &str, found: &mut Vec<String>) {
+    let mut fail = |what: &str| found.push(format!("{name} {what}"));
+    if table.get("approval_policy").and_then(toml::Value::as_str) != Some("never") {
+        fail("does not set `approval_policy = \"never\"`, as the shipped configuration does");
+    }
+    match table
+        .get("default_permissions")
+        .and_then(toml::Value::as_str)
+    {
+        Some(profile @ ("cf-guard" | "cf-builder")) => {
+            let defined = table
+                .get("permissions")
+                .and_then(|permissions| permissions.get(profile))
+                .and_then(toml::Value::as_table)
+                .is_some_and(|have| {
+                    shipped_codex_profile(profile).is_some_and(|shipped| {
+                        shipped
+                            .keys()
+                            .all(|key| key == "description" || have.contains_key(key))
+                            && covers(have, &shipped)
+                    })
+                });
+            if !defined {
+                fail("does not define the selected permission profile with every shipped entry");
+            }
+        }
+        _ => fail("does not select the shipped permission profile (`default_permissions`)"),
+    }
+    let features = table.get("features").and_then(toml::Value::as_table);
+    for flag in ["network_proxy", "hooks"] {
+        let on = features.is_some_and(|features| {
+            features.get(flag).and_then(toml::Value::as_bool) == Some(true)
+                || (flag == "hooks"
+                    && features.get("codex_hooks").and_then(toml::Value::as_bool) == Some(true))
+        });
+        if !on {
+            fail(&format!(
+                "does not set `features.{flag} = true`, as the shipped configuration does"
+            ));
+        }
+    }
+}
+
+/// Whether every entry of `shipped`, at any depth, is present in `have`.
+/// Values were checked layer by layer; this checks nothing was dropped.
+fn covers(have: &toml::Table, shipped: &toml::Table) -> bool {
+    shipped.iter().all(|(key, value)| {
+        key == "description"
+            || match (have.get(key), value) {
+                (Some(toml::Value::Table(have)), toml::Value::Table(shipped)) => {
+                    covers(have, shipped)
+                }
+                (Some(_), _) => true,
+                (None, _) => false,
+            }
     })
 }
 
-/// The shipped Grok profiles.
+// ----------------------------------------------------------------- Grok
+
+/// The shipped Grok profiles by name.
 fn shipped_grok() -> toml::Table {
     include_str!("../../../../assets/base/grok/sandbox.toml")
-        .parse()
+        .parse::<toml::Table>()
+        .ok()
+        .and_then(|table| {
+            table
+                .get("profiles")
+                .and_then(toml::Value::as_table)
+                .cloned()
+        })
         .unwrap_or_default()
 }
 
-/// The string members of `profile`'s array `list`, or why it is not an
-/// array of strings.
+/// The string members of the array `list` in `profile`, or why it is not
+/// an array of strings.
 fn grok_list(profile: &toml::Table, list: &str) -> Result<Vec<String>, String> {
     match profile.get(list) {
         None => Ok(Vec::new()),
@@ -1163,68 +1654,151 @@ fn grok_list(profile: &toml::Table, list: &str) -> Result<Vec<String>, String> {
     }
 }
 
-fn grok_triggers(projects: &[PathBuf], identified: bool, found: &mut Vec<String>) {
+fn grok_attest(host: &Host, found: &mut Vec<String>) {
     let shipped = shipped_grok();
-    let shipped_profiles = shipped
-        .get("profiles")
-        .and_then(toml::Value::as_table)
-        .cloned()
-        .unwrap_or_default();
-    let mut any = false;
-    for dir in projects {
-        let path = dir.join(".grok/sandbox.toml");
-        let present = crate::absence::symlink_metadata_optional(&path);
-        if !matches!(present, Ok(None)) {
-            any = true;
-        }
-        let Some(table) = read_toml(&path, "Grok sandbox profiles", found) else {
-            continue;
-        };
-        let name = format!("`{}`", path.display());
-        let profiles = table
-            .get("profiles")
-            .and_then(toml::Value::as_table)
-            .cloned()
-            .unwrap_or_default();
-        for (profile, shipped) in &shipped_profiles {
-            let Some(shipped) = shipped.as_table() else {
-                continue;
-            };
-            let Some(have) = profiles.get(profile).and_then(toml::Value::as_table) else {
-                found.push(format!(
-                    "the Grok sandbox profiles {name} lack the shipped profile `{profile}`"
-                ));
-                continue;
-            };
-            if have.get("extends") != shipped.get("extends") {
-                found.push(format!(
-                    "the Grok profile `{profile}` in {name} does not extend what the shipped profile extends"
-                ));
-            }
-            for list in ["read_only", "deny"] {
-                let want = grok_list(shipped, list).unwrap_or_default();
-                match grok_list(have, list) {
-                    Err(why) => {
-                        found.push(format!("the Grok profile `{profile}` in {name}: {why}"));
-                    }
-                    Ok(entries) => {
-                        for entry in want {
-                            if !entries.contains(&entry) {
-                                found.push(format!(
-                                    "the Grok profile `{profile}` in {name} lacks the shipped `{list}` entry `{entry}`"
-                                ));
+    let grok_dir = host
+        .grok_home
+        .clone()
+        .or_else(|| host.home.as_ref().map(|home| home.join(".grok")));
+    let mut selected = host
+        .grok_sandbox
+        .clone()
+        .map(|name| (name, "`GROK_SANDBOX`".to_string()));
+    if let Some(dir) = &grok_dir {
+        let path = dir.join("config.toml");
+        if let Some(config) = read_toml(&path, "Grok configuration", found) {
+            if let Some(sandbox) = config.get("sandbox") {
+                let shown = format!("`[sandbox]` in `{}`", path.display());
+                match sandbox.as_table() {
+                    Some(table) => {
+                        for (key, value) in table {
+                            match (key.as_str(), value.as_str()) {
+                                ("profile", Some(name)) => {
+                                    if selected.is_none() {
+                                        selected = Some((name.to_string(), shown.clone()));
+                                    }
+                                }
+                                _ => found.push(format!(
+                                    "{shown} sets `{key}`, which the guard does not attest; remove it"
+                                )),
                             }
                         }
                     }
+                    None => found.push(format!("{shown} is not a table")),
                 }
             }
         }
     }
-    if !any && identified {
+    let Some((profile, source)) = selected else {
         found.push(
-            "no Grok sandbox profiles file (`.grok/sandbox.toml`) is present, so the shipped profiles are not in force"
+            "no Grok sandbox profile is selected where the guard can read it (`GROK_SANDBOX`, or `[sandbox] profile` in the user Grok configuration); Grok's default is no sandbox, and a `--sandbox` launch flag is not visible to the guard"
                 .to_string(),
         );
+        return;
+    };
+    if !shipped.contains_key(&profile) {
+        found.push(format!(
+            "{source} selects the Grok profile `{profile}`, not a shipped one (`cf-guard`, `cf-guard-worktree`)"
+        ));
+        return;
+    }
+    let mut files = Vec::new();
+    if let Some(dir) = &grok_dir {
+        files.push(dir.join("sandbox.toml"));
+    }
+    files.extend(
+        call_dirs(host)
+            .into_iter()
+            .map(|dir| dir.join(".grok/sandbox.toml")),
+    );
+    let mut defined = false;
+    for path in files {
+        let Some(table) = read_toml(&path, "Grok sandbox profiles", found) else {
+            continue;
+        };
+        let name = format!("`{}`", path.display());
+        for key in table.keys().filter(|key| *key != "profiles") {
+            found.push(format!(
+                "the Grok sandbox profiles {name} set `{key}`, which the guard does not attest; remove it"
+            ));
+        }
+        let profiles = table.get("profiles").and_then(toml::Value::as_table);
+        for (each, shipped) in &shipped {
+            let Some(have) = profiles.and_then(|profiles| profiles.get(each)) else {
+                continue;
+            };
+            if *each == profile {
+                defined = true;
+            }
+            match (have.as_table(), shipped.as_table()) {
+                (Some(have), Some(shipped)) => grok_profile(have, shipped, each, &name, found),
+                _ => found.push(format!(
+                    "the Grok profile `{each}` in {name} is not a table"
+                )),
+            }
+        }
+    }
+    if !defined {
+        found.push(format!(
+            "{source} selects the Grok profile `{profile}`, but no profiles file the guard reads defines it"
+        ));
+    }
+}
+
+/// Attest a Grok profile against the shipped one: the same `extends`,
+/// every shipped `read_only` and `deny` entry, no write grant beyond the
+/// shipped ones, and no other key.
+fn grok_profile(
+    have: &toml::Table,
+    shipped: &toml::Table,
+    profile: &str,
+    name: &str,
+    found: &mut Vec<String>,
+) {
+    let mut fail =
+        |what: String| found.push(format!("the Grok profile `{profile}` in {name} {what}"));
+    for (key, value) in have {
+        match key.as_str() {
+            "extends" => {
+                if Some(value) != shipped.get("extends") {
+                    fail("does not extend what the shipped profile extends".to_string());
+                }
+            }
+            "restrict_network" => {
+                if !value.is_bool() {
+                    fail("sets `restrict_network` to a value that is not a boolean".to_string());
+                }
+            }
+            "read_only" | "deny" | "read_write" => {}
+            _ => fail(format!(
+                "sets `{key}`, which the shipped profile does not, so its effect is not attested; remove it"
+            )),
+        }
+    }
+    if !have.contains_key("extends") {
+        fail("does not extend what the shipped profile extends".to_string());
+    }
+    for list in ["read_only", "deny"] {
+        let want = grok_list(shipped, list).unwrap_or_default();
+        match grok_list(have, list) {
+            Err(why) => fail(why),
+            Ok(entries) => {
+                for entry in want.iter().filter(|entry| !entries.contains(entry)) {
+                    fail(format!("lacks the shipped `{list}` entry `{entry}`"));
+                }
+            }
+        }
+    }
+    let allowed = grok_list(shipped, "read_write").unwrap_or_default();
+    match grok_list(have, "read_write") {
+        Err(why) => fail(why),
+        Ok(entries) => {
+            for entry in entries.iter().filter(|entry| !allowed.contains(entry)) {
+                fail(format!(
+                    "grants the write `{entry}` (`read_write`), which the shipped profile does not; remove it"
+                ));
+            }
+        }
     }
 }
 

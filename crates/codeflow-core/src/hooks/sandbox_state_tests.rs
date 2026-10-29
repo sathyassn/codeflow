@@ -1,14 +1,16 @@
-//! TSK-397 design D, AC-4: each trigger selects the tightened outcome when
-//! present and the baseline when absent with every other trigger absent.
+//! TSK-397 design D, AC-4, by attestation: the shipped configuration of
+//! each harness selects the baseline; anything customised beyond a
+//! narrower form, unreadable, unknown or unidentified tightens.
 
 use super::*;
 use serde_json::json;
 use std::fs;
 
-/// A Claude session started at a project whose every file lives under one
-/// temporary directory, with the shipped default preset, as `codeflow
-/// update` writes it, as the project's Claude settings, and the shipped
-/// Codex configuration and Grok profiles.
+/// A session started at a project whose every file lives under one
+/// temporary directory: the shipped default Claude preset as `codeflow
+/// update` writes it; the shipped Codex configuration with a user
+/// configuration that trusts the project; the shipped Grok profiles with
+/// `cf-guard` selected through `GROK_SANDBOX`.
 struct Fixture {
     _dir: tempfile::TempDir,
     host: Host,
@@ -23,33 +25,60 @@ fn preset() -> Value {
     settings
 }
 
+const CLAUDE: Harnesses = Harnesses::CLAUDE;
+const CODEX: Harnesses = Harnesses::CODEX;
+const GROK: Harnesses = Harnesses::GROK;
+const CODEX_SHIPPED: &str = include_str!("../../../../assets/base/codex/config.toml");
+const GROK_SHIPPED: &str = include_str!("../../../../assets/base/grok/sandbox.toml");
+
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("project");
-        let home = dir.path().join("home");
-        fs::create_dir_all(root.join(".claude")).unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let root = base.join("project");
+        let home = base.join("home");
         fs::create_dir_all(&home).unwrap();
-        fs::write(
-            root.join(".claude/settings.json"),
-            serde_json::to_string_pretty(&preset()).unwrap(),
-        )
-        .unwrap();
-        write(&root.join(".codex/config.toml"), &codex_config());
+        write(
+            &root.join(".claude/settings.json"),
+            &serde_json::to_string_pretty(&preset()).unwrap(),
+        );
+        write(&root.join(".codex/config.toml"), CODEX_SHIPPED);
         write(&root.join(".grok/sandbox.toml"), GROK_SHIPPED);
-        let managed = dir.path().join("managed");
+        let managed = base.join("managed");
         let host = Host {
             session: Some(root.clone()),
             cwd: root.clone(),
-            root,
+            root: root.clone(),
             home: Some(home),
             claude_config_dir: None,
             codex_home: None,
+            grok_home: None,
+            grok_sandbox: Some("cf-guard".to_string()),
             managed_file: Some(managed.join("managed-settings.json")),
             managed_dir: Some(managed.join("managed-settings.d")),
+            claude_unattested: vec![managed.join("com.anthropic.claudecode.plist")],
+            codex_unattested: vec![managed.join("codex/config.toml")],
             native_windows: false,
         };
-        Self { _dir: dir, host }
+        let fixture = Self { _dir: dir, host };
+        fixture.codex_user("");
+        fixture
+    }
+
+    fn home(&self) -> PathBuf {
+        self.host.home.clone().unwrap()
+    }
+
+    /// Write the user Codex configuration: one that trusts the project,
+    /// followed by `more`.
+    fn codex_user(&self, more: &str) {
+        write(
+            &self.home().join(".codex/config.toml"),
+            &format!(
+                "{more}\n[projects.{:?}]\ntrust_level = \"trusted\"\n",
+                self.host.root.display().to_string()
+            ),
+        );
     }
 
     fn project(&self) -> PathBuf {
@@ -61,54 +90,64 @@ impl Fixture {
         let mut value: Value =
             serde_json::from_str(&fs::read_to_string(self.project()).unwrap()).unwrap();
         edit(&mut value);
-        fs::write(
-            self.project(),
-            serde_json::to_string_pretty(&value).unwrap(),
-        )
-        .unwrap();
+        write(
+            &self.project(),
+            &serde_json::to_string_pretty(&value).unwrap(),
+        );
     }
 
     fn outcome(&self, harnesses: Harnesses) -> Outcome {
-        outcome(&self.host, harnesses, false, false)
+        outcome(&self.host, harnesses, false, &[])
     }
 }
-
-const CLAUDE: Harnesses = Harnesses::CLAUDE;
-const CODEX: Harnesses = Harnesses::CODEX;
-const GROK: Harnesses = Harnesses::GROK;
-const GROK_SHIPPED: &str = include_str!("../../../../assets/base/grok/sandbox.toml");
 
 fn assert_tightened(outcome: &Outcome, needle: &str) {
     match outcome {
         Outcome::Tightened(trigger) => assert!(trigger.contains(needle), "{trigger}"),
-        Outcome::Baseline => panic!("expected a trigger naming {needle}, got the baseline"),
+        Outcome::Baseline => panic!("expected a reason naming {needle}, got the baseline"),
     }
 }
 
-/// One trigger: the fixture with `apply` tightens, naming `needle`; the
-/// same fixture without it is the baseline.
-fn check(harnesses: Harnesses, needle: &str, apply: impl FnOnce(&Fixture)) {
-    let fixture = Fixture::new();
+/// One reason: the fixture is the baseline for `harnesses`; after `apply`
+/// it tightens, and some reason names `needle`.
+fn check(harnesses: Harnesses, needle: &str, apply: impl FnOnce(&mut Fixture)) {
+    let mut fixture = Fixture::new();
     assert_eq!(
         fixture.outcome(harnesses),
         Outcome::Baseline,
         "{needle}: before"
     );
-    apply(&fixture);
-    assert_tightened(&fixture.outcome(harnesses), needle);
-    assert_tightened(&fixture.outcome(Harnesses::ALL), needle);
+    apply(&mut fixture);
+    let found = triggers(&fixture.host, harnesses);
+    assert!(
+        found.iter().any(|reason| reason.contains(needle)),
+        "{needle}: {found:#?}"
+    );
 }
 
-/// The shipped preset, alone, selects the baseline on macOS and Linux.
-#[test]
-fn the_shipped_preset_selects_the_baseline() {
-    let fixture = Fixture::new();
-    assert_eq!(fixture.outcome(Harnesses::ALL), Outcome::Baseline);
+/// A form the attestation accepts: still the baseline after `apply`.
+fn accepted(harnesses: Harnesses, what: &str, apply: impl FnOnce(&mut Fixture)) {
+    let mut fixture = Fixture::new();
+    apply(&mut fixture);
     assert_eq!(
-        triggers(&fixture.host, Harnesses::ALL),
-        Vec::<String>::new()
+        triggers(&fixture.host, harnesses),
+        Vec::<String>::new(),
+        "{what}"
     );
-    // Each shipped preset as `codeflow update` writes it.
+}
+
+/// The shipped configuration selects the baseline for each identified
+/// harness, with every shipped Claude preset.
+#[test]
+fn the_shipped_configuration_selects_the_baseline() {
+    let fixture = Fixture::new();
+    for harnesses in [CLAUDE, CODEX, GROK] {
+        assert_eq!(
+            triggers(&fixture.host, harnesses),
+            Vec::<String>::new(),
+            "{harnesses:?}"
+        );
+    }
     for name in ["default.json", "acceptEdits.json", "bypass-sandboxed.json"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/base/settings")
@@ -116,602 +155,21 @@ fn the_shipped_preset_selects_the_baseline() {
         let mut settings: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         actions::table().apply_to_claude_preset(&mut settings);
         write(&fixture.project(), &settings.to_string());
-        assert_eq!(fixture.outcome(Harnesses::ALL), Outcome::Baseline, "{name}");
+        assert_eq!(
+            triggers(&fixture.host, CLAUDE),
+            Vec::<String>::new(),
+            "{name}"
+        );
     }
 }
 
-/// Native Windows has no sandbox under Claude Code or Grok Build.
+/// A payload that identifies no single harness cannot be attested
+/// (Codex 17: ambiguous or missing identity with no configuration).
 #[test]
-fn native_windows_tightens() {
-    let mut fixture = Fixture::new();
-    fixture.host.native_windows = true;
-    assert_tightened(&fixture.outcome(CLAUDE), "native Windows");
-    assert_tightened(&fixture.outcome(GROK), "native Windows");
-    assert_eq!(fixture.outcome(CODEX), Outcome::Baseline);
-}
-
-#[test]
-fn a_disabled_or_unset_sandbox_tightens() {
-    check(CLAUDE, "sandbox.enabled", |f| {
-        f.edit_project(|v| v["sandbox"]["enabled"] = json!(false));
-    });
-    check(CLAUDE, "sandbox.enabled", |f| {
-        f.edit_project(|v| {
-            v["sandbox"].as_object_mut().unwrap().remove("enabled");
-        });
-    });
-    check(CLAUDE, "sandbox.filesystem.disabled", |f| {
-        f.edit_project(|v| v["sandbox"]["filesystem"]["disabled"] = json!(true));
-    });
-    // A higher layer wins: the local file turns the sandbox off.
-    check(CLAUDE, "sandbox.enabled", |f| {
-        write(
-            &f.host.root.join(".claude/settings.local.json"),
-            r#"{"sandbox":{"enabled":false}}"#,
-        );
-    });
-    // The managed layer outranks the project.
-    check(CLAUDE, "sandbox.enabled", |f| {
-        write(
-            f.host.managed_file.as_ref().unwrap(),
-            r#"{"sandbox":{"enabled":false}}"#,
-        );
-    });
-    // A lower layer does not: the user's `false` loses to the project's
-    // `true`.
-    let fixture = Fixture::new();
-    write(
-        &fixture
-            .host
-            .home
-            .as_ref()
-            .unwrap()
-            .join(".claude/settings.json"),
-        r#"{"sandbox":{"enabled":false}}"#,
-    );
-    assert_eq!(fixture.outcome(CLAUDE), Outcome::Baseline);
-}
-
-#[test]
-fn a_fail_open_sandbox_tightens() {
-    check(CLAUDE, "sandbox.failIfUnavailable", |f| {
-        f.edit_project(|v| v["sandbox"]["failIfUnavailable"] = json!(false));
-    });
-}
-
-/// Two managed layers disagree: the value cannot be computed.
-#[test]
-fn disagreeing_layers_of_one_rank_tighten() {
-    let fixture = Fixture::new();
-    write(
-        fixture.host.managed_file.as_ref().unwrap(),
-        r#"{"sandbox":{"enabled":true}}"#,
-    );
-    write(
-        &fixture
-            .host
-            .managed_dir
-            .as_ref()
-            .unwrap()
-            .join("10-off.json"),
-        r#"{"sandbox":{"enabled":false}}"#,
-    );
-    assert_tightened(&fixture.outcome(CLAUDE), "disagree");
-}
-
-/// A missing floor entry tightens, whichever mirror carries it: removing
-/// the `Edit` deny alone leaves the `denyWrite` entry, and removing both
-/// tightens.
-#[test]
-fn a_missing_floor_entry_tightens() {
-    check(CLAUDE, "Edit(/.claude/settings.json)", |f| {
-        f.edit_project(|v| {
-            v["permissions"]["deny"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|r| r != "Edit(/.claude/settings.json)");
-            v["sandbox"]["filesystem"]["denyWrite"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|r| r != "./.claude/settings.json");
-        });
-    });
-    let fixture = Fixture::new();
-    fixture.edit_project(|v| {
-        v["permissions"]["deny"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|r| r != "Edit(/.claude/settings.json)");
-    });
-    assert_eq!(fixture.outcome(CLAUDE), Outcome::Baseline);
-    check(CLAUDE, "Read(**/*secret*)", |f| {
-        f.edit_project(|v| {
-            v["permissions"]["deny"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|r| r != "Read(**/*secret*)");
-        });
-    });
-    // A secret store needs its `denyRead` entry or its `Read(...)` deny;
-    // either alone holds the floor, and neither tightens.
-    check(CLAUDE, "~/.pypirc", |f| {
-        f.edit_project(|v| {
-            v["sandbox"]["filesystem"]["denyRead"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|r| r != "~/.pypirc");
-            v["permissions"]["deny"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|r| r != "Read(~/.pypirc)");
-        });
-    });
-    let fixture = Fixture::new();
-    fixture.edit_project(|v| {
-        v["sandbox"]["filesystem"]["denyRead"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|r| r != "~/.pypirc");
-    });
-    assert_eq!(fixture.outcome(CLAUDE), Outcome::Baseline);
-    // A settings file with no sandbox block at all (J5).
-    check(CLAUDE, "sandbox.enabled", |f| {
-        f.edit_project(|v| {
-            v.as_object_mut().unwrap().remove("sandbox");
-        });
-    });
-}
-
-#[test]
-fn an_allow_entry_at_a_protected_path_tightens() {
-    check(CLAUDE, "allowWrite", |f| {
-        f.edit_project(|v| {
-            v["sandbox"]["filesystem"]["allowWrite"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!("./.git/hooks"));
-        });
-    });
-    check(CLAUDE, "allowWrite", |f| {
-        f.edit_project(|v| {
-            v["sandbox"]["filesystem"]["allowWrite"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!("~/.codeflow/authority/receipts"));
-        });
-    });
-    check(CLAUDE, "Edit", |f| {
-        f.edit_project(|v| {
-            v["permissions"]["allow"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!("Edit(/.git/hooks/pre-commit)"));
-        });
-    });
-    check(CLAUDE, "Edit", |f| {
-        f.edit_project(|v| {
-            v["permissions"]["allow"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!("Edit"));
-        });
-    });
-    // A glob whose literal start can reach a protected path.
-    check(CLAUDE, "allowWrite", |f| {
-        f.edit_project(|v| {
-            v["sandbox"]["filesystem"]["allowWrite"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!("./.cl*"));
-        });
-    });
-    check(CLAUDE, "additionalDirectories", |f| {
-        f.edit_project(|v| {
-            v["permissions"]["additionalDirectories"] = json!(["~/.codex/rules"]);
-        });
-    });
-    // An entry that reaches no protected path is not a trigger, nor is
-    // one above a protected path: the project directory is writable by
-    // default, and the floor's denies take precedence there.
-    let fixture = Fixture::new();
-    fixture.edit_project(|v| {
-        v["sandbox"]["filesystem"]["allowWrite"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("./.claude"));
-        v["sandbox"]["filesystem"]["allowWrite"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("./target/**"));
-        v["permissions"]["allow"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("Edit(/src/**)"));
-    });
-    assert_eq!(fixture.outcome(CLAUDE), Outcome::Baseline);
-}
-
-/// Any non-empty exclusion list tightens the whole session; no matcher
-/// decides which call it covers.
-#[test]
-fn any_excluded_command_tightens() {
-    check(CLAUDE, "excludedCommands", |f| {
-        write(
-            f.host.managed_file.as_ref().unwrap(),
-            r#"{"sandbox":{"excludedCommands":["git","gh"]}}"#,
-        );
-    });
-    check(CLAUDE, "excludedCommands", |f| {
-        f.edit_project(|v| v["sandbox"]["excludedCommands"] = json!(["docker"]));
-    });
-}
-
-#[test]
-fn escape_settings_tighten() {
-    for (pointer, value) in [
-        ("/sandbox/enableWeakerNestedSandbox", json!(true)),
-        ("/sandbox/allowNestedUserNamespaces", json!(true)),
-        ("/sandbox/network/allowAllUnixSockets", json!(true)),
-        (
-            "/sandbox/network/allowUnixSockets",
-            json!(["/var/run/docker.sock"]),
-        ),
-        ("/sandbox/ignoreViolations", json!({"*": ["/usr/bin"]})),
-    ] {
-        let key = pointer.rsplit('/').next().unwrap().to_string();
-        check(CLAUDE, &key, |f| {
-            f.edit_project(|v| {
-                let mut at = v;
-                let parts: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
-                for part in &parts[..parts.len() - 1] {
-                    at = at
-                        .as_object_mut()
-                        .unwrap()
-                        .entry((*part).to_string())
-                        .or_insert_with(|| json!({}));
-                }
-                at[parts[parts.len() - 1]] = value;
-            });
-        });
-    }
-}
-
-/// An existing file that cannot be read tightens; an absent one does not
-/// (J2).
-#[test]
-fn a_malformed_file_tightens_and_an_absent_one_does_not() {
-    check(CLAUDE, "not a JSON object", |f| {
-        write(
-            &f.host.root.join(".claude/settings.local.json"),
-            "{ not json",
-        );
-    });
-    check(CLAUDE, "not a JSON object", |f| {
-        write(
-            &f.host.managed_dir.as_ref().unwrap().join("10-policy.json"),
-            "[]",
-        );
-    });
-    check(CODEX, "not valid TOML", |f| {
-        write(&f.host.root.join(".codex/config.toml"), "= broken");
-    });
-    check(GROK, "not valid TOML", |f| {
-        write(&f.host.root.join(".grok/sandbox.toml"), "[profiles");
-    });
-    // No Codex or Grok file at all: a call whose harness is not identified
-    // gets no trigger for them; a call identified as that harness tightens
-    // (review round 16, Fable F3).
-    let fixture = Fixture::new();
-    fs::remove_file(fixture.host.root.join(".codex/config.toml")).unwrap();
-    fs::remove_file(fixture.host.root.join(".grok/sandbox.toml")).unwrap();
-    assert_eq!(fixture.outcome(Harnesses::ALL), Outcome::Baseline);
-    assert_tightened(&fixture.outcome(CODEX), "no Codex configuration file");
-    assert_tightened(&fixture.outcome(GROK), "no Grok sandbox profiles file");
-}
-
-/// C16-5: a settings path that is not a regular file tightens, and a FIFO
-/// does not stall the hook.
-#[cfg(unix)]
-#[test]
-fn a_settings_path_that_is_not_a_regular_file_tightens() {
-    check(CLAUDE, "not a regular file", |f| {
-        fs::create_dir_all(f.host.root.join(".claude/settings.local.json")).unwrap();
-    });
-    check(CLAUDE, "not a regular file", |f| {
-        let fifo = f.host.root.join(".claude/settings.local.json");
-        let made = std::process::Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .unwrap();
-        assert!(made.success());
-    });
-}
-
-#[cfg(unix)]
-#[test]
-fn an_unreadable_file_tightens() {
-    use std::os::unix::fs::PermissionsExt;
-    let fixture = Fixture::new();
-    let local = fixture.host.root.join(".claude/settings.local.json");
-    write(&local, "{}");
-    fs::set_permissions(&local, fs::Permissions::from_mode(0o000)).unwrap();
-    // A process that can read the file anyway (root) cannot test this.
-    if fs::read(&local).is_err() {
-        assert_tightened(&fixture.outcome(CLAUDE), "cannot be read");
-    }
-    fs::set_permissions(&local, fs::Permissions::from_mode(0o600)).unwrap();
-}
-
-fn codex_config() -> String {
-    include_str!("../../../../assets/base/codex/config.toml").to_string()
-}
-
-/// C16-3: a Codex profile is judged by what it grants, not by its name.
-#[test]
-fn codex_triggers() {
-    // The shipped profile selects the baseline, and so does the same
-    // content under another name.
-    let fixture = Fixture::new();
-    assert_eq!(fixture.outcome(CODEX), Outcome::Baseline);
-    write(
-        &fixture.host.root.join(".codex/config.toml"),
-        &codex_config().replace("cf-guard", "my-guard"),
-    );
-    assert_eq!(fixture.outcome(CODEX), Outcome::Baseline);
-    check(CODEX, "grants a write the shipped profiles do not", |f| {
-        write(
-            &f.host.root.join(".codex/config.toml"),
-            &codex_config().replacen(
-                "[permissions.cf-guard.filesystem]\n",
-                "[permissions.cf-guard.filesystem]\n\"/\" = \"write\"\n",
-                1,
-            ),
-        );
-    });
-    check(CODEX, "does not keep the shipped rule `~/.ssh/**`", |f| {
-        write(
-            &f.host.root.join(".codex/config.toml"),
-            &codex_config().replacen("\"~/.ssh/**\" = \"deny\"\n", "", 1),
-        );
-    });
-    check(CODEX, "does not keep the shipped rule `~/.zshrc`", |f| {
-        write(
-            &f.host.root.join(".codex/config.toml"),
-            &codex_config().replacen("\"~/.zshrc\" = \"read\"", "\"~/.zshrc\" = \"write\"", 1),
-        );
-    });
-    check(CODEX, "cannot be judged", |f| {
-        write(
-            &f.host.root.join(".codex/config.toml"),
-            &codex_config().replacen(
-                "extends = \":workspace\"",
-                "extends = \":danger-full-access\"",
-                1,
-            ),
-        );
-    });
-    check(CODEX, "network.allow_local_binding", |f| {
-        write(
-            &f.host.root.join(".codex/config.toml"),
-            &codex_config().replacen(
-                "allow_local_binding = false",
-                "allow_local_binding = true",
-                1,
-            ),
-        );
-    });
-    check(CODEX, "sandbox_mode", |f| {
-        write(
-            &f.host.root.join(".codex/config.toml"),
-            &format!("sandbox_mode = \"danger-full-access\"\n{}", codex_config()),
-        );
-    });
-    check(CODEX, "does not keep the shipped rule", |f| {
-        write(
-            &f.host.root.join(".codex/config.toml"),
-            &codex_config().replace(
-                "default_permissions = \"cf-guard\"",
-                "default_permissions = \":workspace\"",
-            ),
-        );
-    });
-    check(CODEX, "approval policy", |f| {
-        write(
-            &f.host.root.join(".codex/config.toml"),
-            &codex_config().replace(
-                "approval_policy = \"never\"",
-                "approval_policy = \"on-request\"",
-            ),
-        );
-    });
-    // The user layer alone, with no profile, is not the shipped posture.
-    check(CODEX, "selects no default permission profile", |f| {
-        fs::remove_file(f.host.root.join(".codex/config.toml")).unwrap();
-        write(
-            &f.host.home.as_ref().unwrap().join(".codex/config.toml"),
-            "approval_policy = \"never\"\nmodel = \"x\"\n",
-        );
-    });
-}
-
-/// C16-3: removing a shipped Grok entry, a deny included, or a member
-/// that is not a string tightens.
-#[test]
-fn grok_triggers() {
-    let shipped = GROK_SHIPPED;
-    let fixture = Fixture::new();
-    assert_eq!(fixture.outcome(GROK), Outcome::Baseline);
-    check(GROK, "read_only", |f| {
-        write(
-            &f.host.root.join(".grok/sandbox.toml"),
-            &shipped.replacen("  \".codex\",\n", "", 1),
-        );
-    });
-    check(GROK, "shipped `deny` entry", |f| {
-        write(
-            &f.host.root.join(".grok/sandbox.toml"),
-            &shipped.replace("  \"/Users/*/.ssh\",\n", ""),
-        );
-    });
-    check(GROK, "not a string", |f| {
-        write(
-            &f.host.root.join(".grok/sandbox.toml"),
-            &shipped.replacen("read_only = [\n", "read_only = [\n  1,\n", 1),
-        );
-    });
-    check(GROK, "does not extend", |f| {
-        write(
-            &f.host.root.join(".grok/sandbox.toml"),
-            &shipped.replacen("extends = \"workspace\"", "extends = \"full\"", 1),
-        );
-    });
-}
-
-/// C16-2: Claude settings that weaken containment beyond the floor checks.
-#[test]
-fn read_exceptions_and_weaker_isolation_tighten() {
-    check(CLAUDE, "allowRead", |f| {
-        f.edit_project(|v| {
-            v["sandbox"]["filesystem"]["allowRead"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!("~/.ssh/config"));
-        });
-    });
-    check(CLAUDE, "allowAppleEvents", |f| {
-        f.edit_project(|v| v["sandbox"]["allowAppleEvents"] = json!(true));
-    });
-    check(CLAUDE, "enableWeakerNetworkIsolation", |f| {
-        f.edit_project(|v| v["sandbox"]["enableWeakerNetworkIsolation"] = json!(true));
-    });
-    for entry in ["~/.zshrc", "~/.gitconfig", "~/.config/git/config"] {
-        check(CLAUDE, "allowWrite", |f| {
-            f.edit_project(|v| {
-                v["sandbox"]["filesystem"]["allowWrite"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(json!(entry));
-            });
-        });
-    }
-    // The shipped read exception and a write outside the floor stay
-    // controls.
-    let fixture = Fixture::new();
-    fixture.edit_project(|v| {
-        v["sandbox"]["filesystem"]["allowWrite"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("~/scratch"));
-        v["sandbox"]["allowAppleEvents"] = json!(false);
-    });
-    assert_eq!(fixture.outcome(CLAUDE), Outcome::Baseline);
-}
-
-/// C16-1 and Fable F1: a Claude call is judged against the project its
-/// session started in, never only the repository of its working directory.
-#[test]
-fn a_claude_call_is_judged_against_its_session_project() {
-    // The session project is loosened; the call works in a clean scratch
-    // repository.
-    let mut fixture = Fixture::new();
-    let scratch = fixture.host.root.parent().unwrap().join("scratch");
-    write(
-        &scratch.join(".claude/settings.json"),
-        &serde_json::to_string(&preset()).unwrap(),
-    );
-    fixture.edit_project(|v| v["sandbox"]["enabled"] = json!(false));
-    fixture.host.cwd = scratch.clone();
-    fixture.host.root = scratch.clone();
-    assert_tightened(&fixture.outcome(CLAUDE), "sandbox.enabled");
-    // A Claude call whose hook environment names no session tightens.
-    let mut fixture = Fixture::new();
-    fixture.host.session = None;
-    assert_tightened(&fixture.outcome(CLAUDE), "CLAUDE_PROJECT_DIR");
-    // A session started in a subdirectory reads that directory's settings.
-    let mut fixture = Fixture::new();
-    let sub = fixture.host.root.join("sub");
-    write(
-        &sub.join(".claude/settings.json"),
-        r#"{"sandbox":{"enabled":false}}"#,
-    );
-    fixture.host.session = Some(sub.clone());
-    fixture.host.cwd = sub;
-    assert_tightened(&fixture.outcome(CLAUDE), "sandbox.enabled");
-    // A call whose harness is not identified reads every directory with
-    // settings between its working directory and the repository root.
-    let mut fixture = Fixture::new();
-    fixture.host.session = None;
-    let sub = fixture.host.root.join("sub");
-    write(
-        &sub.join(".claude/settings.json"),
-        r#"{"sandbox":{"enabled":false}}"#,
-    );
-    fixture.host.cwd = sub.join("deeper");
-    assert_tightened(&fixture.outcome(Harnesses::ALL), "sandbox.enabled");
-}
-
-/// C16-1: a linked worktree adds its main checkout, found through Git's
-/// worktree metadata, whose loosened settings tighten the call.
-#[test]
-fn a_worktree_reads_its_main_checkout() {
-    let mut fixture = Fixture::new();
-    let main = fixture.host.root.clone();
-    let repo = git2::Repository::init(&main).unwrap();
-    let tree = {
-        let mut index = repo.index().unwrap();
-        index.add_path(Path::new(".claude/settings.json")).unwrap();
-        index.write().unwrap();
-        index.write_tree().unwrap()
-    };
-    let signature = git2::Signature::now("t", "t@example.invalid").unwrap();
-    repo.commit(
-        Some("HEAD"),
-        &signature,
-        &signature,
-        "seed",
-        &repo.find_tree(tree).unwrap(),
-        &[],
-    )
-    .unwrap();
-    let linked = main.parent().unwrap().join("linked");
-    repo.worktree("linked", &linked, None).unwrap();
-    // The session and the call are in the worktree, whose copy of the
-    // preset is clean.
-    fixture.host.session = Some(linked.clone());
-    fixture.host.cwd = linked.clone();
-    fixture.host.root = linked;
-    assert_eq!(fixture.outcome(CLAUDE), Outcome::Baseline);
-    write(
-        &main.join(".claude/settings.local.json"),
-        r#"{"sandbox":{"excludedCommands":["git"]}}"#,
-    );
-    assert_tightened(&fixture.outcome(CLAUDE), "excludedCommands");
-    assert_tightened(&fixture.outcome(Harnesses::ALL), "excludedCommands");
-}
-
-/// J1: shared keys never identify a harness. A Claude payload carrying
-/// `agent_type`, with a loosened Claude layer, tightens.
-#[test]
-fn harnesses_are_read_by_the_union_rule() {
+fn an_unidentified_call_tightens() {
     let keys = |names: &[&str]| -> Vec<String> { names.iter().map(|n| (*n).to_string()).collect() };
     assert_eq!(
-        Harnesses::from_keys(&keys(&[
-            "tool_name",
-            "tool_input",
-            "agent_type",
-            "agent_id",
-            "session_id",
-            "cwd"
-        ])),
-        Harnesses::ALL
-    );
-    assert_eq!(
-        Harnesses::from_keys(&keys(&[
-            "tool_name",
-            "prompt_id",
-            "scratchpad_dir",
-            "agent_type"
-        ])),
+        Harnesses::from_keys(&keys(&["tool_name", "prompt_id", "scratchpad_dir"])),
         CLAUDE
     );
     assert_eq!(
@@ -722,21 +180,414 @@ fn harnesses_are_read_by_the_union_rule() {
         Harnesses::from_keys(&keys(&["toolName", "toolInput"])),
         GROK
     );
-    // `turn_id` alone, or `model` alone, is not Codex.
-    assert_eq!(Harnesses::from_keys(&keys(&["turn_id"])), Harnesses::ALL);
-    // Unique keys of two harnesses contradict each other: all are read.
-    assert_eq!(
-        Harnesses::from_keys(&keys(&["toolName", "prompt_id", "scratchpad_dir"])),
-        Harnesses::ALL
-    );
+    for ambiguous in [
+        keys(&["tool_name", "tool_input", "agent_type", "session_id"]),
+        keys(&["turn_id"]),
+        keys(&["toolName", "prompt_id", "scratchpad_dir"]),
+    ] {
+        assert_eq!(Harnesses::from_keys(&ambiguous), Harnesses::ALL);
+    }
     let fixture = Fixture::new();
-    write(
-        &fixture.host.root.join(".codex/config.toml"),
-        &codex_config(),
+    assert_tightened(
+        &fixture.outcome(Harnesses::ALL),
+        "does not identify one harness",
     );
-    fixture.edit_project(|v| v["sandbox"]["enabled"] = json!(false));
-    let subagent = Harnesses::from_keys(&keys(&["tool_name", "agent_type", "agent_id", "model"]));
-    assert_tightened(&fixture.outcome(subagent), "sandbox.enabled");
+}
+
+#[test]
+fn native_windows_tightens() {
+    let mut fixture = Fixture::new();
+    fixture.host.native_windows = true;
+    assert_tightened(&fixture.outcome(CLAUDE), "native Windows");
+    assert_tightened(&fixture.outcome(GROK), "native Windows");
+    assert_eq!(fixture.outcome(CODEX), Outcome::Baseline);
+}
+
+#[test]
+fn claude_sandbox_settings_must_be_shipped_or_narrower() {
+    check(CLAUDE, "sandbox.enabled", |f| {
+        f.edit_project(|v| v["sandbox"]["enabled"] = json!(false));
+    });
+    check(CLAUDE, "sandbox.enabled", |f| {
+        f.edit_project(|v| {
+            v["sandbox"].as_object_mut().unwrap().remove("enabled");
+        });
+    });
+    check(CLAUDE, "sandbox.failIfUnavailable", |f| {
+        f.edit_project(|v| v["sandbox"]["failIfUnavailable"] = json!(false));
+    });
+    check(CLAUDE, "sandbox.excludedCommands", |f| {
+        f.edit_project(|v| v["sandbox"]["excludedCommands"] = json!(["git"]));
+    });
+    for key in [
+        "enableWeakerNestedSandbox",
+        "enableWeakerNetworkIsolation",
+        "allowAppleEvents",
+        "allowNestedUserNamespaces",
+    ] {
+        check(CLAUDE, key, |f| {
+            f.edit_project(|v| v["sandbox"][key] = json!(true));
+        });
+    }
+    // A key the attestation does not list is not attested.
+    for key in ["ignoreViolations", "somethingNew"] {
+        check(CLAUDE, key, |f| {
+            f.edit_project(|v| v["sandbox"][key] = json!({}));
+        });
+    }
+    check(CLAUDE, "sandbox.filesystem.disabled", |f| {
+        f.edit_project(|v| v["sandbox"]["filesystem"]["disabled"] = json!(true));
+    });
+    check(CLAUDE, "allowAllUnixSockets", |f| {
+        f.edit_project(|v| v["sandbox"]["network"]["allowAllUnixSockets"] = json!(true));
+    });
+    check(CLAUDE, "allowUnixSockets", |f| {
+        f.edit_project(|v| {
+            v["sandbox"]["network"]["allowUnixSockets"] = json!(["/var/run/docker.sock"]);
+        });
+    });
+    // C16-2: reads and writes beyond the shipped ones.
+    check(CLAUDE, "allowRead", |f| {
+        f.edit_project(|v| v["sandbox"]["filesystem"]["allowRead"] = json!(["~/.ssh/config"]));
+    });
+    for entry in ["~/.zshrc", "~/.gitconfig", "/", "."] {
+        check(CLAUDE, entry, |f| {
+            f.edit_project(|v| v["sandbox"]["filesystem"]["allowWrite"] = json!([entry]));
+        });
+    }
+    check(CLAUDE, "additionalDirectories", |f| {
+        f.edit_project(|v| v["permissions"]["additionalDirectories"] = json!(["/"]));
+    });
+    check(CLAUDE, "permissions.unknown", |f| {
+        f.edit_project(|v| v["permissions"]["unknown"] = json!(true));
+    });
+    check(CLAUDE, "ANTHROPIC_API_KEY", |f| {
+        f.edit_project(|v| v["sandbox"]["credentials"]["envVars"] = json!([]));
+    });
+    check(CLAUDE, "Edit(/.claude/settings.json)", |f| {
+        f.edit_project(|v| {
+            v["permissions"]["deny"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|rule| rule != "Edit(/.claude/settings.json)");
+            v["sandbox"]["filesystem"]["denyWrite"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|path| path != "./.claude/settings.json");
+        });
+    });
+    // Narrower forms stay attested.
+    accepted(CLAUDE, "more denies and fewer grants", |f| {
+        f.edit_project(|v| {
+            v["sandbox"]["filesystem"]["denyWrite"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("~/.extra"));
+            v["sandbox"]["filesystem"]["allowWrite"] = json!(["~/.codeflow/locks"]);
+            v["sandbox"]["network"]["allowedDomains"] = json!(["github.com"]);
+            v["permissions"]["allow"] = json!(["Bash(ls:*)"]);
+            v["model"] = json!("opus");
+        });
+    });
+}
+
+#[test]
+fn every_claude_layer_is_read() {
+    // The user layer.
+    check(CLAUDE, "settings.json", |f| {
+        write(
+            &f.home().join(".claude/settings.json"),
+            r#"{"sandbox":{"excludedCommands":["git"]}}"#,
+        );
+    });
+    // CLAUDE_CONFIG_DIR moves it.
+    check(CLAUDE, "excludedCommands", |f| {
+        let dir = f.home().join("claude-config");
+        write(
+            &dir.join("settings.json"),
+            r#"{"sandbox":{"excludedCommands":["git"]}}"#,
+        );
+        f.host.claude_config_dir = Some(dir);
+    });
+    // The managed file and drop-ins.
+    check(CLAUDE, "managed-settings.json", |f| {
+        write(
+            f.host.managed_file.as_ref().unwrap(),
+            r#"{"sandbox":{"enabled":false}}"#,
+        );
+    });
+    check(CLAUDE, "10-x.json", |f| {
+        write(
+            &f.host.managed_dir.as_ref().unwrap().join("10-x.json"),
+            r#"{"sandbox":{"excludedCommands":["git"]}}"#,
+        );
+    });
+    // The local layer.
+    check(CLAUDE, "settings.local.json", |f| {
+        write(
+            &f.host.root.join(".claude/settings.local.json"),
+            r#"{"sandbox":{"enabled":false}}"#,
+        );
+    });
+    // Unattested host files.
+    check(CLAUDE, "managed Claude preferences", |f| {
+        write(&f.host.claude_unattested[0], "plist");
+    });
+    check(CLAUDE, "server-managed Claude settings", |f| {
+        write(&f.home().join(".claude/remote-settings.json"), "{}");
+    });
+    // A Claude call whose environment names no session project.
+    check(CLAUDE, "CLAUDE_PROJECT_DIR", |f| f.host.session = None);
+}
+
+#[test]
+fn an_unusable_settings_file_tightens() {
+    check(CLAUDE, "not a JSON object", |f| {
+        write(&f.project(), "[1, 2]");
+    });
+    check(CLAUDE, "not a JSON object", |f| {
+        write(&f.project(), "{ not json");
+    });
+    check(CLAUDE, "not a regular file", |f| {
+        let local = f.host.root.join(".claude/settings.local.json");
+        fs::create_dir_all(&local).unwrap();
+    });
+    #[cfg(unix)]
+    check(CLAUDE, "not a regular file", |f| {
+        let local = f.host.root.join(".claude/settings.local.json");
+        let c = std::ffi::CString::new(local.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    });
+    #[cfg(unix)]
+    check(CLAUDE, "cannot be read", |f| {
+        use std::os::unix::fs::PermissionsExt;
+        let local = f.host.root.join(".claude/settings.local.json");
+        write(&local, "{}");
+        fs::set_permissions(&local, fs::Permissions::from_mode(0o000)).unwrap();
+        // A process that can read anything (root) cannot test this.
+        if fs::read(&local).is_ok() {
+            write(&local, "{ unreadable stand-in");
+        }
+    });
+}
+
+/// Codex 17, C17-1: a session started in a subdirectory reads the
+/// repository root's local settings; a linked worktree reads the main
+/// checkout's.
+#[test]
+fn claude_local_settings_at_the_repository_root_and_main_checkout() {
+    let mut fixture = Fixture::new();
+    let root = fixture.host.root.clone();
+    commit_all(&root);
+    let sub = root.join("sub");
+    write(
+        &sub.join(".claude/settings.json"),
+        &serde_json::to_string(&preset()).unwrap(),
+    );
+    fixture.host.session = Some(sub.clone());
+    fixture.host.cwd = sub;
+    assert_eq!(triggers(&fixture.host, CLAUDE), Vec::<String>::new());
+    write(
+        &root.join(".claude/settings.local.json"),
+        r#"{"sandbox":{"enabled":false}}"#,
+    );
+    assert_tightened(&fixture.outcome(CLAUDE), "settings.local.json");
+
+    let mut fixture = Fixture::new();
+    let main = fixture.host.root.clone();
+    let repo = commit_all(&main);
+    let linked = main.parent().unwrap().join("linked");
+    repo.worktree("linked", &linked, None).unwrap();
+    fixture.host.session = Some(linked.clone());
+    fixture.host.cwd = linked.clone();
+    fixture.host.root = linked;
+    fixture.codex_user("");
+    assert_eq!(triggers(&fixture.host, CLAUDE), Vec::<String>::new());
+    write(
+        &main.join(".claude/settings.local.json"),
+        r#"{"sandbox":{"excludedCommands":["git"]}}"#,
+    );
+    assert_tightened(&fixture.outcome(CLAUDE), "excludedCommands");
+}
+
+/// Codex: the shipped configuration under a trusting user configuration
+/// is the baseline; everything else here is not attested.
+#[test]
+fn codex_configuration_must_be_shipped_or_narrower() {
+    check(CODEX, "approval_policy", |f| {
+        f.codex_user("approval_policy = \"on-request\"");
+    });
+    // F2-3: the user layer alone is judged, not only under the project.
+    check(CODEX, "default_permissions", |f| {
+        f.codex_user("default_permissions = \"wide\"");
+    });
+    // Without trust, Codex skips the project layer; the user layer alone
+    // does not select the shipped profile.
+    check(CODEX, "does not mark", |f| {
+        write(&f.home().join(".codex/config.toml"), "");
+    });
+    check(CODEX, "user Codex configuration", |f| {
+        fs::remove_file(f.home().join(".codex/config.toml")).unwrap();
+    });
+    // F2-2: a profile table or profile file that sets containment.
+    check(CODEX, "profile `loose`", |f| {
+        f.codex_user("profile = \"loose\"\n[profiles.loose]\napproval_policy = \"on-request\"");
+    });
+    check(CODEX, "loose.config.toml", |f| {
+        write(
+            &f.home().join(".codex/loose.config.toml"),
+            "default_permissions = \"wide\"\n",
+        );
+    });
+    // C17-2: a specific read inside a denied region, a workspace secret
+    // read, an extra workspace root, the network proxy off.
+    let project = |f: &Fixture, from: &str, to: &str| {
+        let path = f.host.root.join(".codex/config.toml");
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(from), "{from}");
+        write(&path, &text.replacen(from, to, 1));
+    };
+    check(CODEX, "`~/.ssh/config` = `read`", |f| {
+        project(
+            f,
+            "\"~/.ssh/**\" = \"deny\"\n",
+            "\"~/.ssh/**\" = \"deny\"\n\"~/.ssh/config\" = \"read\"\n",
+        );
+    });
+    check(CODEX, "`.env.local` = `read`", |f| {
+        project(
+            f,
+            "\".env\" = \"deny\"\n",
+            "\".env\" = \"deny\"\n\".env.local\" = \"read\"\n",
+        );
+    });
+    check(CODEX, "workspace_roots", |f| {
+        project(
+            f,
+            "[permissions.cf-guard]\n",
+            "[permissions.cf-guard]\nworkspace_roots = [\"/\"]\n",
+        );
+    });
+    check(CODEX, "network_proxy", |f| {
+        project(f, "network_proxy = true", "network_proxy = false");
+    });
+    check(CODEX, "`/` = `write`", |f| {
+        project(
+            f,
+            "\"~/.ssh/**\" = \"deny\"\n",
+            "\"~/.ssh/**\" = \"deny\"\n\"/\" = \"write\"\n",
+        );
+    });
+    check(CODEX, "every shipped entry", |f| {
+        project(f, "\"~/.aws/**\" = \"deny\"\n", "");
+    });
+    check(CODEX, "allow_local_binding", |f| {
+        project(
+            f,
+            "allow_local_binding = false",
+            "allow_local_binding = true",
+        );
+    });
+    check(CODEX, "sandbox_mode", |f| {
+        f.codex_user("sandbox_mode = \"danger-full-access\"");
+    });
+    check(CODEX, "not a key the guard knows", |f| {
+        f.codex_user("brand_new_key = 1");
+    });
+    check(CODEX, "not a feature the guard knows", |f| {
+        f.codex_user("[features]\nbrand_new_feature = true");
+    });
+    check(CODEX, "Codex system configuration", |f| {
+        write(&f.host.codex_unattested[0], "");
+    });
+    // Narrower forms stay attested.
+    accepted(CODEX, "an extra deny and a model", |f| {
+        project(
+            f,
+            "\"~/.ssh/**\" = \"deny\"\n",
+            "\"~/.ssh/**\" = \"deny\"\n\"~/private/**\" = \"deny\"\n",
+        );
+        f.codex_user("model = \"gpt-6-astra\"\n[tui]\ntheme = \"dark\"");
+    });
+}
+
+/// Grok: the selected profile must be a shipped one, defined in the
+/// shipped form or a narrower one, in every profiles file read.
+#[test]
+fn grok_profiles_must_be_shipped_or_narrower() {
+    check(GROK, "no Grok sandbox profile is selected", |f| {
+        f.host.grok_sandbox = None;
+    });
+    check(GROK, "not a shipped one", |f| {
+        f.host.grok_sandbox = Some("off".to_string());
+    });
+    // An empty `GROK_SANDBOX` is unset; one that is not UTF-8 selects no
+    // shipped profile, even when the user configuration selects one.
+    assert_eq!(grok_selection(Some("".into())), None);
+    #[cfg(unix)]
+    check(GROK, "not a shipped one", |f| {
+        use std::os::unix::ffi::OsStringExt;
+        f.host.grok_sandbox = grok_selection(Some(std::ffi::OsString::from_vec(vec![0xff])));
+        write(
+            &f.home().join(".grok/config.toml"),
+            "[sandbox]\nprofile = \"cf-guard\"\n",
+        );
+    });
+    accepted(GROK, "the user configuration selects cf-guard", |f| {
+        f.host.grok_sandbox = None;
+        write(
+            &f.home().join(".grok/config.toml"),
+            "[sandbox]\nprofile = \"cf-guard\"\n",
+        );
+    });
+    check(GROK, "not a shipped one", |f| {
+        f.host.grok_sandbox = None;
+        write(
+            &f.home().join(".grok/config.toml"),
+            "[sandbox]\nprofile = \"workspace\"\n",
+        );
+    });
+    let project = |f: &Fixture, from: &str, to: &str| {
+        let path = f.host.root.join(".grok/sandbox.toml");
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(from), "{from}");
+        write(&path, &text.replacen(from, to, 1));
+    };
+    // F2-1: a write grant.
+    check(GROK, "grants the write `/`", |f| {
+        project(
+            f,
+            "restrict_network = false\nread_only",
+            "restrict_network = false\nread_write = [\"/\"]\nread_only",
+        );
+    });
+    check(GROK, "lacks the shipped `deny` entry", |f| {
+        project(f, "  \"/Users/*/.ssh\",\n", "");
+    });
+    check(GROK, "not a string", |f| {
+        project(f, "read_only = [\n", "read_only = [\n  1,\n");
+    });
+    check(GROK, "sets `mystery`", |f| {
+        project(
+            f,
+            "restrict_network = false\nread_only",
+            "restrict_network = false\nmystery = true\nread_only",
+        );
+    });
+    // C17-3: the user profiles file wins over the project's.
+    check(GROK, "lacks the shipped `deny` entry", |f| {
+        write(
+            &f.home().join(".grok/sandbox.toml"),
+            "[profiles.cf-guard]\nextends = \"workspace\"\n",
+        );
+    });
+    check(GROK, "no profiles file the guard reads defines it", |f| {
+        fs::remove_file(f.host.root.join(".grok/sandbox.toml")).unwrap();
+    });
+    accepted(GROK, "an extra deny", |f| {
+        project(f, "deny = [\n", "deny = [\n  \"/Users/*/.private\",\n");
+    });
 }
 
 /// AC-3: the recorded Claude Code 2.1.312 retry payload is judged under
@@ -755,7 +606,7 @@ fn a_recognised_retry_tightens() {
             &fixture.host,
             harnesses,
             parsed.tool_input.sandbox_retry(),
-            false,
+            &[],
         );
         if retried {
             assert_tightened(&outcome, "dangerouslyDisableSandbox");
@@ -763,7 +614,6 @@ fn a_recognised_retry_tightens() {
             assert_eq!(outcome, Outcome::Baseline);
         }
     }
-    // A flag of another type tightens rather than passes.
     let odd =
         r#"{"tool_name":"Bash","tool_input":{"command":"true","dangerouslyDisableSandbox":"yes"}}"#;
     assert!(super::super::git_guard::HookPayload::parse(odd)
@@ -772,19 +622,19 @@ fn a_recognised_retry_tightens() {
         .sandbox_retry());
 }
 
-/// J4: `security.text_guard` only adds the strict rule. `strict` tightens
-/// a clean host, and no value selects the baseline on a tightened host.
+/// J4: a policy reason only adds the strict rule.
 #[test]
-fn the_policy_key_never_loosens() {
+fn a_policy_reason_never_loosens() {
     let fixture = Fixture::new();
+    let strict = vec!["the project policy sets `security.text_guard` to `strict`".to_string()];
     assert_tightened(
-        &outcome(&fixture.host, Harnesses::ALL, false, true),
+        &outcome(&fixture.host, CLAUDE, false, &strict),
         "security.text_guard",
     );
     fixture.edit_project(|v| v["sandbox"]["enabled"] = json!(false));
-    for policy_strict in [false, true] {
+    for policy in [Vec::new(), strict] {
         assert!(matches!(
-            outcome(&fixture.host, Harnesses::ALL, false, policy_strict),
+            outcome(&fixture.host, CLAUDE, false, &policy),
             Outcome::Tightened(_)
         ));
     }
@@ -809,6 +659,30 @@ fn the_write_spelling_of_each_edit_deny() {
         Some("/etc/profile")
     );
     assert_eq!(actions::edit_deny_write_path("Edit(//**/.envrc)"), None);
+}
+
+/// Initialise a repository at `dir` and commit every file in it.
+fn commit_all(dir: &Path) -> git2::Repository {
+    let repo = git2::Repository::init(dir).unwrap();
+    let tree = {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        index.write_tree().unwrap()
+    };
+    let signature = git2::Signature::now("t", "t@example.invalid").unwrap();
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "seed",
+        &repo.find_tree(tree).unwrap(),
+        &[],
+    )
+    .unwrap();
+    repo
 }
 
 /// Write `text` at `path`, creating its directory.

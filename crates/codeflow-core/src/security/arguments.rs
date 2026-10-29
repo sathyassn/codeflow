@@ -173,7 +173,7 @@ fn evaluate_rule(
     if line_dirs.unknown {
         if let Some(word) = reading.derived.as_ref() {
             reaches.push(Reach::Enforcement(format!(
-                "the strict text rule cannot verify the run-time argument `{}`: the line moves to a directory the guard cannot follow, so what the command does with it is unresolved",
+                "the strict text rule cannot verify the run-time argument `{}`: the guard cannot establish the directory the command runs in or what the value resolves to, so what the command does with it is unresolved",
                 word.text
             )));
         }
