@@ -15,8 +15,11 @@ mod checkout_identity;
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
-/// TSK-397 design D: in the tightened outcome this suite runs in, once a
-/// line's directory is unknown, the exec guard refuses a word filled in at
+#[path = "hooks_cli/text_rule.rs"]
+mod text_rule;
+
+/// TSK-397: under the strict text rule, the default this suite runs in,
+/// once a line's directory is unknown, the exec guard refuses a word filled in at
 /// run time given to any program; git-guard does not judge it.
 fn run_time_word_refusal(out: &Output) -> bool {
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -60,27 +63,12 @@ fn codeflow() -> Command {
     isolated_codeflow(Command::new(env!("CARGO_BIN_EXE_codeflow")))
 }
 
-/// TSK-397 design D: this suite's exec-guard expectations are the tightened
-/// outcome's. A test managed settings layer with an exclusion list selects
-/// it on every host, whatever the host's own managed policy says; the
-/// baseline's decisions are proven by the `text_guard_invariant` replay.
-fn tightened_managed_dir() -> &'static Path {
-    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-    DIR.get_or_init(|| {
-        let dir = process_folders::until_exit(tempfile::tempdir().expect("managed tempdir"));
-        std::fs::write(
-            dir.join("managed-settings.json"),
-            r#"{"sandbox":{"excludedCommands":["codeflow-test-tightened"]}}"#,
-        )
-        .expect("managed settings");
-        dir
-    })
-}
-
 fn isolated_codeflow(mut cmd: Command) -> Command {
     // Isolate from the developer's environment.
-    cmd.env("CODEFLOW_TEST_CLAUDE_MANAGED_DIR", tightened_managed_dir())
-        .env("CODEFLOW_HOME", isolated_home())
+    // Its exec-guard expectations are the strict rule's, the default; the
+    // relaxed rule's decisions are proven by the `text_guard_invariant`
+    // replay.
+    cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

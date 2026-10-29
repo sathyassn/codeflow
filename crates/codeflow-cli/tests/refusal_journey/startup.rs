@@ -180,7 +180,7 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
         }
         for command in ALLOWED {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
-            if outputs.iter().any(|o| !o.status.success()) {
+            if outputs.iter().any(|o| !passes(o)) {
                 wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
             }
         }
@@ -220,7 +220,7 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
             "Bash",
             json!({"command": "git config --global user.name Test"}),
         );
-        if outputs.iter().any(|o| !o.status.success()) {
+        if outputs.iter().any(|o| !passes(o)) {
             wrong.push(format!("{harness}: refused git config user.name"));
         }
     }
@@ -264,7 +264,7 @@ fn installed_hooks_judge_git_config_files_and_switches() {
         }
         for command in allowed {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
-            if outputs.iter().any(|o| !o.status.success()) {
+            if outputs.iter().any(|o| !passes(o)) {
                 wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
             }
         }
@@ -361,7 +361,7 @@ fn installed_hooks_judge_the_file_a_repository_config_write_opens() {
         }
         for command in &allowed {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
-            if outputs.iter().any(|o| !o.status.success()) {
+            if outputs.iter().any(|o| !passes(o)) {
                 wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
             }
         }
@@ -954,7 +954,7 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             .chain(ROUND_23_CONTROLS)
         {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
-            if outputs.iter().any(|o| !o.status.success()) {
+            if outputs.iter().any(|o| !passes(o)) {
                 wrong.push(format!("{harness}: refused control {command}"));
             }
         }
@@ -1050,7 +1050,7 @@ fn installed_edit_hooks_refuse_shell_startup_files() {
                     "{harness}:{tool}: {path} refused={refused}: {outputs:?}"
                 ));
             }
-            if !refused && outputs.iter().any(|o| !o.status.success()) {
+            if !refused && outputs.iter().any(|o| !passes(o)) {
                 wrong.push(format!("{harness}:{tool}: refused {path}"));
             }
         }

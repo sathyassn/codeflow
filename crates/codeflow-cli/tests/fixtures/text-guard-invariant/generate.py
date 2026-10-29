@@ -49,6 +49,11 @@ def build(t):
     committed = [e['path'][len('repo/'):] for e in json.load(open(os.path.join(HERE, 'tree.json'))) if e['committed']]
     run('add', '--', *committed)
     run('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'test: fixture')
+    # The committed policy chooses `relaxed`, honoured only from the
+    # remote-tracking refs, so the commit is published as `origin/main`.
+    run('remote', 'add', 'origin', os.path.join(t, 'origin.git'))
+    run('update-ref', 'refs/remotes/origin/main', 'HEAD')
+    run('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
     os.makedirs(os.path.join(t, 'cfhome'), exist_ok=True)
 
 
@@ -59,7 +64,6 @@ def git_env(t):
         'SHELL': '/bin/zsh',
         'PATH': '/usr/bin:/bin',
         'CODEFLOW_HOME': os.path.join(t, 'cfhome'),
-        'CODEFLOW_TEST_CLAUDE_MANAGED_DIR': os.path.join(t, 'managed'),
         # The session's project: Claude Code exports it to hooks.
         'CLAUDE_PROJECT_DIR': os.path.join(t, 'repo'),
         'GIT_CONFIG_GLOBAL': '/dev/null',

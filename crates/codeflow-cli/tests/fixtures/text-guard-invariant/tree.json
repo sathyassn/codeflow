@@ -84,7 +84,7 @@
  {
   "kind": "file",
   "path": "repo/.codeflow/policy.json",
-  "text": "{\"git\":{\"protected_branches\":[\"main\",\"master\"],\"root_checkout_commits\":\"off\",\"hook_integrity\":\"block\"}}\n",
+  "text": "{\"git\":{\"protected_branches\":[\"main\",\"master\"],\"root_checkout_commits\":\"off\",\"hook_integrity\":\"block\"},\"security\":{\"text_guard\":\"relaxed\"}}",
   "exec": false,
   "committed": true
  },

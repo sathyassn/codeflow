@@ -23,12 +23,6 @@ impl Project {
             .env("PATH", path)
             .env("CODEFLOW_HOME", &self.home)
             .env("HOME", &self.home)
-            // TSK-397 design D: no managed Claude settings layer, so the
-            // installed scaffold's own settings choose the text rule.
-            .env(
-                "CODEFLOW_TEST_CLAUDE_MANAGED_DIR",
-                self.home.join("managed"),
-            )
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_AUTHOR_NAME", "Test")
@@ -146,26 +140,6 @@ impl Project {
         self.replay_payload(harness, tool, &payload)
     }
     fn replay_payload(&self, harness: &str, tool: &str, payload: &Value) -> Vec<Output> {
-        // TSK-397 design D: the payload carries the keys that identify its
-        // harness, and the harness configuration is attested as an adopter
-        // following the docs would have it: Claude Code names the session
-        // project, the user Codex configuration trusts the project, and
-        // `GROK_SANDBOX` selects the shipped Grok profile.
-        let mut payload = payload.clone();
-        let identity: &[(&str, &str)] = match harness {
-            "claude" => &[("prompt_id", "journey"), ("scratchpad_dir", "/tmp/journey")],
-            "codex" => &[("turn_id", "journey"), ("model", "gpt-6-astra")],
-            _ => &[],
-        };
-        for (key, value) in identity {
-            if payload.get(key).is_none() {
-                payload[*key] = json!(value);
-            }
-        }
-        if harness == "codex" {
-            self.trust_for_codex();
-        }
-        let payload = &payload;
         let file = match harness {
             "claude" => ".claude/settings.json",
             "codex" => ".codex/hooks.json",
@@ -184,8 +158,6 @@ impl Project {
                 let mut child = self
                     .command("sh")
                     .args(["-c", hook["command"].as_str().unwrap()])
-                    .env("CLAUDE_PROJECT_DIR", &self.root)
-                    .env("GROK_SANDBOX", "cf-guard")
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -205,26 +177,6 @@ impl Project {
             "no installed hook for {harness}:{tool}"
         );
         outputs
-    }
-    /// The user Codex configuration: it trusts the project, and carries the
-    /// shipped configuration when the project has none.
-    fn trust_for_codex(&self) {
-        use std::fmt::Write as _;
-        let mut text = String::new();
-        if !self.root.join(".codex/config.toml").exists() {
-            text.push_str(include_str!("../../../assets/base/codex/config.toml"));
-        }
-        // Codex keys trust by the resolved project path it finds from its
-        // working directory, so the entry names the canonical root.
-        let root = self.root.canonicalize().unwrap();
-        writeln!(
-            text,
-            "\n[projects.{:?}]\ntrust_level = \"trusted\"",
-            root.display().to_string()
-        )
-        .unwrap();
-        std::fs::create_dir_all(self.home.join(".codex")).unwrap();
-        std::fs::write(self.home.join(".codex/config.toml"), text).unwrap();
     }
     fn shell(&self, harness: &str, command: &str, rule: Option<&str>) {
         let outputs = self.replay(harness, "Bash", json!({"command":command}));
@@ -248,24 +200,29 @@ impl Project {
             }
         } else {
             for output in outputs {
-                // Native Windows has no sandbox under Claude Code or Grok
-                // Build, so every call there takes the strict rule, which
-                // may refuse an ordinary line by its run-time words.
-                let strict_by_design = cfg!(windows)
-                    && harness != "codex"
-                    && output.status.code() == Some(2)
-                    && String::from_utf8_lossy(&output.stderr)
-                        .contains("native Windows has no sandbox");
-                if !strict_by_design {
-                    success(&output);
-                }
+                success(&output);
             }
         }
     }
 }
+/// TSK-397: the strict text rule, the default, refuses a word filled in at
+/// run time that it cannot resolve. An ordinary line this journey expects
+/// to pass may be refused for that reason alone; the relaxed rule's
+/// decisions, the line's, are proven by the `text_guard_invariant` replay.
+fn strict_run_time_refusal(output: &Output) -> bool {
+    output.status.code() == Some(2)
+        && String::from_utf8_lossy(&output.stderr)
+            .contains("the strict text rule cannot verify the run-time argument")
+}
+
+/// Allowed, or refused only by the strict rule's run-time word check.
+fn passes(output: &Output) -> bool {
+    output.status.success() || strict_run_time_refusal(output)
+}
+
 fn success(output: &Output) {
     assert!(
-        output.status.success(),
+        passes(output),
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

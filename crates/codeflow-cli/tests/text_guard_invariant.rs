@@ -1,5 +1,5 @@
-//! TSK-397 design D, AC-2 (H-8): the built exec guard never allows a row
-//! the 3.2.0 line refuses, in either outcome.
+//! TSK-397, AC-2 (H-8): the built exec guard never allows a row the 3.2.0
+//! line refuses, in either outcome.
 //!
 //! The corpus (`fixtures/text-guard-invariant/rows.json`) holds the Codex
 //! and security round probes of PR 331 as the round 15 replay assembled
@@ -8,15 +8,17 @@
 //! decision of the line binary at `5f2fe3827`, built in its own target
 //! directory and run by `generate.py` on the fixture tree this test
 //! rebuilds; `line-binary.txt` records that binary's version and digest.
-//! Each row is judged twice by this build: in the baseline outcome (a Claude
-//! payload from a session whose settings show the shipped sandbox) and in
-//! the tightened outcome (the same payload as a recognised unsandboxed
-//! retry). Every judgement must exit 0 (allowed) or 2 (refused).
+//! Each row is judged twice by this build: in the relaxed outcome (a Claude
+//! payload in a checkout whose origin's landed policy sets
+//! `security.text_guard: relaxed`; the column is still named `baseline`) and
+//! in the strict outcome (the same payload as a recognised unsandboxed
+//! retry, which relaxed keeps strict). Every judgement must exit 0
+//! (allowed) or 2 (refused).
 //!
 //! The one exception is the H-3 class (issue 342), defined by
 //! [`directory_change_only`]: a line made only of bare `cd`, `pushd` and
-//! `popd` builtins writes nothing, so the baseline may allow it where the
-//! line refused it. The tightened outcome must still refuse it. The class is
+//! `popd` builtins writes nothing, so relaxed may allow it where the line
+//! refused it. The strict outcome must still refuse it. The class is
 //! written out here, apart from the guard's own predicate, so a widening of
 //! the guard's predicate fails this test instead of passing as an exception.
 //!
@@ -44,7 +46,6 @@ fn environment(t: &Path) -> Vec<(&'static str, PathBuf)> {
         ("SHELL", PathBuf::from("/bin/zsh")),
         ("PATH", PathBuf::from("/usr/bin:/bin")),
         ("CODEFLOW_HOME", t.join("cfhome")),
-        ("CODEFLOW_TEST_CLAUDE_MANAGED_DIR", t.join("managed")),
         ("CLAUDE_PROJECT_DIR", t.join("repo")),
         ("GIT_CONFIG_GLOBAL", PathBuf::from("/dev/null")),
         ("GIT_CONFIG_SYSTEM", PathBuf::from("/dev/null")),
@@ -113,6 +114,20 @@ fn build(t: &Path) {
         "-q",
         "-m",
         "test: fixture",
+    ]);
+    // The committed policy chooses `relaxed`; it is honoured only from the
+    // remote-tracking refs, so the commit is published as `origin/main`.
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        t.join("origin.git").to_str().unwrap(),
+    ]);
+    git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
     ]);
     std::fs::create_dir_all(t.join("cfhome")).unwrap();
 }

@@ -62,12 +62,6 @@ impl Repo {
                 .unwrap(),
             )
             .env("CODEFLOW_HOME", self.root().join("state"))
-            // TSK-397 design D: no managed Claude settings layer, so the
-            // fixture's own settings choose the text rule.
-            .env(
-                "CODEFLOW_TEST_CLAUDE_MANAGED_DIR",
-                self.root().join("managed"),
-            )
             .env("GIT_CONFIG_GLOBAL", self.root().join("global.config"))
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env_remove("GIT_DIR")
