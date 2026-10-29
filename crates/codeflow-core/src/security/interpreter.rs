@@ -397,7 +397,7 @@ fn secret_reads(
                 violations.push(violation);
                 continue;
             }
-            if let Some(why) = git_objects::unproven(&unwrapped, writer) {
+            if let Some(why) = git_objects::unproven(&unwrapped, writer, command) {
                 violations.extend(git_input_violation(levels, Err(why)));
                 continue;
             }
@@ -2202,10 +2202,7 @@ fn file_operands<'a>(
         {
             git_start = args.len() - tail.len() - 1;
             global_files = git_global_files(args, git_start);
-            if matches!(
-                sub,
-                "status" | "rev-parse" | "branch" | "for-each-ref" | "ls-files"
-            ) {
+            if matches!(sub, "rev-parse" | "branch" | "for-each-ref" | "ls-files") {
                 global_files.extend(git_metadata_paths(tail, git_start));
                 return global_files;
             }

@@ -1068,10 +1068,11 @@ fn tsk1002_codex09_unproven_git_readings_refuse() {
 /// in a short option's attached value as in a separate one; a share,
 /// verbatim or device spelling refuses in any word or value of a Git line,
 /// a `-c` setting and an environment assignment included; a `GIT_*`
-/// variable the guard has not classified refuses; and the role-free magic
-/// and `GIT_*` rules refuse a search text that begins with magic or names
-/// such a variable (Fable 12's accepted over-refusal). Each refusal except the separate-value and plain
-/// namespace forms was allowed at `f0146c495`.
+/// variable the line sets that the guard has not classified refuses; and
+/// the role-free magic rule refuses a search text that begins with magic
+/// (Fable 12's accepted over-refusal), while a variable named in search
+/// text does not (Fable 13). Each refusal except the separate-value and
+/// plain namespace forms was allowed at `f0146c495`.
 #[test]
 fn tsk1002_codex10_git_modes_values_and_environment() {
     let f = Fixture::new();
@@ -1093,7 +1094,6 @@ fn tsk1002_codex10_git_modes_values_and_environment() {
         "env GIT_NAMESPACE=x git log -1",
         "git grep '://'",
         "git log --grep=':/'",
-        "git grep GIT_WORK_TREE",
     ] {
         if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
             wrong.push(format!("allowed: {line}"));
@@ -1107,6 +1107,7 @@ fn tsk1002_codex10_git_modes_values_and_environment() {
         "GIT_DIR=.git git status",
         "git commit -m 'fix: parse urls'",
         "git grep 'https://' src",
+        "git grep GIT_WORK_TREE",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
         if out.status.code() != Some(0) {
@@ -1122,6 +1123,57 @@ fn tsk1002_codex10_git_modes_values_and_environment() {
         let message = String::from_utf8_lossy(&out.stderr);
         if out.status.code() != Some(2) || !message.contains("share, verbatim or device") {
             wrong.push(format!("{hook} include share: {message}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 Codex review 11 and Fable review 13: a Git directory or work
+/// tree the line sets must be the repository Git would use without it, so
+/// a store moved in as the work tree refuses; a program a `GIT_*` variable
+/// names is judged as a command; every `status` operand is judged; update
+/// options resolve by Git's unique-prefix rule (`--ca`); a multibyte
+/// message does not stop the guard; a variable named in text, and a
+/// search pattern that looks like an id, do not refuse. Every refusal was
+/// allowed at `146e3ca0e`, and the first two controls refused or failed.
+#[test]
+fn tsk1002_codex11_work_tree_programs_status_and_options() {
+    let f = Fixture::new();
+    let ssh = f.temp.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::write(ssh.join("id_rsa"), "inert fixture\n").unwrap();
+    let ssh = shell_path(&ssh);
+    let root = shell_path(&f.root);
+    let blob = "78981922613b2afb6025042ff6bd878ac1994e85";
+    let mut wrong = Vec::new();
+    // Secret reads are exec-guard's rule; both hooks run on every call.
+    for line in [
+        format!("git --work-tree={ssh} add -A && git diff --cached"),
+        format!("git -C {ssh} --git-dir={root}/.git add -A"),
+        format!("cd {ssh} && git --git-dir={root}/.git add -A"),
+        format!("GIT_EXTERNAL_DIFF='cat {ssh}/id_rsa' git diff HEAD"),
+        format!("GIT_EDITOR='cat {ssh}/id_rsa' git commit --allow-empty"),
+        "git status -vv -- id_rsa".to_string(),
+        format!("git update-index --add --ca 100644 {blob} x"),
+        format!("printf '100644 blob {blob}\\tx\\n' | git update-index --index-i"),
+        "GIT_EXEC_PATH=/tmp git status".to_string(),
+    ] {
+        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "git commit -m '-é'",
+        "git commit -m 'docs: note GIT_WORK_TREE'",
+        "git grep -n cafe",
+        "GIT_PAGER=cat git log -1",
+        "GIT_EDITOR=true git commit --allow-empty -m x",
+        "GIT_DIR=.git git status",
+        "GIT_LFS_SKIP_SMUDGE=1 git status",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
         }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
@@ -1875,7 +1927,9 @@ fn repair2_xargs_guarded_verbs() {
     for hook in ["git-guard", "exec-guard"] {
         for command in ["git diff --name-only | xargs git add", "xargs git status"] {
             let out = f.command(&f.root, hook, command);
-            let unknown_files = hook == "exec-guard" && command.contains("xargs git add");
+            // Every `status` operand is judged since TSK-1002 review 11, so
+            // names supplied at run time are unknown files there too.
+            let unknown_files = hook == "exec-guard";
             assert_eq!(
                 out.status.code(),
                 Some(if unknown_files { 2 } else { 0 }),
@@ -3685,19 +3739,22 @@ fn repair4_external_git_program_resolution() {
             );
             assert_eq!(out.status.code(), Some(0), "{hook} {source}: {out:?}");
         }
-        for command in [
-            format!(
-                "git --exec-path='{}' codeflow-extension --version",
-                shell_path(&programs)
-            ),
-            format!(
-                "GIT_EXEC_PATH='{}' git codeflow-extension --version",
-                shell_path(&programs)
-            ),
-        ] {
-            let out = f.command(&f.linked, hook, &command);
-            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
-        }
+        let command = format!(
+            "git --exec-path='{}' codeflow-extension --version",
+            shell_path(&programs)
+        );
+        let out = f.command(&f.linked, hook, &command);
+        assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        // A line that sets `GIT_EXEC_PATH` moves where Git finds helper
+        // programs the guard never sees, so exec-guard refuses it since
+        // TSK-1002 Fable review 13; the inherited variable above still works.
+        let command = format!(
+            "GIT_EXEC_PATH='{}' git codeflow-extension --version",
+            shell_path(&programs)
+        );
+        let out = f.command(&f.linked, hook, &command);
+        let code = if hook == "exec-guard" { 2 } else { 0 };
+        assert_eq!(out.status.code(), Some(code), "{hook} {command}: {out:?}");
         let out = f.command(&f.linked, hook, "git nosuchcmd");
         assert!(refused(&out), "{out:?}");
         let message = String::from_utf8_lossy(&out.stderr);

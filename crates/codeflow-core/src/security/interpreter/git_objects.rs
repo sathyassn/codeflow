@@ -122,22 +122,36 @@ fn head_form(word: &str) -> bool {
 /// rest of the model judges, except a `push` refspec, whose source is an
 /// object. Each side of a range counts, without a leading `^`. The leading
 /// operands that name no object are skipped: `push`'s repository, the verb
-/// of `worktree`, `notes` and `bundle`, and the path or file `worktree add`
-/// and `bundle` take after it.
+/// of `worktree`, `notes` and `bundle`, the path or file `worktree add`
+/// and `bundle` take after it, and `grep`'s search patterns (Fable review
+/// 13: `git grep 2026` searches text).
 fn candidates(call: &outward::Unwrapped, subcommand: &str, start: usize) -> Vec<String> {
-    let operands = call.args[start..]
+    let operand = |word: &String| word == "-" || !word.starts_with('-');
+    let words_before: Vec<&String> = call.args[start..]
         .iter()
         .take_while(|word| *word != "--")
-        .filter(|word| !word.starts_with('-'));
-    let verb = operands.clone().next().map(String::as_str);
+        .collect();
+    let verb = words_before
+        .iter()
+        .find(|word| operand(word))
+        .map(|word| word.as_str());
+    let (patterns, explicit) = if subcommand == "grep" {
+        grep_patterns(&words_before)
+    } else {
+        (Vec::new(), false)
+    };
     let mut skip = match (subcommand, verb) {
         ("worktree", Some("add")) | ("bundle", Some(_)) => 2,
         ("push" | "notes" | "worktree", _) => 1,
+        ("grep", _) if !explicit => 1,
         _ => 0,
     };
     let mut words = Vec::new();
-    for word in call.args[start..].iter().take_while(|word| *word != "--") {
-        if skip > 0 && !word.starts_with('-') {
+    for (at, word) in words_before.into_iter().enumerate() {
+        if patterns.contains(&at) {
+            continue;
+        }
+        if skip > 0 && operand(word) {
             skip -= 1;
             continue;
         }
@@ -179,12 +193,133 @@ fn candidates(call: &outward::Unwrapped, subcommand: &str, start: usize) -> Vec<
     words
 }
 
+/// The positions of `git grep`'s pattern words among `words` (an `-e` or
+/// `-f` option with its value, attached or separate), and whether any is
+/// given that way; without one, the first operand is the pattern.
+fn grep_patterns(words: &[&String]) -> (Vec<usize>, bool) {
+    let mut positions = Vec::new();
+    let mut explicit = false;
+    let mut next = false;
+    for (at, word) in words.iter().enumerate() {
+        if next {
+            positions.push(at);
+            next = false;
+            continue;
+        }
+        if matches!(word.as_str(), "--regexp" | "--file") {
+            positions.push(at);
+            (explicit, next) = (true, true);
+        } else if word.starts_with("--regexp=") || word.starts_with("--file=") {
+            positions.push(at);
+            explicit = true;
+        } else if let Some(cluster) = word.strip_prefix('-').filter(|c| !c.starts_with('-')) {
+            // A short cluster: flags until a letter that takes a value.
+            for (index, letter) in cluster.char_indices() {
+                if matches!(letter, 'e' | 'f') {
+                    positions.push(at);
+                    explicit = true;
+                    next = index + 1 == cluster.len();
+                    break;
+                }
+                if matches!(letter, 'A' | 'B' | 'C' | 'm' | 'O') || !letter.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+    }
+    (positions, explicit)
+}
+
+/// Why a work tree or Git directory set on the line refuses.
+pub(super) const MOVED: &str = "cannot establish that a Git directory or work tree the line sets is the repository Git would use without it; run Git in the repository without --git-dir, --work-tree or GIT_DIR";
+
+/// Why `call` refuses for a Git directory or work tree it sets
+/// (`--git-dir`, `--work-tree`, `GIT_DIR` on the line), or `None` when it
+/// sets neither. Git itself reports the Git directory and work tree with
+/// and without them, from the directory the call runs in; they must be the
+/// same, so the setting changes nothing. With a Git directory alone, Git
+/// takes the current directory as the work tree, and a `.git` file is read
+/// as a gitfile, as Git does. Anything the guard cannot establish refuses
+/// (TSK-1002 Fable review 13): `git --work-tree=~/.ssh add -A` stages a
+/// store that `git diff --cached` would print.
+fn moved_repository(
+    call: &outward::Unwrapped,
+    start: usize,
+    command: &str,
+) -> Option<&'static str> {
+    let globals = if start >= 2 {
+        &call.args[1..start - 1]
+    } else {
+        &[][..]
+    };
+    let mut kept = Vec::new();
+    let mut moved: Vec<Option<String>> = crate::security::git_preflight::git_dir_values(command)
+        .into_iter()
+        .map(|value| value.map(|value| format!("--git-dir={value}")))
+        .collect();
+    let mut at = 0;
+    while at < globals.len() {
+        let word = globals[at].as_str();
+        let next = globals.get(at + 1);
+        match word {
+            "-C" | "-c" => {
+                kept.push(word.to_string());
+                kept.extend(next.cloned());
+                at += 2;
+            }
+            "--git-dir" | "--work-tree" => {
+                moved.push(next.map(|value| format!("{word}={value}")));
+                at += 2;
+            }
+            _ => {
+                if word.starts_with("--git-dir=") || word.starts_with("--work-tree=") {
+                    moved.push(Some(word.to_string()));
+                }
+                at += 1;
+            }
+        }
+    }
+    if moved.is_empty() {
+        return None;
+    }
+    let Some(cwd) = call.cwd.as_deref() else {
+        return Some(MOVED);
+    };
+    let Some(moved) = moved
+        .into_iter()
+        .map(|value| value.filter(|value| !value.contains(['$', '`', '~'])))
+        .collect::<Option<Vec<String>>>()
+    else {
+        return Some(MOVED);
+    };
+    let mut with = kept.clone();
+    with.extend(moved);
+    let found = |globals: &[String]| match crate::security::git_config::repository_of(cwd, globals)
+    {
+        Ok(Some((dir, top))) => crate::portable_path::canonicalize(&dir)
+            .ok()
+            .zip(crate::portable_path::canonicalize(&top).ok()),
+        _ => None,
+    };
+    match (found(&kept), found(&with)) {
+        (Some(without), Some(set)) if without == set => None,
+        _ => Some(MOVED),
+    }
+}
+
 /// Why `call` refuses for an object it names without a path, or `None`.
 /// `earlier_writer` says a Git call before it on the line may move a ref,
 /// so names are not looked up: each must be a `HEAD` form or an existing
 /// path, which Git reads as a path.
-pub(super) fn unproven(call: &outward::Unwrapped, earlier_writer: bool) -> Option<&'static str> {
+pub(super) fn unproven(
+    call: &outward::Unwrapped,
+    earlier_writer: bool,
+    command: &str,
+) -> Option<&'static str> {
     let (subcommand, start) = git_command(call)?;
+    if let Some(why) = moved_repository(call, start, command) {
+        return Some(why);
+    }
     let subcommand = subcommand.as_str();
     // A format atom that prints raw object content, and fetching an object
     // by id into a named ref, name content without a path in any command.
@@ -204,7 +339,7 @@ pub(super) fn unproven(call: &outward::Unwrapped, earlier_writer: bool) -> Optio
     if subcommand == "update-index"
         && words
             .iter()
-            .any(|word| word.len() > 4 && "--cacheinfo".starts_with(word.as_str()))
+            .any(|word| super::git_reads::update_index_option(word) == Some("cacheinfo"))
     {
         return Some(BY_ID);
     }

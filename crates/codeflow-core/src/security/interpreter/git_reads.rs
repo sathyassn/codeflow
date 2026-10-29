@@ -321,6 +321,51 @@ const PATH_LIST_COMMANDS: &[&str] = &["checkout-index", "update-index"];
 /// `git hash-object`'s complete long-option list (Git 2.53).
 const HASH_OBJECT_OPTIONS: &[&str] = &["stdin", "stdin-paths", "filters", "literally", "path"];
 
+/// `git update-index`'s complete long-option list (Git 2.53,
+/// `git update-index --git-completion-helper-all`), for Git's own
+/// unique-prefix rule: `--ca` is `--cacheinfo` (Fable review 13).
+const UPDATE_INDEX_OPTIONS: &[&str] = &[
+    "add",
+    "again",
+    "assume-unchanged",
+    "cacheinfo",
+    "chmod",
+    "clear-resolve-undo",
+    "force-remove",
+    "force-untracked-cache",
+    "force-write-index",
+    "fsmonitor",
+    "fsmonitor-valid",
+    "ignore-missing",
+    "ignore-skip-worktree-entries",
+    "ignore-submodules",
+    "index-info",
+    "index-version",
+    "info-only",
+    "really-refresh",
+    "refresh",
+    "remove",
+    "replace",
+    "show-index-version",
+    "skip-worktree",
+    "split-index",
+    "stdin",
+    "test-untracked-cache",
+    "unmerged",
+    "unresolve",
+    "untracked-cache",
+    "verbose",
+];
+
+/// The `git update-index` long option `word` resolves to by Git's
+/// unique-prefix rule, or `None` for a word that is not a long option or
+/// resolves to none or several.
+pub(super) fn update_index_option(word: &str) -> Option<&'static str> {
+    let name = word.strip_prefix("--")?;
+    let name = name.split_once('=').map_or(name, |(name, _)| name);
+    resolve_long(name, UPDATE_INDEX_OPTIONS).map(|(option, _)| option)
+}
+
 /// `git cat-file`'s complete long-option list (Git 2.53,
 /// `git cat-file --git-completion-helper-all`), for Git's own
 /// unique-prefix rule.
@@ -721,7 +766,10 @@ fn names(subcommand: &str, options: &[&str]) -> Result<Option<Records>, &'static
     }
     let stdin = options.iter().any(|word| stdin_option(word));
     // `update-index --index-info` reads index entries naming objects.
-    let index_info = options.contains(&"--index-info");
+    let index_info = subcommand == "update-index"
+        && options
+            .iter()
+            .any(|word| update_index_option(word) == Some("index-info"));
     if stdin && !index_info && PATH_LIST_COMMANDS.contains(&subcommand) {
         return Ok(Some(Records::Paths));
     }

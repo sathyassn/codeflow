@@ -900,6 +900,12 @@ fn evaluate_report_with_runners(
     let home = line_home::read(command);
     let _home = line_home::Scope::enter(command, &home);
     let mut report = Evaluation::default();
+    // A program Git runs from a `GIT_*` variable is judged as a command of
+    // its own (TSK-1002 Fable review 13).
+    for program in crate::security::git_preflight::program_values(command) {
+        let nested = evaluate_report_with_runners(&program, ctx, cwd, read_runners);
+        report.violations.extend(nested.violations);
+    }
     let violations = &mut report.violations;
     violations.extend(line_home::unread_violation(
         &home,

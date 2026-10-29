@@ -420,6 +420,38 @@ fn with_globals(
 /// `None` when it names no object. One bounded `cat-file --batch-check`
 /// answers every name; lazy fetches are off, so a partial clone never goes
 /// to the network (TSK-1002, object reads by id).
+/// The Git directory and work tree Git finds from `cwd` with `globals`
+/// (`-C` and `-c` only), as Git reports them: `None` where Git finds no
+/// repository with a work tree (TSK-1002 Fable review 13).
+pub(crate) fn repository_of(
+    cwd: &Path,
+    globals: &[String],
+) -> Result<Option<(PathBuf, PathBuf)>, String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut probe = crate::git::command();
+    probe.current_dir(cwd).stdin(Stdio::null());
+    with_globals(&mut probe, cwd, globals)?;
+    probe.args([
+        "--no-pager",
+        "rev-parse",
+        "--absolute-git-dir",
+        "--show-toplevel",
+    ]);
+    let bytes = match bounded_output(&mut probe, deadline) {
+        Ok(bytes) => bytes,
+        Err(why) if why.contains("git rejected") => return Ok(None),
+        Err(why) => return Err(why),
+    };
+    let text = String::from_utf8(bytes).map_err(|_| "cannot read the Git repository paths")?;
+    let mut lines = text.strip_suffix('\n').unwrap_or(&text).split('\n');
+    match (lines.next(), lines.next(), lines.next()) {
+        (Some(dir), Some(top), None) if !dir.is_empty() && !top.is_empty() => {
+            Ok(Some((PathBuf::from(dir), PathBuf::from(top))))
+        }
+        _ => Err("cannot read the Git repository paths".into()),
+    }
+}
+
 pub(crate) fn object_kinds(
     cwd: &Path,
     globals: &[String],

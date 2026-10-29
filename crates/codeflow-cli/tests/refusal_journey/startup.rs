@@ -502,7 +502,9 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "CMD='git status'; sh -c \"$CMD\"",
     "printf '%s\\n' README | xargs ls",
     "xargs -I{} echo {}",
-    "xargs git status",
+    // `status` operands are judged since TSK-1002 review 11, so the
+    // names-only reader stands in for it.
+    "xargs git ls-files",
     "echo README.md | xargs git add",
     "gtimeout 5 git status",
     "flock /tmp/l git status",
