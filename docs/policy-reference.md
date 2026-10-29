@@ -261,7 +261,17 @@ search selector after a directory change the guard cannot establish,
 whatever it names; a rooted glob (`/dir/*`, `~/dir/*`) is judged as usual.
 A glob after a command substitution the guard cannot establish
 (`cat $(cd DIR && pwd)/../notes*.txt`) refuses the same way, quoted or
-not, whatever it names. A source glob that expands
+not, whatever it names. A word that joins a substitution the guard does
+not resolve into it to a spelled directory is judged whole, each such
+part standing for any text: `cat ~/.codex/$(echo auth).json` refuses as
+cannot-verify because it may name `~/.codex/auth.json`, while `cat
+src/$(echo main).rs` stays available. A command word the shell fills in
+at run time (`$P`, `"$P"`, `${P}`, after a launcher too) refuses as
+cannot-verify unless the line assigns it a value the guard resolves; a
+resolved value with blanks (`P='cat ~/.ssh/id_rsa'; $P`) is judged as the
+command line the shell splits it into, and `P=ls; $P` stays available. A
+secret store is reachable from any directory, so this refusal does not
+depend on where the line runs. A source glob that expands
 completely without secret matches remains available; the same glob refuses
 after `id_rsa.rs` is planted among its matches. A quoted shell wildcard
 remains literal, including `cat < 'id_rs?'`. Lines naming dotglob,
@@ -425,16 +435,31 @@ the form refuses:
   `GIT_HTTP_USER_AGENT`, `GIT_SSH_VARIANT`, `GIT_LFS_SKIP_SMUDGE`), the
   pathspec modes `GIT_GLOB_PATHSPECS`, `GIT_NOGLOB_PATHSPECS` and
   `GIT_LITERAL_PATHSPECS`, and `GIT_DIR` under the repository rule below.
-  A variable whose value is a program Git runs (`GIT_PAGER`,
-  `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_SSH`, `GIT_SSH_COMMAND`,
-  `GIT_ASKPASS`, `GIT_EXTERNAL_DIFF`) is allowed, and its value is judged
-  as a command on the line (`GIT_EXTERNAL_DIFF='cat ~/.ssh/id_rsa'`
-  refuses as that `cat` would). The others move what Git reads or writes
-  and refuse as unverified: `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
-  `GIT_OBJECT_DIRECTORY`, `GIT_NAMESPACE`, `GIT_EXEC_PATH`, every
+  A variable whose value is a program Git runs is allowed, and its value
+  is judged as a command on the line (`GIT_EXTERNAL_DIFF='cat
+  ~/.ssh/id_rsa'` refuses as that `cat` would): `GIT_PAGER`, `GIT_EDITOR`,
+  `GIT_SEQUENCE_EDITOR`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`,
+  `GIT_EXTERNAL_DIFF`, the names Git falls back to (`VISUAL`, `EDITOR`,
+  `PAGER`, `SSH_ASKPASS`) and the pager's `LESSOPEN` and `LESSCLOSE`. A
+  value built from the line's own variables is judged by what it holds;
+  one the guard cannot resolve (text from outside the line, a construct
+  it does not model, an export with no value shown, or a name set by
+  `read`, `printf -v`, `${NAME:=x}` or a `declare -n` reference) refuses
+  as cannot-verify. This covers the environment spelling only: the
+  `-c core.pager=`, `--config-env` and `git config` spellings of the same
+  programs are TSK-1065's residual. A deploy key named in
+  `GIT_SSH_COMMAND='ssh -i ~/.ssh/<key>'` refuses as a secret read, as
+  `ssh -i` does at the top level; name the key as an `IdentityFile` in
+  `~/.ssh/config` instead. The others move what Git reads or writes and
+  refuse as unverified: `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
+  `GIT_OBJECT_DIRECTORY`, `GIT_NAMESPACE`, `GIT_EXEC_PATH` and the
+  `--exec-path=DIR` option (where Git finds the helpers it runs), every
   `GIT_CONFIG*`, the `GIT_TRACE*` family, any name not listed, and a
-  name a declaring builtin builds (`export "$N=x"`). A name in text, such
-  as a commit message or `git grep GIT_WORK_TREE`, is not judged.
+  name a declaring builtin builds (`export "$N=x"`). Only a word in an
+  assignment position assigns: before a command's program word, among
+  its `env` launchers, or as a declaring builtin's operand. Text in a
+  commit message or a search, such as `git commit -m 'GIT_WORK_TREE=/x'`
+  or `git grep GIT_WORK_TREE`, is not judged.
 - A Git directory or work tree a line sets (`--git-dir`, `--work-tree`,
   `GIT_DIR`) refuses unless it names exactly the Git directory and work
   tree Git finds without it from the directory the call runs in; with a
@@ -443,8 +468,9 @@ the form refuses:
   reads it. Anything the guard cannot establish refuses: `git
   --work-tree=~/.ssh add -A && git diff --cached` and `cd ~/.ssh && git
   --git-dir=/repo/.git add -A` would stage a store and print it.
-  git-guard separately refuses a line that sets `GIT_DIR` where it cannot
-  scope the target repository, `GIT_DIR=.git git status` included.
+  In a linked worktree, where `.git` is a file, git-guard separately
+  refuses a line that sets `GIT_DIR` it cannot scope, `GIT_DIR=.git git
+  status` included.
 - Every operand before `--`, a separate option value included, is read as
   a possible object name, unless it is proven to be text: a commit
   message, a configuration value, a repository URL or remote ref of
@@ -462,13 +488,14 @@ the form refuses:
   refuse). `grep`'s search patterns are text. The lookup is skipped, and
   only `HEAD` forms and existing paths pass, after a Git call on the line
   that may move a ref, or on a line that sets `GIT_DIR`. A content batch
-  record without a `:` path, a stream or index entry that names an
+  record without a `:`, a stream or index entry that names an
   object by id (`mktree`, `update-index --cacheinfo` in any spelling Git
   accepts), a fetch refspec whose source is an id and a `%(raw)` format
   refuse. `cat-file -t`, `-s` and `-e` stay available. What a proven
   commit, an archive or a history shows from content already committed
-  is not judged by path, nor is a name after `--`: these rules do not
-  promise that content already in Git's object store stays unread
+  is not judged by path, nor is a name after `--` or a batch record
+  whose only `:` is in its metadata (`--batch='%(rest)'`): these rules
+  do not promise that content already in Git's object store stays unread
   (pending the operator's scope decision, asked 2026-10-29).
 - An alias is judged by its expansion, read from the configuration Git
   would use, and the expansion meets these rules too. One the guard
@@ -1030,8 +1057,9 @@ checked, so a symlink does not remove the target owner's protection.
   Expanded config keys that cannot be proven literal refuse; explicit
   config reads can still use regular expressions. Git commands fed by
   xargs refuse when the subcommand is absent or guarded, because their
-  complete operands are unknown. `xargs git status` remains available.
-  Exec-guard additionally refuses an unverified filename stream to a file
+  complete operands are unknown. Exec-guard refuses `xargs git status`
+  too, since every `status` operand is judged and these arrive at run
+  time; `xargs git ls-files` remains available. Exec-guard additionally refuses an unverified filename stream to a file
   reader, including `git add` and `git grep`; literal ordinary input such as
   `echo README.md | xargs git add` remains available. Git-guard's
   `xargs git grep pattern` check keeps the pattern as data:
