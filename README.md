@@ -90,7 +90,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/sathyassn/codeflow
 To build from a checkout, with a Rust toolchain:
 
 ```sh
-cargo install --path crates/codeflow-cli
+cargo install --locked --path crates/codeflow-cli
 ```
 
 WSL2 uses the Linux installer. It is the preferred Windows route for
