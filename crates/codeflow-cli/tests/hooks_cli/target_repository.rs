@@ -1127,6 +1127,71 @@ fn tsk1002_codex10_git_modes_values_and_environment() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// TSK-1002 object reads by id: a Git object named by id, abbreviation,
+/// tag or peel that does not end in `REV:PATH` names content the guard
+/// cannot map to a path, so a command that may print, copy, relabel or
+/// send it refuses unless the name peels to a commit. A content batch names
+/// each object as `REV:PATH`, a stream names no object by id, and after a
+/// Git call that may move a ref, or on a line that sets `GIT_DIR`, nothing
+/// is looked up. Every refusal here except the `push` line was allowed at
+/// `f0146c495`.
+#[test]
+fn tsk1002_object_reads_by_id_refuse() {
+    let f = Fixture::new();
+    // The blob of the fixture's `README.md` ("a\n"), standing in for a
+    // secret: the guard does not know which file an id came from.
+    let blob = "78981922613b2afb6025042ff6bd878ac1994e85";
+    git(&f.root, &["tag", "v-blob", blob]);
+    let mut wrong = Vec::new();
+    for line in [
+        format!("git cat-file -p {blob}"),
+        format!("git cat-file blob {}", &blob[..7]),
+        format!("git cat-file --textconv {blob}"),
+        format!("git show {}", &blob[..10]),
+        format!("git show '{blob}^{{blob}}'"),
+        "git show v-blob".to_string(),
+        "git cat-file -p refs/tags/v-blob".to_string(),
+        format!("git diff HEAD:README.md {blob}"),
+        format!("git grep -h '' {blob}"),
+        format!("git tag t {blob}"),
+        format!("git push . {blob}:refs/tags/t"),
+        format!("git fetch . {blob}:refs/tags/t"),
+        format!("git notes add -C {blob} HEAD"),
+        format!("git restore --source={blob} notes.txt"),
+        format!("git update-index --add --cacheinfo 100644,{blob},notes.txt"),
+        format!("git cat-file --batch <<< {blob}"),
+        format!("printf '100644 blob {blob}\\tnotes.txt\\n' | git mktree"),
+        "git for-each-ref --format='%(raw)' refs/tags".to_string(),
+        "git tag -f t HEAD && git show t".to_string(),
+        "GIT_DIR=../other/.git git show main".to_string(),
+    ] {
+        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "git show HEAD --stat".to_string(),
+        format!("git cat-file -t {blob}"),
+        format!("git log -p --all -- {blob}"),
+        "git cat-file -p HEAD:README.md".to_string(),
+        "git cat-file --batch <<< HEAD:README.md".to_string(),
+        "git show main".to_string(),
+        "git diff main...HEAD -- README.md".to_string(),
+        "git checkout -b feature".to_string(),
+        "git status && git diff main".to_string(),
+    ] {
+        let out = f.command(&f.linked, "exec-guard", &line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    let out = f.command(&f.linked, "exec-guard", "git show v-blob");
+    if !String::from_utf8_lossy(&out.stderr).contains("name it as REV:PATH") {
+        wrong.push(format!("message: {out:?}"));
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// TSK-1002 Codex review 07: a Git alias is judged by its expansion, the
 /// way Git prepends its value, so a `--batch` reader or an object path
 /// behind an alias refuses as it does spelled out; a case-insensitive

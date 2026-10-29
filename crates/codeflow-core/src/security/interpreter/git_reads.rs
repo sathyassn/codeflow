@@ -760,10 +760,20 @@ fn judge_input(input: &str, records: Records, judges: &Judges<'_>) -> Result<boo
         if record.is_empty() {
             continue;
         }
+        // A content batch names each object as `REV:PATH`, and a stream
+        // names no object by id: either would name content the guard does
+        // not map to a path (TSK-1002, object reads by id).
+        let by_path = |object: &str| {
+            if object.contains(':') {
+                objects(object)
+            } else {
+                Err(super::git_objects::BY_ID)
+            }
+        };
         let secret = match records {
-            Records::Objects => objects(record)?,
+            Records::Objects => by_path(record)?,
             Records::Commands => match record.split_once([' ', '\t']) {
-                Some(("contents", object)) => objects(object)?,
+                Some(("contents", object)) => by_path(object)?,
                 Some(("info", _)) => false,
                 None if record == "flush" => false,
                 _ => return Err("cannot establish a git cat-file batch command"),
@@ -783,6 +793,12 @@ fn judge_input(input: &str, records: Records, judges: &Judges<'_>) -> Result<boo
                 }
             }
             Records::Stream => {
+                if record
+                    .split([' ', '\t'])
+                    .any(|word| word.len() >= 4 && word.bytes().all(|b| b.is_ascii_hexdigit()))
+                {
+                    return Err(super::git_objects::BY_ID);
+                }
                 let unquoted = record.starts_with('"').then(|| unquote(record)).flatten();
                 let mut secret = false;
                 for form in std::iter::once(record).chain(unquoted.as_deref()) {

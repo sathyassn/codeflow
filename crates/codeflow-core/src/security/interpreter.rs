@@ -5,6 +5,7 @@ use super::{actions, outward, pattern::matches_extended_glob};
 use crate::hooks::{PolicyLevel, SecuritySection, Violation};
 use std::path::{Path, PathBuf};
 
+mod git_objects;
 mod git_reads;
 
 pub(crate) fn evaluate(
@@ -311,6 +312,19 @@ fn expanded_alias(
     Ok(expanded)
 }
 
+/// A `GIT_*` variable the guard has not classified may move what Git reads
+/// (TSK-1002 Codex review 10): unlisted means unknown.
+fn git_environment_violation(command: &str, levels: &SecuritySection) -> Option<Violation> {
+    crate::security::git_preflight::unclassified_environment(command).map(|name| {
+        Violation::new(
+            "security.secret_reads",
+            levels.secret_reads,
+            format!("cannot verify Git input: cannot establish what Git reads under `{name}`"),
+            crate::remedy::SECRET_SELECTION.remedy(),
+        )
+    })
+}
+
 fn secret_reads(
     command: &str,
     levels: &SecuritySection,
@@ -330,17 +344,10 @@ fn secret_reads(
     // Every call on the line shares the line's facts, read once.
     let line = CommandLine::new(command);
     if levels.secret_reads.is_active() {
-        // A `GIT_*` variable the guard has not classified may move what Git
-        // reads (TSK-1002 Codex review 10): unlisted means unknown.
-        if let Some(name) = crate::security::git_preflight::unclassified_environment(command) {
-            violations.push(Violation::new(
-                "security.secret_reads",
-                levels.secret_reads,
-                format!("cannot verify Git input: cannot establish what Git reads under `{name}`"),
-                crate::remedy::SECRET_SELECTION.remedy(),
-            ));
-        }
-        for unwrapped in outward::unwrapped_commands(command, cwd, home) {
+        violations.extend(git_environment_violation(command, levels));
+        let calls = outward::unwrapped_commands(command, cwd, home);
+        let writers = git_objects::earlier_writers(&calls, command);
+        for (unwrapped, writer) in calls.into_iter().zip(writers) {
             let unwrapped = match expanded_alias(unwrapped, command) {
                 Ok(unwrapped) => unwrapped,
                 Err(why) => {
@@ -388,6 +395,10 @@ fn secret_reads(
                 .and_then(|result| git_input_violation(levels, result))
             {
                 violations.push(violation);
+                continue;
+            }
+            if let Some(why) = git_objects::unproven(&unwrapped, writer) {
+                violations.extend(git_input_violation(levels, Err(why)));
                 continue;
             }
             for (at, value, glob) in

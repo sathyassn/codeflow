@@ -147,62 +147,7 @@ pub(crate) fn read(
     // GIT_CONFIG selects a file only for `git config`, not for the command
     // being judged. Keep the runtime configuration environment intact.
     command.env_remove("GIT_CONFIG");
-    let mut directory = cwd.to_path_buf();
-    let mut at = 0;
-    while at < globals.len() {
-        let arg = globals[at].as_str();
-        if super::git::GLOBAL_VALUE_OPTIONS.contains(&arg) {
-            let value = globals
-                .get(at + 1)
-                .ok_or("cannot verify Git configuration: missing global-option value")?;
-            if arg == "-C" {
-                directory = directory.join(value);
-            }
-            command.args([arg, value]);
-            at += 2;
-        } else if arg.starts_with("--exec-path=") || matches!(arg, "-p" | "-P") {
-            // Configuration and rev-parse are builtins. Do not select an
-            // external program or start a pager while inspecting their data.
-            at += 1;
-        } else if arg.starts_with("-c")
-            || arg.starts_with("-C")
-            || [
-                "--git-dir=",
-                "--work-tree=",
-                "--namespace=",
-                "--config-env=",
-                "--attr-source=",
-                "--shallow-file=",
-            ]
-            .iter()
-            .any(|prefix| arg.starts_with(prefix))
-            || matches!(
-                arg,
-                "--bare"
-                    | "--no-pager"
-                    | "--paginate"
-                    | "--no-optional-locks"
-                    | "--no-replace-objects"
-                    | "--literal-pathspecs"
-                    | "--glob-pathspecs"
-                    | "--noglob-pathspecs"
-                    | "--icase-pathspecs"
-            )
-        {
-            if let Some(path) = arg.strip_prefix("-C") {
-                directory = directory.join(path);
-            }
-            // --paginate must not run a configured pager during inspection.
-            if arg != "--paginate" {
-                command.arg(arg);
-            }
-            at += 1;
-        } else {
-            return Err(format!(
-                "cannot verify Git configuration: unsupported global option {arg}"
-            ));
-        }
-    }
+    let mut directory = with_globals(&mut command, cwd, globals)?;
     // Git reports relative file origins from its discovered repository root,
     // not necessarily the caller's directory. Probe with the identical globals
     // and environment. Outside a repository config still works from cwd.
@@ -403,11 +348,162 @@ fn include_path(
         .join(path))
 }
 
+/// Add `globals`, the options before the Git subcommand, to `command` as Git
+/// reads them, and return the directory Git starts in. An option the
+/// reader does not support refuses.
+fn with_globals(
+    command: &mut std::process::Command,
+    cwd: &Path,
+    globals: &[String],
+) -> Result<PathBuf, String> {
+    let mut directory = cwd.to_path_buf();
+    let mut at = 0;
+    while at < globals.len() {
+        let arg = globals[at].as_str();
+        if super::git::GLOBAL_VALUE_OPTIONS.contains(&arg) {
+            let value = globals
+                .get(at + 1)
+                .ok_or("cannot verify Git configuration: missing global-option value")?;
+            if arg == "-C" {
+                directory = directory.join(value);
+            }
+            command.args([arg, value]);
+            at += 2;
+        } else if arg.starts_with("--exec-path=") || matches!(arg, "-p" | "-P") {
+            // Configuration and rev-parse are builtins. Do not select an
+            // external program or start a pager while inspecting their data.
+            at += 1;
+        } else if arg.starts_with("-c")
+            || arg.starts_with("-C")
+            || [
+                "--git-dir=",
+                "--work-tree=",
+                "--namespace=",
+                "--config-env=",
+                "--attr-source=",
+                "--shallow-file=",
+            ]
+            .iter()
+            .any(|prefix| arg.starts_with(prefix))
+            || matches!(
+                arg,
+                "--bare"
+                    | "--no-pager"
+                    | "--paginate"
+                    | "--no-optional-locks"
+                    | "--no-replace-objects"
+                    | "--literal-pathspecs"
+                    | "--glob-pathspecs"
+                    | "--noglob-pathspecs"
+                    | "--icase-pathspecs"
+            )
+        {
+            if let Some(path) = arg.strip_prefix("-C") {
+                directory = directory.join(path);
+            }
+            // --paginate must not run a configured pager during inspection.
+            if arg != "--paginate" {
+                command.arg(arg);
+            }
+            at += 1;
+        } else {
+            return Err(format!(
+                "cannot verify Git configuration: unsupported global option {arg}"
+            ));
+        }
+    }
+    Ok(directory)
+}
+
+/// What a Git object name resolves to in the repository Git would use with
+/// `globals` from `cwd`: its type and whether it peels to a commit, or
+/// `None` when it names no object. One bounded `cat-file --batch-check`
+/// answers every name; lazy fetches are off, so a partial clone never goes
+/// to the network (TSK-1002, object reads by id).
+pub(crate) fn object_kinds(
+    cwd: &Path,
+    globals: &[String],
+    names: &[String],
+) -> Result<Vec<Option<(String, bool)>>, String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut command = crate::git::command();
+    command.current_dir(cwd).env("GIT_NO_LAZY_FETCH", "1");
+    with_globals(&mut command, cwd, globals)?;
+    command.args(["--no-pager", "cat-file", "--batch-check=%(objecttype)"]);
+    let mut input = String::new();
+    for name in names {
+        if name.contains(['\n', '\r', '\0']) {
+            return Err("cannot establish a Git object name that spans lines".into());
+        }
+        input.push_str(name);
+        input.push('\n');
+        input.push_str(name);
+        input.push_str("^{commit}\n");
+    }
+    // Where Git finds no repository it resolves no object name either. Any
+    // other failure, a timeout included, stays unverified.
+    let mut probe = crate::git::command();
+    probe.current_dir(cwd).stdin(Stdio::null());
+    with_globals(&mut probe, cwd, globals)?;
+    probe.args(["--no-pager", "rev-parse", "--git-dir"]);
+    if let Err(why) = bounded_output(&mut probe, deadline) {
+        return if why.contains("git rejected") {
+            Ok(vec![None; names.len()])
+        } else {
+            Err(why)
+        };
+    }
+    let bytes = bounded(&mut command, deadline, Some(input.into_bytes()))?;
+    let text = String::from_utf8(bytes).map_err(|_| "cannot read Git object types")?;
+    let lines: Vec<&str> = text
+        .strip_suffix('\n')
+        .unwrap_or(&text)
+        .split('\n')
+        .collect();
+    if lines.len() != names.len() * 2 {
+        return Err("cannot read Git object types".into());
+    }
+    let kind = |line: &str, query: &str| -> Result<Option<String>, String> {
+        if ["blob", "commit", "tag", "tree"].contains(&line) {
+            Ok(Some(line.to_string()))
+        } else if line.strip_suffix(" missing") == Some(query) {
+            Ok(None)
+        } else {
+            Err(format!("cannot establish the Git object `{query}`"))
+        }
+    };
+    names
+        .iter()
+        .enumerate()
+        .map(|(at, name)| {
+            let peeled = format!("{name}^{{commit}}");
+            Ok(kind(lines[2 * at], name)?.map(|found| {
+                (
+                    found,
+                    kind(lines[2 * at + 1], &peeled).ok().flatten().is_some(),
+                )
+            }))
+        })
+        .collect()
+}
+
 pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,
 ) -> Result<Vec<u8>, String> {
+    bounded(command, deadline, None)
+}
+
+/// [`bounded_output`] with `input` written to the child's stdin when given.
+fn bounded(
+    command: &mut std::process::Command,
+    deadline: Instant,
+    input: Option<Vec<u8>>,
+) -> Result<Vec<u8>, String> {
     const LIMIT: u64 = 4 * 1024 * 1024;
+    if input.is_some() {
+        command.stdin(Stdio::piped());
+    }
     if Instant::now() >= deadline {
         return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
     }
@@ -416,6 +512,12 @@ pub(crate) fn bounded_output(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("cannot verify Git configuration: {error}"))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = stdin.write_all(&input);
+        });
+    }
     let stdout = child
         .stdout
         .take()
