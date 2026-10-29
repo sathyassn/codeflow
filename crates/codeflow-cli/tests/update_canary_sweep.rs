@@ -865,3 +865,43 @@ fn update_in_a_root_checkout_never_prints_a_git_config_value() {
         "the workspace hint step did not report:\n{all}"
     );
 }
+
+/// TSK-1029: `Shown::path` keeps a path's characters, and the CLI's print
+/// macros escape them. A project folder whose name holds an escape
+/// sequence, with a policy that does not parse, makes update's workspace
+/// step name the policy file by path; the sequence prints escaped.
+#[cfg(unix)]
+#[test]
+fn update_escapes_control_characters_in_the_paths_it_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, home) = (
+        dir.path().join("proj\u{1b}[31mred"),
+        dir.path().join("home"),
+    );
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let out = codeflow_command(&root, &home, &["init", "--yes", "--minimal"])
+        .output()
+        .expect("codeflow runs");
+    assert!(out.status.success(), "{}", text(&out));
+    // A value of the wrong type: update's own steps read on, and the
+    // workspace step names the file that does not parse.
+    let policy = root.join(".codeflow").join(["policy", "json"].join("."));
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy).unwrap()).unwrap();
+    value["git"]["test_gate_on_push"] = serde_json::json!("not a level");
+    std::fs::write(&policy, value.to_string()).unwrap();
+
+    let out = codeflow_command(&root, &home, &["update"])
+        .output()
+        .expect("codeflow runs");
+    let all = text(&out);
+    assert!(
+        all.contains("cannot parse policy"),
+        "no policy line:\n{all:?}"
+    );
+    assert!(
+        !all.contains('\u{1b}'),
+        "update printed a raw escape sequence:\n{all:?}"
+    );
+}

@@ -50,8 +50,15 @@ const RUNTIME_TEXT: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-cli/src/cmd/mod.rs",
         "touch_registry_best_effort",
         "path",
-        3,
-        "the folder the registry could not inspect, and the registry file",
+        1,
+        "the folder the registry could not inspect",
+    ),
+    (
+        "crates/codeflow-core/src/remedy.rs",
+        "shown_for",
+        "path",
+        1,
+        "the path a catalogued remedy names: the registry file or the folder it could not inspect",
     ),
     (
         "crates/codeflow-cli/src/prompts.rs",
