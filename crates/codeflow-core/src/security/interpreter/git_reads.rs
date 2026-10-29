@@ -162,10 +162,22 @@ pub(super) fn expand_alias(
     Err("cannot follow a Git alias chain that deep")
 }
 
-/// Commands whose operands are proven not to name an object: a commit
-/// message, a remote URL, a configuration value. Every other command's
-/// operands are read as possible `REV:PATH` object names.
-const TEXT_OPERAND_COMMANDS: &[&str] = &["commit", "remote", "config"];
+/// Commands whose operands are proven not to name a local object: a commit
+/// message, a configuration value, or a repository URL and the remote refs
+/// `clone`, `fetch`, `ls-remote` and `pull` match against what the remote
+/// advertises (hosted run 40816623125: a URL read as `https` plus the path
+/// `//host/...` is a share on Windows). `push` stays a reader: its source
+/// is a local object. Every other command's operands are read as possible
+/// `REV:PATH` object names.
+const TEXT_OPERAND_COMMANDS: &[&str] = &[
+    "clone",
+    "commit",
+    "config",
+    "fetch",
+    "ls-remote",
+    "pull",
+    "remote",
+];
 
 /// Commands whose stdin, when they read it, holds names they report
 /// metadata for (attributes, ignore rules, mailmap entries), never content.

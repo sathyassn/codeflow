@@ -397,7 +397,8 @@ the guard parses completely; any other form refuses as cannot-verify:
 
 - Every operand before `--`, a separate option value included, is read as
   a possible object name, unless it is proven to be text: a commit
-  message, a remote spelling, a configuration value, or an option value
+  message, a configuration value, a repository URL or remote ref of
+  `clone`, `fetch`, `ls-remote` and `pull`, or an option value
   (`git log -S TEXT`, `--grep TEXT`, `--format=TEXT`) after options the
   guard's grammar all knows, since an unknown option may take the next
   word. `git log` operands and pathspecs are file operands (`git log -p --
