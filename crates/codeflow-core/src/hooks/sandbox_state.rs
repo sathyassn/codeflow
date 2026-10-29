@@ -39,8 +39,8 @@
 //!
 //! What no file or variable shows is not read: launch flags (`--settings`,
 //! `--sandbox`, `-c`, `--profile`), server-managed settings that are not
-//! cached on disk, and unmarked unsandboxed retries. Failing closed there is
-//! tracked as TSK-1052.
+//! cached on disk, and unmarked unsandboxed retries. TSK-1052 fails closed
+//! there for a command that runs code after a same-line write.
 
 use std::path::{Path, PathBuf};
 
