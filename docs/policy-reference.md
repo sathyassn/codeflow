@@ -398,13 +398,40 @@ the guard does not parse every option of every Git command or prove which
 operand Git reads in which role, so where a reading cannot be made sound
 the form refuses:
 
-- Pathspec magic refuses in any Git operand or option value, whatever
-  role Git gives the word: a word that begins `:(`, `:!`, `:^` or `:/`
-  (`git log -p -- ':!docs'`, `git show ':/fix bug'`, `git commit -F
-  ':(exclude)x'`). Name the paths to read instead.
-- A share, verbatim or device spelling (`//host/share`, `\\?\`,
-  `\\.\`, `\??\`) in any word of a Git call refuses before any
-  lookup, an alias lookup included.
+- Pathspec magic refuses in a Git operand or option value, whatever role
+  Git gives the word: a word that begins `:(`, `:!`, `:^` or `:/`, as an
+  operand, a separate option value, a long option's `=value` or a short
+  option's attached value (`git log -p -- ':!docs'`, `git show ':/fix
+  bug'`, `git commit -F ':(exclude)x'`, `git commit -m':!x'`). Name the
+  paths to read instead. The rule does not know which values are text,
+  so a search text that begins with magic refuses too (`git grep '://'`,
+  `git log --grep=':/'`); search such text with `rg`.
+- On a line that runs Git, a share, verbatim or device spelling
+  (`//host/share`, `\\?\`, `\\.\`, `\??\`) in any word refuses before
+  either guard discovers a repository, reads configuration or looks up an
+  alias. Every word of the line is checked, with the value after `=` in an
+  option, a `-c` setting or an environment assignment and a short option's
+  attached value (`git -c include.path=//host/share/config x`,
+  `GIT_CONFIG_VALUE_0=//host/share git status`). Include paths inside
+  configuration files on disk are read as Git reads them; those files are
+  the user's own or protected checkout state. The order is proved by test
+  on macOS and Linux; Windows execution is not verified.
+- A `GIT_*` environment variable on a line that runs Git refuses unless
+  the guard classifies it (`git help git`, "Environment Variables"):
+  identity (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`), the programs Git runs
+  (`GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_SSH`,
+  `GIT_SSH_COMMAND`, `GIT_SSH_VARIANT`, `GIT_ASKPASS`,
+  `GIT_EXTERNAL_DIFF`, `GIT_EXEC_PATH`), output and prompt settings (`GIT_TERMINAL_PROMPT`,
+  `GIT_FLUSH`, `GIT_PROGRESS_DELAY`, `GIT_MERGE_VERBOSITY`, `GIT_ADVICE`,
+  `GIT_OPTIONAL_LOCKS`, `GIT_DIFF_OPTS`, `GIT_HTTP_USER_AGENT`), the
+  pathspec modes `GIT_GLOB_PATHSPECS`, `GIT_NOGLOB_PATHSPECS` and
+  `GIT_LITERAL_PATHSPECS`, and `GIT_DIR`. The others move
+  what Git reads or writes and refuse as unverified: `GIT_WORK_TREE`,
+  `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_NAMESPACE`, every
+  `GIT_CONFIG*`, the `GIT_TRACE*` family and any name not listed. The
+  name is found anywhere in the line's text, since a shell can build an
+  assignment from it, so `git grep GIT_WORK_TREE` refuses too; search
+  such text with `rg`.
 - Every operand before `--`, a separate option value included, is read as
   a possible object name, unless it is proven to be text: a commit
   message, a configuration value, a repository URL or remote ref of
@@ -446,8 +473,10 @@ the form refuses:
   secret name could match it (`'id_rs?'`). Git's `*` also matches `/`,
   so any glob whose cross-directory match could hit a secret name
   refuses, quoted or not, `git add '*.rs'` and `git diff -- '*.md'`
-  included. `ls-files`
-  and `status` print names only, so their patterns are not judged.
+  included. `status` is judged too, since `status -v` prints staged
+  changes. `ls-files` prints names, modes, object names and line-ending
+  facts in every mode, never content (`git help ls-files`), so its
+  patterns are not judged.
   `--icase-pathspecs` refuses. Ref and refspec patterns (`git fetch
   origin 'refs/heads/*:refs/remotes/origin/*'`, `git tag -l 'v*'`) are not
   pathspecs.
@@ -463,7 +492,8 @@ name list piped from a program (`git ls-files | git update-index
 src/main.rs`), or pass the names one per line. Measured on a corpus of 120 ordinary Git commands
 (TSK-1002), these rules refuse 2 where the earlier ones refused 1; the
 added refusal is `git grep -n needle -- '*.rs'`. The corpus holds no
-magic or NUL list.
+magic, NUL list or `GIT_*` assignment, so it does not measure those
+costs.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the
