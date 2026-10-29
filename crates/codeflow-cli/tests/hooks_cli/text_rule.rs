@@ -71,7 +71,16 @@ fn relaxed_on_the_published_default_branch_is_honoured() {
     let dir = tempfile::tempdir().unwrap();
     published(dir.path(), RELAXED);
     let out = exec_guard(dir.path(), EVERYDAY, false);
-    assert!(out.status.success(), "{out:?}");
+    if cfg!(windows) {
+        // Native Windows keeps the strict rule under relaxed (ADR-0088).
+        assert!(run_time_word_refusal(&out), "{out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("native Windows"),
+            "{out:?}"
+        );
+    } else {
+        assert!(out.status.success(), "{out:?}");
+    }
 }
 
 #[test]
