@@ -127,6 +127,13 @@ pub fn evaluate_in(
     } else {
         evaluate_floor(command)
     };
+    // A Git line naming a share, verbatim or device path refuses before any
+    // check below can discover a repository or read its configuration
+    // (TSK-1002 Codex review 10).
+    if let Some(finding) = crate::security::git_preflight::namespace_violation(command) {
+        violations.push(finding);
+        return violations;
+    }
     // `~` and `$HOME` name the home the line assigns before them (TSK-379).
     let line_home = super::git_guard::line_home::read(command);
     let _home = super::git_guard::line_home::Scope::enter(command, &line_home);

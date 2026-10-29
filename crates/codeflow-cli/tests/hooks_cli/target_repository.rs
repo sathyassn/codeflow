@@ -1040,7 +1040,6 @@ fn tsk1002_codex09_unproven_git_readings_refuse() {
     }
     for line in [
         "git ls-files -- 'src/*'",
-        "git status -- 'src/*'",
         "git cat-file -z --batch-check <<< HEAD:README.md",
         "git push origin :old-branch",
         "git show :README.md",
@@ -1059,6 +1058,71 @@ fn tsk1002_codex09_unproven_git_readings_refuse() {
     let message = String::from_utf8_lossy(&out.stderr);
     if !message.contains("share, verbatim or device") {
         wrong.push(format!("namespace message: {message}"));
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 Codex review 10 and Fable review 12, one test per class:
+/// `status` patterns are judged in every mode, since `-v` prints changes,
+/// while `ls-files` prints no content in any mode; pathspec magic refuses
+/// in a short option's attached value as in a separate one; a share,
+/// verbatim or device spelling refuses in any word or value of a Git line,
+/// a `-c` setting and an environment assignment included; a `GIT_*`
+/// variable the guard has not classified refuses; and the role-free magic
+/// and `GIT_*` rules refuse a search text that begins with magic or names
+/// such a variable (Fable 12's accepted over-refusal). Each refusal except the separate-value and plain
+/// namespace forms was allowed at `f0146c495`.
+#[test]
+fn tsk1002_codex10_git_modes_values_and_environment() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for line in [
+        "git status -- 'src/*'",
+        "git status -v -- 'src/*'",
+        "git status -vv -- 'src/*'",
+        "git status --verbose -- 'src/*'",
+        "git commit -m':!message'",
+        "git commit -m ':!message'",
+        "git -c include.path=//fixture-host/fixture-share/config fixture-alias",
+        "git -cinclude.path=//fixture-host/fixture-share/config status",
+        "GIT_CONFIG_VALUE_0=//fixture-host/fixture-share git status",
+        "GIT_WORK_TREE=/tmp git add README.md",
+        "GIT_INDEX_FILE=/tmp/index git show :README.md",
+        "export GIT_CONFIG_COUNT=1; git status",
+        "GIT_TRACE=/tmp/trace git status",
+        "env GIT_NAMESPACE=x git log -1",
+        "git grep '://'",
+        "git log --grep=':/'",
+        "git grep GIT_WORK_TREE",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "git ls-files -s -- 'src/*'",
+        "git status",
+        "git status -v",
+        "GIT_PAGER=cat git log -1",
+        "GIT_DIR=.git git status",
+        "git commit -m 'fix: parse urls'",
+        "git grep 'https://' src",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    for hook in ["exec-guard", "git-guard"] {
+        let out = f.command(
+            &f.linked,
+            hook,
+            "git -c include.path=//fixture-host/fixture-share/config fixture-alias",
+        );
+        let message = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !message.contains("share, verbatim or device") {
+            wrong.push(format!("{hook} include share: {message}"));
+        }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }

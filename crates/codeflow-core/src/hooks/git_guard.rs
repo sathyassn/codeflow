@@ -887,6 +887,14 @@ fn evaluate_report_with_runners(
     cwd: &Path,
     read_runners: bool,
 ) -> Evaluation {
+    // A Git line naming a share, verbatim or device path refuses before any
+    // repository or configuration lookup (TSK-1002 Codex review 10).
+    if let Some(finding) = crate::security::git_preflight::namespace_violation(command) {
+        return Evaluation {
+            violations: vec![finding],
+            notes: Vec::new(),
+        };
+    }
     let _facts = super::edit_guard::RepoFactsScope::enter();
     // `~` and `$HOME` name the home the line assigns before them (TSK-379).
     let home = line_home::read(command);

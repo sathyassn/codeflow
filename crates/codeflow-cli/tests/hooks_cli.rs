@@ -2409,7 +2409,10 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
         "cd \"$HOME/src/x\" && git push origin task/x",
         "git commit -m \"set HOME\"",
         "printf '%s' \"${HOME}\"; git push origin task/x",
-        "git log -- HOME GIT_CONFIG_PARAMETERS; git push origin task/x",
+        // A `GIT_*` name the guard has not classified refuses on a Git line
+        // in any role since TSK-1002 review 10, so this control names a
+        // classified one.
+        "git log -- HOME GIT_DIR; git push origin task/x",
         "getln HOME; git status",
         "export PATH=$PATH:/x",
         "read -p \"...\" answer",

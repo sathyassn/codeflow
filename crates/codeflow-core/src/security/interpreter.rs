@@ -330,6 +330,16 @@ fn secret_reads(
     // Every call on the line shares the line's facts, read once.
     let line = CommandLine::new(command);
     if levels.secret_reads.is_active() {
+        // A `GIT_*` variable the guard has not classified may move what Git
+        // reads (TSK-1002 Codex review 10): unlisted means unknown.
+        if let Some(name) = crate::security::git_preflight::unclassified_environment(command) {
+            violations.push(Violation::new(
+                "security.secret_reads",
+                levels.secret_reads,
+                format!("cannot verify Git input: cannot establish what Git reads under `{name}`"),
+                crate::remedy::SECRET_SELECTION.remedy(),
+            ));
+        }
         for unwrapped in outward::unwrapped_commands(command, cwd, home) {
             let unwrapped = match expanded_alias(unwrapped, command) {
                 Ok(unwrapped) => unwrapped,

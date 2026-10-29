@@ -32,6 +32,7 @@ pub mod dangerous;
 mod deletion;
 pub mod git;
 pub(crate) mod git_config;
+pub(crate) mod git_preflight;
 // Some tables serve only the Unix symlink tests.
 #[cfg(test)]
 #[cfg_attr(not(unix), allow(dead_code))]

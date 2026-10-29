@@ -71,3 +71,4 @@ crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("builtin export
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("command export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x")	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
 crates/codeflow-core/src/hooks/git_guard/line_home.rs	"builtin export HOME=/r; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
 crates/codeflow-core/src/hooks/git_guard/line_home.rs	"command -v git && git clone u ~/scratch/y"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/security/git_preflight.rs	"git clone https://example.test/x/y.git"	1	TSK-1002 review 10 unit test control: a Git line with no namespace spelling; classified as text, never executed.

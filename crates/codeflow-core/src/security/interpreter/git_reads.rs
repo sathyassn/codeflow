@@ -210,21 +210,31 @@ pub(super) fn refused_form(call: &outward::Unwrapped) -> Result<(), &'static str
     let Some((_, start)) = git_command(call) else {
         return Ok(());
     };
-    let value = |word: &str| -> String {
-        if word.starts_with('-') {
-            word.split_once('=')
-                .map_or(String::new(), |(_, value)| value.to_string())
-        } else {
-            word.to_string()
+    // The values a word carries: the word itself, a long option's `=value`,
+    // and a short option's attached value at any letter (`-m':!x'`).
+    let values = |word: &str| -> Vec<String> {
+        if let Some(long) = word.strip_prefix("--") {
+            return long
+                .split_once('=')
+                .map(|(_, value)| vec![value.to_string()])
+                .unwrap_or_default();
+        }
+        match word.strip_prefix('-') {
+            Some(short) => (1..short.len())
+                .filter(|at| short.is_char_boundary(*at))
+                .map(|at| short[at..].to_string())
+                .collect(),
+            None => vec![word.to_string()],
         }
     };
     for (at, word) in call.args.iter().enumerate().skip(1) {
-        let value = value(word);
-        if outward::remote_or_namespace_operand(&value) {
-            return Err(NAMESPACE);
-        }
-        if at >= start && magic(&value) {
-            return Err(MAGIC);
+        for value in values(word) {
+            if outward::remote_or_namespace_operand(&value) {
+                return Err(NAMESPACE);
+            }
+            if at >= start && magic(&value) {
+                return Err(MAGIC);
+            }
         }
     }
     if call.args[..start]
@@ -332,8 +342,10 @@ const CAT_FILE_OPTIONS: &[&str] = &[
 ];
 
 /// Git commands that read their operands as pathspecs and may print the
-/// content of what they select (Git 2.53). `ls-files` and `status` print
-/// names only, so their patterns select no content.
+/// content of what they select in some mode (Git 2.53; `status -v` prints
+/// staged changes). `ls-files` prints names, modes, object names and
+/// end-of-line facts in every mode (`git help ls-files`), never content, so
+/// its patterns are not judged.
 const PATHSPEC_COMMANDS: &[&str] = &[
     "add",
     "archive",
@@ -357,6 +369,7 @@ const PATHSPEC_COMMANDS: &[&str] = &[
     "shortlog",
     "show",
     "stash",
+    "status",
     "whatchanged",
 ];
 

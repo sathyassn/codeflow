@@ -119,6 +119,13 @@ fn validate_environment(environment: &Environment) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many effective-configuration reads [`read`] made on this thread,
+    /// for tests that prove a refusal comes before any read.
+    pub(crate) static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `globals` contains only the options before the Git subcommand. Environment
 /// entries are allowlisted literal command-local assignments; inherited native
 /// bytes stay in the child environment. Unresolved shell expressions must be
@@ -128,6 +135,8 @@ pub(crate) fn read(
     globals: &[String],
     environment: &Environment,
 ) -> Result<EffectiveConfig, String> {
+    #[cfg(test)]
+    READS.with(|reads| reads.set(reads.get() + 1));
     let deadline = Instant::now() + Duration::from_secs(3);
     validate_environment(environment)?;
     let mut command = crate::git::command();
