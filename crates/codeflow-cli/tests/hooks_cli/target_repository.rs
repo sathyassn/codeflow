@@ -631,6 +631,7 @@ fn tsk1002_review04_bounded_classes_refuse_through_the_hooks() {
         "printf x > sub/script; ruby -wC sub script".into(),
         // Codex 5: the object path keeps the secret-name policy.
         "git show HEAD:id_rsa".into(),
+        "git show $(git rev-parse HEAD):id_rsa".into(),
         "git cat-file -p HEAD:id_rsa".into(),
         "git show :0:id_rsa".into(),
         "git show 'HEAD^{tree}:id_rsa'".into(),
@@ -664,6 +665,8 @@ fn tsk1002_review04_bounded_classes_refuse_through_the_hooks() {
         "printf x > notes.txt; ruby -w tool.py",
         "git show HEAD:README.md",
         "git log --format=%H:%s",
+        "git commit -m 'rotate:id_rsa'",
+        "git remote add backup host:id_rsa",
         "set -euo pipefail; cd alias/.. && cat auth.json",
         "setopt nochaselinks; cd alias/.. && cat auth.json",
         "emulate -L zsh; cd alias/.. && cat auth.json",
@@ -671,6 +674,60 @@ fn tsk1002_review04_bounded_classes_refuse_through_the_hooks() {
         "uv run cat notes.md",
         "uv run python tool.py notes.md",
         "grep -r cat sub",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 Fable review 07: a physical `cd` lands on the destination's
+/// real path, so a later logical `cd ..` from a start reached through a
+/// link moves from the link's target; a shell started with a physical
+/// option runs its code physical. Each refusal allowed at `1f1605f99` in at
+/// least one spelling; the controls stay allowed.
+#[cfg(unix)]
+#[test]
+fn tsk1002_review07_physical_cd_and_shell_options_refuse() {
+    let f = Fixture::new();
+    let store = f.temp.path().join(".codex");
+    std::fs::create_dir_all(store.join("child")).unwrap();
+    std::fs::write(store.join("auth.json"), "planted fixture").unwrap();
+    std::os::unix::fs::symlink(store.join("child"), f.linked.join("alias")).unwrap();
+    std::fs::create_dir_all(f.linked.join("sub")).unwrap();
+    std::os::unix::fs::symlink(store.join("child"), f.linked.join("sub/alias2")).unwrap();
+    std::fs::create_dir_all(f.linked.join("visible")).unwrap();
+    std::fs::write(f.linked.join("visible/note.txt"), "ordinary").unwrap();
+    std::fs::write(f.linked.join("notes.md"), "ordinary").unwrap();
+    let mut wrong = Vec::new();
+    for line in [
+        "cd alias && cd -P . && cd .. && cat auth.json",
+        "cd alias; cd -P .; cd ..; cat auth.json",
+        "cd alias && cd -P ./ && cd .. && cat auth.json",
+        "cd alias && pushd -P . && cd .. && cat auth.json",
+        "cd sub/alias2 && cd -P . && cd .. && cat auth.json",
+        "cd alias && cd -LP . && cd .. && cat auth.json",
+        "bash -P -c 'cd alias/.. && cat auth.json'",
+        "bash -o physical -c 'cd alias/.. && cat auth.json'",
+        "sh -P -c 'cd alias/.. && cat auth.json'",
+        "zsh -w -c 'cd alias/.. && cat auth.json'",
+        "zsh -o chaselinks -c 'cd alias/.. && cat auth.json'",
+        "bash -ePc 'cd alias/.. && cat auth.json'",
+        "zsh --chase-dots -c 'cd alias/.. && cat auth.json'",
+        "zsh -X -c 'cd alias/.. && cat auth.json'",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "cd -P visible && cd .. && cat visible/note.txt",
+        "cd -P sub && cd .. && cat notes.md",
+        "bash -c 'cd alias/.. && cat auth.json'",
+        "bash -e -o pipefail -c 'cd alias/.. && cat auth.json'",
+        "bash --norc -c 'cd alias/.. && cat auth.json'",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
         if out.status.code() != Some(0) {

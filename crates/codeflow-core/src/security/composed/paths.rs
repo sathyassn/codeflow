@@ -1934,7 +1934,18 @@ fn simple(
             }
         }
         let script = crate::hooks::git_guard::launched_script(&words, &script);
-        let after = reparse(&script, position.clone(), dialect, output, depth, reparses);
+        let mut start = position.clone();
+        // A shell started with a physical option (`bash -P -c`, `zsh -o
+        // chaselinks -c`) runs its code physical (TSK-1002 review 07).
+        if !current_shell
+            && reader.is_some_and(|(name, args)| {
+                crate::hooks::git_guard::is_shell(crate::hooks::git_guard::basename(name))
+                    && shell_invocation_physical(args)
+            })
+        {
+            start.physical = true;
+        }
+        let after = reparse(&script, start, dialect, output, depth, reparses);
         position.scripts.clone_from(&after.scripts);
         return if current_shell { after } else { position };
     }
@@ -1963,6 +1974,7 @@ fn simple(
                 || args
                     .iter()
                     .any(|arg| arg.starts_with('-') && arg.contains('P')));
+        let mut physical_destination = None;
         if physical {
             // A UNC or namespace place is never resolved: it is unknown
             // before any filesystem access, so the guard contacts no host
@@ -2027,25 +2039,44 @@ fn simple(
                 // is not a link in the target; a start that cannot be
                 // resolved counts as one. An absolute target is its own
                 // spelling.
-                let through_link = crate::portable_path::canonicalize(&lexical).is_ok_and(|real| {
+                let real = crate::portable_path::canonicalize(&lexical).ok();
+                let through_link = real.as_ref().is_some_and(|real| {
                     if Path::new(target).has_root() {
-                        real != lexical
+                        *real != lexical
                     } else {
                         crate::portable_path::canonicalize(&dir)
-                            .map_or(true, |base| real != lexical_join(&base, Path::new(target)))
+                            .map_or(true, |base| *real != lexical_join(&base, Path::new(target)))
                     }
                 });
-                if through_parent || through_link {
-                    set_oldpwd(&mut position.state);
-                    position.state.directory = None;
-                    position.stack.clear();
-                    set_pwd(&mut position.state);
-                    return position;
+                // Any other physical change lands where the shell puts PWD:
+                // the destination's physical path, so a start reached
+                // through a link (`cd alias && cd -P .`) does not keep its
+                // logical spelling for a later `cd ..` (TSK-1002 review 07).
+                // A destination that cannot be resolved is unknown.
+                match real {
+                    Some(real) if !through_parent && !through_link => {
+                        physical_destination = Some(real);
+                    }
+                    _ => {
+                        set_oldpwd(&mut position.state);
+                        position.state.directory = None;
+                        position.stack.clear();
+                        set_pwd(&mut position.state);
+                        return position;
+                    }
                 }
             }
         }
         match program {
-            "cd" | "chdir" | "pushd" => change_directory(&mut position, program, args),
+            "cd" | "chdir" | "pushd" => {
+                change_directory(&mut position, program, args);
+                if let Some(real) = physical_destination {
+                    if position.state.directory.is_some() {
+                        position.state.directory = Some(real);
+                        set_pwd(&mut position.state);
+                    }
+                }
+            }
             "popd" if !args.is_empty() => {
                 // Indexed removals and -n differ from an ordinary pop.
                 // Keep them unresolved until both shell readings are modeled.
@@ -2267,6 +2298,77 @@ fn sets_physical(program: &str, args: &[String]) -> bool {
         }
         _ => false,
     }
+}
+
+/// bash long invocation options that leave directory changes logical.
+const LOGICAL_SHELL_LONG_OPTIONS: &[&str] = &[
+    "norc",
+    "noprofile",
+    "login",
+    "posix",
+    "restricted",
+    "verbose",
+    "version",
+    "noediting",
+    "debugger",
+    "dumpstrings",
+    "help",
+    "prettyprint",
+    "rcfile",
+    "initfile",
+    "command",
+];
+
+/// Whether a shell's own invocation options make its directory changes
+/// physical: bash `-P` or `-o physical`, zsh `-w`, `-o chaselinks` or
+/// `--chase-dots`, or an option word the guard does not read (fail closed,
+/// as [`sets_physical`]). Options end at `--`, `-` or the first operand.
+fn shell_invocation_physical(args: &[String]) -> bool {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if matches!(word.as_str(), "--" | "-") {
+            return false;
+        }
+        let Some(sign) = word.chars().next().filter(|ch| matches!(ch, '-' | '+')) else {
+            return false;
+        };
+        let on = sign == '-';
+        if let Some(long) = word.strip_prefix("--") {
+            let name: String = long.chars().filter(|ch| !matches!(ch, '_' | '-')).collect();
+            let name = name.to_ascii_lowercase();
+            if matches!(name.as_str(), "rcfile" | "initfile") {
+                words.next();
+            } else if !LOGICAL_SHELL_LONG_OPTIONS.contains(&name.as_str())
+                && option_physical(long, true)
+            {
+                return true;
+            }
+            continue;
+        }
+        let letters = &word[1..];
+        for (at, letter) in letters.char_indices() {
+            match letter {
+                'o' | 'O' => {
+                    let attached = &letters[at + 1..];
+                    let name = if attached.is_empty() {
+                        words.next().map(String::as_str)
+                    } else {
+                        Some(attached)
+                    };
+                    // `-O` names a bash shopt option, none of which is physical.
+                    if letter == 'o' && name.is_none_or(|name| option_physical(name, on)) {
+                        return true;
+                    }
+                    break;
+                }
+                'P' | 'w' if on => return true,
+                'c' | 'i' | 'l' | 'r' | 's' | 'D' | 'a' | 'b' | 'e' | 'f' | 'h' | 'k' | 'm'
+                | 'n' | 'p' | 't' | 'u' | 'v' | 'x' | 'B' | 'C' | 'E' | 'H' | 'T' | 'P' | 'w' => {}
+                _ => return true,
+            }
+        }
+    }
+    false
 }
 
 fn set_oldpwd(state: &mut State) {

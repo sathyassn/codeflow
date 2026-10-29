@@ -380,7 +380,7 @@ fn inspect_operand(
     // `:0:id_rsa`) names a file in the tree, so it keeps the secret-name
     // policy of a file operand whatever the revision's shape and on every
     // platform (TSK-1002 review 04). The word's other readings follow.
-    if let Some(path) = git_object_operand(call, at, value) {
+    for path in git_object_paths(call, at, value) {
         if secret_path_result(path, cwd, home, Some(false))? {
             return Ok(true);
         }
@@ -495,32 +495,75 @@ fn object_path(word: &str) -> Option<&str> {
     None
 }
 
-/// The object path of a Git subcommand operand before any `--` written as
-/// `REV:PATH` or `:PATH`, where the revision part is revision-shaped (no
-/// leading `-`, only the characters Git revision syntax uses). A URL
-/// (`https://host/x`) has no object path.
-fn git_object_operand<'a>(call: &outward::Unwrapped, at: usize, value: &'a str) -> Option<&'a str> {
-    let (program, rest) = call.args.split_first()?;
-    let git = crate::hooks::git_guard::git_arguments(program, rest)?;
-    let (_, tail) = crate::hooks::git_guard::git_subcommand(&git)?;
-    let start = call.args.len() - tail.len();
-    if at < start || call.args[start..at].iter().any(|word| word == "--") {
-        return None;
-    }
-    let path = object_path(value)?;
-    let revision = &value[..value.len() - path.len() - 1];
-    let shaped = !revision.starts_with('-')
-        && revision
-            .chars()
-            .all(|ch| ch.is_alphanumeric() || "_./@-~^{}:+ ".contains(ch));
-    // An index entry names its stage first (`:0:path`).
-    let path = match path.split_once(':') {
-        Some((stage, staged)) if revision.is_empty() && matches!(stage, "0" | "1" | "2" | "3") => {
-            staged
-        }
-        _ => path,
+/// Git subcommands whose operands may name an object as `REV:PATH`.
+const GIT_OBJECT_SUBCOMMANDS: &[&str] = &[
+    "show",
+    "cat-file",
+    "log",
+    "diff",
+    "diff-tree",
+    "grep",
+    "rev-parse",
+    "archive",
+    "ls-tree",
+    "blame",
+    "checkout",
+    "restore",
+    "whatchanged",
+    "difftool",
+];
+
+/// Options of those subcommands whose separate value is text, not an object.
+const GIT_VALUE_OPTIONS: &[&str] = &[
+    "-m",
+    "-F",
+    "-e",
+    "-f",
+    "-S",
+    "-G",
+    "--grep",
+    "--author",
+    "--committer",
+    "--format",
+    "--pretty",
+    "--since",
+    "--until",
+    "--message",
+];
+
+/// Every path a Git object operand may name. For a subcommand that takes
+/// objects, an operand before any `--` that is not an option or an option's
+/// text value may be `REV:PATH` with any revision spelling Git accepts
+/// (`HEAD:x`, `ref!name:x`, `HEAD^{/a:b}:x`, `:0:x`, `$(...):x`). The guard
+/// does not parse revision syntax; it reads the text after every `:` as a
+/// possible object path, so a secret name there refuses whatever comes
+/// before it (TSK-1002 Codex review 05, fail closed).
+fn git_object_paths<'a>(call: &outward::Unwrapped, at: usize, value: &'a str) -> Vec<&'a str> {
+    let Some((program, rest)) = call.args.split_first() else {
+        return Vec::new();
     };
-    (shaped && !path.is_empty() && !path.starts_with("//")).then_some(path)
+    let Some(git) = crate::hooks::git_guard::git_arguments(program, rest) else {
+        return Vec::new();
+    };
+    let Some((subcommand, tail)) = crate::hooks::git_guard::git_subcommand(&git) else {
+        return Vec::new();
+    };
+    // Only subcommands that take object names read one; a commit message or
+    // a remote spelling is not an object (TSK-1002 review 07).
+    let start = call.args.len() - tail.len();
+    if !GIT_OBJECT_SUBCOMMANDS.contains(&subcommand)
+        || at < start
+        || value.starts_with('-')
+        || call.args[start..at].iter().any(|word| word == "--")
+        || at > start && GIT_VALUE_OPTIONS.contains(&call.args[at - 1].as_str())
+    {
+        return Vec::new();
+    }
+    value
+        .match_indices(':')
+        .map(|(colon, _)| &value[colon + 1..])
+        .filter(|path| !path.is_empty())
+        .collect()
 }
 
 /// A Git operand in revision form that names a short-name component but no
@@ -1034,24 +1077,15 @@ fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'st
             }
             continue;
         }
-        match crate::hooks::git_guard::secret_glob_paths(pattern, base) {
-            Ok(paths) => {
-                for path in paths {
-                    let text = match secret_path_text(&path) {
-                        Ok(text) => text,
-                        Err(why) => return uncertain_glob(&reading, cwd, home, why),
-                    };
-                    if secret_path_spelling(&text, home, Some(false))
-                        || real_secret_path(&path, home)?
-                    {
-                        return Ok(true);
-                    }
-                }
-            }
-            Err(why) => {
-                if secret_intersection(&reading, cwd, home) {
-                    return Err(why);
-                }
+        // An expansion the guard could not finish, or an entry it cannot
+        // read as a path, leaves the selection unknown: an unseen entry may
+        // be a link into a store whatever its name, so no name check can
+        // clear it (TSK-1002 Codex review 05).
+        let paths = crate::hooks::git_guard::secret_glob_paths(pattern, base)?;
+        for path in paths {
+            let text = secret_path_text(&path)?;
+            if secret_path_spelling(&text, home, Some(false)) || real_secret_path(&path, home)? {
+                return Ok(true);
             }
         }
     }
@@ -2833,6 +2867,17 @@ mod tests {
             "git show :id_rsa",
             "git show 'HEAD^{tree}:id_rsa'",
             "git diff HEAD:README.md v1.0:id_rsa",
+            // Review 07: an unresolved revision keeps its path.
+            "git show $(git rev-parse HEAD):id_rsa",
+            "git show `git rev-parse HEAD`:id_rsa",
+            "git show \"$(git rev-parse HEAD):id_rsa\"",
+            "git cat-file -p $REV:id_rsa",
+            // Codex review 05: any revision spelling Git accepts.
+            "git show 'fixture!ref:id_rsa'",
+            "git show 'fixture{ref:id_rsa'",
+            "git show 'HEAD^{/fix: a}:id_rsa'",
+            "git show 'a,b:.ssh/id_ed25519'",
+            "git diff 'x\\y:id_rsa' HEAD",
         ] {
             assert!(glob_fixture_read(line, &root, &root), "allowed: {line}");
         }
@@ -2842,9 +2887,47 @@ mod tests {
             "git show :0:README.md",
             "git log --format=%H:%s",
             "git -C . show HEAD~1",
+            // Review 07: a message, a remote and a search text are not objects.
+            "git commit -m 'rotate:id_rsa'",
+            "git remote add backup host:id_rsa",
+            "git log --grep 'key:id_rsa'",
+            "git grep -e 'key:id_rsa'",
         ] {
             assert!(!glob_fixture_read(line, &root, &root), "refused: {line}");
         }
+    }
+
+    /// Codex review 05: a glob the guard cannot expand completely refuses
+    /// whatever it names, since an unseen entry may be a public-named link
+    /// into a store; a complete public expansion stays allowed.
+    #[cfg(unix)]
+    #[test]
+    fn incomplete_glob_expansions_refuse_whatever_they_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = crate::portable_path::canonicalize(temp.path()).unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/auth.json"), "planted fixture").unwrap();
+        let budget = root.join("budget");
+        std::fs::create_dir(&budget).unwrap();
+        for entry in 0..=65_536 {
+            std::fs::File::create(budget.join(format!("f{entry}"))).unwrap();
+        }
+        std::os::unix::fs::symlink(home.join(".codex/auth.json"), budget.join("notes1.txt"))
+            .unwrap();
+        assert!(glob_fixture_read("cat budget/notes*.txt", &root, &home));
+        let closed = root.join("closed");
+        std::fs::create_dir(&closed).unwrap();
+        std::fs::write(closed.join("notes.txt"), "ordinary").unwrap();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let refused = glob_fixture_read("cat closed/notes*.txt", &root, &home);
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(refused);
+        let small = root.join("small");
+        std::fs::create_dir(&small).unwrap();
+        std::fs::write(small.join("notes1.txt"), "ordinary").unwrap();
+        assert!(!glob_fixture_read("cat small/notes*.txt", &root, &home));
     }
 
     /// Review 03, ruling 1: a bracket class grep reads (`[[:alpha:]]`) is
