@@ -901,6 +901,10 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         ("packed-refs", false),
         ("config", false),
         ("config.worktree", false),
+        // An alternate object store adds objects Git reads as its own, so a
+        // written list can make any content reachable (TSK-1002 Fable 13).
+        ("objects/info/alternates", false),
+        ("objects/info/http-alternates", false),
     ] {
         protected.push((
             repo.commondir().join(name),

@@ -1179,6 +1179,59 @@ fn tsk1002_codex11_work_tree_programs_status_and_options() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// TSK-1002 Fable review 13: the alternate object store lists are Git
+/// enforcement state like refs, hooks and config, so writing them refuses
+/// from the checkout and from a linked worktree, through the shell and the
+/// edit tool; reading them stays allowed. Each write was allowed at
+/// `d88385639`.
+#[test]
+fn tsk1002_alternates_writes_refuse() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    let root = shell_path(&f.root);
+    for (cwd, line) in [
+        (
+            &f.root,
+            "printf '/tmp/x\\n' > .git/objects/info/alternates".to_string(),
+        ),
+        (
+            &f.root,
+            "echo x >> .git/objects/info/http-alternates".to_string(),
+        ),
+        (
+            &f.linked,
+            format!("printf '/tmp/x\\n' > {root}/.git/objects/info/alternates"),
+        ),
+    ] {
+        let out = f.command(cwd, "git-guard", &line);
+        let message = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !message.contains("git.hook_integrity") {
+            wrong.push(format!("allowed: {line}: {message}"));
+        }
+    }
+    let payload = serde_json::json!({"tool_name": "Write", "tool_input": {
+        "file_path": f.root.join(".git/objects/info/alternates"), "content": "/tmp/x\n"},
+        "cwd": f.root})
+    .to_string();
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "edit-guard"])
+            .current_dir(&f.root)
+            .env("HOME", f.temp.path()),
+        &payload,
+    );
+    if out.status.code() != Some(2) {
+        wrong.push(format!("edit allowed: {out:?}"));
+    }
+    for hook in ["git-guard", "exec-guard"] {
+        let out = f.command(&f.root, hook, "cat .git/objects/info/alternates");
+        if out.status.code() != Some(0) {
+            wrong.push(format!("{hook} refused the read: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// TSK-1002 object reads by id: a Git object named by id, abbreviation,
 /// tag or peel that does not end in `REV:PATH` names content the guard
 /// cannot map to a path, so a command that may print, copy, relabel or
