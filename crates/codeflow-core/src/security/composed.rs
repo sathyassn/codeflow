@@ -302,7 +302,7 @@ pub enum Composed {
 pub(crate) fn composed_texts(line: &str) -> Vec<Composed> {
     let mut found = Vec::new();
     for dialect in [Dialect::Bash, Dialect::Zsh] {
-        for event in events(line, dialect) {
+        for event in texts(line, dialect) {
             if !found.contains(&event.value) {
                 found.push(event.value);
             }
@@ -317,7 +317,7 @@ pub(crate) fn composed_texts(line: &str) -> Vec<Composed> {
 #[doc(hidden)]
 #[must_use]
 pub fn final_output(line: &str, dialect: Dialect) -> Option<Composed> {
-    events(line, dialect)
+    texts(line, dialect)
         .into_iter()
         .rev()
         .find(|event| event.output && event.depth == 0)
@@ -334,7 +334,36 @@ pub fn final_output(line: &str, dialect: Dialect) -> Option<Composed> {
 #[doc(hidden)]
 #[must_use]
 pub fn texts_in(line: &str, dialect: Dialect) -> Vec<Composed> {
-    events(line, dialect).into_iter().map(|e| e.value).collect()
+    texts(line, dialect).into_iter().map(|e| e.value).collect()
+}
+
+/// Every value the line binds to a variable, read as bash and as zsh read
+/// it: a standalone or prefix assignment, a declaration operand, and every
+/// other way the line stores a value (`printf -v`, `read`, a `for`
+/// variable), with what each holds. A value the guard cannot resolve is
+/// [`Composed::Unresolved`]; text from outside the line is an open piece
+/// (TSK-1002 review 12: a program value is judged by what it holds).
+pub(crate) fn bindings(line: &str) -> Vec<(String, Composed)> {
+    let mut found = Vec::new();
+    for dialect in [Dialect::Bash, Dialect::Zsh] {
+        for event in events(line, dialect) {
+            if let Some(name) = event.binding {
+                let bound = (name, event.value);
+                if !found.contains(&bound) {
+                    found.push(bound);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The text events, without the bindings [`bindings`] reports.
+fn texts(line: &str, dialect: Dialect) -> Vec<Event> {
+    events(line, dialect)
+        .into_iter()
+        .filter(|event| event.binding.is_none())
+        .collect()
 }
 
 fn events(line: &str, dialect: Dialect) -> Vec<Event> {
@@ -1319,6 +1348,8 @@ struct Event {
     /// line may have changed fed it.
     exact: bool,
     value: Composed,
+    /// The variable a binding event assigns; `None` for a text event.
+    binding: Option<String>,
 }
 
 /// The and-or list being read in one frame.
@@ -1785,7 +1816,30 @@ impl Run<'_> {
             output,
             exact: true,
             value,
+            binding: None,
         });
+    }
+
+    /// Report what `name` now holds, for [`bindings`].
+    fn bind(&mut self, name: &str, var: &Var) {
+        let values = match var {
+            Var::Scalar(value) => vec![Composed::Resolved(value.clone())],
+            Var::Array(values) | Var::Choices(values) if !values.is_empty() => values
+                .iter()
+                .map(|value| Composed::Resolved(value.clone()))
+                .collect(),
+            Var::Array(_) | Var::Choices(_) => vec![Composed::Resolved(Value::default())],
+            Var::Unknown(reason) => vec![Composed::Unresolved(reason)],
+        };
+        for value in values {
+            self.events.push(Event {
+                depth: self.depth + usize::from(self.uncertain > 0),
+                output: false,
+                exact: true,
+                value,
+                binding: Some(name.to_string()),
+            });
+        }
     }
 
     fn emit_eval(&mut self, eval: &Eval) {
@@ -1871,6 +1925,7 @@ impl Run<'_> {
         } else {
             var
         };
+        self.bind(name, &var);
         self.state.changed.remove(name);
         self.state.vars.insert(name.to_string(), var);
         self.log.push(name.to_string());
@@ -3194,6 +3249,7 @@ impl Run<'_> {
         let mut saved: Vec<(String, Option<Var>)> = Vec::new();
         for tok in &prefix {
             if let Some((name, var)) = self.assignment(tok) {
+                self.bind(&name, &var);
                 if standalone {
                     self.store(&name, var.clone(), certain);
                 } else {
@@ -3785,6 +3841,7 @@ impl Run<'_> {
             output: true,
             exact,
             value,
+            binding: None,
         });
     }
 

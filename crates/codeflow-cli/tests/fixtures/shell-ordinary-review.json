@@ -737,7 +737,7 @@
   [
     "$CMD args",
     0,
-    0
+    2
   ],
   [
     "\"$HOME/bin/tool\" data/in.txt",
@@ -757,7 +757,7 @@
   [
     "$TOOL < data/in.txt",
     0,
-    0
+    2
   ],
   [
     "exec bash",

@@ -808,9 +808,10 @@ fn judge_input(input: &str, records: Records, judges: &Judges<'_>) -> Result<boo
         if record.is_empty() {
             continue;
         }
-        // A content batch names each object as `REV:PATH`, and a stream
-        // names no object by id: either would name content the guard does
-        // not map to a path (TSK-1002, object reads by id).
+        // A content batch record must hold a colon, read as `REV:PATH`, and a
+        // stream names no object by id (TSK-1002, object reads by id). A
+        // record whose only colon is in its metadata (`%(rest)`) passes:
+        // that object-store case is pending the operator's scope decision.
         let by_path = |object: &str| {
             if object.contains(':') {
                 objects(object)

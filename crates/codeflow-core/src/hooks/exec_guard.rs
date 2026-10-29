@@ -134,10 +134,21 @@ pub fn evaluate_in(
         violations.push(finding);
         return violations;
     }
-    // A program Git runs from a `GIT_*` variable is judged as a command of
-    // its own (TSK-1002 Fable review 13).
-    for program in crate::security::git_preflight::program_values(command) {
-        violations.extend(evaluate_in(&program, posix, levels, integrity, cwd, root));
+    // A program Git runs from an environment variable is judged as a
+    // command of its own, or refuses when its value cannot be established
+    // (TSK-1002 Fable reviews 13 and 14, Codex review 12).
+    match crate::security::git_preflight::program_values(command) {
+        Ok(programs) => {
+            for program in programs {
+                violations.extend(evaluate_in(&program, posix, levels, integrity, cwd, root));
+            }
+        }
+        Err(why) => violations.push(Violation::new(
+            "security.secret_reads",
+            levels.secret_reads,
+            format!("cannot verify the program Git runs: {why}"),
+            crate::remedy::SECRET_SELECTION.remedy(),
+        )),
     }
     // `~` and `$HOME` name the home the line assigns before them (TSK-379).
     let line_home = super::git_guard::line_home::read(command);

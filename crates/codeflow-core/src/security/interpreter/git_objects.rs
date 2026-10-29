@@ -4,9 +4,12 @@
 //! (`HEAD:id_rsa`). An object id, a tag or any revision that does not end in
 //! `REV:PATH` names content without a path, so the guard does not map it
 //! back to one. A command that may print, copy or relabel object content
-//! accepts such a name only when it is proven to peel to a commit, whose
-//! readings the rest of the model already covers. Anything else refuses as
-//! cannot-verify.
+//! accepts such a name, before `--`, only when it is proven to peel to a
+//! commit; anything else refuses as cannot-verify. What a commit's history
+//! and patches show, an object named after `--`, and a batch record whose
+//! only colon is in its metadata are not judged here: whether content
+//! already in Git's object store is in scope is pending the operator's
+//! decision (asked 2026-10-29).
 
 use crate::security::outward;
 
@@ -17,7 +20,8 @@ pub(super) const BY_ID: &str =
 /// Commands that may print an object's content, copy it into a file, the
 /// index or a tree, point a ref at it, or send it to a remote (Git 2.53).
 /// History commands (`log`, `rev-list`) and name readers (`ls-tree`,
-/// `rev-parse`) are absent: they print no blob content.
+/// `rev-parse`) are absent: they take commits, and a patch they print is
+/// committed content, pending the operator's scope decision above.
 const CONTENT_COMMANDS: &[&str] = &[
     "archive",
     "blame",

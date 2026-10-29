@@ -315,14 +315,19 @@ fn expanded_alias(
 /// A `GIT_*` variable the guard has not classified may move what Git reads
 /// (TSK-1002 Codex review 10): unlisted means unknown.
 fn git_environment_violation(command: &str, levels: &SecuritySection) -> Option<Violation> {
-    crate::security::git_preflight::unclassified_environment(command).map(|name| {
-        Violation::new(
-            "security.secret_reads",
-            levels.secret_reads,
-            format!("cannot verify Git input: cannot establish what Git reads under `{name}`"),
-            crate::remedy::SECRET_SELECTION.remedy(),
-        )
-    })
+    let why = crate::security::git_preflight::unclassified_environment(command)
+        .map(|name| format!("cannot establish what Git reads under `{name}`"))
+        .or_else(|| {
+            crate::security::git_preflight::exec_path_option(command).then(|| {
+                "cannot establish the helper programs Git runs from `--exec-path`".to_string()
+            })
+        })?;
+    Some(Violation::new(
+        "security.secret_reads",
+        levels.secret_reads,
+        format!("cannot verify Git input: {why}"),
+        crate::remedy::SECRET_SELECTION.remedy(),
+    ))
 }
 
 fn secret_reads(
@@ -330,6 +335,67 @@ fn secret_reads(
     levels: &SecuritySection,
     cwd: &Path,
     home: Option<&Path>,
+) -> Vec<Violation> {
+    secret_reads_at(command, levels, cwd, home, 0)
+}
+
+/// Why a call's program word cannot be judged, if it cannot: one the shell
+/// fills in at run time that the guard does not resolve (`$P`, `"$P"`,
+/// `${P}`, after any launcher), refused as cannot-verify, and one resolved
+/// to a value with blanks (`P='cat x'; $P`), which the shell splits into a
+/// command and its operands, judged as that command line. The same rule
+/// covers a program value Git runs ([`super::git_preflight::program_values`];
+/// TSK-1002 Fable review 14, Codex review 12). A secret store is reachable
+/// from any directory, so the refusal does not depend on where the line runs.
+fn program_word_unverified(
+    call: &outward::Unwrapped,
+    cwd: &Path,
+    home: Option<&Path>,
+    levels: &SecuritySection,
+    depth: usize,
+) -> Option<String> {
+    let program = call.args.first()?;
+    if crate::hooks::git_guard::unresolved_word(program) || program.contains(['\u{1}', '\u{2}']) {
+        let shown: String = program
+            .chars()
+            .map(|ch| if ch.is_control() { '?' } else { ch })
+            .collect();
+        return Some(format!(
+            "cannot verify the program `{shown}`: the shell fills it in at run time"
+        ));
+    }
+    // The shell splits an unquoted expansion at its default field
+    // separators: space, tab and newline.
+    if !program.contains([' ', '\t', '\n']) {
+        return None;
+    }
+    if depth >= 2 {
+        return Some(format!(
+            "cannot verify the program `{program}`: its words split more than the guard reads"
+        ));
+    }
+    let quoted: Vec<String> = call.args[1..]
+        .iter()
+        .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
+        .collect();
+    let line = std::iter::once(program.clone())
+        .chain(quoted)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let dir = call.cwd.as_deref().unwrap_or(cwd);
+    secret_reads_at(&line, levels, dir, home, depth + 1)
+        .into_iter()
+        .find(|violation| violation.level.is_active())
+        .map(|violation| violation.message)
+}
+
+#[allow(clippy::too_many_lines)] // One ordered pass of the read checks over every call.
+fn secret_reads_at(
+    command: &str,
+    levels: &SecuritySection,
+    cwd: &Path,
+    home: Option<&Path>,
+    depth: usize,
 ) -> Vec<Violation> {
     let mapped_home = home
         .map(|home| crate::portable_path::guard_path(home).unwrap_or_else(|_| home.to_path_buf()));
@@ -356,6 +422,15 @@ fn secret_reads(
                 }
             };
             let args = &unwrapped.args;
+            if let Some(why) = program_word_unverified(&unwrapped, cwd, home, levels, depth) {
+                violations.push(Violation::new(
+                    "security.secret_reads",
+                    levels.secret_reads,
+                    why,
+                    crate::remedy::SECRET_SELECTION.remedy(),
+                ));
+                continue;
+            }
             let name = args
                 .first()
                 .map_or("", |s| super::unresolved::writer_name(s));
@@ -495,6 +570,34 @@ fn substitution_root_unknown(value: &str, expands: bool) -> bool {
     relative_names_secret(name)
 }
 
+/// Whether a word holding a command substitution the guard did not resolve
+/// into it may name a secret: each such part stands for any text, slashes
+/// included, so the word is judged as the pattern it can match, in the
+/// directory it is read in (TSK-1002 Fable review 14:
+/// `cat ~/.codex/$(echo auth).json`). A word is judged whole, never by its
+/// tail alone.
+fn substitution_may_name_secret(value: &str, cwd: &Path, home: Option<&Path>) -> bool {
+    // A word that starts with the substitution has no spelled directory:
+    // [`substitution_root_unknown`] judges what follows it.
+    let Some(first) = value.find(['\u{1}', '\u{2}']).filter(|at| *at > 0) else {
+        return false;
+    };
+    let whole = value.replace(['\u{1}', '\u{2}'], "*");
+    let below = format!("{}*/**", &value[..first]);
+    [whole, below].into_iter().any(|pattern| {
+        let rooted = pattern.starts_with('~') || Path::new(&pattern).is_absolute();
+        let pattern = if rooted {
+            pattern
+        } else {
+            format!(
+                "{}/{pattern}",
+                crate::portable_path::slashed(cwd).trim_end_matches('/')
+            )
+        };
+        secret_path_spelling(&pattern, home, Some(true))
+    })
+}
+
 /// File operands retain their command-position provenance. Declared links
 /// add possible real paths before they exist on disk; virtual script
 /// descriptors keep the interpreter's existing best-effort code boundary.
@@ -559,6 +662,9 @@ fn inspect_operand(
             .is_none_or(|flags| flags.get(at).copied().unwrap_or(true));
     if substitution_root_unknown(value, expands) {
         return Err("cannot establish the directory a command substitution prints");
+    }
+    if substitution_may_name_secret(value, cwd, home) {
+        return Err("cannot establish the text a command substitution prints in this path");
     }
     if expands
         && crate::hooks::git_guard::has_glob(value)

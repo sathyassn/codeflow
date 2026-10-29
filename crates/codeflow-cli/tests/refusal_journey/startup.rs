@@ -127,7 +127,6 @@ const ALLOWED: &[&str] = &[
     "git -c core.fsmonitorHookVersion=2 log -p -- .envrc | head",
     "git -c clean.requireForce=yes log -p -- .envrc | head",
     "EDITOR='vim -R' git log -p -- .envrc | head",
-    "git --exec-path=/usr/bin diff -- .envrc",
     "GIT_EXTERNAL_DIFF='diff -u' git log -p -- .envrc | head",
     "C=never git --config-env color.ui=C log -p -- .envrc | head",
     "cat ~/.zshrc",
@@ -183,6 +182,14 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
             if outputs.iter().any(|o| !o.status.success()) {
                 wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
             }
+        }
+        // `--exec-path=DIR` moves where Git finds the helpers it runs, so it
+        // refuses as a secret-read cannot-verify like `GIT_EXEC_PATH` since
+        // TSK-1002 Fable review 14; it is not a startup write.
+        let command = "git --exec-path=/usr/bin diff -- .envrc";
+        let outputs = project.replay(harness, "Bash", json!({"command": command}));
+        if !refused_with(&outputs, "security.secret_reads") || refused_with(&outputs, RULE) {
+            wrong.push(format!("{harness}: {command}: {outputs:?}"));
         }
         // A user-scope git key that runs a program is refused; an ordinary
         // user-scope key is not.

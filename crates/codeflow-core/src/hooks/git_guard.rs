@@ -900,11 +900,22 @@ fn evaluate_report_with_runners(
     let home = line_home::read(command);
     let _home = line_home::Scope::enter(command, &home);
     let mut report = Evaluation::default();
-    // A program Git runs from a `GIT_*` variable is judged as a command of
-    // its own (TSK-1002 Fable review 13).
-    for program in crate::security::git_preflight::program_values(command) {
-        let nested = evaluate_report_with_runners(&program, ctx, cwd, read_runners);
-        report.violations.extend(nested.violations);
+    // A program Git runs from an environment variable is judged as a
+    // command of its own, or refuses when its value cannot be established
+    // (TSK-1002 Fable reviews 13 and 14, Codex review 12).
+    match crate::security::git_preflight::program_values(command) {
+        Ok(programs) => {
+            for program in programs {
+                let nested = evaluate_report_with_runners(&program, ctx, cwd, read_runners);
+                report.violations.extend(nested.violations);
+            }
+        }
+        Err(why) => report.violations.push(Violation::new(
+            "git.hook_integrity",
+            ctx.policy.hook_integrity,
+            format!("cannot verify the program Git runs: {why}"),
+            crate::remedy::HOOK_INTEGRITY.remedy(),
+        )),
     }
     let violations = &mut report.violations;
     violations.extend(line_home::unread_violation(

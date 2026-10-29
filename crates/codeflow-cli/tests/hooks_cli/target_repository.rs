@@ -1232,11 +1232,88 @@ fn tsk1002_alternates_writes_refuse() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// TSK-1002 Codex review 12 and Fable review 14: a command word or a
+/// program value Git runs must resolve to literal text. One held in a
+/// variable is judged by what the line assigns it; one the guard cannot
+/// resolve (outside text, an export with no value shown, a name set by
+/// `printf -v`) refuses as cannot-verify. `EDITOR`, `VISUAL` and `PAGER`
+/// are judged like their `GIT_*` names, a substitution after a spelled
+/// store directory is judged as the whole word, and `--exec-path=DIR`
+/// refuses like `GIT_EXEC_PATH`. Only words in assignment position assign,
+/// so text that looks like `NAME=value` in a message or a search does not
+/// refuse. Every refusal here was allowed at `409de0b2e` and both
+/// assignment-shaped controls refused there.
+#[test]
+fn tsk1002_review12_program_words_and_values() {
+    let f = Fixture::new();
+    let ssh = f.temp.path().join(".ssh");
+    let codex = f.temp.path().join(".codex");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::create_dir_all(&codex).unwrap();
+    std::fs::write(ssh.join("id_rsa"), "inert fixture\n").unwrap();
+    std::fs::write(codex.join("auth.json"), "{}\n").unwrap();
+    let key = format!("{}/id_rsa", shell_path(&ssh));
+    let mut wrong = Vec::new();
+    // Secret reads are exec-guard's rule.
+    for line in [
+        format!("E='cat {key}'; GIT_EDITOR=\"$E\" git commit --allow-empty"),
+        format!("E='cat {key}'; export GIT_EXTERNAL_DIFF=\"$E\"; git diff HEAD"),
+        format!("E='cat {key}'; env GIT_PAGER=\"$E\" git log -1"),
+        "GIT_PAGER=\"$UNSET_FIXTURE_VALUE\" git log -1".to_string(),
+        "export GIT_PAGER; git log -1".to_string(),
+        format!("printf -v GIT_PAGER %s 'cat {key}'; export GIT_PAGER; git log -1"),
+        format!("EDITOR='cat {key}' git commit --allow-empty"),
+        format!("VISUAL='cat {key}' git commit --allow-empty"),
+        format!("PAGER='cat {key}' git log -1"),
+        format!("P=\"cat {key}\"; $P"),
+        format!("P=\"cat {key}\"; command $P"),
+        format!("$UNSET_FIXTURE_PROGRAM {key}"),
+        "cat ~/.codex/$(echo auth).json".to_string(),
+        "git --exec-path=/tmp log -1".to_string(),
+    ] {
+        let out = f.command(&f.linked, "exec-guard", &line);
+        let message = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !message.contains("security.secret_reads") {
+            wrong.push(format!("exec-guard allowed: {line}: {message}"));
+        }
+    }
+    // A program Git runs may write enforcement files: git-guard's rule.
+    for line in [
+        "P='rm -rf .git/hooks'; GIT_EDITOR=\"$P\" git commit --allow-empty",
+        "GIT_EDITOR=\"$UNSET_FIXTURE_VALUE\" git commit --allow-empty",
+    ] {
+        let out = f.command(&f.linked, "git-guard", line);
+        let message = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !message.contains("git.hook_integrity") {
+            wrong.push(format!("git-guard allowed: {line}: {message}"));
+        }
+    }
+    for line in [
+        "git commit -m 'GIT_EXEC_PATH=fixture'",
+        "git grep 'GIT_WORK_TREE=fixture'",
+        "P=ls; $P",
+        "P=cat; GIT_PAGER=\"$P\" git log -1",
+        "EDITOR=true git commit --allow-empty -m x",
+        "cat docs/$(echo notes).md",
+        "unset PAGER; git log -1",
+    ] {
+        for hook in ["git-guard", "exec-guard"] {
+            let out = f.command(&f.linked, hook, line);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("{hook} refused: {line}: {out:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// TSK-1002 object reads by id: a Git object named by id, abbreviation,
 /// tag or peel that does not end in `REV:PATH` names content the guard
 /// cannot map to a path, so a command that may print, copy, relabel or
-/// send it refuses unless the name peels to a commit. A content batch names
-/// each object as `REV:PATH`, a stream names no object by id, and after a
+/// send it refuses unless the name peels to a commit. A content batch record
+/// without a colon refuses (one whose only colon is in its metadata is
+/// pending the operator's scope decision), a stream names no object by id,
+/// and after a
 /// Git call that may move a ref, or on a line that sets `GIT_DIR`, nothing
 /// is looked up. Every refusal here except the `push` line was allowed at
 /// `f0146c495`.
@@ -1300,7 +1377,7 @@ fn tsk1002_object_reads_by_id_refuse() {
 /// TSK-1002 Codex review 07: a Git alias is judged by its expansion, the
 /// way Git prepends its value, so a `--batch` reader or an object path
 /// behind an alias refuses as it does spelled out; a case-insensitive
-/// pathspec refuses. Ordinary aliases, `-C` and `--exec-path` stay allowed.
+/// pathspec refuses. Ordinary aliases and `-C` stay allowed.
 #[test]
 fn tsk1002_codex07_aliases_are_judged_by_expansion() {
     let f = Fixture::new();
@@ -3143,7 +3220,6 @@ fn repair3_runner_configuration_and_environment_sources() {
             "git --version",
             "git -v",
             "C=never git --config-env=color.ui=C log -1",
-            "EDITOR='rm -rf .claude' git config --get user.name",
             "git config alias.example status; git status",
             "GIT_SSH_COMMAND=ssh git status",
             "git -c core.fsmonitor=false status",
@@ -3160,6 +3236,13 @@ fn repair3_runner_configuration_and_environment_sources() {
             let out = f.command(&f.linked, hook, command);
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
+        // `EDITOR` is judged as a command on every Git line since TSK-1002
+        // Fable review 14, as `GIT_EDITOR` is, whether or not the call runs
+        // the editor; the write it names is git-guard's rule.
+        let command = "EDITOR='rm -rf .claude' git config --get user.name";
+        let out = f.command(&f.linked, hook, command);
+        let code = if hook == "git-guard" { 2 } else { 0 };
+        assert_eq!(out.status.code(), Some(code), "{hook} {command}: {out:?}");
     }
     // An out-of-band config write must be read on the next invocation.
     for hook in ["exec-guard", "git-guard"] {
@@ -3796,17 +3879,18 @@ fn repair4_external_git_program_resolution() {
             "git --exec-path='{}' codeflow-extension --version",
             shell_path(&programs)
         );
+        // A line that sets `GIT_EXEC_PATH` or `--exec-path=DIR` moves where
+        // Git finds helper programs the guard never sees, so exec-guard
+        // refuses both spellings since TSK-1002 Fable reviews 13 and 14; the
+        // inherited variable above still works.
+        let code = if hook == "exec-guard" { 2 } else { 0 };
         let out = f.command(&f.linked, hook, &command);
-        assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
-        // A line that sets `GIT_EXEC_PATH` moves where Git finds helper
-        // programs the guard never sees, so exec-guard refuses it since
-        // TSK-1002 Fable review 13; the inherited variable above still works.
+        assert_eq!(out.status.code(), Some(code), "{hook} {command}: {out:?}");
         let command = format!(
             "GIT_EXEC_PATH='{}' git codeflow-extension --version",
             shell_path(&programs)
         );
         let out = f.command(&f.linked, hook, &command);
-        let code = if hook == "exec-guard" { 2 } else { 0 };
         assert_eq!(out.status.code(), Some(code), "{hook} {command}: {out:?}");
         let out = f.command(&f.linked, hook, "git nosuchcmd");
         assert!(refused(&out), "{out:?}");

@@ -727,7 +727,12 @@ fn ac1_exec_guard_retargets_git_policy_without_borrowing_session_levels() {
             other.root().join(".git").display()
         ),
     ] {
-        session.check("exec-guard", &command, 2);
+        let out = session.check("exec-guard", &command, 2);
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            message.contains("is the repository Git would use without it"),
+            "{command}: {message}"
+        );
     }
 }
 
