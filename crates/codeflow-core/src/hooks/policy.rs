@@ -154,14 +154,22 @@ pub enum MappingState {
     Custom,
 }
 
-impl fmt::Display for MappingState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl MappingState {
+    /// The state as the policy file writes it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
             Self::Diagnosed => "diagnosed",
             Self::Accepted => "accepted",
             Self::Refused => "refused",
             Self::Custom => "custom",
-        })
+        }
+    }
+}
+
+impl fmt::Display for MappingState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -509,6 +517,11 @@ const DEFAULT_BRANCH_PREFIXES: &[&str] = &[
     INTEGRATION_BRANCH_PREFIX,
 ];
 
+/// The PR sections every pull request needs by default.
+pub const DEFAULT_PR_REQUIRED_SECTIONS: [&str; 2] = ["Summary", "Changes"];
+/// The PR sections a pull request that changes code needs by default.
+pub const DEFAULT_PR_CODE_SECTIONS: [&str; 1] = ["Testing"];
+
 impl Default for GitPolicy {
     fn default() -> Self {
         Self {
@@ -565,8 +578,8 @@ impl Default for GitPolicy {
             pr_release_impact: PolicyLevel::Warn,
             pr_summary: PolicyLevel::Block,
             pr_breaking_level: "major".into(),
-            pr_required_sections: vec!["Summary".into(), "Changes".into()],
-            pr_code_sections: vec!["Testing".into()],
+            pr_required_sections: DEFAULT_PR_REQUIRED_SECTIONS.map(String::from).to_vec(),
+            pr_code_sections: DEFAULT_PR_CODE_SECTIONS.map(String::from).to_vec(),
             pr_body_max_words: 1000,
             work_records: PolicyLevel::Block,
             work_planning: PolicyLevel::Block,
@@ -860,6 +873,30 @@ impl Policy {
         Self::load_file(&root.join(".codeflow").join("policy.json"))
     }
 
+    /// [`Policy::load`] for a caller inside the display boundary of
+    /// `codeflow update` (TSK-1029): a failure names the file and the I/O
+    /// category or the parse place, built as `Shown` text.
+    /// # Errors
+    /// An existing policy cannot be read or decoded.
+    pub fn load_shown(root: &Path) -> Result<Self, crate::scaffold::Shown> {
+        use crate::scaffold::{ParsePlace, Shown};
+        let path = root.join(".codeflow").join("policy.json");
+        let unreadable = |error: std::io::Error| {
+            crate::shown!("cannot read {}: {}", Shown::path(&path), Shown::io(&error))
+        };
+        if crate::absence::proven_absent(&path).map_err(unreadable)? {
+            return Ok(Self::default());
+        }
+        let text = std::fs::read_to_string(&path).map_err(unreadable)?;
+        serde_json::from_str(&text).map_err(|error| {
+            crate::shown!(
+                "cannot parse policy {}: {}",
+                Shown::path(&path),
+                Shown::place(&ParsePlace::json(&error))
+            )
+        })
+    }
+
     /// Describe the source without converting unreadable input into absence.
     #[must_use]
     pub fn source(root: &Path) -> PolicySource {
@@ -878,8 +915,16 @@ impl Policy {
     /// An existing policy cannot be read or decoded.
     pub fn load_file(path: &Path) -> Result<Self, String> {
         match optional_text(path)? {
-            Some(data) => serde_json::from_str(&data)
-                .map_err(|error| format!("cannot parse policy {}: {error}", path.display())),
+            // The parser quotes the offending value, which the project wrote
+            // and which can be a secret, so only its place is shown
+            // (TSK-1029).
+            Some(data) => serde_json::from_str(&data).map_err(|error| {
+                format!(
+                    "cannot parse policy {}: {}",
+                    path.display(),
+                    crate::scaffold::json_error(&error)
+                )
+            }),
             None => Ok(Self::default()),
         }
     }

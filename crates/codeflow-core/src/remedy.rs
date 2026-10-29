@@ -61,20 +61,99 @@ impl Clearing {
         Remedy(self.text.to_string())
     }
 
-    /// The remedy with each `{key}` replaced by its value.
+    /// The remedy with each `{key}` replaced by its value, in one pass over
+    /// the catalogued text. Only that text is read as template syntax: a
+    /// value is copied as it is, so a brace in a path neither fills nor
+    /// trips a placeholder check, and no check message quotes a value
+    /// (TSK-1029).
     #[must_use]
     pub fn with(&'static self, fills: &[(&str, &str)]) -> Remedy {
-        let mut text = self.text.to_string();
-        for (key, value) in fills {
-            text = text.replace(&format!("{{{key}}}"), value);
+        let mut text = String::with_capacity(self.text.len());
+        for piece in self.pieces() {
+            match piece {
+                Piece::Fixed(fixed) => text.push_str(fixed),
+                Piece::Key(key) => {
+                    let fill = fills.iter().find(|(name, _)| *name == key);
+                    debug_assert!(fill.is_some(), "{} has no fill for {{{key}}}", self.name);
+                    if let Some((_, value)) = fill {
+                        text.push_str(value);
+                    } else {
+                        text.push('{');
+                        text.push_str(key);
+                        text.push('}');
+                    }
+                }
+            }
         }
-        debug_assert!(
-            !text.contains('{'),
-            "{} left a placeholder: {text}",
-            self.name
-        );
         Remedy(text)
     }
+
+    /// The remedy with each `{path}` filled by `path`, as [`Shown`] text,
+    /// for a warning inside the display boundary of `codeflow update`
+    /// (TSK-1029). Only the catalogued text is read as template syntax.
+    ///
+    /// [`Shown`]: crate::scaffold::Shown
+    #[must_use]
+    pub fn shown_for(&'static self, path: &std::path::Path) -> crate::scaffold::Shown {
+        use crate::scaffold::Shown;
+        let mut text = Shown::default();
+        for piece in self.pieces() {
+            match piece {
+                Piece::Fixed(fixed) => text.push(&Shown::fixed(fixed)),
+                Piece::Key(key) => {
+                    debug_assert!(key == "path", "{} has a {{{key}}} to fill", self.name);
+                    text.push(&Shown::path(path));
+                }
+            }
+        }
+        text
+    }
+
+    /// The catalogued text split into fixed runs and `{key}` placeholders.
+    /// Every `{` in a catalogue entry opens a placeholder
+    /// (`every_catalogue_brace_opens_a_named_placeholder` checks).
+    fn pieces(&'static self) -> Vec<Piece> {
+        let mut pieces = Vec::new();
+        let mut rest = self.text;
+        while let Some(open) = rest.find('{') {
+            let Some(close) = rest[open..].find('}') else {
+                break;
+            };
+            pieces.push(Piece::Fixed(&rest[..open]));
+            pieces.push(Piece::Key(&rest[open + 1..open + close]));
+            rest = &rest[open + close + 1..];
+        }
+        pieces.push(Piece::Fixed(rest));
+        pieces
+    }
+}
+
+/// A run of a catalogued remedy text: fixed text, or a placeholder's key.
+enum Piece {
+    Fixed(&'static str),
+    Key(&'static str),
+}
+
+/// A warning or note in the form [`Finding::line`] writes, built from
+/// [`Shown`] text: what was found, then the catalogued step that clears it
+/// (TSK-1029).
+///
+/// [`Shown`]: crate::scaffold::Shown
+#[must_use]
+pub fn shown_line(
+    plane: &'static str,
+    kind: &'static str,
+    text: &crate::scaffold::Shown,
+    remedy: &crate::scaffold::Shown,
+) -> crate::scaffold::Shown {
+    use crate::scaffold::Shown;
+    crate::shown!(
+        "{}: {}: {}\n  clear it: {}",
+        Shown::fixed(plane),
+        Shown::fixed(kind),
+        text,
+        remedy
+    )
 }
 
 /// A rendered remedy, made only from a [`Clearing`], or from the sanctioned
@@ -792,6 +871,52 @@ mod tests {
             assert!(remedy
                 .text
                 .contains("HEAD while no remote-tracking refs exist"));
+        }
+    }
+
+    /// `Clearing::pieces` reads every `{` as a placeholder; each entry's
+    /// braces pair up around a plain key.
+    #[test]
+    fn every_catalogue_brace_opens_a_named_placeholder() {
+        for clearing in super::CATALOG {
+            let mut rest = clearing.text;
+            while let Some(open) = rest.find('{') {
+                let close = rest[open..]
+                    .find('}')
+                    .unwrap_or_else(|| panic!("{}: an unclosed brace", clearing.name));
+                let key = &rest[open + 1..open + close];
+                assert!(
+                    !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                    "{}: {{{key}}} is not a placeholder",
+                    clearing.name
+                );
+                rest = &rest[open + close + 1..];
+            }
+            assert!(
+                !rest.contains('}'),
+                "{}: a lone closing brace",
+                clearing.name
+            );
+        }
+    }
+
+    /// TSK-1029 review: a path is copied as it is. Braces and control
+    /// characters in it neither fill nor trip a placeholder, and a debug
+    /// build does not panic, for both registry remedies.
+    #[test]
+    fn a_brace_in_a_filled_path_is_copied_as_text() {
+        let path = "/home{label}/x{path}\u{1b}[31m{";
+        for clearing in [&super::REGISTRY_UNWRITTEN, &super::REGISTRY_ROOT_UNREADABLE] {
+            let shown = clearing.shown_for(std::path::Path::new(path));
+            assert_eq!(
+                shown.matches(path).count(),
+                clearing.text.matches("{path}").count()
+            );
+            let remedy = clearing.with(&[("path", path)]);
+            assert_eq!(
+                remedy.matches(path).count(),
+                clearing.text.matches("{path}").count()
+            );
         }
     }
 }

@@ -221,7 +221,7 @@ fn presets_parse_as_json() {
 fn every_preset_and_the_repository_carry_the_compaction_default() {
     let expected = serde_json::json!({
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
-        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "35"
     });
     let path = settings_dir().join("../../../.claude/settings.json");
     let bytes =
@@ -258,15 +258,27 @@ fn context_policy_guidance_pins_scope_effect_and_lifecycle_caution() {
     for marker in [
         "`codeflow init` writes these string values",
         "\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"1000000\"",
-        "\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"50\"",
+        "\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"35\"",
         "capped at the model's real context window",
         "can only lower the compaction threshold",
         "applies to main sessions and to subagents",
-        "| Model with a native 1M window | compacts at about 967K tokens | compacts at about 500K tokens |",
-        "| Session limited to 200K | compacts at the 200K boundary | compacts at about 100K tokens |",
+        "| Model with a native 1M window | compacts at about 967K tokens | compacts at about 350K tokens |",
+        "| Session limited to 200K | compacts at the 200K boundary | compacts at about 70K tokens |",
         "`used_percentage` measures against the full model window, so it no longer shows when compaction runs",
-        "Update keeps every value the project set",
-        "a key it wrote that the project has since deleted stays deleted",
+        "Update keeps a value that differs from the one CodeFlow last shipped",
+        "update cannot tell a deliberate 50 from the shipped 50, so a project on 50 moves to 35",
+        "To keep 50, set it again in the shared `env` after the update",
+        "the update report names the key it kept, never the value",
+        "A key CodeFlow wrote that the project has since deleted stays deleted",
+        "a turn near 350K carries about 0.7 times the input of a turn near 500K",
+        "A lower point compacts more often",
+        "compact at about 70K",
+        "The point matters most for long orchestrator sessions",
+        "Detail that lives only in the conversation may be lost",
+        "let a session recover its task, branch and next step when it rereads them",
+        "supplies context and pointers to those records; it does not restore the session's state by itself",
+        "is revisited once an adopter's measurement of 50, 40, 35 and 30 percent is published on CodeFlow issue 358",
+        "Since Claude Code v2.1.211 a worktree session uses the file at the main checkout's root",
         "delete both keys or the whole `env` object. It stays deleted",
         "With no recorded baseline, update adds the keys only when the project has no `env` at all",
         "Update reports key names, never values",
@@ -1850,7 +1862,7 @@ fn a_2_1_0_project_upgrades_through_the_installed_cli() {
             "{case}"
         );
         assert!(
-            first.contains("moved security.privilege_escalation from \"warn\" to \"block\""),
+            first.contains("moved security.privilege_escalation to \"block\""),
             "{case}: the moved default is reported:\n{first}"
         );
 

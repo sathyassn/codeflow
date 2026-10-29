@@ -335,8 +335,8 @@ Upgrade the binary once, then run `codeflow update` in each repository.
    older than a [new policy key](policy-reference.md#where-a-new-key-goes)
    rejects the policy file, which blocks every commit until you upgrade (for
    example `git.policy_characters`, ADR-0067).
-2. Run `codeflow update` in the repository. Add `--diff <FILE>` to write the
-   report with unified diffs.
+2. Run `codeflow update` in the repository. Add `--diff <FILE>` to export the
+   changes without project values (`docs/cli.md`).
 3. Resolve each `<name>.new`, move it over the live file, then rerun `codeflow update`.
 
 | Case | What `update` does |

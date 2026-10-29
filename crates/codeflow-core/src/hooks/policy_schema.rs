@@ -1086,18 +1086,28 @@ pub fn first_unsupported_warning(text: &str) -> bool {
 /// Compatibility diagnostics for controls with no enforcement reader.
 #[must_use]
 pub fn unsupported_control_warnings(value: &Value) -> Vec<crate::remedy::Finding> {
+    unsupported_control_paths(value)
+        .into_iter()
+        .map(|path| {
+            crate::remedy::Finding::new(
+                format!("policy key {path} is not supported, has no effect"),
+                crate::remedy::POLICY_UNSUPPORTED.with(&[("key", path)]),
+            )
+        })
+        .collect()
+}
+
+/// The schema paths of the unsupported controls `value` sets: each a key
+/// `CodeFlow` defines, never one the project wrote.
+#[must_use]
+pub fn unsupported_control_paths(value: &Value) -> Vec<&'static str> {
     schema()
         .iter()
         .filter(|spec| {
             spec.path.contains('.') && spec.path != "git.direct_changes" && spec.is_unsupported()
         })
         .filter(|spec| lookup(value, spec.path).is_some())
-        .map(|spec| {
-            crate::remedy::Finding::new(
-                format!("policy key {} is not supported, has no effect", spec.path),
-                crate::remedy::POLICY_UNSUPPORTED.with(&[("key", spec.path)]),
-            )
-        })
+        .map(|spec| spec.path)
         .collect()
 }
 
