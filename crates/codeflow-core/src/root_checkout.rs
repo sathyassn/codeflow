@@ -20,6 +20,8 @@ use std::process::Stdio;
 use crate::git::GitName;
 use crate::hooks::policy::{GitPolicy, PolicyLevel};
 use crate::hooks::{Violation, HUMAN_OVERRIDE_ENV};
+use crate::scaffold::Shown;
+use crate::shown;
 
 /// `CodeFlow`'s convention name for an umbrella workspace's root branch. Every
 /// surface that sets up or describes workspace mode reads this constant.
@@ -663,10 +665,20 @@ fn git_stdin(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String
         Ok(out.stdout)
     } else {
         Err(format!(
-            "cannot read Git ignore rules: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "cannot read Git ignore rules ({})",
+            exit_category(out.status)
         ))
     }
+}
+
+/// How a git run ended, by its exit code only. Git's stderr is never
+/// passed on: it can quote a configuration value, a path or a ref name
+/// (TSK-1029).
+fn exit_category(status: std::process::ExitStatus) -> String {
+    status.code().map_or_else(
+        || "git was stopped by a signal".to_string(),
+        |code| format!("git exited with code {code}"),
+    )
 }
 
 /// For each relative directory path, the ignore file that matches it, if
@@ -746,8 +758,8 @@ fn effective_ignore_case(root: &Path) -> Result<bool, String> {
     }
     if !out.status.success() {
         return Err(format!(
-            "cannot read core.ignoreCase: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "cannot read core.ignoreCase ({})",
+            exit_category(out.status)
         ));
     }
     match out.stdout.as_slice() {
@@ -1553,6 +1565,67 @@ fn workspace_hint_finding(repo_label: &str, nested: &[NestedRepo]) -> Finding {
              {WORKSPACE_ROOT_BRANCH}); a single project can ignore this"
         ),
     }
+}
+
+/// [`workspace_hint`] as `init` and `update` print it: inside the display
+/// boundary (TSK-1029). It names the repository and the nested repositories
+/// by path and counts them; a failure to read the repository is a fixed
+/// line, since its cause can quote what git read from the project's
+/// configuration.
+#[must_use]
+pub fn workspace_hint_shown(root: &Path, policy: &GitPolicy) -> Option<Shown> {
+    if !policy.root_branch.is_empty() {
+        return None;
+    }
+    let cannot_read = || {
+        Some(shown!(
+            "{}: cannot read the repository to look for nested repositories; nothing was \
+             switched. Next: restore readable repository state and rerun the check",
+            Shown::fixed(ROOT_BRANCH_KEY)
+        ))
+    };
+    let repo = match crate::hooks::repo::open(root) {
+        Ok(Some(repo)) => repo,
+        Ok(None) => return None,
+        Err(_) => return cannot_read(),
+    };
+    if !is_root_checkout(&repo) {
+        return None;
+    }
+    if head(&repo).is_err() {
+        return cannot_read();
+    }
+    let Ok(nested) = nested_repositories(&repo) else {
+        return cannot_read();
+    };
+    if nested.is_empty() {
+        return None;
+    }
+    let Some(workdir) = repo.workdir() else {
+        return cannot_read();
+    };
+    let projects = nested
+        .iter()
+        .filter(|n| n.kind == NestedKind::CodeflowProject)
+        .count();
+    let noun = Shown::fixed(if nested.len() == 1 {
+        "nested repository"
+    } else {
+        "nested repositories"
+    });
+    Some(shown!(
+        "{}: {} contains {} {} ({} with CodeFlow) ({}) and sets no {}, so it looks like a \
+         workspace; nothing was switched. Next: for an umbrella workspace, run codeflow init \
+         --workspace (root branch {}); a single project can ignore this",
+        Shown::fixed(ROOT_BRANCH_KEY),
+        Shown::path(canonical(workdir)),
+        Shown::count(nested.len()),
+        noun,
+        Shown::count(projects),
+        Shown::join(nested.iter().map(|n| Shown::path(&n.path)), ", "),
+        Shown::fixed(ROOT_BRANCH_KEY),
+        Shown::fixed(WORKSPACE_ROOT_BRANCH)
+    ))
 }
 
 /// The hint plain `init` and `update` print in a folder that holds nested
