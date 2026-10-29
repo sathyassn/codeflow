@@ -5,9 +5,10 @@ use super::*;
 use serde_json::json;
 use std::fs;
 
-/// A host whose every file lives under one temporary directory, with the
-/// shipped default preset, as `codeflow update` writes it, as the
-/// project's Claude settings.
+/// A Claude session started at a project whose every file lives under one
+/// temporary directory, with the shipped default preset, as `codeflow
+/// update` writes it, as the project's Claude settings, and the shipped
+/// Codex configuration and Grok profiles.
 struct Fixture {
     _dir: tempfile::TempDir,
     host: Host,
@@ -34,10 +35,13 @@ impl Fixture {
             serde_json::to_string_pretty(&preset()).unwrap(),
         )
         .unwrap();
+        write(&root.join(".codex/config.toml"), &codex_config());
+        write(&root.join(".grok/sandbox.toml"), GROK_SHIPPED);
         let managed = dir.path().join("managed");
         let host = Host {
+            session: Some(root.clone()),
+            cwd: root.clone(),
             root,
-            main_root: Ok(None),
             home: Some(home),
             claude_config_dir: None,
             codex_home: None,
@@ -69,21 +73,10 @@ impl Fixture {
     }
 }
 
-const CLAUDE: Harnesses = Harnesses {
-    claude: true,
-    codex: false,
-    grok: false,
-};
-const CODEX: Harnesses = Harnesses {
-    claude: false,
-    codex: true,
-    grok: false,
-};
-const GROK: Harnesses = Harnesses {
-    claude: false,
-    codex: false,
-    grok: true,
-};
+const CLAUDE: Harnesses = Harnesses::CLAUDE;
+const CODEX: Harnesses = Harnesses::CODEX;
+const GROK: Harnesses = Harnesses::GROK;
+const GROK_SHIPPED: &str = include_str!("../../../../assets/base/grok/sandbox.toml");
 
 fn assert_tightened(outcome: &Outcome, needle: &str) {
     match outcome {
@@ -186,24 +179,24 @@ fn a_fail_open_sandbox_tightens() {
     });
 }
 
-/// The two local layers of a worktree session disagree: the value cannot
-/// be computed.
+/// Two managed layers disagree: the value cannot be computed.
 #[test]
 fn disagreeing_layers_of_one_rank_tighten() {
-    let mut fixture = Fixture::new();
-    let main = fixture.host.root.parent().unwrap().join("main");
+    let fixture = Fixture::new();
     write(
-        &main.join(".claude/settings.local.json"),
-        r#"{"sandbox":{"enabled":false}}"#,
-    );
-    write(
-        &fixture.host.root.join(".claude/settings.local.json"),
+        fixture.host.managed_file.as_ref().unwrap(),
         r#"{"sandbox":{"enabled":true}}"#,
     );
-    fixture.host.main_root = Ok(Some(main));
+    write(
+        &fixture
+            .host
+            .managed_dir
+            .as_ref()
+            .unwrap()
+            .join("10-off.json"),
+        r#"{"sandbox":{"enabled":false}}"#,
+    );
     assert_tightened(&fixture.outcome(CLAUDE), "disagree");
-    fixture.host.main_root = Err("no repository".to_string());
-    assert_tightened(&fixture.outcome(CLAUDE), "main checkout");
 }
 
 /// A missing floor entry tightens, whichever mirror carries it: removing
@@ -405,10 +398,33 @@ fn a_malformed_file_tightens_and_an_absent_one_does_not() {
     check(GROK, "not valid TOML", |f| {
         write(&f.host.root.join(".grok/sandbox.toml"), "[profiles");
     });
-    // No Codex or Grok file at all: no trigger for those harnesses.
+    // No Codex or Grok file at all: a call whose harness is not identified
+    // gets no trigger for them; a call identified as that harness tightens
+    // (review round 16, Fable F3).
     let fixture = Fixture::new();
-    assert_eq!(fixture.outcome(CODEX), Outcome::Baseline);
-    assert_eq!(fixture.outcome(GROK), Outcome::Baseline);
+    fs::remove_file(fixture.host.root.join(".codex/config.toml")).unwrap();
+    fs::remove_file(fixture.host.root.join(".grok/sandbox.toml")).unwrap();
+    assert_eq!(fixture.outcome(Harnesses::ALL), Outcome::Baseline);
+    assert_tightened(&fixture.outcome(CODEX), "no Codex configuration file");
+    assert_tightened(&fixture.outcome(GROK), "no Grok sandbox profiles file");
+}
+
+/// C16-5: a settings path that is not a regular file tightens, and a FIFO
+/// does not stall the hook.
+#[cfg(unix)]
+#[test]
+fn a_settings_path_that_is_not_a_regular_file_tightens() {
+    check(CLAUDE, "not a regular file", |f| {
+        fs::create_dir_all(f.host.root.join(".claude/settings.local.json")).unwrap();
+    });
+    check(CLAUDE, "not a regular file", |f| {
+        let fifo = f.host.root.join(".claude/settings.local.json");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+    });
 }
 
 #[cfg(unix)]
@@ -430,22 +446,67 @@ fn codex_config() -> String {
     include_str!("../../../../assets/base/codex/config.toml").to_string()
 }
 
+/// C16-3: a Codex profile is judged by what it grants, not by its name.
 #[test]
 fn codex_triggers() {
-    // The shipped profile selects the baseline.
+    // The shipped profile selects the baseline, and so does the same
+    // content under another name.
     let fixture = Fixture::new();
+    assert_eq!(fixture.outcome(CODEX), Outcome::Baseline);
     write(
         &fixture.host.root.join(".codex/config.toml"),
-        &codex_config(),
+        &codex_config().replace("cf-guard", "my-guard"),
     );
     assert_eq!(fixture.outcome(CODEX), Outcome::Baseline);
+    check(CODEX, "grants a write the shipped profiles do not", |f| {
+        write(
+            &f.host.root.join(".codex/config.toml"),
+            &codex_config().replacen(
+                "[permissions.cf-guard.filesystem]\n",
+                "[permissions.cf-guard.filesystem]\n\"/\" = \"write\"\n",
+                1,
+            ),
+        );
+    });
+    check(CODEX, "does not keep the shipped rule `~/.ssh/**`", |f| {
+        write(
+            &f.host.root.join(".codex/config.toml"),
+            &codex_config().replacen("\"~/.ssh/**\" = \"deny\"\n", "", 1),
+        );
+    });
+    check(CODEX, "does not keep the shipped rule `~/.zshrc`", |f| {
+        write(
+            &f.host.root.join(".codex/config.toml"),
+            &codex_config().replacen("\"~/.zshrc\" = \"read\"", "\"~/.zshrc\" = \"write\"", 1),
+        );
+    });
+    check(CODEX, "cannot be judged", |f| {
+        write(
+            &f.host.root.join(".codex/config.toml"),
+            &codex_config().replacen(
+                "extends = \":workspace\"",
+                "extends = \":danger-full-access\"",
+                1,
+            ),
+        );
+    });
+    check(CODEX, "network.allow_local_binding", |f| {
+        write(
+            &f.host.root.join(".codex/config.toml"),
+            &codex_config().replacen(
+                "allow_local_binding = false",
+                "allow_local_binding = true",
+                1,
+            ),
+        );
+    });
     check(CODEX, "sandbox_mode", |f| {
         write(
             &f.host.root.join(".codex/config.toml"),
             &format!("sandbox_mode = \"danger-full-access\"\n{}", codex_config()),
         );
     });
-    check(CODEX, "default permission profile", |f| {
+    check(CODEX, "does not keep the shipped rule", |f| {
         write(
             &f.host.root.join(".codex/config.toml"),
             &codex_config().replace(
@@ -464,19 +525,21 @@ fn codex_triggers() {
         );
     });
     // The user layer alone, with no profile, is not the shipped posture.
-    check(CODEX, "default permission profile", |f| {
+    check(CODEX, "selects no default permission profile", |f| {
+        fs::remove_file(f.host.root.join(".codex/config.toml")).unwrap();
         write(
             &f.host.home.as_ref().unwrap().join(".codex/config.toml"),
-            "model = \"x\"\n",
+            "approval_policy = \"never\"\nmodel = \"x\"\n",
         );
     });
 }
 
+/// C16-3: removing a shipped Grok entry, a deny included, or a member
+/// that is not a string tightens.
 #[test]
 fn grok_triggers() {
-    let shipped = include_str!("../../../../assets/base/grok/sandbox.toml");
+    let shipped = GROK_SHIPPED;
     let fixture = Fixture::new();
-    write(&fixture.host.root.join(".grok/sandbox.toml"), shipped);
     assert_eq!(fixture.outcome(GROK), Outcome::Baseline);
     check(GROK, "read_only", |f| {
         write(
@@ -484,6 +547,146 @@ fn grok_triggers() {
             &shipped.replacen("  \".codex\",\n", "", 1),
         );
     });
+    check(GROK, "shipped `deny` entry", |f| {
+        write(
+            &f.host.root.join(".grok/sandbox.toml"),
+            &shipped.replace("  \"/Users/*/.ssh\",\n", ""),
+        );
+    });
+    check(GROK, "not a string", |f| {
+        write(
+            &f.host.root.join(".grok/sandbox.toml"),
+            &shipped.replacen("read_only = [\n", "read_only = [\n  1,\n", 1),
+        );
+    });
+    check(GROK, "does not extend", |f| {
+        write(
+            &f.host.root.join(".grok/sandbox.toml"),
+            &shipped.replacen("extends = \"workspace\"", "extends = \"full\"", 1),
+        );
+    });
+}
+
+/// C16-2: Claude settings that weaken containment beyond the floor checks.
+#[test]
+fn read_exceptions_and_weaker_isolation_tighten() {
+    check(CLAUDE, "allowRead", |f| {
+        f.edit_project(|v| {
+            v["sandbox"]["filesystem"]["allowRead"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("~/.ssh/config"));
+        });
+    });
+    check(CLAUDE, "allowAppleEvents", |f| {
+        f.edit_project(|v| v["sandbox"]["allowAppleEvents"] = json!(true));
+    });
+    check(CLAUDE, "enableWeakerNetworkIsolation", |f| {
+        f.edit_project(|v| v["sandbox"]["enableWeakerNetworkIsolation"] = json!(true));
+    });
+    for entry in ["~/.zshrc", "~/.gitconfig", "~/.config/git/config"] {
+        check(CLAUDE, "allowWrite", |f| {
+            f.edit_project(|v| {
+                v["sandbox"]["filesystem"]["allowWrite"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(entry));
+            });
+        });
+    }
+    // The shipped read exception and a write outside the floor stay
+    // controls.
+    let fixture = Fixture::new();
+    fixture.edit_project(|v| {
+        v["sandbox"]["filesystem"]["allowWrite"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("~/scratch"));
+        v["sandbox"]["allowAppleEvents"] = json!(false);
+    });
+    assert_eq!(fixture.outcome(CLAUDE), Outcome::Baseline);
+}
+
+/// C16-1 and Fable F1: a Claude call is judged against the project its
+/// session started in, never only the repository of its working directory.
+#[test]
+fn a_claude_call_is_judged_against_its_session_project() {
+    // The session project is loosened; the call works in a clean scratch
+    // repository.
+    let mut fixture = Fixture::new();
+    let scratch = fixture.host.root.parent().unwrap().join("scratch");
+    write(
+        &scratch.join(".claude/settings.json"),
+        &serde_json::to_string(&preset()).unwrap(),
+    );
+    fixture.edit_project(|v| v["sandbox"]["enabled"] = json!(false));
+    fixture.host.cwd = scratch.clone();
+    fixture.host.root = scratch.clone();
+    assert_tightened(&fixture.outcome(CLAUDE), "sandbox.enabled");
+    // A Claude call whose hook environment names no session tightens.
+    let mut fixture = Fixture::new();
+    fixture.host.session = None;
+    assert_tightened(&fixture.outcome(CLAUDE), "CLAUDE_PROJECT_DIR");
+    // A session started in a subdirectory reads that directory's settings.
+    let mut fixture = Fixture::new();
+    let sub = fixture.host.root.join("sub");
+    write(
+        &sub.join(".claude/settings.json"),
+        r#"{"sandbox":{"enabled":false}}"#,
+    );
+    fixture.host.session = Some(sub.clone());
+    fixture.host.cwd = sub;
+    assert_tightened(&fixture.outcome(CLAUDE), "sandbox.enabled");
+    // A call whose harness is not identified reads every directory with
+    // settings between its working directory and the repository root.
+    let mut fixture = Fixture::new();
+    fixture.host.session = None;
+    let sub = fixture.host.root.join("sub");
+    write(
+        &sub.join(".claude/settings.json"),
+        r#"{"sandbox":{"enabled":false}}"#,
+    );
+    fixture.host.cwd = sub.join("deeper");
+    assert_tightened(&fixture.outcome(Harnesses::ALL), "sandbox.enabled");
+}
+
+/// C16-1: a linked worktree adds its main checkout, found through Git's
+/// worktree metadata, whose loosened settings tighten the call.
+#[test]
+fn a_worktree_reads_its_main_checkout() {
+    let mut fixture = Fixture::new();
+    let main = fixture.host.root.clone();
+    let repo = git2::Repository::init(&main).unwrap();
+    let tree = {
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(".claude/settings.json")).unwrap();
+        index.write().unwrap();
+        index.write_tree().unwrap()
+    };
+    let signature = git2::Signature::now("t", "t@example.invalid").unwrap();
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "seed",
+        &repo.find_tree(tree).unwrap(),
+        &[],
+    )
+    .unwrap();
+    let linked = main.parent().unwrap().join("linked");
+    repo.worktree("linked", &linked, None).unwrap();
+    // The session and the call are in the worktree, whose copy of the
+    // preset is clean.
+    fixture.host.session = Some(linked.clone());
+    fixture.host.cwd = linked.clone();
+    fixture.host.root = linked;
+    assert_eq!(fixture.outcome(CLAUDE), Outcome::Baseline);
+    write(
+        &main.join(".claude/settings.local.json"),
+        r#"{"sandbox":{"excludedCommands":["git"]}}"#,
+    );
+    assert_tightened(&fixture.outcome(CLAUDE), "excludedCommands");
+    assert_tightened(&fixture.outcome(Harnesses::ALL), "excludedCommands");
 }
 
 /// J1: shared keys never identify a harness. A Claude payload carrying

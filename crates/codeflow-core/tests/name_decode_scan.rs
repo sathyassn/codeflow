@@ -1528,12 +1528,14 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-397: the exec guard's text-rule selection fails closed. A Claude
     // layer that is not UTF-8 or not a JSON object is a strict-rule trigger,
-    // never an absent layer. An empty CLAUDE_CONFIG_DIR, CODEX_HOME or test
-    // directory counts as unset, as the harnesses read it. A permission rule
-    // is trimmed before its tool name is compared, so whitespace only lets a
-    // rule match more allows, which tightens. Doctor's state-root check reads
-    // the project settings; an unreadable or malformed file adds no state-root
-    // line, and the same file is a trigger that fails the check.
+    // never an absent layer. A permission rule is trimmed before its tool
+    // name is compared, so whitespace only lets a rule match more allows,
+    // which tightens. A `.git` file's `gitdir:` value is trimmed as Git
+    // trims it, and the main checkout counts only when the trimmed path
+    // resolves to the common directory; otherwise the call tightens. The
+    // shipped `allowRead` list is embedded at build time; were it
+    // unparsable, every `allowRead` entry would count as unshipped, which
+    // tightens.
     (
         "crates/codeflow-core/src/hooks/sandbox_state.rs",
         "read_text",
@@ -1550,10 +1552,17 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
     (
         "crates/codeflow-core/src/hooks/sandbox_state.rs",
-        "Host::from_process",
-        "obtain-absent:var",
+        "main_checkout",
+        "trim",
         1,
         "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/sandbox_state.rs",
+        "shipped_allow_read",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
     ),
     (
         "crates/codeflow-core/src/hooks/sandbox_state.rs",
@@ -1561,20 +1570,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "format-contract",
-    ),
-    (
-        "crates/codeflow-core/src/doctor/sandbox.rs",
-        "home_in_write_set",
-        "obtain-absent:read_to_string",
-        1,
-        "unproven",
-    ),
-    (
-        "crates/codeflow-core/src/doctor/sandbox.rs",
-        "home_in_write_set",
-        "obtain-absent:from_str",
-        1,
-        "unproven",
     ),
     // TSK-452: doctor's preflight report only prints evidence and decides
     // nothing. A missing or misread catalog, settings file or PATH entry is
@@ -6800,6 +6795,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "claude_layers", "ErrorKind::NotFound", 1, "Only native NotFound on read_dir of the managed settings drop-in directory means it adds no layer (TSK-397); every other error is a strict-rule trigger, so the exec guard fails closed."),
     ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),

@@ -1058,8 +1058,9 @@ const HOOK_VARIABLES: &[&str] = &[
 ];
 
 /// The launchers [`read_line`] reads through by their own option grammar,
-/// by their base name (a path or GNU-prefixed name maps to it). Every one
-/// must also be in the lexer's wrapper list, which a test asserts.
+/// by their base name (a path or GNU-prefixed name maps to it). The strict
+/// branch keeps the words after each one judged, which
+/// `no_program_keeps_its_words_to_itself` asserts.
 pub(crate) const LEXER_LAUNCHERS: &[&str] = &[
     "command",
     "exec",

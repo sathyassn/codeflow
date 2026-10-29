@@ -304,8 +304,8 @@ fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::
     // TSK-397 design D: the payload carries the keys only a Codex call
     // sends, so the guard reads the Codex configuration alone. These wiring
     // checks pin the line's decisions, so the call is judged in the baseline
-    // outcome on every host: an empty home, no managed settings layer and no
-    // project Codex configuration.
+    // outcome on every host: a home holding only the shipped Codex
+    // configuration and no managed settings layer.
     let payload = serde_json::json!({
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -314,6 +314,12 @@ fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::
         "model": "gpt-6-astra",
     });
     let harness_home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(harness_home.path().join(".codex")).unwrap();
+    std::fs::write(
+        harness_home.path().join(".codex/config.toml"),
+        include_str!("../../../assets/base/codex/config.toml"),
+    )
+    .unwrap();
     let mut child = std::process::Command::new("sh")
         .args(["-c", &hook])
         .current_dir(root)

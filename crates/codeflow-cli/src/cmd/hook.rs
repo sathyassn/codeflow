@@ -585,9 +585,10 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         return 2;
     };
     // Which text rule judges this call (TSK-397 design D): the harness
-    // configuration this host shows, the call's retry flag and the policy.
+    // configuration of the session's project and the call's repository, the
+    // call's retry flag and the policy.
     let outcome = codeflow_core::hooks::sandbox_state::outcome(
-        &codeflow_core::hooks::sandbox_state::Host::from_process(&root),
+        &codeflow_core::hooks::sandbox_state::Host::for_hook(&cwd, &root),
         codeflow_core::hooks::sandbox_state::Harnesses::from_keys(&payload.keys),
         payload.tool_input.sandbox_retry(),
         policy.security.text_guard == codeflow_core::hooks::policy::TextGuard::Strict,

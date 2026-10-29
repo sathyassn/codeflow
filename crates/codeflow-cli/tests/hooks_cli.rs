@@ -15,14 +15,14 @@ mod checkout_identity;
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
-/// TSK-397 (operator decision, 2026-10-27): once a line's directory is
-/// unknown, the exec guard refuses a word filled in at run time that is given
-/// to a program off the non-executing allowlist; git-guard does not judge it.
+/// TSK-397 design D: in the tightened outcome this suite runs in, once a
+/// line's directory is unknown, the exec guard refuses a word filled in at
+/// run time given to any program; git-guard does not judge it.
 fn run_time_word_refusal(out: &Output) -> bool {
     let stderr = String::from_utf8_lossy(&out.stderr);
     out.status.code() == Some(2)
         && stderr.contains("git.hook_integrity")
-        && stderr.contains("is filled in at run time")
+        && stderr.contains("cannot verify the run-time argument")
 }
 
 #[cfg(unix)]

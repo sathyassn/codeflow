@@ -726,7 +726,9 @@ mod tests {
 
     fn argument_refusal(findings: &[Violation]) -> bool {
         integrity_refusal(findings).is_some_and(|v| {
-            v.message.contains("interpreter") && !v.message.contains("interpreter code")
+            (v.message.contains("interpreter")
+                || v.message.contains("cannot verify the run-time argument"))
+                && !v.message.contains("interpreter code")
         })
     }
 
