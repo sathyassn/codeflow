@@ -67,8 +67,6 @@ qualify_records
         .env("CODEFLOW_HOOK_BINARY", &binary)
         .env("CODEFLOW_HOME", work.join("codeflow-home"))
         .env("PATH", path)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
