@@ -860,6 +860,158 @@ fn tsk1002_review08_unmodelled_shell_constructs_refuse() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// TSK-1002 Codex review 07: a Git command is cleared only in a form the
+/// guard parses completely. An option is resolved by Git's unique-prefix
+/// rule against the command's complete list; a path list on stdin is read
+/// in Git's quoting; every command's operands may name an object unless it
+/// is proven to take text; stdin a command may read names from is read
+/// when literal and refused otherwise; a pathspec pattern Git expands
+/// against the tree refuses when it could select a secret name. Each
+/// refusal was allowed at `a2e3efd57`; the controls stay allowed.
+#[test]
+fn tsk1002_codex07_git_forms_are_parsed_completely() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for line in [
+        "git cat-file --batch-com <<< 'contents HEAD:id_rsa'",
+        "git cat-file --batch-c <<< 'contents HEAD:id_rsa'",
+        "git hash-object --stdin-p <<< copies/id_rsa",
+        "git cat-file --batch --follow-sym <<< HEAD:README.md",
+        "git cat-file --unknown-option --batch-check <<< HEAD:README.md",
+        "git add --pathspec-from=paths.txt",
+        "git hash-object --stdin-paths <<< '\"id_rsa\"'",
+        "git hash-object --stdin-paths <<< '\"copies/id\\137rsa\"'",
+        "git hash-object --stdin-paths <<< '\"unterminated'",
+        "git update-index --add --stdin <<< '\"copies/id_rsa\"'",
+        "git add --pathspec-from-file=- <<< '\"copies/id_rsa\"'",
+        "git unpack-file HEAD:id_rsa",
+        "git tag leak HEAD:id_rsa",
+        "git update-ref refs/leak HEAD:id_rsa",
+        "git rev-list --objects --stdin <<< HEAD:id_rsa",
+        "git log --stdin -p <<< HEAD:id_rsa",
+        "git pack-objects --stdout <<< HEAD:id_rsa",
+        "git update-ref --stdin <<< 'create refs/leak HEAD:id_rsa'",
+        "cat list.txt | git update-index --stdin",
+        "git ls-files | git commit --pathspec-from-file=- -m x",
+        "git cat-file --batch-command <<< 'mystery HEAD:id_rsa'",
+        "git log -p -- 'id_rs?'",
+        "git log -p -- ':(glob)**/id_*'",
+        "git show HEAD -- '*_rsa'",
+        "git log -p -- ':(top)id_rsa'",
+        "git log -p -- ':(attr:secret)'",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "git hash-object --stdin-paths <<< '\"README.md\"'",
+        "git unpack-file HEAD:README.md",
+        "git commit -m 'rotate:id_rsa'",
+        "git rev-list --stdin <<< HEAD",
+        "printf 'fix: rotate keys\\n' | git commit -F -",
+        "cat fix.patch | git apply",
+        "git ls-files | git check-attr --stdin -a",
+        "git cat-file --batch-command <<< 'info HEAD:id_rsa'",
+        "git cat-file --batch-check <<< HEAD:id_rsa",
+        "git rev-parse HEAD | git cat-file --batch-check",
+        "git log -p -- ':!README.md'",
+        "git log -p -- ':(glob)src/main*.rs'",
+        "git fetch origin 'refs/heads/*:refs/remotes/origin/*'",
+        "git tag -l 'v*'",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 Codex review 07: a Git alias is judged by its expansion, the
+/// way Git prepends its value, so a `--batch` reader or an object path
+/// behind an alias refuses as it does spelled out; a case-insensitive
+/// pathspec refuses. Ordinary aliases, `-C` and `--exec-path` stay allowed.
+#[test]
+fn tsk1002_codex07_aliases_are_judged_by_expansion() {
+    let f = Fixture::new();
+    for (name, value) in [
+        ("alias.zshow", "show"),
+        ("alias.zcat", "cat-file"),
+        ("alias.zst", "status"),
+        ("alias.zchain", "zshow"),
+    ] {
+        git(&f.root, &["config", name, value]);
+    }
+    let mut wrong = Vec::new();
+    for line in [
+        "git zshow HEAD:id_rsa",
+        "git zcat --batch <<< HEAD:id_rsa",
+        "git zchain HEAD:id_rsa",
+        "git -c alias.q=show q HEAD:id_rsa",
+        "git zshow HEAD -- 'id_rs?'",
+        "git log -p -- ':(icase)ID_RSA'",
+        "git --icase-pathspecs log -p -- 'ID_RS?'",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "git zst",
+        "git --no-pager zst",
+        "git -C . zst",
+        "git zshow HEAD:README.md",
+        "git -c alias.q=status q",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 Codex review 07 and Fable review 09: a glob rooted in a
+/// substitution the guard cannot resolve refuses whatever it names, and a
+/// command-local `HOME=` or `env HOME=` is in effect for a physical `cd`
+/// with no operand. Each refusal was allowed at `a2e3efd57`.
+#[cfg(unix)]
+#[test]
+fn tsk1002_fable09_command_local_home_and_substitution_globs() {
+    let f = Fixture::new();
+    let store = f.temp.path().join(".codex");
+    std::fs::create_dir_all(store.join("child")).unwrap();
+    std::fs::write(store.join("auth.json"), "planted fixture").unwrap();
+    std::fs::write(store.join("notes1.txt"), "planted fixture").unwrap();
+    std::os::unix::fs::symlink(store.join("child"), f.linked.join("alias")).unwrap();
+    std::fs::create_dir_all(f.linked.join("visible")).unwrap();
+    std::fs::write(f.linked.join("visible/note.txt"), "ordinary").unwrap();
+    let mut wrong = Vec::new();
+    for line in [
+        "cat $(cd alias && pwd)/../notes*.txt",
+        "cat \"$(cd alias && pwd)\"/../notes*.txt",
+        "HOME=alias cd -P && cd .. && cat auth.json",
+        "HOME=alias cd -P; cd ..; cat auth.json",
+        "env HOME=alias bash -c 'cd -P && cd .. && cat auth.json'",
+        "HOME=alias exec bash -c 'cd -P && cd .. && cat auth.json'",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "HOME=visible cd -P && cat note.txt",
+        "cat \"$(git rev-parse --show-toplevel)/README.md\"",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// TSK-1002 UNC finding: an administrative share, a verbatim or device UNC
 /// spelling, or any share whose path ends in a home store names the store,
 /// and a share write names the checkout file. Before this change the guard

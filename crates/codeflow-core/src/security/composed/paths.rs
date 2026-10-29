@@ -31,6 +31,12 @@ impl Command {
             self.input_code.as_deref().or(inherited)
         }
     }
+
+    /// Whether the line gives this command stdin: its own pipe or
+    /// redirection, or one its enclosing shell inherited.
+    pub(crate) fn input_bound(&self, inherited: bool) -> bool {
+        self.input_bound || inherited
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1963,6 +1969,15 @@ fn simple(
         {
             start.physical = true;
         }
+        // The nested shell starts with the variables its command words set
+        // (`HOME=alias bash -c`, `env HOME=alias bash -c`), as far as the
+        // guard reads them (TSK-1002 Fable review 09).
+        if !current_shell {
+            if let Some((_, args)) = reader {
+                let prefix = &words[..words.len().saturating_sub(args.len() + 1)];
+                apply_prefix_environment(&mut start, prefix);
+            }
+        }
         let after = reparse(&script, start, dialect, output, depth, reparses);
         position.scripts.clone_from(&after.scripts);
         return if current_shell { after } else { position };
@@ -2001,7 +2016,11 @@ fn simple(
         // unset or unread HOME or OLDPWD) leaves the directory unknown, so
         // no operand skips the checks below (TSK-1002 review 06).
         let target = if physical {
-            let Some(target) = physical_operand(&position, program, args) else {
+            // A command-local `HOME=` or `env HOME=` is in effect for this
+            // change (TSK-1002 Fable review 09).
+            let mut local = position.clone();
+            apply_prefix_environment(&mut local, &words[..words.len() - args.len() - 1]);
+            let Some(target) = physical_operand(&local, program, args) else {
                 set_oldpwd(&mut position.state);
                 position.state.directory = None;
                 position.stack.clear();
@@ -2470,6 +2489,33 @@ fn path_value(path: &Path) -> Var {
     match name.rule_text() {
         Ok(text) => Var::Scalar(Value::text(text)),
         Err(_) => Var::Unknown("shell path is not UTF-8"),
+    }
+}
+
+/// Apply the variables command words in front of a program set: an
+/// assignment the guard reads exactly sets its value, any other assignment
+/// leaves the variable unknown, and an `env` option that unsets or clears
+/// variables leaves HOME and OLDPWD unknown.
+fn apply_prefix_environment(position: &mut Position, prefix: &[String]) {
+    for word in prefix {
+        if is_assignment_word(word) {
+            let (name, value) = word.split_once('=').unwrap_or((word, ""));
+            let unread = value.starts_with('~')
+                || value.contains(['$', '`', '\u{1}', '\u{2}', '*', '?', '[']);
+            let var = if unread {
+                Var::Unknown("a variable a command word sets")
+            } else {
+                Var::Scalar(Value::text(value))
+            };
+            position.state.vars.insert(name.to_string(), var);
+        } else if word.starts_with('-') && word != "--" {
+            for name in ["HOME", "OLDPWD"] {
+                position
+                    .state
+                    .vars
+                    .insert(name.to_string(), Var::Unknown("an env option may unset it"));
+            }
+        }
     }
 }
 

@@ -5,6 +5,8 @@ use super::{actions, outward, pattern::matches_extended_glob};
 use crate::hooks::{PolicyLevel, SecuritySection, Violation};
 use std::path::{Path, PathBuf};
 
+mod git_reads;
+
 pub(crate) fn evaluate(
     command: &str,
     levels: &SecuritySection,
@@ -294,6 +296,20 @@ fn secret_reads(
     let line = CommandLine::new(command);
     if levels.secret_reads.is_active() {
         for unwrapped in outward::unwrapped_commands(command, cwd, home) {
+            // A Git alias is judged by its expansion (TSK-1002 review 07).
+            let expanded = match git_reads::expand_alias(&unwrapped, command) {
+                Ok(expanded) => expanded,
+                Err(why) => {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        format!("cannot verify Git input: {why}"),
+                        crate::remedy::SECRET_SELECTION.remedy(),
+                    ));
+                    continue;
+                }
+            };
+            let unwrapped = expanded.unwrap_or(unwrapped);
             let args = &unwrapped.args;
             let name = args
                 .first()
@@ -319,7 +335,13 @@ fn secret_reads(
                     continue;
                 }
             }
-            if let Some(result) = git_input_reads(&unwrapped, reader_cwd, home) {
+            let judge = |path: &str| {
+                if unwrapped.cwd.is_none() && relative_names_secret(path) {
+                    return Err("cannot establish the directory the command runs in");
+                }
+                secret_path_result(path, reader_cwd, home, Some(false))
+            };
+            if let Some(result) = git_reads::reads(&unwrapped, &judge) {
                 if result.as_ref().map_or(true, |secret| *secret) {
                     violations.push(Violation::new(
                         "security.secret_reads",
@@ -384,6 +406,30 @@ fn git_operand(
     if git_text_value(call, at) {
         return Some(Ok(false));
     }
+    // Git matches a pathspec pattern against the tree and history, which
+    // the guard cannot list: one that could select a secret name refuses
+    // (TSK-1002 review 07 sibling sweep).
+    match git_reads::pathspec(call, at) {
+        Some(Err(why)) => return Some(Err(why)),
+        Some(Ok(git_reads::Pathspec::Excluded)) => return Some(Ok(false)),
+        Some(Ok(git_reads::Pathspec::Literal(path))) => {
+            match secret_path_result(&path, cwd, home, Some(false)) {
+                Ok(false) => {}
+                verdict => return Some(verdict),
+            }
+        }
+        Some(Ok(git_reads::Pathspec::Pattern(spellings))) => {
+            if spellings
+                .iter()
+                .any(|spelling| secret_path_spelling(spelling, home, Some(true)))
+            {
+                return Some(Err(
+                    "cannot establish which tracked paths a Git pathspec selects",
+                ));
+            }
+        }
+        None => {}
+    }
     for path in git_object_paths(call, at, value) {
         match secret_path_result(path, cwd, home, Some(false)) {
             Ok(false) => {}
@@ -399,11 +445,15 @@ fn git_operand(
 /// A command substitution whose output the guard cannot establish (a
 /// `pwd` after a directory change inside it, any unread program) may print
 /// any directory, so the path after it is judged as a relative name in an
-/// unknown directory (TSK-1002 review 08).
-fn substitution_names_secret(value: &str) -> bool {
+/// unknown directory (TSK-1002 review 08), and a glob after it selects
+/// entries the guard cannot list, whatever it names (review 07).
+fn substitution_root_unknown(value: &str, expands: bool) -> bool {
     let Some((_, tail)) = value.rsplit_once(['\u{1}', '\u{2}']) else {
         return false;
     };
+    if expands && crate::hooks::git_guard::has_glob(tail) {
+        return true;
+    }
     // The separators after the substitution, slash or backslash, are
     // dropped; the name itself keeps every other character.
     let name = tail
@@ -432,9 +482,6 @@ fn inspect_operand(
     // 02); other relative operands keep their verdicts below.
     if call.cwd.is_none() && relative_names_secret(value) {
         return Err("cannot establish the directory the command runs in");
-    }
-    if substitution_names_secret(value) {
-        return Err("cannot establish the directory a command substitution prints");
     }
     if value == "__unverified_transfer_input" {
         return Err("cannot establish a transfer option's quoted input filename");
@@ -478,6 +525,9 @@ fn inspect_operand(
             .expands
             .as_ref()
             .is_none_or(|flags| flags.get(at).copied().unwrap_or(true));
+    if substitution_root_unknown(value, expands) {
+        return Err("cannot establish the directory a command substitution prints");
+    }
     if expands
         && crate::hooks::git_guard::has_glob(value)
         && crate::hooks::git_guard::dot_glob_option(line.text()).is_some()
@@ -546,26 +596,8 @@ fn object_path(word: &str) -> Option<&str> {
     None
 }
 
-/// Git subcommands whose operands may name an object as `REV:PATH`.
-const GIT_OBJECT_SUBCOMMANDS: &[&str] = &[
-    "show",
-    "cat-file",
-    "log",
-    "diff",
-    "diff-tree",
-    "grep",
-    "rev-parse",
-    "archive",
-    "ls-tree",
-    "blame",
-    "checkout",
-    "restore",
-    "whatchanged",
-    "difftool",
-];
-
-/// Long options whose attached value (`--format=...`) is text in every
-/// subcommand above: a format, a search pattern, a person or a date.
+/// Long options whose attached value (`--format=...`) is text in every Git
+/// command that takes one: a format, a search pattern, a person or a date.
 const GIT_TEXT_OPTIONS: &[&str] = &[
     "--format=",
     "--pretty=",
@@ -643,94 +675,6 @@ const GIT_LOG_FLAGS: &[&str] = &[
     "--source",
 ];
 
-/// What a Git command reads through a list on its input instead of its
-/// operands: `cat-file --batch` and `--batch-command` print the contents of
-/// the objects named on stdin, `hash-object --stdin-paths` and
-/// `update-index --stdin` read the files named there, and
-/// `--pathspec-from-file` reads paths from stdin or a file. A literal list
-/// (here-string, heredoc, `echo` or `printf` pipe) is judged line by line
-/// as object paths and file operands; any other input, a file, a program's
-/// output or the terminal, cannot be established and refuses, and so does
-/// a content batch over every object or through in-tree links (TSK-1002
-/// reviews 06 and 08). `None` when the command reads no such list.
-fn git_input_reads(
-    call: &outward::Unwrapped,
-    cwd: &Path,
-    home: Option<&Path>,
-) -> Option<Result<bool, &'static str>> {
-    let (program, rest) = call.args.split_first()?;
-    let git = crate::hooks::git_guard::git_arguments(program, rest)?;
-    let (subcommand, tail) = crate::hooks::git_guard::git_subcommand(&git)?;
-    let options: Vec<&str> = tail
-        .iter()
-        .map(String::as_str)
-        .take_while(|word| *word != "--")
-        .collect();
-    let has = |name: &str| {
-        options
-            .iter()
-            .any(|word| *word == name || word.starts_with(&format!("{name}=")))
-    };
-    let objects = subcommand == "cat-file" && (has("--batch") || has("--batch-command"));
-    let mut paths = subcommand == "hash-object" && has("--stdin-paths")
-        || subcommand == "update-index" && has("--stdin");
-    for (at, word) in options.iter().enumerate() {
-        let from = match word.strip_prefix("--pathspec-from-file") {
-            Some("") => options.get(at + 1).copied(),
-            Some(attached) => attached.strip_prefix('='),
-            None => continue,
-        };
-        match from {
-            Some("-") => paths = true,
-            _ => return Some(Err("cannot establish the paths a pathspec file names")),
-        }
-    }
-    if objects && (has("--batch-all-objects") || has("--follow-symlinks")) {
-        return Some(Err("cannot establish which objects a content batch reads"));
-    }
-    if !objects && !paths {
-        return None;
-    }
-    let Some(input) = call.input.as_deref() else {
-        return Some(Err("cannot establish the object or path list on stdin"));
-    };
-    let judge = |path: &str| {
-        if call.cwd.is_none() && relative_names_secret(path) {
-            return Err("cannot establish the directory the command runs in");
-        }
-        secret_path_result(path, cwd, home, Some(false))
-    };
-    for line in input.split(['\n', '\0']) {
-        let line = line.trim_end_matches('\r');
-        if objects {
-            // A batch line names an object, after a command word for
-            // `--batch-command`, and may carry trailing text; every colon
-            // suffix of the line and of each word is a possible path.
-            // Git splits a batch line at a space or tab.
-            let words = std::iter::once(line)
-                .chain(line.split([' ', '\t']).filter(|word| !word.is_empty()));
-            for word in words {
-                for (colon, _) in word.match_indices(':') {
-                    let path = &word[colon + 1..];
-                    if !path.is_empty() {
-                        match judge(path) {
-                            Ok(false) => {}
-                            result => return Some(result),
-                        }
-                    }
-                }
-            }
-        }
-        if paths && !line.is_empty() {
-            match judge(line) {
-                Ok(false) => {}
-                result => return Some(result),
-            }
-        }
-    }
-    Some(Ok(false))
-}
-
 /// Whether the word at `at` is text by a Git object subcommand's option
 /// grammar: the attached value of a text option (`--format=a:b`), or for
 /// `log`, `show` and `whatchanged` the value of a pickaxe, search, person,
@@ -750,7 +694,7 @@ fn git_text_value(call: &outward::Unwrapped, at: usize) -> bool {
         return false;
     };
     let start = call.args.len() - tail.len();
-    if !GIT_OBJECT_SUBCOMMANDS.contains(&subcommand) || at < start || at >= call.args.len() {
+    if !git_reads::object_reader(subcommand) || at < start || at >= call.args.len() {
         return false;
     }
     let log = matches!(subcommand, "log" | "show" | "whatchanged");
@@ -808,10 +752,11 @@ fn git_object_paths<'a>(call: &outward::Unwrapped, at: usize, value: &'a str) ->
     let Some((subcommand, tail)) = crate::hooks::git_guard::git_subcommand(&git) else {
         return Vec::new();
     };
-    // Only subcommands that take object names read one; a commit message or
-    // a remote spelling is not an object (TSK-1002 review 07).
+    // Every command's operands may name an object except the commands
+    // proven to take text: a commit message or a remote spelling is not an
+    // object (TSK-1002 reviews 07 and Codex 07).
     let start = call.args.len() - tail.len();
-    if !GIT_OBJECT_SUBCOMMANDS.contains(&subcommand)
+    if !git_reads::object_reader(subcommand)
         || at < start
         || value.starts_with('-')
         || call.args[start..at].iter().any(|word| word == "--")

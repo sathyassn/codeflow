@@ -115,6 +115,17 @@ pub(crate) enum PositionalSource {
     Supplier,
 }
 
+/// Whether stdin is given at the current command position, scoped across
+/// recursion.
+#[derive(Clone, Copy, Default)]
+struct InputScope {
+    /// Whether the line gives the current command position stdin.
+    bound: bool,
+    /// Whether the shell reading the current text was itself given stdin;
+    /// the first stage of a pipeline reads that stdin.
+    outer: bool,
+}
+
 #[derive(Default)]
 struct Parsed {
     resolve_shell: bool,
@@ -129,6 +140,8 @@ struct Parsed {
     commands: Vec<Unwrapped>,
     /// Literal stdin at the current command position, scoped across recursion.
     literal_input: Option<String>,
+    /// Whether the current command position and its shell have stdin.
+    input: InputScope,
     home: Option<PathBuf>,
     created_tags: Vec<(PathBuf, String)>,
     calls: Vec<InterpreterCall>,
@@ -201,6 +214,9 @@ pub(crate) struct Unwrapped {
     pub(crate) args: Vec<String>,
     /// Literal stdin from this command position, before any file-list parsing.
     pub(crate) input: Option<String>,
+    /// Whether the line gives this command stdin (a pipe or an input
+    /// redirection), whether or not the guard can read what it holds.
+    pub(crate) stdin_bound: bool,
     pub(crate) unresolved: Vec<String>,
     pub(crate) supplier: Option<Supplier>,
     /// For each word, whether the shell may expand it as an unquoted glob
@@ -377,10 +393,13 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         return;
     }
     let inherited_input = out.literal_input.take();
+    let inherited_bound = out.input.bound;
+    let outer_bound = std::mem::replace(&mut out.input.outer, inherited_bound);
     if let Some(cwd) = cwd.filter(|_| out.resolve_shell) {
         for step in super::composed::paths::commands(command, cwd, out.shell_home.as_deref()) {
             let input = step.input(inherited_input.as_deref()).map(str::to_owned);
             out.literal_input.clone_from(&input);
+            out.input.bound = step.input_bound(inherited_bound);
             let first_call = out.calls.len();
             let first_command = out.commands.len();
             if step.text == "__unresolved_shell_code" {
@@ -445,6 +464,8 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         visit_literal(command, cwd, depth, out);
     }
     out.literal_input = inherited_input;
+    out.input.bound = inherited_bound;
+    out.input.outer = outer_bound;
 }
 
 /// xargs input has quote/backslash handling, but no shell comments,
@@ -634,7 +655,11 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
     let mut directories = vec![cwd.map(Path::to_path_buf)];
     // Pipeline carriers include the producer text. Split those before argv
     // inspection; find's child retains its supplier evidence in argv.
-    for segment in visit_segments(command, out.resolve_shell) {
+    let segments = visit_segments(command, out.resolve_shell);
+    let stages = if out.resolve_shell { segments.len() } else { 1 };
+    let (step_input, step_bound) = (out.literal_input.clone(), out.input.bound);
+    for (stage, segment) in segments.into_iter().enumerate() {
+        stage_input(out, &segment, (stage, stages), (&step_input, step_bound));
         let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
         let before = words.len();
         strip_reserved_words(&mut words);
@@ -663,6 +688,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
             for (source, expands) in crate::hooks::git_guard::redirect_reads(&segment) {
                 out.commands.push(Unwrapped {
                     input: None,
+                    stdin_bound: false,
                     links: Vec::new(),
                     args: vec!["cat".to_string(), source],
                     unresolved: Vec::new(),
@@ -723,7 +749,31 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
             }
         }
     }
+    out.literal_input = step_input;
+    out.input.bound = step_bound;
     out.config_trigger = inherited;
+}
+
+/// The stdin of pipeline stage `stage` of `stages`. Only the last stage of
+/// a pipeline carrier reads the step's input. A later stage reads the one
+/// before it, which the guard does not read; the first reads the enclosing
+/// shell's stdin or its own redirection.
+fn stage_input(
+    out: &mut Parsed,
+    segment: &str,
+    (stage, stages): (usize, usize),
+    (step_input, step_bound): (&Option<String>, bool),
+) {
+    if stage + 1 < stages {
+        out.literal_input = None;
+        out.input.bound = stage > 0
+            || out.input.outer
+            || segment.contains("<<")
+            || !crate::hooks::git_guard::redirect_reads(segment).is_empty();
+    } else {
+        out.literal_input.clone_from(step_input);
+        out.input.bound = step_bound;
+    }
 }
 
 fn visit_segments(command: &str, positioned: bool) -> Vec<String> {
@@ -1357,6 +1407,7 @@ fn argv(
     let command_at = out.commands.len();
     out.commands.push(Unwrapped {
         input: out.literal_input.clone(),
+        stdin_bound: out.input.bound,
         links: Vec::new(),
         args: args.to_vec(),
         unresolved: Vec::new(),
@@ -1768,8 +1819,14 @@ fn unmodeled_launch(
         if let Some(at) = rest.iter().position(|word| {
             LAUNCHED_READERS.contains(&crate::hooks::git_guard::launcher_name(word))
         }) {
+            // A program the guard does not model passes on stdin it cannot
+            // read: bound, with no literal text.
             let mut reader = Parsed {
                 supplier: out.supplier.clone(),
+                input: InputScope {
+                    bound: out.input.bound,
+                    outer: false,
+                },
                 ..Parsed::default()
             };
             argv(

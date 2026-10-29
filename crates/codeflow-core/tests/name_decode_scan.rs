@@ -1976,6 +1976,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // TSK-1002: a quoted Git path on stdin whose octal escapes are not UTF-8 makes unquote return None, and reads refuses the command as one it cannot decode.
+    (
+        "crates/codeflow-core/src/security/interpreter/git_reads.rs",
+        "unquote",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     // Octal escape digits that are not UTF-8 make unquote_git_path return unproven None; diff_path turns None into a cannot-read Err, so evaluate_commit_range marks added-lines skipped (ci exits 2) and conflict_markers::dispatch reports an incomplete finding at its level.
     (
         "crates/codeflow-cli/src/cmd/ci.rs",
