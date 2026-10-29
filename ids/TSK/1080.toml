@@ -1,0 +1,11 @@
+id = "TSK-1080"
+uid = "7773c0db-2f6d-43bf-a054-8b805a24774a"
+kind = "TSK"
+title = "Remote protect writes three owned rulesets and never weakens a rule"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T22:05:35Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
