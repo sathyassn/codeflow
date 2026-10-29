@@ -256,7 +256,9 @@ readers; explicit secret-store operands retain their own protection.
 
 Shell expansion and recursive root inspection each use a 65,536-entry
 metadata budget. Unreadable, unresolved or over-budget selections refuse as
-cannot-verify and name a narrowing remedy. A source glob that expands
+cannot-verify and name a narrowing remedy, and so does a relative glob or
+search selector after a directory change the guard cannot establish,
+whatever it names; a rooted glob (`/dir/*`, `~/dir/*`) is judged as usual. A source glob that expands
 completely without secret matches remains available; the same glob refuses
 after `id_rsa.rs` is planted among its matches. A quoted shell wildcard
 remains literal, including `cat < 'id_rs?'`. Lines naming dotglob,
@@ -299,9 +301,11 @@ them closed where containment cannot be established.
 The written-file checks are partial filters that only refuse, not a
 boundary, and they leave run routes they do not name allowed: a file
 written earlier on the same line, by a heredoc, `echo`, `printf`, an
-append, `tee` or a copy, refuses when it runs directly by path, interpreter
-or Make, or before an interpreter that loads its extension runs, unless the
-guard read its code exactly. A copy into a directory writes the file of the
+append, `tee` or a copy, refuses when it runs directly by path, interpreter,
+shell (`bash FILE`, `sh FILE`, `source FILE`, `. FILE`) or Make, or before
+an interpreter that loads its extension runs, unless the guard read its code
+exactly; a shell script whose exact body the guard read is judged as that
+code. A copy into a directory writes the file of the
 source's name there. After a recursive copy, an interpreter, shell, Make or
 launcher that the line runs directly later refuses. A script operand is
 opened in the directory a launcher such as `env -C` moves to. After a write
@@ -337,7 +341,12 @@ leaves the directory unknown; any other physical change lands on the
 destination's real path, or leaves the directory unknown when that cannot
 be resolved. A `set`, `setopt` or `emulate` option word the guard does not
 read counts as physical, and so do a shell's own invocation options
-(`bash -P -c`, `zsh -o chaselinks -c`) for its code. `pwd -P` prints the
+(`bash -P -c`, `zsh -o chaselinks -c`) for its code, and so does a
+`SHELLOPTS` in its environment that names `physical` or that the guard
+cannot read (`env SHELLOPTS=physical bash -c`, an exported `SHELLOPTS`).
+A physical change with no operand goes to HOME, `cd -P -` to OLDPWD; one
+whose target the guard cannot read (an unread HOME or OLDPWD, a `pushd`
+swap or stack index) leaves the directory unknown. `pwd -P` prints the
 physical directory. As a partial filter, inline code and the file readers
 the guard lists (`cat`, `head`, `grep`, `rg`, `tar` and similar) that a
 program the guard does not model may run (`uv run --directory DIR cat
@@ -346,7 +355,11 @@ there, and the runner's real child directory, are outside the promise.
 Turning a physical option off (`unsetopt chaselinks`) does not clear the
 physical reading, so later changes through a link stay unknown.
 A directory that a launcher or interpreter option moves to and the guard
-cannot establish refuses as cannot-verify. After any other directory change
+cannot establish refuses as cannot-verify. A directory change inside a
+command substitution leaves what a later `pwd` there prints unknown, and a
+path after a substitution whose output the guard cannot establish
+(`cat "$(cd DIR && pwd)/../auth.json"`) is judged as a relative operand in
+an unknown directory. After any other directory change
 the guard cannot establish, such as `cd "$DIR"` or `pushd "$DIR"`, inline
 interpreter code (`-c`, `-e`, `eval`, a heredoc or stdin) refuses, and a
 relative operand refuses when its name or path could name a secret: a
@@ -377,7 +390,22 @@ in `REV:PATH` or `:PATH` keeps the secret-name rules of a file operand
 whatever the revision's shape, a revision the guard cannot read included
 (`git show HEAD:id_rsa` refuses), for the subcommands that take objects
 (`show`, `cat-file`, `log`, `diff`, `grep` and the like); a commit message
-or a remote spelling is not an object path.
+or a remote spelling is not an object path. Every operand of those
+subcommands before `--` is read that way, a separate option value
+included: a value counts as text (`git log -S TEXT`, `--grep TEXT`,
+`--format=TEXT`) only when every option before it is one the guard's
+grammar knows, since an unknown option may take the next word. A list Git
+reads instead of operands is read or refused: the object names a
+`cat-file --batch` or `--batch-command` reads, and the paths
+`hash-object --stdin-paths`, `update-index --stdin` and
+`--pathspec-from-file=-` read, are judged line by line when a here-string,
+heredoc, `echo` or `printf` supplies them, and refuse as cannot-verify
+when they come from a file or a program; a content batch over every object
+or through in-tree links refuses, and `--batch-check` stays available.
+`git log` operands and pathspecs are file operands (`git log -p --
+id_rsa` refuses). A clone or fetch URL whose last component is a secret
+name refuses: Git's `insteadOf` configuration can rewrite a URL to a local
+path the guard does not read.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the
