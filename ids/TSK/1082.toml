@@ -1,0 +1,11 @@
+id = "TSK-1082"
+uid = "5178ef78-6c7b-4c1c-ab2f-5e6b62bb8009"
+kind = "TSK"
+title = "The in-session guards block when a harness times them out"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T22:37:59Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
