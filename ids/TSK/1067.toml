@@ -1,0 +1,11 @@
+id = "TSK-1067"
+uid = "e6dc20cc-f268-4fd2-a4cc-0c7eadd8649f"
+kind = "TSK"
+title = "The exec guard refuses an awk program that writes an enforcement path"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T11:21:52Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
