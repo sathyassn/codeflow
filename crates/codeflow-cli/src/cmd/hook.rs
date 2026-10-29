@@ -584,16 +584,16 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         let _ = term_writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
         return 2;
     };
-    // Which text rule judges this call (TSK-397 design D): whether the
-    // harness configuration it runs under is attested, the call's retry
-    // flag, and the policy of the call's repository and of the session's
-    // project, failing closed when the session's cannot be read.
+    // Which text rule judges this call (TSK-397): strict unless the policy
+    // of the call's repository and of the session's project both choose
+    // `relaxed` at the protected remote-tracking refs; a retry flag and
+    // native Windows keep it strict.
     let host = codeflow_core::hooks::sandbox_state::Host::for_hook(&cwd, &root);
     let mut policy_reasons = Vec::new();
-    if policy.security.text_guard == codeflow_core::hooks::policy::TextGuard::Strict {
-        policy_reasons
-            .push("the project policy sets `security.text_guard` to `strict`".to_string());
-    }
+    policy_reasons.extend(codeflow_core::hooks::sandbox_state::policy_reason(
+        &authority,
+        "the project policy",
+    ));
     if let Some(session) = host.session.as_deref() {
         if let Some(reason) = session_policy_reason(session, &root) {
             policy_reasons.push(reason);
@@ -601,7 +601,6 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     }
     let outcome = codeflow_core::hooks::sandbox_state::outcome(
         &host,
-        codeflow_core::hooks::sandbox_state::Harnesses::from_keys(&payload.keys),
         payload.tool_input.sandbox_retry(),
         &policy_reasons,
     );
@@ -617,11 +616,11 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
 }
 
-/// Why the session project's policy tightens a call made from `root`: it
-/// sets `security.text_guard` to `strict`, or it cannot be read. `None`
-/// when the session project is the call's repository, whose policy the
-/// caller already read, or when its policy does not ask for the strict
-/// rule.
+/// Why the session project's policy keeps a call made from `root` strict:
+/// it does not choose `relaxed` at its protected remote-tracking refs, or it
+/// cannot be read. `None` when the session project is the call's
+/// repository, whose policy the caller already read, or when it chooses
+/// `relaxed` there.
 fn session_policy_reason(session: &std::path::Path, root: &std::path::Path) -> Option<String> {
     let session_root = match super::project_root(session) {
         Ok(session_root) => session_root,
@@ -637,13 +636,10 @@ fn session_policy_reason(session: &std::path::Path, root: &std::path::Path) -> O
         return None;
     }
     match codeflow_core::hooks::landed_policy::load(&session_root) {
-        Ok(authority)
-            if authority.policy.security.text_guard
-                == codeflow_core::hooks::policy::TextGuard::Strict =>
-        {
-            Some("the session project's policy sets `security.text_guard` to `strict`".to_string())
-        }
-        Ok(_) => None,
+        Ok(authority) => codeflow_core::hooks::sandbox_state::policy_reason(
+            &authority,
+            "the session project's policy",
+        ),
         Err(error) => Some(format!(
             "the session project's policy at `{}` cannot be read ({}), so its `security.text_guard` is unknown",
             session_root.display(),

@@ -1478,15 +1478,11 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
-    // TSK-397: the exec guard's text-rule selection fails closed. A Claude
-    // layer that is not UTF-8 or not a JSON object is a strict-rule trigger,
-    // never an absent layer. A `.git` file's `gitdir:` value is trimmed as
-    // Git trims it, and the main checkout counts only when the trimmed path
-    // resolves to the common directory; otherwise the call tightens. The
-    // shipped Claude presets are embedded at build time; were one
-    // unparsable, fewer settings would count as shipped, which tightens. A
-    // `GROK_SANDBOX` value that is not UTF-8 is kept as a selection that
-    // names no shipped profile, which tightens.
+    // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
+    // or not a JSON object is reported, never read as an absent layer. A
+    // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
+    // checkout counts only when the trimmed path resolves to the common
+    // directory; otherwise the check reports it.
     (
         "crates/codeflow-core/src/hooks/sandbox_state.rs",
         "read_text",
@@ -1507,20 +1503,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "format-contract",
-    ),
-    (
-        "crates/codeflow-core/src/hooks/sandbox_state.rs",
-        "shipped_claude",
-        "obtain-absent:from_str",
-        1,
-        "unproven",
-    ),
-    (
-        "crates/codeflow-core/src/hooks/sandbox_state.rs",
-        "grok_selection",
-        "obtain-absent:into_string",
-        1,
-        "unproven",
     ),
     // TSK-452: doctor's preflight report only prints evidence and decides
     // nothing. A missing or misread catalog, settings file or PATH entry is
@@ -6772,8 +6754,7 @@ const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"]
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),
-    ("crates/codeflow-core/src/hooks/sandbox_state.rs", "claude_layers", "ErrorKind::NotFound", 1, "Only native NotFound on read_dir of the managed settings drop-in directory means it adds no layer (TSK-397); every other error is a strict-rule trigger, so the exec guard fails closed."),
-    ("crates/codeflow-core/src/hooks/sandbox_state.rs", "codex_attest", "ErrorKind::NotFound", 1, "Only native NotFound on read_dir of the Codex home means it holds no profile file (TSK-397); every other error, and an entry that cannot be read, is a strict-rule reason, so the exec guard fails closed."),
+    ("crates/codeflow-core/src/hooks/sandbox_state.rs", "claude_layers", "ErrorKind::NotFound", 1, "Only native NotFound on read_dir of the managed settings drop-in directory means it adds no layer (TSK-397); every other error is reported by doctor's state-root check, which then fails."),
     ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),

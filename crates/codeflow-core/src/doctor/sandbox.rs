@@ -1,25 +1,23 @@
-//! The `sandbox` check (TSK-397 design D, H-6): which text rule the exec
-//! guard applies to each harness's calls in this project, and why.
+//! The `sandbox` check (TSK-397, H-6): which text rule the exec guard
+//! applies to shell calls in this project, and whether the state root is
+//! writable from a sandboxed Claude Code session.
 //!
-//! It decides through the function the hook uses
+//! The text rule is decided by the function the hook uses
 //! ([`crate::hooks::sandbox_state::reasons`]), for a session started at the
-//! project root, once per harness, so the two cannot disagree. A harness
-//! this project configures (its settings file is present) fails the check
-//! when its configuration is not attested, naming each reason; a harness it
-//! does not configure gets a note, since its calls are tightened by design.
-//! Separately, the check fails when the policy cannot be read (the hook
-//! then refuses every call) and when a Claude Code grant it can read makes
-//! the state root (`CODEFLOW_HOME`) writable from a sandboxed session. It
-//! does not claim the state root is unwritable: Codex and Grok grants and
-//! what no file shows are not computed. Grok's profile selection is read
-//! from this process's environment, which may differ from a Grok session's.
+//! project root, so the two cannot disagree. Strict is the default and
+//! needs nothing. Relaxed is printed as the operator's choice, with the
+//! ref it was read from; nothing here verifies a sandbox. The check fails
+//! when the policy cannot be read (the hook then refuses every call) and
+//! when a Claude Code grant it can read makes the state root
+//! (`CODEFLOW_HOME`) writable from a sandboxed session. It does not claim
+//! the state root is unwritable: Codex and Grok grants and what no file
+//! shows are not computed.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::{CheckResult, Options, Status};
-use crate::hooks::policy::TextGuard;
-use crate::hooks::sandbox_state::{self, Harnesses, Host};
+use crate::hooks::sandbox_state::{self, Host};
 
 pub(super) fn check(opts: &Options) -> CheckResult {
     let start = Instant::now();
@@ -28,10 +26,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     if let Some(home) = &opts.harness_home {
         host.home = Some(home.clone());
         host.claude_config_dir = None;
-        host.codex_home = None;
-        host.grok_home = None;
     }
-    host.grok_sandbox = sandbox_state::grok_selection(opts.env("GROK_SANDBOX"));
     let (status, message) = report(&host, opts.codeflow_home.as_deref(), &temporary_dirs());
     CheckResult {
         name: "sandbox".into(),
@@ -63,12 +58,21 @@ pub(crate) fn report(
 ) -> (Status, String) {
     let mut lines = Vec::new();
     let mut failed = false;
-    let mut policy = Vec::new();
     match crate::hooks::landed_policy::load(&host.root) {
         Ok(authority) => {
-            if authority.policy.security.text_guard == TextGuard::Strict {
-                policy
-                    .push("the project policy sets `security.text_guard` to `strict`".to_string());
+            let policy: Vec<String> =
+                sandbox_state::policy_reason(&authority, "the project policy")
+                    .into_iter()
+                    .collect();
+            let reasons = sandbox_state::reasons(host, false, &policy);
+            if reasons.is_empty() {
+                lines.push(format!(
+                    "text rule: relaxed by operator choice, not verified (`security.text_guard: relaxed` read from {})",
+                    authority.source
+                ));
+            } else {
+                lines.push("text rule: strict".to_string());
+                lines.extend(reasons.iter().map(|why| format!("  because {why}")));
             }
         }
         Err(error) => {
@@ -78,34 +82,8 @@ pub(crate) fn report(
             ));
         }
     }
-    for (name, harnesses, file) in [
-        ("Claude Code", Harnesses::CLAUDE, ".claude/settings.json"),
-        ("Codex", Harnesses::CODEX, ".codex/config.toml"),
-        ("Grok Build", Harnesses::GROK, ".grok/sandbox.toml"),
-    ] {
-        let reasons = sandbox_state::reasons(host, harnesses, false, &policy);
-        if reasons.is_empty() {
-            lines.push(format!(
-                "text rule for {name} calls: baseline: the configuration read is attested"
-            ));
-            continue;
-        }
-        let configured = !matches!(
-            crate::absence::symlink_metadata_optional(&host.root.join(file)),
-            Ok(None)
-        );
-        if configured {
-            failed = true;
-            lines.push(format!("text rule for {name} calls: tightened"));
-        } else {
-            lines.push(format!(
-                "text rule for {name} calls: tightened; this project does not configure {name} (`{file}` is absent)"
-            ));
-        }
-        lines.extend(reasons.iter().map(|why| format!("  because {why}")));
-    }
     lines.push(
-        "  a call marked `dangerouslyDisableSandbox` (verified on Claude Code 2.1.312) is always tightened; launch flags and an unsandboxed run the harness does not mark are not visible here"
+        "  a call marked `dangerouslyDisableSandbox` (verified on Claude Code 2.1.312) always takes the strict rule; a Claude Code call also needs `relaxed` in its session project's policy"
             .to_string(),
     );
     if let Some(home) = codeflow_home {
@@ -198,45 +176,22 @@ fn lexical(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-    /// A session started at `<dir>/project`, carrying the shipped Claude
-    /// preset, Codex configuration and Grok profiles.
+    /// A session started at `<dir>/project`, a repository with the shipped
+    /// Claude preset committed and no remote.
     fn host(dir: &Path) -> Host {
         let root = dir.join("project");
-        for (file, text) in [
-            (".claude/settings.json", preset()),
-            (
-                ".codex/config.toml",
-                include_str!("../../../../assets/base/codex/config.toml").to_string(),
-            ),
-            (
-                ".grok/sandbox.toml",
-                include_str!("../../../../assets/base/grok/sandbox.toml").to_string(),
-            ),
-            (
-                "../home/.codex/config.toml",
-                format!(
-                    "[projects.{:?}]\ntrust_level = \"trusted\"\n",
-                    root.display().to_string()
-                ),
-            ),
-        ] {
-            let path = root.join(file);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, text).unwrap();
-        }
+        let path = root.join(".claude/settings.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, preset()).unwrap();
+        git2::Repository::init(&root).unwrap();
         Host {
             session: Some(root.clone()),
             cwd: root.clone(),
             root,
             home: Some(dir.join("home")),
             claude_config_dir: None,
-            codex_home: None,
-            grok_home: None,
-            grok_sandbox: Some("cf-guard".to_string()),
             managed_file: Some(dir.join("managed/managed-settings.json")),
             managed_dir: None,
-            claude_unattested: Vec::new(),
-            codex_unattested: Vec::new(),
             native_windows: false,
         }
     }
@@ -250,56 +205,33 @@ mod tests {
         settings.to_string()
     }
 
-    /// AC-5: the shipped configuration passes with a note; a trigger fails,
-    /// naming it, on the line of the harness it applies to, and the hook's
-    /// outcome for that harness agrees.
+    /// AC-5: with no relaxed choice the line reads strict and names why,
+    /// and the hook's function agrees; a relaxed working copy is not
+    /// honoured.
     #[test]
-    fn the_lines_follow_the_configuration_per_harness() {
+    fn the_text_rule_is_strict_by_default() {
         let dir = tempfile::tempdir().unwrap();
         let host = host(dir.path());
-        let (status, message) = report(&host, Some(&dir.path().join("home/.codeflow")), &[]);
-        assert!(matches!(status, Status::Note(_)), "{status:?}: {message}");
-        for name in ["Claude Code", "Codex", "Grok Build"] {
-            assert!(
-                message.contains(&format!("text rule for {name} calls: baseline")),
-                "{message}"
-            );
-        }
-        std::fs::create_dir_all(dir.path().join("managed")).unwrap();
-        std::fs::write(
-            host.managed_file.as_ref().unwrap(),
-            r#"{"sandbox":{"excludedCommands":["git"]}}"#,
-        )
-        .unwrap();
         let (status, message) = report(&host, None, &[]);
-        assert_eq!(status, Status::Fail, "{message}");
+        assert!(matches!(status, Status::Note(_)), "{status:?}: {message}");
         assert!(
-            message.contains("text rule for Claude Code calls: tightened"),
+            message.contains("text rule: strict")
+                && message.contains("keeps the default `security.text_guard: strict`"),
             "{message}"
         );
+        let policy = host.root.join(".codeflow/policy.json");
+        std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+        std::fs::write(&policy, r#"{"security":{"text_guard":"relaxed"}}"#).unwrap();
+        let (_, message) = report(&host, None, &[]);
         assert!(
-            message.contains("because the Claude settings")
-                && message.contains("`sandbox.excludedCommands` lists commands"),
+            message.contains("text rule: strict") && message.contains("not honoured"),
             "{message}"
         );
-        assert!(
-            message.contains("text rule for Codex calls: baseline"),
-            "{message}"
-        );
-        for harnesses in [Harnesses::CLAUDE, Harnesses::CODEX, Harnesses::GROK] {
-            let hook = sandbox_state::outcome(&host, harnesses, false, &[]);
-            let shown = !sandbox_state::reasons(&host, harnesses, false, &[]).is_empty();
-            assert_eq!(
-                hook != sandbox_state::Outcome::Baseline,
-                shown,
-                "{harnesses:?}"
-            );
-        }
+        assert!(!message.contains("relaxed by operator choice"), "{message}");
     }
 
     /// H-5: doctor fails when the state root is writable from a sandboxed
-    /// session, through any settings layer, and that failure does not
-    /// change the text rule it reports.
+    /// session, through any settings layer.
     #[test]
     fn a_writable_state_root_fails_on_its_own_line() {
         let dir = tempfile::tempdir().unwrap();
@@ -310,15 +242,12 @@ mod tests {
             message.contains("state root: `") && message.contains("inside the project"),
             "{message}"
         );
-        assert!(
-            message.contains("text rule for Claude Code calls: baseline"),
-            "{message}"
-        );
+        assert!(message.contains("text rule: strict"), "{message}");
         let (status, message) =
             report(&host, Some(&dir.path().join("home/.codeflow/locks/x")), &[]);
         assert_eq!(status, Status::Fail, "{message}");
         assert!(message.contains("~/.codeflow/locks"), "{message}");
-        // A grant in the user layer counts too.
+        // A grant in the user layer counts.
         let user = dir.path().join("home/.claude/settings.json");
         std::fs::create_dir_all(user.parent().unwrap()).unwrap();
         let state = dir.path().join("state");
@@ -364,20 +293,6 @@ mod tests {
             message.contains("no Claude Code write grant read here reaches")
                 && message.contains("Codex and Grok grants are not checked")
                 && !message.contains("not writable"),
-            "{message}"
-        );
-    }
-
-    /// A harness the project does not configure is noted, not failed.
-    #[test]
-    fn an_unconfigured_harness_is_a_note() {
-        let dir = tempfile::tempdir().unwrap();
-        let host = host(dir.path());
-        std::fs::remove_file(host.root.join(".grok/sandbox.toml")).unwrap();
-        let (status, message) = report(&host, None, &[]);
-        assert!(matches!(status, Status::Note(_)), "{message}");
-        assert!(
-            message.contains("text rule for Grok Build calls: tightened; this project does not configure Grok Build"),
             "{message}"
         );
     }

@@ -104,14 +104,14 @@ pub fn evaluate_in(
         integrity,
         cwd,
         root,
-        &super::sandbox_state::Outcome::Baseline,
+        &super::sandbox_state::Outcome::Relaxed,
     )
 }
 
 /// [`evaluate_in`] under the outcome [`super::sandbox_state`] selected for
-/// the call (TSK-397 design D): the baseline rule, or the baseline with the
-/// strict branch added. Every check outside the interpreter-argument rule
-/// is the same in both outcomes.
+/// the call (TSK-397): the line's rule, or the line's rule with the strict
+/// branch added. Every check outside the interpreter-argument rule is the
+/// same in both outcomes.
 #[must_use]
 pub fn evaluate_ruled(
     command: &str,
@@ -478,7 +478,7 @@ mod tests {
     fn run_time_project_deletions_refuse_only_when_tightened() {
         use crate::security::guard_forms::{NESTINGS, RUN_TIME_PROJECT_DELETIONS};
         let section = SecuritySection::default();
-        let tightened = super::super::sandbox_state::Outcome::Tightened("a test trigger".into());
+        let tightened = super::super::sandbox_state::Outcome::Strict("a test trigger".into());
         let root = std::env::current_dir().unwrap();
         for command in RUN_TIME_PROJECT_DELETIONS {
             for nesting in NESTINGS {

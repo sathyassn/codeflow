@@ -14,6 +14,11 @@ pub struct LandedPolicy {
     /// Where the policy was read, as messages show it.
     pub source: String,
     pub local_differs: bool,
+    /// Whether the policy was read from the remote's protected
+    /// remote-tracking refs. `false` for `HEAD` or the working copy, which
+    /// a local commit or edit can change; `security.text_guard: relaxed`
+    /// is honoured only when this is `true` (TSK-397).
+    pub remote_tracked: bool,
     remote_head_advice: Option<String>,
 }
 
@@ -78,7 +83,7 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
             return working(root, &format!("working copy (unborn HEAD; {reason})"));
         }
         let (policy, project) = at(&repo, "HEAD")?;
-        return finish(root, policy, project, format!("HEAD ({reason})"));
+        return finish(root, policy, project, format!("HEAD ({reason})"), false);
     }
     let remote = remote.ok_or("populated tracking namespace has no configured remote")?;
     let (defaults, fallback) = default_sources(&repo, remote)?;
@@ -133,7 +138,7 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
             );
         }
     }
-    let mut authority = finish(root, policy, project, sources)?;
+    let mut authority = finish(root, policy, project, sources, true)?;
     if fallback {
         authority.remote_head_advice = Some(format!(
             "operator advice: git remote set-head {remote} --auto; without remote HEAD the default is assumed to be main or master; custom defaults need set-head"
@@ -188,6 +193,7 @@ fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
         project: super::policy::read_project_toml(root)?,
         source: source.into(),
         local_differs: false,
+        remote_tracked: false,
         remote_head_advice: None,
     })
 }
@@ -197,6 +203,7 @@ fn finish(
     policy: Policy,
     project: Option<toml::Value>,
     source: String,
+    remote_tracked: bool,
 ) -> Result<LandedPolicy, String> {
     let local_differs = !same_inputs(&Policy::load(root)?, &policy)?
         || super::policy::read_project_toml(root)? != project;
@@ -205,6 +212,7 @@ fn finish(
         project,
         source,
         local_differs,
+        remote_tracked,
         remote_head_advice: None,
     })
 }
@@ -447,8 +455,9 @@ fn stricter_levels(
             }
         }
     }
-    // `security.text_guard`: `strict` outranks `auto` (TSK-397).
-    if line.pointer("/security/text_guard").and_then(Value::as_str) == Some("strict") {
+    // `security.text_guard`: `relaxed` holds only when every source says it;
+    // `strict`, also when absent, wins (TSK-397).
+    if line.pointer("/security/text_guard").and_then(Value::as_str) != Some("relaxed") {
         if let Some(Value::Object(security)) = base.pointer_mut("/security") {
             security.insert(
                 "text_guard".to_string(),
@@ -652,24 +661,26 @@ mod tests {
     #[test]
     fn the_strict_text_guard_wins_a_merge() {
         use super::super::policy::TextGuard;
-        let mut strict = Policy::default();
-        strict.security.text_guard = TextGuard::Strict;
+        let mut relaxed = Policy::default();
+        relaxed.security.text_guard = TextGuard::Relaxed;
         for (base, line) in [
-            (Policy::default(), strict.clone()),
-            (strict.clone(), Policy::default()),
-            (strict.clone(), strict.clone()),
+            (Policy::default(), relaxed.clone()),
+            (relaxed.clone(), Policy::default()),
+            (Policy::default(), Policy::default()),
         ] {
-            assert_eq!(
-                super::stricter(base, &line).unwrap().security.text_guard,
-                TextGuard::Strict
-            );
+            for merged in [
+                super::stricter(base.clone(), &line).unwrap(),
+                super::over_target(base, &line).unwrap(),
+            ] {
+                assert_eq!(merged.security.text_guard, TextGuard::Strict);
+            }
         }
         assert_eq!(
-            super::stricter(Policy::default(), &Policy::default())
+            super::stricter(relaxed.clone(), &relaxed)
                 .unwrap()
                 .security
                 .text_guard,
-            TextGuard::Auto
+            TextGuard::Relaxed
         );
     }
 

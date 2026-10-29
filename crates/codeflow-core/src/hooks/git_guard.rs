@@ -290,10 +290,6 @@ pub struct HookPayload {
     pub tool_input: ToolInput,
     #[serde(default)]
     pub cwd: Option<PathBuf>,
-    /// The payload's top-level keys as the harness sent them, before the
-    /// two spellings are folded: what identifies a harness (TSK-397).
-    #[serde(skip)]
-    pub keys: Vec<String>,
 }
 
 /// `tool_input` for shell invocations.
@@ -353,7 +349,6 @@ impl HookPayload {
                 json_kind(&value)
             )));
         };
-        let keys: Vec<String> = object.keys().cloned().collect();
         // One field under two spellings: equal values are one field; values
         // that disagree name two calls, and reading either one could judge a
         // command other than the one the harness runs.
@@ -377,10 +372,7 @@ impl HookPayload {
                 "field `{field}` is a JSON {found} where {expected} belongs"
             )));
         }
-        let mut payload: Self =
-            serde_json::from_value(value).map_err(|e| PayloadError::Malformed(e.to_string()))?;
-        payload.keys = keys;
-        Ok(payload)
+        serde_json::from_value(value).map_err(|e| PayloadError::Malformed(e.to_string()))
     }
 
     /// The command to evaluate when this is a shell tool call.

@@ -860,10 +860,10 @@ pub const SCHEMA: [KeySpec; 75] = [
     },
     KeySpec {
         path: "security.text_guard",
-        kind: KeyKind::Enum(&["auto", "strict"]),
-        valid: "auto | strict",
-        purpose: "Which text rule the exec-guard applies to shell calls (TSK-397): `auto` adds the strict rule unless the guard attests the harness's sandbox configuration as the shipped preset or a narrower form, and when the call asks to run outside the sandbox; `strict` adds it on every host.",
-        notes: "Default auto. No value loosens the guard: the strict rule only adds refusals, and when policy sources disagree `strict` wins. A Claude Code call also reads the session project's policy, and tightens when that sets `strict` or cannot be read. `codeflow doctor --check sandbox` shows which rule a host gets and why.",
+        kind: KeyKind::Enum(&["strict", "relaxed"]),
+        valid: "strict | relaxed",
+        purpose: "Which text rule the exec-guard applies to shell calls (TSK-397): `strict` adds the strict rule to every call; `relaxed` applies the line's rule by the operator's choice and verifies no sandbox.",
+        notes: "Default strict, also when the key is absent. `relaxed` is honoured only from the protected remote-tracking refs (the default branch and any declared line, where `strict` wins), never from a working copy or a repository without a remote; a Claude Code call also needs it in the session project's policy. Under `relaxed`, a call marked `dangerouslyDisableSandbox` and every call on native Windows still take the strict rule. `codeflow doctor --check sandbox` shows the rule and the ref it was read from.",
     },
     KeySpec {
         path: "security.outward_actions",

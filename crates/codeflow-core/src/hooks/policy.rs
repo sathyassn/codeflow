@@ -800,10 +800,10 @@ pub struct SecuritySection {
     /// Unsupported legacy entries; accepted values have no effect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_retry_allow: Option<Vec<serde_json::Value>>,
-    /// Which text rule the exec guard applies (TSK-397 design D): `auto`
-    /// selects it from the harness sandbox configuration, `strict` always
-    /// adds the strict rule. No value loosens the guard.
-    #[serde(skip_serializing_if = "TextGuard::is_auto")]
+    /// Which text rule the exec guard applies (TSK-397): `strict`, the
+    /// default, adds the strict rule to every shell call; `relaxed`, the
+    /// operator's choice, applies the line's rule and verifies nothing.
+    #[serde(skip_serializing_if = "TextGuard::is_strict")]
     pub text_guard: TextGuard,
 }
 
@@ -811,18 +811,19 @@ pub struct SecuritySection {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextGuard {
-    /// The sandbox configuration selects the rule.
+    /// The strict rule applies to every shell call.
     #[default]
-    Auto,
-    /// The strict rule applies on every host.
     Strict,
+    /// The line's rule, by the operator's choice; honoured only from the
+    /// protected remote-tracking refs.
+    Relaxed,
 }
 
 impl TextGuard {
-    /// Whether this is the default, `auto`.
+    /// Whether this is the default, `strict`.
     #[must_use]
-    pub fn is_auto(&self) -> bool {
-        *self == Self::Auto
+    pub fn is_strict(&self) -> bool {
+        *self == Self::Strict
     }
 }
 
@@ -840,7 +841,7 @@ impl Default for SecuritySection {
             workflow_pushes: None,
             sandbox_retry: None,
             sandbox_retry_allow: None,
-            text_guard: TextGuard::Auto,
+            text_guard: TextGuard::Strict,
         }
     }
 }
