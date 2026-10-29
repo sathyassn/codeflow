@@ -385,15 +385,17 @@ named stream is judged as its file. A UNC path that ends in a protected
 home-relative path refuses whatever the host or share; any other share
 outside the home and the session's directory refuses, since its root may
 be a store; read it through its drive-letter path. That refusal comes
-before any filesystem access. Other device paths, stream type syntax and short names the
+before any filesystem access, a Git alias lookup in that directory
+included. Other device paths, stream type syntax and short names the
 guard cannot map refuse. A short name that does not exist yet refuses
 unless nothing can exist there, since a command earlier on the line could
 create the entry it aliases. A Git revision such as `HEAD~1` that names no
 path, and inline interpreter code, are not file operands; the object path
 in `REV:PATH` or `:PATH` keeps the secret-name rules of a file operand
 whatever the revision's shape, a revision the guard cannot read included
-(`git show HEAD:id_rsa` refuses). A Git command is cleared only in a form
-the guard parses completely; any other form refuses as cannot-verify:
+(`git show HEAD:id_rsa` refuses). Git commands are judged by these rules;
+the guard does not parse every option of every Git command, so the rules
+name what it reads and what refuses when it cannot:
 
 - Every operand before `--`, a separate option value included, is read as
   a possible object name, unless it is proven to be text: a commit
@@ -401,8 +403,8 @@ the guard parses completely; any other form refuses as cannot-verify:
   `clone`, `fetch`, `ls-remote` and `pull`, or an option value
   (`git log -S TEXT`, `--grep TEXT`, `--format=TEXT`) after options the
   guard's grammar all knows, since an unknown option may take the next
-  word. `git log` operands and pathspecs are file operands (`git log -p --
-  id_rsa` refuses).
+  word. `git log` operands are file operands (`git log -p -- id_rsa`
+  refuses).
 - An alias is judged by its expansion, read from the configuration Git
   would use. One the guard cannot read refuses: a `!` shell alias, an
   alias on a line that changes configuration, or one under a global
@@ -411,37 +413,55 @@ the guard parses completely; any other form refuses as cannot-verify:
 - The options that decide what `cat-file`, `hash-object` and
   `--pathspec-from-file` read are resolved by Git's own rules, a unique
   abbreviation (`--batch-com`) and a `--no-` form included; an option
-  those rules do not resolve refuses.
-- A list Git reads from stdin instead of operands is judged record by
-  record, in Git's quoting, when a here-string, heredoc, `echo` or
-  `printf` supplies it: object names for `cat-file --batch` and
-  `--batch-command`, `rev-list --stdin`, `update-ref --stdin` and the
-  like, and paths for `hash-object --stdin-paths`, `update-index --stdin`
-  and `--pathspec-from-file=-`. The list refuses when a file or a program
-  supplies it or a record cannot be decoded, and a path list in a file
-  refuses. A content batch over every object or through in-tree links
-  refuses; `--batch-check` stays available. Stdin that holds data (`git
-  apply`, `git am`, `git commit -F -`, `hash-object --stdin`) or names Git
-  reports only metadata for (`check-attr --stdin`) is not such a list.
-- A pathspec pattern, which Git matches against the tree and history
-  (`'id_rs?'`, `':(glob)**/id_*'`), refuses when a secret name could match
-  it. Git's `*` also matches `/`. A case-insensitive pathspec (`icase`
-  magic, `--icase-pathspecs`) refuses, and so does magic other than
-  `top`, `literal`, `glob` and `exclude`; an exclusion selects nothing. Ref and refspec patterns (`git fetch origin
-  'refs/heads/*:refs/remotes/origin/*'`, `git tag -l 'v*'`) are not
-  pathspecs.
+  those rules do not resolve refuses. A `--stdin` option on another
+  command is recognised in any spelling that begins `--std`.
+- Stdin is read only for the forms that read names from it: a
+  `cat-file` content batch, `hash-object --stdin-paths`,
+  `--pathspec-from-file=-`, a `--stdin` option (`rev-list`, `update-ref`,
+  `update-index`, `checkout-index` and the like), `update-index
+  --index-info`, and the stream readers (`pack-objects`, `mktree`,
+  `fast-import`, the serving side of transports, credential helpers).
+  Their list is judged record by record when a here-string, heredoc,
+  `echo` or `printf` on the line supplies it. Any other stdin refuses:
+  a file, a program's output, a descriptor an earlier `exec` or a
+  compound command's redirection rebinds, or stdin the line does not
+  give. Records are read as Git reads them: file names in Git's C quoting
+  per line, or verbatim when NUL-separated (`-z`,
+  `--pathspec-file-nul`); pathspecs from a file meet the pathspec rules
+  below. A path list in a file refuses. A content batch over every
+  object or through in-tree links refuses; `--batch-check` stays
+  available. Every other Git command is judged by its operands whatever
+  its stdin holds (`git status </dev/null`, `yes | git add -p`).
+- Pathspec rules apply only to the operands of commands that read
+  pathspecs (`add`, `diff`, `log`, `grep`, `ls-files`, `rm`, `show`,
+  `status` and the like); another command's operand is a file name, and
+  magic in it never clears it (`git hash-object ':(exclude)x'` opens a
+  file of that name). A pattern, which Git matches against the tree and
+  history (`'id_rs?'`, `':(glob)**/id_*'`), refuses when a secret name
+  could match it. Git's `*` also matches `/`, so any glob whose
+  cross-directory match could hit a secret name refuses, `git add
+  '*.rs'` and `git diff -- '*.md'` included; `:(glob)` magic keeps `*`
+  within one directory. A case-insensitive pathspec (`icase` magic,
+  `--icase-pathspecs`) refuses, and so does magic other than `top`,
+  `literal`, `glob` and `exclude`. Exclusions never narrow a read: the
+  positive pathspecs are judged alone, and pathspecs that are all
+  exclusions refuse, since Git applies them to the whole tree. Ref and
+  refspec patterns (`git fetch origin 'refs/heads/*:refs/remotes/origin/*'`,
+  `git tag -l 'v*'`) are not pathspecs.
 - A clone or fetch URL whose last component is a secret name refuses:
   Git's `insteadOf` configuration can rewrite a URL to a local path the
   guard does not read.
 
 These rules refuse some ordinary commands by design. `git diff -- '*.rs'`
 refuses because `id_rsa.rs` matches both that pattern and the `id_rsa*`
-secret rule; name the files, or use a pattern no secret name matches
-(`':(glob)src/main*.rs'`). `git ls-files | git update-index --stdin`
-refuses because the guard cannot read the list; pass the paths as
-operands. Measured on a corpus of 120 ordinary Git commands (TSK-1002),
-these rules refuse 2 where the earlier ones refused 1; the added refusal
-is `git grep -n needle -- '*.rs'`, a pattern `id_rsa.rs` could match.
+secret rule; name the files, or use `:(glob)` magic with a pattern no
+secret name matches (`':(glob)src/main*.rs'`). `git ls-files | git
+update-index --stdin` refuses because the guard cannot read the list;
+pass the paths as operands. `git diff -- ':!vendor'` refuses; name what
+to read beside the exclusion (`git diff -- src ':!src/vendor'`). Measured
+on a corpus of 120 ordinary Git commands (TSK-1002), these rules refuse 2
+where the earlier ones refused 1; the added refusal is `git grep -n
+needle -- '*.rs'`.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the
