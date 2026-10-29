@@ -1755,14 +1755,18 @@ fn a_completion_into_the_release_branch_binds_alike_in_status_and_ci() {
         )
     };
     fx.write(&path("TSK-006"), &proposed("todo"));
-    let needle = format!("src/other.rs changed after the reviewed commit {reviewed}");
-    blocks(&fx.status_complete("TSK-006"), "the verb", &[&needle]);
+    let needle = format!("changed between the reviewed commit {reviewed} and ");
+    blocks(
+        &fx.status_complete("TSK-006"),
+        "the verb",
+        &[&needle, "first: src/other.rs"],
+    );
     fx.write(&path("TSK-006"), &proposed("complete"));
     fx.commit("docs(records): complete TSK-006");
     blocks(
         &fx.ci(RELEASE, "HEAD", "task/TSK-006-fix", Some(RELEASE)),
         "CI into the release branch",
-        &[&needle],
+        &[&needle, "first: src/other.rs"],
     );
 }
 
@@ -1785,8 +1789,12 @@ fn the_release_owner_binds_at_the_head_in_task_status() {
         &path(HOLDER),
         &record(HOLDER, "todo", CRITERIA, &block(&reviewed)),
     );
-    let needle = format!("src/other.rs changed after the reviewed commit {reviewed}");
-    blocks(&fx.status_complete(HOLDER), "the verb", &[&needle]);
+    let needle = format!("changed between the reviewed commit {reviewed} and ");
+    blocks(
+        &fx.status_complete(HOLDER),
+        "the verb",
+        &[&needle, "first: src/other.rs"],
+    );
     fx.write(
         &path(HOLDER),
         &record(HOLDER, "complete", CRITERIA, &block(&reviewed)),
@@ -1795,7 +1803,7 @@ fn the_release_owner_binds_at_the_head_in_task_status() {
     blocks(
         &fx.ci(RELEASE, "HEAD", "task/TSK-009-fix", Some(RELEASE)),
         "CI into the release branch",
-        &[&needle],
+        &[&needle, "first: src/other.rs"],
     );
 }
 
@@ -1883,11 +1891,11 @@ fn a_direct_completion_binds_to_the_release_head() {
     fx.write("src/later.rs", "// later\n");
     let later = fx.commit("fix: a later change");
     let result = agree(&fx, "a direct completion followed by code");
-    let needle = format!("src/later.rs changed after the reviewed commit {reviewed}");
+    let needle = format!("changed between the reviewed commit {reviewed} and ");
     // The finding names the commit that made the completion, and the path
     // report shows how each commit was judged.
     let named = format!(
-        "TSK-002 (completed directly on the release line at {}): {needle}",
+        "TSK-002 (completed directly on the release line at {}): 1 path {needle}",
         &made[..9]
     );
     let completion = format!(
@@ -1914,7 +1922,7 @@ fn a_direct_completion_binds_to_the_release_head() {
     blocks(
         &verb,
         "the verb after later code",
-        &[&format!("TSK-002: {needle}")],
+        &[&format!("TSK-002: 1 path {needle}"), "first: src/later.rs"],
     );
 
     // Control: a task already complete gets the status refusal, apart from
@@ -1978,7 +1986,7 @@ fn after_a_brought_repair(repair: Repair) -> (i32, String) {
     blocks(
         &first,
         "the brought completion with a late change",
-        &["TSK-001", "src/late.rs changed after the reviewed commit"],
+        &["TSK-001", "first: src/late.rs"],
     );
 
     // Line A reopens the task by a planning pull request, then completes
@@ -2050,7 +2058,7 @@ fn after_a_brought_repair(repair: Repair) -> (i32, String) {
 /// one reaching the release through another line, leaves the refusal.
 #[test]
 fn a_valid_re_completion_from_its_line_supersedes_a_brought_one() {
-    let old = "src/late.rs changed after the reviewed commit";
+    let old = "first: src/late.rs";
     let count = |result: &(i32, String)| {
         findings(result)
             .iter()
@@ -2159,7 +2167,7 @@ fn three_completions_on_line_a() -> (Fx, String, String) {
 /// The real git merge of the same tips is the control.
 #[test]
 fn an_older_octopus_parent_cannot_hide_a_newer_completion() {
-    let needle = "src/newlate.rs changed after the reviewed commit";
+    let needle = "first: src/newlate.rs";
     let (fx, l2, l3) = three_completions_on_line_a();
     let release = fx.head();
     // The real merge: git drops L2, which L3 contains.
@@ -2194,7 +2202,7 @@ fn an_older_octopus_parent_cannot_hide_a_newer_completion() {
     blocks(
         &result,
         "the octopus restoring L2",
-        &["TSK-001", "src/late.rs changed after the reviewed commit"],
+        &["TSK-001", "first: src/late.rs"],
     );
     assert!(
         result.1.contains(&format!(
@@ -2321,8 +2329,8 @@ fn both_supersession_guards_hold_through_faithful_imports() {
     fx.git(&["push", "-q", "origin", LINE_B]);
 
     // L1's finding names its reviewed commit, L3's names main.
-    let l1_finding = format!("src/late.rs changed after the reviewed commit {reviewed}");
-    let l3_finding = format!("src/late.rs changed after the reviewed commit {main}");
+    let l1_finding = format!("changed between the reviewed commit {reviewed} and ");
+    let l3_finding = format!("changed between the reviewed commit {main} and ");
     for sides in [[&l3, &foreign], [&foreign, &l3]] {
         let merge = faithful_merge(&fx, &tree, &[&release_l1, sides[0], sides[1]]);
         let result = fx.ci("main", "HEAD", RELEASE, Some("main"));
@@ -2429,7 +2437,7 @@ fn a_foreign_completion_never_replaces_a_direct_one() {
     );
     let direct = fx.commit("docs(records): replace the completion");
     let stale = format!(
-        "TSK-001 (completed directly on the release line at {}): src/work.rs changed after the reviewed commit",
+        "TSK-001 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
         &direct[..9]
     );
     let before = fx.ci("main", "HEAD", RELEASE, Some("main"));
@@ -2641,7 +2649,7 @@ fn a_resolution_restoring_an_older_record_is_refused() {
             "TSK-001 changes its criteria directly on the release line (the resolution of merge",
             "work.acceptance_binding",
             &format!(
-                "TSK-001 (completed directly on the release line at {}): src/one.rs changed after the reviewed commit {first}",
+                "TSK-001 (completed directly on the release line at {}): 1 path changed between the reviewed commit {first} and ",
                 &merge[..9]
             ),
         ],
@@ -2881,7 +2889,7 @@ fn a_clean_octopus_with_an_unverified_parent_is_direct_work() {
             "is no import",
             NO_OWNER,
             &format!(
-                "TSK-002 (completed directly on the release line at {}): src/untrusted.rs changed after the reviewed commit",
+                "TSK-002 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
                 &octopus[..9]
             ),
         ],
@@ -3097,7 +3105,7 @@ fn direct_code_belongs_to_the_release_integration_task() {
         &result,
         "code after the completion",
         &[&format!(
-            "TSK-009 (completed directly on the release line at {}): src/after.rs changed after the reviewed commit",
+            "TSK-009 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
             &completed[..9]
         )],
     );

@@ -348,6 +348,7 @@ mod authority {
             CriteriaBases {
                 bases: self.0.clone(),
                 imported_home: None,
+                judged_tips: Vec::new(),
             }
         }
     }
@@ -400,6 +401,7 @@ mod authority {
     pub struct CriteriaBases {
         bases: Vec<Oid>,
         imported_home: Option<(String, Oid)>,
+        judged_tips: Vec<(String, Oid)>,
     }
 
     impl CriteriaBases {
@@ -420,6 +422,30 @@ mod authority {
                 .as_ref()
                 .filter(|(home, _)| home == super::super::work_start::logical_target(name))
                 .map(|(_, tip)| *tip)
+        }
+
+        /// One exact tip of an epic line this run judges as part of one pull
+        /// request into its target (TSK-433): the range's own line, or a
+        /// verified line that joined it. The caller marks only a tip the
+        /// range head contains whose epic-line proof passed, so that tip is
+        /// the range under judgment and no outside evidence of a landing; it
+        /// adds no criteria base.
+        pub(super) fn with_judged_tip(mut self, line: &str, tip: Oid) -> Self {
+            let line = super::super::work_start::logical_target(line).to_string();
+            if !self.judged_tips.contains(&(line.clone(), tip)) {
+                self.judged_tips.push((line, tip));
+            }
+            self
+        }
+
+        /// Whether `tip`, resolved for the target `name`, is that exact
+        /// judged tip ([`Self::with_judged_tip`]). Another commit under any
+        /// spelling of the same line is not.
+        pub(super) fn judged_tip(&self, name: &str, tip: Oid) -> bool {
+            let name = super::super::work_start::logical_target(name);
+            self.judged_tips
+                .iter()
+                .any(|(line, judged)| line == name && *judged == tip)
         }
     }
 }
@@ -1405,18 +1431,16 @@ fn reviewed_span_problem(
         // (SPC-013 R-60: the task's own later commits change only this
         // record's status and Closeout), leading with the net change when
         // there is one and naming the commit that stopped it.
-        Stacked::No(None) => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
-            format!("{problem} after the reviewed commit {reviewed}; review the result again")
-        }),
+        Stacked::No(None) => later_change_finding(repo, &task.path, &completed, reviewed, at, None),
         Stacked::No(Some(stop)) => {
             let detail = match stop {
                 Stop::Commit { commit, changed } => format!("commit {commit}: {changed}"),
                 Stop::Other(why) => why,
             };
-            Some(match later_change(repo, &task.path, &completed, reviewed, at) {
-                Some(problem) => format!("{problem} after the reviewed commit {reviewed} ({detail}); review the result again"),
-                None => format!("the history after the reviewed commit {reviewed} does not stack on it ({detail}); review the result again"),
-            })
+            Some(
+                later_change_finding(repo, &task.path, &completed, reviewed, at, Some(&detail))
+                    .unwrap_or_else(|| format!("the history after the reviewed commit {reviewed} does not stack on it ({detail}); review the result again")),
+            )
         }
     }
 }
@@ -1559,6 +1583,11 @@ enum Landed {
     NotALanding(String),
 }
 
+/// How a binding finding names the commit it binds a completion at when
+/// that commit changes more than planning records. A completion bound at a
+/// range head it was not made in names that head instead (TSK-433 AC-7).
+const COMPLETION_CHANGES: &str = "the completion also changes";
+
 /// Resolve the task-landing provenance. This checks transport structure,
 /// never infers a line's parent and never grants a review verdict itself.
 #[allow(clippy::too_many_lines)] // Find, authorize and check the landing merge in one judgment order.
@@ -1650,7 +1679,7 @@ fn task_landing(
     };
     if let Some(path) = completion {
         return Landed::Refused(format!(
-            "the completion also changes {path}; a completion after the landing merge {} of the reviewed commit {reviewed} changes planning records only",
+            "{COMPLETION_CHANGES} {path}; a completion after the landing merge {} of the reviewed commit {reviewed} changes planning records only",
             merge.id()
         ));
     }
@@ -1972,7 +2001,7 @@ pub fn owned_paths(
 
 /// Why the diff from `reviewed` to `head` is more than the status and
 /// Closeout of the record at `path`, which reads `completed` at `head`, if
-/// it is.
+/// it is: the first other path that changed, in its short form.
 pub(super) fn later_change(
     repo: &Repository,
     path: &str,
@@ -1980,28 +2009,81 @@ pub(super) fn later_change(
     reviewed: Oid,
     head: Oid,
 ) -> Option<String> {
+    later_change_judged(repo, path, completed, reviewed, head).map(|later| match later {
+        LaterChange::Paths { first, .. } => format!("{first} changed"),
+        LaterChange::Other(problem) => problem,
+    })
+}
+
+/// What [`later_change_judged`] found beyond the record's status and
+/// Closeout.
+enum LaterChange {
+    /// Other paths changed: how many, and the first in byte order.
+    Paths { count: usize, first: String },
+    /// The trees, the diff or the record itself.
+    Other(String),
+}
+
+/// The finding for a completion whose reviewed span is more than its
+/// record's status and Closeout, ending "; review the result again". It
+/// says what it compared and how much (TSK-433 AC-8, issue #320): the count
+/// of other paths between the reviewed commit and `at`, and the first one.
+/// `detail` names the commit that stopped a stack, when one did.
+fn later_change_finding(
+    repo: &Repository,
+    path: &str,
+    completed: &str,
+    reviewed: Oid,
+    at: Oid,
+    detail: Option<&str>,
+) -> Option<String> {
+    let detail = detail
+        .map(|detail| format!(" ({detail})"))
+        .unwrap_or_default();
+    later_change_judged(repo, path, completed, reviewed, at).map(|later| match later {
+        LaterChange::Paths { count, first } => format!(
+            "{count} {} changed between the reviewed commit {reviewed} and {at}, first: {first}{detail}; review the result again",
+            if count == 1 { "path" } else { "paths" }
+        ),
+        LaterChange::Other(problem) => {
+            format!("{problem} after the reviewed commit {reviewed}{detail}; review the result again")
+        }
+    })
+}
+
+fn later_change_judged(
+    repo: &Repository,
+    path: &str,
+    completed: &str,
+    reviewed: Oid,
+    head: Oid,
+) -> Option<LaterChange> {
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree()).ok();
     let (Some(before), Some(after)) = (tree(reviewed), tree(head)) else {
-        return Some("the trees cannot be read".to_string());
+        return Some(LaterChange::Other("the trees cannot be read".to_string()));
     };
     let Ok(diff) = repo.diff_tree_to_tree(Some(&before), Some(&after), None) else {
-        return Some("the diff cannot be read".to_string());
+        return Some(LaterChange::Other("the diff cannot be read".to_string()));
     };
     let other: Vec<String> = crate::git::diff_paths(&diff)
         .iter()
         .filter(|changed| changed.bytes() != path.as_bytes())
         .map(|changed| changed.display().to_string())
         .collect();
-    if let Some(changed) = other.first() {
-        return Some(format!("{changed} changed"));
+    if let Some(first) = other.first() {
+        return Some(LaterChange::Paths {
+            count: other.len(),
+            first: first.clone(),
+        });
     }
     let Ok(Some(then)) = blob_at(repo, reviewed, path) else {
-        return Some(format!(
+        return Some(LaterChange::Other(format!(
             "{path} is not in the reviewed commit, so its scope was never reviewed; it appeared"
-        ));
+        )));
     };
-    (reviewed_part(&then) != reviewed_part(completed))
-        .then(|| "the record changed outside its status and Closeout".to_string())
+    (reviewed_part(&then) != reviewed_part(completed)).then(|| {
+        LaterChange::Other("the record changed outside its status and Closeout".to_string())
+    })
 }
 
 /// The tip of the line `task` belongs to: its declared integration target
@@ -2215,6 +2297,12 @@ fn judge_reopened(
                 crate::git::display_text(name)
             ));
         }
+        // The epic line's pull request into its target judges the line's
+        // history up to its head, so a proved tip of that line the head
+        // contains is the range under judgment, not a target it is not
+        // judged against (TSK-433). Only the exact tips a proof covered
+        // are; any other commit, under any spelling, stays outside evidence.
+        found.retain(|(_, tip)| !criteria.judged_tip(name, *tip));
         tips.extend(found);
     }
     match default_target_name(repo) {
@@ -3816,6 +3904,7 @@ pub fn completions_in_range(
         *criteria == Criteria::Amendable,
     );
     let mut reviewed = Vec::new();
+    let mut proofs = LineProofs::default();
     for task in after
         .records
         .values()
@@ -3887,12 +3976,28 @@ pub fn completions_in_range(
                 Some(source_base.unwrap_or(anchor)),
                 (own_task == Some(task.id.as_str())).then_some(anchor),
                 &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
-                &run.criteria(),
+                &judged_line(
+                    repo,
+                    run.criteria(),
+                    criteria,
+                    (line, task),
+                    head_oid,
+                    &mut proofs,
+                ),
             );
             if let Some(proof) = bound.proof {
                 reviewed.push(proof.reviewed);
             }
-            findings.extend(bound.findings);
+            // A completion made before the range head but bound at it (a
+            // frozen range) did not make the head's change: name the head.
+            let at_head = (origin == head_oid && introduced != head_oid)
+                .then(|| format!("the range head {head_oid} also changes"));
+            findings.extend(bound.findings.into_iter().map(|mut found| {
+                if let Some(at_head) = &at_head {
+                    found.message = found.message.replace(COMPLETION_CHANGES, at_head);
+                }
+                found
+            }));
         }
     }
     findings.extend(epic_completions_in_range(
@@ -3927,6 +4032,152 @@ fn with_own_line(
         }
     }
     tips
+}
+
+/// The criteria bases for `task` in a range, marking tips of the line the
+/// task declares as judged when the range is an `integration/` line into
+/// its target with amendable criteria and the task declares either that
+/// line or a joined line (TSK-433). Every mark rests on the epic-line proof
+/// ([`super::work_start::check_epic_line`]) into the default target, never
+/// on the range's class or the record's text: a workspace root branch is
+/// amendable without that proof, so its class alone marks nothing.
+///
+/// The judged line is marked only when it passes the proof at the range
+/// head; then the head and each other tip of the line the head contains
+/// that passes the proof itself are marked. A joined line is another epic
+/// line with at least one tip in the range head, every such tip passing the
+/// proof; those tips are marked, and the judged line's as above. A tip that
+/// fails the proof, or cannot be read, stays unmarked and keeps today's
+/// refusal. A mark covers one exact commit, so another commit under another
+/// spelling of the same line is never covered. The marks add no criteria
+/// base: they only keep the range's own proved tips from counting as a
+/// target the run is not judged against. A planning range, a task range or
+/// a task of another target keeps the run's bases alone.
+fn judged_line(
+    repo: &Repository,
+    bases: CriteriaBases,
+    criteria: &Criteria,
+    (line, task): (Option<&str>, &RecordView),
+    head: Oid,
+    proofs: &mut LineProofs,
+) -> CriteriaBases {
+    let declared = task
+        .integration_target
+        .as_deref()
+        .filter(|target| !target.is_empty());
+    let (Criteria::Amendable, Some(line), Some(declared)) = (criteria, line, declared) else {
+        return bases;
+    };
+    if !line.starts_with("integration/") {
+        return bases;
+    }
+    let declared = super::work_start::logical_target(declared);
+    if declared == super::work_start::logical_target(line) {
+        return with_line_tips(repo, bases, line, head, proofs);
+    }
+    // A joined line's task may name the judged line too, as a target it
+    // had before it moved to its own line (TSK-422): both lines' proved
+    // tips the head contains are the range.
+    if !declared.starts_with("integration/") || !proofs.proved(repo, line, head) {
+        return bases;
+    }
+    let Some(joined) = joined_tips(repo, declared, head, proofs) else {
+        return bases;
+    };
+    let bases = joined
+        .into_iter()
+        .fold(bases, |bases, tip| bases.with_judged_tip(declared, tip));
+    with_line_tips(repo, bases, line, head, proofs)
+}
+
+/// `bases` with the judged `line` marked when it passes the epic-line proof
+/// at `head`: the head itself, and each other tip of the line the head
+/// contains that passes the proof itself. Unchanged otherwise; a tip that
+/// cannot be read stays unmarked (fail closed).
+fn with_line_tips(
+    repo: &Repository,
+    bases: CriteriaBases,
+    line: &str,
+    head: Oid,
+    proofs: &mut LineProofs,
+) -> CriteriaBases {
+    if !proofs.proved(repo, line, head) {
+        return bases;
+    }
+    let mut bases = bases.with_judged_tip(line, head);
+    let Ok(tips) = target_tips(repo, line) else {
+        return bases;
+    };
+    for (_, tip) in tips {
+        if tip != head
+            && matches!(is_ancestor_or_same(repo, tip, head), Ok(true))
+            && proofs.proved(repo, line, tip)
+        {
+            bases = bases.with_judged_tip(line, tip);
+        }
+    }
+    bases
+}
+
+/// The tips of `joined`, an epic line other than the judged one, when it
+/// joined it: at least one of its tips is in the range head, and every such
+/// tip passes the epic-line proof into the default target. `None` otherwise;
+/// any read failure answers `None`, which keeps the joined tips outside
+/// evidence (fail closed).
+fn joined_tips(
+    repo: &Repository,
+    joined: &str,
+    head: Oid,
+    proofs: &mut LineProofs,
+) -> Option<Vec<Oid>> {
+    let tips = target_tips(repo, joined).ok()?;
+    let mut contained = Vec::new();
+    for (_, tip) in tips {
+        if !is_ancestor_or_same(repo, tip, head).ok()? {
+            continue;
+        }
+        if !proofs.proved(repo, joined, tip) {
+            return None;
+        }
+        contained.push(tip);
+    }
+    (!contained.is_empty()).then_some(contained)
+}
+
+/// Epic-line proofs ([`epic_line_proved`]) read once per line and tip in
+/// one run, since every completion of a line asks the same question.
+#[derive(Default)]
+struct LineProofs(std::collections::HashMap<(String, Oid), bool>);
+
+impl LineProofs {
+    fn proved(&mut self, repo: &Repository, line: &str, tip: Oid) -> bool {
+        *self
+            .0
+            .entry((line.to_string(), tip))
+            .or_insert_with(|| epic_line_proved(repo, line, tip))
+    }
+}
+
+/// Whether `line` at `tip` passes the epic-line proof into the default
+/// target ([`super::work_start::check_epic_line`]): an epic that exists, a
+/// task of it targeting the line, and a first-parent history of merges or
+/// landed adoptions. Any read failure answers no (fail closed).
+fn epic_line_proved(repo: &Repository, line: &str, tip: Oid) -> bool {
+    let Ok(default) = default_target_name(repo) else {
+        return false;
+    };
+    let Ok(Some(default_tip)) = imports::home_tip(repo, &default.name) else {
+        return false;
+    };
+    let root = repo.workdir().unwrap_or_else(|| repo.path());
+    super::work_start::check_epic_line(
+        root,
+        line,
+        &default.name,
+        &default_tip.to_string(),
+        &tip.to_string(),
+    )
+    .is_ok()
 }
 
 /// The anchored base of the task landing that carried `introduced` onto

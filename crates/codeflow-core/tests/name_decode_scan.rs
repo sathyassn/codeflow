@@ -4644,10 +4644,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // A tree that cannot be read returns Some(the trees cannot be read), which reviewed_span_problem and stacked turn into a refusal finding.
+    // A tree that cannot be read returns Some(the trees cannot be read), which reviewed_span_problem and stacked turn into a refusal finding (through later_change and later_change_finding).
     (
         "crates/codeflow-core/src/workgraph/acceptance.rs",
-        "later_change",
+        "later_change_judged",
         "obtain-absent:find_commit",
         1,
         "unproven",
