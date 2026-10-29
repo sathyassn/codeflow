@@ -905,3 +905,51 @@ fn update_escapes_control_characters_in_the_paths_it_names() {
         "update printed a raw escape sequence:\n{all:?}"
     );
 }
+
+/// TSK-1029 review (Codex round 8): a folder name may hold braces and
+/// control characters. Both registry warnings name such a path through
+/// their catalogued remedy without reading it as a placeholder, so a debug
+/// build does not panic, and the escape prints escaped.
+#[cfg(unix)]
+#[test]
+fn registry_warnings_name_a_braced_path_without_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    let odd = "x{path}{label\u{1b}[31m{";
+    let root = dir.path().join(format!("proj{odd}"));
+    std::fs::create_dir_all(&root).unwrap();
+
+    let plain = dir.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let out = codeflow_command(&root, &plain, &["init", "--yes", "--minimal"])
+        .output()
+        .expect("codeflow runs");
+    assert!(out.status.success(), "{}", text(&out));
+
+    // The registry file is a folder, so the touch cannot write it.
+    let home = dir.path().join(format!("home{odd}"));
+    std::fs::create_dir_all(home.join("registry.json")).unwrap();
+    let out = codeflow_command(&root, &home, &["update"])
+        .output()
+        .expect("codeflow runs");
+    let unwritten = text(&out);
+
+    // The project's state file is a link to itself, so the touch cannot
+    // inspect the folder.
+    let state = root.join(".codeflow").join("project.toml");
+    std::fs::remove_file(&state).unwrap();
+    std::os::unix::fs::symlink(&state, &state).unwrap();
+    let out2 = codeflow_command(&root, &plain, &["update"])
+        .output()
+        .expect("codeflow runs");
+    let unreadable = text(&out2);
+
+    for (case, code, all) in [
+        ("registry touch failed", out.status.code(), &unwritten),
+        ("registry touch skipped", out2.status.code(), &unreadable),
+    ] {
+        assert_ne!(code, Some(101), "{case}: the command panicked");
+        assert!(all.contains(case), "{case}: no warning:\n{all:?}");
+        assert!(all.contains("clear it: "), "{case}: no remedy:\n{all:?}");
+        assert!(!all.contains('\u{1b}'), "{case}: a raw escape:\n{all:?}");
+    }
+}
