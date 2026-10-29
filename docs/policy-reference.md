@@ -258,7 +258,10 @@ Shell expansion and recursive root inspection each use a 65,536-entry
 metadata budget. Unreadable, unresolved or over-budget selections refuse as
 cannot-verify and name a narrowing remedy, and so does a relative glob or
 search selector after a directory change the guard cannot establish,
-whatever it names; a rooted glob (`/dir/*`, `~/dir/*`) is judged as usual. A source glob that expands
+whatever it names; a rooted glob (`/dir/*`, `~/dir/*`) is judged as usual.
+A glob after a command substitution the guard cannot establish
+(`cat $(cd DIR && pwd)/../notes*.txt`) refuses the same way, quoted or
+not, whatever it names. A source glob that expands
 completely without secret matches remains available; the same glob refuses
 after `id_rsa.rs` is planted among its matches. A quoted shell wildcard
 remains literal, including `cat < 'id_rs?'`. Lines naming dotglob,
@@ -344,8 +347,9 @@ read counts as physical, and so do a shell's own invocation options
 (`bash -P -c`, `zsh -o chaselinks -c`) for its code, and so does a
 `SHELLOPTS` in its environment that names `physical` or that the guard
 cannot read (`env SHELLOPTS=physical bash -c`, an exported `SHELLOPTS`).
-A physical change with no operand goes to HOME, `cd -P -` to OLDPWD; one
-whose target the guard cannot read (an unread HOME or OLDPWD, a `pushd`
+A physical change with no operand goes to HOME, `cd -P -` to OLDPWD, with
+a command-local assignment (`HOME=DIR cd -P`, `env HOME=DIR bash -c`) in
+effect; one whose target the guard cannot read (an unread HOME or OLDPWD, a `pushd`
 swap or stack index) leaves the directory unknown. `pwd -P` prints the
 physical directory. As a partial filter, inline code and the file readers
 the guard lists (`cat`, `head`, `grep`, `rg`, `tar` and similar) that a
@@ -388,24 +392,53 @@ create the entry it aliases. A Git revision such as `HEAD~1` that names no
 path, and inline interpreter code, are not file operands; the object path
 in `REV:PATH` or `:PATH` keeps the secret-name rules of a file operand
 whatever the revision's shape, a revision the guard cannot read included
-(`git show HEAD:id_rsa` refuses), for the subcommands that take objects
-(`show`, `cat-file`, `log`, `diff`, `grep` and the like); a commit message
-or a remote spelling is not an object path. Every operand of those
-subcommands before `--` is read that way, a separate option value
-included: a value counts as text (`git log -S TEXT`, `--grep TEXT`,
-`--format=TEXT`) only when every option before it is one the guard's
-grammar knows, since an unknown option may take the next word. A list Git
-reads instead of operands is read or refused: the object names a
-`cat-file --batch` or `--batch-command` reads, and the paths
-`hash-object --stdin-paths`, `update-index --stdin` and
-`--pathspec-from-file=-` read, are judged line by line when a here-string,
-heredoc, `echo` or `printf` supplies them, and refuse as cannot-verify
-when they come from a file or a program; a content batch over every object
-or through in-tree links refuses, and `--batch-check` stays available.
-`git log` operands and pathspecs are file operands (`git log -p --
-id_rsa` refuses). A clone or fetch URL whose last component is a secret
-name refuses: Git's `insteadOf` configuration can rewrite a URL to a local
-path the guard does not read.
+(`git show HEAD:id_rsa` refuses). A Git command is cleared only in a form
+the guard parses completely; any other form refuses as cannot-verify:
+
+- Every operand before `--`, a separate option value included, is read as
+  a possible object name, unless it is proven to be text: a commit
+  message, a remote spelling, a configuration value, or an option value
+  (`git log -S TEXT`, `--grep TEXT`, `--format=TEXT`) after options the
+  guard's grammar all knows, since an unknown option may take the next
+  word. `git log` operands and pathspecs are file operands (`git log -p --
+  id_rsa` refuses).
+- An alias is judged by its expansion, read from the configuration Git
+  would use. One the guard cannot read refuses: a `!` shell alias, an
+  alias on a line that changes configuration, or one under a global
+  option other than `-c`, `-C`, `--exec-path=` and the paging options.
+  An external `git-*` program is judged like any other program.
+- The options that decide what `cat-file`, `hash-object` and
+  `--pathspec-from-file` read are resolved by Git's own rules, a unique
+  abbreviation (`--batch-com`) and a `--no-` form included; an option
+  those rules do not resolve refuses.
+- A list Git reads from stdin instead of operands is judged record by
+  record, in Git's quoting, when a here-string, heredoc, `echo` or
+  `printf` supplies it: object names for `cat-file --batch` and
+  `--batch-command`, `rev-list --stdin`, `update-ref --stdin` and the
+  like, and paths for `hash-object --stdin-paths`, `update-index --stdin`
+  and `--pathspec-from-file=-`. The list refuses when a file or a program
+  supplies it or a record cannot be decoded, and a path list in a file
+  refuses. A content batch over every object or through in-tree links
+  refuses; `--batch-check` stays available. Stdin that holds data (`git
+  apply`, `git am`, `git commit -F -`, `hash-object --stdin`) or names Git
+  reports only metadata for (`check-attr --stdin`) is not such a list.
+- A pathspec pattern, which Git matches against the tree and history
+  (`'id_rs?'`, `':(glob)**/id_*'`), refuses when a secret name could match
+  it. Git's `*` also matches `/`. A case-insensitive pathspec (`icase`
+  magic, `--icase-pathspecs`) refuses, and so does magic other than
+  `top`, `literal`, `glob` and `exclude`; an exclusion selects nothing. Ref and refspec patterns (`git fetch origin
+  'refs/heads/*:refs/remotes/origin/*'`, `git tag -l 'v*'`) are not
+  pathspecs.
+- A clone or fetch URL whose last component is a secret name refuses:
+  Git's `insteadOf` configuration can rewrite a URL to a local path the
+  guard does not read.
+
+These rules refuse some ordinary commands by design. `git diff -- '*.rs'`
+refuses because `id_rsa.rs` matches both that pattern and the `id_rsa*`
+secret rule; name the files, or use a pattern no secret name matches
+(`':(glob)src/main*.rs'`). `git ls-files | git update-index --stdin`
+refuses because the guard cannot read the list; pass the paths as
+operands.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the
