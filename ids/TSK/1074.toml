@@ -1,0 +1,11 @@
+id = "TSK-1074"
+uid = "60b255e6-019e-48b5-9f60-d6d6349dbeb9"
+kind = "TSK"
+title = "An away session can run on a harness route other than Claude Code's listable scheduled jobs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T22:04:38Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
