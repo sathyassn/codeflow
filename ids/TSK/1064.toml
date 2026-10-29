@@ -1,0 +1,11 @@
+id = "TSK-1064"
+uid = "1d3f51c0-c917-4168-a958-d31b8046e519"
+kind = "TSK"
+title = "Update reports a malformed hook group in a person's settings instead of crashing"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T01:51:12Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
