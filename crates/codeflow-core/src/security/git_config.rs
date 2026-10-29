@@ -415,11 +415,6 @@ fn with_globals(
     Ok(directory)
 }
 
-/// What a Git object name resolves to in the repository Git would use with
-/// `globals` from `cwd`: its type and whether it peels to a commit, or
-/// `None` when it names no object. One bounded `cat-file --batch-check`
-/// answers every name; lazy fetches are off, so a partial clone never goes
-/// to the network (TSK-1002, object reads by id).
 /// The Git directory and work tree Git finds from `cwd` with `globals`
 /// (`-C` and `-c` only), as Git reports them: `None` where Git finds no
 /// repository with a work tree (TSK-1002 Fable review 13).
@@ -452,98 +447,19 @@ pub(crate) fn repository_of(
     }
 }
 
-pub(crate) fn object_kinds(
-    cwd: &Path,
-    globals: &[String],
-    names: &[String],
-) -> Result<Vec<Option<(String, bool)>>, String> {
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let mut command = crate::git::command();
-    command.current_dir(cwd).env("GIT_NO_LAZY_FETCH", "1");
-    with_globals(&mut command, cwd, globals)?;
-    command.args(["--no-pager", "cat-file", "--batch-check=%(objecttype)"]);
-    let mut input = String::new();
-    for name in names {
-        if name.contains(['\n', '\r', '\0']) {
-            return Err("cannot establish a Git object name that spans lines".into());
-        }
-        input.push_str(name);
-        input.push('\n');
-        input.push_str(name);
-        input.push_str("^{commit}\n");
-    }
-    // Where Git finds no repository it resolves no object name either. Any
-    // other failure, a timeout included, stays unverified.
-    let mut probe = crate::git::command();
-    probe.current_dir(cwd).stdin(Stdio::null());
-    with_globals(&mut probe, cwd, globals)?;
-    probe.args(["--no-pager", "rev-parse", "--git-dir"]);
-    if let Err(why) = bounded_output(&mut probe, deadline) {
-        return if why.contains("git rejected") {
-            Ok(vec![None; names.len()])
-        } else {
-            Err(why)
-        };
-    }
-    let bytes = bounded(&mut command, deadline, Some(input.into_bytes()))?;
-    let text = String::from_utf8(bytes).map_err(|_| "cannot read Git object types")?;
-    let lines: Vec<&str> = text
-        .strip_suffix('\n')
-        .unwrap_or(&text)
-        .split('\n')
-        .collect();
-    if lines.len() != names.len() * 2 {
-        return Err("cannot read Git object types".into());
-    }
-    let kind = |line: &str, query: &str| -> Result<Option<String>, String> {
-        if ["blob", "commit", "tag", "tree"].contains(&line) {
-            Ok(Some(line.to_string()))
-        } else if line.strip_suffix(" missing") == Some(query) {
-            Ok(None)
-        } else {
-            Err(format!("cannot establish the Git object `{query}`"))
-        }
-    };
-    names
-        .iter()
-        .enumerate()
-        .map(|(at, name)| {
-            let peeled = format!("{name}^{{commit}}");
-            Ok(kind(lines[2 * at], name)?.map(|found| {
-                (
-                    found,
-                    kind(lines[2 * at + 1], &peeled).ok().flatten().is_some(),
-                )
-            }))
-        })
-        .collect()
-}
-
 pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,
-) -> Result<Vec<u8>, String> {
-    bounded(command, deadline, None)
-}
-
-/// [`bounded_output`] with `input` written to the child's stdin when given.
-fn bounded(
-    command: &mut std::process::Command,
-    deadline: Instant,
-    input: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
     const LIMIT: u64 = 4 * 1024 * 1024;
     if Instant::now() >= deadline {
         return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
     }
-    command.stdout(Stdio::piped()).stderr(Stdio::null());
-    // The shared helper writes stdin from its own thread; the deadline
-    // below bounds the child whatever the write does.
-    let mut child = match input {
-        Some(input) => crate::git::spawn_with_input(command, input).map(|(child, _)| child),
-        None => command.spawn(),
-    }
-    .map_err(|error| format!("cannot verify Git configuration: {error}"))?;
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("cannot verify Git configuration: {error}"))?;
     let stdout = child
         .stdout
         .take()

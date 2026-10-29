@@ -5,8 +5,8 @@ use super::{actions, outward, pattern::matches_extended_glob};
 use crate::hooks::{PolicyLevel, SecuritySection, Violation};
 use std::path::{Path, PathBuf};
 
-mod git_objects;
 mod git_reads;
+mod git_repository;
 
 pub(crate) fn evaluate(
     command: &str,
@@ -412,8 +412,7 @@ fn secret_reads_at(
     if levels.secret_reads.is_active() {
         violations.extend(git_environment_violation(command, levels));
         let calls = outward::unwrapped_commands(command, cwd, home);
-        let writers = git_objects::earlier_writers(&calls, command);
-        for (unwrapped, writer) in calls.into_iter().zip(writers) {
+        for unwrapped in calls {
             let unwrapped = match expanded_alias(unwrapped, command) {
                 Ok(unwrapped) => unwrapped,
                 Err(why) => {
@@ -472,7 +471,7 @@ fn secret_reads_at(
                 violations.push(violation);
                 continue;
             }
-            if let Some(why) = git_objects::unproven(&unwrapped, writer, command) {
+            if let Some(why) = git_repository::moved_repository(&unwrapped, command) {
                 violations.extend(git_input_violation(levels, Err(why)));
                 continue;
             }

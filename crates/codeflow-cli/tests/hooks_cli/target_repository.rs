@@ -1131,10 +1131,9 @@ fn tsk1002_codex10_git_modes_values_and_environment() {
 /// TSK-1002 Codex review 11 and Fable review 13: a Git directory or work
 /// tree the line sets must be the repository Git would use without it, so
 /// a store moved in as the work tree refuses; a program a `GIT_*` variable
-/// names is judged as a command; every `status` operand is judged; update
-/// options resolve by Git's unique-prefix rule (`--ca`); a multibyte
-/// message does not stop the guard; a variable named in text, and a
-/// search pattern that looks like an id, do not refuse. Every refusal was
+/// names is judged as a command; every `status` operand is judged; a
+/// multibyte message does not stop the guard; a variable named in text,
+/// and a search pattern that looks like an id, do not refuse. Every refusal was
 /// allowed at `146e3ca0e`, and the first two controls refused or failed.
 #[test]
 fn tsk1002_codex11_work_tree_programs_status_and_options() {
@@ -1144,7 +1143,6 @@ fn tsk1002_codex11_work_tree_programs_status_and_options() {
     std::fs::write(ssh.join("id_rsa"), "inert fixture\n").unwrap();
     let ssh = shell_path(&ssh);
     let root = shell_path(&f.root);
-    let blob = "78981922613b2afb6025042ff6bd878ac1994e85";
     let mut wrong = Vec::new();
     // Secret reads are exec-guard's rule; both hooks run on every call.
     for line in [
@@ -1154,8 +1152,6 @@ fn tsk1002_codex11_work_tree_programs_status_and_options() {
         format!("GIT_EXTERNAL_DIFF='cat {ssh}/id_rsa' git diff HEAD"),
         format!("GIT_EDITOR='cat {ssh}/id_rsa' git commit --allow-empty"),
         "git status -vv -- id_rsa".to_string(),
-        format!("git update-index --add --ca 100644 {blob} x"),
-        format!("printf '100644 blob {blob}\\tx\\n' | git update-index --index-i"),
         "GIT_EXEC_PATH=/tmp git status".to_string(),
     ] {
         if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
@@ -1307,69 +1303,45 @@ fn tsk1002_review12_program_words_and_values() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
-/// TSK-1002 object reads by id: a Git object named by id, abbreviation,
-/// tag or peel that does not end in `REV:PATH` names content the guard
-/// cannot map to a path, so a command that may print, copy, relabel or
-/// send it refuses unless the name peels to a commit. A content batch record
-/// without a colon refuses (one whose only colon is in its metadata is
-/// pending the operator's scope decision), a stream names no object by id,
-/// and after a
-/// Git call that may move a ref, or on a line that sets `GIT_DIR`, nothing
-/// is looked up. Every refusal here except the `push` line was allowed at
-/// `f0146c495`.
+/// TSK-1002, operator direction 2026-10-29: content already committed to
+/// Git's object store is outside the text guard's promise (a one-time
+/// full-history secret scan handles it; the commit-time and hosted secret
+/// scans stop new commits), so a Git object named by id, tag or peel is
+/// allowed again as it was before the object-id rule. The checks on the
+/// paths a command names, on writing working-tree files into the store, and
+/// on a Git directory that is not the repository's own stay.
 #[test]
-fn tsk1002_object_reads_by_id_refuse() {
+fn tsk1002_committed_content_is_outside_the_promise() {
     let f = Fixture::new();
-    // The blob of the fixture's `README.md` ("a\n"), standing in for a
-    // secret: the guard does not know which file an id came from.
+    // The blob of the fixture's `README.md` ("a\n").
     let blob = "78981922613b2afb6025042ff6bd878ac1994e85";
     git(&f.root, &["tag", "v-blob", blob]);
     let mut wrong = Vec::new();
     for line in [
         format!("git cat-file -p {blob}"),
-        format!("git cat-file blob {}", &blob[..7]),
-        format!("git cat-file --textconv {blob}"),
         format!("git show {}", &blob[..10]),
-        format!("git show '{blob}^{{blob}}'"),
         "git show v-blob".to_string(),
-        "git cat-file -p refs/tags/v-blob".to_string(),
-        format!("git diff HEAD:README.md {blob}"),
-        format!("git grep -h '' {blob}"),
-        format!("git tag t {blob}"),
-        format!("git push . {blob}:refs/tags/t"),
-        format!("git fetch . {blob}:refs/tags/t"),
-        format!("git notes add -C {blob} HEAD"),
-        format!("git restore --source={blob} notes.txt"),
-        format!("git update-index --add --cacheinfo 100644,{blob},notes.txt"),
         format!("git cat-file --batch <<< {blob}"),
+        format!("git update-index --add --cacheinfo 100644,{blob},notes.txt"),
         format!("printf '100644 blob {blob}\\tnotes.txt\\n' | git mktree"),
-        "git for-each-ref --format='%(raw)' refs/tags".to_string(),
-        "git tag -f t HEAD && git show t".to_string(),
-        "GIT_DIR=../other/.git git show main".to_string(),
-    ] {
-        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
-            wrong.push(format!("allowed: {line}"));
-        }
-    }
-    for line in [
         "git show HEAD --stat".to_string(),
-        format!("git cat-file -t {blob}"),
-        format!("git log -p --all -- {blob}"),
         "git cat-file -p HEAD:README.md".to_string(),
-        "git cat-file --batch <<< HEAD:README.md".to_string(),
-        "git show main".to_string(),
-        "git diff main...HEAD -- README.md".to_string(),
-        "git checkout -b feature".to_string(),
-        "git status && git diff main".to_string(),
     ] {
         let out = f.command(&f.linked, "exec-guard", &line);
         if out.status.code() != Some(0) {
             wrong.push(format!("refused: {line}: {out:?}"));
         }
     }
-    let out = f.command(&f.linked, "exec-guard", "git show v-blob");
-    if !String::from_utf8_lossy(&out.stderr).contains("name it as REV:PATH") {
-        wrong.push(format!("message: {out:?}"));
+    for line in [
+        "git show HEAD:id_rsa",
+        "git cat-file --batch <<< HEAD:.ssh/id_rsa",
+        "git log -p -- id_rsa",
+        "git add id_rsa",
+        "GIT_DIR=../other/.git git show main",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }

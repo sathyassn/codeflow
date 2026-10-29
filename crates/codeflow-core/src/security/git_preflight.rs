@@ -22,7 +22,7 @@
 ///   make it literal (`GIT_NOGLOB_PATHSPECS`, `GIT_LITERAL_PATHSPECS`),
 ///   which the pattern rule over-refuses at worst;
 /// - `GIT_DIR`, accepted only where it names the repository Git would use
-///   without it (`interpreter::git_objects`);
+///   without it (`interpreter::git_repository`);
 /// - the programs Git runs, [`PROGRAM_ENVIRONMENT`], whose values are
 ///   judged as commands.
 ///
