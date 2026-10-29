@@ -287,23 +287,33 @@ refuse as cannot-verify. AppleScript bodies receive literal-path inspection;
 constructed shell commands refuse.
 What a program does once it runs is outside the text guard's promise: a
 file the line wrote and then runs, a copied or extracted tree, and the
-directory an unmodelled runner gives its child. Where the OS sandbox is
-active, it contains them. Where it is not, the guard does not yet refuse
-them beyond the filter below; a planned change will fail them closed where
-containment cannot be established. The written-file checks below are a
-conservative filter that
-only refuses, not a boundary: a file written earlier on the same line, by a
-heredoc, `echo`, `printf`, an append, `tee` or a copy, refuses when it runs
-by path, interpreter or Make, or before an interpreter that loads its
-extension runs, unless the guard read its code exactly. A copy into a
-directory writes the file of the source's name there. After a recursive
-copy, any interpreter, shell, Make or launcher later on the line refuses. A
-script operand is opened in the directory a launcher such as `env -C` moves
-to. After a write on the line, a relative or bare-name run refuses when the
-line changes `PATH` in the shell or in a launcher (`env PATH=`), or runs
-through an execution context the guard does not model (`env -S`, `env -P`,
-`ruby -C` in any option spelling, `pwsh -wd`). Run routes the filter does
-not name are left to the sandbox.
+directory an unmodelled runner gives its child. The proven containment is
+the installed Claude Code sandbox profile (the `denyRead` and `denyWrite`
+entries in `.claude/settings.json`) on native macOS: it denies reads of
+the home secret stores and writes to the enforcement files, and it leaves a
+workspace hard-secret file such as `id_rsa` readable. Linux, WSL and native
+Windows need their own evidence, and a seat without an active sandbox has
+none. Where that containment is not active, the guard does not yet refuse
+these cases beyond the partial filters below; a planned change will fail
+them closed where containment cannot be established.
+The written-file checks are partial filters that only refuse, not a
+boundary, and they leave run routes they do not name allowed: a file
+written earlier on the same line, by a heredoc, `echo`, `printf`, an
+append, `tee` or a copy, refuses when it runs directly by path, interpreter
+or Make, or before an interpreter that loads its extension runs, unless the
+guard read its code exactly. A copy into a directory writes the file of the
+source's name there. After a recursive copy, an interpreter, shell, Make or
+launcher that the line runs directly later refuses. A script operand is
+opened in the directory a launcher such as `env -C` moves to. After a write
+on the line, a relative or bare-name run refuses when the line changes
+`PATH` in the shell or in a launcher (`env PATH=`), or runs through an
+execution context the guard does not model (`env -S`, `env -P`, `ruby -C`
+in any option spelling, `pwsh -wd`). Run routes through a child the filter
+does not follow stay allowed, for example a copied file run through
+`xargs` (`cp -r src out; xargs python3 <<< out/helper.py`), a written bare
+name run through `xargs` after a `PATH` change (`printf x > tool; PATH=.
+xargs tool <<< x`), and a reader the guard does not list under a runner's
+own directory option (`uv run --directory DIR paste auth.json`).
 Every inline-code option form, attached or separate (`node --print=CODE`),
 is read as code.
 A command runs in the directory `env` moves it to in any option spelling
@@ -323,12 +333,18 @@ before any filesystem access. A physical shell change (`cd -P`, `pushd -P`,
 or any `cd` after `set -P`, `set -o physical`, or zsh's `CHASE_LINKS` or
 `CHASE_DOTS` in any spelling through `setopt`, `set -w`, `set -o` or
 `emulate -o`) through a link or `..`, or to a UNC or namespace place,
-leaves the directory unknown; a `set`, `setopt` or `emulate` option word
-the guard does not read counts as physical. `pwd -P` prints the physical
-directory. As part of the filter, inline code and file readers that a
+leaves the directory unknown; any other physical change lands on the
+destination's real path, or leaves the directory unknown when that cannot
+be resolved. A `set`, `setopt` or `emulate` option word the guard does not
+read counts as physical, and so do a shell's own invocation options
+(`bash -P -c`, `zsh -o chaselinks -c`) for its code. `pwd -P` prints the
+physical directory. As a partial filter, inline code and the file readers
+the guard lists (`cat`, `head`, `grep`, `rg`, `tar` and similar) that a
 program the guard does not model may run (`uv run --directory DIR cat
-auth.json`) are judged in an unknown directory; the runner's real child
-directory is outside the promise.
+auth.json`) are judged in an unknown directory; other programs' operands
+there, and the runner's real child directory, are outside the promise.
+Turning a physical option off (`unsetopt chaselinks`) does not clear the
+physical reading, so later changes through a link stay unknown.
 A directory that a launcher or interpreter option moves to and the guard
 cannot establish refuses as cannot-verify. After any other directory change
 the guard cannot establish, such as `cd "$DIR"` or `pushd "$DIR"`, inline
@@ -358,7 +374,10 @@ unless nothing can exist there, since a command earlier on the line could
 create the entry it aliases. A Git revision such as `HEAD~1` that names no
 path, and inline interpreter code, are not file operands; the object path
 in `REV:PATH` or `:PATH` keeps the secret-name rules of a file operand
-whatever the revision's shape (`git show HEAD:id_rsa` refuses).
+whatever the revision's shape, a revision the guard cannot read included
+(`git show HEAD:id_rsa` refuses), for the subcommands that take objects
+(`show`, `cat-file`, `log`, `diff`, `grep` and the like); a commit message
+or a remote spelling is not an object path.
 
 Expansion observes the filesystem before execution. File creation, concurrent
 changes and symlink retargeting can change the paths selected after the
