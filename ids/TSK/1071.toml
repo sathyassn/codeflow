@@ -1,0 +1,11 @@
+id = "TSK-1071"
+uid = "a13e0096-47d5-41e0-ad7b-7d7d292320cf"
+kind = "TSK"
+title = "Coverage shard drift is reported in CI before a shard overruns"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T17:27:16Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
