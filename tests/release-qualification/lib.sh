@@ -114,6 +114,8 @@ status_for_match() {
 }
 
 # observed_exit [extra] - the observed column for an exit-status check.
+# The extra is optional; qualify.sh passes it and the rows here do not.
+# shellcheck disable=SC2120
 observed_exit() {
   if [ -n "${1:-}" ]; then
     printf 'exit %s: %s' "$CF_STATUS" "$1"
@@ -1222,6 +1224,83 @@ tree_digest() {
       shasum -a 256 |
       awk '{print $1}'
   )
+}
+
+# ---------------------------------------------------------------------------
+# The record lifecycle rows
+# ---------------------------------------------------------------------------
+#
+# They live here, and qualify.sh calls qualify_records, so a test can run the
+# rows the harness runs against a real binary on a prepared full-tier sample
+# (crates/codeflow-cli/tests/release_qualification_records.rs), without the
+# rest of the matrix.
+
+# The Outcome line state_sample_outcomes writes.
+SAMPLE_OUTCOME="after this merges, a qualification user can run the sample flow"
+
+# state_sample_outcomes <dir> - write SAMPLE_OUTCOME under the `## Outcome`
+# heading of the sample epic and task, as their author does before committing
+# them: validate --docs refuses a record made after the project adopted the
+# section without one.
+state_sample_outcomes() {
+  for _record in epics/EPC-001.md tasks/TSK-001.md; do
+    _path="$1/project-management/$_record"
+    [ -f "$_path" ] || continue
+    awk -v outcome="$SAMPLE_OUTCOME" '{ print } $0 == "## Outcome" { print ""; print outcome }' \
+      "$_path" >"$_path.tmp"
+    mv "$_path.tmp" "$_path"
+  done
+}
+
+# qualify_records - allocate an epic, a task and a spec in the sample at $DIR,
+# check the graph is clean, then start the task before and after its planning
+# records land. Needs DIR, WORK, SAMPLE, TIER, BINARY, RESULTS and TRANSCRIPT,
+# and the current directory at $DIR.
+qualify_records() {
+  # The record lifecycle exists only at the full tier.
+  git -C "$DIR" checkout -q -B chore/qualification-records main
+
+  cf epic new "sample epic for qualification"
+  record "$SAMPLE" "$TIER" "epic new" "allocate and scaffold an epic" \
+    "$(status_for_match 0 'EPC-')" "exit 0 and an allocated EPC-NNN record" "$(observed_exit)"
+
+  cf task new --epic EPC-001 --into main "sample task for qualification"
+  record "$SAMPLE" "$TIER" "task new" "allocate an epic-linked task" \
+    "$(status_for_match 0 'TSK-')" "exit 0 and an allocated TSK-NNN record" "$(observed_exit)"
+
+  state_sample_outcomes "$DIR"
+
+  cf spec new --for EPC-001 "sample spec for qualification"
+  record "$SAMPLE" "$TIER" "spec new" "allocate a spec and link its consumer" \
+    "$(status_for_match 0 'SPC-')" "exit 0 and an allocated SPC-NNN record" "$(observed_exit)"
+
+  cf validate --docs
+  record "$SAMPLE" "$TIER" "validate --docs" "the freshly allocated graph is clean" \
+    "$(status_for_match 0 'doc graph clean')" "exit 0, doc graph clean" "$(observed_exit)"
+
+  # The refusal: the planning record is not yet at the merge base.
+  git -C "$DIR" checkout -q -B task/TSK-001-sample-task
+  cf work start TSK-001 --into main
+  record "$SAMPLE" "$TIER" "work start" "rejecting: planning record not anchored" \
+    "$(status_for_match 1 'not present at the merge-base')" \
+    "exit 1 because TSK-001 is not at the merge base" "$(observed_exit)"
+
+  # Land the planning records, with the spec approved, then start again.
+  git -C "$DIR" checkout -q chore/qualification-records
+  sed -e 's/^status: draft/status: approved/' "$DIR/project-management/specs/SPC-001.md" >"$WORK/spc.tmp"
+  mv "$WORK/spc.tmp" "$DIR/project-management/specs/SPC-001.md"
+  git -C "$DIR" add -A
+  git -C "$DIR" commit -q -m "docs: plan the qualification sample work"
+  cf integrate chore/qualification-records --into main
+
+  git -C "$DIR" checkout -q main
+  git -C "$DIR" checkout -q -B task/TSK-001-sample-task
+  cf work start TSK-001 --into main
+  record "$SAMPLE" "$TIER" "work start" "positive: anchored task on its task branch" \
+    "$(status_for_match 0 'anchored at')" \
+    "exit 0 naming the anchor commit, the epic and the spec" "$(observed_exit)"
+
+  git -C "$DIR" checkout -q main
 }
 
 # ---------------------------------------------------------------------------
