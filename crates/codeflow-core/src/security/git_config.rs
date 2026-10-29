@@ -501,23 +501,17 @@ fn bounded(
     input: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
     const LIMIT: u64 = 4 * 1024 * 1024;
-    if input.is_some() {
-        command.stdin(Stdio::piped());
-    }
     if Instant::now() >= deadline {
         return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
     }
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("cannot verify Git configuration: {error}"))?;
-    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
-        std::thread::spawn(move || {
-            use std::io::Write;
-            let _ = stdin.write_all(&input);
-        });
+    command.stdout(Stdio::piped()).stderr(Stdio::null());
+    // The shared helper writes stdin from its own thread; the deadline
+    // below bounds the child whatever the write does.
+    let mut child = match input {
+        Some(input) => crate::git::spawn_with_input(command, input).map(|(child, _)| child),
+        None => command.spawn(),
     }
+    .map_err(|error| format!("cannot verify Git configuration: {error}"))?;
     let stdout = child
         .stdout
         .take()
