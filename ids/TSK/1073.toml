@@ -1,0 +1,11 @@
+id = "TSK-1073"
+uid = "83077fd8-b012-43d4-8139-8870de414061"
+kind = "TSK"
+title = "The guards read command lines through a qualified shell parser"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T18:56:54Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
