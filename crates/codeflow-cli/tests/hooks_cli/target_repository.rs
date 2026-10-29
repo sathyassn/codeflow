@@ -915,8 +915,7 @@ fn tsk1002_codex07_git_forms_are_parsed_completely() {
         "git cat-file --batch-command <<< 'info HEAD:id_rsa'",
         "git cat-file --batch-check <<< HEAD:id_rsa",
         "git rev-parse HEAD | git cat-file --batch-check",
-        "git log -p -- README.md ':!docs'",
-        "git log -p -- ':(glob)src/main*.rs'",
+        "git log -p -- README.md",
         "git fetch origin 'refs/heads/*:refs/remotes/origin/*'",
         "git tag -l 'v*'",
     ] {
@@ -961,16 +960,16 @@ fn tsk1002_codex08_git_selection_and_stdin_classes() {
         "while read x; do git cat-file --batch; done < list.txt",
         "git cat-file --batch",
         "git hash-object --stdin-paths",
+        "git log -p -- README.md ':!docs'",
+        "git add src ':!src/x'",
+        "printf '%s\\0' '\"id_rsa\"' | git add --pathspec-from-file=- --pathspec-file-nul",
     ] {
         if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
             wrong.push(format!("allowed: {line}"));
         }
     }
     for line in [
-        "git log -p -- README.md ':!docs'",
-        "git add src ':!src/x'",
         "git add --pathspec-from-file=- <<< 'README.md'",
-        "printf '%s\\0' '\"id_rsa\"' | git add --pathspec-from-file=- --pathspec-file-nul",
         // Stdin a command does not read.
         "git status </dev/null",
         "true | git status",
@@ -1007,21 +1006,61 @@ fn tsk1002_codex08_magic_is_read_only_on_pathspec_operands() {
     }
 }
 
-/// TSK-1002 Codex review 08 major: a share named for a Git alias lookup
-/// refuses before the lookup touches it; the message is the share rule's,
-/// not a configuration read's.
-#[cfg(windows)]
+/// TSK-1002 Codex review 09, one test per class, each removing a reading
+/// the guard could not make sound: pathspec magic in any Git operand or
+/// option value refuses, whatever role Git gives the word; a NUL-separated
+/// Git list refuses; a share, verbatim or device spelling in a Git call
+/// refuses before any lookup, on every platform. Each refusal was allowed
+/// at `5ba68cd5b`, except the share forms, which refused there on Windows
+/// only after a lookup could start.
 #[test]
-fn tsk1002_codex08_alias_lookup_refuses_a_share_first() {
+fn tsk1002_codex09_unproven_git_readings_refuse() {
     let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for line in [
+        "git diff --no-index -- ':(exclude)link' README.md",
+        "git commit -F ':(exclude)link' -- README.md",
+        "git add --chmod +x ':!README.md'",
+        "git hash-object --path=':(exclude)x' README.md",
+        "git show ':/fix bug'",
+        "git log -p -- ':(top)README.md'",
+        "git log -p -- ':^docs' README.md",
+        "git cat-file --batch -Z <<< 'HEAD:README.md'",
+        "printf 'HEAD:README.md\\0' | git cat-file -z --batch",
+        "git update-index -z --stdin <<< README.md",
+        "git update-ref -z --stdin <<< 'update refs/x HEAD'",
+        "git -C '//fixture-host/fixture-share' fixture-alias",
+        "git -C '\\\\?\\C:\\fixture' fixture-alias",
+        "git --git-dir='\\\\.\\C:\\fixture\\.git' status",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "git ls-files -- 'src/*'",
+        "git status -- 'src/*'",
+        "git cat-file -z --batch-check <<< HEAD:README.md",
+        "git push origin :old-branch",
+        "git show :README.md",
+        "git diff -- README.md",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
     let out = f.command(
         &f.linked,
         "exec-guard",
-        "git -C '//fixture-host/fixture-share' fixture-alias",
+        "git -C '\\\\?\\C:\\fixture' fixture-alias",
     );
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
     let message = String::from_utf8_lossy(&out.stderr);
-    assert!(message.contains("network share"), "{message}");
+    if !message.contains("share, verbatim or device") {
+        wrong.push(format!("namespace message: {message}"));
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
 /// TSK-1002 Codex review 07: a Git alias is judged by its expansion, the

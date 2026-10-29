@@ -295,15 +295,20 @@ fn git_input_violation(
 }
 
 /// `call` with a Git alias expanded, so it is judged by its expansion
-/// (TSK-1002 review 07). A share or namespace directory refuses before the
-/// lookup touches it (review 08).
+/// (TSK-1002 review 07). Spellings the guard refuses in any Git call,
+/// pathspec magic and share or namespace words among them, refuse before
+/// the lookup touches anything (reviews 08 and 09).
 fn expanded_alias(
     call: outward::Unwrapped,
     command: &str,
 ) -> Result<outward::Unwrapped, &'static str> {
     let share =
         |dir: &Path| unmapped_share_root(Path::new("/"), &crate::portable_path::slashed(dir));
-    Ok(git_reads::expand_alias(&call, command, &share)?.unwrap_or(call))
+    git_reads::refused_form(&call)?;
+    let expanded = git_reads::expand_alias(&call, command, &share)?.unwrap_or(call);
+    // An alias value can hold any spelling a command line can.
+    git_reads::refused_form(&expanded)?;
+    Ok(expanded)
 }
 
 fn secret_reads(
@@ -429,24 +434,12 @@ fn git_operand(
     // Git matches a pathspec pattern against the tree and history, which
     // the guard cannot list: one that could select a secret name refuses
     // (TSK-1002 review 07 sibling sweep).
-    match git_reads::pathspec(call, at) {
-        Some(Err(why)) => return Some(Err(why)),
-        Some(Ok(git_reads::Pathspec::Excluded)) => return Some(Ok(false)),
-        Some(Ok(git_reads::Pathspec::Literal(path))) => {
-            match secret_path_result(&path, cwd, home, Some(false)) {
-                Ok(false) => {}
-                verdict => return Some(verdict),
-            }
-        }
-        Some(Ok(git_reads::Pathspec::Pattern(spellings))) => {
-            if spellings
-                .iter()
-                .any(|spelling| secret_path_spelling(spelling, home, Some(true)))
-            {
-                return Some(Err(git_reads::PATTERN));
-            }
-        }
-        None => {}
+    if git_reads::pathspec_pattern(call, at).is_some_and(|spellings| {
+        spellings
+            .iter()
+            .any(|spelling| secret_path_spelling(spelling, home, Some(true)))
+    }) {
+        return Some(Err(git_reads::PATTERN));
     }
     for path in git_object_paths(call, at, value) {
         match secret_path_result(path, cwd, home, Some(false)) {

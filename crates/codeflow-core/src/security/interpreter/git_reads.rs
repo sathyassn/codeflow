@@ -100,7 +100,7 @@ pub(super) fn expand_alias(
         // Every directory the lookup could touch is checked before any
         // filesystem access: a share or namespace path refuses first
         // (TSK-1002 Codex review 08).
-        share(cwd)?;
+        directory(cwd, share)?;
         let mut dir = cwd.to_path_buf();
         let mut index = 1;
         while index < at {
@@ -116,7 +116,7 @@ pub(super) fn expand_alias(
                         .filter(|value| !value.contains('$'))
                         .ok_or("cannot establish the directory a Git alias is read in")?;
                     dir = dir.join(value);
-                    share(&dir)?;
+                    directory(&dir, share)?;
                     index += 2;
                 }
                 // `--exec-path` moves where Git finds programs, not aliases.
@@ -167,6 +167,73 @@ pub(super) fn expand_alias(
         });
     }
     Err("cannot follow a Git alias chain that deep")
+}
+
+/// A directory a Git alias lookup may touch, checked before any filesystem
+/// access: a verbatim or device spelling (`\\?\`, `\\.\`, `\??\`) refuses
+/// as written, before any mapping, and a share refuses by `share`.
+fn directory(
+    dir: &std::path::Path,
+    share: &dyn Fn(&std::path::Path) -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    let text = crate::portable_path::slashed(dir);
+    if ["//?/", "//./", "/??/"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+    {
+        return Err(NAMESPACE);
+    }
+    share(dir)
+}
+
+/// Why a Git call naming a share, verbatim or device spelling refuses.
+const NAMESPACE: &str = "cannot read a Git repository or path through a share, verbatim or device spelling; use its drive-letter path";
+
+/// Why pathspec magic refuses.
+const MAGIC: &str = "cannot establish what Git pathspec magic selects; name the paths instead";
+
+/// Whether `word` begins with pathspec magic: the long form `:(`, or the
+/// short `:!`, `:^` or `:/`.
+fn magic(word: &str) -> bool {
+    [":(", ":!", ":^", ":/"]
+        .iter()
+        .any(|prefix| word.starts_with(prefix))
+}
+
+/// Git spellings the guard refuses whatever their role, checked before any
+/// lookup (TSK-1002 Codex review 09). Pathspec magic in any operand or
+/// option value refuses: the guard does not prove which operand Git reads
+/// as a pathspec, so it never lets magic narrow or redirect a selection. A
+/// share, verbatim or device spelling in any word refuses, and so does
+/// `--icase-pathspecs`.
+pub(super) fn refused_form(call: &outward::Unwrapped) -> Result<(), &'static str> {
+    let Some((_, start)) = git_command(call) else {
+        return Ok(());
+    };
+    let value = |word: &str| -> String {
+        if word.starts_with('-') {
+            word.split_once('=')
+                .map_or(String::new(), |(_, value)| value.to_string())
+        } else {
+            word.to_string()
+        }
+    };
+    for (at, word) in call.args.iter().enumerate().skip(1) {
+        let value = value(word);
+        if outward::remote_or_namespace_operand(&value) {
+            return Err(NAMESPACE);
+        }
+        if at >= start && magic(&value) {
+            return Err(MAGIC);
+        }
+    }
+    if call.args[..start]
+        .iter()
+        .any(|word| word == "--icase-pathspecs")
+    {
+        return Err(ICASE);
+    }
+    Ok(())
 }
 
 /// Commands whose operands are proven not to name a local object: a commit
@@ -264,9 +331,9 @@ const CAT_FILE_OPTIONS: &[&str] = &[
     "filter",
 ];
 
-/// Git commands that read their operands as pathspecs (Git 2.53). Any
-/// other command's operands are file names, revisions or text, and get the
-/// ordinary path and object readings: pathspec magic never clears them.
+/// Git commands that read their operands as pathspecs and may print the
+/// content of what they select (Git 2.53). `ls-files` and `status` print
+/// names only, so their patterns select no content.
 const PATHSPEC_COMMANDS: &[&str] = &[
     "add",
     "archive",
@@ -282,7 +349,6 @@ const PATHSPEC_COMMANDS: &[&str] = &[
     "format-patch",
     "grep",
     "log",
-    "ls-files",
     "range-diff",
     "reset",
     "restore",
@@ -291,67 +357,28 @@ const PATHSPEC_COMMANDS: &[&str] = &[
     "shortlog",
     "show",
     "stash",
-    "status",
     "whatchanged",
 ];
-
-/// Pathspec commands that take no revision, so every non-option word is a
-/// pathspec before `--` too.
-const REVISION_FREE_COMMANDS: &[&str] = &["add", "clean", "ls-files", "rm", "status"];
-
-/// What one Git pathspec selects, as far as the guard reads it.
-pub(super) enum Pathspec {
-    /// A pattern Git matches against the tree and history itself (`'*.rs'`,
-    /// `':(glob)**/x'`): the guard can only compare it with the secret
-    /// names, as these spellings to check.
-    Pattern(Vec<String>),
-    /// A literal path after its magic (`:(top)id_rsa`), judged as a path.
-    Literal(String),
-    /// An exclusion. It never narrows what the other pathspecs select, and
-    /// without them Git applies it to the whole tree.
-    Excluded,
-}
-
-/// Why pathspecs that are all exclusions refuse: Git applies them to the
-/// whole tree, which the guard cannot clear by name.
-pub(super) const EXCLUSIONS_ONLY: &str =
-    "cannot establish what Git pathspecs that only exclude select: they apply to the whole tree; name the paths to read";
 
 /// Why a pattern that a secret name could match refuses.
 pub(super) const PATTERN: &str = "cannot establish which tracked paths a Git pathspec selects";
 
-/// One pathspec read as Git reads it: `Ok(None)` for a plain path with no
-/// magic and no glob character, judged as an ordinary path. Git's glob `*`
-/// also crosses `/`, so a pattern is also compared as a match anywhere below
-/// the root and by the text after its last `*`. A case-insensitive pathspec
-/// and magic the guard does not read (`attr:`, an unknown word) refuse.
-fn classify(word: &str, after_separator: bool) -> Result<Option<Pathspec>, &'static str> {
-    let (magic, body) = pathspec_magic(word, after_separator)?.unwrap_or((Vec::new(), word));
-    if magic
-        .iter()
-        .any(|word| matches!(*word, "exclude" | "!" | "^"))
-    {
-        return Ok(Some(Pathspec::Excluded));
+/// The spellings to compare with the secret names for a pathspec pattern,
+/// or `None` for a word with no glob character. Git's glob `*` also
+/// crosses `/`, so a pattern is also compared as a match anywhere below the
+/// root and by the text after its last `*`. Magic never reaches here:
+/// [`refused_form`] refuses it first.
+fn pattern(word: &str) -> Option<Vec<String>> {
+    if !word.contains(['*', '?', '[']) {
+        return None;
     }
-    if magic.contains(&"icase") {
-        return Err(ICASE);
-    }
-    let literal = magic.contains(&"literal");
-    if literal || !body.contains(['*', '?', '[']) {
-        return Ok((!magic.is_empty()).then(|| Pathspec::Literal(body.to_string())));
-    }
-    let body = body.strip_prefix('/').unwrap_or(body);
-    // With `glob` magic Git matches as a shell does: `*` stays within one
-    // component and the pattern is anchored where Git runs.
-    if magic.contains(&"glob") {
-        return Ok(Some(Pathspec::Pattern(vec![body.to_string()])));
-    }
+    let body = word.strip_prefix('/').unwrap_or(word);
     let mut spellings = vec![body.to_string(), format!("**/{body}")];
     if let Some((_, after)) = body.rsplit_once('*') {
         let leaf = after.rsplit_once('/').map_or(after, |(_, leaf)| leaf);
         spellings.push(format!("**/*{leaf}"));
     }
-    Ok(Some(Pathspec::Pattern(spellings)))
+    Some(spellings)
 }
 
 /// The Git subcommand of `call` and the index of its first operand.
@@ -362,60 +389,20 @@ fn git_command(call: &outward::Unwrapped) -> Option<(String, usize)> {
     Some((subcommand.to_string(), call.args.len() - tail.len()))
 }
 
-/// Whether a pathspec operand of `call` selects anything itself: a word
-/// after `--`, or any non-option word of a command that takes no revision,
-/// that is not an exclusion.
-fn has_positive_pathspec(call: &outward::Unwrapped, subcommand: &str, start: usize) -> bool {
-    let mut after_separator = false;
-    for word in &call.args[start..] {
-        if word == "--" && !after_separator {
-            after_separator = true;
-            continue;
-        }
-        let revision_free = REVISION_FREE_COMMANDS.contains(&subcommand);
-        let candidate = after_separator || revision_free && !word.starts_with('-');
-        let spec = classify(word, after_separator || revision_free);
-        if candidate && !matches!(spec, Ok(Some(Pathspec::Excluded))) {
-            return true;
-        }
-    }
-    false
-}
-
-/// The pathspec reading of the operand at `at`, or `None` when the command
-/// does not read it as a pathspec or it is a plain path. Exclusions never
-/// narrow a read; pathspecs that are all exclusions refuse.
-pub(super) fn pathspec(
-    call: &outward::Unwrapped,
-    at: usize,
-) -> Option<Result<Pathspec, &'static str>> {
+/// The pattern spellings of the operand at `at` when the command reads it
+/// as a pathspec that may select content, or `None`. A pattern only adds a
+/// refusal; it never clears the operand's other readings.
+pub(super) fn pathspec_pattern(call: &outward::Unwrapped, at: usize) -> Option<Vec<String>> {
     let (subcommand, start) = git_command(call)?;
-    let subcommand = subcommand.as_str();
-    if !PATHSPEC_COMMANDS.contains(&subcommand) || at < start {
+    if !PATHSPEC_COMMANDS.contains(&subcommand.as_str()) || at < start {
         return None;
-    }
-    if call.args[..start]
-        .iter()
-        .any(|word| word == "--icase-pathspecs")
-    {
-        return Some(Err(ICASE));
     }
     let word = call.args.get(at)?.as_str();
     let after_separator = call.args[start..at].iter().any(|word| word == "--");
     if !after_separator && word.starts_with('-') {
         return None;
     }
-    // A command that takes no revision reads short magic (`:!x`) before
-    // `--` too.
-    let magic_position = after_separator || REVISION_FREE_COMMANDS.contains(&subcommand);
-    match classify(word, magic_position) {
-        Err(why) => Some(Err(why)),
-        Ok(None) => None,
-        Ok(Some(Pathspec::Excluded)) if !has_positive_pathspec(call, subcommand, start) => {
-            Some(Err(EXCLUSIONS_ONLY))
-        }
-        Ok(Some(spec)) => Some(Ok(spec)),
-    }
+    pattern(word)
 }
 
 /// How the secret-read check judges a path and a pattern spelling.
@@ -426,61 +413,9 @@ pub(super) struct Judges<'a> {
     pub(super) pattern: &'a dyn Fn(&str) -> bool,
 }
 
-/// The verdict on one pathspec that selects something.
-pub(super) fn judge_pathspec(spec: &Pathspec, judges: &Judges<'_>) -> Result<bool, &'static str> {
-    match spec {
-        Pathspec::Pattern(spellings) if spellings.iter().any(|x| (judges.pattern)(x)) => {
-            Err(PATTERN)
-        }
-        Pathspec::Pattern(_) | Pathspec::Excluded => Ok(false),
-        Pathspec::Literal(path) => (judges.path)(path),
-    }
-}
-
-/// Git matches a case-insensitive pathspec (`:(icase)`,
-/// `--icase-pathspecs`) in any case, which the guard's pattern comparison
-/// does not model.
+/// Git matches a case-insensitive pathspec (`--icase-pathspecs`) in any
+/// case, which the guard's pattern comparison does not model.
 pub(super) const ICASE: &str = "cannot establish what a case-insensitive Git pathspec selects";
-
-/// The magic words of a pathspec (`:(top,glob)x`, `:!x`, `:/x`) and the
-/// path after them; `None` when the word has no magic. Before `--` a
-/// short form may be a revision (`:/message`, `:0:path`), which the
-/// object-path reading judges, so only the long form is read there.
-fn pathspec_magic(
-    word: &str,
-    after_separator: bool,
-) -> Result<Option<(Vec<&str>, &str)>, &'static str> {
-    const UNREAD: &str = "cannot establish what Git pathspec magic selects";
-    let Some(rest) = word.strip_prefix(':') else {
-        return Ok(None);
-    };
-    if let Some(long) = rest.strip_prefix('(') {
-        let (words, body) = long.split_once(')').ok_or(UNREAD)?;
-        let magic: Vec<&str> = words.split(',').collect();
-        if magic
-            .iter()
-            .any(|word| !matches!(*word, "top" | "literal" | "glob" | "icase" | "exclude"))
-        {
-            return Err(UNREAD);
-        }
-        return Ok(Some((magic, body)));
-    }
-    if !after_separator {
-        return Ok(None);
-    }
-    let short_end = rest
-        .char_indices()
-        .find(|(_, ch)| !matches!(ch, '/' | '!' | '^'))
-        .map_or(rest.len(), |(at, _)| at);
-    let magic: Vec<&str> = rest[..short_end]
-        .char_indices()
-        .map(|(at, ch)| &rest[at..at + ch.len_utf8()])
-        .collect();
-    let body = rest[short_end..]
-        .strip_prefix(':')
-        .unwrap_or(&rest[short_end..]);
-    Ok(Some((magic, body)))
-}
 
 /// Whether the guard models `subcommand`.
 pub(super) fn known(subcommand: &str) -> bool {
@@ -612,22 +547,18 @@ fn pathspec_file(word: &str, next: Option<&str>) -> PathspecFile {
     }
 }
 
-/// Whether the options end with NUL-separated pathspec records
-/// (`--pathspec-file-nul` in any unique spelling; the last form wins).
-fn pathspec_file_nul(options: &[&str]) -> bool {
-    let mut nul = false;
-    for word in options {
-        let Some(name) = word.strip_prefix("--") else {
-            continue;
-        };
-        let (negated, name) = name
-            .strip_prefix("no-")
-            .map_or((false, name), |name| (true, name));
-        if name.len() >= "pathspec-fi".len() && "pathspec-file-nul".starts_with(name) {
-            nul = !negated;
+/// Whether the options ask for NUL-separated records: `-z` or `-Z` alone or
+/// in a short cluster, or `--pathspec-file-nul` in any unique spelling.
+fn nul_records(options: &[&str]) -> bool {
+    options.iter().any(|word| {
+        if let Some(name) = word.strip_prefix("--") {
+            let name = name.split_once('=').map_or(name, |(name, _)| name);
+            name.len() >= "pathspec-fi".len() && "pathspec-file-nul".starts_with(name)
+        } else {
+            word.strip_prefix('-')
+                .is_some_and(|short| short.contains(['z', 'Z']))
         }
-    }
-    nul
+    })
 }
 
 /// Whether `word` is a `--stdin` option in a spelling Git may accept: the
@@ -638,13 +569,6 @@ fn stdin_option(word: &str) -> bool {
     };
     let name = long.split_once('=').map_or(long, |(name, _)| name);
     name.starts_with("stdin") || name.len() >= 3 && "stdin".starts_with(name)
-}
-
-/// Whether a short-option word asks for NUL-separated records (`-z`, or a
-/// cluster holding `z`).
-fn short_nul(word: &str) -> bool {
-    word.strip_prefix('-')
-        .is_some_and(|short| !short.starts_with('-') && short.contains('z'))
 }
 
 /// A line in Git's C-style quoting (`"a\tb"`, `"\303\251"`), decoded as Git
@@ -688,19 +612,20 @@ fn unquote(line: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// How Git reads the records of a list on stdin.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// How Git reads the records of a list on stdin, one per line.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Records {
-    /// Object names, one per line (`cat-file --batch`).
+    /// Object names (`cat-file --batch`).
     Objects,
     /// `cat-file --batch-command` commands.
     Commands,
-    /// File names (`hash-object --stdin-paths`, `update-index --stdin`),
-    /// C-quoted per line, or verbatim when NUL-separated.
-    Paths { nul: bool },
+    /// File names (`hash-object --stdin-paths`, `update-index --stdin`), in
+    /// Git's C quoting when a line starts with a quote.
+    Paths,
     /// Pathspecs (`--pathspec-from-file=-`), decoded as paths are, then read
-    /// with the argv pathspec rules.
-    Pathspecs { nul: bool },
+    /// with the argv pathspec rules: magic refuses, a pattern a secret name
+    /// could match refuses.
+    Pathspecs,
     /// Revisions, object names or requests a `--stdin` command or a stream
     /// reader takes: every record and word is judged as a path and as an
     /// object name.
@@ -713,9 +638,10 @@ enum Records {
 /// option, and the stream readers. Each needs a literal input (here-string,
 /// heredoc, `echo` or `printf` pipe) the guard reads record by record; any
 /// other stdin, a file, a program's output, a descriptor an earlier `exec`
-/// rebinds or one the line does not give, refuses. Every other command is
-/// judged by its operands alone, whatever its stdin holds. A pathspec file
-/// other than stdin refuses.
+/// rebinds or one the line does not give, refuses. NUL-separated records
+/// (`-z`, `-Z`, `--pathspec-file-nul`) refuse: the guard reads lines only.
+/// Every other command is judged by its operands alone, whatever its stdin
+/// holds. A pathspec file other than stdin refuses.
 pub(super) fn reads(
     call: &outward::Unwrapped,
     judges: &Judges<'_>,
@@ -748,21 +674,27 @@ pub(super) fn reads(
 /// The records `subcommand` reads from stdin with `options`, or `None`
 /// when it reads no names there.
 fn records(subcommand: &str, options: &[&str]) -> Result<Option<Records>, &'static str> {
+    let records = names(subcommand, options)?;
+    if records.is_some() && nul_records(options) {
+        return Err("cannot establish NUL-separated Git records; pass the names one per line");
+    }
+    Ok(records)
+}
+
+/// The records `subcommand` reads from stdin with `options`, whatever
+/// their separator.
+fn names(subcommand: &str, options: &[&str]) -> Result<Option<Records>, &'static str> {
     for (at, word) in options.iter().enumerate() {
         match pathspec_file(word, options.get(at + 1).copied()) {
             PathspecFile::NotTheOption => {}
-            PathspecFile::Stdin => {
-                return Ok(Some(Records::Pathspecs {
-                    nul: pathspec_file_nul(options),
-                }));
-            }
+            PathspecFile::Stdin => return Ok(Some(Records::Pathspecs)),
             PathspecFile::Elsewhere => {
                 return Err("cannot establish the paths a pathspec file names");
             }
         }
     }
     if subcommand == "hash-object" {
-        return Ok(hash_object_paths(options)?.then_some(Records::Paths { nul: false }));
+        return Ok(hash_object_paths(options)?.then_some(Records::Paths));
     }
     if subcommand == "cat-file" {
         return Ok(match cat_file(options)? {
@@ -778,8 +710,7 @@ fn records(subcommand: &str, options: &[&str]) -> Result<Option<Records>, &'stat
     // `update-index --index-info` reads index entries naming objects.
     let index_info = options.contains(&"--index-info");
     if stdin && !index_info && PATH_LIST_COMMANDS.contains(&subcommand) {
-        let nul = options.iter().any(|word| short_nul(word));
-        return Ok(Some(Records::Paths { nul }));
+        return Ok(Some(Records::Paths));
     }
     let stream = stdin || index_info || STREAM_STDIN_COMMANDS.contains(&subcommand);
     Ok(stream.then_some(Records::Stream))
@@ -801,17 +732,16 @@ fn judge_input(input: &str, records: Records, judges: &Judges<'_>) -> Result<boo
         }
         Ok(false)
     };
-    // A line-mode record that starts with a quote is read in Git's C
-    // quoting; a NUL-separated one is taken verbatim.
-    let decoded = |record: &str, nul: bool| -> Result<String, &'static str> {
-        if !nul && record.starts_with('"') {
+    // A record that starts with a quote is read in Git's C quoting.
+    let decoded = |record: &str| -> Result<String, &'static str> {
+        if record.starts_with('"') {
             unquote(record).ok_or("cannot decode a quoted Git path on stdin")
         } else {
             Ok(record.to_string())
         }
     };
-    let (mut excluded, mut selecting) = (false, false);
-    // Splitting at both separators in either mode only adds readings.
+    // Records are lines. A NUL inside a line ends the name Git uses; reading
+    // the text after it too only adds readings.
     for record in input.split(['\n', '\0']) {
         let record = record.trim_end_matches('\r');
         if record.is_empty() {
@@ -825,22 +755,18 @@ fn judge_input(input: &str, records: Records, judges: &Judges<'_>) -> Result<boo
                 None if record == "flush" => false,
                 _ => return Err("cannot establish a git cat-file batch command"),
             },
-            Records::Paths { nul } => (judges.path)(&decoded(record, nul)?)?,
-            Records::Pathspecs { nul } => {
-                let path = decoded(record, nul)?;
-                match classify(&path, true)? {
-                    Some(Pathspec::Excluded) => {
-                        excluded = true;
-                        false
+            Records::Paths => (judges.path)(&decoded(record)?)?,
+            Records::Pathspecs => {
+                let path = decoded(record)?;
+                if magic(&path) {
+                    return Err(MAGIC);
+                }
+                match pattern(&path) {
+                    Some(spellings) if spellings.iter().any(|x| (judges.pattern)(x)) => {
+                        return Err(PATTERN);
                     }
-                    Some(spec) => {
-                        selecting = true;
-                        judge_pathspec(&spec, judges)?
-                    }
-                    None => {
-                        selecting = true;
-                        (judges.path)(&path)?
-                    }
+                    Some(_) => false,
+                    None => (judges.path)(&path)?,
                 }
             }
             Records::Stream => {
@@ -855,9 +781,6 @@ fn judge_input(input: &str, records: Records, judges: &Judges<'_>) -> Result<boo
         if secret {
             return Ok(true);
         }
-    }
-    if excluded && !selecting {
-        return Err(EXCLUSIONS_ONLY);
     }
     Ok(false)
 }
@@ -896,64 +819,52 @@ mod tests {
 
     #[test]
     fn stdin_records_are_read_only_from_the_forms_that_read_them() {
-        assert!(records("status", &[]) == Ok(None));
-        assert!(records("add", &["-p"]) == Ok(None));
-        assert!(records("log", &["--oneline"]) == Ok(None));
-        assert!(records("rev-list", &["--stdin"]) == Ok(Some(Records::Stream)));
-        assert!(records("update-index", &["--std"]) == Ok(Some(Records::Paths { nul: false })));
-        assert!(
-            records("update-index", &["-z", "--stdin"]) == Ok(Some(Records::Paths { nul: true }))
+        assert_eq!(records("status", &[]), Ok(None));
+        assert_eq!(records("add", &["-p"]), Ok(None));
+        assert_eq!(records("log", &["--oneline"]), Ok(None));
+        assert_eq!(records("rev-list", &["--stdin"]), Ok(Some(Records::Stream)));
+        assert_eq!(
+            records("update-index", &["--std"]),
+            Ok(Some(Records::Paths))
         );
-        assert!(records("pack-objects", &["--stdout"]) == Ok(Some(Records::Stream)));
-        assert!(records("hash-object", &["--stdin"]) == Ok(None));
-        assert!(records("hash-object", &["--stdin-p"]) == Ok(Some(Records::Paths { nul: false })));
-        assert!(records("check-attr", &["--stdin"]) == Ok(None));
-        assert!(
-            records("add", &["--pathspec-from-file=-", "--pathspec-file-nul"])
-                == Ok(Some(Records::Pathspecs { nul: true }))
+        assert_eq!(
+            records("pack-objects", &["--stdout"]),
+            Ok(Some(Records::Stream))
         );
-        assert!(
-            records(
-                "add",
-                &[
-                    "--pathspec-from-file=-",
-                    "--pathspec-file-nul",
-                    "--no-pathspec-file-nul"
-                ]
-            ) == Ok(Some(Records::Pathspecs { nul: false }))
+        assert_eq!(records("hash-object", &["--stdin"]), Ok(None));
+        assert_eq!(
+            records("hash-object", &["--stdin-p"]),
+            Ok(Some(Records::Paths))
         );
+        assert_eq!(records("check-attr", &["--stdin"]), Ok(None));
         assert!(records("add", &["--pathspec-from-file=list"]).is_err());
     }
 
     #[test]
-    fn exclusions_never_narrow_a_selection() {
+    fn nul_separated_lists_refuse() {
+        assert!(records("update-index", &["-z", "--stdin"]).is_err());
+        assert!(records("cat-file", &["--batch", "-Z"]).is_err());
+        assert!(records("cat-file", &["-z", "--batch"]).is_err());
+        assert!(records("add", &["--pathspec-from-file=-", "--pathspec-file-nul"]).is_err());
+        assert!(records("update-ref", &["-z", "--stdin"]).is_err());
+        assert_eq!(records("cat-file", &["-z", "--batch-check"]), Ok(None));
+    }
+
+    #[test]
+    fn pathspecs_on_stdin_meet_the_argv_rules() {
         let path = |path: &str| Ok(path.contains("id_rsa"));
         let pattern = |spelling: &str| spelling.contains("id_r");
         let judges = Judges {
             path: &path,
             pattern: &pattern,
         };
-        let pathspecs = Records::Pathspecs { nul: false };
-        assert_eq!(
-            judge_input(":!README.md\n", pathspecs, &judges),
-            Err(EXCLUSIONS_ONLY)
-        );
-        assert_eq!(
-            judge_input(":!README.md\nsrc\n", pathspecs, &judges),
-            Ok(false)
-        );
-        assert_eq!(
-            judge_input(":(icase)ID_RSA\n", pathspecs, &judges),
-            Err(ICASE)
-        );
-        assert_eq!(
-            judge_input(":(glob)**/id_r*\n", pathspecs, &judges),
-            Err(PATTERN)
-        );
-        assert_eq!(judge_input(":(top)id_rsa\n", pathspecs, &judges), Ok(true));
-        assert_eq!(judge_input("\"id_rsa\"\n", pathspecs, &judges), Ok(true));
-        let nul = Records::Pathspecs { nul: true };
-        assert_eq!(judge_input("\"x\"\0", nul, &judges), Ok(false));
+        let read = |input: &str| judge_input(input, Records::Pathspecs, &judges);
+        assert_eq!(read(":!README.md\n"), Err(MAGIC));
+        assert_eq!(read(":(icase)ID_RSA\n"), Err(MAGIC));
+        assert_eq!(read("src\n:/x\n"), Err(MAGIC));
+        assert_eq!(read("id_r*\n"), Err(PATTERN));
+        assert_eq!(read("\"id_rsa\"\n"), Ok(true));
+        assert_eq!(read("README.md\nsrc/*.rs\n"), Ok(false));
     }
 
     #[test]
