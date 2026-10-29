@@ -1,0 +1,11 @@
+id = "TSK-1079"
+uid = "c5074e4f-43db-49c7-9da2-0a758394d542"
+kind = "TSK"
+title = "Exempt paths still refuse links and gitlinks, and credentials.json is blocked"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T22:05:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
