@@ -54,6 +54,57 @@ impl AssetSource for DirSource {
     }
 }
 
+/// An asset's text as the binary's [`AssetSource`] holds it, before any
+/// templating. Only `read_shipped` makes one (the field is private to
+/// this module), so holding one proves where the text came from.
+pub struct AssetText(String);
+
+impl AssetText {
+    /// The text as proof of what the binary ships ([`Shipped`]).
+    #[must_use]
+    pub fn shipped(&self) -> Shipped<'_> {
+        Shipped(&self.0)
+    }
+
+    /// The text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Text the binary ships: an asset read from its [`AssetSource`]
+/// ([`AssetText::shipped`]) or text compiled into it
+/// ([`Shipped::compiled`]). A runtime string cannot become one, so
+/// [`super::Shown::shipped`], which shows only text a `Shipped` holds, cannot
+/// be handed a project's text as its proof (TSK-1029).
+#[derive(Clone, Copy)]
+pub struct Shipped<'a>(&'a str);
+
+impl Shipped<'static> {
+    /// Text compiled into the binary, such as an `include_str!` asset.
+    #[must_use]
+    pub fn compiled(text: &'static str) -> Self {
+        Self(text)
+    }
+}
+
+impl<'a> Shipped<'a> {
+    /// The shipped text.
+    #[must_use]
+    pub fn as_str(self) -> &'a str {
+        self.0
+    }
+}
+
+/// Read an asset as [`AssetText`], the proof [`Shipped`] needs.
+pub(crate) fn read_shipped(
+    source: &dyn AssetSource,
+    path: &str,
+) -> Result<Option<AssetText>, super::ScaffoldError> {
+    Ok(read_text(source, path)?.map(AssetText))
+}
+
 /// Convenience: read an asset as UTF-8 text.
 pub(crate) fn read_text(
     source: &dyn AssetSource,

@@ -183,15 +183,16 @@ pub fn shown(version: &str) -> String {
 /// One-line warning when the project's scaffold is behind the binary.
 /// Quiet (None) when the project is uninitialized or up to date.
 #[must_use]
-pub fn version_skew_warning(root: &Path, binary_version: &str) -> Option<String> {
+pub fn version_skew_warning(root: &Path, binary_version: &str) -> Option<super::Shown> {
+    use super::Shown;
     let state = super::state::ProjectState::load(root).ok()?;
     // An unparseable pin stays quiet here: this runs on every invocation,
     // and `init`, `update` and `doctor` already name it where it matters.
     (is_older(&state.scaffold_version, binary_version) == Ok(true)).then(|| {
-        format!(
+        crate::shown!(
             "codeflow: scaffold {} is behind binary {} — run `codeflow update`",
-            shown(&state.scaffold_version),
-            binary_version
+            Shown::version(&state.scaffold_version),
+            Shown::version(binary_version)
         )
     })
 }

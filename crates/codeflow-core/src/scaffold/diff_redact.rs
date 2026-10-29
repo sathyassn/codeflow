@@ -29,6 +29,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use super::assets::Shipped as Embedded;
 use super::Shown;
 use crate::shown;
 
@@ -38,9 +39,9 @@ pub struct Reference<'a> {
     /// The asset as update writes it: rendered with the project's template
     /// values, the merge-region block, or the composed default.
     pub rendered: &'a str,
-    /// The asset's bytes as embedded in the binary, before templating.
-    /// `None` withholds every shipped value and line.
-    pub raw: Option<&'a str>,
+    /// The asset's text as the binary ships it, before templating: the
+    /// proof for every value and line shown. `None` withholds them all.
+    pub raw: Option<Embedded<'a>>,
 }
 
 /// The marker for a value equal to the shipped one at its path.
@@ -132,7 +133,7 @@ fn structured(format: Format, old: &str, new: &str, reference: Reference<'_>) ->
     // A reference that does not parse owns nothing: every key is the
     // project's and no shipped value is shown.
     let shipped = format.parse(reference.rendered);
-    let raw = reference.raw.and_then(|raw| format.parse(raw));
+    let raw = reference.raw.and_then(|raw| format.parse(raw.as_str()));
     let mut lines = vec![Shown::fixed(
         "(changed key paths; values and key names from the project are never shown)",
     )];
@@ -187,7 +188,7 @@ impl Sides<'_> {
 struct Shipped<'a> {
     rendered: Option<&'a Value>,
     raw: Option<&'a Value>,
-    text: Option<&'a str>,
+    text: Option<Embedded<'a>>,
 }
 
 impl<'a> Shipped<'a> {
@@ -373,7 +374,7 @@ fn shipped_value(shipped: Shipped<'_>) -> Shown {
 /// `value` as compact JSON, built only from strings and numbers the
 /// embedded bytes (`text`) hold as written; `None` when any part is not, or
 /// a string needs escaping.
-fn embedded_json(value: &Value, text: Option<&str>) -> Option<Shown> {
+fn embedded_json(value: &Value, text: Option<Embedded<'_>>) -> Option<Shown> {
     let text = text?;
     match value {
         Value::Null => Some(Shown::fixed("null")),
@@ -423,7 +424,7 @@ fn marker(value: Option<&Value>, shipped: Option<&Value>, missing: &'static str)
 fn text(old: &str, new: &str, reference: Reference<'_>) -> Shown {
     let shipped_lines: HashSet<&str> = reference
         .raw
-        .map(|raw| raw.split('\n').collect())
+        .map(|raw| raw.as_str().split('\n').collect())
         .unwrap_or_default();
     let patch = diffy::create_patch(old, new);
     let mut written = Vec::new();
@@ -503,10 +504,10 @@ mod tests {
     /// A synthetic value no output may show.
     const SECRET: &str = "opaque-neighbour-value-31337";
 
-    fn reference(shipped: &str) -> Reference<'_> {
+    fn reference(shipped: &'static str) -> Reference<'static> {
         Reference {
             rendered: shipped,
-            raw: Some(shipped),
+            raw: Some(Embedded::compiled(shipped)),
         }
     }
 
@@ -592,7 +593,7 @@ mod tests {
             &rendered,
             Reference {
                 rendered: &rendered,
-                raw: Some(raw),
+                raw: Some(Embedded::compiled(raw)),
             },
         );
         assert_hidden(&out);
@@ -690,7 +691,7 @@ mod tests {
             &rendered,
             Reference {
                 rendered: &rendered,
-                raw: Some(raw),
+                raw: Some(Embedded::compiled(raw)),
             },
         );
         assert_hidden(&out);

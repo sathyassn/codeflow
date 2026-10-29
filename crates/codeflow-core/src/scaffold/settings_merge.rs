@@ -50,6 +50,7 @@
 
 use serde_json::{Map, Value};
 
+use super::assets::Shipped;
 use super::{ScaffoldError, Shown};
 use crate::shown;
 
@@ -178,7 +179,7 @@ fn merge(
     kind: Previous,
     report: &mut Vec<Shown>,
 ) -> Result<String, ScaffoldError> {
-    let preset = Preset(incoming);
+    let preset = Preset(&SHIPPED_PRESETS);
     let mut current: Value = serde_json::from_str(current)?;
     let incoming: Value = serde_json::from_str(incoming)?;
     let previous: Option<Value> = previous.map(serde_json::from_str).transpose()?;
@@ -999,7 +1000,7 @@ fn shown_entry(entry: &Value) -> Shown {
             PRIOR_PRESETS
                 .iter()
                 .filter_map(|src| super::prior_release::settings(src))
-                .find_map(|shipped| Shown::shipped(&text, shipped))
+                .find_map(|shipped| Shown::shipped(&text, Shipped::compiled(shipped)))
         })
         .unwrap_or_else(|| Shown::fixed("<not shown: no shipped copy in this binary holds it>"))
 }
@@ -1012,7 +1013,7 @@ fn prior_key(key: &str) -> Shown {
         .iter()
         .filter_map(|src| super::prior_release::settings(src))
         .find(|shipped| shipped.contains(&quoted))
-        .and_then(|shipped| Shown::shipped(key, shipped))
+        .and_then(|shipped| Shown::shipped(key, Shipped::compiled(shipped)))
         .unwrap_or_else(|| Shown::fixed("<a key no shipped copy in this binary holds>"))
 }
 
@@ -1024,23 +1025,36 @@ const PRIOR_PRESETS: [&str; 3] = [
     "settings/bypass-sandboxed.json",
 ];
 
-/// The settings preset this update writes: an embedded asset, never
-/// templated (the scan test `update_display_boundary` checks), so a name or
-/// entry it holds as written may be shown.
+/// The settings presets this binary ships, compiled in: the proof for a
+/// name or entry a report line shows ([`Shipped::compiled`]). The merge
+/// itself reads the preset it is handed; these are never templated (the
+/// scan test `update_display_boundary` checks).
+const SHIPPED_PRESETS: [&str; 3] = [
+    include_str!("../../../../assets/base/settings/default.json"),
+    include_str!("../../../../assets/base/settings/acceptEdits.json"),
+    include_str!("../../../../assets/base/settings/bypass-sandboxed.json"),
+];
+
+/// How a report line names what the shipped presets hold: it holds the
+/// compiled-in presets the names are proved against.
 #[derive(Clone, Copy)]
-struct Preset<'a>(&'a str);
+struct Preset<'a>(&'a [&'static str]);
 
 impl Preset<'_> {
-    /// A key or command the shipped preset holds; any other is a
-    /// placeholder.
+    /// A key or command a shipped preset holds; any other is a placeholder.
     fn name(self, name: &str) -> Shown {
-        Shown::shipped(name, self.0)
+        self.0
+            .iter()
+            .find_map(|preset| Shown::shipped(name, Shipped::compiled(preset)))
             .unwrap_or_else(|| Shown::fixed("<a name the shipped preset does not hold>"))
     }
 
-    /// An array entry, as JSON, when the shipped preset holds it as written.
+    /// An array entry, as JSON, when a shipped preset holds it as written.
     fn entry(self, entry: &Value) -> Shown {
-        Shown::shipped(&entry.to_string(), self.0)
+        let entry = entry.to_string();
+        self.0
+            .iter()
+            .find_map(|preset| Shown::shipped(&entry, Shipped::compiled(preset)))
             .unwrap_or_else(|| Shown::fixed("<an entry the shipped preset does not hold>"))
     }
 }

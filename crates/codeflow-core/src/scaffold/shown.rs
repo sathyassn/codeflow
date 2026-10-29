@@ -2,28 +2,34 @@
 //! (TSK-1029).
 //!
 //! Every report line, note, warning and error these commands print or
-//! export is a [`Shown`]. A `Shown` is built only from a closed set of
-//! fragments, none of which can carry a value, key or line a project
-//! wrote:
+//! export is a [`Shown`]. Its text is private and there is no conversion
+//! from a string, so a `Shown` is built only from these fragments:
 //!
-//! - text compiled into the binary ([`Shown::fixed`], and the format string
-//!   of [`shown!`](crate::shown), which takes only `Shown` arguments);
-//! - a count ([`Shown::count`]);
-//! - a path ([`Shown::path`]);
-//! - a parse location ([`Shown::place`]);
-//! - an I/O failure category ([`Shown::io`]);
-//! - a version under the version display rule ([`Shown::version`]);
-//! - text the binary's embedded assets hold ([`Shown::shipped`]).
+//! - text compiled into the binary: [`Shown::fixed`] and the format string
+//!   of [`shown!`](crate::shown) take `&'static str`;
+//! - a count or number ([`Shown::count`], [`Shown::number`]);
+//! - a hash or object id the binary computed ([`Shown::sha256_of`],
+//!   [`Shown::object_id`]);
+//! - a path ([`Shown::path`]), a parse location ([`Shown::place`]) or an
+//!   I/O failure category ([`Shown::io`]);
+//! - a version or a date, reduced to their digits and fixed suffixes
+//!   ([`Shown::version`], [`Shown::iso_date`]);
+//! - text the binary ships: [`Shown::shipped`] returns a slice of a
+//!   [`Shipped`] text, which only the asset reader or a compiled-in
+//!   `&'static str` makes, and [`Shown::defined`] returns one of a list of
+//!   `&'static str` names.
 //!
-//! There is no conversion from `String` or `&str`, and the inner text is
-//! private, so the compiler refuses any other construction. An error from a
-//! lower layer is converted to these fragments where it enters a sink. The
-//! scan test `update_display_boundary` checks what the type cannot: that a
-//! `shown!` format string captures no variable, and that each call of the
-//! two constructors that take runtime text (`path` and `shipped`) is
-//! listed with what feeds it.
+//! `shown!` joins `Shown` arguments into a `&'static str` format through
+//! [`Shown::format`]; no `fmt::Arguments` and no runtime format string
+//! enter. The guarantee rests on two things the compiler does not check: a
+//! `&'static str` is made only from a literal or compiled-in text (no
+//! `leak`), and the [`super::AssetSource`] the binary passes is its own
+//! embedded tree. The scan test `update_display_boundary` checks the first
+//! and lists the `Shown::path` sites.
 
 use std::fmt;
+
+use super::assets::Shipped;
 
 /// Text `codeflow update` and `codeflow update --pin` may print or export.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -81,21 +87,28 @@ impl Shown {
         Self(super::version::shown(version))
     }
 
-    /// `text` when `shipped`, the bytes of an asset embedded in the binary
-    /// before any templating, holds it as written; else `None`.
+    /// The part of `shipped` that reads as `text`, when the shipped text
+    /// holds it as written; else `None`. The result is copied from the
+    /// shipped text, so `text` only chooses which part.
     #[must_use]
-    pub fn shipped(text: &str, shipped: &str) -> Option<Self> {
-        (!text.is_empty() && shipped.contains(text)).then(|| Self(text.to_string()))
+    pub fn shipped(text: &str, shipped: Shipped<'_>) -> Option<Self> {
+        let shipped = shipped.as_str();
+        if text.is_empty() {
+            return None;
+        }
+        let start = shipped.find(text)?;
+        Some(Self(shipped[start..start + text.len()].to_string()))
     }
 
-    /// `text` when it equals one of `defined`, names `CodeFlow` defines (such
-    /// as the default policy's required PR sections), else `None`.
+    /// The name in `defined`, names `CodeFlow` compiles in (such as the
+    /// default policy's required PR sections), that equals `text` ignoring
+    /// ASCII case; else `None`.
     #[must_use]
-    pub fn defined<'a>(text: &str, defined: impl IntoIterator<Item = &'a str>) -> Option<Self> {
+    pub fn defined(text: &str, defined: &[&'static str]) -> Option<Self> {
         defined
-            .into_iter()
+            .iter()
             .find(|name| name.eq_ignore_ascii_case(text))
-            .map(|name| Self(name.to_string()))
+            .map(|name| Self::fixed(name))
     }
 
     /// A calendar date in `YYYY-MM-DD` form, such as the binary's own
@@ -147,33 +160,78 @@ impl Shown {
         self.0.push_str(&other.0);
     }
 
-    /// Builds the text of [`shown!`](crate::shown). Called only by that
-    /// macro, whose arguments must be `Shown` (the scan test checks the
-    /// callers).
-    #[doc(hidden)]
+    /// `format` with each `{}` replaced by the next of `parts`, `{:<N}` and
+    /// `{:>N}` padding it to `N` characters, and `{{` and `}}` written as
+    /// braces. The format is compiled-in text and every part is a `Shown`,
+    /// so the result is one. This is what [`shown!`](crate::shown) calls.
+    ///
+    /// # Panics
+    ///
+    /// On a placeholder of another form, or a count of parts that does not
+    /// match the placeholders: a mistake in the binary's own format string.
     #[must_use]
-    pub fn from_shown_macro(args: fmt::Arguments<'_>) -> Self {
-        Self(fmt::format(args))
-    }
-
-    /// Passes a macro argument through, so it must be a `Shown`.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn macro_argument(argument: &Shown) -> &Shown {
-        argument
+    pub fn format(format: &'static str, parts: &[&Shown]) -> Self {
+        let mut out = String::with_capacity(format.len());
+        let mut parts = parts.iter();
+        let mut rest = format;
+        while let Some(index) = rest.find(['{', '}']) {
+            out.push_str(&rest[..index]);
+            rest = &rest[index..];
+            if let Some(after) = rest.strip_prefix("{{") {
+                out.push('{');
+                rest = after;
+            } else if let Some(after) = rest.strip_prefix("}}") {
+                out.push('}');
+                rest = after;
+            } else if rest.starts_with('{') {
+                let end = rest.find('}').expect("shown!: unclosed placeholder");
+                let spec = &rest[1..end];
+                let part = parts.next().expect("shown!: more placeholders than parts");
+                pad(&mut out, &part.0, spec);
+                rest = &rest[end + 1..];
+            } else {
+                panic!("shown!: a lone closing brace in the format");
+            }
+        }
+        out.push_str(rest);
+        assert!(
+            parts.next().is_none(),
+            "shown!: more parts than placeholders"
+        );
+        Self(out)
     }
 }
 
-/// A [`Shown`] from a format string and `Shown` arguments. The format string
-/// is text compiled into the binary; it uses positional `{}` placeholders
-/// only, never a captured variable (the scan test checks).
+/// Writes `text` padded as the placeholder `spec` asks: empty, `:<N` or
+/// `:>N`.
+fn pad(out: &mut String, text: &str, spec: &str) {
+    if spec.is_empty() {
+        return out.push_str(text);
+    }
+    let width = |digits: &str| digits.parse::<usize>().ok();
+    let (left, width) = match (spec.strip_prefix(":<"), spec.strip_prefix(":>")) {
+        (Some(digits), _) => (true, width(digits)),
+        (_, Some(digits)) => (false, width(digits)),
+        _ => (true, None),
+    };
+    let width = width.expect("shown!: placeholders are {}, {:<N} or {:>N}");
+    let fill = " ".repeat(width.saturating_sub(text.chars().count()));
+    if left {
+        out.push_str(text);
+        out.push_str(&fill);
+    } else {
+        out.push_str(&fill);
+        out.push_str(text);
+    }
+}
+
+/// A [`Shown`] from a format string and `Shown` arguments ([`Shown::format`]).
+/// The format string is a literal; it uses `{}`, `{:<N}` and `{:>N}`
+/// placeholders only. An argument that is not a `Shown` does not compile.
 #[macro_export]
 macro_rules! shown {
     ($format:literal $(, $argument:expr)* $(,)?) => {
-        $crate::scaffold::shown::Shown::from_shown_macro(format_args!(
-            $format
-            $(, $crate::scaffold::shown::Shown::macro_argument(&$argument))*
-        ))
+        $crate::scaffold::shown::Shown::format($format, &[$(&$argument),*])
     };
 }
 
@@ -236,19 +294,31 @@ mod tests {
     #[test]
     fn the_macro_takes_only_shown_arguments_and_keeps_padding() {
         let line = crate::shown!(
-            "{:<6}|{} of {}",
+            "{:<6}|{} of {} {{{:>3}}}",
             Shown::fixed("ab"),
             Shown::count(3),
-            Shown::path("a/b.md")
+            Shown::path("a/b.md"),
+            Shown::count(7)
         );
-        assert_eq!(line.as_str(), "ab    |3 of a/b.md");
+        assert_eq!(line.as_str(), "ab    |3 of a/b.md {  7}");
+    }
+
+    #[test]
+    #[should_panic(expected = "placeholders are")]
+    fn a_named_placeholder_is_refused() {
+        let _ = Shown::format("{secret}", &[&Shown::fixed("x")]);
     }
 
     #[test]
     fn shipped_text_needs_the_asset_to_hold_it() {
-        assert!(Shown::shipped("Read", r#"{"allow": ["Read"]}"#).is_some());
-        assert!(Shown::shipped("opaque-31337", r#"{"allow": ["Read"]}"#).is_none());
-        assert!(Shown::shipped("", "anything").is_none());
+        let asset = Shipped::compiled(r#"{"allow": ["Read"]}"#);
+        assert_eq!(Shown::shipped("Read", asset).unwrap().as_str(), "Read");
+        assert!(Shown::shipped("opaque-31337", asset).is_none());
+        assert!(Shown::shipped("", asset).is_none());
+        assert_eq!(
+            Shown::defined("summary", &["Summary"]).unwrap().as_str(),
+            "Summary"
+        );
     }
 
     #[test]

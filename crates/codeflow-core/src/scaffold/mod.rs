@@ -124,18 +124,19 @@ pub use update::{update, UpdateOptions};
 pub use version::version_skew_warning;
 
 /// Errors produced by the scaffold engine. Every text a variant holds is a
-/// [`Shown`], a path or a [`ParsePlace`], and no variant has a source, so
-/// neither its text, its `Debug` form nor an error chain can carry what a
+/// [`Shown`], a path or a [`ParsePlace`], and no variant keeps a source:
+/// [`std::error::Error::source`] is `None`, and `Debug` writes the same text
+/// as `Display`, so neither an error chain nor a `{:?}` can carry what a
 /// project wrote (TSK-1029, the display boundary in [`shown`]).
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum ScaffoldError {
-    /// An I/O failure, shown by its path and kind. The `io::Error` stays
-    /// for callers that match on it; it is not a source, since a custom
-    /// error's message can hold any text.
-    #[error("io error on {}: {}", .path.display(), Shown::io(.source))]
+    /// An I/O failure, shown by its path and the failure's category. The
+    /// `io::Error` itself is not kept: a custom error's message can hold any
+    /// text, and a field named `source` would become the error's source.
+    #[error("io error on {}: {kind}", .path.display())]
     Io {
         path: std::path::PathBuf,
-        source: std::io::Error,
+        kind: Shown,
     },
     #[error("scaffold manifest missing from assets ({0})")]
     ManifestMissing(Shown),
@@ -251,11 +252,22 @@ impl ScaffoldError {
         Self::InvalidState { what, detail }
     }
 
-    fn io(path: impl Into<std::path::PathBuf>, source: std::io::Error) -> Self {
+    // Taken by value so `map_err(|e| ScaffoldError::io(path, e))` reads
+    // plainly; only the category is kept.
+    #[allow(clippy::needless_pass_by_value)]
+    fn io(path: impl Into<std::path::PathBuf>, error: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),
-            source,
+            kind: Shown::io(&error),
         }
+    }
+}
+
+impl std::fmt::Debug for ScaffoldError {
+    /// The same text as `Display`: every field is inside the boundary, and
+    /// a derived form would print each field's own `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ScaffoldError({self})")
     }
 }
 
@@ -431,5 +443,33 @@ mod parse_error_tests {
             failures.extend(misplaced(&toml_error(&text, &error), line));
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// TSK-1029 review: an I/O error's message is any text its maker
+    /// chose, so neither the error, its `Debug` form nor its source shows
+    /// it; a kept PR template's headings and a report holding one stay out
+    /// of `Debug` too.
+    #[test]
+    fn io_errors_and_kept_templates_never_show_their_text_in_debug() {
+        use super::pr_template::KeptTemplate;
+        use std::error::Error as _;
+        let error = ScaffoldError::io(
+            "docs/x.md",
+            std::io::Error::other(format!("custom {SECRET}")),
+        );
+        assert!(error.source().is_none(), "the io::Error is not kept");
+        let shown = chain(&error);
+        assert!(!shown.contains(SECRET), "{shown}");
+        assert!(shown.contains("docs/x.md"), "{shown}");
+        let kept = KeptTemplate {
+            path: ".github/pull_request_template.md".into(),
+            headings: vec![format!("## {SECRET}")],
+        };
+        let mut report = super::Report::new(super::Shown::fixed("update"));
+        report.pending_pr_template = Some(kept.clone());
+        for debug in [format!("{kept:?}"), format!("{report:?}")] {
+            assert!(!debug.contains(SECRET), "{debug}");
+            assert!(debug.contains("headings: 1"), "{debug}");
+        }
     }
 }

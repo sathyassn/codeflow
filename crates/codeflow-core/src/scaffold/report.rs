@@ -68,7 +68,7 @@ pub struct FileReport {
 }
 
 /// The full init/update report.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct Report {
     /// Heading, e.g. `codeflow init (standard tier)`.
     pub title: Shown,
@@ -79,6 +79,17 @@ pub struct Report {
     /// A kept PR template whose mapping awaits the operator's decision
     /// (SPC-013 R-84); an interactive caller asks before it reports.
     pub pending_pr_template: Option<super::pr_template::KeptTemplate>,
+}
+
+impl std::fmt::Debug for Report {
+    /// The report's own text, as [`Report::shown`] gives it: a derived form
+    /// would print the kept PR template's fields (TSK-1029).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Report")
+            .field("text", &self.shown().as_str())
+            .field("pending_pr_template", &self.pending_pr_template)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Report {

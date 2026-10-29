@@ -34,12 +34,23 @@ pub const MANAGED_TEMPLATE: &str = ".github/pull_request_template.md";
 const POLICY: &str = ".codeflow/policy.json";
 
 /// A PR template the project already had.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct KeptTemplate {
     /// Repository-relative path.
     pub path: String,
     /// Its `##` and `###` headings, in order.
     pub headings: Vec<String>,
+}
+
+impl std::fmt::Debug for KeptTemplate {
+    /// The path and a count of headings: the headings are the project's
+    /// text (TSK-1029).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeptTemplate")
+            .field("path", &self.path)
+            .field("headings", &self.headings.len())
+            .finish()
+    }
 }
 
 /// Every PR template location GitHub reads: `.github/`, the root and
@@ -432,15 +443,9 @@ fn edit_error(key: &'static str) -> ScaffoldError {
 /// project, in its policy or its template, and can hold a secret
 /// (TSK-1029).
 fn shipped_section(heading: &str) -> Option<Shown> {
-    let defaults = Policy::default().git;
-    Shown::defined(
-        heading,
-        defaults
-            .pr_required_sections
-            .iter()
-            .chain(&defaults.pr_code_sections)
-            .map(String::as_str),
-    )
+    use crate::hooks::policy::{DEFAULT_PR_CODE_SECTIONS, DEFAULT_PR_REQUIRED_SECTIONS};
+    Shown::defined(heading, &DEFAULT_PR_REQUIRED_SECTIONS)
+        .or_else(|| Shown::defined(heading, &DEFAULT_PR_CODE_SECTIONS))
 }
 
 /// `headings` for a report: each shipped one by name, in order, then a

@@ -46,6 +46,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::assets::Shipped;
 use super::init::{build_context, render_entry};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
 use super::prior_release;
@@ -777,7 +778,7 @@ fn push_diff(
     old: &str,
     new: &str,
     rendered: &str,
-    raw: Option<&str>,
+    raw: Option<Shipped<'_>>,
 ) {
     diffs.push(&super::diff_redact::section(
         dest,
@@ -902,7 +903,8 @@ fn update_entry(
     };
     // The embedded asset, before templating: what the `--diff` export may
     // show of this file (TSK-1029).
-    let raw = super::assets::read_text(source, &format!("base/{}", entry.src))?;
+    let asset = super::assets::read_shipped(source, &format!("base/{}", entry.src))?;
+    let raw = asset.as_ref().map(super::assets::AssetText::shipped);
     let dest_path = root.join(&entry.dest);
     let exists = super::path_exists(&dest_path)?;
     let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
@@ -944,28 +946,14 @@ fn update_entry(
                     write_dest(root, entry, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(
-                        diffs,
-                        &entry.dest,
-                        old,
-                        &rendered,
-                        &rendered,
-                        raw.as_deref(),
-                    );
+                    push_diff(diffs, &entry.dest, old, &rendered, &rendered, raw);
                     report.file(&entry.dest, Action::Changed);
                 }
                 ManagedStep::Force => {
                     write_dest(root, entry, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(
-                        diffs,
-                        &entry.dest,
-                        old,
-                        &rendered,
-                        &rendered,
-                        raw.as_deref(),
-                    );
+                    push_diff(diffs, &entry.dest, old, &rendered, &rendered, raw);
                     report.file_with_notes(
                         &entry.dest,
                         Action::Forced,
@@ -1001,7 +989,7 @@ fn update_entry(
                     // on the following update.
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(diffs, &entry.dest, old, &merged, &rendered, raw.as_deref());
+                    push_diff(diffs, &entry.dest, old, &merged, &rendered, raw);
                     report.file_with_notes(
                         &entry.dest,
                         Action::Merged,
@@ -1068,14 +1056,7 @@ fn update_entry(
                     report.file_with_notes(&entry.dest, Action::Unchanged, lines);
                 } else {
                     write_dest(root, entry, &merged)?;
-                    push_diff(
-                        diffs,
-                        &entry.dest,
-                        &current,
-                        &merged,
-                        &rendered,
-                        raw.as_deref(),
-                    );
+                    push_diff(diffs, &entry.dest, &current, &merged, &rendered, raw);
                     report.file_with_notes(&entry.dest, Action::Merged, lines);
                 }
             }
@@ -1101,7 +1082,7 @@ fn update_entry(
                     BlockOutcome::Unchanged => report.file(&entry.dest, Action::Unchanged),
                     BlockOutcome::Replaced => {
                         write_dest(root, entry, &next)?;
-                        push_diff(diffs, &entry.dest, &current, &next, &block, raw.as_deref());
+                        push_diff(diffs, &entry.dest, &current, &next, &block, raw);
                         report.file_with_notes(
                             &entry.dest,
                             Action::Changed,
@@ -1112,7 +1093,7 @@ fn update_entry(
                     }
                     BlockOutcome::Appended => {
                         write_dest(root, entry, &next)?;
-                        push_diff(diffs, &entry.dest, &current, &next, &block, raw.as_deref());
+                        push_diff(diffs, &entry.dest, &current, &next, &block, raw);
                         report.file_with_notes(
                             &entry.dest,
                             Action::Merged,
@@ -1136,15 +1117,7 @@ fn update_entry(
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("json"));
             if is_json {
-                sync_user_owned_json(
-                    root,
-                    entry,
-                    &rendered,
-                    raw.as_deref(),
-                    installed,
-                    report,
-                    diffs,
-                )?;
+                sync_user_owned_json(root, entry, &rendered, raw, installed, report, diffs)?;
             } else {
                 let mut notes = vec![Shown::fixed("user-owned: never mutated by update")];
                 let is_new_entry = !installed.files.contains_key(&entry.dest);
@@ -1174,7 +1147,7 @@ fn sync_user_owned_json(
     root: &Path,
     entry: &ManifestEntry,
     rendered: &str,
-    raw: Option<&str>,
+    raw: Option<Shipped<'_>>,
     installed: &mut InstalledManifest,
     report: &mut Report,
     diffs: &mut Shown,
@@ -1308,7 +1281,7 @@ fn prior_release_note() -> Shown {
 /// A policy key path, by the name `CodeFlow` defines: the schema's own path
 /// for the key, or each segment as the embedded default (`raw`) holds it
 /// quoted; any other key is a placeholder (TSK-1029).
-fn policy_key(path: &str, raw: Option<&str>) -> Shown {
+fn policy_key(path: &str, raw: Option<Shipped<'_>>) -> Shown {
     if let Some(spec) = crate::hooks::policy_schema::spec_for(path) {
         return Shown::fixed(spec.path);
     }
@@ -1318,7 +1291,8 @@ fn policy_key(path: &str, raw: Option<&str>) -> Shown {
     let segments: Option<Vec<Shown>> = raw.and_then(|raw| {
         path.split('.')
             .map(|segment| {
-                raw.contains(&format!("\"{segment}\""))
+                raw.as_str()
+                    .contains(&format!("\"{segment}\""))
                     .then(|| Shown::shipped(segment, raw))
                     .flatten()
             })
@@ -1332,7 +1306,7 @@ fn policy_key(path: &str, raw: Option<&str>) -> Shown {
 
 /// A shipped default value, as JSON, when the embedded default (`raw`)
 /// holds it as written.
-fn shipped_value(value: &serde_json::Value, raw: Option<&str>) -> Shown {
+fn shipped_value(value: &serde_json::Value, raw: Option<Shipped<'_>>) -> Shown {
     raw.and_then(|raw| Shown::shipped(&value.to_string(), raw))
         .unwrap_or_else(|| Shown::fixed("<the new shipped default>"))
 }
@@ -1388,7 +1362,7 @@ impl MovedDefault {
     /// The report line: the key and the new shipped value, never the old
     /// value, which comes from the project's file and its recorded baseline
     /// (TSK-1029).
-    fn note(&self, raw: Option<&str>) -> Shown {
+    fn note(&self, raw: Option<Shipped<'_>>) -> Shown {
         shown!(
             "moved {} to {}: it held the previous shipped default. To keep the \
              previous value, set it again in .codeflow/policy.json; update keeps a \
@@ -1460,7 +1434,7 @@ fn recommend_defaults(
     user: &serde_json::Value,
     old_default: &serde_json::Value,
     new_default: &serde_json::Value,
-    raw: Option<&str>,
+    raw: Option<Shipped<'_>>,
 ) -> Vec<Shown> {
     let mut notes = Vec::new();
     for (path, reason) in RECOMMENDED_DEFAULTS {
@@ -1499,7 +1473,7 @@ fn unsupported_policy_notes(value: &serde_json::Value) -> impl Iterator<Item = S
         })
 }
 
-fn key_change_note(key: &str, raw: Option<&str>) -> Shown {
+fn key_change_note(key: &str, raw: Option<Shipped<'_>>) -> Shown {
     match key.strip_prefix('-') {
         Some(gone) => {
             let kind = if crate::hooks::policy_schema::spec_for(gone)
