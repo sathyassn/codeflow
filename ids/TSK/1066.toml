@@ -1,0 +1,11 @@
+id = "TSK-1066"
+uid = "ae3175ca-7056-4778-85fc-d0ad2d6a9551"
+kind = "TSK"
+title = "A task pull request into an epic line judges a sync that edits task files as the line push does"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-29T11:21:45Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
