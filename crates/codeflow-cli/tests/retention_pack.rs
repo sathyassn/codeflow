@@ -182,7 +182,7 @@ fn assert_local_window_and_reinjection(case: &str, plan: &Value, fixture: &Path,
     )
     .expect("shared settings JSON");
     assert_eq!(
-        shared["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50",
+        shared["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "35",
         "{case}: the project default the pin overrides"
     );
     let tracked = Command::new("git")

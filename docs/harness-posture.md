@@ -156,6 +156,14 @@ scaffold ships a status line and leaves effort to each person (ADR-0087).
 | Claude `statusLine` | a `jq` line: model name and id, version, output style, folder, branch, context used with a green, yellow or red percentage; without `jq`, folder and branch | `.claude/settings.local.json` |
 | Claude `effortLevel` | none | `~/.claude/settings.json`, `.claude/settings.local.json`, or `--effort` at launch |
 | Codex `model_reasoning_effort` | none | `~/.codex/config.toml`, or `-c model_reasoning_effort=...` at launch |
+| Claude compaction point (`env`) | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 1000000 and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 35: compaction near 350K tokens, a team cost policy that also applies to subagents | `env` in `.claude/settings.local.json` |
+
+The compaction point stays in the shared file because it sets the team's
+token cost; `cf-customize`'s `references/claude-context-policy.md` states
+the tradeoff: per-turn input grows with the context carried, a lower point
+compacts more often, and detail kept only in the conversation may be lost;
+durable records let a session recover when it rereads them, and the orient
+digest points to them after a compaction.
 
 - Claude Code reads managed settings, then `--settings` at launch, then
   `.claude/settings.local.json`, then the shared `.claude/settings.json`, then
@@ -183,7 +191,12 @@ scaffold ships a status line and leaves effort to each person (ADR-0087).
   `permissions`, `sandbox` and `env` follow their own merge rules:
   CodeFlow's own hook commands and missing sandbox entries are added back,
   while a shipped permission entry or `env` key the project removed stays
-  removed when the recorded baseline shows CodeFlow shipped it.
+  removed when the recorded baseline shows CodeFlow shipped it. An `env`
+  value still equal to the recorded shipped value moves to the new one,
+  whatever the project meant by it, so a project on the compaction
+  percentage of 50 moves to 35; a value that differs from the recorded
+  shipped value stays, and the report names its key when the default
+  changed.
 
 ### Hosting the duo from either seat
 
