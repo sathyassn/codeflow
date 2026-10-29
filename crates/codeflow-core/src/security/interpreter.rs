@@ -319,6 +319,20 @@ fn secret_reads(
                     continue;
                 }
             }
+            if let Some(result) = git_input_reads(&unwrapped, reader_cwd, home) {
+                if result.as_ref().map_or(true, |secret| *secret) {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        match result {
+                            Ok(_) => "Git input names a secret file or object path".into(),
+                            Err(why) => format!("cannot verify Git input: {why}"),
+                        },
+                        crate::remedy::SECRET_SELECTION.remedy(),
+                    ));
+                    continue;
+                }
+            }
             for (at, value, glob) in
                 file_operands(name, args, unwrapped.expands.as_deref(), &line, reader_cwd)
             {
@@ -353,6 +367,52 @@ fn secret_reads(
     violations
 }
 
+/// The verdict a Git word gets from its Git role, or `None` when its other
+/// readings decide. An attached or proven text value names nothing. A Git
+/// object name's path part (`HEAD:id_rsa`, `main~2:.ssh/x`, `:0:id_rsa`)
+/// names a file in the tree, so it keeps the secret-name policy of a file
+/// operand whatever the revision's shape and on every platform (TSK-1002
+/// review 04). A revision word needs no filename mapping, but its object
+/// path keeps that policy too (TSK-1002 review 03, ruling 6).
+fn git_operand(
+    call: &outward::Unwrapped,
+    at: usize,
+    value: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Option<Result<bool, &'static str>> {
+    if git_text_value(call, at) {
+        return Some(Ok(false));
+    }
+    for path in git_object_paths(call, at, value) {
+        match secret_path_result(path, cwd, home, Some(false)) {
+            Ok(false) => {}
+            verdict => return Some(verdict),
+        }
+    }
+    git_revision_word(call, at, value, cwd).then(|| match object_path(value) {
+        Some(path) => secret_path_result(path, cwd, home, Some(false)),
+        None => Ok(false),
+    })
+}
+
+/// A command substitution whose output the guard cannot establish (a
+/// `pwd` after a directory change inside it, any unread program) may print
+/// any directory, so the path after it is judged as a relative name in an
+/// unknown directory (TSK-1002 review 08).
+fn substitution_names_secret(value: &str) -> bool {
+    let Some((_, tail)) = value.rsplit_once(['\u{1}', '\u{2}']) else {
+        return false;
+    };
+    // The separators after the substitution, slash or backslash, are
+    // dropped; the name itself keeps every other character.
+    let name = tail
+        .char_indices()
+        .find(|(_, ch)| !matches!(ch, '/' | '\\'))
+        .map_or("", |(at, _)| &tail[at..]);
+    relative_names_secret(name)
+}
+
 /// File operands retain their command-position provenance. Declared links
 /// add possible real paths before they exist on disk; virtual script
 /// descriptors keep the interpreter's existing best-effort code boundary.
@@ -373,27 +433,14 @@ fn inspect_operand(
     if call.cwd.is_none() && relative_names_secret(value) {
         return Err("cannot establish the directory the command runs in");
     }
+    if substitution_names_secret(value) {
+        return Err("cannot establish the directory a command substitution prints");
+    }
     if value == "__unverified_transfer_input" {
         return Err("cannot establish a transfer option's quoted input filename");
     }
-    // A Git object name's path part (`HEAD:id_rsa`, `main~2:.ssh/x`,
-    // `:0:id_rsa`) names a file in the tree, so it keeps the secret-name
-    // policy of a file operand whatever the revision's shape and on every
-    // platform (TSK-1002 review 04). The word's other readings follow.
-    for path in git_object_paths(call, at, value) {
-        if secret_path_result(path, cwd, home, Some(false))? {
-            return Ok(true);
-        }
-    }
-    if git_revision_word(call, at, value, cwd) {
-        // The revision needs no filename mapping, but the object path in
-        // `REV:PATH` names a file in the tree: it keeps the secret-name
-        // policy of a file operand on every platform (TSK-1002 review 03,
-        // ruling 6).
-        return match object_path(value) {
-            Some(path) => secret_path_result(path, cwd, home, Some(false)),
-            None => Ok(false),
-        };
+    if let Some(verdict) = git_operand(call, at, value, cwd, home) {
+        return verdict;
     }
     let name = call
         .args
@@ -437,13 +484,17 @@ fn inspect_operand(
     {
         return Err("shell options change which hidden paths the glob selects");
     }
-    if call.cwd.is_none() && (glob || expands && crate::hooks::git_guard::has_glob(value)) {
-        return uncertain_glob(
-            value,
-            cwd,
-            home,
-            "cannot establish the glob's working directory",
-        );
+    // A relative glob or search selector in a directory the guard cannot
+    // establish selects entries it cannot list, so no name check clears it
+    // (TSK-1002 review 06). A rooted glob does not depend on it.
+    if call.cwd.is_none()
+        && (glob
+            || expands
+                && crate::hooks::git_guard::has_glob(value)
+                && !value.starts_with("~/")
+                && !Path::new(value).is_absolute())
+    {
+        return Err("cannot establish the glob's working directory");
     }
     if glob {
         return secret_search_glob(
@@ -513,28 +564,236 @@ const GIT_OBJECT_SUBCOMMANDS: &[&str] = &[
     "difftool",
 ];
 
-/// Options of those subcommands whose separate value is text, not an object.
-/// The pickaxe regex option is not listed, so its separate value is still
-/// read as an operand (fail closed; `--grep=` or an attached value avoids it).
-const GIT_VALUE_OPTIONS: &[&str] = &[
-    "-m",
-    "-F",
-    "-e",
-    "-f",
+/// Long options whose attached value (`--format=...`) is text in every
+/// subcommand above: a format, a search pattern, a person or a date.
+const GIT_TEXT_OPTIONS: &[&str] = &[
+    "--format=",
+    "--pretty=",
+    "--grep=",
+    "--author=",
+    "--committer=",
+    "--since=",
+    "--until=",
+    "--after=",
+    "--before=",
+    "--date=",
+];
+
+/// Options of `log`, `show` and `whatchanged` whose separate value is text
+/// (a pickaxe string, a search pattern, a person, a date or a count).
+const GIT_LOG_TEXT_VALUED: &[&str] = &[
     "-S",
+    "-G",
     "--grep",
     "--author",
     "--committer",
-    "--format",
-    "--pretty",
     "--since",
     "--until",
-    "--message",
+    "--after",
+    "--before",
+    "-n",
+    "--max-count",
+    "--skip",
 ];
 
+/// Options of `log`, `show` and `whatchanged` known to take no separate
+/// value. Any other option word leaves the roles after it unknown.
+const GIT_LOG_FLAGS: &[&str] = &[
+    "-p",
+    "-u",
+    "-s",
+    "-m",
+    "-i",
+    "-E",
+    "-F",
+    "-P",
+    "--patch",
+    "--no-patch",
+    "--stat",
+    "--shortstat",
+    "--numstat",
+    "--name-only",
+    "--name-status",
+    "--oneline",
+    "--all",
+    "--graph",
+    "--decorate",
+    "--no-decorate",
+    "--merges",
+    "--no-merges",
+    "--first-parent",
+    "--reverse",
+    "--follow",
+    "--pickaxe-regex",
+    "--pickaxe-all",
+    "--regexp-ignore-case",
+    "--extended-regexp",
+    "--fixed-strings",
+    "--perl-regexp",
+    "--all-match",
+    "--invert-grep",
+    "--abbrev-commit",
+    "--no-abbrev-commit",
+    "--date-order",
+    "--topo-order",
+    "--color",
+    "--no-color",
+    "--no-pager",
+    "--full-history",
+    "--source",
+];
+
+/// What a Git command reads through a list on its input instead of its
+/// operands: `cat-file --batch` and `--batch-command` print the contents of
+/// the objects named on stdin, `hash-object --stdin-paths` and
+/// `update-index --stdin` read the files named there, and
+/// `--pathspec-from-file` reads paths from stdin or a file. A literal list
+/// (here-string, heredoc, `echo` or `printf` pipe) is judged line by line
+/// as object paths and file operands; any other input, a file, a program's
+/// output or the terminal, cannot be established and refuses, and so does
+/// a content batch over every object or through in-tree links (TSK-1002
+/// reviews 06 and 08). `None` when the command reads no such list.
+fn git_input_reads(
+    call: &outward::Unwrapped,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Option<Result<bool, &'static str>> {
+    let (program, rest) = call.args.split_first()?;
+    let git = crate::hooks::git_guard::git_arguments(program, rest)?;
+    let (subcommand, tail) = crate::hooks::git_guard::git_subcommand(&git)?;
+    let options: Vec<&str> = tail
+        .iter()
+        .map(String::as_str)
+        .take_while(|word| *word != "--")
+        .collect();
+    let has = |name: &str| {
+        options
+            .iter()
+            .any(|word| *word == name || word.starts_with(&format!("{name}=")))
+    };
+    let objects = subcommand == "cat-file" && (has("--batch") || has("--batch-command"));
+    let mut paths = subcommand == "hash-object" && has("--stdin-paths")
+        || subcommand == "update-index" && has("--stdin");
+    for (at, word) in options.iter().enumerate() {
+        let from = match word.strip_prefix("--pathspec-from-file") {
+            Some("") => options.get(at + 1).copied(),
+            Some(attached) => attached.strip_prefix('='),
+            None => continue,
+        };
+        match from {
+            Some("-") => paths = true,
+            _ => return Some(Err("cannot establish the paths a pathspec file names")),
+        }
+    }
+    if objects && (has("--batch-all-objects") || has("--follow-symlinks")) {
+        return Some(Err("cannot establish which objects a content batch reads"));
+    }
+    if !objects && !paths {
+        return None;
+    }
+    let Some(input) = call.input.as_deref() else {
+        return Some(Err("cannot establish the object or path list on stdin"));
+    };
+    let judge = |path: &str| {
+        if call.cwd.is_none() && relative_names_secret(path) {
+            return Err("cannot establish the directory the command runs in");
+        }
+        secret_path_result(path, cwd, home, Some(false))
+    };
+    for line in input.split(['\n', '\0']) {
+        let line = line.trim_end_matches('\r');
+        if objects {
+            // A batch line names an object, after a command word for
+            // `--batch-command`, and may carry trailing text; every colon
+            // suffix of the line and of each word is a possible path.
+            // Git splits a batch line at a space or tab.
+            let words = std::iter::once(line)
+                .chain(line.split([' ', '\t']).filter(|word| !word.is_empty()));
+            for word in words {
+                for (colon, _) in word.match_indices(':') {
+                    let path = &word[colon + 1..];
+                    if !path.is_empty() {
+                        match judge(path) {
+                            Ok(false) => {}
+                            result => return Some(result),
+                        }
+                    }
+                }
+            }
+        }
+        if paths && !line.is_empty() {
+            match judge(line) {
+                Ok(false) => {}
+                result => return Some(result),
+            }
+        }
+    }
+    Some(Ok(false))
+}
+
+/// Whether the word at `at` is text by a Git object subcommand's option
+/// grammar: the attached value of a text option (`--format=a:b`), or for
+/// `log`, `show` and `whatchanged` the value of a pickaxe, search, person,
+/// date or count option, attached (`-Ga:b`) or separate (`-G a:b`). A role
+/// is proven only when every option word before it is one the grammar
+/// knows: a separate value can itself look like an option (`-S -m
+/// HEAD:x`), and an unknown option may consume the next word, so after an
+/// unknown option every word is judged (TSK-1002 review 06).
+fn git_text_value(call: &outward::Unwrapped, at: usize) -> bool {
+    let Some((program, rest)) = call.args.split_first() else {
+        return false;
+    };
+    let Some(git) = crate::hooks::git_guard::git_arguments(program, rest) else {
+        return false;
+    };
+    let Some((subcommand, tail)) = crate::hooks::git_guard::git_subcommand(&git) else {
+        return false;
+    };
+    let start = call.args.len() - tail.len();
+    if !GIT_OBJECT_SUBCOMMANDS.contains(&subcommand) || at < start || at >= call.args.len() {
+        return false;
+    }
+    let log = matches!(subcommand, "log" | "show" | "whatchanged");
+    let attached = |word: &str| {
+        GIT_TEXT_OPTIONS
+            .iter()
+            .any(|option| word.starts_with(option))
+            || log && (word.starts_with("-S") || word.starts_with("-G")) && word.len() > 2
+    };
+    let mut index = start;
+    while index < at {
+        let word = call.args[index].as_str();
+        index += 1;
+        if word == "--" {
+            return false;
+        }
+        if !word.starts_with('-') || word == "-" {
+            continue;
+        }
+        let count = word.len() > 1 && word[1..].bytes().all(|byte| byte.is_ascii_digit());
+        if attached(word)
+            || count
+            || log && GIT_LOG_FLAGS.contains(&word)
+            || word.starts_with("--") && word.contains('=')
+        {
+            continue;
+        }
+        if log && GIT_LOG_TEXT_VALUED.contains(&word) {
+            if index == at {
+                return true;
+            }
+            index += 1;
+            continue;
+        }
+        return false;
+    }
+    attached(&call.args[at])
+}
+
 /// Every path a Git object operand may name. For a subcommand that takes
-/// objects, an operand before any `--` that is not an option or an option's
-/// text value may be `REV:PATH` with any revision spelling Git accepts
+/// objects, any operand before `--`, a separate option value included, or
+/// the attached value of an option not listed as text, may be `REV:PATH`
+/// with any revision spelling Git accepts
 /// (`HEAD:x`, `ref!name:x`, `HEAD^{/a:b}:x`, `:0:x`, `$(...):x`). The guard
 /// does not parse revision syntax; it reads the text after every `:` as a
 /// possible object path, so a secret name there refuses whatever comes
@@ -556,7 +815,7 @@ fn git_object_paths<'a>(call: &outward::Unwrapped, at: usize, value: &'a str) ->
         || at < start
         || value.starts_with('-')
         || call.args[start..at].iter().any(|word| word == "--")
-        || at > start && GIT_VALUE_OPTIONS.contains(&call.args[at - 1].as_str())
+        || git_text_value(call, at)
     {
         return Vec::new();
     }
@@ -1065,12 +1324,7 @@ fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'st
             return Ok(true);
         }
         let Some((base, pattern)) = glob_base(&reading, cwd, home) else {
-            return uncertain_glob(
-                &reading,
-                cwd,
-                home,
-                "cannot resolve the glob's home directory",
-            );
+            return Err("cannot resolve the glob's home directory");
         };
         if !crate::hooks::git_guard::has_glob(pattern) {
             if secret_path(pattern, base, home, Some(false)) {
@@ -1127,19 +1381,6 @@ fn home_rule_glob(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
                         .is_some_and(intersects)
                 })
         })
-}
-
-fn uncertain_glob(
-    word: &str,
-    cwd: &Path,
-    home: Option<&Path>,
-    why: &'static str,
-) -> Result<bool, &'static str> {
-    if secret_intersection(word, cwd, home) {
-        Err(why)
-    } else {
-        Ok(false)
-    }
 }
 
 fn glob_base<'a>(
@@ -1209,17 +1450,6 @@ fn secret_directory(directory: &str, cwd: &Path, home: Option<&Path>) -> bool {
                     || super::pattern::glob_intersects(&spelling, &format!("{store}/**"))
                         .unwrap_or(true)))
     })
-}
-
-fn secret_intersection(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
-    secret_path_spelling(word, home, Some(true))
-        || glob_base(word, cwd, home).is_none_or(|(base, word)| {
-            secret_path_spelling(
-                &crate::portable_path::slashed(&outward::lexical_join(base, Path::new(word))),
-                home,
-                Some(true),
-            )
-        })
 }
 
 /// Existing names are judged through their real target as well as their
@@ -1997,7 +2227,7 @@ fn file_operands<'a>(
             global_files = git_global_files(args, git_start);
             if matches!(
                 sub,
-                "status" | "log" | "rev-parse" | "branch" | "for-each-ref" | "ls-files"
+                "status" | "rev-parse" | "branch" | "for-each-ref" | "ls-files"
             ) {
                 global_files.extend(git_metadata_paths(tail, git_start));
                 return global_files;

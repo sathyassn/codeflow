@@ -737,6 +737,129 @@ fn tsk1002_review07_physical_cd_and_shell_options_refuse() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// TSK-1002 review 06 and Fable review 08: Git words whose role the
+/// guard cannot prove are judged, and a list Git reads from stdin or a
+/// file is read or refused. A separate value is text only when every option
+/// before it is one the grammar knows; batch object names and stdin paths
+/// are judged line by line; `git log` pathspecs are file operands. Each
+/// refusal was allowed at `d6812159d`; the controls stay allowed.
+#[test]
+fn tsk1002_review06_git_roles_and_input_lists_refuse() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for line in [
+        "git show --format -m HEAD:id_rsa",
+        "git grep -e -m HEAD:id_rsa",
+        "git log -S -m HEAD:id_rsa",
+        "git show --author -m HEAD:id_rsa",
+        "git log --output -S HEAD:id_rsa",
+        "git log -p --find-object=HEAD:id_rsa",
+        "git log -L1,2:id_rsa",
+        "git log -p -- id_rsa",
+        "git log --all -p -- id_rsa",
+        "git log -p id_rsa",
+        "git cat-file --batch <<< HEAD:id_rsa",
+        "git cat-file --batch-command <<< 'contents HEAD:id_rsa'",
+        "printf 'HEAD:id_rsa\\n' | git cat-file --batch",
+        "git cat-file --batch='%(objectname)' <<< HEAD:id_rsa",
+        "git cat-file --batch < objects.txt",
+        "git rev-parse HEAD | git cat-file --batch",
+        "git cat-file --batch-all-objects --batch",
+        "git cat-file --batch --follow-symlinks <<< HEAD:README.md",
+        "git hash-object -w --stdin-paths <<< copies/id_rsa",
+        "git hash-object --stdin-paths < list.txt",
+        "git add --pathspec-from-file=paths.txt",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "git show HEAD:README.md",
+        "git show -m HEAD:README.md",
+        "git show --format=fixture:id_rsa HEAD:README.md",
+        "git show --pretty=format:%h:id_rsa HEAD",
+        "git log -G 'key:id_rsa'",
+        "git log -S id_rsa",
+        "git log --grep id_rsa --author alice -p",
+        "git log --format %H:%s",
+        "git log -p -- README.md",
+        "git cat-file --batch <<< HEAD:README.md",
+        "git cat-file --batch-check <<< HEAD:id_rsa",
+        "git rev-parse HEAD | git cat-file --batch-check",
+        "git hash-object --stdin-paths <<< README.md",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 review 06 and Fable review 08: a shell construct the
+/// evaluator does not fully model leaves its state unknown, and an unknown
+/// state refuses what it could make secret. A `cd` inside a capture makes
+/// what `pwd` prints there unknown; physical mode set through `SHELLOPTS`
+/// reaches the nested shell; a physical `cd` with no operand resolves HOME
+/// first; a glob in an unknown directory refuses; a shell running a file
+/// the line wrote reads the exact body. Each refusal was allowed at
+/// `d6812159d`; the controls stay allowed.
+#[cfg(unix)]
+#[test]
+fn tsk1002_review08_unmodelled_shell_constructs_refuse() {
+    let f = Fixture::new();
+    let store = f.temp.path().join(".codex");
+    std::fs::create_dir_all(store.join("child")).unwrap();
+    std::fs::write(store.join("auth.json"), "planted fixture").unwrap();
+    std::fs::write(store.join("notes.txt"), "planted fixture").unwrap();
+    std::os::unix::fs::symlink(store.join("child"), f.linked.join("alias")).unwrap();
+    std::fs::create_dir_all(f.linked.join("visible")).unwrap();
+    std::fs::write(f.linked.join("visible/note.txt"), "ordinary").unwrap();
+    let mut wrong = Vec::new();
+    for line in [
+        "cat \"$(cd alias && pwd)/../auth.json\"",
+        "cat \"$(cd alias; pwd)/../auth.json\"",
+        "cat \"$(pushd alias >/dev/null && pwd)/../auth.json\"",
+        "cat `cd alias && pwd`/../auth.json",
+        "cd \"$(cd alias && pwd -P)/..\" && cat auth.json",
+        "cd \"$(cd alias && pwd -P)\" && cd .. && cat auth.json",
+        "SHELLOPTS=braceexpand:physical bash -c 'cd alias/.. && cat auth.json'",
+        "export SHELLOPTS=physical; bash -c 'cd alias/.. && cat auth.json'",
+        "env SHELLOPTS=physical bash <<< 'cd alias/.. && cat auth.json'",
+        "echo 'cd alias/.. && cat auth.json' | env SHELLOPTS=physical bash",
+        "HOME=alias; cd -P && cd .. && cat auth.json",
+        "pushd alias; pushd ..; pushd -P; cd ..; cat auth.json",
+        "cd -P alias/..; cat notes*.txt",
+        "cd -P alias/..; cat note[s].txt",
+        "printf '%s\\n' 'cat copies/id_rsa' > s.sh; sh s.sh",
+        "printf '%s\\n' 'cat copies/id_rsa' > s.sh; source s.sh",
+        "printf '%s\\n' 'cat copies/id_rsa' > s.sh; . ./s.sh",
+        "echo 'cat copies/id_rsa' > s.sh; zsh s.sh",
+        "printf '%s\\n' 'cd alias/.. && cat auth.json' > s.sh; bash -P s.sh",
+    ] {
+        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+            wrong.push(format!("allowed: {line}"));
+        }
+    }
+    for line in [
+        "cat \"$(pwd)/visible/note.txt\"",
+        "D=$(cd visible && pwd); cat visible/note.txt",
+        "env SHELLOPTS=braceexpand bash -c 'cd visible && cat note.txt'",
+        "HOME=visible; cd -P; cat note.txt",
+        "cat visible/*.txt",
+        "printf x > s.sh; bash s.sh",
+        "printf 'echo x' > run.sh; sh run.sh",
+        "zsh --no-rcs -c 'cd alias/.. && cat auth.json'",
+    ] {
+        let out = f.command(&f.linked, "exec-guard", line);
+        if out.status.code() != Some(0) {
+            wrong.push(format!("refused: {line}: {out:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
 /// TSK-1002 UNC finding: an administrative share, a verbatim or device UNC
 /// spelling, or any share whose path ends in a home store names the store,
 /// and a share write names the checkout file. Before this change the guard

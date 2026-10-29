@@ -3574,6 +3574,12 @@ impl Run<'_> {
                 for name in ["PWD", "OLDPWD", "DIRSTACK", "dirstack"] {
                     self.set_unknown(name, "a directory variable the line changes");
                 }
+                // This evaluator does not follow directory changes, so after
+                // one its directory is unknown: a later `pwd` in the same
+                // capture (`$(cd alias && pwd)`) cannot print the place it
+                // started from (TSK-1002 review 08). The command-position
+                // reader applies the main line's changes itself.
+                self.state.directory = None;
             }
             "let" => {
                 for arg in rest {

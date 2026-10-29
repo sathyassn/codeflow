@@ -1571,10 +1571,25 @@ fn simple(
         let appends = tokens
             .iter()
             .any(|token| matches!(token, Tok::Redir { op, .. } if op.contains(">>")));
+        // The body is what the command prints, read without its own
+        // redirections: the redirected text's stdout is empty, which is
+        // not what the file holds (TSK-1002 review 08).
         let printed = launched
             .filter(|(program, _)| matches!(*program, "echo" | "printf" | "print"))
-            .and(stdout.as_ref())
-            .filter(|_| !appends && unresolved.is_empty());
+            .filter(|_| !appends && unresolved.is_empty())
+            .and_then(|(program, args)| {
+                let quoted: Vec<String> = std::iter::once(program)
+                    .chain(args.iter().map(String::as_str))
+                    .map(quote)
+                    .collect();
+                run.approx.set(false);
+                let captured = run.capture_stdout(&quoted.join(" "));
+                if run.approx.get() {
+                    None
+                } else {
+                    captured.ok().and_then(|value| value.exact())
+                }
+            });
         let redirected = crate::hooks::git_guard::redirect_writes(&text).targets;
         for target in targets {
             let path = lexical_join(dir, Path::new(&target));
@@ -1582,8 +1597,8 @@ fn simple(
             let body = doc_input
                 .as_ref()
                 .filter(|_| literal_cat)
-                .or(printed.filter(|_| redirected.contains(&target)))
                 .cloned()
+                .or(printed.clone().filter(|_| redirected.contains(&target)))
                 .unwrap_or_else(|| "__unresolved_shell_code".into());
             position.scripts.push((path, body));
         }
@@ -1937,10 +1952,13 @@ fn simple(
         let mut start = position.clone();
         // A shell started with a physical option (`bash -P -c`, `zsh -o
         // chaselinks -c`) runs its code physical (TSK-1002 review 07).
+        // So does one whose environment carries bash's `SHELLOPTS` with
+        // `physical`, or a value the guard cannot read (TSK-1002 review 06).
         if !current_shell
             && reader.is_some_and(|(name, args)| {
+                let prefix = &words[..words.len().saturating_sub(args.len() + 1)];
                 crate::hooks::git_guard::is_shell(crate::hooks::git_guard::basename(name))
-                    && shell_invocation_physical(args)
+                    && (shell_invocation_physical(args) || environment_physical(&position, prefix))
             })
         {
             start.physical = true;
@@ -1951,9 +1969,11 @@ fn simple(
     }
     let directory_values =
         ["PWD", "OLDPWD"].map(|name| (name, position.state.vars.get(name).cloned()));
+    let directory = position.state.directory.clone();
     run.simple(tokens, docs, false, ";");
     position.state = run.state;
     if launched.is_some_and(|(program, _)| matches!(program, "cd" | "chdir" | "pushd" | "popd")) {
+        position.state.directory = directory;
         // The text evaluator invalidates directory variables; this consumer
         // owns their command-position state and applies the directory effect.
         for (name, value) in directory_values {
@@ -1975,11 +1995,28 @@ fn simple(
                     .iter()
                     .any(|arg| arg.starts_with('-') && arg.contains('P')));
         let mut physical_destination = None;
+        // The directory a physical change goes to, as the shell finds it:
+        // the operand, HOME with none, OLDPWD for `cd -`. A form whose
+        // target the guard does not read (a `pushd` swap or rotation, an
+        // unset or unread HOME or OLDPWD) leaves the directory unknown, so
+        // no operand skips the checks below (TSK-1002 review 06).
+        let target = if physical {
+            let Some(target) = physical_operand(&position, program, args) else {
+                set_oldpwd(&mut position.state);
+                position.state.directory = None;
+                position.stack.clear();
+                set_pwd(&mut position.state);
+                return position;
+            };
+            Some(target)
+        } else {
+            None
+        };
         if physical {
             // A UNC or namespace place is never resolved: it is unknown
             // before any filesystem access, so the guard contacts no host
             // (TSK-1002 review 04).
-            if let Some(target) = args.iter().find(|arg| !arg.starts_with('-')) {
+            if let Some(target) = target.as_deref() {
                 let remote = crate::security::outward::remote_or_namespace_operand(target)
                     || position.state.directory.as_ref().is_some_and(|dir| {
                         lexical_join(dir, Path::new(target))
@@ -2000,10 +2037,9 @@ fn simple(
                 .last()
                 .map(|step| step.links.clone())
                 .unwrap_or_default();
-            if let (Some(dir), Some(target)) = (
-                position.state.directory.as_ref(),
-                args.iter().find(|arg| !arg.starts_with('-')),
-            ) {
+            if let (Some(dir), Some(target)) =
+                (position.state.directory.as_ref(), target.as_deref())
+            {
                 match linked_paths(target, dir, &links) {
                     Ok(paths) if paths.len() == 1 => {
                         position.state.directory = paths.into_iter().next();
@@ -2023,10 +2059,8 @@ fn simple(
             // where the guard does not follow it: the directory becomes
             // unknown, so the unknown-directory rules apply (TSK-1002 review
             // 03, ruling 5). A plain physical change keeps its spelling.
-            if let (Some(dir), Some(target)) = (
-                position.state.directory.clone(),
-                args.iter().find(|arg| !arg.starts_with('-')),
-            ) {
+            if let (Some(dir), Some(target)) = (position.state.directory.clone(), target.as_deref())
+            {
                 let lexical = lexical_join(&dir, Path::new(target));
                 let through_parent = Path::new(target)
                     .components()
@@ -2179,16 +2213,19 @@ const LOGICAL_OPTIONS: &[&str] = &[
     "errtrace",
     "extendedglob",
     "functrace",
+    "globalrcs",
     "globdots",
     "hashall",
     "histexpand",
     "history",
     "ignoreeof",
+    "interactive",
     "interactivecomments",
     "keyword",
     "ksharrays",
     "localoptions",
     "localtraps",
+    "login",
     "monitor",
     "noclobber",
     "noexec",
@@ -2204,7 +2241,10 @@ const LOGICAL_OPTIONS: &[&str] = &[
     "privileged",
     "promptsubst",
     "pushdsilent",
+    "rcs",
+    "shinstdin",
     "shwordsplit",
+    "singlecommand",
     "verbose",
     "vi",
     "xtrace",
@@ -2319,6 +2359,32 @@ const LOGICAL_SHELL_LONG_OPTIONS: &[&str] = &[
     "command",
 ];
 
+/// Whether the environment a shell starts with makes its directory changes
+/// physical: bash enables every option an exported `SHELLOPTS` names, so a
+/// `SHELLOPTS` word in front of the shell (`env SHELLOPTS=physical bash`)
+/// or a `SHELLOPTS` the line set counts when it names `physical` or holds a
+/// value the guard cannot read.
+fn environment_physical(position: &Position, prefix: &[String]) -> bool {
+    let physical = |value: &str| {
+        value.contains(['$', '`', '*', '?', '['])
+            || value
+                .split(':')
+                .any(|option| option.eq_ignore_ascii_case("physical"))
+    };
+    if let Some(value) = prefix
+        .iter()
+        .rev()
+        .find_map(|word| word.strip_prefix("SHELLOPTS="))
+    {
+        return physical(value);
+    }
+    match position.state.vars.get("SHELLOPTS") {
+        None => position.state.changed.contains("SHELLOPTS"),
+        Some(Var::Scalar(value)) => value.exact().is_none_or(|value| physical(&value)),
+        Some(_) => true,
+    }
+}
+
 /// Whether a shell's own invocation options make its directory changes
 /// physical: bash `-P` or `-o physical`, zsh `-w`, `-o chaselinks` or
 /// `--chase-dots`, or an option word the guard does not read (fail closed,
@@ -2404,6 +2470,47 @@ fn path_value(path: &Path) -> Var {
     match name.rule_text() {
         Ok(text) => Var::Scalar(Value::text(text)),
         Err(_) => Var::Unknown("shell path is not UTF-8"),
+    }
+}
+
+/// The target of a physical `cd`, `chdir` or `pushd`: its operand, HOME
+/// when it has none, OLDPWD for `cd -`. `None` when the guard cannot read
+/// it: an unset or unread HOME or OLDPWD, or a `pushd` with no operand or
+/// a stack index.
+fn physical_operand(position: &Position, program: &str, args: &[String]) -> Option<String> {
+    let mut operands = args.iter().map(String::as_str);
+    let mut operand = None;
+    for word in operands.by_ref() {
+        if word == "--" {
+            operand = None;
+            break;
+        }
+        if word == "-" || !word.starts_with('-') {
+            operand = Some(word);
+            break;
+        }
+        if program == "pushd" && word[1..].bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+    }
+    let operand = operand.or_else(|| {
+        args.iter()
+            .position(|word| word == "--")
+            .and_then(|at| args.get(at + 1))
+            .map(String::as_str)
+    });
+    let variable = |name: &str| {
+        position.state.vars.get(name).and_then(|value| match value {
+            Var::Scalar(value) => value.exact(),
+            _ => None,
+        })
+    };
+    match operand {
+        Some(word) if program == "pushd" && word.starts_with('+') => None,
+        Some("-") if program != "pushd" => variable("OLDPWD"),
+        Some(word) => Some(word.to_string()),
+        None if program == "pushd" => None,
+        None => variable("HOME"),
     }
 }
 
@@ -2580,15 +2687,24 @@ mod tests {
         ] {
             assert!(!unread(line), "refused: {line}");
         }
-        // A shell script with an exact body is read as that body.
-        let text: Vec<_> = commands("printf 'cat notes.txt' > r.sh; sh r.sh", temp.path(), None)
-            .into_iter()
-            .map(|step| step.text)
-            .collect();
-        assert!(
-            text.iter().any(|step| step.contains("cat notes.txt")),
-            "{text:?}"
-        );
+        // A shell script with an exact body is read as that body, its own
+        // step (TSK-1002 review 08: the redirected text printed nothing, so
+        // the body was read as empty and this check matched the printf).
+        for line in [
+            "printf 'cat notes.txt' > r.sh; sh r.sh",
+            "printf '%s\\n' 'cat notes.txt' > r.sh; bash r.sh",
+            "echo 'cat notes.txt' > r.sh; source r.sh",
+            "printf 'cat notes.txt' > r.sh; . ./r.sh",
+        ] {
+            let text: Vec<_> = commands(line, temp.path(), None)
+                .into_iter()
+                .map(|step| step.text)
+                .collect();
+            assert!(
+                text.iter().any(|step| step.trim_end() == "cat notes.txt"),
+                "{line}: {text:?}"
+            );
+        }
     }
 
     #[test]
