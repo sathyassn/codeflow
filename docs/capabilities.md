@@ -102,7 +102,7 @@ name: scaffold-init
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
-epics: [EPC-001, EPC-005, EPC-009, EPC-011, EPC-012, EPC-020]
+epics: [EPC-001, EPC-005, EPC-009, EPC-011, EPC-012, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055]
 ```
 
@@ -133,21 +133,27 @@ id: CAP-002
 name: scaffold-update
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
-epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020]
+verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
+epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0011, ADR-0019]
 ```
 
-`codeflow update` refreshes managed scaffold files by ownership class:
+`codeflow update` refreshes managed scaffold files:
 
-- Unmodified files are replaced.
-- User-modified files get a three-way merge from `.codeflow/.baseline/`. A
-  conflict produces a `.new` file and a report.
-- Managed regions are updated in place.
-- User-owned schema-versioned files gain new keys with defaults.
+| Case | Update action |
+|---|---|
+| Unmodified file | Replaces it |
+| User-modified file | Three-way merge from `.codeflow/.baseline/`; a conflict produces a `.new` file and saves the pending shipped content. After resolution, the next update records that shipped baseline, so the conflict does not repeat |
+| Managed region | Updates it in place |
+| User-owned schema-versioned file | Adds new keys with defaults |
+| Missing in-tier manifest entry | Installs it |
+| All classes | Never clobbers or silently skips |
 
-Update also installs missing in-tier manifest entries. It never clobbers and
-never silently skips.
+| Version case | What update and a repeated init do |
+|---|---|
+| Binary older than the project's `scaffold_version` | Refuses before writing project files, preserving the pin, release digests and managed files; names both versions and the pinned version to install |
+| Unparsable pin | Refuses before writing project files and names the value, file and correction to make |
+| Binary released before this safeguard | Can still lower the pin |
 
 | Policy scalar | On update |
 |---|---|
@@ -165,7 +171,7 @@ name: scaffold-customize
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012, EPC-020]
+epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012, EPC-020, EPC-024]
 adrs: [ADR-0025, ADR-0044]
 ```
 
@@ -190,7 +196,7 @@ name: optional-agentic-estimation
 area: engine
 status: shipped
 verified_by: [estimate, estimate_cli, estimate_adoption_e2e, estimate_outcomes_cli, manifest_consistency]
-epics: [EPC-006]
+epics: [EPC-006, EPC-023]
 adrs: [ADR-0057, ADR-0079]
 ```
 
@@ -212,8 +218,8 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "codeflow-cli tests/ci_pin.rs", "codeflow-cli tests/ci_pin_platforms.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
-epics: [EPC-001, EPC-011, EPC-017, EPC-020]
+verified_by: ["codeflow-core tests/path_policy.rs", "codeflow-cli tests/path_policy_cli.rs", "cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-core tests/managed_secret_scan.rs", "codeflow-core tests/policy_key_placement.rs", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "codeflow-cli tests/ci_pin.rs", "codeflow-cli tests/ci_pin_platforms.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
+epics: [EPC-001, EPC-011, EPC-017, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
 
@@ -234,6 +240,7 @@ Other checks on these planes:
 
 | Check | Key and default | What it judges |
 |---|---|---|
+| Blocked names and protected paths (TSK-322) | `git.path_policy`, block | Staged changes and every introduced commit; two-parent merges use remerge changes. `git.blocked_names` matches at any depth, `git.protected_paths` at the root. Landed denials persist when a branch removes them; branch-only exceptions grant no access. Gate inputs remain exempt, and the existing secret scan stays separate |
 | Unresolved conflict markers (TSK-170) | `git.conflict_markers`, block | The lines a change adds to a text file: in pre-commit over the staged diff, and in `codeflow ci` over the range, which also catches a marker left while resolving `git rebase --continue`. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in `.gitattributes` |
 | En and em dashes (ADR-0067) | `policy_characters`, warn; CodeFlow's own policy sets block | Added lines. The scan skips a file only when its bytes equal the whole-file managed asset the running binary ships for that path, so unmodified scaffold content never trips it and a project record proves nothing |
 | Pull request sections by change class (TSK-135) | `pr_sections` | Read from one checked merge-base tree diff that includes merge resolutions, deletions, both rename sides and file modes. A range of only regular Markdown under `docs/` or `project-management/`, outside every shared path set (product and watched contract paths from the checkout and the target, shipped templates, the record schema, dependency manifests, hooks, instructions and CI), needs Summary and Changes, under a mapped heading where the project accepted a mapping. An absent Release impact there reads as no impact unless a commit is marked breaking. The Release impact section is required only on a pull request into a protected branch or one that carries a breaking commit; elsewhere it is optional and checked when present (ADR-0076). A range that cannot be listed is code |
@@ -241,8 +248,8 @@ Other checks on these planes:
 | Pull request Summary shape (TSK-218) | `git.pr_summary`, block | The one Summary section, under its mapped heading: one prose paragraph, then a list or a table, then at most one closing paragraph, read from the visible blocks only, so an HTML comment never supplies the lead or the list. It judges shape, never a word or sentence count (ADR-0071, note of 2026-10-03). It runs at warn while a kept PR template is diagnosed, and a trusted automation profile skips it |
 | Managed CI release digests (TSK-225) | `[scaffold_sha256]` in `.codeflow/project.toml`, written by `codeflow update --pin`; none by default | The archive each managed CI installer downloads must match the digest the target pins for its platform, whatever the release's own `sha256.sum` says, and must match `sha256.sum` too. A table from another version, a missing platform, a table declared or keyed twice or written in another TOML form, a table line other than a plain entry, and any escaped table name or key or multi-line string in the state fail closed. With no table the install checks `sha256.sum` alone and warns |
 | Managed CI project setup (TSK-225) | `.codeflow/ci-setup.sh`, project-owned; none by default | The gates job and the shared script of the other templates source it under `set -eu` just before `codeflow test`, after any lowered-pin refusal. It is the project's own code with the gate's authority; doctor names its first command but does not audit it |
-| Managed CI secret scan range (TSK-225) | the gitleaks job of `codeflow-ci.yml` | A pull request's own commits or a push's pushed range; the full history on a weekly schedule, on manual dispatch, for a push that creates the branch and for one whose previous tip is gone. Exemptions come only from the trusted commit |
-| Local release state | `release.backend = "codeflow"` with `scripts/release.py`, for a project that adopted CodeFlow's release calculator | Pre-push runs the preflight for each pushed branch: a warning for a behaviour change with no pending entry, a block only for a push that breaks a tree its base kept valid. `codeflow integrate` runs the structural state check in its test stage. Both say what was not checked against the host, and the pull request's `release impact` job stays the gate. `codeflow ci` reads the Release impact block with the calculator's parser, and both pass one shared fixture set. The release jobs live in the project's own workflow, never in the managed CI file |
+| Managed CI secret scan range (TSK-225, TSK-292) | the gitleaks job of `codeflow-ci.yml`; `git.secret_scan_inline_allow`, trusted | A pull request's own commits or a push's pushed range; the full history on a weekly schedule, on manual dispatch, for a push that creates the branch and for one whose previous tip is gone. Resolved commit ids and a final `--` keep a path named `HEAD` unambiguous. Exemptions come only from the trusted commit; its inline-allow key can be `never` to ignore every inline allow while keeping other trusted exemptions. Bounded diagnostics offer reviewed replacements for legacy remerge fingerprints only for readable two-parent commits after checking both paths, distinguishing one-parent commits, real `b/` paths and unreadable commits without rewriting exemptions |
+| Local release state | `release.backend = "codeflow"` with `scripts/release.py`, for a project that adopted CodeFlow's release calculator | Pre-push runs the preflight for each pushed branch: warnings for a behaviour change with no pending entry and, with a PR draft, release-impact mismatches; a block only for a push that breaks a tree its base kept valid. `codeflow integrate` runs the structural state check in its test stage. Both say what was not checked against the host; `release.py check-local` gives the hosted verdict for an explicit range and body, and the pull request's `release impact` job stays the gate. `codeflow ci` reads the Release impact block with the calculator's parser, and both pass one shared fixture set. The release jobs live in the project's own workflow, never in the managed CI file |
 
 | Refusal record and report | Behaviour |
 |---|---|
@@ -265,7 +272,7 @@ name: remote-protect-doctor
 area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
-epics: [EPC-001, EPC-002, EPC-003, EPC-020]
+epics: [EPC-001, EPC-002, EPC-003, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 ```
 
@@ -273,14 +280,16 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   provider. On GitHub it requires a PR and the required checks on an
   up-to-date branch, blocks force-push and deletion, and reports anything
   the plan tier cannot apply.
-- `codeflow doctor` runs twenty-two health checks on the repository and the
+- `codeflow doctor` runs twenty-four health checks on the repository and the
   tools around it, including the default branch's host rules.
 
 | Doctor check | Reports |
 |---|---|
+| Git configuration includes | Included files that may be writable, and configuration the bounded reader cannot verify; include-file writes remain unguarded |
 | Always-loaded instruction size | a warning when the `AGENTS.md` chain Codex loads for any directory, root to nested, exceeds Codex's instruction limit: `project_doc_max_bytes` from the project's `.codex/config.toml` when set, else 32 KiB |
 | Reading sizes (ADR-0083) | the kernel and the per-task reading chain in bytes, each shipped skill and agent body and the always-loaded instruction set in lines, against advisory guidelines with a stated basis (500 lines for a body, 200 for the always-loaded set, 160 KiB for the chain, the kernel derived from the Codex limit), or a project's own `[reading]` values in `.codeflow/project.toml`: information within them, a note above them that names the detail to move behind a trigger, never a warning or a failure; a skill or agent description over the API's 1,024 characters warns; when the installed skills' read edges differ from the map the binary ships, the chain is information naming both versions |
-| Permissions and the sandbox | a warning naming each directory a full gate writes outside the worktree (its locks and its evidence) that this process cannot write; when `SANDBOX_RUNTIME` is set it notes that, probes the network over HTTPS and checks the HTTP status, and reports a failed Codex sign-in probe as unconfirmed, quoting it, unless it says signed out |
+| Orchestrator preflight (`--preflight`) | the evidence the orchestrator preflight reads: each standing seat's catalog binding and the project sandbox settings as configured, executables on `PATH` as observed (never run, except `codex` for the builder profile line), whether the installed Codex accepts the builder launch overrides and, under `codex sandbox` with the managed config from the main checkout root, whether they let a builder seat write both gate lock folders and the common `.git` objects and refs, and the live model, effort and enforced boundary as unavailable, since doctor cannot observe a running session. It exits 1 when Codex refuses the builder overrides or a builder write is refused, and says builder readiness is not established when the write probe gives no result |
+| Permissions and the sandbox | a warning naming each gate directory outside the worktree (essential and full locks, and full-run evidence) that this process cannot write; when `SANDBOX_RUNTIME` is set it notes that, probes the network over HTTPS and checks the HTTP status, and reports a failed Codex sign-in probe as unconfirmed, quoting it, unless it says signed out |
 
 Doctor leaves live interactive account and tool canaries to the harness
 (ADR-0023).
@@ -321,9 +330,9 @@ id: CAP-004
 name: test-gate
 area: engine
 status: shipped
-verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
-epics: [EPC-001]
-adrs: [ADR-0021, ADR-0031]
+verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs", "codeflow-cli tests/test_gate_cli.rs", "cargo test testing::delivery", "cargo test testing::evidence"]
+epics: [EPC-001, EPC-022, EPC-023, EPC-024]
+adrs: [ADR-0021, ADR-0031, ADR-0085]
 ```
 
 `codeflow test [--mode full|quick|essential] [--strict] [--since <rev>] [--all] [--only <targets>]`
@@ -334,25 +343,28 @@ or a detected stack.
   into a non-zero exit for unattended callers.
 - With a stack it is a real gate, re-run in CI. Coverage thresholds count toward
   the verdict (ADR-0021).
+- The task's declared line supplies the default comparison base. Only content
+  targets with matching candidate evidence can be skipped; missing evidence runs
+  the target. The [test-gate reference](test-gate.md) defines the fields.
 - `codeflow test setup` fills absent configs and never auto-replaces populated
   ones.
 
 | Pre-push case | Behaviour |
 |---|---|
 | The push set | `quick` names the targets with a `quick` mode; a manual run aliases it to `essential`, the lighter mode, when no target defines it |
-| Every push | runs the push set plus `codeflow validate --docs` and `codeflow ci` on the pushed range, blocking by default under `test_gate_on_push`; `codeflow ci` judges every pushed branch with the strictly validated `.codeflow/policy.json` at the destination default branch's advertised tip, a candidate destination authority, not the known pull request target, and that policy's `test_gate_on_push` decides whether and at what level the check gates the push, so a branch that loosens its own policy is refused before the push; a branch that carries its task (`task/TSK-NNN-…`) is held to the journey criterion rule (R-53) over its range, as its pull request is; for a head that shares history with that tip, its commit checks run over everything the head adds to the tip, whatever history the destination already holds or target a task record declares, so a branch on an integration line has the line's inherited commits judged by the default branch's policy too, stricter than the hosted job for a pull request into the line; a head whose recorded history shares nothing with the tip, such as a deployment branch, is never diffed against it: a fast-forward of an existing branch keeps its own new commits and a new branch keeps the commits the destination does not hold yet, under that policy, named not default-target parity, while a shallow clone, a graft or a replace ref keeps the tip; no other branch is an authority, even a protected one, so a pull request into an integration line is judged locally by the default branch's policy and the host may differ; a policy there that this codeflow cannot read or validate refuses the push whether or not its range resolves; with no candidate authority (no answer, a failed fetch, no policy on the default branch) the hook says so and, where a range resolves, still runs the check at block level with the policy at the range's base; the tree checks, the quick targets and the release preflight follow the working copy's gate, and the commit-msg and other local hook stages read the working copy; hosted CI is the enforcement; it blocks on what it can see, and the test suite belongs to the full gate |
+| Every push | runs the push set, `codeflow ci` on the pushed range and no test-config target or `codeflow validate --docs`, blocking by default under `test_gate_on_push`; `codeflow ci` judges every pushed branch with the strictly validated `.codeflow/policy.json` at the destination default branch's advertised tip, a candidate destination authority, not the known pull request target, and that policy's `test_gate_on_push` decides whether and at what level the check gates the push, so a branch that loosens its own policy is refused before the push; a branch that carries its task (`task/TSK-NNN-…`) is held to the journey criterion rule (R-53) over its range, as its pull request is; for a head that shares history with that tip, its commit checks run over everything the head adds to the tip, whatever history the destination already holds or target a task record declares, so a branch on an integration line has the line's inherited commits judged by the default branch's policy too, stricter than the hosted job for a pull request into the line; a head whose recorded history shares nothing with the tip, such as a deployment branch, is never diffed against it: a fast-forward of an existing branch keeps its own new commits and a new branch keeps the commits the destination does not hold yet, under that policy, named not default-target parity, while a shallow clone (including a linked worktree), a graft, any ref under a replace-ref base or a commit-graph that disagrees with commit objects refuses the history check; ordinary commit-graphs remain allowed; no other branch is an authority, even a protected one, so a pull request into an integration line is judged locally by the default branch's policy and the host may differ; a policy there that this codeflow cannot read or validate refuses the push whether or not its range resolves; with no candidate authority (no answer, a failed fetch, no policy on the default branch) the hook says so and, where a range resolves, still runs the check at block level with the policy at the range's base; the release preflight follows the working copy's gate; hosted CI is the enforcement; it blocks on what it can see, and the quick gate is cited when the pull request is made ready |
 | Existing protected or `integration/` branch, fast-forward | the range starts at its advertised tip |
 | Branch with a declared target | the merge base with that target's advertised tip, reading the target from the task record at the pushed commit; the hook names that target |
 | Line rewrite, undeclared branch, unavailable target | the advertised-history fallback; an advertised target missing locally is noted |
-| Unresolved range, sibling ref, or a dirty, sparse or submodule-incomplete checkout | named as left to CI |
+| Unresolved range | named as left to CI |
 
 | Full gate | Behaviour |
 |---|---|
 | Scheduling | a target may declare `requires`, `outputs`, `narrow` inputs and `exclusive`: producers and prerequisites run first, targets with no producer and consumer relation run in parallel up to `max_parallel`, a dependent of a red target reports "not run: prerequisite failed", and a missing or cyclic prerequisite fails the run before any target starts. The run names its candidate tree after the producers ran and fails when generation changed tracked bytes |
-| Change-aware selection | a target is skipped only when its declared inputs are unchanged since a `--since` base that has a recorded green run for the same config; an unmatched path, a Rust, asset, build, config or workflow change, a rename or deletion, no base, and `--all` (the epic close) run every target, and the run prints what it selected and skipped and why |
-| Split across runners | `--only` runs the named targets and their prerequisites, so one gate can run as parallel CI jobs; a limited run is recorded as not complete, so no single part serves as a green base, and a name that is not an enabled target of the mode is refused before any target starts. CodeFlow's own CI runs its full gate in four such parts behind one `codeflow gates` check, and `scripts/gate-parity.py` refuses a full-mode target no part runs |
-| Preflight | refuses before any target when the temp directory is not writable, a configured lock cannot be taken, or a tool a selected target needs is missing |
-| Concurrency | one full gate runs at a time on a machine; a second refuses, naming the holder |
+| Change-aware selection | quick and essential compare with the task line's merge base by default; only content checks with matching per-target evidence from a clean, complete full run of the base tree can be skipped. Unknown evidence runs the check and names the reason. Skip credit is local convenience; full landing gates execute every target and integration refuses incomplete runs. `--all` executes every eligible target, and summaries distinguish executed and skipped counts |
+| Split across runners | `--only` runs the named targets and their prerequisites, so one gate can run as parallel CI jobs; a limited run is recorded as not complete, so no single part serves as a green base, and a name that is not an enabled target of the mode is refused before any target starts. CodeFlow's own CI runs its full gate as such parts behind one `codeflow gates` check: two landing parts on every gated event, and a release-tier job (the exhaustive prose oracle, the read benchmark and the present browser and binary-delta checks) on the release candidate, pushes to main or master, the schedule and manual runs; `scripts/gate-parity.py` refuses a full-mode target that both paths leave out |
+| Preflight | refuses before targets when the temp directory is not writable or a required tool is missing. Essential and full also refuse before targets when a lock cannot be taken; quick reports heavy refusals alongside its light results |
+| Concurrency | essential and full gates share the machine and repository locks; a second refuses with the holder's process, mode and directory. Quick runs light targets beside a gate; heavy targets wait up to the configured bound, then refuse. Projects can choose the default class of undeclared quick targets; pre-push runs no quick target. `codeflow test --lock-status` reads holder records without starting work. `codeflow reserve -- <command>` admits direct heavy work through the same locks. An optional `execution.worker_budget` divides nested workers among concurrent heavy targets |
 | Cargo | a gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the worktree |
 | Progress | each target prints a start line and a completion line on stderr |
 | Result artifact | a full run writes a result bound to its revision, tree hash and config digest and copies it to `~/.codeflow/gate-runs/<repo>/<run-id>/`, outside any worktree, for pull request bodies to cite. CodeFlow's own gate runs the Rust suite once, instrumented, and its journey check reads that run's results |
@@ -368,17 +380,19 @@ id: CAP-005
 name: integrate
 area: engine
 status: shipped
-verified_by: ["cargo test integrate::", "codeflow-cli tests/cli_flow.rs"]
-epics: [EPC-001]
+verified_by: ["cargo test integrate::", "codeflow-core tests/integrate_merge.rs", "codeflow-cli tests/integrate_merge_cli.rs", "codeflow-cli tests/acceptance_journey.rs"]
+epics: [EPC-001, EPC-022]
 adrs: []
 ```
 
 `codeflow integrate <branch> [--into <target>]` is the sanctioned local landing
-path for protected branches. Under a file lock it rebases the branch onto the
-target, runs the test gate, then advances the target with
-`git merge --ff-only`. No merge commit is added, and the target moves only
-when every stage succeeds. A gate-context token lets the protected ref advance
-only through integrate or a human-merged PR. Detail: [commands](cli.md) and
+path for protected branches. Under a file lock it rebases and fast-forwards
+by default. With `--merge`, it gates a no-fast-forward merge commit that
+preserves the reviewed source head and its acceptance binding. Both modes
+advance only the local target ref after every stage succeeds; neither pushes.
+Merge mode runs from a linked worktree. A gate-context token lets the
+protected ref advance only through integrate or a human-merged PR. Detail:
+[commands](cli.md) and
 [enforcement planes](architecture/enforcement-planes.md).
 
 ### Remember
@@ -390,17 +404,18 @@ id: CAP-007
 name: orient-session-summary
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::orient", "cargo test hooks::guidance", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "codeflow-cli tests/init_e2e.rs", "codeflow-core tests/rule_reinjection_update.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-001, EPC-004]
+verified_by: ["cargo test workgraph::line_drift", "codeflow-cli tests/orient_cli.rs", "cargo test hooks::orient", "cargo test hooks::guidance", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "codeflow-cli tests/init_e2e.rs", "codeflow-core tests/rule_reinjection_update.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+epics: [EPC-001, EPC-004, EPC-023, EPC-025]
 adrs: [ADR-0013, ADR-0044]
 ```
 
-`codeflow orient` builds the session-start digest live. It is at most 30 lines
-of pointers: the product line, branch and worktree state, work and capability
-counts, recent ADR titles and gate status. The `session-summary` SessionEnd
-hook appends a session record to the ledger that recall searches. Claude wires
-both through `.claude/settings.json`, and an interactive Codex session gets
-the same digest through `.codex/hooks.json` (ADR-0013).
+`codeflow orient` builds the session-start digest live: product, branch,
+worktree, work counts, ADRs and gates. Its 30-line base guideline excludes
+the complete [integration-line and open-epic inventories](session-orientation.md).
+`git.line_sync_interval` optionally enables overdue reminders. The
+`session-summary` SessionEnd hook records sessions for recall. Claude wires
+both through `.claude/settings.json`; interactive Codex gets the digest
+through `.codex/hooks.json` (ADR-0013).
 
 Rules return after context loss and where a prompt needs them (TSK-128). One
 advisory command, `session-orient`, is wired on `SessionStart` and
@@ -451,7 +466,7 @@ name: cross-vendor-delegation
 area: scaffold
 status: shipped
 verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md", "docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
-epics: [EPC-002, EPC-011, EPC-012, EPC-018]
+epics: [EPC-002, EPC-011, EPC-012, EPC-018, EPC-022, EPC-023, EPC-024, EPC-025]
 adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059, ADR-0077]
 ```
 
@@ -472,9 +487,9 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs", "cargo test -p codeflow-cli --test models_cli", "cargo test -p codeflow-core --test model_catalog_surfaces", "cargo test -p codeflow-cli --test models_managed_catalog", "cargo test -p codeflow-cli --test models_design_authority", "codeflow-cli tests/acceptance_cli.rs", "codeflow-cli tests/acceptance_journey.rs", "codeflow-cli tests/release_line_cli.rs", "codeflow-cli tests/feedback_cli.rs", "cargo test feedback::tests"]
-epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060, ADR-0069]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::redaction", "codeflow-cli tests/ci_cli/acceptance_fix.rs", "codeflow-cli tests/ci_cli/cancelled_standalone.rs", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs", "cargo test -p codeflow-cli --test models_cli", "cargo test -p codeflow-core --test model_catalog_surfaces", "cargo test -p codeflow-cli --test models_managed_catalog", "cargo test -p codeflow-cli --test models_design_authority", "codeflow-cli tests/acceptance_cli.rs", "codeflow-cli tests/acceptance_journey.rs", "codeflow-cli tests/release_line_cli.rs", "codeflow-cli tests/feedback_cli.rs", "cargo test feedback::tests"]
+epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020, EPC-022, EPC-023, EPC-024, EPC-025]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060, ADR-0069, ADR-0084]
 ```
 
 `/cf-model-orchestrator` is the host-neutral entry for routed repository work.
@@ -500,11 +515,14 @@ The work records a plan produces are judged by one core (SPC-013):
 | Work record rule | Behaviour |
 |---|---|
 | Planning anchor | `codeflow work start` checks the anchor of the task the branch carries on any work prefix except `plan/` and `integration/`: the epic's planning change, or the record at head for a standalone task whose record arrives in its own pull request; CI applies the same read-only merge-base check once per pull request, and the per-commit hook no longer does. Both report at the `git.work_planning` level, `block` by default or `warn`. A reviewed but incomplete predecessor is accepted only through `--on TSK-NNN@<sha>` at its tip, reviewed directly or followed only by changes to its own record's status and Closeout |
-| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs and the `AGENTS.md` project section, ADR-0078), an epic's integration line or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer, or, in a range of planning records only, the wording of a completed standalone task's criteria when it names that task or its follow-up (ADR-0080) |
+| Unlanded standalone cancellation | A `plan/` range can add one standalone task record at `cancelled`, absent from the merge-base, with its Closeout reason and scope and `Task: TSK-NNN`. CI and pre-push accept the planning amendment without a start claim; the range stays inside `project-management/`. See [troubleshooting](troubleshooting.md#a-cancelled-standalone-task-has-no-planning-anchor) |
+| Record redaction (ADR-0084) | `codeflow task redact` preserves acceptance results and review provenance while replacing criteria or acceptance wording; CI and pre-push require a record-only range with the original digest and a separate redaction review. Superseded blocks remain usable for later completion. See [delivery](delivery.md#acceptance-waivers-and-redactions) |
+| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs, exact document index files declared by `git.document_indexes` on the target, and the `AGENTS.md` project section, ADR-0078; product and watched paths stay excluded), an epic's integration line, a [secret-scan exemption](policy-reference.md#secret-scan-exemption-pull-requests) adding or modifying only the regular file `.gitleaksignore` without a mode change, or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer, or, in a range of planning records only, the wording of a completed standalone task's criteria when it names that task or its follow-up (ADR-0080) |
 | Readiness | one readiness core judges a task for `work next`, `work claim`, `work start`, `status`, `orient` and CI |
 | Claim scope | local branches, `origin`, the target's fetch remote and `git.claim_remotes` count as advisory claims; branches on other remotes remain information in `work next` and `work claim`, without making a task active or conflicting |
 | Record status | `task status`, `epic status` and `spec status` move records only by legal transitions; the same judge rules on hand edits (`validate --docs --since <ref>`) and on each record a pull request changes |
 | Deliverables | a task record lists each output and its home as a path in the project's structure under `## Deliverables`, after its Description, and an epic names the homes its tasks write or points to the project's structure authority; `validate --docs` warns, and never blocks, about an open task with no filled section and no path in its Description, and never reads a complete or cancelled record for it. The warning is advisory, so it errs toward silence: any token with `/` or `\` that is not a URL, a version or a slash word such as and/or counts as a path, as do a file name with an extension, a local link target and a common extensionless file such as `README`; in the section, a heading, an empty or checkbox-only item, `TODO` or the template's `<output>` and `<path>` count for nothing |
+| Outcome | a task or epic states under `## Outcome`, between its Description or Summary and its Deliverables, one line saying what someone can do once it lands ("after this merges, <who> can <do what>"); an epic also carries its own `## Deliverables`. `validate --docs` reads the adoption marker `outcome_present_uids` in `.codeflow/project.toml`, which `codeflow update` writes once (and a fresh `codeflow init` writes empty) with the uid of every task and epic present then: an open record not listed and without a filled section is refused, a listed one warns (a filled line has a word beyond the template's tokens and words in its visible text, and a template token in it must be in a code span: a raw one, including an escaped, entity-encoded or respaced one, leaves it unfilled), a project with no marker only warns, and a complete, cancelled or archived record is never read for it. An open epic not listed that names no Deliverables warns. `codeflow ci` judges the list against the target's file: a change may keep or drop listed uids, never add one or remove the marker, except the adoption write into a target with none. See [the adoption marker](policy-reference.md#the-outcome-adoption-marker) |
 | Operator feedback | at the full tier, `codeflow feedback new` issues an `FB-NNN` from the shared registry for feedback that sets a standing rule, declines or reorders planned work, or spans several units, one file per item with the operator's words verbatim; `feedback status` moves it only by its table (received, placed, closed, declined with the operator's confirmation, superseded); `validate --docs` fails a malformed item and warns about a stale written index; `status` counts open items and `recall` searches them |
 | Completion and release | a completion is bound to the reviewed commit, at a batch landing at the commit that introduced its block; on a release branch each change is judged where it was introduced |
 | Release integration workflow | CodeFlow's own workflow imports verified epic-line tips into the release branch; it is not a task pull request gate and is not installed for adopters |
@@ -520,7 +538,7 @@ name: model-binding-evaluation
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/live_eval_pack.rs (with the live delivery holdout checked out)", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "evals/model-artifacts/test_retention_pack.py", "codeflow-cli tests/retention_pack.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test -p codeflow-cli --test models_cli", "cargo test -p codeflow-core --test model_catalog_surfaces", "cargo test -p codeflow-cli --test models_managed_catalog"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020]
+epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060, ADR-0069]
 ```
 
@@ -591,7 +609,7 @@ name: opt-in-documentation-portal
 area: scaffold
 status: shipped
 verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/", "docs/verification/tsk-020-portal-ownership.md"]
-epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017]
+epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017, EPC-022, EPC-023]
 adrs: [ADR-0048, ADR-0058]
 ```
 
@@ -617,7 +635,7 @@ name: interactive-presentation-review
 area: engine
 status: building
 verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
-epics: [EPC-005, EPC-014, EPC-016, EPC-020]
+epics: [EPC-005, EPC-014, EPC-016, EPC-020, EPC-022]
 adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
 ```
 

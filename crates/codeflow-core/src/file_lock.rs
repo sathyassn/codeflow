@@ -51,7 +51,9 @@ fn acquire_exclusive_lock(path: &Path) -> Result<fs::File, RmwError> {
 pub(crate) enum RmwError {
     /// The step that failed and its OS error.
     Io(&'static str, std::io::Error),
-    /// A parse, callback or serialize failure.
+    /// The file did not parse; only its place is kept (TSK-1029).
+    Parse(crate::scaffold::ParsePlace),
+    /// A callback or serialize failure.
     Other(String),
 }
 
@@ -60,7 +62,7 @@ impl RmwError {
     pub(crate) fn io(&self) -> Option<&std::io::Error> {
         match self {
             Self::Io(_, error) => Some(error),
-            Self::Other(_) => None,
+            Self::Parse(_) | Self::Other(_) => None,
         }
     }
 }
@@ -69,6 +71,7 @@ impl std::fmt::Display for RmwError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(step, error) => write!(f, "{step}: {error}"),
+            Self::Parse(place) => write!(f, "parse: {place}"),
             Self::Other(message) => f.write_str(message),
         }
     }
@@ -137,7 +140,8 @@ where
 
     // Read
     let data = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let mut value: Value = serde_json::from_str(&data).map_err(|e| format!("parse: {e}"))?;
+    let mut value: Value = serde_json::from_str(&data)
+        .map_err(|e| format!("parse: {}", crate::scaffold::json_error(&e)))?;
 
     // Modify
     f(&mut value);
@@ -163,7 +167,8 @@ pub fn locked_read(path: &Path) -> Result<Value, String> {
     let _lock = acquire_shared_lock(path)?;
 
     let data = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let value: Value = serde_json::from_str(&data).map_err(|e| format!("parse: {e}"))?;
+    let value: Value = serde_json::from_str(&data)
+        .map_err(|e| format!("parse: {}", crate::scaffold::json_error(&e)))?;
 
     // Lock released on drop
     Ok(value)
@@ -258,9 +263,8 @@ where
 
     // Read (default on NotFound)
     let mut value: T = match fs::read_to_string(path) {
-        Ok(data) => {
-            serde_json::from_str(&data).map_err(|e| RmwError::Other(format!("parse: {e}")))?
-        }
+        Ok(data) => serde_json::from_str(&data)
+            .map_err(|e| RmwError::Parse(crate::scaffold::ParsePlace::json(&e)))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => default_fn(),
         Err(e) => return Err(RmwError::Io("read", e)),
     };
@@ -320,17 +324,31 @@ pub fn lock_path_exclusive(path: &Path) -> Result<PathLock, String> {
 // Atomic write helper
 // ---------------------------------------------------------------------------
 
-/// Atomically write file contents: write to `.tmp` sibling then rename.
+/// Atomically replace `path` using an exclusively created, unique sibling.
+///
+/// Creating the temporary file exclusively refuses an existing file or link.
+/// Its guard removes it on write or rename failure. The parent is supplied by
+/// the caller; this helper does not contain ancestor paths or acquire a lock.
 ///
 /// # Errors
 ///
-/// Returns an I/O error if writing the temporary file or renaming it fails.
+/// Returns an I/O error if creating, writing or renaming the temporary file fails.
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
-    let tmp_path = path.with_extension("tmp");
-    fs::write(&tmp_path, data)?;
-    fs::rename(&tmp_path, path).inspect_err(|_| {
-        let _ = fs::remove_file(&tmp_path);
-    })
+    use std::io::Write;
+
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".codeflow-").suffix(".tmp");
+    // Match fs::write's creation mode, still filtered by the process umask.
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666));
+    let mut temporary = builder.tempfile_in(parent)?;
+    temporary.write_all(data)?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +358,68 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_write_cleans_up_after_failed_replace() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("existing-directory");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("kept"), b"unchanged").unwrap();
+
+        assert!(atomic_write(&destination, b"replacement").is_err());
+
+        assert_eq!(fs::read(destination.join("kept")).unwrap(), b"unchanged");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locked_writers_ignore_planted_temporary_links() {
+        for typed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let sentinel = root.path().join("sentinel");
+            fs::write(&sentinel, b"unchanged").unwrap();
+            let path = root.path().join("state.json");
+            fs::write(&path, b"{}").unwrap();
+            let planted = path.with_extension("tmp");
+            std::os::unix::fs::symlink(&sentinel, &planted).unwrap();
+            if typed {
+                locked_rmw_typed(&path, serde_json::Map::new, |value| {
+                    value.insert("written".into(), Value::Bool(true));
+                    Ok(())
+                })
+                .unwrap();
+            } else {
+                locked_rmw(&path, |value| value["written"] = Value::Bool(true)).unwrap();
+            }
+            assert_eq!(fs::read(&sentinel).unwrap(), b"unchanged");
+            assert!(fs::symlink_metadata(planted).unwrap().is_symlink());
+            assert_eq!(locked_read(&path).unwrap()["written"], true);
+        }
+    }
+
+    #[test]
+    fn concurrent_locked_writers_preserve_every_update() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("counter.json");
+        fs::write(&path, br#"{"count":0}"#).unwrap();
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..10 {
+                        locked_rmw(path, |value| {
+                            value["count"] =
+                                serde_json::json!(value["count"].as_u64().unwrap() + 1);
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(locked_read(&path).unwrap()["count"], 80);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+    }
 
     #[test]
     fn test_locked_rmw_basic() {

@@ -1,0 +1,777 @@
+[
+  [
+    "bash script.sh",
+    0,
+    0
+  ],
+  [
+    "bash scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "sh scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "bash -x script.sh",
+    0,
+    0
+  ],
+  [
+    "bash -e scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "zsh scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "./scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "bash ./scripts/build.sh arg1 arg2",
+    0,
+    0
+  ],
+  [
+    "bash -c 'echo hi'",
+    0,
+    0
+  ],
+  [
+    "bash -c 'ls src'",
+    0,
+    0
+  ],
+  [
+    "sh -c 'cargo test'",
+    0,
+    0
+  ],
+  [
+    "bash -lc 'npm test'",
+    0,
+    0
+  ],
+  [
+    "bash -s < scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "bash < scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "bash -s -- arg1 < scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "bash -c 'cd src && ls'",
+    0,
+    0
+  ],
+  [
+    "bash -c \"cd src && ls\"",
+    0,
+    0
+  ],
+  [
+    "source scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    ". scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "source ~/.bashrc",
+    0,
+    0
+  ],
+  [
+    ". ./env.sh",
+    0,
+    0
+  ],
+  [
+    "bash --version",
+    0,
+    0
+  ],
+  [
+    "bash --help",
+    0,
+    0
+  ],
+  [
+    "bash -n script.sh",
+    0,
+    0
+  ],
+  [
+    "bash -c 'echo $PWD'",
+    0,
+    0
+  ],
+  [
+    "bash -c 'rm -rf build'",
+    0,
+    0
+  ],
+  [
+    "bash -c \"rm -rf $PWD/build\"",
+    0,
+    0
+  ],
+  [
+    "bash <<< 'echo hi'",
+    0,
+    0
+  ],
+  [
+    "bash <<< 'ls src'",
+    0,
+    0
+  ],
+  [
+    "bash <<< \"rm -rf $PWD/build\"",
+    0,
+    0
+  ],
+  [
+    "bash -s <<< 'echo hi'",
+    0,
+    0
+  ],
+  [
+    "bash -s -- a b <<< 'echo $1'",
+    0,
+    0
+  ],
+  [
+    "bash <<'EOF2'\necho hi\nEOF2",
+    0,
+    0
+  ],
+  [
+    "bash <<EOF2\nls src\nEOF2",
+    0,
+    0
+  ],
+  [
+    "bash -e <<EOF2\ncargo test\nEOF2",
+    0,
+    0
+  ],
+  [
+    "sh <(echo 'echo hi')",
+    0,
+    0
+  ],
+  [
+    "bash <(echo 'ls src')",
+    0,
+    0
+  ],
+  [
+    "bash <(printf 'cargo build\\n')",
+    0,
+    0
+  ],
+  [
+    "echo 'ls src' | bash",
+    0,
+    0
+  ],
+  [
+    "echo 'echo hi' | sh",
+    0,
+    0
+  ],
+  [
+    "printf 'ls\\n' | bash -s",
+    0,
+    0
+  ],
+  [
+    "cat scripts/build.sh | bash",
+    0,
+    0
+  ],
+  [
+    "curl -fsSL https://example.com/install.sh | sh",
+    0,
+    0
+  ],
+  [
+    "eval 'ls src'",
+    0,
+    0
+  ],
+  [
+    "eval -- 'ls src'",
+    0,
+    0
+  ],
+  [
+    "eval - 'ls src'",
+    0,
+    0
+  ],
+  [
+    "eval \"echo $PWD\"",
+    0,
+    0
+  ],
+  [
+    "eval \"$(direnv hook bash)\"",
+    2,
+    2
+  ],
+  [
+    "eval \"$(ssh-agent -s)\"",
+    2,
+    2
+  ],
+  [
+    "eval \"$(brew shellenv)\"",
+    2,
+    2
+  ],
+  [
+    "eval -x 'ls'",
+    2,
+    2
+  ],
+  [
+    "python3 tool.py <<< 'x'",
+    0,
+    0
+  ],
+  [
+    "python3 - <<< 'print(1)'",
+    0,
+    0
+  ],
+  [
+    "python3 - < tool.py",
+    0,
+    0
+  ],
+  [
+    "python3 < tool.py",
+    0,
+    0
+  ],
+  [
+    "node - <<< 'console.log(1)'",
+    0,
+    0
+  ],
+  [
+    "cat <<< 'hello'",
+    0,
+    0
+  ],
+  [
+    "grep foo <<< 'foo bar'",
+    0,
+    0
+  ],
+  [
+    "jq . <<< '{\"a\":1}'",
+    0,
+    0
+  ],
+  [
+    "jq . < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "sort < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "sort data/in.txt",
+    0,
+    0
+  ],
+  [
+    "wc -l < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "tr a-z A-Z <<< hello",
+    0,
+    0
+  ],
+  [
+    "read -r x <<< hello",
+    0,
+    0
+  ],
+  [
+    "xargs -n1 echo <<< 'a b c'",
+    0,
+    2
+  ],
+  [
+    "sqlite3 db.sqlite < schema.sql",
+    0,
+    0
+  ],
+  [
+    "psql -f schema.sql",
+    0,
+    0
+  ],
+  [
+    "psql < schema.sql",
+    0,
+    0
+  ],
+  [
+    "mysql mydb < dump.sql",
+    0,
+    0
+  ],
+  [
+    "mytool < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "./mytool < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "./mytool <<< 'x'",
+    0,
+    0
+  ],
+  [
+    "./mytool data/in.txt",
+    0,
+    0
+  ],
+  [
+    "mytool data/in.txt",
+    0,
+    0
+  ],
+  [
+    "unknowncmd --flag",
+    0,
+    0
+  ],
+  [
+    "unknowncmd",
+    0,
+    0
+  ],
+  [
+    "unknown-tool -s data/in.txt",
+    0,
+    0
+  ],
+  [
+    "unknown-tool -c data/in.txt",
+    0,
+    0
+  ],
+  [
+    "rsync -a src/ backup/",
+    0,
+    0
+  ],
+  [
+    "tar -xzf archive.tgz",
+    0,
+    0
+  ],
+  [
+    "tar xf - < archive.tar",
+    0,
+    0
+  ],
+  [
+    "gzip -c < data/in.txt > out.gz",
+    0,
+    0
+  ],
+  [
+    "gunzip < file.gz",
+    0,
+    0
+  ],
+  [
+    "base64 < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "md5sum < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "shasum -a 256 < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "openssl dgst -sha256 < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "diff <(ls src) <(ls docs)",
+    0,
+    0
+  ],
+  [
+    "diff <(sort a) <(sort b)",
+    0,
+    0
+  ],
+  [
+    "comm <(sort a) <(sort b)",
+    0,
+    0
+  ],
+  [
+    "paste <(cut -f1 a) <(cut -f2 b)",
+    0,
+    0
+  ],
+  [
+    "cat <(echo hi)",
+    0,
+    0
+  ],
+  [
+    "while read -r l; do echo \"$l\"; done < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "while read -r l; do echo \"$l\"; done <<< \"$(ls)\"",
+    0,
+    0
+  ],
+  [
+    "mapfile -t arr < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "tee out.txt < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "go run main.go < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "cargo run < data/in.txt",
+    0,
+    0
+  ],
+  [
+    "cargo run -- -s data/in.txt",
+    0,
+    0
+  ],
+  [
+    "make -s",
+    0,
+    0
+  ],
+  [
+    "make -C src",
+    0,
+    0
+  ],
+  [
+    "ls -s",
+    0,
+    0
+  ],
+  [
+    "ls -s src",
+    0,
+    0
+  ],
+  [
+    "du -s src",
+    0,
+    0
+  ],
+  [
+    "cut -c -s data/in.txt",
+    0,
+    0
+  ],
+  [
+    "tail -s 1 -f log.txt",
+    0,
+    0
+  ],
+  [
+    "grep -s foo src",
+    0,
+    0
+  ],
+  [
+    "ln -s src link && cat link/app.py",
+    0,
+    0
+  ],
+  [
+    "ln -s src link && printf x > link/new.txt",
+    0,
+    0
+  ],
+  [
+    "ln -s src/app.py app && cat app",
+    0,
+    0
+  ],
+  [
+    "ln -s src/app.py app && printf x > app",
+    0,
+    0
+  ],
+  [
+    "ln -sf ../src docs/src",
+    0,
+    0
+  ],
+  [
+    "ln -s $PWD/src link",
+    0,
+    0
+  ],
+  [
+    "ln -s \"$(pwd)/src\" link",
+    0,
+    0
+  ],
+  [
+    "ln src/app.py hard && cat hard",
+    0,
+    0
+  ],
+  [
+    "ln -s /usr/bin/python3 py && ./py tool.py",
+    0,
+    0
+  ],
+  [
+    "ln -s data d && rm -rf d/in.txt",
+    0,
+    0
+  ],
+  [
+    "ln -s build b && rm -rf b",
+    0,
+    0
+  ],
+  [
+    "ln -s src L; ls L",
+    0,
+    0
+  ],
+  [
+    "cp -s src/app.py copy && cat copy",
+    0,
+    0
+  ],
+  [
+    "ln -s notes.txt n && printf x > n",
+    0,
+    0
+  ],
+  [
+    "ln -s ../ up && cat up/README.md",
+    0,
+    0
+  ],
+  [
+    "ln -s docs d && cd d && ls",
+    0,
+    0
+  ],
+  [
+    "ln -s src L && rm -rf L/",
+    0,
+    0
+  ],
+  [
+    "ln -s docs L && printf x > L/notes.txt",
+    0,
+    0
+  ],
+  [
+    "env bash -c 'ls'",
+    0,
+    0
+  ],
+  [
+    "command bash -c 'ls'",
+    0,
+    0
+  ],
+  [
+    "nice -n 5 bash scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "time bash scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "nohup bash scripts/build.sh &",
+    0,
+    0
+  ],
+  [
+    "timeout 10 bash scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "busybox ls",
+    0,
+    0
+  ],
+  [
+    "busybox sh -c 'ls'",
+    0,
+    0
+  ],
+  [
+    "docker exec c bash -c 'ls'",
+    0,
+    0
+  ],
+  [
+    "ssh host bash -s < scripts/build.sh",
+    0,
+    0
+  ],
+  [
+    "npm run build",
+    0,
+    0
+  ],
+  [
+    "npx eslint src",
+    0,
+    0
+  ],
+  [
+    "pnpm test",
+    0,
+    0
+  ],
+  [
+    "cargo test -p x -- --nocapture",
+    0,
+    0
+  ],
+  [
+    "git status",
+    0,
+    0
+  ],
+  [
+    "git log --oneline -3",
+    0,
+    0
+  ],
+  [
+    "git commit -m x",
+    2,
+    0
+  ],
+  [
+    "f() { echo hi; }; f",
+    0,
+    0
+  ],
+  [
+    "for f in src/*.py; do python3 lint.py \"$f\"; done",
+    0,
+    0
+  ],
+  [
+    "if [ -f tool.py ]; then python3 tool.py src/app.py; fi",
+    0,
+    0
+  ],
+  [
+    "$CMD args",
+    0,
+    2
+  ],
+  [
+    "\"$HOME/bin/tool\" data/in.txt",
+    0,
+    0
+  ],
+  [
+    "$HOME/bin/tool data/in.txt",
+    0,
+    0
+  ],
+  [
+    "~/bin/tool data/in.txt",
+    0,
+    0
+  ],
+  [
+    "$TOOL < data/in.txt",
+    0,
+    2
+  ],
+  [
+    "exec bash",
+    0,
+    0
+  ],
+  [
+    "exec bash -l",
+    0,
+    0
+  ],
+  [
+    "script -q out.txt bash -c 'ls'",
+    0,
+    0
+  ]
+]

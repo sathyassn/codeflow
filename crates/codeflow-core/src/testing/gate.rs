@@ -9,13 +9,15 @@
 
 use std::path::Path;
 
-use crate::testing::config::{load_test_config, ExecutionConfig, TargetConfig};
+use crate::testing::config::{
+    self, load_named_test_config, load_test_config, ExecutionConfig, TargetConfig,
+};
 use crate::testing::coverage::FileCoverage;
 use crate::testing::delivery;
 pub use crate::testing::delivery::{matches as inputs_match, GateOptions};
 use crate::testing::error::TestingError;
 use crate::testing::report::{CanonicalTestReport, CtrfStatus};
-use crate::testing::runner::{run_dependency_targets, TargetRunResult};
+use crate::testing::runner::TargetRunResult;
 use crate::testing::setup::detect::detect_stacks;
 use crate::testing::validation;
 
@@ -31,8 +33,8 @@ pub struct GateTargetResult {
     pub duration_ms: u64,
     pub stdout: String,
     pub stderr: String,
-    /// Set when the target failed before producing an exit code
-    /// (spawn failure, missing mode, panic).
+    /// Failure detail beyond an ordinary exit code (timeout, signal, runner
+    /// error, or a target that could not run).
     pub error: Option<String>,
     /// Structured failure detail parsed from the target's JUnit/CTRF report
     /// artifact, when one was configured and produced. `None` when the target
@@ -113,7 +115,15 @@ pub enum GateOutcome {
     Completed {
         results: Vec<GateTargetResult>,
         passed: bool,
+        /// Conditions that fail the gate independently of target exit statuses.
+        failure_reasons: Vec<String>,
         coverage: Vec<CoverageReport>,
+        /// Targets omitted by selection or CI configuration.
+        skipped: Vec<String>,
+        /// Count of requested targets skipped by candidate evidence.
+        evidence_skipped: usize,
+        /// Every full-mode target executed without selection limits.
+        complete: bool,
     },
 }
 
@@ -172,6 +182,10 @@ fn run_gate_resolved(
     alias_quick: bool,
     options: &GateOptions,
 ) -> Result<GateOutcome, TestingError> {
+    let options = &GateOptions {
+        all: options.all || (mode == "full" && options.since.is_none()),
+        ..options.clone()
+    };
     let resolve = |targets: &[TargetConfig]| {
         if alias_quick {
             resolve_mode(mode, targets)
@@ -179,10 +193,38 @@ fn run_gate_resolved(
             mode.to_string()
         }
     };
+    if let Some(named) = &options.config {
+        let (config, bytes) = load_named_test_config(named)?;
+        if config.targets.is_empty() {
+            return Ok(GateOutcome::NoTargets {
+                reason: format!("{} defines no targets", named.display()),
+            });
+        }
+        let effective = resolve(&config.targets);
+        // Diagnostics name the config this run read, never the default
+        // path it ignored (TSK-1020 review 1).
+        let default = project_dir.join(TEST_CONFIG_PATH);
+        return run_configured(
+            project_dir,
+            mode,
+            options,
+            (config.targets, config.execution, effective),
+            &delivery::digest(&bytes),
+        )
+        .map_err(|error| match error {
+            TestingError::ConfigInvalid { path, message } if path == default => {
+                TestingError::ConfigInvalid {
+                    path: named.clone(),
+                    message,
+                }
+            }
+            other => other,
+        });
+    }
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 
     let has_config = !crate::absence::proven_absent(&config_path)?;
-    let (mut targets, execution, effective_mode) = if has_config {
+    let (targets, execution, effective_mode) = if has_config {
         let config = load_test_config(&config_path)?;
         if config.targets.is_empty() {
             return Ok(GateOutcome::NoTargets {
@@ -209,6 +251,25 @@ fn run_gate_resolved(
     } else {
         delivery::digest(&serde_json::to_vec(&(&targets, &execution))?)
     };
+    run_configured(
+        project_dir,
+        mode,
+        options,
+        (targets, execution, effective_mode),
+        &config_digest,
+    )
+}
+
+/// Select and run `targets` from a loaded config whose evidence binds to
+/// `config_digest`.
+#[allow(clippy::too_many_lines)]
+fn run_configured(
+    project_dir: &Path,
+    mode: &str,
+    options: &GateOptions,
+    (mut targets, execution, effective_mode): (Vec<TargetConfig>, ExecutionConfig, String),
+    config_digest: &str,
+) -> Result<GateOutcome, TestingError> {
     delivery::check_only(project_dir, &targets, &effective_mode, &options.only)?;
     let home = crate::registry::codeflow_home();
     let selection = delivery::select(
@@ -218,25 +279,28 @@ fn run_gate_resolved(
         &effective_mode,
         options,
         home.as_deref(),
-        &config_digest,
+        config_digest,
     );
     for target in &targets {
+        let reason = selection.reasons.get(&target.name).map_or_else(
+            || selection.reason.clone(),
+            |reason| format!("{}; {reason}", selection.reason),
+        );
         if selection.selected.contains(&target.name) {
-            eprintln!(
-                "[codeflow test] selected {}: {}; requires [{}]",
+            progress!(
+                "[codeflow test] selected {}: {reason}; requires [{}]",
                 target.name,
-                selection.reason,
                 target.requires.join(", ")
             );
         } else if selection.skipped.contains(&target.name) {
-            eprintln!(
-                "[codeflow test] skipped {}: {}",
-                target.name, selection.reason
-            );
+            progress!("[codeflow test] skipped {}: {reason}", target.name);
+        } else if selection.excluded.contains(&target.name) {
+            progress!("[codeflow test] excluded {}: {reason}", target.name);
         }
     }
+    let declarations = targets.clone();
     targets.retain(|t| selection.selected.contains(&t.name));
-    if targets.is_empty() {
+    if targets.is_empty() && selection.skipped.is_empty() {
         return Ok(GateOutcome::NoTargets {
             reason: format!("no enabled target defines mode \"{effective_mode}\""),
         });
@@ -266,13 +330,24 @@ fn run_gate_resolved(
         .map(|t| t.name.clone())
         .collect();
     targets.retain(|t| !ci_skipped.contains(&t.name));
-    let tools = delivery::preflight(project_dir, &targets, &effective_mode)?;
+    let mut tools =
+        delivery::preflight(project_dir, &targets, &effective_mode).map_err(|error| {
+            let message = declarations.iter().fold(error.to_string(), |text, target| {
+                super::evidence::redact(target, &text)
+            });
+            delivery::invalid(project_dir, message)
+        })?;
+    for value in tools.values_mut() {
+        for target in &declarations {
+            *value = super::evidence::redact(target, value);
+        }
+    }
     let run_id = uuid::Uuid::new_v4().to_string();
     let target_dir = delivery::target_dir(project_dir);
     std::fs::create_dir_all(&target_dir)?;
     let target_dir = target_dir.canonicalize()?;
     let run_dir = target_dir.join("codeflow-gate").join(&run_id);
-    std::fs::create_dir_all(&run_dir)?;
+    create_run_directory(&target_dir, &run_id)?;
     configure_run_targets(
         &mut targets,
         project_dir,
@@ -280,15 +355,24 @@ fn run_gate_resolved(
         &run_dir,
         options.all,
     )?;
+    // Resolve fallback weight before scheduling; the original declarations remain evidence inputs.
+    for target in &mut targets {
+        if mode == "quick" && target.heavy.is_none() {
+            target.heavy = Some(
+                effective_mode == "essential"
+                    || execution.quick_default_class == config::QuickTargetClass::Heavy,
+            );
+        }
+    }
     let before = delivery::tracked(project_dir)?;
-    let raw = run_dependency_targets(
+    let raw = crate::testing::runner::run_dependency_targets_with_admission(
         &targets,
         &effective_mode,
         project_dir,
-        execution.parallel,
-        execution.max_parallel,
-        execution.fail_fast,
+        &execution,
         &run_dir,
+        &declarations,
+        mode == "quick",
     );
     let after = delivery::tracked(project_dir)?;
     // Producers are complete now. This is the named candidate; a writer that
@@ -297,7 +381,7 @@ fn run_gate_resolved(
     let generation_unchanged = before == after;
     let revision = delivery::revision(project_dir).unwrap_or_default();
 
-    if raw.is_empty() {
+    if raw.is_empty() && selection.skipped.is_empty() && ci_skipped.is_empty() {
         return Ok(GateOutcome::NoTargets {
             reason: format!("no enabled target defines mode \"{effective_mode}\""),
         });
@@ -316,6 +400,10 @@ fn run_gate_resolved(
         Vec::new()
     };
 
+    let target_evidence: Vec<_> = raw
+        .iter()
+        .filter_map(|r| r.as_ref().ok()?.evidence.clone())
+        .collect();
     let results: Vec<GateTargetResult> = raw
         .into_iter()
         .map(|r| match r {
@@ -335,12 +423,12 @@ fn run_gate_resolved(
                     duration_ms: run.duration_ms,
                     stdout: run.stdout,
                     stderr: run.stderr,
-                    error: None,
+                    error: run.error,
                     report,
                 }
             }
             Err(e) => GateTargetResult {
-                name: "(unrunnable)".to_string(),
+                name: "(gate)".to_string(),
                 exit_code: -1,
                 duration_ms: 0,
                 stdout: String::new(),
@@ -351,15 +439,19 @@ fn run_gate_resolved(
         })
         .collect();
 
+    let mut failure_reasons = Vec::new();
     if !generation_unchanged {
-        let changed: Vec<_> = after
-            .iter()
-            .filter(|(p, hash)| before.get(*p) != Some(*hash))
-            .map(|(p, _)| p.as_str())
+        let changed: std::collections::BTreeSet<_> = before
+            .keys()
+            .chain(after.keys())
+            .filter(|path| before.get(*path) != after.get(*path))
+            .map(String::as_str)
             .collect();
-        eprintln!(
+        let changed = changed.into_iter().collect::<Vec<_>>().join(", ");
+        failure_reasons.push(format!("tracked files changed during the gate: {changed}"));
+        progress!(
             "[codeflow test] generation changed the candidate: {}",
-            changed.join(", ")
+            changed
         );
     }
     let passed = generation_unchanged && gate_verdict(&results, &coverage);
@@ -378,25 +470,28 @@ fn run_gate_resolved(
     // A run limited by `--only` is one part of a split gate, never the
     // whole gate's evidence, even when its names happen to cover every
     // target: only an unlimited run is recorded complete.
-    let complete = options.only.is_empty()
+    let complete = !results.is_empty()
+        && options.only.is_empty()
         && selection.skipped.is_empty()
         && ci_skipped.is_empty()
         && results.len() == targets.len()
         && effective_mode == "full";
     if !ci_skipped.is_empty() && effective_mode == "full" {
-        eprintln!(
+        progress!(
             "[codeflow test] not complete: skipped in CI and still owed locally: {}",
             ci_skipped.join(", ")
         );
     }
     let artifact = serde_json::json!({
-        "schema_version": 1, "run_id": run_id, "revision": revision,
+        "schema_version": 2, "run_id": run_id, "revision": revision,
+        "git_tree": super::evidence::git_tree(project_dir), "target_evidence": target_evidence,
         "tree": tree, "config_digest": config_digest, "mode": effective_mode,
         "selection": selection, "passed": passed, "complete": complete, "clean": clean,
         "ci_skipped": ci_skipped,
         "generation_unchanged": generation_unchanged, "dirty_paths": dirty_paths,
+        "failure_reasons": failure_reasons,
         "results": results, "coverage": coverage,
-        "targets": targets.iter().map(|t| serde_json::json!({"name":t.name,"command":t.modes[&effective_mode].command,"requires":t.requires,"env":t.env})).collect::<Vec<_>>(),
+        "targets": targets.iter().map(|t| serde_json::json!({"name":t.name,"command":super::evidence::redact(declarations.iter().find(|d| d.name == t.name).unwrap_or(t), &t.modes[&effective_mode].command),"requires":t.requires})).collect::<Vec<_>>(),
         "environment": {"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"target_dir":target_dir},
         "tools": tools
     });
@@ -404,7 +499,7 @@ fn run_gate_resolved(
         run_dir.join("run.json"),
         serde_json::to_vec_pretty(&artifact)?,
     )?;
-    eprintln!(
+    progress!(
         "[codeflow test] artifact: {}",
         run_dir.join("run.json").display()
     );
@@ -417,16 +512,26 @@ fn run_gate_resolved(
         })?;
         let destination = delivery::durable_root(project_dir, &home).join(&run_id);
         copy_evidence(&run_dir, &destination)?;
-        eprintln!(
+        progress!(
             "[codeflow test] durable artifact: {}",
             destination.join("run.json").display()
         );
     }
     Ok(GateOutcome::Completed {
+        evidence_skipped: selection.skipped.len(),
+        skipped: selection.skipped.into_iter().chain(ci_skipped).collect(),
+        complete,
         results,
         passed,
+        failure_reasons,
         coverage,
     })
+}
+
+// The build-output root is caller-owned. Each run owns its leaf exclusively
+// before any producer writes there, even when a link was planted at that name.
+fn create_run_directory(target_dir: &Path, run_id: &str) -> std::io::Result<()> {
+    crate::contained::Tree::open(target_dir)?.mkdir(&format!("codeflow-gate/{run_id}"))
 }
 
 fn configure_run_targets(
@@ -538,8 +643,13 @@ fn copy_evidence(from: &Path, to: &Path) -> Result<(), TestingError> {
 /// defines the mode (after the `quick` alias) uses the cargo runner or names
 /// `cargo` in its command, or, with no config, a Rust stack is detected. An
 /// unreadable config reads as `false`; [`run_gate`] reports that error itself.
+/// `named` is the config a caller names with `--config`, read instead.
 #[must_use]
-pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
+pub fn gate_uses_cargo(project_dir: &Path, mode: &str, named: Option<&Path>) -> bool {
+    if let Some(named) = named {
+        return load_named_test_config(named)
+            .is_ok_and(|(config, _)| any_cargo(&config.targets, mode));
+    }
     let config_path = project_dir.join(TEST_CONFIG_PATH);
     let Ok(absent) = crate::absence::proven_absent(&config_path) else {
         return false; // The actual gate reports this obtaining error.
@@ -555,7 +665,12 @@ pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
             Err(_) => return false,
         }
     };
-    let effective = resolve_mode(mode, &targets);
+    any_cargo(&targets, mode)
+}
+
+/// Whether an enabled target that defines `mode` runs cargo.
+fn any_cargo(targets: &[TargetConfig], mode: &str) -> bool {
+    let effective = resolve_mode(mode, targets);
     targets
         .iter()
         .filter(|t| t.enabled)
@@ -1007,11 +1122,12 @@ mod tests {
     fn quick_resolves_to_essential_on_template_config() {
         // Shipped templates (and stack detection) define `essential`/`full`,
         // never `quick`. A `--mode quick` run must resolve to `essential` and
-        // actually execute — the pre-push gate depends on this.
+        // actually execute. This no-op fixture is explicitly light so the
+        // enclosing gate's reservation does not prevent testing mode resolution.
         let dir = tempfile::tempdir().unwrap();
         write_config(
             dir.path(),
-            &format!("[{}]", essential_full_target("ok", "exit 0")),
+            r#"[{"name":"ok","runner":"custom","heavy":false,"modes":{"essential":{"command":"exit 0"},"full":{"command":"exit 0"}}}]"#,
         );
 
         let outcome = run_gate(dir.path(), "quick").unwrap();
@@ -1275,5 +1391,31 @@ mod r22_regressions {
         let odd = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/odd\xff"));
         assert!(configure_run_targets(&mut [target.clone()], root, odd, root, false).is_err());
         assert!(configure_run_targets(&mut [target], root, root, root, false).is_ok());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod temporary_directory_tests {
+    #[test]
+    fn gate_output_refuses_planted_run_directory_link() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let path = root.path().join("codeflow-gate/run-id");
+        std::fs::create_dir(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(outside.path(), &path).unwrap();
+        assert!(super::create_run_directory(root.path(), "run-id").is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
+    }
+
+    #[test]
+    fn gate_output_refuses_planted_container_link() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let path = root.path().join("codeflow-gate");
+        std::os::unix::fs::symlink(outside.path(), &path).unwrap();
+        assert!(super::create_run_directory(root.path(), "run-id").is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
     }
 }

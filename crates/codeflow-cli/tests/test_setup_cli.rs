@@ -4,11 +4,9 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
@@ -40,6 +38,91 @@ fn codeflow_with_input(dir: &Path, args: &[&str], input: &str) -> Output {
 
 fn config_path(dir: &Path) -> std::path::PathBuf {
     dir.join(".codeflow/test-config.json")
+}
+
+#[cfg(unix)]
+#[test]
+fn test_command_does_not_follow_a_committed_schema_temporary_link() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let sentinel = outside.path().join("sentinel");
+    std::fs::write(&sentinel, b"unchanged").unwrap();
+    std::fs::create_dir(root.path().join(".codeflow")).unwrap();
+    let planted = root.path().join(".codeflow/test-config.schema.tmp");
+    std::os::unix::fs::symlink(&sentinel, &planted).unwrap();
+    std::fs::write(
+        config_path(root.path()),
+        r#"{
+        "schema_version":"1.0",
+        "targets":[{"name":"smoke","runner":"custom","modes":{
+            "quick":{"command":"printf safe"},
+            "essential":{"command":"printf safe"},
+            "full":{"command":"printf safe"}
+        }}]
+    }"#,
+    )
+    .unwrap();
+    // Each Git command uses only this disposable repository's configuration.
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", ".codeflow"],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    ] {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root.path())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["test", "--mode", "quick"])
+        .current_dir(root.path())
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("CARGO_TARGET_DIR", root.path().join("target"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+    // The test runner consumes a populated config without writing the schema.
+    // Setup exercises the schema writer with the same committed link present.
+    let setup = codeflow(
+        root.path(),
+        &["test", "setup", "--template", "minimal.json", "--replace"],
+    );
+    assert!(
+        setup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+    assert!(std::fs::symlink_metadata(planted).unwrap().is_symlink());
+    assert!(root
+        .path()
+        .join(".codeflow/test-config.schema.json")
+        .is_file());
 }
 
 #[test]
@@ -175,4 +258,52 @@ fn unsafe_or_unknown_template_name_cannot_read_arbitrary_files() {
     );
     assert_eq!(output.status.code(), Some(1));
     assert!(!config_path(dir.path()).exists());
+}
+
+/// Makes the home this process's tests share, and fails when
+/// `SHARED_HOME_PROBE_FAILS` is set. The next test runs it in a process of
+/// its own.
+#[test]
+fn a_test_process_makes_its_shared_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = codeflow(dir.path(), &["test", "setup", "--list-templates"]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(isolated_home().is_dir());
+    assert!(
+        std::env::var_os("SHARED_HOME_PROBE_FAILS").is_none(),
+        "failing as asked"
+    );
+}
+
+/// TSK-386: the shared home is removed when the test process exits, after a
+/// passing and after a failing test, so no run of the suite leaves it in the
+/// temporary directory.
+#[test]
+fn the_shared_home_is_removed_when_the_test_process_exits() {
+    for fails in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut probe = Command::new(std::env::current_exe().unwrap());
+        probe
+            .args(["--exact", "a_test_process_makes_its_shared_home"])
+            .args(["--test-threads", "1"])
+            .env("TMPDIR", temp.path())
+            .env("TMP", temp.path())
+            .env("TEMP", temp.path())
+            .env_remove("SHARED_HOME_PROBE_FAILS");
+        if fails {
+            probe.env("SHARED_HOME_PROBE_FAILS", "1");
+        }
+        let out = probe.output().unwrap();
+        let printed = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(out.status.success(), !fails, "{printed}");
+        assert!(
+            printed.contains("1 passed") || printed.contains("1 failed"),
+            "{printed}"
+        );
+        let left: Vec<_> = std::fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert!(left.is_empty(), "fails={fails}: left {left:?}");
+    }
 }

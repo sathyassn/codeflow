@@ -8,6 +8,8 @@
 //! `work next` and `status` make no network call: they read the refs as last
 //! fetched and name that snapshot. `work claim` fetches first.
 
+use crate::workgraph::history;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::rc::Rc;
@@ -74,8 +76,13 @@ pub struct Entry {
     pub state: State,
     /// Why it is not ready (empty when ready or active).
     pub reason: String,
-    /// Visible, unlanded branches carrying the task id.
+    /// Visible, unlanded branches carrying the task id, in display form
+    /// (`GitName::display`), for text output.
     pub branches: Vec<String>,
+    /// The same branches as git stores them, for machine output: the exact
+    /// text, or the display form for a name that is not valid UTF-8, which
+    /// no text can hold exactly (TSK-388).
+    pub branch_names: Vec<String>,
     /// Branches on unrelated remotes, reported as information rather than claims.
     pub informational_branches: Vec<String>,
 }
@@ -128,18 +135,25 @@ impl Backlog {
     }
 
     /// One line naming the snapshot the verdicts were read from (R-41).
+    /// The reference and target are ref names, which can hold any
+    /// character git accepts, so they are shown escaped (TSK-388).
     #[must_use]
     pub fn snapshot_line(&self) -> String {
+        use crate::git::{display_message, display_text};
         let tips = self
             .snapshots
             .iter()
             .map(
                 |snapshot| match (&snapshot.reference, &snapshot.tip, &snapshot.problem) {
                     (Some(reference), Some(tip), _) => {
-                        format!("{reference}@{}", &tip[..tip.len().min(9)])
+                        format!("{}@{}", display_text(reference), &tip[..tip.len().min(9)])
                     }
-                    (_, _, Some(problem)) => format!("{} ({problem})", snapshot.target),
-                    _ => format!("{} (not found)", snapshot.target),
+                    (_, _, Some(problem)) => format!(
+                        "{} ({})",
+                        display_text(&snapshot.target),
+                        display_message(problem)
+                    ),
+                    _ => format!("{} (not found)", display_text(&snapshot.target)),
                 },
             )
             .collect::<Vec<_>>()
@@ -151,6 +165,13 @@ impl Backlog {
                 .unwrap_or("never (local refs only)")
         )
     }
+}
+
+/// `name` as machine output carries it: the exact text, or the display
+/// form for a name that is not valid UTF-8, which no text can hold.
+fn exact_text(name: &GitName) -> String {
+    name.rule_text()
+        .map_or_else(|_| name.display().to_string(), str::to_owned)
 }
 
 /// The identity of a target name, for comparing a branch with declared
@@ -207,7 +228,10 @@ fn shown(target: &str) -> String {
 ///
 /// Returns the reason when an explicit remote-tracking ref names no
 /// configured remote.
-fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<String>, String> {
+pub(crate) fn target_fetch_remote(
+    repo: &Repository,
+    declared: &str,
+) -> Result<Option<String>, String> {
     // OS text rule (issue 79): a remote name that is not valid UTF-8 cannot be
     // a fetch remote CodeFlow names. The owner decides which remote is
     // refreshed, so an owner that cannot be read is an error and never a
@@ -313,7 +337,7 @@ impl WorkBranches {
                 format!(
                     "also on {remote}: {} (not a claim: {remote} does not carry work to {})",
                     branch.display(),
-                    shown(target)
+                    crate::git::display_text(&shown(target))
                 )
             })
             .collect()
@@ -420,7 +444,7 @@ fn scope_scan<'a>(
 /// landing. Work lands with a merge commit, so a landed tip is off that line.
 /// Anything unproven is not landed.
 fn landed(repo: &Repository, repo_root: &Path, tip: git2::Oid, target: git2::Oid) -> bool {
-    if tip == target || repo.graph_descendant_of(target, tip).unwrap_or(false) {
+    if tip == target || history::descendant_of(repo, target, tip).unwrap_or(false) {
         return on_first_parent_line(repo, target, tip) == Some(false);
     }
     cherry_landed_in(repo, repo_root, target, tip)
@@ -467,6 +491,9 @@ fn cherry_landed_in(
 }
 
 fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
+    if history::check_command(repo_root).is_err() {
+        return false;
+    }
     let range = format!("{target}..{tip}");
     let merges = git(
         repo_root,
@@ -479,6 +506,9 @@ fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
 }
 
 fn cherry_all_equivalent(repo_root: &Path, target: &str, tip: &str) -> bool {
+    if history::check_command(repo_root).is_err() {
+        return false;
+    }
     git(repo_root, &["cherry", target, tip])
         .is_ok_and(|out| !out.is_empty() && out.split('\n').all(|line| line.starts_with("- ")))
 }
@@ -494,12 +524,12 @@ fn cherry_all_equivalent(repo_root: &Path, target: &str, tip: &str) -> bool {
 /// nothing: the spawned check then decides alone.
 fn could_be_patch_equivalent(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> Option<bool> {
     let mut added = Vec::new();
-    let mut walk = repo.revwalk().ok()?;
+    let mut walk = history::revwalk(repo).ok()?;
     walk.push(tip).ok()?;
     walk.hide(target).ok()?;
     for oid in walk {
         let commit = repo.find_commit(oid.ok()?).ok()?;
-        if commit.parent_count() > 1 {
+        if history::parents(repo, &commit).ok()?.len() > 1 {
             return Some(false);
         }
         added.push(changed_paths(repo, &commit)?);
@@ -508,13 +538,13 @@ fn could_be_patch_equivalent(repo: &Repository, target: git2::Oid, tip: git2::Oi
         return Some(false);
     }
     let mut upstream = std::collections::HashSet::new();
-    let mut walk = repo.revwalk().ok()?;
+    let mut walk = history::revwalk(repo).ok()?;
     walk.push(target).ok()?;
     walk.hide(tip).ok()?;
     for oid in walk {
         let commit = repo.find_commit(oid.ok()?).ok()?;
         // `git cherry` compares against non-merge commits only.
-        if commit.parent_count() <= 1 {
+        if history::parents(repo, &commit).ok()?.len() <= 1 {
             if let Some(paths) = changed_paths(repo, &commit) {
                 upstream.insert(paths);
             }
@@ -538,14 +568,15 @@ thread_local! {
 /// nothing or cannot be read.
 fn changed_paths(repo: &Repository, commit: &git2::Commit<'_>) -> Option<u64> {
     use std::hash::{Hash, Hasher};
+    history::parents(repo, commit).ok()?;
     if let Some(known) = CHANGED_PATHS.with(|memo| memo.borrow().get(&commit.id()).copied()) {
         return known;
     }
     let digest = (|| {
         let tree = commit.tree().ok()?;
-        let parent = match commit.parent_count() {
+        let parent = match history::parents(repo, commit).ok()?.len() {
             0 => None,
-            _ => Some(commit.parent(0).ok()?.tree().ok()?),
+            _ => Some(history::parent(repo, commit, 0).ok()?.tree().ok()?),
         };
         let diff = repo
             .diff_tree_to_tree(parent.as_ref(), Some(&tree), None)
@@ -588,15 +619,16 @@ fn patch_id_path(path: &[u8]) -> Vec<u8> {
 /// alone (commit dates need not follow ancestry). `None` when the walk
 /// cannot be completed, which proves nothing.
 fn on_first_parent_line(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> Option<bool> {
+    let _judgment = history::judgment();
     let mut current = repo.find_commit(target).ok()?;
     loop {
         if current.id() == tip {
             return Some(true);
         }
-        if current.parent_count() == 0 {
+        if history::parents(repo, &current).ok()?.is_empty() {
             return Some(false);
         }
-        current = current.parent(0).ok()?;
+        current = history::parent(repo, &current, 0).ok()?;
     }
 }
 
@@ -734,12 +766,24 @@ fn read_tips(
     Ok(tips)
 }
 
+/// Order entries by state, then by task id number (`TSK-999` before
+/// `TSK-1000`), and the landed branch names the same way.
+fn sort_by_state_then_id(out: &mut Backlog) {
+    out.entries.sort_by(|left, right| {
+        left.state
+            .cmp(&right.state)
+            .then_with(|| crate::ids::compare_ids(&left.task_id, &right.task_id))
+    });
+    out.landed.sort_by(|a, b| crate::ids::compare_ids(a, b));
+}
+
 /// Compute the backlog from the last-fetched refs. Makes no network call.
 ///
 /// # Errors
 ///
 /// Returns the reason when the repository or a target tip cannot be read.
 pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
     let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
@@ -802,10 +846,10 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
             // The report shows names; the decisions above used exact bytes.
             out.landed
                 .extend(done.iter().map(|name| name.display().to_string()));
-            let names: Vec<String> = names
+            let (branch_names, names): (Vec<String>, Vec<String>) = names
                 .iter()
-                .map(|name| name.display().to_string())
-                .collect();
+                .map(|name| (exact_text(name), name.display().to_string()))
+                .unzip();
             if names.len() > 1 {
                 out.conflicts.insert(record.id.clone(), names.clone());
             }
@@ -836,14 +880,505 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                 state,
                 reason,
                 branches: names,
+                branch_names,
                 informational_branches: carried.information(&record.id, reference),
             });
         }
     }
-    out.entries
-        .sort_by(|left, right| (left.state, &left.task_id).cmp(&(right.state, &right.task_id)));
-    out.landed.sort();
+    sort_by_state_then_id(&mut out);
     out.landed.dedup();
+    Ok(out)
+}
+
+/// A task's state as its target tip holds it: the record status on the
+/// ref its declared target resolves to, never a feature branch's copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetTask {
+    /// `todo`, `blocked`, `complete` or `cancelled`, as the target holds it.
+    pub status: String,
+    /// The record's hidden identity on the target, when it carries one.
+    pub uid: Option<String>,
+    /// The declared target (`main`, `integration/EPC-NNN-<slug>`).
+    pub target: String,
+    /// The ref read (`origin/main`).
+    pub reference: String,
+    /// The tip commit read.
+    pub tip: String,
+    /// A visible, unlanded branch carries the task (claimed, advisory).
+    pub claimed: bool,
+    /// Complete with an acceptance block that passes the structural
+    /// acceptance rules against the record's criteria, on this tip, and
+    /// bound to its reviewed commit as CI binds a completion.
+    pub accepted: bool,
+}
+
+/// Whether a bare branch name is a landing line: `main`, `master` or an
+/// `integration/` line. Nothing is stripped: `fix/main` is a work branch.
+#[must_use]
+pub fn is_landing_target(name: &str) -> bool {
+    crate::ids::inventory::is_landing_branch(name)
+}
+
+/// The integration lines the default work target's records name: every
+/// task's declared `integration/` target there, as a bare branch name. An
+/// `integration/` line counts as a landing line only when it is one of
+/// these, so a line someone made up and pushed, even under a real epic
+/// number, is not one. Empty when the default target cannot be read.
+fn default_tip_lines(repo_root: &Path, repo: &Repository) -> BTreeSet<String> {
+    let Ok(Some(default)) = super::default_work_target(repo_root) else {
+        return BTreeSet::new();
+    };
+    let Ok(Some((_, tip))) = resolve_target(repo_root, repo, &default) else {
+        return BTreeSet::new();
+    };
+    let remotes: Vec<String> = repo
+        .remotes()
+        .map(|names| {
+            (0..names.len())
+                .filter_map(|index| names.get(index).ok().flatten().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    repo.find_commit(tip)
+        .and_then(|commit| commit.tree())
+        .ok()
+        .and_then(|tree| records_from_tree(repo, &tree).ok())
+        .map(|records| {
+            records
+                .values()
+                .filter(|record| record.kind == RecordKind::Task)
+                .filter_map(|record| record.integration_target.as_deref())
+                .map(|declared| {
+                    let name = declared
+                        .strip_prefix("refs/remotes/")
+                        .or_else(|| declared.strip_prefix("refs/heads/"))
+                        .unwrap_or(declared);
+                    // Only a configured remote's name is a prefix to drop.
+                    remotes
+                        .iter()
+                        .find_map(|remote| {
+                            name.strip_prefix(remote.as_str())
+                                .and_then(|rest| rest.strip_prefix('/'))
+                        })
+                        .unwrap_or(name)
+                        .to_string()
+                })
+                .filter(|name| name.starts_with(crate::hooks::policy::INTEGRATION_BRANCH_PREFIX))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a bare branch name is a landing line this project recognises:
+/// `main`, `master`, or an `integration/` line the default target's records
+/// name as a task's target.
+#[must_use]
+pub fn is_recognised_landing(name: &str, lines: &BTreeSet<String>) -> bool {
+    matches!(name, "main" | "master") || lines.contains(name)
+}
+
+/// The integration lines a pull request base or a task target may name,
+/// for the observer.
+///
+/// # Errors
+///
+/// Returns the reason when the repository cannot be opened.
+pub fn landing_lines(repo_root: &Path) -> Result<BTreeSet<String>, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    Ok(default_tip_lines(repo_root, &repo))
+}
+
+/// The task record with `task_id` (and, when known, `uid`) at `commit`,
+/// read only at the paths the established record reader accepts
+/// (`record_kind_for_tree_path`): `project-management/tasks/ID.md` or
+/// `project-management/epics/<epic>/tasks/ID.md`. A file elsewhere is
+/// never the record; a record whose UID differs is another record.
+fn task_record_at(
+    repo: &Repository,
+    commit: &str,
+    task_id: &str,
+    uid: Option<&str>,
+) -> Option<Record> {
+    let tree = git2::Oid::from_str(commit)
+        .and_then(|oid| repo.find_commit(oid))
+        .and_then(|commit| commit.tree())
+        .ok()?;
+    let file = format!("{task_id}.md");
+    let mut paths = vec![format!("project-management/tasks/{file}")];
+    if let Ok(epics) = tree.get_path(Path::new("project-management/epics")) {
+        if let Some(epics) = epics
+            .to_object(repo)
+            .ok()
+            .and_then(|object| object.into_tree().ok())
+        {
+            for epic in &epics {
+                if let Ok(name) = epic.name() {
+                    paths.push(format!("project-management/epics/{name}/tasks/{file}"));
+                }
+            }
+        }
+    }
+    paths.into_iter().find_map(|path| {
+        super::work_start::record_kind_for_tree_path(&path)
+            .filter(|kind| *kind == RecordKind::Task)?;
+        let entry = tree.get_path(Path::new(&path)).ok()?;
+        let blob = repo.find_blob(entry.id()).ok()?;
+        let record =
+            parse_record(std::str::from_utf8(blob.content()).ok()?, RecordKind::Task).ok()?;
+        (record.id == task_id && uid.is_none_or(|uid| record.uid.as_deref() == Some(uid)))
+            .then_some(record)
+    })
+}
+
+/// The commits of `tip`'s first-parent line that change anything under
+/// `project-management/` against their first parent, newest first, each
+/// with all its parents, read through Git with replace refs and grafts
+/// disabled. `None` when the history cannot be read.
+fn first_parent_record_changes(
+    repo_root: &Path,
+    tip: git2::Oid,
+) -> Option<Vec<(String, Vec<String>)>> {
+    let output = crate::git::judging_command()
+        .arg("-C")
+        .arg(repo_root)
+        .args([
+            "--no-replace-objects",
+            "-c",
+            "core.commitGraph=false",
+            "-c",
+            "core.useReplaceRefs=false",
+            "log",
+            "--first-parent",
+            "--format=%H %P",
+        ])
+        .arg(tip.to_string())
+        .args(["--", "project-management"])
+        .env(
+            "GIT_GRAFT_FILE",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut ids = line.split(' ');
+                let commit = ids.next()?.to_string();
+                Some((commit, ids.map(str::to_string).collect()))
+            })
+            .collect(),
+    )
+}
+
+/// A record's completion state: complete or not, the reviewed commit of
+/// its valid active acceptance block, and that block's whole text (so any
+/// change to the block while complete is a new transition).
+type Completion = (bool, Option<String>, Option<String>);
+
+fn completion_of(record: Option<&Record>) -> Completion {
+    match record {
+        Some(record) if record.status == "complete" => {
+            (true, record.reviewed.clone(), record.acceptance.clone())
+        }
+        _ => (false, None, None),
+    }
+}
+
+/// Whether the task's current completion on `tip` is bound to its review
+/// as its landing gate bound it. The design (`target/build-TSK-422.md`,
+/// round 5):
+///
+/// 1. The record is found only through the reader's layouts and its UID.
+/// 2. The current completion is the newest transition on `tip`'s
+///    first-parent line: a commit whose record, against its first parent's,
+///    goes from not complete to complete, or changes its acceptance block
+///    while complete. A move that leaves both unchanged is no transition.
+/// 3. A direct transition C is judged at C; a merge M at the head it
+///    brought in, M's second parent, which must hold the same completion as
+///    M (otherwise the merge edited the record and M is judged as a direct
+///    transition, which cannot bind). The reviewed commit must be on the
+///    judged head's first-parent line and must not hold the task complete,
+///    and
+///    `completions_in_range(reviewed, head)` must report no finding for the
+///    task. For a merge, M must be the clean re-merge of its parents, and
+///    no reopen of the task may lie on the first-parent line between the
+///    reviewed commit and M. After the completion, the criteria check a
+///    pull request gets, over the range to `tip`, must report nothing for
+///    the task.
+/// 4. A reopen after the transition voids it; since `tip` holds the task
+///    complete, any later reopen is followed by a newer transition, which
+///    is the one judged.
+#[allow(clippy::too_many_lines)]
+fn completion_bound(
+    repo_root: &Path,
+    repo: &Repository,
+    tip: git2::Oid,
+    task_id: &str,
+    uid: Option<&str>,
+) -> bool {
+    use super::acceptance::{completions_in_range, Criteria, RunBases};
+    let Some(changes) = first_parent_record_changes(repo_root, tip) else {
+        return false;
+    };
+    let state = |commit: &str| completion_of(task_record_at(repo, commit, task_id, uid).as_ref());
+    // Rule 2: the newest transition.
+    let Some((index, transition, parents)) =
+        changes
+            .iter()
+            .enumerate()
+            .find_map(|(index, (commit, parents))| {
+                let now = state(commit);
+                let before = parents
+                    .first()
+                    .map_or((false, None, None), |parent| state(parent));
+                let transition = now.0 && (!before.0 || before.1 != now.1 || before.2 != now.2);
+                transition.then(|| (index, commit.clone(), parents.clone()))
+            })
+    else {
+        return false;
+    };
+    let (complete, Some(reviewed), _) = state(&transition) else {
+        return false;
+    };
+    if !complete {
+        return false;
+    }
+    // Rule 3: the head its landing gate judged.
+    let head = match parents.get(1) {
+        Some(second) if state(second) == state(&transition) => {
+            // A merge passes on its second parent's proof only when it is
+            // the clean re-merge of its parents, as the landing gate
+            // requires: an edited, conflicted or unreadable merge landed a
+            // result nobody reviewed.
+            let clean = git2::Oid::from_str(&transition)
+                .and_then(|oid| repo.find_commit(oid))
+                .ok()
+                .map(|merge| super::acceptance::is_clean_remerge(repo, &merge));
+            if !matches!(clean, Some(Ok(true))) {
+                return false;
+            }
+            // Rule 3 for a merge: no reopen of the task on the first-parent
+            // line between the reviewed commit and the merge.
+            for (commit, parents) in &changes[index + 1..] {
+                // Past the reviewed commit's own history: done. An ancestry
+                // that cannot be read is no proof.
+                match crate::git::commit_reachable_from(
+                    repo_root,
+                    commit,
+                    std::slice::from_ref(&reviewed),
+                ) {
+                    Ok(true) => break,
+                    Ok(false) => {}
+                    Err(_) => return false,
+                }
+                let before = parents
+                    .first()
+                    .map_or((false, None, None), |parent| state(parent));
+                if before.0 && !state(commit).0 {
+                    return false;
+                }
+            }
+            second.clone()
+        }
+        _ => transition.clone(),
+    };
+    let Ok(review) = git2::Oid::from_str(&reviewed).and_then(|oid| repo.find_commit(oid)) else {
+        return false;
+    };
+    // The reviewed commit must be on the judged head's first-parent line,
+    // as a pull request's own range has it: a review that reaches the head
+    // only through a merged side line binds nothing there.
+    let (Ok(head_line), Ok(review_line)) =
+        (git2::Oid::from_str(&head), git2::Oid::from_str(&reviewed))
+    else {
+        return false;
+    };
+    if on_first_parent_line(repo, head_line, review_line) != Some(true) {
+        return false;
+    }
+    if completion_of(task_record_at(repo, &review.id().to_string(), task_id, uid).as_ref()).0 {
+        return false;
+    }
+    let Ok(head_oid) = git2::Oid::from_str(&head) else {
+        return false;
+    };
+    let bound = match completions_in_range(
+        repo,
+        &reviewed,
+        &head,
+        Some(tip),
+        &Criteria::Frozen,
+        &RunBases::new([tip, head_oid]),
+        None,
+        &[],
+    ) {
+        Ok(findings) => !findings
+            .iter()
+            .any(|finding| !finding.note && finding.message.starts_with(task_id)),
+        Err(_) => false,
+    };
+    if !bound {
+        return false;
+    }
+    // After the completion, the record's criteria stay as the landing gate
+    // keeps them: the same criteria check a pull request gets, with its
+    // correction route for a completed task, over the range from the
+    // completion to the tip. Any finding for this task voids the proof.
+    if transition != tip.to_string() {
+        let criteria = super::acceptance::task_criteria(repo_root, &transition, task_id, false)
+            .unwrap_or(Criteria::Frozen);
+        match super::acceptance::pull_request_findings(
+            repo_root,
+            &transition,
+            &tip.to_string(),
+            &criteria,
+        ) {
+            Ok(findings) => {
+                if findings
+                    .iter()
+                    .any(|finding| !finding.note && finding.message.starts_with(task_id))
+                {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// Every task's state on its own target tip, from the refs as last fetched.
+/// Only a landing line counts as a target (a configured remote's tracking
+/// ref of `main`, `master` or an epic's integration line): a record that
+/// declares a work branch or a local-only line is left out, and a task that
+/// two landing tips each hold as their own is left out as ambiguous rather
+/// than judged by the first name. The remote is chosen by this reader's own
+/// rule (see `tracking` below), which differs from `work start`'s. Makes no
+/// network call and writes nothing. The coordination ledger calls this only
+/// within its bounded record observer.
+///
+/// # Errors
+///
+/// Returns the reason when the repository or a target tip cannot be read.
+#[allow(clippy::too_many_lines)]
+pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, String> {
+    let _judgment = history::judgment();
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
+    let lines = default_tip_lines(repo_root, &repo);
+    // A declared target as the one remote-tracking ref it names:
+    // `origin/main` is origin's `main` and a bare name is `origin`'s. Unlike
+    // `work start`, a local branch's upstream never chooses the remote.
+    // Another remote never stands in, and a target whose tracking ref is
+    // absent stays unknown.
+    let tracking = |declared: &str| -> Option<(String, String)> {
+        let name = declared
+            .strip_prefix("refs/remotes/")
+            .or_else(|| declared.strip_prefix("refs/heads/"))
+            .unwrap_or(declared);
+        // A target that names a configured remote reads that remote; a bare
+        // name reads `origin`, the remote `target_fetch_remote` takes for a
+        // target with no local branch. A local branch's upstream setting is
+        // mutable local state and never chooses the remote here.
+        let named = target_fetch_remote(&repo, declared)
+            .ok()
+            .flatten()
+            .filter(|remote| name.starts_with(&format!("{remote}/")));
+        let remote = named.unwrap_or_else(|| "origin".to_string());
+        let branch = name
+            .strip_prefix(remote.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+            .unwrap_or(name)
+            .to_string();
+        repo.find_remote(&remote).ok()?;
+        is_recognised_landing(&branch, &lines)
+            .then(|| (format!("refs/remotes/{remote}/{branch}"), branch))
+    };
+    let landing: BTreeSet<(String, String)> = declared_targets(repo_root)?
+        .iter()
+        .chain(default.iter())
+        .filter_map(|declared| tracking(declared))
+        .collect();
+    let active: BTreeSet<String> = backlog(repo_root)
+        .map(|backlog| {
+            backlog
+                .in_state(State::Active)
+                .map(|entry| entry.task_id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut parsed: BTreeMap<git2::Oid, Rc<BTreeMap<String, Record>>> = BTreeMap::new();
+    let mut out: BTreeMap<String, TargetTask> = BTreeMap::new();
+    let mut ambiguous = BTreeSet::new();
+    // Only the remote-tracking refs of configured remotes are read: a
+    // completion counts on a line the remote holds, never on a local branch.
+    for (reference, branch) in &landing {
+        {
+            let Ok(commit) = repo
+                .find_reference(reference)
+                .and_then(|found| found.peel_to_commit())
+            else {
+                continue;
+            };
+            let tip = commit.id();
+            let tree = commit.tree().map_err(|error| error.to_string())?;
+            let records = if let Some(records) = parsed.get(&tree.id()) {
+                Rc::clone(records)
+            } else {
+                let records =
+                    Rc::new(records_from_tree(&repo, &tree).map_err(|error| error.to_string())?);
+                parsed.insert(tree.id(), Rc::clone(&records));
+                records
+            };
+            for record in records
+                .values()
+                .filter(|record| record.kind == RecordKind::Task)
+            {
+                let Some(declared) = record
+                    .integration_target
+                    .clone()
+                    .or_else(|| default.clone())
+                else {
+                    continue;
+                };
+                if tracking(&declared).as_ref().map(|(seen, _)| seen) != Some(reference) {
+                    continue;
+                }
+                if let Some(seen) = out.get(&record.id) {
+                    if seen.tip != tip.to_string() {
+                        ambiguous.insert(record.id.clone());
+                    }
+                    continue;
+                }
+                out.insert(
+                    record.id.clone(),
+                    TargetTask {
+                        status: record.status.clone(),
+                        uid: record.uid.clone(),
+                        target: branch.clone(),
+                        reference: shown(reference),
+                        tip: tip.to_string(),
+                        claimed: active.contains(&record.id),
+                        accepted: record.reviewed.is_some()
+                            && completion_bound(
+                                repo_root,
+                                &repo,
+                                tip,
+                                &record.id,
+                                record.uid.as_deref(),
+                            ),
+                    },
+                );
+            }
+        }
+    }
+    for id in ambiguous {
+        out.remove(&id);
+    }
     Ok(out)
 }
 
@@ -859,7 +1394,7 @@ pub struct Claim {
 
 /// `git <args>` with its output as exact bytes.
 fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = crate::git::command()
+    let out = history::command()
         .arg("-C")
         .arg(repo_root)
         .args(args)
@@ -868,12 +1403,14 @@ fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     if out.status.success() {
         Ok(out.stdout)
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        Err(crate::git::remote_query::display_urls(
+            String::from_utf8_lossy(&out.stderr).trim(),
+        ))
     }
 }
 
 fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = crate::git::command()
+    let out = history::command()
         .arg("-C")
         .arg(repo_root)
         .args(args)
@@ -883,7 +1420,9 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
         Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        Err(crate::git::remote_query::display_urls(
+            String::from_utf8_lossy(&out.stderr).trim(),
+        ))
     }
 }
 
@@ -1189,7 +1728,9 @@ fn standalone_claim_base(
     {
         return Err("a protected branch cannot be renamed into a task claim".into());
     }
-    if head.id() != target && !repo.graph_descendant_of(head.id(), target).unwrap_or(false) {
+    if head.id() != target
+        && !history::descendant_of(repo, head.id(), target).map_err(|error| error.to_string())?
+    {
         return Err("the standalone branch must contain its current target".into());
     }
     Ok(Some((head.id(), task.clone(), current)))
@@ -1420,8 +1961,7 @@ pub fn selections_in_range(
             .map_err(|error| format!("{revision}: {error}"))
     };
     let head = commit(head)?;
-    let base = repo
-        .merge_base(commit(base)?.id(), head.id())
+    let base = history::merge_base(&repo, commit(base)?.id(), head.id())
         .and_then(|oid| repo.find_commit(oid))
         .map_err(|error| error.to_string())?;
     let read = |commit: &git2::Commit<'_>| {
@@ -1523,7 +2063,7 @@ mod tests {
     use std::fs;
 
     fn run(root: &Path, args: &[&str]) -> String {
-        let out = crate::git::command()
+        let out = history::command()
             .arg("-C")
             .arg(root)
             .args(args)
@@ -1601,6 +2141,25 @@ mod tests {
         let tree = repo.head().unwrap().peel_to_tree().unwrap();
         let records = records_from_tree(&repo, &tree).unwrap();
         validate_anchored_task(&repo, &records, id, "main")
+    }
+
+    /// `work next` lists ready tasks by id number, so TSK-1000 follows
+    /// TSK-999 and TSK-10000 follows TSK-1000.
+    #[test]
+    fn backlog_lists_tasks_by_id_number_past_three_digits() {
+        let dir = repo();
+        let root = dir.path();
+        for id in ["TSK-10000", "TSK-1000", "TSK-999", "TSK-100"] {
+            task(root, id, "todo", "[]", "");
+        }
+        commit(root, "tasks");
+        let backlog = backlog(root).unwrap();
+        let ids: Vec<&str> = backlog
+            .entries
+            .iter()
+            .map(|entry| entry.task_id.as_str())
+            .collect();
+        assert_eq!(ids, ["TSK-100", "TSK-999", "TSK-1000", "TSK-10000"]);
     }
 
     fn state(root: &Path, id: &str) -> Option<NotReady> {
@@ -1752,6 +2311,362 @@ mod tests {
         assert!(error.to_string().contains("not on 'main'"), "{error}");
         assert!(consumer(&done).is_ok());
         assert!(verdict(root, "TSK-003").is_ok());
+    }
+
+    /// The verdict on `id` with the records of `target`, judged for `target`.
+    fn verdict_at(root: &Path, id: &str, target: &str) -> Result<AnchoredTask, WorkStartError> {
+        let repo = Repository::open(root).unwrap();
+        let tree = super::super::work_start::target_reference(&repo, target)
+            .unwrap()
+            .unwrap()
+            .tree()
+            .unwrap();
+        let records = records_from_tree(&repo, &tree).unwrap();
+        validate_anchored_task(&repo, &records, id, target)
+    }
+
+    /// TSK-381 (issue 236): the producer TSK-001 completes on its own line,
+    /// the line lands on `main` and is deleted. Returns the open and
+    /// completing commits and a side commit, which holds the record complete
+    /// but is on no target.
+    fn landed_and_deleted_producer(root: &Path) -> (String, String, String) {
+        let line = "integration/EPC-002-carry";
+        epic(root, "EPC-002", "in_progress");
+        task_in(root, "TSK-001", Some("EPC-002"), line, "todo", "[]", "");
+        let open = commit(root, "plan");
+        run(root, &["switch", "-q", "-c", line]);
+        task_in(root, "TSK-001", Some("EPC-002"), line, "complete", "[]", "");
+        let done = commit(root, "findings");
+        run(root, &["switch", "-q", "-c", "side"]);
+        fs::write(root.join("note.md"), "side\n").unwrap();
+        let side = commit(root, "side");
+        run(root, &["switch", "-q", "main"]);
+        run(root, &["merge", "-q", "--no-ff", "-m", "land", line]);
+        run(root, &["branch", "-q", "-d", line]);
+        (open, done, side)
+    }
+
+    /// TSK-381 AC-1 and AC-3: after the producer's line is deleted, a pin on
+    /// this task's target is met; an open record at the pin, a pin on no
+    /// target, a missing object and a pin before the record still refuse.
+    #[test]
+    fn a_research_pin_stays_met_after_its_producers_line_is_deleted() {
+        let dir = repo();
+        let root = dir.path();
+        let before = commit(root, "scaffold");
+        let (open, done, side) = landed_and_deleted_producer(root);
+        pinned_consumer(root, &done);
+        verdict(root, "TSK-002").expect("the pin is on this task's target");
+        pinned_consumer(root, &open);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(
+            error.to_string().contains("the record there is 'todo'"),
+            "{error}"
+        );
+        pinned_consumer(root, &side);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "task TSK-002 pins TSK-001 at {side}: not on 'main'; \
+                 'integration/EPC-002-carry' is not fetched here"
+            )
+        );
+        assert_eq!(error.not_ready(), NotReady::Waiting);
+        let missing = "0123456789abcdef0123456789abcdef01234567";
+        pinned_consumer(root, missing);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("not a commit in this repository"),
+            "{error}"
+        );
+        pinned_consumer(root, &before);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(
+            error.to_string().contains("the record is not there"),
+            "{error}"
+        );
+    }
+
+    /// TSK-381 AC-1 to AC-3 on a clone: the consumer's line was cut before
+    /// the producer landed, the producer's line is gone, and the local `main`
+    /// is behind `origin/main`. The pin is met on `origin/main`; a local
+    /// `main`, behind or ahead, changes nothing, and a refusal names the
+    /// refs it read.
+    #[test]
+    fn a_research_pin_is_read_on_origin_main_never_on_the_local_main() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-002", "todo", "[]", "");
+        let cut = commit(root, "plan the consumer");
+        let _origin = with_origin(root);
+        let line = "integration/EPC-001-line";
+        let push_line = |head: &str| {
+            run(
+                root,
+                &[
+                    "push",
+                    "-q",
+                    "-f",
+                    "origin",
+                    &format!("{head}:refs/heads/{line}"),
+                ],
+            );
+            run(root, &["fetch", "-q", "origin"]);
+        };
+        push_line(&cut);
+        let (_, done, side) = landed_and_deleted_producer(root);
+        run(root, &["push", "-q", "origin", "main"]);
+        run(root, &["switch", "-q", "--detach", &cut]);
+        run(root, &["branch", "-q", "-f", "main", &cut]);
+        let consumer = |pin: &str| {
+            run(root, &["switch", "-q", "--detach", &cut]);
+            task_in(
+                root,
+                "TSK-002",
+                Some("EPC-001"),
+                line,
+                "todo",
+                &format!("[{{id: TSK-001, kind: research, pin: \"{pin}\"}}]"),
+                "",
+            );
+            push_line(&commit(root, "pin the consumer"));
+            verdict_at(root, "TSK-002", &format!("origin/{line}"))
+        };
+        consumer(&done).expect("the pin is on origin/main");
+        let error = consumer(&side).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("task TSK-002 pins TSK-001 at {side}: not on 'origin/{line}' or 'origin/main'")
+        );
+        run(root, &["branch", "-q", "-f", "main", &side]);
+        let error = consumer(&side).unwrap_err();
+        assert!(error.to_string().contains("'origin/main'"), "{error}");
+    }
+
+    /// TSK-381 AC-2, the issue comment's reproduction: the producer targets
+    /// `main`, the pin is on `origin/main`, and the local `main` is behind.
+    #[test]
+    fn a_research_pin_on_main_is_met_while_the_local_main_is_behind() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        let behind = commit(root, "plan");
+        let _origin = with_origin(root);
+        task(root, "TSK-001", "complete", "[]", "");
+        let done = commit(root, "findings");
+        run(root, &["push", "-q", "origin", "main"]);
+        run(
+            root,
+            &["switch", "-q", "-c", "integration/EPC-001-line", &behind],
+        );
+        run(root, &["branch", "-q", "-f", "main", &behind]);
+        task_in(
+            root,
+            "TSK-002",
+            Some("EPC-001"),
+            "integration/EPC-001-line",
+            "todo",
+            &format!("[{{id: TSK-001, kind: research, pin: \"{done}\"}}]"),
+            "",
+        );
+        commit(root, "pin the consumer");
+        verdict_at(root, "TSK-002", "integration/EPC-001-line")
+            .expect("the pin is on origin/main although the local main is behind");
+    }
+
+    /// TSK-381 review round 1: a clone whose `origin/main` holds TSK-001 open
+    /// on `target`, and whose unpushed local `branch` completes it. TSK-002 on
+    /// the local `main` pins that forged completion. Returns the origin and
+    /// the pin.
+    fn forged_producer(root: &Path, target: &str, branch: &str) -> (tempfile::TempDir, String) {
+        task_in(root, "TSK-001", Some("EPC-001"), target, "todo", "[]", "");
+        commit(root, "plan");
+        let origin = with_origin(root);
+        run(root, &["switch", "-q", "-c", branch]);
+        task_in(
+            root,
+            "TSK-001",
+            Some("EPC-001"),
+            target,
+            "complete",
+            "[]",
+            "",
+        );
+        let pin = commit(root, "forge the findings");
+        run(root, &["switch", "-q", "main"]);
+        pinned_consumer(root, &pin);
+        (origin, pin)
+    }
+
+    /// Grok F1 demonstration 1 and SF-2: with a remote present, a local
+    /// branch the author made is never a landing ref, however the producer's
+    /// target spells it.
+    #[test]
+    fn a_local_branch_is_no_landing_while_a_remote_exists() {
+        for (target, branch) in [
+            ("evil", "evil"),
+            ("refs/heads/evil", "evil"),
+            ("integration/producer-line", "integration/producer-line"),
+        ] {
+            let dir = repo();
+            let root = dir.path();
+            let (_origin, pin) = forged_producer(root, target, branch);
+            let error = verdict(root, "TSK-002").unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'; \
+                     '{target}' is not fetched here"
+                ),
+                "{target}"
+            );
+        }
+    }
+
+    /// Grok F1 demonstration 2 and SF-1: an upstream that is a local branch,
+    /// set by config (`remote = .`) or by `git branch -u`, is not honoured;
+    /// the authority remote's `origin/main` is read.
+    #[test]
+    fn a_local_upstream_is_not_honoured() {
+        let dir = repo();
+        let root = dir.path();
+        let (_origin, pin) = forged_producer(root, "main", "evil");
+        run(root, &["merge", "-q", "evil", "-m", "take the forgery"]);
+        run(root, &["branch", "-q", "-f", "evil", "main"]);
+        let refused = format!("task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'");
+        assert_eq!(verdict(root, "TSK-002").unwrap_err().to_string(), refused);
+        run(root, &["config", "branch.main.remote", "."]);
+        run(root, &["config", "branch.main.merge", "refs/heads/evil"]);
+        assert_eq!(verdict(root, "TSK-002").unwrap_err().to_string(), refused);
+        run(root, &["branch", "-q", "side", "main"]);
+        run(root, &["branch", "-q", "-u", "side", "main"]);
+        assert_eq!(verdict(root, "TSK-002").unwrap_err().to_string(), refused);
+        run(root, &["config", "branch.main.remote", "origin"]);
+        run(root, &["config", "branch.main.merge", "refs/tags/v1"]);
+        run(root, &["tag", "v1", "main"]);
+        assert_eq!(verdict(root, "TSK-002").unwrap_err().to_string(), refused);
+    }
+
+    /// TSK-381 SF-4: a loose `refs/remotes/origin/MAIN` holding the forged pin
+    /// is the same file as `.../main` on a case-insensitive filesystem; only
+    /// the spelling git lists counts, so `origin/main` reads as unfetched.
+    #[test]
+    fn a_tracking_ref_listed_under_another_spelling_is_unfetched() {
+        let dir = repo();
+        let root = dir.path();
+        let (_origin, pin) = forged_producer(root, "main", "side");
+        run(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        let remotes = root.join(".git/refs/remotes/origin");
+        fs::create_dir_all(&remotes).unwrap();
+        fs::write(remotes.join("MAIN"), format!("{pin}\n")).unwrap();
+        assert_eq!(
+            verdict(root, "TSK-002").unwrap_err().to_string(),
+            format!("task TSK-002 pins TSK-001 at {pin}: 'main' is not fetched here")
+        );
+    }
+
+    /// Grok F1 demonstration 3: with `origin` configured but its tracking ref
+    /// deleted, the local `main` does not stand in for it.
+    #[test]
+    fn a_deleted_tracking_ref_leaves_the_target_unfetched() {
+        let dir = repo();
+        let root = dir.path();
+        commit(root, "scaffold");
+        let _origin = with_origin(root);
+        task(root, "TSK-001", "complete", "[]", "");
+        let pin = commit(root, "findings, unpushed");
+        pinned_consumer(root, &pin);
+        run(root, &["branch", "-q", "--unset-upstream", "main"]);
+        run(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        assert_eq!(
+            verdict(root, "TSK-002").unwrap_err().to_string(),
+            format!("task TSK-002 pins TSK-001 at {pin}: 'main' is not fetched here")
+        );
+    }
+
+    /// TSK-381 review round 2 (SF-1R): `line`'s upstream is another branch,
+    /// `task/TSK-999-forge`, of the configured remote `origin`, which holds the
+    /// forged pin. Returns the pin and the verdict.
+    fn upstream_on_another_branch(root: &Path, line: &str) -> (String, WorkStartError) {
+        let (_origin, pin) = forged_producer(root, line, "side");
+        run(root, &["push", "-q", "origin", "side:task/TSK-999-forge"]);
+        run(root, &["fetch", "-q", "origin"]);
+        if line == "main" {
+            run(
+                root,
+                &["branch", "-q", "-u", "origin/task/TSK-999-forge", "main"],
+            );
+        } else {
+            run(
+                root,
+                &["config", &format!("branch.{line}.remote"), "origin"],
+            );
+            run(
+                root,
+                &[
+                    "config",
+                    &format!("branch.{line}.merge"),
+                    "refs/heads/task/TSK-999-forge",
+                ],
+            );
+        }
+        let error = verdict(root, "TSK-002").unwrap_err();
+        (pin, error)
+    }
+
+    /// SF-1R with `git branch -u origin/task/TSK-999-forge main`.
+    #[test]
+    fn an_upstream_on_another_branch_is_not_honoured() {
+        let dir = repo();
+        let (pin, error) = upstream_on_another_branch(dir.path(), "main");
+        assert_eq!(
+            error.to_string(),
+            format!("task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'")
+        );
+    }
+
+    /// SF-1R through the producer line's branch config alone.
+    #[test]
+    fn a_line_config_naming_another_branch_is_not_honoured() {
+        let dir = repo();
+        let line = "integration/producer-line";
+        let (pin, error) = upstream_on_another_branch(dir.path(), line);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'; \
+                 '{line}' is not fetched here"
+            )
+        );
+    }
+
+    /// The fork case stays: an upstream on another configured remote is the
+    /// landing ref, although `origin/main` lacks the pin.
+    #[test]
+    fn an_upstream_on_another_configured_remote_is_the_landing_ref() {
+        let dir = repo();
+        let root = dir.path();
+        commit(root, "scaffold");
+        let _origin = with_origin(root);
+        let upstream = tempfile::tempdir().unwrap();
+        run(upstream.path(), &["init", "-q", "--bare"]);
+        run(
+            root,
+            &[
+                "remote",
+                "add",
+                "upstream",
+                upstream.path().to_str().unwrap(),
+            ],
+        );
+        task(root, "TSK-001", "complete", "[]", "");
+        let pin = commit(root, "findings");
+        run(root, &["push", "-q", "-u", "upstream", "main"]);
+        pinned_consumer(root, &pin);
+        verdict(root, "TSK-002").expect("the pin is on upstream/main");
     }
 
     /// Review finding on issue 79: an upstream remote whose name is not valid
@@ -2003,7 +2918,7 @@ mod tests {
 
     fn commit_dated(root: &Path, message: &str, date: &str) -> String {
         run(root, &["add", "-A"]);
-        let out = crate::git::command()
+        let out = history::command()
             .arg("-C")
             .arg(root)
             .args(["commit", "-q", "-m", message])
@@ -2826,16 +3741,16 @@ mod tests {
         let line = rendered
             .lines()
             .find(|line| line.contains(&claimed.branch) && line.contains("retain"))
-            .unwrap_or_else(|| panic!("no cleanup line for the claim:\n{rendered}"));
+            .unwrap_or_else(|| panic!("no cleanup line for the claim:\n{rendered:?}"));
         assert!(line.contains("retain-live"), "{line}");
         assert!(line.contains("open claim"), "{line}");
         assert!(
             !rendered
                 .lines()
                 .any(|line| line.contains(&claimed.branch) && line.contains("removable")),
-            "{rendered}"
+            "{rendered:?}"
         );
-        assert!(rendered.contains("active"), "{rendered}");
+        assert!(rendered.contains("active"), "{rendered:?}");
     }
 
     /// TSK-110 AC-2: the in-process read decides no landing by itself. On

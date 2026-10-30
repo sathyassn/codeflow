@@ -23,6 +23,14 @@ created: {{DATE}}
      public contracts or boundaries this task changes, and how to recover
      from an irreversible step, when a reviewer needs them. -->
 
+## Outcome
+
+<!-- One line saying what someone can do once this lands, in the form
+     "after this merges, <who> can <do what>". `codeflow validate --docs`
+     refuses an open record created after the project adopted this section
+     when the line is missing (`outcome_present_uids` in
+     `.codeflow/project.toml`), and warns for an older open record. -->
+
 ## Deliverables
 
 <!-- Each output this task produces and its home, one line each as
@@ -44,7 +52,8 @@ created: {{DATE}}
      a hard-coded or meaningless test merely to satisfy the record. The
      reviewer checks the named evidence, and unsupported claims are defects.
      List each criterion as `- AC-n <criterion>` with no checkbox; ids are
-     unique and never renumbered. End a criterion with
+     unique and never renumbered. This task's own PR may amend them, with a
+     reason in its PR body for each one it removes. End a criterion with
      `(serves EPC-NNN AC-m)` when it serves an epic criterion, or with
      `(journey)` when it names the path exercised. -->
 

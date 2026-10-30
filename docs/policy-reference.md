@@ -16,7 +16,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 | Key | Type | Default | Valid values | Purpose | Notes |
 |---|---|---|---|---|---|
-| `git.protected_branches` | string list | `["main","master"]` | an array of branch names or glob patterns (e.g. release/*) | Branches every enforcement plane treats as protected. | Globs use the `glob` crate's syntax; read by all four planes. |
+| `git.protected_branches` | string list | `["main","master"]` | an array of branch names or glob patterns (e.g. release/*) | Branches every enforcement plane treats as protected. | Globs use the `glob` crate's syntax; read by all four planes. Prefix folding: git-guard and the reference-transaction hook compare the `refs/heads/` and `refs/remotes/` prefix of a ref name with ASCII case folded, and refuse an `update-ref` or `symbolic-ref` name whose `refs/` prefix matches only that way. Protected-name folding: they match a name and this list with ASCII case folded, because a case-insensitive filesystem stores `refs/heads/MAIN` as the loose ref of `main`; this fails closed, so a distinct branch such as `Main` is refused on a case-sensitive filesystem too while `main` is protected. Non-ASCII local names where the directory folds: a case-insensitive filesystem (the macOS and Windows defaults) also folds some non-ASCII characters to ASCII letters (`ſ` names the same file as `s`), so where the git directory is on one, a branch name with a non-ASCII byte counts as protected and such an `update-ref` or `symbolic-ref` name is refused; on a case-sensitive git directory such names are ordinary. Fetched tracking names: a fetch may still write such names under exactly `refs/remotes/` and `refs/tags/`; where the git directory folds names, the hook refuses a written ref whose name, or a directory along it, folds onto another spelling once case and Unicode normalization are ignored, and a tracking ref whose branch, the part after the longest configured `refs/remotes/<remote>/` prefix, folds onto a protected branch it does not name (under no configured remote every possible branch is judged), so a fetch of `MAIN` beside `main` or of `INTEGRATION/x` beside `integration/y` fails as a whole while `feat/MAIN` fetches. Housekeeping passes: a transaction line that keeps its value, as `git pack-refs` and `git gc` write, passes. Retargeted commands: the guards probe the git directory once per invocation, a probe that cannot decide counting as case-insensitive, and a command run in another repository (`-C`, `--git-dir`, `GIT_DIR`, `cd`) is judged by that repository's own probe, an unreadable one counting as case-insensitive. Readiness needs the hook: that refusal is the control against a fetched alias, so on a case-insensitive filesystem readiness needs the hook installed with `local_ref_protection` at `block`; readiness and the sync allowance also read a remote-tracking ref only under the spelling git stored, listing every ref and comparing names byte for byte, which catches an alias only while the genuine ref is packed or absent. Edit guard: it folds case for paths under the git directory, refuses any such path with a non-ASCII component, and refuses direct writes under `.git/refs/heads`. |
 | `git.commit_to_protected` | Level | `block` | off \| warn \| allow \| block | A commit made directly on a protected branch. | A human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1. |
 | `git.push_to_protected` | Level | `block` | off \| warn \| allow \| block | A push to a protected branch. | A human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1 for a fast-forward push; force pushes and deletions stay refused. |
 | `git.force_push_protected` | Level | `block` | off \| warn \| allow \| block | A force-push to a protected branch. |  |
@@ -26,7 +26,8 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A merge commit landing on a protected branch. | PR merge and `codeflow integrate` are the sanctioned paths; a human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1. |
 | `git.pr_merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A `gh pr merge` whose base branch is protected (git-guard only). |  |
 | `git.local_ref_protection` | Level | `block` | off \| warn \| allow \| block | Any local update of a protected ref that did not come from the remote. | The reference-transaction backstop (ADR-0007): catches fast-forward merges, reset --hard, and branch -D that classic client hooks miss. In session, git-guard also refuses a forced branch move aimed at a protected branch (`git branch -f`, `-M` or `-C`, `git checkout -B`, `git switch -C`, `git worktree add -B`, flag clusters and abbreviations included), resolving `@{-N}` and `@{upstream}` in the target repository and refusing one it cannot resolve or that an earlier git command on the line may change. |
-| `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. git-guard refuses a `sed`, `find`, `xargs` or `parallel` that can change files when its command line names an enforcement path in any spelling the file system reads as one, a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement files, and a recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a registered worktree, a directory holding one, or a target it cannot resolve where worktrees live. A path built at run time is past the guard; the OS sandbox's write denies are the backstop. |
+| `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). A write to Git's alternate object lists (`objects/info/alternates`, `objects/info/http-alternates`, in the common directory a linked worktree shares) refuses like a write to hooks, refs or config, since an alternate store adds objects Git reads as its own; reading them stays allowed. Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. git-guard refuses a `sed`, `find`, `xargs` or `parallel` that can change files when its command line names an enforcement path in any spelling the file system reads as one (a search pattern in the command an `xargs` or `find` runs names nothing), a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement files, and a recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a registered worktree, a directory holding one, or a target it cannot resolve where worktrees live. exec-guard refuses an interpreter (`python`, `python3`, `node`, `nodejs`, `perl`, `ruby`, a version suffix included) whose inline code or arguments name an enforcement path: a script's arguments, every word after inline code or stdin `-`, a `--name=value` option or an attached short value in a cluster (`-oFILE`, `-voFILE`), and string literals in its code. It judges every directory the line may run the interpreter in: the session directory and every one any directory change may reach, success or not. Within the modeled grammar (`cd`, `chdir`, `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun` and `ionice` with their options, GNU-prefixed names such as `genv` and `gtimeout` and every `env -C` spelling included; the zsh precommands `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; `find -execdir` from every directory in the set, a file start in its parent, `-path` against find's own spelling) the set is exact. Anything outside it (`source`, `.`, `sudo`, `env -S`, an option it does not list, or any other word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or `--chdir` after an env-like word) makes the directory unknown, and so does an unknown program that launches a modeled launcher or an interpreter later in its words (after a `--` too), and a script string an unknown program is given, a `-c` or `-e` value or any quoted word (`expect -c`, `osascript -e`, `ssh host '...'`), which is read as a command line; `echo` and `printf` operands stay data. Resolved builtin output, shell here-strings and sourced process substitutions are also read as code. When an interpreter takes code from an external producer the guard cannot read, or a shell or interpreter takes its code from anything other than a literal argument or a heredoc body the guard reads (a pipe, a here-string, a descriptor such as `/dev/stdin` or `/dev/fd/N`, a process substitution, or a `-c`/`-e` value holding a substitution), every word on the line is judged by its trailing components. On a line where a shell (`source` and `.` included) or an interpreter runs, every quoted string anywhere on the line is judged as possible code the same way, so a line that mixes an interpreter with an unrelated quoted protected path refuses; unquoted operands of other programs stay data. Quoted strings are read as the shell builds them: `$'...'` decoded, adjacent quoted pieces joined, and a `printf` of `%s` pieces read as the value it joins. A composed text (a `printf` escape or `%b`/`%q`, an `echo -e` or `print` decode, or a join of on-line assignments) is resolved exactly where the guard can and judged by the tail rule, and on a running line a composing construct it cannot resolve refuses as cannot-verify, naming it. That reading is closed-world: a value is resolved only when every input is a literal read exactly through a construct the guard models and the result equals what bash and zsh produce; any other construct feeding it is unresolved, named by its family. The output of a program other than the modelled builtins is outside text, judged by its trailing components as an unassigned variable is, and also as if empty, the spelled pieces around it joined. A word is also read without one surrounding `{}` pair; every known word is then judged by its trailing components at the same levels: it never fails open on grammar it does not understand. The model is conservative, so an odd shape like `cd .claude && cd .. && python3 tool.py settings.json`, and a repo-root `find . -execdir python3 lint.py notes.txt`, which can really run in a hook directory, are refused. An operand naming policy authority metadata refuses in every form whatever the level. It reads an enforcement file passed as an argument as a possible write, so read one with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin. An argument it cannot read (a variable, a substitution, a directory after a `cd` it cannot follow) refuses when its spelled part could name an enforcement path or the line names one, as git-guard judges a writer's operands. Code in a file the guard does not read, and a path a script builds at run time, stay past the guard; the OS sandbox's write denies are the backstop. The guard stops at shell grammar, so a path built by interpreter code, such as Python adjacent string literals or a node `+` concatenation, is part of that residual. |
+| `git.line_sync_interval` | uint | `0` | days; 0 disables reminders | Orient flags integration lines past this interval since their last sync or evidenced creation. | Unknown creation without a sync and lines with no own commits are never flagged. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.root_branch` | string | `""` | empty, or a valid branch name | The branch the root checkout holds; empty means the repository's default branch. | Set it only for an umbrella repository whose root is a working checkout; `codeflow init --workspace` writes the convention name. |
 | `git.root_checkout_commits` | Level | `block` | off \| warn \| allow \| block | A commit at the root checkout on any branch other than git.root_branch. | git-guard applies the level to agents; the git hooks apply it when a harness marker is set and only warn otherwise. Suspended in the pre-first-commit bootstrap window. |
 | `git.worktree_locations` | string list | `[".worktrees",".claude/worktrees","$CODEX_HOME/worktrees","$GROK_HOME/worktrees","$GROK_HOME/worktree_pool"]` | folders: relative to the root checkout, absolute, ~/..., $CODEX_HOME/... or $GROK_HOME/... | Where linked worktrees may live; doctor reports one outside them. | The default covers .worktrees and the folders the Claude desktop app, Codex and Grok manage. |
@@ -58,19 +59,24 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.work_records` | enum | `block` | block \| warn | Level of the adjustable work-record rules: the acceptance block bound to the reviewed commit and the journey criterion (SPC-013 R-80). | There is no `off`: once work tracking is on the rules always run, at block or warn. The transition rules (a Blocker for blocked, a Closeout for cancelled, an acceptance block for complete) always block whatever this says. `codeflow update` rewrites a stale `off` to `warn` and keeps every other value. |
 | `git.work_planning` | enum | `block` | block \| warn | Level of the planning checks run once per task at `work start` and in `codeflow ci`, on any work prefix: a valid visible workgraph, a task record for the branch's task, and that record anchored on its target. | There is no `off`: with work tracking on, the checks always run. Pre-commit does not repeat them. An undeterminable tracking state and pull request classification block whatever this says. `codeflow update` keeps the value a project set. |
 | `git.automation_profiles` | profile list | `[]` | an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}, task: optional task line} | Trusted bots whose pull requests skip branch naming, the commit message shape rules and the PR Summary shape (SPC-013 R-82). | Applies in `codeflow ci` only when the actor the workflow passes and the head branch both match, read from the target side of the range. Locally and on fork pull requests the actor is `unknown` and nothing applies. Tests, the secret scan, AI attribution, emoji, policy characters, PR sections and the release declaration still run at their configured level; `sections` only supplies content for headings the bot body omits. |
-| `git.pr_section_mapping` | object | `` | {state: diagnosed \| accepted \| refused \| custom, headings: {required heading: template heading}, decided: YYYY-MM-DD or none} | The decision about a kept PR template whose headings differ from pr_required_sections (SPC-013 R-84). | Absent by default. `init` and `update` write `diagnosed` with a proposed mapping; `accepted` checks the mapped headings, `refused` and `custom` check pr_required_sections. While diagnosed the check runs at warn only when init created the policy file without a pr_sections key; a pr_sections key in the file always wins (R-115). |
+| `git.pr_section_mapping` | object | `absent` | {state: diagnosed \| accepted \| refused \| custom, headings: {required heading: template heading}, decided: YYYY-MM-DD or none} | The decision about a kept PR template whose headings differ from pr_required_sections (SPC-013 R-84). | Absent by default. `init` and `update` write `diagnosed` with a proposed mapping; `accepted` checks the mapped headings, `refused` and `custom` check pr_required_sections. While diagnosed the check runs at warn only when init created the policy file without a pr_sections key; a pr_sections key in the file always wins (R-115). |
 | `git.product_paths` | string list | `null` | an array of path globs (e.g. src/**) | The project's product code extends the adopter-facing paths requiring a journey criterion (SPC-013 R-114); every PR names its task or epic (R-70). | `codeflow init` writes the default for the detected stack and `codeflow update` adds it once; a value the project sets is kept. Absent, the binary assumes the stack default. The shared adopter-facing paths continue to require journey coverage. |
-| `git.direct_changes` | enum | `allow` | allow \| forbid | Retired compatibility key; accepted and ignored. | Every pull request names its task or epic (R-70), regardless of this retained key. |
-| `git.release_branch_pattern` | string | `` | a branch glob (e.g. release/*); absent means integration/release-* | Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120). | Read only from the policy at the default target's tip at the destination, so a pushed branch or a pull request cannot set its own scope; a change takes effect once it lands on the default target. A pattern that could match a protected branch or an epic line name (`integration/EPC-*`) is refused, so the default target and epic lines keep their own rules. |
+| `git.document_indexes` | string list | `[]` | an array of exact repository-relative documentation files (.md, .mdx, .rst or .adoc; case-insensitive extension), without globs or dot components | Document index files a planning amendment may update alongside records and plans. | Empty by default. Declare the files in a prior task pull request. The hosted check reads the target policy. On a re-push of a plan/ branch, pre-push can fall back to the earlier pushed tip; with an advertised work target it judges from the merge base with that target. The hosted check enforces the target-policy boundary. A declaration is a reviewed policy change on the target and must not name a file a harness or build tool loads. Product and watched paths, hidden paths and non-regular files stay excluded. Index file names beginning AGENT., AGENTS., CLAUDE., GEMINI., WARP., QWEN. or CRUSH., and SKILL.md, CONVENTIONS.md and llms*.md, are excluded without case. A file name stem containing a tilde followed by a digit is refused as a possible short-name alias. Root AGENTS.md keeps its separate project-section exception. The shipped policy file omits this key. |
+| `git.direct_changes` | enum | `allow` | allow \| forbid | Not supported, has no effect. Retired compatibility key; accepted and ignored. | Every pull request names its task or epic (R-70), regardless of this retained key. |
+| `git.release_branch_pattern` | string | `absent` | a branch glob (e.g. release/*); absent means integration/release-* | Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120). | Read only from the policy at the default target's tip at the destination, so a pushed branch or a pull request cannot set its own scope; a change takes effect once it lands on the default target. A pattern that could match a protected branch or an epic line name (`integration/EPC-*`) is refused, so the default target and epic lines keep their own rules. |
 | `git.branch_naming` | Level | `block` | off \| warn \| allow \| block | Branch names must match `{prefix}/{kebab-name}` with a sanctioned prefix. | Protected branches are exempt (governed by the protection rules, not naming); prefixes come from branch_prefixes. |
 | `git.branch_prefixes` | string list | `["feat/","fix/","docs/","refactor/","test/","chore/","ci/","hotfix/","plan/","task/","spike/","experiment/","integration/"]` | an array of prefixes, each ending with `/` (e.g. feat/) | The sanctioned branch-name prefixes. | A prefix missing its trailing `/` never matches a `{prefix}/{name}` branch. |
+| `git.path_policy` | Level | `block` | off \| warn \| allow \| block | Refuse blocked names and protected prefixes in staged changes and introduced commits. | Reads landed policy for pre-commit and target policy for CI. Off removes only this gate; the secret scan remains separate. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.blocked_names` | path rule list | `[".env",".env.*","*.env","*.pem","*.key","*.p12","*.pfx","*.jks","*.keystore","id_rsa*","id_dsa*","id_ecdsa*","id_ed25519*",".netrc",".pgpass","*.tfstate","*.tfstate.*","kubeconfig",".kube/config",".aws/credentials","application_default_credentials.json"]` | strings or {pattern, except_under: [root-relative prefix], reason} | Block final-component globs or component sequences at any depth. | Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.protected_paths` | path rule list | `[]` | {prefix, allow: [{path, reason}]} entries | Refuse every change under root-anchored component prefixes. | Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. |
+| `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
-| `git.test_gate_on_push` | Level | `block` | off \| warn \| allow \| block | Run the test gate before a push (pre-push hook). |  |
+| `git.test_gate_on_push` | Level | `block` | off \| warn \| allow \| block | Run the push set before a push (pre-push hook). | The push set runs `codeflow ci` over each pushed range, which includes the conflict-marker check, and the release preflight where the project adopted it. It runs no `codeflow validate --docs` (`codeflow ci` checks the work graph) and no test-config target, so a push never waits for the heavy-work lock; cite `codeflow test --mode quick` when the pull request is made ready. Tag and other non-branch pushes are outside the push set. Local-config tampering is outside the hook threat model; hosted CI checks the pushed commit. |
 | `git.security_review` | Level | `warn` | off \| warn \| allow \| block | The umbrella gate for the CI security-review job. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.dep_audit` | Level | `warn` | off \| warn \| allow \| block | The dependency-audit gate in CI. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.discard_uncommitted` | Level | `block` | off \| warn \| allow \| block | Commands in an agent session that discard locally unique uncommitted work (ADR-0075). | Default block. The in-session guard judges it; a human terminal and the git hooks are unaffected. |
-| `git.clean_regenerable` | string list | `["target/","node_modules/","dist/","build/",".venv/","__pycache__/","coverage/"]` | an array of directory paths, each ending with `/` | Regenerable build and dependency directories `git clean` may remove without a discard refusal (ADR-0075). | Default target/, node_modules/, dist/, build/, .venv/, __pycache__/, coverage/. |
+| `git.clean_regenerable` | string list | `absent` | an array of directory paths, each ending with `/` | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
 
 ## Security keys
 
@@ -79,14 +85,14 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `security.dangerous_commands` | enum | `block` | block | Destructive commands the exec-guard catches (rm -rf on system paths, dd to devices, mkfs, fork bombs). | Non-relaxable safety floor: stale or hand-edited weaker values are ignored by enforcement and rejected by validation. |
 | `security.privilege_escalation` | Level | `block` | off \| warn \| allow \| block | Privilege escalation the exec-guard catches (Unix sudo/su/doas/pkexec, Windows gsudo/runas/elevated PowerShell, LD_PRELOAD/PATH injection). | Default block (ADR-0075 D5): the presets deny the plain forms without a prompt, the guard refuses the wrapped ones, and the operator runs privileged commands. `codeflow update` moves a project still at the old warn default to block. |
 | `security.headless_peer_runs` | Level | `block` | off \| warn \| allow \| block | Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate). | Default block (ADR-0075 D4): a project that needs a headless run sets security.headless_peer_runs to warn or off. `codeflow update` moves a project still at the old warn default to block. |
-| `security.script_bypass` | Level | `warn` | off \| warn \| allow \| block | Refused actions found inside a script file a command runs (ADR-0075). | Default warn: a script is read on a best-effort basis. |
+| `security.script_bypass` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
 | `security.outward_actions` | Level | `block` | off \| warn \| allow \| block | Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075). | Default block. |
-| `security.interpreter_scan` | Level | `block` | off \| warn \| allow \| block | Refused actions embedded in an interpreter call (`python -c`, `node -e`) (ADR-0075). | Default block. |
+| `security.interpreter_scan` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
 | `security.secret_reads` | Level | `block` | off \| warn \| allow \| block | Shell reads of the secret stores the presets deny to the file tools (ADR-0075). | Default block. |
-| `security.enforcement_baseline` | Level | `block` | off \| warn \| allow \| block | Commits and ref moves whose enforcement files match no identity the operator approved (ADR-0075). | Default block. |
-| `security.workflow_pushes` | enum | `queue` | queue \| allow | A push from an agent session that introduces a `.github/workflows/` change (ADR-0075 D9). | Default queue: refused and queued for the operator, whose login can push workflows. `allow` is for an agent credential with workflow rights. |
-| `security.sandbox_retry` | enum | `allowlist` | allowlist \| block | Claude's unsandboxed retry from a primary session (ADR-0075 decision 6). | Default allowlist: only an argument vector an entry of sandbox_retry_allow spells out. `block` refuses every retry. |
-| `security.sandbox_retry_allow` | entry list | `[{"program":"node","script":"~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs","program_options":[],"cwd":"project","refuse_if_env":["NODE_OPTIONS","NODE_PATH","NODE_REPL_EXTERNAL_MODULE"],"subcommands":{"review":{"flags":["--wait","--background","--json"],"values":{"--base":"git-ref","--scope":["auto","working-tree","branch"],"--model":"word"},"positionals":0},"adversarial-review":{"flags":["--wait","--background","--json"],"values":{"--base":"git-ref","--scope":["auto","working-tree","branch"],"--model":"word"},"positionals":"text"},"task":{"flags":["--background","--write","--resume-last","--resume","--fresh","--json"],"values":{"--model":"word","--effort":["none","minimal","low","medium","high","xhigh"]},"positionals":"text"},"status":{"flags":["--all","--wait","--json"],"values":{"--timeout-ms":"integer","--poll-interval-ms":"integer"},"positionals":"job-id"},"result":{"flags":["--json"],"values":{},"positionals":"job-id"},"cancel":{"flags":["--json"],"values":{},"positionals":"job-id"}},"program_path":"<absolute path recorded at qualification, outside every sandbox-writable directory>","script_digest":{"scripts/codex-companion.mjs":"<sha256 at qualification>","scripts/lib/*.mjs":"<sha256 per file at qualification>"},"child_executables":{"codex":"<absolute path recorded at qualification>"},"refuse_writable_path_entries":true}]` | an array of entry objects, each naming its `program` | The argument-bound entries the unsandboxed retry may run (ADR-0075 decision 6). | The shipped entry is the Codex plugin companion, pinned by path, version and digest at qualification. |
+| `security.enforcement_baseline` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
+| `security.workflow_pushes` | enum | `absent` | queue \| allow | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
+| `security.sandbox_retry` | enum | `absent` | allowlist \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
+| `security.sandbox_retry_allow` | entry list | `absent` | an array of entry objects, each naming its `program` | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
 
 ## Top-level keys
 
@@ -95,6 +101,789 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `guidance.prompt_reminders` | enum | `warn` | off \| allow \| warn | The one-line rule reminder the prompt hook adds when a prompt asks for a duration, a status or a complex explanation. | Advisory only: warn adds the line, off and allow add nothing; block is refused because a reminder never stops a prompt. |
 
 <!-- codeflow-derived policy-reference end -->
+
+### Blocked names and protected paths
+
+`git.path_policy` defaults to `block`. Pre-commit reads the landed policy
+and any stricter working-copy rules. CI reads the target policy and judges
+all commits the range introduces. A branch-only exception grants no access.
+Denials from applicable sources are combined. When a task declares an
+integration line, pre-commit takes exceptions from that line, as CI against
+the line does, and the default branch adds only denials. Otherwise
+exceptions keep only the area the sources share. A removed entry still
+applies when another source holds it.
+
+- A `git.blocked_names` string without `/` is a glob on the final component.
+  A sequence with `/` matches consecutive components at any depth.
+- A `{pattern, except_under, reason}` entry applies the same denial with
+  explained root-relative prefix exceptions. An explicit entry can narrow a
+  shipped default.
+- A `git.protected_paths` entry, `{prefix, allow: [{path, reason}]}`, matches
+  a root-relative prefix on component boundaries and supplies explained
+  root-relative prefix allowances.
+
+Patterns and paths use Unicode NFC normalization and ASCII case folding.
+Empty components, `.`, `..`, trailing dots or spaces, backslashes and
+non-UTF-8 names refuse. Prefix declarations may end in `/`; an empty,
+`.` or `/` exception denotes the root and waives the whole rule. An empty,
+`.` or `/` `protected_paths` prefix protects the whole tree.
+`codeflow doctor --check policy-source` names these waivers and reports
+policy sources and local differences.
+
+The shipped names are `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`,
+`*.pfx`, `*.jks`, `*.keystore`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`,
+`id_ed25519*`, `.netrc`, `.pgpass`, `*.tfstate`, `*.tfstate.*`, `kubeconfig`,
+`.kube/config`, `.aws/credentials` and
+`application_default_credentials.json`. Omitting them keeps them active.
+A public certificate fixture can use this declaration in the target's
+`.codeflow/policy.json`:
+
+```json
+{
+  "git": {
+    "blocked_names": [
+      {
+        "pattern": "*.pem",
+        "except_under": ["tests/public-certificates"],
+        "reason": "Public certificate chains used by tests"
+      }
+    ]
+  }
+}
+```
+
+Blocked names refuse additions, content changes, type changes and renames
+into a matching path. Deletions pass with a history note. Protected prefixes
+refuse every change, deletions included. Gitlinks are judged at their path;
+symlinks are judged at their path and their normalized target. Absolute or
+parent-traversing targets refuse. Neither kind of link is followed.
+
+CI reads each ordinary commit against its parent and each two-parent merge
+against the automatic remerge of its parents. Unchanged inherited content
+is not a merge introduction. Octopus or unreadable merges refuse. An
+addition followed by deletion in the range remains an introduction.
+
+The gate exempts its own inputs, in the same normalized spelling:
+`.codeflow/policy.json`, `.codeflow/project.toml`, `.codeflow/bootstrap.sh`,
+`.codeflow/bootstrap.ps1`, `.codeflow/ci-setup.sh`, files directly under
+`.codeflow/git-hooks/`, `.github/workflows/codeflow-policy.yml`,
+`.github/workflows/codeflow-ci.yml`, and every `.gitignore`.
+Other rules still apply to those files. `git.secret_scan` continues to own
+both the existing environment-file check and the content secret scan;
+`git.path_policy: off` disables only the new path gate.
+
+## Unsupported policy keys
+
+`security.script_bypass`, `security.sandbox_retry` and
+`security.sandbox_retry_allow` have no enforcement reader. Setting `block`
+does not add protection. Hooks warn when these keys are present, and
+`codeflow doctor` reports them. Valid legacy values remain accepted;
+invalid types and values still fail policy validation.
+
+The shipped policy and built-in defaults omit these keys. `codeflow
+update` removes a value only when it matches the recorded shipped baseline.
+An edited value, or a value with no recorded baseline, stays and is warned
+about. The legacy retry entries have no effect, including their placeholder
+digests; they do not authorize an unsandboxed retry.
+
+The reader contract also identifies `git.clean_regenerable`,
+`security.interpreter_scan`, `security.enforcement_baseline` and
+`security.workflow_pushes` as unsupported. These four keys are also omitted
+from shipped and built-in defaults and follow the same update rules. Retained
+values do not configure the existing guards. Each key warns once per process.
+The table above labels every unsupported key.
+
+## Secret-path matching
+
+`security.secret_reads` judges file operands of every program and literals
+in inline interpreter code against the hard-secret rules. The program does
+not need to appear in a reader list. Option values count too, including
+`--input=FILE`, `-fFILE` and values attached to short-option clusters.
+For curl and wget data values, file prefixes such as `@FILE` and form
+`name=@FILE` or `name=<FILE` expose the local file operand. On Windows,
+backslashes are separators and trailing dots and spaces are normalized.
+Search patterns remain text: `rg 'id_rsa' README.md` and
+`grep -n id_rsa docs/x.md` pass. The existing search-option grammar identifies
+pattern text and file values; an unknown option earns no text exemption.
+
+Hard-secret names are protected wherever they occur, including inside the
+workspace. The `**/` rule includes zero directories, so `id_rsa`,
+`./id_rsa`, nested and absolute spellings receive the same refusal. The
+same applies to `id_ed25519`, `.pem`, `.key`, `.p12`, `.pfx` and `.netrc`
+patterns. A newline inside a directory name does not hide its secret leaf.
+Comparisons fold ASCII case, including on case-sensitive volumes.
+A backup copy of a named secret file holds the same token, so it is
+secret too: in the secret's directory (any directory for a name rule such
+as `.netrc`), the secret's name followed by `~` or a `.` suffix
+(`~/.codex/auth.json~`, `auth.json.bak`, `.orig`, `.old`, `.1`,
+`.netrc.bak`) or an editor swap file (`.auth.json.swp`). A name that
+only continues the secret's name (`.netrc-notes`) is another file. A
+pattern rule covers only the names it matches: `id_rsa*` matches
+`id_rsa.bak`, but a backup of a file named by a suffix pattern (`*.pem`,
+`*.key`, `*.p12`, `*.pfx`, as in `x.pem.bak`) is not judged a secret,
+since telling a backup suffix from a source one (`certificate.pem.txt`)
+would need a suffix list. That is a stated limit of the text guard.
+
+The shared shell resolver follows on-line assignments, directory changes,
+home parameters and supported static substitutions before judging operands.
+An operand it cannot resolve refuses as cannot-verify with an operator route.
+An active named-user tilde receives the home-store judgment; a quoted
+`'~somebody/.codex/auth.json'` stays a literal workspace path. Directory
+boundaries matter: `~/.ssh-notes/file` is outside `~/.ssh`.
+
+Shell braces and bracket expressions use the shared conservative word
+readings against the filesystem at classification time. Each match is judged
+by its visible name and canonical target, including a symlink with an ordinary
+source filename. Patterns naming a home catalog rule, such as
+`~/.codex/auth.*` or `~/.codex/auth.{json}`, retain that rule's protection
+even if its file is absent. Whole-directory
+read rules in the action table define stores such as `~/.ssh`, `~/.aws`,
+`~/.gnupg` and `~/.claude/sessions`; globs inside these stores refuse even
+when empty. A file rule does not turn all of its parent's public siblings
+into a store: a Markdown selector under `~/.claude/projects` does not select
+the private `.jsonl` files there. Claude skills and Cargo binaries remain
+available. Standard whole-component `**` retains its leaf selector while
+covering both one-level and recursive shell readings. A selected secret name
+or symlink target still refuses. Other unmodeled glob syntax remains
+conservative. The guards add no separate `~/.config/gh` store.
+Bare `~`, `~/` and the equivalent home
+parameter spellings receive the same store-ancestor judgment.
+That judgment applies to file operands; a fragment such as `"~"` inside
+interpreter code remains literal data. Known variable names, output-directory
+options and Git metadata arguments retain their own roles; an explicit
+secret path passed to a metadata command still refuses.
+
+Recursive readers inspect their roots even without a glob selector. This
+includes recursive search, copy and archive input trees. Search selectors
+such as `rg -g`, `--glob`, `--iglob` and `grep --include` select actual names
+under the parsed roots. A negated selector cannot clear an otherwise
+selected secret. Ignored and hidden entries are inspected too: the guard
+cannot reproduce every ignore file, configuration source or same-line edit.
+Unknown recursive or archive syntax retains all candidate roots; inputs whose
+roots cannot be established refuse. A recursive root or descendant that may
+traverse a link declared earlier on the line refuses as cannot-verify.
+A `find` that hands what it visits to a command (`-exec`, `-execdir`,
+`-ok`, `-okdir`) is a recursive reader of its starting points, narrowed by
+a `-name` test in a plain conjunction: `find ~/.codex -type f -exec cat {}
++` refuses, while `find src -name '*.rs' -exec grep -l x {} +` stays
+available; with `-L` or `-follow` it refuses as cannot-verify. `find`
+piped into `xargs` gives the command input the guard does not read, so
+`find src | xargs cat` refuses as cannot-verify, as `ls | xargs cat`
+does; use `find ... -exec ... {} +`. `fd` and `fdfind` with `-x`,
+`--exec`, `-X` or `--exec-batch` read their roots (the operands after the
+pattern, `--search-path` values, or the current directory) the same way,
+without narrowing by the pattern: `fd . ~/.codex -x cat` refuses, while
+`fd . src -x cat` stays available. A value attached to the option
+(`--exec=cat`, `-x=cat`, `-xcat`) is the whole command, as `fd` reads it.
+`-L`, `--follow`, an option the guard does not know, an exec option whose
+command it cannot read and a `--base-directory` the guard cannot follow
+refuse as cannot-verify.
+Listings and metadata operands do not inherit the ancestor rule for content
+readers; explicit secret-store operands retain their own protection.
+
+Shell expansion and recursive root inspection each use a 65,536-entry
+metadata budget. Unreadable, unresolved or over-budget selections refuse as
+cannot-verify and name a narrowing remedy, and so does a relative glob or
+search selector after a directory change the guard cannot establish,
+whatever it names; a rooted glob (`/dir/*`, `~/dir/*`) is judged as usual.
+A glob after a command substitution the guard cannot establish
+(`cat $(cd DIR && pwd)/../notes*.txt`) refuses the same way, quoted or
+not, whatever it names. A word that joins a substitution the guard does
+not resolve into it to a spelled directory is judged whole, each such
+part standing for any text: `cat ~/.codex/$(echo auth).json` refuses as
+cannot-verify because it may name `~/.codex/auth.json`, while `cat
+src/$(echo main).rs` stays available. A command word the shell fills in
+at run time (`$P`, `"$P"`, `${P}`, after a launcher too) refuses as
+cannot-verify unless the line assigns it a value the guard resolves:
+`P=ls; $P` stays available, while an unquoted value with blanks
+(`P='cat README.md'; $P`), which the shell splits at run time, refuses as
+cannot-verify. A quoted `"$P"` whose value holds blanks is judged as the
+command line its words form; the shell runs no program by that name, so
+this reading only adds refusals. So does a program word the line does not set: an inherited
+`$EDITOR`, `$PAGER` or `$SHELL`, and a forwarded `"$@"` (`f() { "$@"; };
+f printf x`). Name the program literally instead. A program value Git
+runs is a different construct: Git hands it to a shell as a command line,
+so it is judged as one (see the Git rules below). A secret store is
+reachable from any directory, so this refusal does not depend on where
+the line runs. A source glob that expands
+completely without secret matches remains available; the same glob refuses
+after `id_rsa.rs` is planted among its matches. A quoted shell wildcard
+remains literal, including `cat < 'id_rs?'`. A zsh `^` negation that opens
+a path component (`^main`, `^README.md`) may match any name in that one
+directory, so it is judged as `*` there: `git log ^main` and `grep -n ^foo
+README.md` stay available where the directory holds no secret name, and
+refuse with a message to quote the word where it does. A Git call that
+runs a program the guard reads (a configured pager, diff or tool) refuses
+such a word, since it may expand to a name that reads as an option; quote
+the exclusion (`git log '^main'`). One after a
+literal part of its component (`HEAD^`, `main^2`) matches only names that
+start with that part, so caret revisions stay available and `cat
+copies/id^` refuses when `copies/id_rsa` exists. Lines naming dotglob,
+GLOBIGNORE or globdots make secret-read globs unverified because those
+options change hidden-file selection.
+
+Input redirections use a quote-aware scan, including no-space operators,
+`exec {fd}<`, numbered descriptors and redirections on compound commands.
+Substitutions in unquoted heredoc bodies execute and are inspected. A quoted
+heredoc body stays literal data for a data recipient; code supplied to a
+shell or interpreter is inspected even with a quoted delimiter. Process
+substitution bodies are executable commands too. Static echo/printf output
+retains tilde expansion. Literal pipeline or here-string input to xargs is
+judged as child operands; unverified program input or argument files refuse
+for children that can read files. Known text-only children remain available.
+`tee` filenames are write destinations; `rm`, `rmdir` and `unlink` operands
+are removal targets. They receive write/deletion checks rather than content-read
+checks. Input redirections still receive secret-read checks.
+On Windows, backslashes in undelimited xargs input remain unverified because
+they may be native path separators or xargs escapes. Use forward-slash path
+data or an explicit delimiter such as `-0` to preserve the selected paths.
+Rooted Windows homes without a drive inherit the command directory's drive.
+PowerShell aliases, cmd /c, AppleScript's do shell script and deno eval join
+the inline-code checks. Makefiles supplied on stdin or through `make --eval`
+are code too.
+Unknown PowerShell or deno parameter grammar and encoded PowerShell bodies
+refuse as cannot-verify. AppleScript bodies receive literal-path inspection;
+constructed shell commands refuse.
+What a program does once it runs is outside the text guard's promise: a
+file the line wrote and then runs, a copied or extracted tree, and the
+directory an unmodelled runner gives its child. The proven containment is
+the installed Claude Code sandbox profile (the `denyRead` and `denyWrite`
+entries in `.claude/settings.json`) on native macOS: it denies reads of
+the home secret stores and writes to the enforcement files, and it leaves a
+workspace hard-secret file such as `id_rsa` readable. Linux, WSL and native
+Windows need their own evidence, and a seat without an active sandbox has
+none. Where that containment is not active, the guard does not yet refuse
+these cases beyond the partial filters below; a planned change will fail
+them closed where containment cannot be established.
+The written-file checks are partial filters that only refuse, not a
+boundary, and they leave run routes they do not name allowed: a file
+written earlier on the same line, by a heredoc, `echo`, `printf`, an
+append, `tee` or a copy, refuses when it runs directly by path, interpreter,
+shell (`bash FILE`, `sh FILE`, `source FILE`, `. FILE`) or Make, or before
+an interpreter that loads its extension runs, unless the guard read its code
+exactly; a shell script whose exact body the guard read is judged as that
+code. A copy into a directory writes the file of the
+source's name there. After a recursive copy, an interpreter, shell, Make or
+launcher that the line runs directly later refuses. A script operand is
+opened in the directory a launcher such as `env -C` moves to. After a write
+on the line, a relative or bare-name run refuses when the line changes
+`PATH` in the shell or in a launcher (`env PATH=`), or runs through an
+execution context the guard does not model (`env -S`, `env -P`, `ruby -C`
+in any option spelling, `pwsh -wd`). Run routes through a child the filter
+does not follow stay allowed, for example a copied file run through
+`xargs` (`cp -r src out; xargs python3 <<< out/helper.py`), a written bare
+name run through `xargs` after a `PATH` change (`printf x > tool; PATH=.
+xargs tool <<< x`), and a reader the guard does not list under a runner's
+own directory option (`uv run --directory DIR paste auth.json`).
+Every inline-code option form, attached or separate (`node --print=CODE`),
+is read as code.
+A command runs in the directory `env` moves it to in any option spelling
+(`-CDIR`, `-iC DIR`, `--chdir=DIR --`), and interpreter code runs where its
+call runs (`ruby -C`, `pwsh -WorkingDirectory`). An `env -S` string is
+split by env's own grammar and its words, `-C` included, are judged again;
+a string with a variable, `\c`, a comment or an escape the guard does not
+read refuses as cannot-verify. Of several `env` directory options only the
+last applies, from the directory env starts in, as env applies them. A
+directory option
+(`env -C`, `ruby -C`, `pwsh -wd`, `tar -C`, `make -C`) resolves physically
+from the physical directory it starts in: a parent component after a link,
+or after a directory reached through a link, is the parent of the link's
+target, and a missing component before a parent component leaves the
+directory unknown. A UNC, device or verbatim directory option is unknown
+before any filesystem access, and a Git call that names one in any word
+refuses before any lookup. A physical shell change (`cd -P`, `pushd -P`,
+or any `cd` after `set -P`, `set -o physical`, or zsh's `CHASE_LINKS` or
+`CHASE_DOTS` in any spelling through `setopt`, `set -w`, `set -o` or
+`emulate -o`) through a link or `..`, or to a UNC or namespace place,
+leaves the directory unknown; any other physical change lands on the
+destination's real path, or leaves the directory unknown when that cannot
+be resolved. A `set`, `setopt` or `emulate` option word the guard does not
+read counts as physical, and so do a shell's own invocation options
+(`bash -P -c`, `zsh -o chaselinks -c`) for its code, and so does a
+`SHELLOPTS` in its environment that names `physical` or that the guard
+cannot read (`env SHELLOPTS=physical bash -c`, an exported `SHELLOPTS`).
+A physical change with no operand goes to HOME, `cd -P -` to OLDPWD, with
+a command-local assignment (`HOME=DIR cd -P`, `env HOME=DIR bash -c`) in
+effect; one whose target the guard cannot read (an unread HOME or OLDPWD, a `pushd`
+swap or stack index) leaves the directory unknown. `pwd -P` prints the
+physical directory. As a partial filter, inline code and the file readers
+the guard lists (`cat`, `head`, `grep`, `rg`, `tar` and similar) that a
+program the guard does not model may run (`uv run --directory DIR cat
+auth.json`) are judged in an unknown directory; other programs' operands
+there, and the runner's real child directory, are outside the promise.
+Turning a physical option off (`unsetopt chaselinks`) does not clear the
+physical reading, so later changes through a link stay unknown.
+A `CDPATH` in effect for a change, set on the line as a separate
+assignment or command-local (`CDPATH=~ cd .codex`) or inherited, sends a
+relative `cd` or `pushd` operand that does not start with `.` or `..` to
+a directory the guard does not read, so the directory becomes unknown.
+bash's `cdable_vars` (`shopt -s`, `bash -O`) and zsh's `CDABLE_VARS` make
+later changes physical, so an operand that is not a directory leaves it
+unknown. A relative operand of a Git call is read from the directory its
+`-C` options move it to, each taken from the one before, as Git does
+(`git -C ~ diff --no-index /dev/null .codex/auth.json` refuses); a `-C`
+value the guard cannot resolve leaves the directory unknown.
+A directory that a launcher or interpreter option moves to and the guard
+cannot establish refuses as cannot-verify. A directory change inside a
+command substitution leaves what a later `pwd` there prints unknown, and a
+path after a substitution whose output the guard cannot establish
+(`cat "$(cd DIR && pwd)/../auth.json"`) is judged as a relative operand in
+an unknown directory. After any other directory change
+the guard cannot establish, such as `cd "$DIR"` or `pushd "$DIR"`, inline
+interpreter code (`-c`, `-e`, `eval`, a heredoc or stdin) refuses, and a
+relative operand refuses when its name or path could name a secret: a
+secret basename such as `id_rsa`, or a path that is secret below a
+protected home directory, such as `auth.json` or `.codex/auth.json`, by the
+same names the absolute-path checks use. Env files such as `.env` are not
+among those names; the native read deny covers them. Other relative
+operands keep their verdicts.
+A parent component after an existing link, or leading out of a directory
+reached through one, is resolved through the link. A search selector is
+matched with the tool's own matching semantics against every spelling the
+tool may compare, the search root included; a selector construct the
+guard does not model, such as a bracket class (`[[:alpha:]]`), refuses. Windows namespace spellings are judged as the
+path Windows opens: `\\?\UNC\` and `\\.\UNC\` as the UNC path, `\\?\C:\`,
+`\??\C:\` and `\\.\C:\` as the drive path, and an administrative share such
+as `\\host\C$\` on any host as its drive. A verbatim name that an ordinary
+path would change (a trailing dot or space, `..`, a device name) refuses. A
+named stream is judged as its file. A UNC path that ends in a protected
+home-relative path refuses whatever the host or share; any other share
+outside the home and the session's directory refuses, since its root may
+be a store; read it through its drive-letter path. That refusal comes
+before any filesystem access. Other device paths, stream type syntax and short names the
+guard cannot map refuse. A short name that does not exist yet refuses
+unless nothing can exist there, since a command earlier on the line could
+create the entry it aliases. A Git revision such as `HEAD~1` that names no
+path, and inline interpreter code, are not file operands; the object path
+in `REV:PATH` or `:PATH` keeps the secret-name rules of a file operand
+whatever the revision's shape, a revision the guard cannot read included
+(`git show HEAD:id_rsa` refuses). Git commands are judged by these rules;
+the guard does not parse every option of every Git command or prove which
+operand Git reads in which role, so where a reading cannot be made sound
+the form refuses:
+
+- Pathspec magic refuses in a Git operand or option value, whatever role
+  Git gives the word: a word that begins `:(`, `:!`, `:^` or `:/`, as an
+  operand, a separate option value, a long option's `=value` or a short
+  option's attached value (`git log -p -- ':!docs'`, `git show ':/fix
+  bug'`, `git commit -F ':(exclude)x'`, `git commit -m':!x'`). Name the
+  paths to read instead. The rule does not know which values are text,
+  so a search text that begins with magic refuses too (`git grep '://'`,
+  `git log --grep=':/'`); search such text with `rg`.
+- On a line that runs Git, a share, verbatim or device spelling
+  (`//host/share`, `\\?\`, `\\.\`, `\??\`) in any word refuses before
+  either guard discovers a repository, reads configuration or looks up an
+  alias. Every word of the line is checked, with the value after `=` in an
+  option, a `-c` setting or an environment assignment and a short option's
+  attached value (`git -c include.path=//host/share/config x`,
+  `GIT_CONFIG_VALUE_0=//host/share git status`). Include paths inside
+  configuration files on disk are read as Git reads them; those files are
+  the user's own or protected checkout state. The order is proved by test
+  on macOS and Linux; Windows execution is not verified.
+- A `GIT_*` variable that a line running Git sets, exports or clears
+  refuses unless the guard classifies it (`git help git`, "Environment
+  Variables"): identity (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`), output and
+  prompt settings (`GIT_TERMINAL_PROMPT`, `GIT_FLUSH`,
+  `GIT_PROGRESS_DELAY`, `GIT_MERGE_VERBOSITY`, `GIT_MERGE_AUTOEDIT`,
+  `GIT_ADVICE`, `GIT_OPTIONAL_LOCKS`, `GIT_DIFF_OPTS`,
+  `GIT_HTTP_USER_AGENT`, `GIT_SSH_VARIANT`, `GIT_LFS_SKIP_SMUDGE`), the
+  pathspec modes `GIT_GLOB_PATHSPECS`, `GIT_NOGLOB_PATHSPECS` and
+  `GIT_LITERAL_PATHSPECS`, and `GIT_DIR` under the repository rule below.
+  A program variable on the closed list under "Program variables the
+  guards judge" below is allowed, and its value is judged as a command
+  (`GIT_EXTERNAL_DIFF='cat ~/.ssh/id_rsa'` refuses as that `cat` would).
+  Such a value, assigned on the line or exported earlier in it, is judged
+  before every program the line runs, Git or any program that may run Git
+  (`GIT_EXTERNAL_DIFF='cat ~/.codex/auth.json' cargo test` refuses), in
+  the directory each program runs in: the shell's after its `cd` steps,
+  a Git call's `-C` directory, and that repository's top, where Git starts
+  a pager, editor or diff program. A link the line declares before the
+  call, or a directory the guard cannot establish, refuses as
+  cannot-verify. A value built from the line's own variables is judged by
+  the command line it holds (`E='cat x'; GIT_EDITOR="$E"` is judged as
+  `cat x`, since Git runs it through a shell); one the guard cannot
+  resolve (text from outside the line, a construct it does not model, an
+  export with no value shown, or a name set by `read`, `printf -v`,
+  `mapfile`, a `for` loop, an alias of one, `${NAME:=x}` or a `declare -n`
+  reference) refuses as cannot-verify. A deploy key named in
+  `GIT_SSH_COMMAND='ssh -i ~/.ssh/<key>'` refuses as a secret read, as
+  `ssh -i` does at the top level; name the key as an `IdentityFile` in
+  `~/.ssh/config` instead. The others move what Git reads or writes and
+  refuse as unverified: `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
+  `GIT_OBJECT_DIRECTORY`, `GIT_NAMESPACE`, `GIT_EXEC_PATH` and the
+  `--exec-path=DIR` option (where Git finds the helpers it runs), every
+  `GIT_CONFIG*`, the `GIT_TRACE*` family, any name not listed, and a
+  name a declaring builtin builds (`export "$N=x"`). Only a word in an
+  assignment position assigns: before a command's program word, among
+  its `env` launchers, or as a declaring builtin's operand. A word that
+  names a program variable is read as a possible setter only where a
+  builtin, keyword or alias may set it; an external program cannot set a
+  variable of the shell that runs it, so its operands are text: `git
+  commit -m 'GIT_WORK_TREE=/x'`, `git grep GIT_WORK_TREE`, `echo EDITOR;
+  git status` and `printf '%s\n' 'PAGER=less'` are not judged.
+- Operator decision 2026-10-29: Git operand commands are judged as
+  commands. Every command a Git call runs itself is read by the Git
+  runner reader below, with the directory Git runs it in, and exec-guard
+  judges each one by every rule it applies to a command line, secret reads
+  included, as git-guard already did: `git rebase -x`/`--exec`, `git
+  bisect run`, `git submodule foreach` (in each checked-out submodule),
+  `git filter-branch --*-filter` and `--setup`, `git difftool
+  -x`/`--extcmd`, the configured tool command of `git difftool` and `git
+  mergetool`, the `git send-email` hooks, `git grep -O`, the transport
+  programs, a `-c` setting or configured command the subcommand uses (`-c
+  core.pager=` for a command that pages, `core.editor` for one that edits,
+  `!` aliases), and a program variable the call inherits. A `git config`
+  write whose key the setting classification below does not know to run
+  nothing (`core.pager`, `core.editor`, `diff.external`, `*.cmd`, `!`
+  aliases) is judged as a command too, in the call's directory. A
+  `submodule foreach` or `for-each-repo` after another command that may
+  change which checkouts exist (any Git call, a write, or a program other
+  than a directory change, an assignment or a builtin that prints or
+  tests) refuses, since the guard reads the checkouts before the line
+  runs. A command the guard cannot read, such as an `ext::` remote or an
+  unread `--config-env` value, refuses as cannot-verify.
+- A Git call that stages working-tree files it does not name (`git add
+  .`, `-A`, `-u`, a directory, `git commit -a` or a commit pathspec, `git
+  stash` with or without `-u` or `-a`) is judged by the files Git would
+  stage, which Git itself lists: a secret-named file among them refuses as
+  `git add id_rsa` does, and a list the guard cannot read refuses as
+  cannot-verify.
+- A Git directory or work tree a line sets (`--git-dir`, `--work-tree`,
+  `GIT_DIR`) refuses unless it names exactly the Git directory and work
+  tree Git finds without it from the directory the call runs in; with a
+  Git directory alone, Git takes the current directory as the work tree,
+  so it must be the top of the work tree. A `.git` file is read as Git
+  reads it. Anything the guard cannot establish refuses: `git
+  --work-tree=~/.ssh add -A && git diff --cached` and `cd ~/.ssh && git
+  --git-dir=/repo/.git add -A` would stage a store and print it.
+  In a linked worktree, where `.git` is a file, git-guard separately
+  refuses a line that sets `GIT_DIR` it cannot scope, `GIT_DIR=.git git
+  status` included.
+- Every operand before `--`, a separate option value included, is read as
+  a possible object name, unless it is proven to be text: a commit
+  message, a configuration value, a repository URL or remote ref of
+  `clone`, `fetch`, `ls-remote` and `pull`, or an option value
+  (`git log -S TEXT`, `--grep TEXT`, `--format=TEXT`) after options the
+  guard's grammar all knows, since an unknown option may take the next
+  word. `git log` operands are file operands (`git log -p -- id_rsa`
+  refuses).
+- Content already committed to Git's object store is outside these
+  rules' promise, by the operator's direction of 2026-10-29: an object
+  named by id, tag or peel (`git cat-file -p 7898192`, `git show
+  v-blob`), a batch record or stream entry, an archive, and what `show`
+  or `log -p` prints from a commit are not judged by content. The basis
+  is a one-time full-history secret scan of the repositories, whose
+  findings are rotated or removed with the operator's approval, and the
+  commit-time and hosted secret scans that stop new commits. The checks
+  on the paths a command names stay (`git show HEAD:id_rsa`, `git log -p
+  -- id_rsa` and `git cat-file --batch <<< HEAD:.ssh/id_rsa` refuse), and
+  so do those on writing working-tree files into the store (`git add`)
+  and on a Git directory or work tree that is not the repository's own.
+- An alias is judged by its expansion, read from the configuration Git
+  would use, and the expansion meets these rules too. One the guard
+  cannot read refuses: a `!` shell alias, an alias on a line that
+  changes configuration, or one under a global option other than `-c`,
+  `-C`, `--exec-path=` and the paging options. An external `git-*`
+  program is judged like any other program.
+- The options that decide what `cat-file`, `hash-object` and
+  `--pathspec-from-file` read are resolved by Git's own rules, a unique
+  abbreviation (`--batch-com`) and a `--no-` form included; an option
+  those rules do not resolve refuses. A `--stdin` option on another
+  command is recognised in any spelling that begins `--std`.
+- Stdin is read only for the forms that read names from it: a
+  `cat-file` content batch, `hash-object --stdin-paths`,
+  `--pathspec-from-file=-`, a `--stdin` option (`rev-list`, `update-ref`,
+  `update-index`, `checkout-index` and the like), `update-index
+  --index-info`, and the stream readers (`pack-objects`, `mktree`,
+  `fast-import`, the serving side of transports, credential helpers).
+  The guard reads such a list one record per line, from a here-string,
+  heredoc, `echo` or `printf` on the line, with a line that starts with
+  a quote decoded in Git's C quoting; pathspecs from stdin meet the
+  pathspec rules here. Any other stdin refuses: a file, a program's
+  output, a descriptor an earlier `exec` or a compound command's
+  redirection rebinds, or stdin the line does not give. A NUL-separated
+  list (`-z`, `-Z`, `--pathspec-file-nul`) refuses, and so does a path
+  list in a file. A content batch over every object or through in-tree
+  links refuses; `--batch-check` stays available. Every other Git
+  command is judged by its operands whatever its stdin holds (`git status
+  </dev/null`, `yes | git add -p`).
+- A pathspec pattern given to a command that may print what it selects
+  (`add`, `diff`, `log`, `grep`, `show` and the like) refuses when a
+  secret name could match it (`'id_rs?'`). Git's `*` also matches `/`,
+  so any glob whose cross-directory match could hit a secret name
+  refuses, quoted or not, `git add '*.rs'` and `git diff -- '*.md'`
+  included. Every `status` operand is judged as a file operand and its
+  patterns as pathspecs, since `status -v` prints changes (`git status
+  -vv -- id_rsa` refuses). `ls-files` prints names, modes, object names
+  and line-ending facts in every mode, never content (`git help
+  ls-files`), so its patterns are not judged.
+  `--icase-pathspecs` refuses. Ref and refspec patterns (`git fetch
+  origin 'refs/heads/*:refs/remotes/origin/*'`, `git tag -l 'v*'`) are not
+  pathspecs.
+- A clone or fetch URL whose last component is a secret name refuses:
+  Git's `insteadOf` configuration can rewrite a URL to a local path the
+  guard does not read.
+
+These rules refuse some ordinary commands by design: a pathspec glob,
+quoted or not (`git diff -- '*.rs'`, because `id_rsa.rs` matches both
+that pattern and the `id_rsa*` secret rule), any pathspec magic, a Git
+name list piped from a program (`git ls-files | git update-index
+--stdin`), a NUL-separated list, and a `--git-dir` or `--work-tree` Git
+cannot be shown to use anyway (a bare repository, a dotfiles work tree).
+Name the paths (`git diff -- src/main.rs`), pass the names one per line,
+or run Git inside the repository. Measured on
+a corpus of 120 ordinary Git commands (TSK-1002), these rules refuse 2
+where the earlier ones refused 1; the added refusal is `git grep -n
+needle -- '*.rs'`. The corpus holds no magic, NUL list or `GIT_*`
+assignment, so it does not measure those
+costs.
+
+Expansion observes the filesystem before execution. File creation, concurrent
+changes and symlink retargeting can change the paths selected after the
+check. Classification cannot eliminate that race. Native filesystem denies
+remain a separate backstop for the paths they actually cover.
+
+The shell check skips read-rule groups that have carve-outs. It does not
+enforce the `.env` or `secret`/`credentials` source-name groups, including
+`.env.production` and `credentials.json`. File-tool rules still apply those
+groups with their example and source exceptions, such as `.env.example`
+and `secret_scan.rs`.
+
+Writer checks also use the shared resolver. An unread command substitution
+in a writer operand refuses while a checkout is reachable. Links created
+earlier on a line are followed before a subsequent `..`, including physical
+`cd -P`, and attached or
+long target-directory options receive the separated option's judgment.
+A call through an alias defined earlier on the line refuses when the path
+reader does not expand its body. Checkouts added or moved earlier on the
+line are protected from subsequent interpreter arguments and code literals.
+Redirect targets preserve quoting when expanding globs. An unquoted redirect
+glob that could select an enforcement path refuses even before its leaf is
+created; quoted glob characters stay literal.
+
+Paths assembled inside arbitrary program code remain outside shell analysis,
+as do unseen script-file contents and inputs supplied in another tool call.
+An unseen script descriptor such as `bash /dev/fd/9` retains that boundary;
+literal code fed to a modeled stdin descriptor is inspected.
+The guard can inspect literal heredoc code written and then supplied to a
+shell on the same line; this does not certify arbitrary program behavior.
+The native macOS fixture reproduces installed Claude store-root denies.
+Those denies block store reads and leave a workspace `id_rsa` readable
+natively. The command guard refuses that workspace read, and the installed
+`Read(**/id_rsa*)` file-tool rule covers it separately. Hook replay does not
+prove live harness dispatch or profile adoption. Linux/WSL and native Windows
+sandbox enforcement require separate platform evidence. A seat without an
+active filesystem sandbox has no native backstop.
+
+### Command launchers the guards model
+
+Operator decision 2026-10-29: where a class cannot be closed soundly, the
+text guard's promise is narrowed instead. A word naming a secret or an
+enforcement path is judged as any program's operand, whatever launches it.
+The command a launcher runs, the directory it runs in and the paths a
+launcher hands it are read only for this closed list, Git's own runners
+(read by the Git runner reader) and the programs below; the code holds the
+same list in one place (`security/launchers.rs`), and a test keeps the two
+equal.
+
+- Launchers: `-`, `builtin`, `busybox`, `caffeinate`, `chrt`, `command`,
+  `doas`, `env`, `exec`, `gsudo`, `ionice`, `nice`, `nocorrect`,
+  `noglob`, `nohup`, `pkexec`, `setsid`, `stdbuf`, `sudo`, `taskset`,
+  `time`, `timeout`, `unbuffer`, `xcrun`, and the GNU names of the
+  coreutils ones with a g prefix.
+- Suppliers: `fd`, `fdfind`, `find`, `parallel`, `watch`, `xargs`.
+- Package runners: `bunx`, `npx`, `pnpx`, `pnx`.
+- Shells: `ash`, `bash`, `cmd`, `csh`, `dash`, `fish`, `ksh`, `lksh`,
+  `mksh`, `oksh`, `posh`, `powershell`, `pwsh`, `rbash`, `sh`, `tcsh`,
+  `yash`, `zsh`.
+- Interpreters: `deno`, `make`, `node`, `nodejs`, `osascript`, `perl`,
+  `python`, `ruby`.
+
+A program outside this list that moves the command it runs to another
+directory, or hands it paths it finds, is outside the text guard's
+promise; the qualified shell parser (TSK-1073, 4.0.0) owns that residual.
+
+### Program variables the guards judge
+
+A variable whose value is a program is judged as a command before every
+program the line runs, as the Git operands rule above states, only for
+this closed list: the program variables in git-guard's runner catalog,
+which follows `git help git` ("Environment Variables"), `git help var`,
+`git help credential` and `git help difftool`, and the ones the programs
+Git starts read (`less` runs `LESSOPEN` and `LESSCLOSE`, `man` runs
+`MANPAGER` for `git help`, and `git web--browse` runs `BROWSER`). The
+code takes the list from the same catalog (`security/git_preflight.rs`),
+and a test keeps it equal to this one.
+
+- Program variables: `BROWSER`, `EDITOR`, `GIT_ASKPASS`,
+  `GIT_DIFFTOOL_EXTCMD`, `GIT_EDITOR`, `GIT_EXTERNAL_DIFF`, `GIT_PAGER`,
+  `GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `GIT_SSH`,
+  `GIT_SSH_COMMAND`, `LESSCLOSE`, `LESSOPEN`, `MANPAGER`, `PAGER`,
+  `SSH_ASKPASS`, `VISUAL`.
+
+Another `GIT_*` name refuses on a line that runs Git unless the guard
+classifies it. A variable outside this list whose value some other
+program runs is outside the text guard's promise; the qualified shell
+parser (TSK-1073, 4.0.0) owns that residual.
+
+## Planning amendment paths
+
+A planning amendment may change records under `project-management/` except
+its templates, plans under `docs/plan/`, and other files under `docs/` that
+are outside the adopter-facing set. It may also change exact document
+index files from `git.document_indexes` in the target policy, such as
+`["DOC-INDEX.md"]`, and the project-owned part of root `AGENTS.md` while
+keeping its managed block byte for byte.
+
+Declare index files in a prior task PR after upgrading the pinned binary.
+A declaration is a reviewed policy change on the target and must not name a
+file a harness or build tool loads. The hosted check reads the target's
+policy and enforces that declaration. On a re-push of a `plan/` branch,
+pre-push can fall back to the earlier pushed tip; with an advertised work
+target it judges from the merge base with that target. The hosted check
+enforces the target-policy boundary.
+
+The list defaults to empty and admits exact repository-relative documentation
+files with extensions `.md`, `.mdx`, `.rst` or `.adoc`, checked without case
+(`index.MD` is valid). Globs and dot components are refused. Text files are
+excluded because build, dependency and harness tools can load them.
+
+A declaration never overrides product or watched globs or hidden-path
+exclusions. Declared indexes cannot have file names beginning `AGENT.`,
+`AGENTS.`, `CLAUDE.`, `GEMINI.`, `WARP.`, `QWEN.` or `CRUSH.`, checked without
+case. `SKILL.md`, `CONVENTIONS.md` and `llms*.md` are also refused without
+case, as is a file name whose stem contains a tilde followed by a digit,
+which could be a Windows short-name alias. These exclusions do not identify
+every file a tool loads; the policy review must check that boundary.
+Independently of declarations, planning paths exclude file names beginning
+`AGENTS.`, `CLAUDE.` or `GEMINI.`; root `AGENTS.md` keeps its project-section
+exception. Files must be regular. When carrying documentation, indexes or
+`AGENTS.md`, both trees must have no symbolic links or submodules. A refusal
+names the excluded path and the admitted set; carry an excluded file in a
+task PR.
+
+## Destination lookup failures
+
+`codeflow ci` and pre-push refuse under `ci.destination_unavailable` when
+the destination's default-branch lookup times out, fails authentication,
+returns a malformed advertisement or advertises branches without a usable
+default. The refusal names the cause once per run and directs the operator
+to check network access, remote credentials and the remote's default branch.
+It always blocks, with no configurable level. Record and acceptance rules
+do not report that destination failure as a lifecycle violation.
+
+The shared lookup uses a fixed 10-second deadline per attempt. It retries
+only timeouts, at most twice, with a 100 ms backoff between attempts. A
+first-attempt success makes one network call. Authentication failures and
+unusable advertisements are not retried. Pre-push caches the final answer
+or error for every pushed ref and passes a successful advertisement to its
+child checks. A final error refuses the set before those children run.
+Local tracking refs, including `origin/HEAD`, never replace that answer.
+A destination with no branches yet keeps the existing bootstrap behavior;
+a release push still needs a default target to judge against.
+
+Messages and printed commands name a destination without credentials: the
+userinfo of a URL such as `https://user:token@host/path` is shown as
+`https://***@host/path`. Only git receives the real URL.
+
+## Secret-scan exemption pull requests
+
+The managed secret scan reads `.gitleaksignore` from the pull request's
+trusted base. When an integration line contains a reviewed false positive,
+land its fingerprint on the base in a separate pull request first, then
+rerun the line's scan.
+
+`codeflow ci` gives a range that adds or modifies only the root `.gitleaksignore`
+the **secret-scan exemption** class. Its body names one existing epic or
+task with `Task: EPC-NNN` or `Task: TSK-NNN`. A task branch still names its
+own task. Adding a record, a document or any other path keeps the range out
+of this class; `.gitleaksignore` remains outside planning amendments.
+The head entry must be a regular file. Deletions, type changes and mode
+changes do not qualify: such a range naming a task stays ordinary tracked
+work with its dependency check, and one naming an epic is refused.
+
+The class permits a task whose predecessor is incomplete at the planning
+anchor, including one complete only on an integration line. Task identity,
+record validation, PR-body requirements and commit standards still apply.
+The secret scan and security review jobs still run at their configured
+levels. The new fingerprint takes effect only after it lands on the trusted
+base; it cannot exempt a finding introduced by its own pull request.
+Repository approval rules, including code-owner review where configured,
+are unchanged. The class neither configures protection nor grants approval.
+
+Reviewers must verify that each added or changed entry uses `<commit>:<path>:<rule>:<line>`,
+that its commit is already on the named epic's integration line or task's
+branch, and that a linked review establishes the finding as a false positive.
+Refuse entries without a commit: they cover that location in every later
+commit.
+
+## Reviewing legacy remerge fingerprints
+
+The managed GitHub secret scan removes Git's `remerge` header notes so
+gitleaks reports a conflicted merge's actual path. Older scans could record
+`<commit>:b/<path>:<rule>:<line>` instead of
+`<commit>:<path>:<rule>:<line>` in `.gitleaksignore`.
+
+The scan checks the trusted ignore file and offers the exact replacement
+only when the commit is readable with exactly two parents, `b/<path>` is
+absent from that commit, and `<path>` exists. A one-parent commit receives
+its own message without replacement advice. The scan reports an existing
+`b/` path separately and keeps its fingerprint unchanged. An unreadable
+commit needs fetching or manual investigation before a replacement can be
+inferred. None of these cases is classified as a legacy fingerprint.
+
+Review the finding, confirm that the exemption still applies, and submit
+the suggested replacement as a reviewed ignore-file change. A pull
+request's own ignore-file change cannot exempt its finding in that run;
+the trusted base must already hold it. The scan never rewrites or aliases
+fingerprints, so unrelated and newly introduced findings remain blocked.
+
+The advisory diagnostic examines at most the first 64 KiB of the ignore
+file and 50 candidate fingerprints, with a five-second time budget. A
+limit warning asks for manual review of the remainder. These limits apply
+only to diagnostics; gitleaks still reads the complete trusted ignore file.
+
+## The Outcome adoption marker
+
+Task and epic records state one value line under `## Outcome`, in the form
+"after this merges, <who> can <do what>" (TSK-435). The rule binds by record
+identity, never by a date, through a marker of two top-level keys in
+`.codeflow/project.toml`:
+
+```toml
+outcome_required_since = "<the project's HEAD when the marker was written>"
+outcome_present_uids = ["<uid of each task and epic record present then>"]
+```
+
+`outcome_present_uids` is the marker; `outcome_required_since` records where
+the project stood and is left out when the project has no commit yet.
+
+- **Who writes it?** The first `codeflow update` of a release that has the section writes it once, listing every task and epic record in the working tree at that moment, committed or not. A fresh `codeflow init` writes it with no records listed. Neither ever rewrites a marker that is present.
+- **What does `validate --docs` do with it?** A complete, cancelled or archived record is never flagged. An open record that states its Outcome is clean. An open record without a filled section is refused when its uid is not listed, and warned about when it is listed or has no uid. A marker that cannot be read refuses an open record without the section.
+- **What about a project with no marker?** Every open record without the section warns and nothing is refused; `codeflow doctor --check config` warns that the marker is missing and names `codeflow update` as the step that writes it.
+- **What stays valid?** No existing record is edited. A record made by an older release, even on the morning of the upgrade, is listed, so it warns until it is next amended. The "Outcome:" sentence some older records carry in their Description stays valid for them.
+- **Can a change edit the list?** `codeflow ci` and the pre-push hook judge the list against `.codeflow/project.toml` at the tip of the branch the change lands on: the tip the destination advertises to the pre-push hook, the hosting platform's target commit, or else the target branch's remote-tracking ref, then its local branch. The pre-push hook names the target by the same rule that bounds the push's range, else the destination's default branch, so a declared target the range rejects never decides it. Neither the range's `--base`, which can be a merge-base, nor the pushed branch's own earlier tip decides it. A target with no tip is never read as having no list: a target the destination does not advertise refuses until the line is pushed there first (a fork fetches the upstream line and pushes it to the fork), and a target missing from the clone refuses until it is fetched, created (in a repository with no remote) or named with `--into`. A change that leaves the marker as it was at every best fork point from the target is not judged, since merging it keeps the target's own list; a target list that cannot be read refuses every change until it is repaired on the target. A change that edits the marker may keep or drop uids the target lists, and is refused when it adds a uid, removes the marker or leaves it unreadable. A target with no marker admits the change that writes one, which is the adoption itself. This check runs in every tier, including a project that keeps only epics or no records yet.
+- **And an epic's Deliverables?** An open epic whose uid is not listed warns when its `## Deliverables` section names nothing.
+
+## Where a new key goes
+
+A new policy key lives in the schema registry and the code default only. It
+is not written to the shipped template (`assets/base/policy.json`) or to this
+repository's installed policy (`.codeflow/policy.json`). Its note says so, in
+the words "The shipped policy file does not list it, so an older binary never
+meets the key." The keys `git.pr_summary` and `git.claim_remotes` above follow
+this rule.
+
+- **Why does the template stay out of it?** `codeflow update` copies every template key into an adopter's policy file. A binary that does not know a key rejects the whole file as unknown, which blocks every commit. The binary on `PATH` and the binary a CI job pins can both be older than the one that ran `update`.
+- **How does this relate to the two-step upgrade?** [The upgrade](adoption.md#update) takes two pull requests: first raise and land the pin, then run `codeflow update` on a new branch. That protects an adopter who follows it. The rule means the release that introduces a key never depends on it, because its template does not carry the key.
+- **When may a key join the template and the installed policy?** Only when the last released binary already lists it, so after the release that introduced it has published, and only when the file must carry a value that differs from the code default. Most keys never need to: the default applies when a file omits the key.
+- **What holds the rule?** `crates/codeflow-core/tests/policy_key_placement.rs` fails when the template or the installed policy names a key that the last release's schema does not hold, or gives a known key a value of the wrong kind. The schema is pinned in `crates/codeflow-core/tests/fixtures/policy-schema-last-release.tsv` (each key with its kind and valid values), with the script that regenerates it from a release tag. The test also updates a fixture project at the last release with this build's template and runs the same check on the result. The pinned schema stands in for the released validator and does not repeat its key-specific checks, so these are fast unit checks. The authority for whether a project at the last release still loads after `codeflow update` is `crates/codeflow-cli/tests/policy_last_release_journey.rs`: it scaffolds a project with a binary built from the release tag, updates it with this build and has the release binary load the result. That test is ignored until `CODEFLOW_LAST_RELEASE_BIN` names the release binary; its header gives the commands.
+- **Does `repository_update_noop` catch it?** No. A key placed in both files passes it, because the installed policy then matches the template.
+- **When is the pinned schema refreshed?** In the change that first needs the newer schema, from the release tag. A stale schema only keeps a newer key out of the template.
+
+The same rule is in the module documentation of
+`crates/codeflow-core/src/hooks/policy_schema.rs`, where a contributor adds a
+key.
 
 ## Rules with no key
 
@@ -201,6 +990,46 @@ program in a call that does not name the file. The task record lists the
 measured refusals. `ssh HOST CMD`, `tmux`, `screen` and `make --eval` were
 residuals the guard did not judge; beside a named file they now refuse as
 programs it does not read.
+
+A search tool's pattern is never judged as a path it writes (TSK-380,
+issue 242). The pattern words are every `-e` or `--regexp` value of `rg`,
+`grep`, `egrep`, `fgrep` and `git grep`, and the first operand of those
+tools and `ag` when no `-e`, `--regexp`, `-f` or `--file` supplies the
+pattern, whether the tool is called directly or run by `xargs`,
+`parallel -q` or `find -exec`. So `rg --files | rg '/CHANGELOG.md$'` runs,
+and git-guard's `xargs` and `find` rules no longer read
+`xargs rg '.claude/settings.json'` as naming an enforcement path. A word
+counts only when the shell passes it as one argument with the text
+written: quoted, or free of unquoted glob, brace and `$` or backtick
+expansion. An unquoted `~/.*rc` in the pattern position expands into the
+pattern and more searched paths, so it is judged as before. GNU
+`parallel` without `-q` runs its command through a shell, so no word of
+it is a pattern word, and git-guard's `parallel` rule reads the commands
+it builds whole. `ag` has no `-e`, and a direct `git grep` is a read both
+guards pass. Every other word is judged as before: a path operand after
+the pattern, a `-f` pattern file, a redirect and every word of a call
+with an option the reader does not know, so `rg x > ~/.zshrc` refuses.
+When the line names `RIPGREP_CONFIG_PATH` (an assignment, `export`,
+`declare`, `typeset`, `read`, `printf -v` or any other use) and `rg` has
+no `--no-config`, the first operand stays judged, since the configuration
+may supply the pattern. A pattern's text still names a file for the line
+rules above, because search output carries text that matches it:
+`rg '~/.zshrc' docs` refuses because `rg` may run a `--pre` program from
+its configuration, while `grep` or `rg --no-config` runs.
+
+A ripgrep `--pre` or `--pre-glob` given on the line runs a program on
+every file `rg` searches, so both guards judge each root it searches as a
+recursive writer's target: its path operands, or the directory it runs
+in when it names none. exec-guard refuses a root that is a startup file,
+the home, `/etc` or a directory above a class entry, a root it cannot
+resolve, and one below which a `.envrc`, a link leaving the root or more
+than 4096 directories lie, so `rg --hidden --pre tee x ~` and
+`cd ~ && rg -. --pre tee x` refuse. git-guard refuses a root that holds an
+enforcement file, as it does a recursive `rm`, so `rg --pre tee x` at the
+repository root refuses while `rg --pre pdftotext needle docs/` runs. A
+`--pre` under `xargs` or `parallel` searches the files the input names,
+which the guards cannot see, and refuses; under `find -exec` its roots are
+`find`'s starting points.
 
 The guards refuse under `security.shell_startup`, whatever the integrity
 level:
@@ -315,12 +1144,279 @@ level:
   path check; the guard does not interpret link text from its landing place;
 - a copy into a target directory spelled `-t DIR`, `-tDIR` or the exact
   `--target-directory`, when the named file lands in the class;
-- `rg` without `--no-config`, since its configuration file can name a
-  `--pre` program, and `sed` unless its options change no file and its
-  script is only addressed print commands.
+- `rg` without `--no-config` on a class file it is given (a pattern word
+  is not one, as above), since its configuration file can name a `--pre`
+  program; `rg` with a `--pre` on the line over a root that can hold one,
+  as above; and `sed` unless its options change no file and its script is
+  only addressed print commands.
 
 The backstop reads text, not a parse of copier behavior. For reviewers, a
 new copier option is a residual, not a new member of the startup class.
+
+### Repository discovery and enforcement targets
+
+Enforcement-path checks judge every repository enclosing the target, as
+well as the session repository and its registered worktrees. Nested
+repositories and submodules do not hide an enclosing checkout. An absolute
+target in another repository receives the same checks, including when the
+command starts outside any repository. Both lexical and resolved paths are
+checked, so a symlink does not remove the target owner's protection.
+
+- Shell redirects, native file edits and interpreter arguments protect the
+  owning checkout's enforcement files and its common Git directory.
+- A checkout whose `.git` pointer survives a move and prune remains subject
+  to discovery checks when it returns. An unreadable or inconsistent pointer
+  refuses the operation; missing registration is not proof of an ordinary
+  directory. Each invocation reads current disk state.
+  A hidden-checkout search stops at a verified checkout of the same
+  repository. Foreign, empty or malformed `.git` markers do not hide a
+  checkout below them. The search visits at most 4096 directories under
+  the configured locations reached by a removal target; ordinary files do
+  not count toward that bound. An unreadable walk or an exceeded bound
+  refuses and names the inspection problem; narrow a cleanup target when
+  the search exceeds the bound.
+- Shell moves of a worktree, and `rsync --remove-source-files` targeting its
+  source, refuse. So does `rsync --delete` into a checkout. An empty `mv` or
+  `rsync` operand is read as the current directory, as rsync reads it; an
+  empty `rm`, `rmdir` or `find` operand names nothing. Copying a worktree
+  does not authorize deleting its source. Use `git worktree move` or
+  `git worktree remove` for lifecycle changes.
+- Persistent writes of `core.worktree`, `core.bare` and
+  `extensions.worktreeConfig` refuse under `git.hook_integrity` in both shell
+  hooks, regardless of the config file or scope. Reads and command-local
+  `git -c` settings keep their existing checks.
+  Expanded config keys that cannot be proven literal refuse; explicit
+  config reads can still use regular expressions. Git commands fed by
+  xargs refuse when the subcommand is absent or guarded, because their
+  complete operands are unknown. Exec-guard refuses `xargs git status`
+  too, since every `status` operand is judged and these arrive at run
+  time; `xargs git ls-files` remains available. Exec-guard additionally refuses an unverified filename stream to a file
+  reader, including `git add` and `git grep`; literal ordinary input such as
+  `echo README.md | xargs git add` remains available. Git-guard's
+  `xargs git grep pattern` check keeps the pattern as data:
+  Git stops reading options at that first operand. With only `-e pattern`,
+  add `--` before stdin supplies filenames, or stdin could supply a pager
+  option. Replacement placeholders remain unread. Quoted search patterns
+  stay data. The arch launcher and Git command runners
+  receive the same checks as their command payloads. A shared catalog
+  covers command-valued options, effective configuration and environment,
+  including rebase exec, bisect run, submodule foreach, filter-branch,
+  diff tools, pagers and transport programs. Saved rebase exec instructions
+  and clone-local callback settings use the same reader. Filter consumers
+  include plumbing commands such as `cat-file` and `hash-object`. Callback
+  checks also cover pull, commit replay and interactive patch editors.
+  Filesystem monitor, filter and merge-driver command settings are checked
+  for every Git verb. Multi-argument foreach bodies retain argument
+  boundaries. Option bodies are checked from the starting directory after
+  `-C` changes and from the work tree; a bare runner has no proven work tree.
+  Saved instructions are read before continuation, bounded to a regular
+  UTF-8 file of 1 MiB.
+  For-each-repo bodies use the configured repositories. The reader follows
+  Git option arity, short bundles and unambiguous long-option prefixes.
+  Aliases, dashed Git programs and the submodule helper use the same reader.
+  Ordinary flags and literal Git revision expressions remain available.
+  Command-valued options still require a readable body; a missing value or
+  ambiguous spelling names the option and its readable route. External Git
+  commands resolve as `git-<name>` on PATH or Git's exec path and receive the
+  same checks as other programs. When discovery proves the starting directory
+  is outside any repository, configured callbacks are checked there. Ordinary
+  status, config writes and cleanup do not require a checkout merely because
+  global filters are configured. A name found nowhere, an unread command
+  value or an unresolved checkout refuses under active hook integrity.
+  This includes an explicitly unresolved target for `git status`, which can
+  run a configured filesystem monitor. Each body is judged from the checkout
+  or submodule where Git runs it, including Git commands nested in the body.
+  A body that only names a script path remains unread; these checks do not inspect that
+  script's contents. Nested Git commands inherit command-local config
+  options and environment, including alias overrides. The `ext::` transport
+  syntax refuses because its percent expansion is not a classified shell
+  body; this includes configured URLs, URL rewrites and direct helper calls.
+  A preceding config write that could change command settings or a saved-instruction rewrite
+  makes the next Git command's runner state unknown; run those commands
+  separately so the guard can read the resulting state. The same holds for
+  any earlier write on the line that can create, replace or move repository
+  state the next Git command reads: a path with a `.git` component at or
+  above its starting directory or work tree; a copy, move, sync, link,
+  archive extraction or clone whose destination is that directory or above
+  it; a write in or around its explicit Git directory; or the configuration
+  file its environment or home names. A copy or move of named regular files
+  into the directory still passes, as do ordinary writes that create no
+  repository state.
+  Push operands can use preceding literal assignments on the same line,
+  for example `BRANCH=task/topic; git push origin "$BRANCH"`. Git-guard's
+  fetch-source check requires a literal configured remote name or its URL.
+  An inherited shell variable whose value the reader cannot prove remains
+  unresolved. PATH assignments can extend the inherited PATH using `$HOME`,
+  and ordinary path operands, including `git -C` and discard pathspecs, can
+  start with `~/` or be `~`. Named-user homes, a quoted `~` and remaining
+  brace or filename patterns still require a literal path.
+  `~` and `$HOME` resolve against the HOME the line assigns before them, in
+  every check of both shell hooks: `HOME=<repo>; rm -rf ~/.claude` is judged
+  as `rm -rf <repo>/.claude`. Only one literal absolute value assigned in
+  statement or export form is read, including behind the `command` and
+  `builtin` wrappers. Any other HOME change before a word that uses the home
+  refuses: an unresolved or relative value, an append (`HOME+=`), `HOME=` in
+  front of a command, `read`, `unset`, a loop variable, a nameref, an `eval`
+  of unread text, a sourced file, a wrapper the reader does not unwrap, or a
+  line that uses the home both before and after assigning it. The guard does
+  not read sourced files: a line that sources one and then uses the home
+  refuses because the file could set HOME, and what a sourced file does
+  otherwise remains unread. Exec-guard refuses such a line when a command
+  that uses the reassigned home writes an enforcement path, as git-guard
+  judges the write; a read-only use such as a Git pathspec passes.
+- An honestly deleted checkout remains prunable. When registration and a
+  live checkout disagree, the operator runs `git worktree repair` in their
+  own terminal outside the harness.
+
+A target outside every repository and outside the session's protected paths
+does not acquire repository enforcement protection. Home startup and Git
+configuration protections retain their separate rules.
+
+Git directories outside a checkout, including submodule metadata and
+separate Git directories, protect their configuration, hooks, HEAD and
+remote-tracking metadata. This also applies to plain Git repositories that
+have not adopted CodeFlow. Unreadable enclosing markers refuse targets
+that could be their enforcement paths; they do not lock ordinary files in
+a nested project. Agent writes cannot create or rewrite a `.git` marker in
+an ancestor of the session project. Removing a directory that contains
+submodule or separate Git metadata also refuses. Inspection for contained
+Git directories counts at most 4096 directories, excluding ordinary files;
+an unreadable or larger walk refuses with the inspection reason.
+
+Non-interactive editor scripts refuse when the guard cannot prove which
+files they write, even with an initial file argument: a script can switch
+files. Interactive edits of ordinary files remain available. Git-native
+clone or worktree creation cannot target an enforcement directory, including
+through a same-line variable assignment. An unresolved creation target
+refuses. `git init`, including `--separate-git-dir`, cannot create inside
+an enforcement directory or a configured worktree location. Scratch
+initialization outside these locations remains available.
+Git's own output paths receive the same check in both shell hooks:
+`archive -o`, the `--output` option of any verb, `format-patch -o`,
+`bundle create`, `bugreport` and `diagnose -o`, `index-pack -o`,
+`mailsplit -o`, `checkout-index --prefix`, `merge-file` without `-p`,
+fast-export and fast-import marks, and the file a `git config --file` write
+changes when that file is not Git configuration. They are read with the same
+option tables as the command runners, so another option's value is never
+taken for the output and Git's accepted abbreviations (`--pref`, `--fil`)
+count; an option the tables do not know, where its value could be the
+output, refuses. An alias that expands to one of these is judged the same
+way. `git worktree add` reads the conditional includes (`includeIf`),
+which can apply to the new worktree though not where the guard reads, and
+refuses when one sets a setting Git can run during the add or a hooks path,
+even an empty one. Which conditions hold
+depends on the Git directory Git creates (its sanitized and numbered name,
+its spelling through any alias) and the new branch, so the guard does not
+decide it: every conditional include, of any kind, is read for every add.
+A repository with a callback-setting conditional include anywhere therefore
+refuses `git worktree add` through the guards, and the refusal names the
+include file; benign includes pass. Each include is read by the path Git
+reads it by, so a relative include inside a linked file resolves from the
+link's directory; the new checkout then
+counts as an earlier write for later commands on the line. Ordinary outputs such as
+`git archive -o build/x.tar HEAD`, `git format-patch -o patches/ HEAD~1`
+and `git diff --output=out.diff` remain available.
+Source-removing rsync spellings protect the checkout's gitfile as well
+as its directory.
+
+### Shell expansions and checkout paths
+
+Exec-guard resolves shell expansions in interpreter arguments, double-quoted
+code, unquoted heredocs, here-strings and piped code before checking checkout
+roots and enforcement files. Git-guard uses the same resolver for shell writer
+operands.
+
+- The resolver reads plain and exported assignments earlier on the line,
+  `$PWD`, `${PWD}`, `$(pwd)`, backtick `pwd`, `$HOME` and `${HOME}`.
+  It tracks `OLDPWD` after `cd`, `pushd` and `popd`, and resolves
+  `~+`, `~-` and known directory-stack indices from that state.
+  Unavailable stack entries, named-user tildes and zsh parameter modifiers
+  remain unresolved. The hook process cannot supply shell directory values.
+  It also reads static substitutions such as `$(printf %s '<literal>')`.
+  It never executes a substitution to discover its output.
+- The working directory starts at the hook payload's directory. Directory
+  changes update it and `PWD`; assigning `PWD` changes only the parameter.
+  Relative operands resolve from the working directory, regardless of the
+  hook process's `PWD`. Brace groups carry their state forward; subshells,
+  substitutions and background jobs keep their changes local. When a
+  directory change or pipeline scope is uncertain, all reachable states
+  remain candidates.
+- An unresolved shell expansion in interpreter arguments, code or writer
+  operands refuses as cannot-verify where a checkout or enforcement path is
+  reachable.
+  The message names the unread word. Interpreter arguments and code do not
+  read inherited variables other than the modeled home and directory values.
+  Writer operands may read other variables from the hook process environment;
+  `PWD`, `OLDPWD`, `DIRSTACK`, `dirstack` and directory-stack forms always use
+  shell state or remain unresolved. Shell-maintained process, call-stack and
+  timing parameters, including `_`, `PPID` and `BASH_SOURCE`, stay unresolved.
+  Substitutions that depend on a file,
+  another program or the network remain unresolved.
+- Single-quoted interpreter code and quoted heredocs remain literal.
+  Shell `eval`, including leading `--` and zsh `-` markers, reparses its
+  argument with the current variable state. Each line permits at most 16 distinct
+  code reparses per shell reading; further code is refused as cannot-verify.
+  Other leading eval options are unresolved. Bash, sh, zsh, dash, ksh, mksh, yash, fish and ash,
+  including BusyBox sh/ash applets, and `source`/`.` share the script-input
+  rule. Their `-c` arguments, here-strings, heredocs and resolved builtin output
+  supplied through pipes or process substitutions are judged as shell code.
+  Words after `-s` are positional arguments. Unknown programs are not treated as shells. Script-file operands,
+  file redirects and unread external producers retain best-effort reading
+  and the existing script-bypass policy; they do not cause a new integrity
+  refusal. Supplied inline code uses the bounded reparse cache. Unresolved
+  expansions retain the cannot-verify rule. Known data readers and interpreter
+  families keep their own input rules.
+  Resolved builtin output piped into an interpreter is read as code; unread
+  external producers retain the trailing-component checks described above.
+  Literal loop word lists and earlier ordinary assignments stay resolvable
+  inside control flow; external input such as `while read` stays unresolved.
+  Paths constructed inside interpreter code at run time, including
+  concatenation, formatting and encoding, remain outside this reading. The OS sandbox and permission
+  preset provide the backstop.
+- A checkout named by an earlier `git worktree add`, including `-b`, `-B`
+  and `--detach` and bundled flags such as `-fb`, stays protected for the rest
+  of the line. Both paths of `git worktree move` receive that protection,
+  including the source basename
+  appended to an existing destination directory. Equivalent paths containing
+  `..`, existing symlinks or case variants on a case-insensitive volume
+  receive the same verdict. An inline Git alias that could create or move a
+  worktree refuses when that prospective location cannot be verified.
+  Writers and interpreter paths follow possible same-line links made by `ln`,
+  `ln -s`, `cp -s`, `cp -l`, `link`, `pax -rwl`, `cpio -pl` and
+  `rsync --link-dest`, including path-qualified program names and GNU
+  spellings. This includes `dd of=` destinations. Both guards judge a GNU
+  program installed with a `g` prefix by its plain name wherever they match
+  program names: the coreutils writers and launchers (`gdd`, `gtee`,
+  `gtruncate`, `ginstall`, `gmv`, `gcp`, `grm`, `gln`, `gtimeout`, `genv`),
+  `gsed`, `gawk`, `gfind`, `gxargs`, `gpatch` and `ggrep`. The list is
+  closed: another `g`-prefixed program keeps its own name. Ordinary
+  targets remain allowed. Add-then-status is allowed when the source
+  configuration proves it needs no callback that the guard cannot judge
+  before the new checkout exists.
+- git-guard also judges the files a program writes through an output
+  option or in place (TSK-1002 Fable review 15): the value of `-o`,
+  `--output`, `--outfile`, `--output-file` or `-out` for any program
+  whose `-o` is not a flag (`sort -o`, `shuf -o`, `iconv -o`); the
+  operands of `awk -i inplace`, `sponge`, `dos2unix` and its siblings,
+  `sd`, `yq -i`, `ruby -i` and a compressor that replaces its operand
+  (`gzip`, `xz`, `zstd --rm`); the output operand of `uniq` and `xxd`; the
+  prefix `split` and `csplit` write under; and Git's own overwrites: `git
+  checkout [REV] -- PATH`, `git restore PATH` (not `--staged` alone),
+  `git checkout-index` and `git apply --directory=DIR`. A path is judged
+  as written: one naming an enforcement file, or a glob or pathspec that
+  may select one (`-- .claude`, `-- '*'`, `-- :/`), refuses. A path that
+  names only a directory holding enforcement files (`git checkout main --
+  .`, `git restore .`, `git checkout-index -a -f`) restores their committed
+  content, as switching to that ref does, and is not refused; switching
+  refs stays allowed by necessity, so refusing those spellings would
+  protect nothing it leaves open. The commit operand of `git checkout`
+  (`-b`, `-B` and `--orphan` start points, a revision before `--`, and a
+  first operand with a `~N` or `^N` suffix) is not a written path. `git
+  worktree remove` without `--force` removes only a clean worktree, whose
+  files are all committed: it is the sanctioned cleanup after a landing
+  and stays allowed. The writer list stays a filter that only refuses; the
+  installed sandbox's write denies remain the backstop for a writer it
+  does not name.
 
 ### Git settings that can run a program
 
@@ -352,7 +1448,11 @@ number git's base-0 reading takes whole with at most one `k`, `m` or `g`.
 Any other value is a program git runs, so `core.fsmonitor 08` refuses
 (`08` is no octal number) while `true` and `0x10` pass (review round 13);
 keys match by exact name. Repository-scope settings, unsets and
-reads pass. git has many keys that run a program and adds more, so a list
+reads pass this program-setting check, though a repository-scope write or
+a `-c` setting of such a key is judged by the command its value holds, by
+the same classification (operator decision 2026-10-29: Git operand
+commands are judged as commands); the discovery settings and hook-path
+settings have the separate integrity checks described above. git has many keys that run a program and adds more, so a list
 of them always missed one (review round ten); an unknown key costs a
 refusal the operator can clear by setting it by hand.
 
@@ -398,6 +1498,97 @@ prefix (`~/etc/gitconfig`, `/opt/local/etc/gitconfig`), git-guard refuses a
 redirect into it and edit-guard a native edit; a write by any other program
 (`curl -o`, `cp`, `tar`) is the residual AC-6 names, held by the sandbox
 where that path is outside the writable root (review rounds 17 and 18).
+
+The alias and follow-tags checks use one bounded effective-configuration
+reader. Git resolves files, includes, conditional includes, command options
+and inherited configuration environment variables. The reader preserves
+configuration values as bytes until a decision needs text, retaining scope,
+origin and all values for multi-valued keys. Lookup folds section and variable
+names to lowercase while preserving subsection case, as Git does. Alias names
+are case-insensitive. Relative file origins resolve from Git's repository
+base, including invocations from subdirectories. A malformed configuration,
+include loop, unsupported include-path interpolation, or read beyond three
+seconds or 4 MiB is reported as "cannot verify". Missing
+includes contribute nothing, as in Git, and remain in the diagnostic inventory.
+The include inventory is limited to 128 entries.
+
+The guards refuse configuration-dependent actions when shell environment
+changes cannot be reproduced, including `GIT_CONFIG_COUNT`, its key/value pairs,
+`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
+`GIT_CONFIG_NOSYSTEM`. Refusals name the affected variable or unsupported
+option. The parser reads assignments, declaring and input-setting builtins
+(`declare`, `typeset`, `export`, `readonly`, `local`, `unset`, `read`,
+`getln`, `printf -v`, `print -v`, `getopts`, `mapfile`, `readarray`, `let`), loop
+variables (`for VAR in`) and assignment expansions, including `$[...]` and
+`$((...))` arithmetic in Git segments and unquoted heredocs. Array literals
+are read as one assignment and refusals name the array. A destination is
+verified only when it is a literal variable name after quote removal; brace,
+glob, subscript and substitution shapes are unresolved. Namerefs, variable
+redirections and indirect assignment expansions also leave
+configuration-dependent actions unverifiable. Literal configuration
+destinations refuse append writes too. A dynamic value for a known unrelated
+destination, such as `export PATH=$PATH:/x`, is allowed.
+
+On a line with a configuration-dependent Git decision, the guards refuse any
+non-Git segment that mentions a configuration variable except as a plain
+`$NAME` or `${NAME}` read. This backstop applies to aliases, pushes, other
+transports, discards and exec-guard's outward checks. It includes Git's
+configuration, repository-location and program variables, `HOME` and
+`XDG_CONFIG_HOME`. Consequently, data such as `printf HOME; git st` also
+refuses. Git operands and commit messages remain excluded. Lines without such
+a decision, such as `grep HOME f`, are unaffected by this backstop. Clearing
+the environment with `env -i` or `--ignore-environment` also leaves
+configuration-dependent decisions unverifiable.
+
+Configuration or refs supplied as data through variables or xargs, such as
+`V=$(cat f); git push origin "$V"`, are not judged.
+
+Command-local reader environment entries are limited to `GIT_CONFIG_*`,
+`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `HOME`, `XDG_CONFIG_HOME` and
+`GIT_CEILING_DIRECTORIES`; other names are unverifiable. `--config-env` alias
+invocations remain conservative refusals because a shell assignment can supply
+the named variable. Exec-guard alone does not discover configuration variables
+set inside sourced files; this remains a tracked follow-up.
+Exec-guard alone also does not follow same-line configuration writes before an
+alias; git-guard's ordered configuration-write facts remain a tracked follow-up.
+Repository discovery uses libgit2 before the bounded reader runs. A FIFO or
+device named by an include can block that discovery, and the reader's
+deadline does not bound the whole hook invocation. The guard's own deadline
+does (TSK-1082):
+
+- A guard that has reached no decision 20 seconds after it starts refuses
+  with exit 2 and the reason on stderr, naming `codeflow doctor --check
+  git-config-includes`. Exit 2 with a reason blocks in Claude Code, Codex
+  and Grok.
+- Every shipped guard hook entry carries `"timeout": 30` (seconds, in all
+  three harnesses), so the refusal arrives before the harness gives up.
+- Claude's guard entries also carry `"onFailure": "block"` (Claude Code
+  2.1.295 or later; an older version ignores the key), so a Claude timeout,
+  crash or start failure blocks the tool call.
+- Codex (0.166.0, `hooks/src/events/pre_tool_use.rs`) and Grok (1.0.70,
+  its hooks guide) let a call through when a hook times out, crashes or exits
+  with a code other than 0 or 2, and neither has a setting to change that. A
+  guard process that cannot reach its own deadline, because it does not start
+  or is starved past 30 seconds, therefore still fails open in Codex and
+  Grok. `codeflow doctor --check guard-timeouts` states this and warns about
+  any guard entry without the shipped fields.
+- Codex hashes each hook's timeout into its trust record, so after
+  `codeflow update` moves the guard entries to 30 seconds, Codex does not
+  run them until they are approved again in `/hooks`; `codeflow doctor
+  --check codex` warns until then.
+- Grok also loads user-level hook files: `~/.grok/hooks/*.json`,
+  `~/.claude/settings.json`, `~/.claude/settings.local.json` and
+  `~/.cursor/hooks.json`. CodeFlow neither reads nor installs them, and
+  `guard-timeouts` reads project files only. A copy of a guard command there
+  can set the timeout Grok actually runs, such as Grok's 5 second default,
+  which ends the guard before its own deadline.
+
+`codeflow doctor --check git-config-includes` names include files that may
+be writable, distinguishes missing files, and reports when discovery cannot be
+verified. Include-file writes are not guarded, and the check does not certify
+filesystem permissions. The operator inspects or repairs the configuration and
+secures its include paths. This is the diagnostic mitigation for issue 88; it
+avoids starting Git for every path a session guard examines.
 
 A default, `--local` or `--worktree` write is judged by the file git opens:
 the `config` of the git directory the call selects (through `-C`,
@@ -473,13 +1664,14 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   this page says the guard reads is still a blocker when it slips
   through. The sandbox holds such a write when the resolved path is
   outside the writable root or matches a deny. These stay open: a path
-  inside a writable root; an include file in the workspace that a user
-  configuration pulls in (issue 88); a code-running key set at repository
+  inside a writable root; writes to include files (doctor names potentially
+  writable includes, but cannot discover nested includes behind inactive
+  conditions or concurrent changes, issue 88); a code-running key set at repository
   scope, which an allowed `git status` then runs; a workspace symbolic
   link to a protected file, which no sandbox was tested against; a seat
   with no sandbox; Claude's unsandboxed retry, since the presets set
-  `allowUnsandboxedCommands` and the `security.sandbox_retry` keys are not
-  read yet; commands in `excludedCommands`; `sandbox.filesystem.disabled`
+  `allowUnsandboxedCommands`; the `security.sandbox_retry` keys are
+  unsupported and have no effect; commands in `excludedCommands`; `sandbox.filesystem.disabled`
   set at user, managed or CLI scope; native Windows Claude; Grok's
   Windows stub; and a hard-linked repository `config` on a git that
   writes the file in place (git 2.53.0 replaces it and breaks the link).
@@ -580,6 +1772,26 @@ global alias that expands an argument) is not seen; agents are blocked from
 writing such files where a filesystem sandbox exists and the guard refuses it on
 a best-effort basis elsewhere (issue 86). And a certified line can create a document
 that a later call runs as a script.
+
+## Coordination ledger
+
+The coordination ledger (ADR-0086) has no policy key. It lives at
+`<git common dir>/codeflow/coord/`, and its event schema, records and
+transaction rules are in the [coordination ledger schema](coordination-ledger.md).
+Three rules touch enforcement:
+
+- The edit guard, git-guard and exec-guard treat `codeflow/coord/` under
+  the common git directory as authority metadata, so an agent's direct
+  write, copy or recursive delete there is refused under
+  `git.hook_integrity` whatever the level. `codeflow follow` writes it from
+  inside its own process.
+- `codeflow validate --docs` reports a task, epic or ADR record that cites
+  an `FU-NNN`, `LN-NNN` or `WS-NNN` id as an error.
+- `codeflow ci` refuses a pull request body that cites one, under the
+  always-blocking rule `coord.ledger_citation`.
+
+No gate, hook, CI check or landing reads the ledger; a missing or damaged
+ledger changes no verdict.
 
 ## Git hook stages
 

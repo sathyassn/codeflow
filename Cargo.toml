@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/codeflow-core", "crates/codeflow-cli", "crates/codeflow-present", "crates/codeflow-fixture"]
 
 [workspace.package]
-version = "3.1.1"
+version = "3.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/sathyassn/codeflow"
@@ -23,11 +23,11 @@ serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 glob = "0.3"
+globset = "0.4"
 quick-xml = "0.41"
 regex = "1"
 git2 = { version = "0.21", default-features = false }
 fs2 = "0.4"
-same-file = "1.0.6"
 rusqlite = { version = "0.37", features = ["bundled"] }
 ulid = "1"
 tokio = { version = "1", features = ["process", "time", "rt-multi-thread", "macros"] }
@@ -45,10 +45,21 @@ windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_Fil
 axum = { version = "=0.8.9", default-features = false, features = ["form", "http1", "json", "tokio"] }
 base64 = "=0.23.0"
 getrandom = { version = "=0.4.3", features = ["std"] }
-pulldown-cmark = { version = "=0.13.4", default-features = false }
+pulldown-cmark = { version = "=0.13.5", default-features = false }
 scraper = { version = "=0.27.0", default-features = false }
 cssparser = "=0.37.0"
 uuid = { version = "=1.24.0", features = ["serde", "v4"] }
+
+# include-flate-compress 0.3.4, the newest release, requires zstd ^0.13.3,
+# whose zstd, zstd-safe and zstd-sys releases carry RUSTSEC-2026-0391,
+# RUSTSEC-2026-0395 to 0406 and RUSTSEC-2026-0410. rust-embed's compression
+# feature reaches it through include-flate with default features, so no
+# feature choice drops zstd while retaining rust-embed compression. This
+# takes the upstream maintainer's merged bump to zstd 0.14 at its exact
+# commit (TSK-1016). TSK-1017 removes it once an include-flate-compress
+# release newer than 0.3.4 requires zstd 0.14.
+[patch.crates-io]
+include-flate-compress = { git = "https://github.com/SOF3/include-flate", rev = "bfe8fcd57aed281988f1ee86edbc35fd5905239a" }
 
 [workspace.lints.clippy]
 all = "deny"

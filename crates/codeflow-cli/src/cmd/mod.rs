@@ -6,6 +6,7 @@ pub mod delegate;
 pub mod doctor;
 pub mod estimate;
 pub mod feedback;
+pub mod follow;
 pub mod git_hook;
 pub mod hook;
 pub mod ids;
@@ -20,6 +21,7 @@ mod push_set;
 pub mod recall;
 pub mod remote;
 pub mod report;
+pub mod reserve;
 pub mod status;
 pub mod test;
 pub mod validate;
@@ -29,6 +31,8 @@ use std::path::{Path, PathBuf};
 
 use codeflow_core::hooks::{any_blocking, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use codeflow_core::registry;
+use codeflow_core::scaffold::Shown;
+use codeflow_core::shown;
 
 /// `true` when the `codeflow integrate` gate-context token is present in the
 /// environment (charter §6.2 / D9).
@@ -100,7 +104,11 @@ pub fn render_stage(
     block_code: i32,
 ) -> i32 {
     for status in &report.status {
-        eprintln!("codeflow {plane}: {status}");
+        // A status line can quote a name a remote supplied (TSK-388).
+        eprintln!(
+            "codeflow {plane}: {}",
+            codeflow_core::git::display_message(status)
+        );
     }
     render_findings(
         &mut std::io::stderr(),
@@ -126,13 +134,18 @@ fn render_findings(
     block_code: i32,
 ) -> i32 {
     for finding in relayed {
-        let _ = writeln!(err, "codeflow {plane}: {finding}");
+        // Relayed output, escaped where it was read; escaping is idempotent.
+        let _ = term_writeln!(
+            err,
+            "codeflow {plane}: {}",
+            codeflow_core::git::display_output(finding)
+        );
     }
     for note in notes {
-        let _ = writeln!(err, "{}", note.line(&format!("codeflow {plane}"), "note"));
+        let _ = term_writeln!(err, "{}", note.line(&format!("codeflow {plane}"), "note"));
     }
     for v in violations {
-        let _ = writeln!(err, "{}", v.render(plane));
+        let _ = term_writeln!(err, "{}", v.render(plane));
     }
     let stopped = any_blocking(violations);
     if let Some(root) = root {
@@ -142,7 +155,7 @@ fn render_findings(
     if !relayed.is_empty() || !violations.is_empty() || !notes.is_empty() {
         let operation = operation_of(plane);
         let verdict = if stopped { "stopped" } else { "not stopped" };
-        let _ = writeln!(err, "codeflow {plane}: {operation} {verdict}");
+        let _ = term_writeln!(err, "codeflow {plane}: {operation} {verdict}");
     }
     let _ = err.flush();
     if stopped {
@@ -174,7 +187,10 @@ fn record_refusal(
         Ok(Some(info)) => info,
         Ok(None) => return,
         Err(error) => {
-            eprintln!("codeflow: cannot record refusal: {error}");
+            eprintln!(
+                "codeflow: cannot record refusal: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return;
         }
     };
@@ -217,6 +233,33 @@ fn operation_of(plane: &str) -> &'static str {
     }
 }
 
+/// Writes a line of [`Shown`] text to stdout. With [`warn`] and [`prompt`],
+/// the only printers on the paths `codeflow update` and `codeflow update
+/// --pin` take (TSK-1029): what they print is a `Shown`, so the type, not
+/// the call site, keeps a project's text out. The scan test
+/// `update_display_boundary` checks that no other print reaches those
+/// paths. The crate's own `println!` family applies the terminal sink rule
+/// (`display_print`), so a control character in a path prints escaped.
+pub fn say(line: &Shown) {
+    println!("{line}");
+}
+
+/// Writes a line of [`Shown`] text to stderr ([`say`]).
+pub fn warn(line: &Shown) {
+    eprintln!("{line}");
+}
+
+/// Writes a prompt of [`Shown`] text to stdout, without a newline, and
+/// flushes it ([`say`]).
+///
+/// # Errors
+/// When stdout cannot be flushed.
+pub fn prompt(text: &Shown) -> std::io::Result<()> {
+    use std::io::Write as _;
+    print!("{text}");
+    std::io::stdout().flush()
+}
+
 /// Cheap per-command registry touch (charter §7 layer 3): when the current
 /// working directory is inside an initialized codeflow repo, upsert its
 /// entry in `~/.codeflow/registry.json`. Never blocks or fails the actual
@@ -231,23 +274,28 @@ pub fn touch_registry_best_effort() {
     let root = match registry::find_repo_root_checked(&cwd) {
         Ok(root) => root,
         Err(unreadable) => {
-            let path = unreadable.path.display().to_string();
-            let finding = codeflow_core::remedy::Finding::new(
-                format!("registry touch skipped: {unreadable}"),
-                codeflow_core::remedy::REGISTRY_ROOT_UNREADABLE.with(&[("path", &path)]),
-            );
-            eprintln!("{}", finding.line("codeflow", "warning"));
+            warn(&codeflow_core::remedy::shown_line(
+                "codeflow",
+                "warning",
+                &shown!(
+                    "registry touch skipped: cannot inspect {} ({})",
+                    Shown::path(&unreadable.path),
+                    Shown::io(&unreadable.error)
+                ),
+                &codeflow_core::remedy::REGISTRY_ROOT_UNREADABLE.shown_for(&unreadable.path),
+            ));
             return;
         }
     };
     if let Some(root) = root {
         if let Err(e) = registry::touch_registry(&home, &root) {
-            let path = registry::registry_path(&home).display().to_string();
-            let finding = codeflow_core::remedy::Finding::new(
-                format!("registry touch failed: {e}"),
-                codeflow_core::remedy::REGISTRY_UNWRITTEN.with(&[("path", &path)]),
-            );
-            eprintln!("{}", finding.line("codeflow", "warning"));
+            warn(&codeflow_core::remedy::shown_line(
+                "codeflow",
+                "warning",
+                &shown!("registry touch failed: {}", e),
+                &codeflow_core::remedy::REGISTRY_UNWRITTEN
+                    .shown_for(&registry::registry_path(&home)),
+            ));
         }
     }
 }
@@ -272,8 +320,38 @@ fn repo_root_from(cwd: &std::path::Path) -> Result<PathBuf, String> {
     }
 }
 
+/// `text` as a printed field shows it ([`codeflow_core::git::display_message`]):
+/// escaped, with each further line indented, so an error, reason or title
+/// that quotes remote or checkout content cannot start a line of its own
+/// (TSK-388).
+pub(crate) fn shown(text: &dyn std::fmt::Display) -> String {
+    codeflow_core::git::display_message(&text.to_string())
+}
+
 #[cfg(test)]
 mod root_tests {
+    /// TSK-388 round 7: a terminal writer applies the sink rule per call,
+    /// so a value with a line break cannot start a doctor result line.
+    #[test]
+    fn terminal_writers_keep_interpolated_lines_off_column_zero() {
+        let mut out: Vec<u8> = Vec::new();
+        let value = "ev\nok  test-config: healthy";
+        let _ = term_writeln!(out, "FAIL  test-config: cannot read {value}");
+        let _ = term_write!(out, "warn  x: {value}\n");
+        let _ = term_writeln!(out, "      clear it: run {value}");
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.lines().all(|line| !line.starts_with("ok  ")),
+            "{text:?}"
+        );
+        assert_eq!(
+            text,
+            "FAIL  test-config: cannot read ev\n  ok  test-config: healthy\n\
+             warn  x: ev\n  ok  test-config: healthy\n      \
+             clear it: run ev\n  ok  test-config: healthy\n"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn r22_repository_root_missing_cwd_is_not_dot() {

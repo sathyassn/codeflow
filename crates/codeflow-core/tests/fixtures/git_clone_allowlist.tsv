@@ -2,8 +2,21 @@
 crates/codeflow-cli/tests/delegate_pty_stress.rs	expect("clone PTY reader")	1	Diagnostic for duplicating a PTY reader, unrelated to Git.
 crates/codeflow-cli/tests/remedy_clearing/records.rs	join("clone")	2	Fixture directory name only; not a command argument.
 crates/codeflow-core/src/hooks/git_guard.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
+crates/codeflow-core/src/hooks/git_guard.rs	matches!(verb,"clone"|"init")	1	Git creation classification only; never starts Git.
+crates/codeflow-core/src/hooks/git_guard.rs	is_none_or(|(verb,rest)|matchverb{"grep"=>replaced||!runners::closed_grep_options(rest),"branch"|"reset"|"config"|"worktree"|"update-ref"|"symbolic-ref"|"push"|"clean"|"checkout"|"switch"|"restore"|"rm"|"mv"|"commit"|"merge"|"cherry-pick"|"rebase"|"bisect"|"submodule"|"fast-import"|"clone"|"init"|"fetch"|"pull"|"stash"=>true,_=>expands(verb)||runners::command_options(verb)||!GIT_BUILTINS.contains(&verb),})	1	Classifies xargs Git verbs for refusal; never starts Git.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"clone /source"	1	Inert hook payload for the enforcement-directory refusal matrix; passed to CodeFlow for judgment, never executed as Git.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"D=.claude; git clone /source $D/newclone"	1	Inert assignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"D=.git/hooks; git clone /source $D/planted"	1	Inert assignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone /source $D/newclone; D=scratch"	1	Inert late-assignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone /source $UNKNOWN/newclone"	1	Inert unresolved-target payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"D=.claude; git -C \"$D\" clone /source newclone"	1	Inert assigned-cwd payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git -C \"$UNKNOWN\" clone /source newclone"	1	Inert unresolved-cwd payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	command(&f.root,hook,"D=scratch; git clone /source $D/newclone")	1	Inert ordinary-target control judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone /source scratch/../.claude/newclone"	1	Inert dot-component target payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"D=scratch/../.claude; git clone /source $D/newclone"	1	Inert assigned dot-component target payload judged by the built hook; no Git clone executes.
 crates/codeflow-core/src/security/deletion.rs	"clone"	2	Git subcommand vocabulary used for command classification; never executes this literal.
 crates/codeflow-core/src/security/headless.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
+crates/codeflow-core/src/security/interpreter/git_reads.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
 crates/codeflow-core/src/security/startup.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
 crates/codeflow-core/tests/git_spawn_contract.rs	"Command::new(\"git-clone\").args([src, dst]);"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.arg(\"clone\");"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
@@ -31,3 +44,34 @@ crates/codeflow-core/tests/git_spawn_contract.rs	scope_clone("spawnSync(\"git\",
 crates/codeflow-core/tests/git_spawn_contract.rs	scope_clone("spawnSync(\"git\", [\"clone\", source, dest]);")	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/manifest_consistency.rs	board_rule_paragraphs("Run `git clone <url>` to fetch the repository.")	1	Documentation contract vocabulary and inert prose examples; not executed.
 crates/codeflow-core/tests/manifest_consistency.rs	filter(|paragraph|{["evidence board","tsk-014-w5","the board"].iter().any(|name|paragraph.contains(name))&&["clone","re-render","reproduce"].iter().any(|verb|paragraph.contains(verb))})	1	Documentation contract vocabulary and inert prose examples; not executed.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -u 'rm -rf .claude' /source scratch"	1	Inert hook payload tests the upload-pack command source; never executed as Git.
+crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	"clone fetch pull push ls-remote fetch-pack send-pack submodule archive credential"	1	Vocabulary selecting command-valued transport settings; no process starts here.
+crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	CommandOption("clone",'u',"--upload-pack")	1	Catalog entry for judging a clone option's command body; never starts Git.
+crates/codeflow-core/src/hooks/git_guard/runners.rs	"clone"	2	Selects the option table in the shared reader and reads a clone destination for the runner-state check; never starts Git.
+crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	ConfigOption("clone",'c',"--config")	1	Catalog entry for clone-local configuration inspection; never starts Git.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -c 'filter.fixture.smudge=rm -rf .claude' /source scratch"	1	Inert hook payload for clone-local filter configuration; never executes Git.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --config='core.sshCommand=rm -rf .claude' /source scratch"	1	Inert hook payload for clone-local transport configuration; never executes Git.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --reject-shallow /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -4 /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --ipv4 --no-remote-submodules /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/scratch/y"	2	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~someone/scratch/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/scratch/*"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/{scratch,repo}/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/repo/.claude/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/repo/.git/hooks/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"HOME=$UNPROVEN; git clone https://example.test/x/y.git ~/scratch/y"	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x")	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x")	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"HOME=$X; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"HOME=/r; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"export HOME=/r; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"git clone u ~/scratch/y"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("builtin export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x")	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("command export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x")	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"builtin export HOME=/r; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"command -v git && git clone u ~/scratch/y"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/security/git_preflight.rs	"git clone https://example.test/x/y.git"	1	TSK-1002 review 10 unit test control: a Git line with no namespace spelling; classified as text, never executed.
+crates/codeflow-core/src/security/git_preflight.rs	unclassified_environment("GIT_LFS_SKIP_SMUDGE=1 git clone https://x.test/y")	1	TSK-1002 review 11 unit test control: a classified variable beside a clone; classified as text, never executed.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone 'ext::sh -c cat% ~/.codex/auth.json' copy"	1	Inert ext:: transport payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -u 'cat ~/.codex/auth.json' ../.. copy"	1	Inert upload-pack command payload judged by the built hook; no Git clone executes.

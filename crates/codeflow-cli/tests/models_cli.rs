@@ -728,7 +728,7 @@ fn models_failure_paths_never_invent_participant_names() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.starts_with("designer: open [required]:"));
+    assert!(text.starts_with("participant: designer: open [required]:"));
     assert!(!text.contains("design: open"));
 }
 
@@ -789,7 +789,7 @@ fn models_text_marks_filled_and_open_obligations() {
     let output = command();
     assert_eq!(output.status.code(), Some(0));
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.starts_with("host: orchid-seat"));
+    assert!(text.starts_with("participant: host: orchid-seat"));
     assert!(text.contains("\nobligation: xhigh-reasoning:orchid-seat: "));
     let mut catalog = fixture_data::fixture();
     for line in catalog["lines"].as_array_mut().unwrap() {

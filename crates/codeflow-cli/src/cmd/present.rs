@@ -183,8 +183,13 @@ const EXIT_CLOSED: i32 = 7;
 /// outside the agent sandbox; the sandbox preset can write only inside it.
 /// A failure is reported but does not fail the scaffold operation.
 pub fn provision_state_root_or_warn() {
-    if let Err(error) = codeflow_present::state::provision_state_root() {
-        eprintln!("warning: could not create the cf-present state directory: {error}");
+    // `update` calls this after its report, so the line is a fixed
+    // `Shown` (TSK-1029); `codeflow present` names the cause when it runs.
+    if codeflow_present::state::provision_state_root().is_err() {
+        crate::cmd::warn(&codeflow_core::scaffold::Shown::fixed(
+            "warning: could not create the cf-present state directory; `codeflow present` \
+             names the cause when it runs",
+        ));
     }
 }
 
@@ -199,7 +204,7 @@ pub fn run(args: &PresentArgs) -> i32 {
             8
         }
         Err(error) => {
-            eprintln!("present: {error}");
+            eprintln!("present: {error}", error = crate::cmd::shown(&error));
             exit_code(&error)
         }
     }
@@ -261,7 +266,7 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<i32> {
             let stdout = std::io::stdout();
             let mut output = stdout.lock();
             for line in store.feedback_lines(parse_id(session_id)?, &filter)? {
-                write_line(&mut output, &serde_json::to_vec(&line)?)?;
+                write_line(&mut output, &serde_json::to_string(&line)?)?;
             }
             Ok(0)
         }
@@ -306,7 +311,9 @@ fn check(
     };
     let lines = codeflow_present::document::check_document(&bytes);
     for line in &lines {
-        println!("{}", serde_json::to_string(line)?);
+        println_block!(codeflow_core::git::TextBlock::json(&serde_json::to_string(
+            line
+        )?));
     }
     // `faults` and `valid` keep their meaning; warnings never fail the check.
     let faults = lines.iter().filter(|line| line.is_fault()).count();
@@ -323,7 +330,10 @@ fn check(
 fn print_review_warnings(bytes: &[u8]) -> codeflow_present::Result<()> {
     for line in codeflow_present::document::check_document(bytes) {
         if !line.is_fault() {
-            eprintln!("{}", serde_json::to_string(&line)?);
+            eprintln!(
+                "{}",
+                codeflow_core::git::display_json(&serde_json::to_string(&line)?)
+            );
         }
     }
     Ok(())
@@ -359,14 +369,15 @@ fn run_command(
             from,
             to,
         } => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&store.diff(parse_id(session_id)?, *from, *to)?)?
-            );
+            println_block!(codeflow_core::git::TextBlock::json(
+                &serde_json::to_string_pretty(&store.diff(parse_id(session_id)?, *from, *to)?)?
+            ));
             Ok(())
         }
         PresentCommand::List => {
-            println!("{}", serde_json::to_string_pretty(&store.list()?)?);
+            println_block!(codeflow_core::git::TextBlock::json(
+                &serde_json::to_string_pretty(&store.list()?)?
+            ));
             Ok(())
         }
         PresentCommand::Show {
@@ -390,10 +401,9 @@ fn run_command(
             Ok(())
         }
         PresentCommand::History { session_id } => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&store.history(parse_id(session_id)?)?)?
-            );
+            println_block!(codeflow_core::git::TextBlock::json(
+                &serde_json::to_string_pretty(&store.history(parse_id(session_id)?)?)?
+            ));
             Ok(())
         }
         PresentCommand::Resolve {
@@ -500,7 +510,7 @@ fn export(
     } else {
         export_session(store, parse_id(session_id)?, out, theme, mode)?;
     }
-    println!("exported {}", out.display());
+    println!("exported {}", codeflow_core::git::display_path(out));
     Ok(())
 }
 
@@ -541,7 +551,7 @@ fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_pres
         println!(
             "session {} ready; open the owner-private bootstrap file {} in a qualified isolated browser profile",
             session.id,
-            ready.bootstrap_path.display()
+            codeflow_core::git::display_path(&ready.bootstrap_path)
         );
         print_handoff_link(store, &ready.bootstrap_path)?;
         return Ok(());
@@ -555,7 +565,9 @@ fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_pres
 fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Result<()> {
     let session = store.load(id)?;
     if session.status != SessionStatus::Active {
-        println!("{}", serde_json::to_string_pretty(&session)?);
+        println_block!(codeflow_core::git::TextBlock::json(
+            &serde_json::to_string_pretty(&session)?
+        ));
         return Ok(());
     }
     let healthy = match (session.service_port, session.service_instance) {
@@ -578,8 +590,8 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
         if no_launch {
             println!(
                 "session {id} recovered; open the owner-private bootstrap file {} in the isolated profile {}",
-                ready.bootstrap_path.display(),
-                profile.display()
+                codeflow_core::git::display_path(&ready.bootstrap_path),
+                codeflow_core::git::display_path(&profile)
             );
             print_handoff_link(store, &ready.bootstrap_path)?;
             return Ok(());
@@ -594,24 +606,38 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
     let authority = format!("127.0.0.1:{port}");
     let profile = store.runtime_dir(id)?.join("browser-profile");
     browser::recover_incomplete_launch(store, id, &profile)?;
+    let ready_path = store.runtime_dir(id)?.join("control").join("ready.json");
     if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
         if browser::is_isolated_running(pid, instance_id, &profile)? {
             if no_launch {
-                println!("http://{authority}/app/ profile={}", profile.display());
+                println!(
+                    "http://{authority}/app/ profile={}",
+                    codeflow_core::git::display_path(&profile)
+                );
                 return Ok(());
             }
-            return Err(PresentError::BrowserAlreadyOpen(id.to_string()));
+            // The browser runs, with or without a window (a closed window
+            // leaves it running through its grace): open a window in it.
+            let ready = read_ready_record(&ready_path, id)?;
+            request_rebootstrap(&ready)?;
+            if browser::open_window(store, id, &ready.bootstrap_path, &profile)? {
+                println!("opened a window for {id}");
+                return Ok(());
+            }
+            // It quit meanwhile; the fresh bootstrap serves a new launch.
+            browser::launch_isolated(store, id, &ready.bootstrap_path, &profile)?;
+            println!("opened {id}");
+            return Ok(());
         }
         let _ = store.clear_browser(id, instance_id)?;
     }
-    let ready_path = store.runtime_dir(id)?.join("control").join("ready.json");
     let ready = read_ready_record(&ready_path, id)?;
     request_rebootstrap(&ready)?;
     if no_launch {
         println!(
             "session {id} ready; open the owner-private bootstrap file {} in the isolated profile {}",
-            ready.bootstrap_path.display(),
-            profile.display()
+            codeflow_core::git::display_path(&ready.bootstrap_path),
+            codeflow_core::git::display_path(&profile)
         );
         print_handoff_link(store, &ready.bootstrap_path)?;
     } else {
@@ -918,7 +944,7 @@ fn deliver_pending(
     if !v2 {
         let pending = store.pending_feedback(id)?;
         for envelope in &pending {
-            write_line(output, &serde_json::to_vec(&envelope.v1_view())?)?;
+            write_line(output, &serde_json::to_string(&envelope.v1_view())?)?;
             store.mark_delivered(id, &[envelope.event_id])?;
         }
         return Ok(pending.len());
@@ -931,7 +957,7 @@ fn deliver_pending(
     for mut line in pending.iter().cloned() {
         // The line is the delivery: it reads as the state it leaves behind.
         line.status = DeliveryStatus::Delivered;
-        write_line(output, &serde_json::to_vec(&line)?)?;
+        write_line(output, &serde_json::to_string(&line)?)?;
         store.deliver(id, &[line.event_id])?;
     }
     Ok(pending.len())
@@ -954,9 +980,13 @@ fn announce_v2_pending(store: &SessionStore, id: Uuid) -> codeflow_present::Resu
 }
 
 /// Writes one JSON line and flushes it, so a reader sees each event whole.
-fn write_line(output: &mut impl Write, json: &[u8]) -> codeflow_present::Result<()> {
+/// One JSON line on stdout. Feedback text is what a reviewer typed, so each
+/// hidden character is written as a JSON escape (`display_json`, TSK-388);
+/// the line decodes to the same value.
+fn write_line(output: &mut impl Write, json: &str) -> codeflow_present::Result<()> {
+    let shown = codeflow_core::git::display_json(json);
     output
-        .write_all(json)
+        .write_all(shown.as_bytes())
         .and_then(|()| output.write_all(b"\n"))
         .and_then(|()| output.flush())
         .map_err(|error| PresentError::io("stdout", error))

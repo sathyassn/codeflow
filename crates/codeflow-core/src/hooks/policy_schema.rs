@@ -11,6 +11,51 @@
 //! quietly discard a consumer's hardened configuration). Defaults are rendered
 //! live from the real [`Policy::default`], never hand-maintained literals, and
 //! a drift-guard test pins the registry to the serde fields both ways.
+//!
+//! # Where a new key goes
+//!
+//! One rule decides, and a test holds it (TSK-280, issue 118).
+//!
+//! **A new key lives in this registry and in the code default
+//! ([`Policy::default`]) only.** It is not written to the shipped template
+//! (`assets/base/policy.json`) or to this repository's installed policy
+//! (`.codeflow/policy.json`). Give the key a note that ends with the
+//! sentence "The shipped policy file does not list it, so an older binary
+//! never meets the key." (`git.pr_summary` and `git.claim_remotes` carry it).
+//!
+//! Why: `codeflow update` inserts every template key into an adopter's
+//! policy file, and a binary that does not know a key rejects the whole file
+//! as unknown, which blocks every commit. The binary on `PATH` and the
+//! binary a CI job pins can both be older than the one that ran `update`.
+//! The two-step upgrade in `docs/adoption.md` (first raise and land the
+//! pin, then run `codeflow update` on a new branch) protects an adopter who
+//! follows it. This rule keeps the release that introduces a key from
+//! depending on that: its template never carries the key, so `update`
+//! never writes it for an older binary to reject. A key placed in the
+//! template and the installed policy together also passes the
+//! `repository_update_noop` test, so that test does not catch it.
+//!
+//! **A key may join the template and the installed policy only when the last
+//! released binary already lists it**, which is after the release that
+//! introduced it has published, and only when the file must carry a value
+//! that differs from the code default. An adopter on an older release then
+//! reaches the key through the same two-step upgrade. Most keys never need
+//! to: the code default already applies when a file omits the key.
+//!
+//! The check is `tests/policy_key_placement.rs`. It fails when the template
+//! or the installed policy names a key that the last release's pinned schema
+//! (`tests/fixtures/policy-schema-last-release.tsv`: each key with its kind
+//! and valid values) does not hold, or gives a known key a value of the wrong
+//! kind. It also updates a fixture project at the last release and runs the
+//! same check on the result. The pinned schema stands in for the released
+//! validator: it does not repeat that validator's key-specific checks, so these
+//! are fast unit checks only. The authority for "a project at the last
+//! release still loads after `codeflow update`" is
+//! `crates/codeflow-cli/tests/policy_last_release_journey.rs`, which runs a
+//! binary built from the release tag. The pinned schema is refreshed from the release tag, in the
+//! change that first needs the newer schema; a stale one is the safe side,
+//! because it only keeps a newer key out of the template. The reader-facing copy of
+//! this rule is "Where a new key goes" in `docs/policy-reference.md`.
 
 use std::fmt;
 use std::path::Path;
@@ -50,8 +95,10 @@ pub enum KeyKind {
     Profiles,
     /// The PR-section mapping object (SPC-013 R-84).
     SectionMapping,
-    /// A list of argument-bound retry entry objects (TSK-174).
+    /// Legacy retry entries, validated for compatibility but never enforced.
     RetryEntries,
+    /// Path denial declarations with explained exceptions.
+    PathRules,
 }
 
 impl KeyKind {
@@ -67,6 +114,7 @@ impl KeyKind {
             Self::Profiles => "profile list",
             Self::SectionMapping => "object",
             Self::RetryEntries => "entry list",
+            Self::PathRules => "path rule list",
         }
     }
 }
@@ -86,13 +134,34 @@ pub struct KeySpec {
     pub notes: &'static str,
 }
 
+/// Accepted compatibility keys with no enforcement reader. This list grants
+/// no behavior; it makes the absence explicit in diagnostics and the contract.
+pub const UNSUPPORTED_KEYS: &[&str] = &[
+    "git.direct_changes",
+    "git.clean_regenerable",
+    "security.script_bypass",
+    "security.interpreter_scan",
+    "security.enforcement_baseline",
+    "security.workflow_pushes",
+    "security.sandbox_retry",
+    "security.sandbox_retry_allow",
+];
+
+impl KeySpec {
+    /// Whether this accepted key has no implementation.
+    #[must_use]
+    pub fn is_unsupported(self) -> bool {
+        UNSUPPORTED_KEYS.contains(&self.path)
+    }
+}
+
 /// Valid-values text shared by every Level key.
 const LEVEL_VALID: &str = "off | warn | allow | block";
 
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 68] = [
+pub const SCHEMA: [KeySpec; 74] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -108,7 +177,15 @@ pub const SCHEMA: [KeySpec; 68] = [
         kind: KeyKind::StringList,
         valid: "an array of branch names or glob patterns (e.g. release/*)",
         purpose: "Branches every enforcement plane treats as protected.",
-        notes: "Globs use the `glob` crate's syntax; read by all four planes.",
+        notes: "Globs use the `glob` crate's syntax; read by all four planes. \
+                Prefix folding: git-guard and the reference-transaction hook compare the `refs/heads/` and `refs/remotes/` prefix of a ref name with ASCII case folded, and refuse an `update-ref` or `symbolic-ref` name whose `refs/` prefix matches only that way. \
+                Protected-name folding: they match a name and this list with ASCII case folded, because a case-insensitive filesystem stores `refs/heads/MAIN` as the loose ref of `main`; this fails closed, so a distinct branch such as `Main` is refused on a case-sensitive filesystem too while `main` is protected. \
+                Non-ASCII local names where the directory folds: a case-insensitive filesystem (the macOS and Windows defaults) also folds some non-ASCII characters to ASCII letters (`ſ` names the same file as `s`), so where the git directory is on one, a branch name with a non-ASCII byte counts as protected and such an `update-ref` or `symbolic-ref` name is refused; on a case-sensitive git directory such names are ordinary. \
+                Fetched tracking names: a fetch may still write such names under exactly `refs/remotes/` and `refs/tags/`; where the git directory folds names, the hook refuses a written ref whose name, or a directory along it, folds onto another spelling once case and Unicode normalization are ignored, and a tracking ref whose branch, the part after the longest configured `refs/remotes/<remote>/` prefix, folds onto a protected branch it does not name (under no configured remote every possible branch is judged), so a fetch of `MAIN` beside `main` or of `INTEGRATION/x` beside `integration/y` fails as a whole while `feat/MAIN` fetches. \
+                Housekeeping passes: a transaction line that keeps its value, as `git pack-refs` and `git gc` write, passes. \
+                Retargeted commands: the guards probe the git directory once per invocation, a probe that cannot decide counting as case-insensitive, and a command run in another repository (`-C`, `--git-dir`, `GIT_DIR`, `cd`) is judged by that repository's own probe, an unreadable one counting as case-insensitive. \
+                Readiness needs the hook: that refusal is the control against a fetched alias, so on a case-insensitive filesystem readiness needs the hook installed with `local_ref_protection` at `block`; readiness and the sync allowance also read a remote-tracking ref only under the spelling git stored, listing every ref and comparing names byte for byte, which catches an alias only while the genuine ref is packed or absent. \
+                Edit guard: it folds case for paths under the git directory, refuses any such path with a non-ASCII component, and refuses direct writes under `.git/refs/heads`.",
     },
     KeySpec {
         path: "git.commit_to_protected",
@@ -189,17 +266,105 @@ pub const SCHEMA: [KeySpec; 68] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
-        notes: "Agent guards (ADR-0009). Local-edit relief never disables protection \
+        notes: "Agent guards (ADR-0009). A write to Git's alternate object lists \
+                (`objects/info/alternates`, `objects/info/http-alternates`, in the common \
+                directory a linked worktree shares) refuses like a write to hooks, refs or \
+                config, since an alternate store adds objects Git reads as its own; reading \
+                them stays allowed. Local-edit relief never disables protection \
                 of remote-tracking refs, packed-refs or Git config authority metadata. \
                 git-guard refuses a `sed`, `find`, `xargs` or `parallel` that \
                 can change files when its command line names an enforcement \
-                path in any spelling the file system reads as one, a recursive \
-                `rm` or a `chmod` or `chown` of a directory holding enforcement \
+                path in any spelling the file system reads as one (a search \
+                pattern in the command an `xargs` or `find` runs names \
+                nothing), a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement \
                 files, and a recursive `rm`, `trash`, `find -delete` or `git \
                 clean -ff` of a registered worktree, a directory holding one, or \
-                a target it cannot resolve where worktrees live. A path built at \
-                run time is past the guard; the OS sandbox's write denies are \
-                the backstop.",
+                a target it cannot resolve where worktrees live. exec-guard \
+                refuses an interpreter (`python`, `python3`, `node`, `nodejs`, \
+                `perl`, `ruby`, a version suffix included) whose inline code or \
+                arguments name an enforcement path: a script's arguments, \
+                every word after inline code or stdin `-`, a `--name=value` \
+                option or an attached short value in a cluster (`-oFILE`, \
+                `-voFILE`), and string literals in its code. It judges every \
+                directory the line may run the interpreter in: the session \
+                directory and every one any directory change may reach, \
+                success or not. Within the modeled grammar (`cd`, `chdir`, \
+                `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, \
+                `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, \
+                `xargs`, `caffeinate`, `xcrun` and `ionice` with their \
+                options, GNU-prefixed names such as `genv` and `gtimeout` \
+                and every `env -C` spelling included; the zsh precommands \
+                `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; \
+                `find -execdir` from every directory in the set, a file \
+                start in its parent, `-path` against find's own spelling) \
+                the set is exact. Anything outside it (`source`, `.`, \
+                `sudo`, `env -S`, an option it does not list, or any other \
+                word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or \
+                `--chdir` after an env-like word) makes the directory \
+                unknown, and so does an unknown program that launches a \
+                modeled launcher or an interpreter later in its words \
+                (after a `--` too), and a script string an unknown program \
+                is given, a `-c` or `-e` value or any quoted word (`expect \
+                -c`, `osascript -e`, `ssh host '...'`), which is read as a \
+                command line; `echo` and `printf` operands stay data. Resolved \
+                builtin output, shell here-strings and sourced process substitutions \
+                are also read as code. When an interpreter takes code from an external \
+                producer the guard cannot read, or a shell or interpreter takes its code from anything other \
+                than a literal argument or a heredoc body the guard reads (a \
+                pipe, a here-string, a descriptor such as `/dev/stdin` or \
+                `/dev/fd/N`, a process substitution, or a `-c`/`-e` value \
+                holding a substitution), every word on the line is judged \
+                by its trailing components. On a line where a shell \
+                (`source` and `.` included) or an interpreter runs, every \
+                quoted string anywhere on the line is judged as possible \
+                code the same way, so a line that mixes an interpreter with \
+                an unrelated quoted protected path refuses; unquoted \
+                operands of other programs stay data. Quoted strings are \
+                read as the shell builds them: `$'...'` decoded, adjacent \
+                quoted pieces joined, and a `printf` of `%s` pieces read as \
+                the value it joins. A composed text (a `printf` escape or \
+                `%b`/`%q`, an `echo -e` or `print` decode, or a join of \
+                on-line assignments) is resolved exactly where the guard \
+                can and judged by the tail rule, and on a running line a \
+                composing construct it cannot resolve refuses as \
+                cannot-verify, naming it. That reading is closed-world: \
+                a value is resolved only when every input is a literal \
+                read exactly through a construct the guard models and the \
+                result equals what bash and zsh produce; any other \
+                construct feeding it is unresolved, named by its family. \
+                The output of a program other than the modelled builtins is \
+                outside text, judged by its trailing components as an \
+                unassigned variable is, and also as if empty, the spelled \
+                pieces around it joined. \
+                A word is also read \
+                without one surrounding `{}` pair; every known word is then judged by its trailing \
+                components at the same levels: it never fails open on grammar \
+                it does not understand. The model is conservative, so an odd shape like \
+                `cd .claude && cd .. && python3 tool.py settings.json`, and a \
+                repo-root `find . -execdir python3 lint.py notes.txt`, which \
+                can really run in a hook directory, are refused. An operand \
+                naming policy authority metadata refuses in every form \
+                whatever the level. It \
+                reads an enforcement file passed as an argument as a possible \
+                write, so read one with `cat`, `jq` or `grep`, or redirect it \
+                into the interpreter's stdin. An argument it cannot read (a \
+                variable, a substitution, a directory after a `cd` it cannot \
+                follow) refuses when its spelled part could name an enforcement \
+                path or the line names one, as git-guard judges a writer's \
+                operands. Code in a file the guard does not read, and a path \
+                a script builds at run time, stay past the guard; the OS \
+                sandbox's write denies are the backstop. The guard stops at \
+                shell grammar, so a path built by interpreter code, such as \
+                Python adjacent string literals or a node `+` concatenation, \
+                is part of that residual.",
+    },
+    KeySpec {
+        path: "git.line_sync_interval",
+        kind: KeyKind::UInt,
+        valid: "days; 0 disables reminders",
+        purpose: "Orient flags integration lines past this interval since their last sync or evidenced creation.",
+        notes: "Unknown creation without a sync and lines with no own commits are never flagged. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {
@@ -512,10 +677,31 @@ pub const SCHEMA: [KeySpec; 68] = [
                 adopter-facing paths continue to require journey coverage.",
     },
     KeySpec {
+        path: "git.document_indexes",
+        kind: KeyKind::StringList,
+        valid: "an array of exact repository-relative documentation files (.md, .mdx, .rst or .adoc; case-insensitive extension), without globs or dot components",
+        purpose: "Document index files a planning amendment may update alongside records and plans.",
+        notes: "Empty by default. Declare the files in a prior task pull request. \
+                The hosted check reads the target policy. On a re-push of a \
+                plan/ branch, pre-push can fall back to the earlier pushed tip; \
+                with an advertised work target it judges from the merge base \
+                with that target. The hosted check enforces the target-policy \
+                boundary. A declaration is a reviewed policy change on the \
+                target and must not name a file a harness or build tool loads. \
+                Product and watched paths, hidden paths and non-regular files \
+                stay excluded. Index file names beginning AGENT., AGENTS., \
+                CLAUDE., GEMINI., WARP., QWEN. or CRUSH., and SKILL.md, \
+                CONVENTIONS.md and llms*.md, are excluded without case. A file \
+                name stem containing a tilde followed by a digit is refused \
+                as a possible short-name alias. Root AGENTS.md keeps its \
+                separate project-section exception. The shipped policy file \
+                omits this key.",
+    },
+    KeySpec {
         path: "git.direct_changes",
         kind: KeyKind::Enum(&["allow", "forbid"]),
         valid: "allow | forbid",
-        purpose: "Retired compatibility key; accepted and ignored.",
+        purpose: "Not supported, has no effect. Retired compatibility key; accepted and ignored.",
         notes: "Every pull request names its task or epic (R-70), regardless of this retained key.",
     },
     KeySpec {
@@ -548,12 +734,42 @@ pub const SCHEMA: [KeySpec; 68] = [
     },
     // ---- git: gates --------------------------------------------------------
     KeySpec {
+        path: "git.path_policy", kind: KeyKind::Level, valid: LEVEL_VALID,
+        purpose: "Refuse blocked names and protected prefixes in staged changes and introduced commits.",
+        notes: "Reads landed policy for pre-commit and target policy for CI. Off removes only this gate; the secret scan remains separate. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.blocked_names", kind: KeyKind::PathRules,
+        valid: "strings or {pattern, except_under: [root-relative prefix], reason}",
+        purpose: "Block final-component globs or component sequences at any depth.",
+        notes: "Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.protected_paths", kind: KeyKind::PathRules,
+        valid: "{prefix, allow: [{path, reason}]} entries",
+        purpose: "Refuse every change under root-anchored component prefixes.",
+        notes: "Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
         path: "git.secret_scan",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Pre-commit scan for staged secrets and .env files.",
         notes: "Never suspended by bootstrap grace, but off/allow HERE does \
                 disable the scan (it is policy, not hardcoded); leave at block.",
+    },
+    KeySpec {
+        path: "git.secret_scan_inline_allow",
+        kind: KeyKind::Enum(&["trusted", "never"]),
+        valid: "trusted | never",
+        purpose: "Inline gitleaks:allow handling in the managed CI secret scan.",
+        notes: "Read from the trusted commit (the pull request base, or the pushed \
+                commit). Missing means trusted: only allows on commits it already \
+                holds count. With never, every inline allow is ignored; other \
+                trusted exemptions still apply. A pull request's head-only policy \
+                change cannot change its own scan. This key does not affect the pre-commit scan. \
+                The shipped policy file does not list it, so an older binary \
+                never meets the key.",
     },
     KeySpec {
         path: "git.conflict_markers",
@@ -571,8 +787,16 @@ pub const SCHEMA: [KeySpec; 68] = [
         path: "git.test_gate_on_push",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Run the test gate before a push (pre-push hook).",
-        notes: "",
+        purpose: "Run the push set before a push (pre-push hook).",
+        notes: "The push set runs `codeflow ci` over each pushed range, which \
+                includes the conflict-marker check, and the release preflight \
+                where the project adopted it. It runs no `codeflow validate \
+                --docs` (`codeflow ci` checks the work graph) and no \
+                test-config target, so a push never waits for the heavy-work \
+                lock; cite `codeflow test --mode quick` when the pull request \
+                is made ready. Tag and other non-branch pushes are outside the \
+                push set. Local-config tampering is outside the hook threat \
+                model; hosted CI checks the pushed commit.",
     },
     KeySpec {
         path: "git.security_review",
@@ -600,9 +824,8 @@ pub const SCHEMA: [KeySpec; 68] = [
         path: "git.clean_regenerable",
         kind: KeyKind::StringList,
         valid: "an array of directory paths, each ending with `/`",
-        purpose: "Regenerable build and dependency directories `git clean` may remove without a discard refusal (ADR-0075).",
-        notes: "Default target/, node_modules/, dist/, build/, .venv/, \
-                __pycache__/, coverage/.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
     },
     // ---- security ----------------------------------------------------------
     KeySpec {
@@ -636,8 +859,8 @@ pub const SCHEMA: [KeySpec; 68] = [
         path: "security.script_bypass",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Refused actions found inside a script file a command runs (ADR-0075).",
-        notes: "Default warn: a script is read on a best-effort basis.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
     },
     KeySpec {
         path: "security.outward_actions",
@@ -650,8 +873,8 @@ pub const SCHEMA: [KeySpec; 68] = [
         path: "security.interpreter_scan",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Refused actions embedded in an interpreter call (`python -c`, `node -e`) (ADR-0075).",
-        notes: "Default block.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
     },
     KeySpec {
         path: "security.secret_reads",
@@ -664,33 +887,29 @@ pub const SCHEMA: [KeySpec; 68] = [
         path: "security.enforcement_baseline",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Commits and ref moves whose enforcement files match no identity the operator approved (ADR-0075).",
-        notes: "Default block.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
     },
     KeySpec {
         path: "security.workflow_pushes",
         kind: KeyKind::Enum(&["queue", "allow"]),
         valid: "queue | allow",
-        purpose: "A push from an agent session that introduces a `.github/workflows/` change (ADR-0075 D9).",
-        notes: "Default queue: refused and queued for the operator, whose \
-                login can push workflows. `allow` is for an agent credential \
-                with workflow rights.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
     },
     KeySpec {
         path: "security.sandbox_retry",
         kind: KeyKind::Enum(&["allowlist", "block"]),
         valid: "allowlist | block",
-        purpose: "Claude's unsandboxed retry from a primary session (ADR-0075 decision 6).",
-        notes: "Default allowlist: only an argument vector an entry of \
-                sandbox_retry_allow spells out. `block` refuses every retry.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
     },
     KeySpec {
         path: "security.sandbox_retry_allow",
         kind: KeyKind::RetryEntries,
         valid: "an array of entry objects, each naming its `program`",
-        purpose: "The argument-bound entries the unsandboxed retry may run (ADR-0075 decision 6).",
-        notes: "The shipped entry is the Codex plugin companion, pinned by \
-                path, version and digest at qualification.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
     },
     // ---- guidance ----------------------------------------------------------
     KeySpec {
@@ -790,7 +1009,8 @@ impl PolicyError {
 /// Render a JSON value for an error message: a string as `'value'`, else its JSON.
 fn show_value(v: &Value) -> String {
     match v {
-        Value::String(s) => format!("'{s}'"),
+        // A policy value is checkout content, shown escaped (TSK-388).
+        Value::String(s) => format!("'{}'", crate::git::display_text(s)),
         other => other.to_string(),
     }
 }
@@ -816,7 +1036,7 @@ fn deprecated_key(key: &str) -> Option<&'static str> {
         .map(|(_, why)| *why)
 }
 
-/// One warning per deprecated key present in `<root>/.codeflow/policy.json`.
+/// One warning per deprecated or unsupported control key present in `<root>/.codeflow/policy.json`.
 /// An absent or unreadable file gives none; [`validate_policy`] reports that.
 #[must_use]
 pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
@@ -846,7 +1066,53 @@ pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
             crate::remedy::POLICY_DEPRECATED.with(&[("key", "git.direct_changes")]),
         ));
     }
+    warnings.extend(unsupported_control_warnings(&value));
     warnings
+}
+
+/// Claim an unsupported-key diagnostic before printing it. Repeated policy
+/// loads and multiple reporting paths share this process-wide set. Collection
+/// and validation stay pure, and a later load can still report a different key.
+/// Other diagnostic text is not deduplicated here.
+#[must_use]
+pub fn first_unsupported_warning(text: &str) -> bool {
+    static REPORTED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    if !text.starts_with("policy key ") || !text.ends_with(" is not supported, has no effect") {
+        return true;
+    }
+    REPORTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(text.to_string())
+}
+
+/// Compatibility diagnostics for controls with no enforcement reader.
+#[must_use]
+pub fn unsupported_control_warnings(value: &Value) -> Vec<crate::remedy::Finding> {
+    unsupported_control_paths(value)
+        .into_iter()
+        .map(|path| {
+            crate::remedy::Finding::new(
+                format!("policy key {path} is not supported, has no effect"),
+                crate::remedy::POLICY_UNSUPPORTED.with(&[("key", path)]),
+            )
+        })
+        .collect()
+}
+
+/// The schema paths of the unsupported controls `value` sets: each a key
+/// `CodeFlow` defines, never one the project wrote.
+#[must_use]
+pub fn unsupported_control_paths(value: &Value) -> Vec<&'static str> {
+    schema()
+        .iter()
+        .filter(|spec| {
+            spec.path.contains('.') && spec.path != "git.direct_changes" && spec.is_unsupported()
+        })
+        .filter(|spec| lookup(value, spec.path).is_some())
+        .map(|spec| spec.path)
+        .collect()
 }
 
 /// Strictly validate `<root>/.codeflow/policy.json`. See [`validate_policy_file`].
@@ -973,6 +1239,21 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
 /// `git.worktree_locations` entry must be a folder `doctor` can expand.
 fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     match path {
+        "git.document_indexes" => {
+            for entry in value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !crate::workgraph::classify::valid_document_index(entry) {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!("invalid path {entry:?} in {path}; use an exact repository-relative documentation file (.md, .mdx, .rst or .adoc; case-insensitive extension), excluding instruction names, without globs, backslashes or dot components"),
+                    });
+                }
+            }
+        }
         "git.root_branch" => {
             if let Some(s) = value.as_str() {
                 if !s.is_empty() && !crate::root_checkout::is_valid_branch_name(s) {
@@ -1122,6 +1403,7 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
         KeyKind::Profiles => validate_profiles(path, value, errors),
         KeyKind::SectionMapping => validate_mapping(path, value, errors),
         KeyKind::RetryEntries => validate_retry_entries(path, value, errors),
+        KeyKind::PathRules => validate_path_rules(path, value, errors),
         KeyKind::Enum(values) => {
             if !value.as_str().is_some_and(|s| values.contains(&s)) {
                 errors.push(PolicyError::invalid_value(
@@ -1131,6 +1413,26 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
                 ));
             }
         }
+    }
+}
+
+fn validate_path_rules(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let parsed = if path == "git.blocked_names" {
+        serde_json::from_value(value.clone()).map(|blocked_names| super::policy::GitPolicy {
+            blocked_names,
+            ..Default::default()
+        })
+    } else {
+        serde_json::from_value(value.clone()).map(|protected_paths| super::policy::GitPolicy {
+            protected_paths,
+            ..Default::default()
+        })
+    };
+    if let Err(error) = parsed
+        .map_err(|e| e.to_string())
+        .and_then(|git| super::path_policy::PathPolicy::from_git(&git))
+    {
+        nested_error(errors, path, &error);
     }
 }
 
@@ -1263,11 +1565,8 @@ fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     }
 }
 
-/// Validate `git.pr_section_mapping`: an object with a known `state`, an
-/// optional `headings` map of strings, and `decided` as `none` or a date.
-/// Validate `security.sandbox_retry_allow` as far as this unit owns it: an
-/// array of objects, each naming a non-empty `program`. The retry check
-/// (TSK-174) owns the meaning of every other field.
+/// Validate the legacy entry shape without claiming a working retry control.
+/// Each entry must be an object naming a non-empty `program`.
 fn validate_retry_entries(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     let Some(list) = value.as_array() else {
         errors.push(PolicyError::invalid_value(
@@ -1383,7 +1682,17 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 2] = ["git.pr_section_mapping", "git.release_branch_pattern"];
+        const OPTIONAL: [&str; 9] = [
+            "git.pr_section_mapping",
+            "git.release_branch_pattern",
+            "git.clean_regenerable",
+            "security.interpreter_scan",
+            "security.enforcement_baseline",
+            "security.workflow_pushes",
+            "security.script_bypass",
+            "security.sandbox_retry",
+            "security.sandbox_retry_allow",
+        ];
         // The drift guard: every leaf the default Policy serializes must be in
         // the schema, and every schema path must be a real serde leaf — a new
         // field (or a renamed one) fails this test until the registry follows.
@@ -1447,6 +1756,34 @@ mod tests {
     }
 
     #[test]
+    fn document_index_policy_refuses_patterns_and_non_documentation_entries() {
+        for path in [
+            "Cargo.toml",
+            "Makefile",
+            "docs/**",
+            "WARP.md",
+            "CMakeLists.txt",
+            "requirements-dev.txt",
+            "constraints.txt",
+            "llms.txt",
+            "CONVENTIONS.md",
+            "skills/example/SKILL.md",
+            "LLMS-full.MD",
+            "AGENTS~1.MD",
+        ] {
+            let policy = serde_json::json!({"git": {"document_indexes": [path]}});
+            let errors = validate_policy_str(&policy.to_string()).unwrap_err();
+            assert!(
+                errors.iter().any(|error| {
+                    error.key == "git.document_indexes" && error.message.contains("invalid path")
+                }),
+                "{path}: {errors:?}"
+            );
+        }
+        validate_policy_str(r#"{"git":{"document_indexes":["index.MD"]}}"#).unwrap();
+    }
+
+    #[test]
     fn claim_remotes_policy_accepts_names_and_rejects_invalid_values() {
         assert_eq!(
             default_policy_value()["git"]["claim_remotes"],
@@ -1478,6 +1815,19 @@ mod tests {
     }
 
     #[test]
+    fn line_sync_interval_accepts_days_and_defaults_off() {
+        assert_eq!(default_policy_value()["git"]["line_sync_interval"], 0);
+        for value in ["0", "7", "4294967295"] {
+            let text = format!(r#"{{"git":{{"line_sync_interval":{value}}}}}"#);
+            assert!(validate_policy_str(&text).is_ok(), "{text}");
+        }
+        for value in ["-1", "1.5", "4294967296", "\"7d\"", "null"] {
+            let text = format!(r#"{{"git":{{"line_sync_interval":{value}}}}}"#);
+            assert!(validate_policy_str(&text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
     fn required_checks_default_to_the_shipped_ci_jobs_and_refuse_bad_lists() {
         // Absent, the key validates and yields the four shipped job names.
         let text = r#"{"git":{"protected_branches":["main"]}}"#;
@@ -1505,28 +1855,6 @@ mod tests {
             assert!(
                 !errors.is_empty() && errors.iter().all(|e| e.key == "git.required_checks"),
                 "{list}: {errors:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn no_shipped_or_installed_policy_file_names_required_checks() {
-        // Issue 118: a key added after 3.0.0 lives in the schema and the code
-        // default only, so an older pinned binary never meets it.
-        for (path, text) in [
-            (
-                "assets/base/policy.json",
-                include_str!("../../../../assets/base/policy.json"),
-            ),
-            (
-                ".codeflow/policy.json",
-                include_str!("../../../../.codeflow/policy.json"),
-            ),
-        ] {
-            let value: Value = serde_json::from_str(text).unwrap();
-            assert!(
-                lookup(&value, "git.required_checks").is_none(),
-                "{path} names git.required_checks"
             );
         }
     }

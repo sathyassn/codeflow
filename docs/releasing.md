@@ -63,6 +63,28 @@ Release-state check (`scripts/release.py check-pr`):
     its label.
 - The main-push state check and `codeflow integrate` apply the same refusal.
 
+Run the same verdict locally before pushing, with the current target, head
+and saved PR body:
+
+```sh
+python3 scripts/release.py check-local \
+  --base origin/main --head HEAD \
+  --body-file target/pr-body.md --repository sathyassn/codeflow \
+  --codeflow-bin target/debug/codeflow
+```
+
+`check-local` uses the same verdict as hosted `check-pr`, including the
+conventional-marker floor and equality between the declared impact and the
+entries added or edited. It reads published state from the host, returns
+JSON on success, and exits 2 with the hosted error on a mismatch. Build the
+body reader first with `cargo build -p codeflow-cli`, or name an installed
+build with `--codeflow-bin`. Fetch the target first and pass its current tip
+as `--base`. A task branch uses its recorded integration target instead of
+`origin/main`. `--target-ref` defaults to that base and can name a separate
+current target ref to detect a stale base. The verdict holds for those
+inputs and host state, which can change before CI runs. `check-pr` remains
+the hosted entry point and requires `--target-ref` explicitly.
+
 Merge:
 
 - PR CI checks the actual proposed merge tree, which is more than the absence
@@ -156,9 +178,12 @@ Concurrency:
 Release impact rules for each PR:
 
 - The PR carries one `Release impact` section with `Impact`, `Breaking`,
-  `Rationale`, `Migration`, `Unit` and `Evidence`.
-- `Breaking: yes` holds if and only if `Impact: major`, and the checkers
-  enforce both directions. A break needs substantive migration guidance.
+  `Rationale` and `Migration`.
+- `codeflow ci`'s one evaluator judges the section's fields, and `check-pr`
+  calls it and judges nothing of the section separately (TSK-451).
+  `Breaking: yes` needs `Impact: major` and substantive migration guidance;
+  `check-pr` also refuses a major pending entry the PR adds or edits without
+  `Breaking: yes`.
 - An edit of a pending major entry is assessed at major, so it declares the
   break and keeps its migration guidance.
 - A field left at the template's alternatives fails.
@@ -388,6 +413,9 @@ The first two planes are the local planes:
 | What they judge against | The recorded bootstrap and the local stable tags. They say "not checked against the host" |
 | Published tags | Every local stable tag counts as published, so a pending version never reuses one |
 | Preflight range | The branch against its pull request target: a task branch's `integration_target`, else `main` |
+| PR draft | Set `CODEFLOW_PR_DRAFT` to the saved body path; the hook passes it as `--body-file`. Direct preflight runs also accept `--body-file` |
+| Declaration warnings | With a readable draft, preflight runs the shared PR verdict against its local baseline and range. Marker-floor and entry-equality errors name the rule and warn without blocking. Without a body it says these rules were not checked; an unreadable or invalid body warns |
+| Limits | Preflight does not read host state or prove the target is current. Use `check-local` with a fetched target for the hosted verdict |
 | Missing entry warning | The preflight warns when that range touches behavior paths with no pending entry added or edited, in a fragment or the section, and no `Impact: none` in the local PR draft named by `CODEFLOW_PR_DRAFT` |
 | Work in progress | A missing entry never blocks a work-in-progress push |
 | Base already invalid | The preflight only warns, so it does not catch every new break there. The pull request job does |
@@ -416,59 +444,14 @@ refused until the repair lands.
 note in the `## Errata` block before the first version section, written as
 `- YYYY-MM-DD, X.Y.Z: note` and naming a published version.
 
-### Integration after an epic-line landing
+### Releases ship from `main`
 
-The repository's `codeflow-release-integration.yml` merges verified epic lines
-into the release branch. It reports its result after the landing, and task
-pull requests do not depend on it.
-
-| Aspect | Rule |
-|---|---|
-| Trigger | Runs after a `codeflow-release` push run completes on an epic line, and daily at 03:17 UTC |
-| Source of the job's YAML | The `workflow_run` trigger loads the privileged job's YAML from the default branch, including for an older line without the integration job. See [GitHub's workflow_run contract](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run) |
-| Source of the job's code | The job checks out that event's default-branch commit and builds its runner and judge there |
-| Triggering line | Passed through an environment variable for reporting. Its workflow, artifacts and scripts do not define or run the privileged job |
-| Release branch | `RELEASE_BRANCH` in the integration job selects an existing branch that matches the default target's release pattern |
-| Lines checked | Every run checks all verified epic lines, not only the triggering line |
-| Replaced pending job | GitHub can replace a pending concurrency job. The surviving run catches up those landings too, and running jobs are not cancelled. See [GitHub's concurrency rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency) |
-| Checks before the push | The runner verifies each epic line with the core line check and makes clean merges in a disposable clone. It runs `codeflow ci` under R-120 and the reading-structure checks on the combined result before one normal push |
-| Failure | A batch with any failure pushes nothing |
-| Reading checks | Reading sizes remain guidelines. Structural reading faults block integration |
-| Inspection | Select the run with `gh run list --workflow codeflow-release-integration.yml` and inspect it with `gh run view <run-id> --log-failed`. For a replaced pending run, inspect the later surviving run's result for the line tip |
-| Failure owner | A failure names the open task carrying `role: release-integration` at the destination's fetched default-branch commit, even when the release branch predates its assignment, or reports that none owns it |
-| Resolution | TSK-010 resolves conflicts and findings in the release pull request. Automation never resolves conflicts or changes a task's status |
-| Prerequisites | The integration workflow must first land on the default branch. Per-landing notifications need the epic line's existing read-only `codeflow-release` push workflow |
-| Line without that workflow | The next surviving integration run or the daily backstop includes it |
-| Upstream result | Upstream completion is a notification and never an approval. The runner checks the current tips itself even when the notifying run failed |
-
-To reproduce the current integration locally without pushing, put the current
-`codeflow` binary on PATH and run:
-
-```sh
-cargo run -p codeflow-cli --example release_integration -- --release integration/release-3-0-0-r3
-```
-
-| Option or limit | Effect |
-|---|---|
-| No `--line` | Reproduces the workflow's complete catch-up |
-| `--line integration/EPC-NNN-slug` | Narrows a local investigation to one line; use it only for that |
-| `--push` | Passed by the workflow alone; the runner's default is a check |
-| No configured release argument and no repository workflow | Reports no configured integration and does nothing |
-| Adopters | The runner and workflow are repository-owned and absent from adopter scaffolds |
-| Proof | Hosted authentication and scheduling still need a live workflow run; fixture tests prove the local merge, judge, failure and push paths |
-
-#### Rotating the release branch
-
-When the next release uses a new branch, a maintainer coordinates these steps.
-Changing the YAML alone does not verify the rotation.
-
-| Step | What the maintainer does |
-|---|---|
-| 1 | Disable `codeflow-release-integration.yml` in Actions and let running jobs finish or cancel them. Confirm no running or pending integration job remains. An already queued job still carries its old `RELEASE_BRANCH` value |
-| 2 | Create the next release branch through the reviewed release process and check that the default target's `git.release_branch_pattern` covers it. Land the planning record for exactly one open task with `role: release-integration` and that branch as its `integration_target` on the default branch. Keep the preceding release's completed task as history and use the new release's task |
-| 3 | In one reviewed PR to the default branch, change the integration workflow's `RELEASE_BRANCH` and this runbook's reproduction command to that same branch. Keep the shared concurrency group. Confirm the branch exists at the remote and the open owner record agrees with it before enabling automation |
-| 4 | From the updated default checkout, build the runner and current `codeflow`, put that binary on PATH, and run the reproduction command without `--push` or `--line`. Resolve any finding in the release PR, then repeat the preview |
-| 5 | Re-enable the integration workflow. Inspect the next eligible completion or daily run, verify its reported release branch, owner and integrated line tips, and record that run in the release checklist |
+Releases ship from `main`. An epic line reaches `main` through its own
+reviewed pull request, merged by a human, and the release is dispatched from
+`main` as the sections below describe. The release-integration workflow, which
+merged epic lines into `integration/release-3-0-0-r3`, was retired on
+2026-10-13. A future release branch would bring it back through a reviewed
+change.
 
 ### Same-PR preparation and deliberate publication
 

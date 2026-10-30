@@ -26,11 +26,11 @@
     },
     "package-lock.json": {
       "ownership": "managed",
-      "pristine_sha256": "ec9af034398c2549ffbcbb8b8b428ce2f57f9f0f4957be2c1550993e45987695"
+      "pristine_sha256": "0c6150b21da548d06df8c54802384799750dddbed9f16a6141eac6948edd056e"
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "133aa1ce3168c0640c6d084040a23ffd695e1a2be0bd29423905476dc5068363"
+      "pristine_sha256": "bc373cc0f50f7c101dc93797c964f379b01d71b4501210da53da66aabac06d03"
     },
     "portal.config.json": {
       "ownership": "user-owned",
@@ -58,7 +58,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "2eed048cd630cbc4be203b62e4341d3f75feda14a00cfcb9a4413235c65862c0"
+      "pristine_sha256": "9e1137936caa7738630301c470f8c10001d4fb6aca7726186b83d515064018de"
     },
     "scripts/as-is-markdown.mjs": {
       "ownership": "managed",
@@ -80,9 +80,13 @@
       "ownership": "managed",
       "pristine_sha256": "37087b488dfbd010322197279510e487d3403384b33d21d6a93963ab6757e927"
     },
+    "scripts/figure-declaration-rules.json": {
+      "ownership": "managed",
+      "pristine_sha256": "cedb2a8103d4c51a85f89800734dbd8ad5f9f38e41afcfdd9d8c40fa2468bedb"
+    },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ff99a7531837ed8bbb2d024303e4717bb87904bae4573504e6cb0cce2c610d97"
+      "pristine_sha256": "28d470972621736f0049c49f5f17245d56fa8a5a4bfb226097d17a8d5a40e407"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -98,7 +102,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "2115d1ba684e41d820cf09c79f0ede3074be59c2672889d5952511a491681459"
+      "pristine_sha256": "732f42b8a31cbddec434488a9a967857bed1c52b24993633f6aa92e59e50dacf"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -114,11 +118,11 @@
     },
     "scripts/publication.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "d0af1b5dd83a18e0cedb4392301bd9269ecb4bc2d9057f475c02317755d3ac24"
+      "pristine_sha256": "db33c373bdb2398f387f5bed609ed31b26efd6442beb4ff79eb5e15b18a7edd9"
     },
     "scripts/runtime-scripts.json": {
       "ownership": "managed",
-      "pristine_sha256": "af576d969611b8a39c4b77f6cc8db2a4c5f185f804a4f185b38650343550e421"
+      "pristine_sha256": "21814ae5af05f2703f47fa420c9d01e076bb94e013af740cafcc52e54558ea66"
     },
     "scripts/runtime-scripts.mjs": {
       "ownership": "managed",
@@ -130,7 +134,7 @@
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "60925812836859609ab44d82b1c025992fed8fc6d755f5a72cceb75ce85048f6"
+      "pristine_sha256": "c15271b6fe8b91ba9d05399c22a2c2b6bd864c6c6d8963d22f514eb6708e12b0"
     },
     "src/components/PortalColumns.astro": {
       "ownership": "managed",
@@ -162,7 +166,7 @@
     },
     "src/components/PortalTitle.astro": {
       "ownership": "managed",
-      "pristine_sha256": "59119adef7276880edc6fb74a006b2343a40c8ae6b20c2ad6802ca15571874b4"
+      "pristine_sha256": "08c612b7e59524fbac2183dd4fda8200d32d44b2fd978ba4aca9e5c4ccaef7de"
     },
     "src/content.config.ts": {
       "ownership": "managed",
@@ -202,19 +206,19 @@
     },
     "src/styles/figure.css": {
       "ownership": "managed",
-      "pristine_sha256": "81dbe4a3de3b4daa76a23d8429711ef3c498169f0a5d9c9ec0a7773b546b8c4b"
+      "pristine_sha256": "f652b408358279943ed6f57a96366f4859a0337360b45ccaee3f4e82a4d47cd4"
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "7e4a9d6c4eb9e5eb711616f325885b69fdf41d6331ee9f068f9b4eb2da1f3f29"
+      "pristine_sha256": "1931b291720212a948cb6f4ff97e8d0e9dd379d1f24171abeaef41ef014113b3"
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
-      "pristine_sha256": "225dfbad0c1e64fb1bb1e4429adee226200f1714edc550bf657ff0ae64830930"
+      "pristine_sha256": "5f6ab3808bd05ee37008510fc4573f881f17b900574ba1d1d1e40a8fd29d66ee"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "37a781c44c354797d371358f06c9c7ef58034e7e0dc05b9b3ae26822e885eb79"
+      "pristine_sha256": "283928f8cec78316cde490ec1ef2439f5387e3ee5ca62ab778899580c798c580"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
@@ -226,7 +230,7 @@
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "17407d3ceaa3296685197171b17ae1033d085f3e38e4eecd2a005550f780ed1f"
+      "pristine_sha256": "11bc305840024e60e7300d802d92d50a81bf1f244ee4e1fb6d6cbf83d5979e49"
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
@@ -238,11 +242,11 @@
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "629cd26c4fccf563749ce9cb182dbeb05b93c441e7f584dc269dece7e5e6b567"
+      "pristine_sha256": "7f7ea3d441734e7305aeb1f816a6b80490a643b851f63a7f1a2507fa7bda8152"
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "7cb2977870e204f348598e6c51a56efc7a9629debc37a98ea4a75ea7820f34fb"
+      "pristine_sha256": "213605683f6acf75385fe469037e67e910a1ddc355b7cdcdfc486e6b3904e144"
     },
     "tests/fixtures/altitude-words.json": {
       "ownership": "managed",
@@ -312,6 +316,10 @@
       "ownership": "managed",
       "pristine_sha256": "25127563f551486841e34893f54ad0caa4eed3843419adc89a93f4079459d722"
     },
+    "tests/fixtures/figures/controls/layering-toned.json": {
+      "ownership": "managed",
+      "pristine_sha256": "d141e5370b9399a01fd2f7ab6dcdc4feefb02c7f3da32063588c5d770cfe1452"
+    },
     "tests/fixtures/figures/controls/one-channel.json": {
       "ownership": "managed",
       "pristine_sha256": "3585376015b90a25afa728f4faaa4a4697dc042d23402bee1be609256e3ca465"
@@ -368,9 +376,17 @@
       "ownership": "managed",
       "pristine_sha256": "a1daaf9ab208e0fb41bfb3ea3aec7ea3bebc85c8e143556a0de0a39196c752d0"
     },
+    "tests/fixtures/figures/rendered/controls/layering-toned.html": {
+      "ownership": "managed",
+      "pristine_sha256": "abe8f1c9144fddb587d6f65d3ddc6e851f392d0ca4b379c2658fd68cd45d48b5"
+    },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",
       "pristine_sha256": "0b442af14a23ccd4a3636d0c1cb7e3c43f24aab07313bda13ea136fcf5cd290a"
+    },
+    "tests/page-anatomy-browser.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "cba4340436a7694c21dc2c9b232ffc8996407b335399c1d7b173ab8990f86b16"
     },
     "tests/page-shapes.mjs": {
       "ownership": "managed",
@@ -379,6 +395,10 @@
     "tests/portal-fixture.mjs": {
       "ownership": "managed",
       "pristine_sha256": "d0c2d9b6570ee0c2cce20ea78bc377737a1796d889e6259166da85aa862d975b"
+    },
+    "tests/present-parity.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "19b677c926547414e7e7358f44674dcabf46e5c7c1ca7efaa3fbaf40db6c64ab"
     },
     "tests/site-server.test.mjs": {
       "ownership": "managed",

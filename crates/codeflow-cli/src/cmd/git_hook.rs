@@ -69,7 +69,10 @@ pub fn run(args: &GitHookArgs) -> i32 {
             if matches!(args.stage, StageName::ReferenceTransaction) {
                 return refuse_reference_transaction(&error);
             }
-            eprintln!("codeflow: cannot read project root: {error}");
+            eprintln!(
+                "codeflow: cannot read project root: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 2;
         }
     };
@@ -101,24 +104,18 @@ pub fn run(args: &GitHookArgs) -> i32 {
     if matches!(args.stage, StageName::CommitMsg) {
         if let Err(errors) = policy_schema::validate_policy(&root) {
             for e in &errors {
-                eprintln!("codeflow commit-msg: policy error: {e}");
+                eprintln!("codeflow commit-msg: policy error: {}", super::shown(e));
             }
             eprintln!(
                 "codeflow commit-msg: .codeflow/policy.json is invalid — fix the key(s) above (see `codeflow policy explain`) or remove the file to use the built-in defaults"
             );
             return 1;
         }
-        for warning in policy_schema::deprecation_warnings(&root) {
-            eprintln!("{}", warning.line("codeflow commit-msg", "warning"));
-        }
     }
 
     let (policy, _armed) = match Policy::load_effective(&root) {
         Ok(value) => value,
-        Err(error) => {
-            eprintln!("codeflow: cannot read policy: {error}");
-            return 2;
-        }
+        Err(error) => return policy_unreadable(&error),
     };
     let token = super::integrate_token_present();
 
@@ -210,7 +207,7 @@ fn sync_pending_ids(
         report.notes.push(codeflow_core::remedy::Finding::new(
             format!(
                 "pending id reservations stay local: this push goes to {}, not the authority `{AUTHORITY}`",
-                remote.unwrap_or("an unnamed remote")
+                codeflow_core::git::remote_query::display_url(remote.unwrap_or("an unnamed remote"))
             ),
             codeflow_core::remedy::IDS_PENDING_LOCAL.remedy(),
         ));
@@ -276,10 +273,7 @@ fn run_reference_transaction_with_reader(
             // so Git must cancel it instead of silently moving a protected ref.
             let (policy, _armed) = match Policy::load_effective(root) {
                 Ok(value) => value,
-                Err(error) => {
-                    eprintln!("codeflow: cannot read policy: {error}");
-                    return 2;
-                }
+                Err(error) => return policy_unreadable(&error),
             };
             if !policy.git.local_ref_protection.is_active()
                 && !policy.git.delete_protected.is_active()
@@ -287,26 +281,30 @@ fn run_reference_transaction_with_reader(
                 return 0;
             }
             eprintln!(
-                "codeflow reference-transaction: could not read reference-transaction input ({error}) — operation blocked while ref protection is active"
+                "codeflow reference-transaction: could not read reference-transaction input ({error}) — operation blocked while ref protection is active", error = crate::cmd::shown(&error)
             );
             return 1;
         }
     };
     // Fast path: no local-branch update in this transaction (e.g. a fetch that
-    // only moved remote-tracking refs) — allow without loading policy.
-    if !stdin
-        .split('\n')
-        .any(git_hook::ref_line_touches_local_branch)
+    // only moved remote-tracking refs) — allow without loading policy. On a
+    // case-insensitive git directory any written name may fold onto another
+    // ref, so every transaction is judged there (TSK-381 SF-4).
+    let folds = codeflow_core::hooks::RepoInfo::discover(root)
+        .ok()
+        .flatten()
+        .is_none_or(|info| codeflow_core::hooks::repo::case_insensitive_git_dir(&info.common_dir));
+    if !folds
+        && !stdin
+            .split('\n')
+            .any(git_hook::ref_line_touches_local_branch)
     {
         return 0;
     }
 
     let (policy, _armed) = match Policy::load_effective(root) {
         Ok(value) => value,
-        Err(error) => {
-            eprintln!("codeflow: cannot read policy: {error}");
-            return 2;
-        }
+        Err(error) => return policy_unreadable(&error),
     };
     let token = super::integrate_token_present();
     let human = super::human_override_present();
@@ -318,7 +316,7 @@ fn run_reference_transaction_with_reader(
 
 fn refuse_reference_transaction(error: impl std::fmt::Display) -> i32 {
     eprintln!(
-        "codeflow reference-transaction: could not evaluate protected-ref transaction ({error}) - operation blocked"
+        "codeflow reference-transaction: could not evaluate protected-ref transaction ({error}) - operation blocked", error = crate::cmd::shown(&error)
     );
     1
 }
@@ -481,6 +479,13 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
         .collect())
 }
 
+/// A local policy that cannot be read stops the hook. The error can quote a
+/// policy value from the checkout, so it is shown escaped (TSK-388).
+fn policy_unreadable(error: &str) -> i32 {
+    eprintln!("codeflow: cannot read policy: {}", super::shown(&error));
+    2
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -511,6 +516,35 @@ mod tests {
     }
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_registry_note_redacts_a_url_used_as_the_remote_name() {
+        use std::ffi::OsStr;
+        let dir = tempfile::tempdir().unwrap();
+        let head = repo_with_commit(dir.path(), &[b"a"]);
+        for args in [
+            vec!["update-ref", codeflow_core::ids::REGISTRY_REF, &head],
+            vec!["remote", "add", "origin", "/unused"],
+        ] {
+            let args: Vec<_> = args.iter().map(OsStr::new).collect();
+            run_git(dir.path(), &args, b"");
+        }
+        let refs = git_hook::parse_push_refs(&format!(
+            "refs/heads/task/example {head} refs/heads/task/example {}\n",
+            "0".repeat(40)
+        ));
+        let mut report = git_hook::StageReport::default();
+        sync_pending_ids(
+            dir.path(),
+            Some("https://u:FAKE_PENDING_TOKEN@host.invalid/repo"),
+            &refs,
+            &mut report,
+        );
+        let text = format!("{:?}", report.notes);
+        assert_eq!(text.matches("FAKE_PENDING_TOKEN").count(), 0);
+        assert!(text.contains("https://***@host.invalid/repo"));
+    }
 
     #[test]
     fn r20_pending_registry_read_failure_blocks_push() {

@@ -12,11 +12,9 @@
 use std::path::Path;
 use std::process::Command;
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
@@ -268,7 +266,7 @@ fn a_named_task_corrects_its_criteria_text() {
         &[
             DELTA,
             "a human reviewer confirms that the substance of each changed criterion is unchanged",
-            "this range of planning records only corrects the records of a completed standalone task that TSK-003 names or follows up, and starts no work",
+            "this range only corrects a completed standalone record that TSK-003 names or follows up, or redacts the named record, and starts no work",
         ],
     );
     assert!(!result.1.contains(FROZEN), "{}", result.1);
@@ -372,7 +370,7 @@ fn follow_up_that_cannot_start_corrects(how: Stuck, what: &str) {
         &format!("a correction naming a follow-up that is {what}"),
         &[
             DELTA,
-            "this range of planning records only corrects the records of a completed standalone task that TSK-005 names or follows up, and starts no work",
+            "this range only corrects a completed standalone record that TSK-005 names or follows up, or redacts the named record, and starts no work",
         ],
     );
     for absent in [FROZEN, "work.stable_planning_anchor"] {
@@ -673,7 +671,7 @@ fn a_correction_behind_main_that_edited_another_task_keeps_the_skip() {
         "a correction naming the task, behind a main that edited another task",
         &[
             DELTA,
-            "this range of planning records only corrects the records of a completed standalone task that TSK-003 names or follows up, and starts no work",
+            "this range only corrects a completed standalone record that TSK-003 names or follows up, or redacts the named record, and starts no work",
         ],
     );
     for absent in [FROZEN, "work.stable_planning_anchor"] {
@@ -699,7 +697,7 @@ fn a_blocked_follow_up_behind_main_that_edited_another_task_keeps_the_skip() {
         "a correction naming the blocked follow-up, behind a main that edited another task",
         &[
             DELTA,
-            "this range of planning records only corrects the records of a completed standalone task that TSK-005 names or follows up, and starts no work",
+            "this range only corrects a completed standalone record that TSK-005 names or follows up, or redacts the named record, and starts no work",
         ],
     );
     for absent in [FROZEN, "work.stable_planning_anchor"] {

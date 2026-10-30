@@ -6,11 +6,9 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 /// A fixed clock for every commit, so merge times and the refusal window
 /// are known: minute `n` of 2026-09-10 10:00 UTC.

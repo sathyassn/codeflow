@@ -6,6 +6,8 @@
 //! dependencies to exist in that anchored snapshot. It never creates or
 //! updates files, refs, branches, worktrees, or record status.
 
+use crate::workgraph::history;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -212,8 +214,17 @@ pub struct WorkStartReport {
 #[derive(Debug, Clone)]
 pub(crate) struct Record {
     pub(crate) id: String,
+    /// The hidden record identity, when the record carries one.
+    pub(crate) uid: Option<String>,
+    /// For a complete task whose active acceptance block passes the
+    /// structural acceptance rules against its own criteria, the block's
+    /// `reviewed` commit; its binding is judged separately.
+    pub(crate) reviewed: Option<String>,
+    /// The text of the record's one active acceptance block, valid or not.
+    pub(crate) acceptance: Option<String>,
     pub(crate) kind: RecordKind,
     pub(crate) title: String,
+    pub(crate) created: Option<String>,
     pub(crate) status: String,
     pub(crate) epic_id: Option<String>,
     standalone_reason: Option<String>,
@@ -251,6 +262,22 @@ pub(crate) struct AnchoredTask {
 ///
 /// Returns an error if an existing conventional target or its repository cannot be read.
 pub fn default_work_target(repo_root: &Path) -> Result<Option<String>, WorkStartError> {
+    Ok(default_target(repo_root)?.map(|(target, _)| target.to_string()))
+}
+
+/// The full ref of the target [`default_work_target`] picks, such as
+/// `refs/remotes/origin/main`. Read the default target's commit through this
+/// ref, never through the short name: Git resolves a short `origin/main` to a
+/// local branch or tag of that name before the remote-tracking ref.
+///
+/// # Errors
+///
+/// Returns an error if an existing conventional target or its repository cannot be read.
+pub fn default_work_target_ref(repo_root: &Path) -> Result<Option<String>, WorkStartError> {
+    Ok(default_target(repo_root)?.map(|(_, reference)| reference))
+}
+
+fn default_target(repo_root: &Path) -> Result<Option<(&'static str, String)>, WorkStartError> {
     let Some(repo) = crate::hooks::repo::open(repo_root).map_err(WorkStartError::Repository)?
     else {
         return Ok(None);
@@ -262,7 +289,7 @@ pub fn default_work_target(repo_root: &Path) -> Result<Option<String>, WorkStart
             format!("refs/heads/{target}")
         };
         if reference_commit(&repo, &reference)?.is_some() {
-            return Ok(Some(target.to_string()));
+            return Ok(Some((target, reference)));
         }
     }
     Ok(None)
@@ -403,8 +430,7 @@ fn local_or_upstream(
     // The exact ref compared is the ref anchored on: a shortened name such
     // as `origin/main` could resolve to a different ref.
     let upstream = upstream_ref;
-    let (ahead, behind) = repo
-        .graph_ahead_behind(local_id, upstream_id)
+    let (ahead, behind) = history::ahead_behind(repo, local_id, upstream_id)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     match (ahead, behind) {
         (_, 0) => keep(),
@@ -425,6 +451,7 @@ fn local_or_upstream(
 #[must_use]
 pub fn is_stable_work_target(target: &str) -> bool {
     target_reference_names(target).is_some()
+        && !logical_target(target).starts_with('-')
         && !looks_like_full_object_id(target)
         && !logical_target(target).starts_with("task/")
 }
@@ -670,8 +697,7 @@ pub fn epic_line_proof(
     };
     let head_commit = commit(head)?;
     let target_tip = commit(base)?.id();
-    let merge_base = repo
-        .merge_base(target_tip, head_commit.id())
+    let merge_base = history::merge_base(&repo, target_tip, head_commit.id())
         .map_err(|error| error.to_string())?;
     let records_at = |oid: git2::Oid| {
         repo.find_commit(oid)
@@ -789,6 +815,20 @@ pub fn declared_work_target_at_revision(
     branch: &str,
     revision: &str,
 ) -> Result<Option<String>, WorkStartError> {
+    Ok(
+        declared_work_record_at_revision(repo_root, branch, revision)?
+            .and_then(|record| record.integration_target)
+            .filter(|target| !target.is_empty())
+            .map(|target| logical_target(&target).to_owned()),
+    )
+}
+
+/// The task record a work branch claims, read at `revision`.
+fn declared_work_record_at_revision(
+    repo_root: &Path,
+    branch: &str,
+    revision: &str,
+) -> Result<Option<Record>, WorkStartError> {
     let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
         return Ok(None);
     };
@@ -807,12 +847,118 @@ pub fn declared_work_target_at_revision(
                 .is_some_and(|id| suffix.starts_with(&format!("{id}-")))
     })?;
     Ok(records
-        .values()
+        .into_values()
         .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
-        .max_by_key(|record| record.id.len())
-        .and_then(|record| record.integration_target.as_deref())
-        .filter(|target| !target.is_empty())
-        .map(|target| logical_target(target).to_owned()))
+        .max_by_key(|record| record.id.len()))
+}
+
+/// Whether the records at one revision bind a declared epic line.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EpicLineBinding {
+    /// The records bind the line as a target the branch may declare.
+    Bound,
+    /// A refusal no other revision can lift: the name is not an epic line,
+    /// the branch cannot target its epic, or the epic is cancelled or
+    /// archived.
+    Refused(String),
+    /// These records do not bind the line; another trusted revision may.
+    Unbound(String),
+}
+
+/// Whether trusted records at `anchor` (named `place` in messages) bind
+/// `line` as an epic line that `branch` may declare. The task record at
+/// `head` is author-controlled routing input, not authorization: it must
+/// name the line's epic or be standalone with a reason and this target.
+/// A planning branch must name that epic.
+///
+/// Only the trusted anchor records bind the line: the epic must exist there
+/// without being cancelled or archived, and a task of that epic there must
+/// name this exact line, as [`check_epic_line`] requires of a landing line.
+/// The caller selects the protected tip or the remote line's tip as the
+/// anchor. Head-record membership never replaces this anchor check.
+///
+/// # Errors
+///
+/// Returns why the repository, a revision or a record could not be read.
+pub fn epic_line_binding(
+    repo_root: &Path,
+    branch: &str,
+    head: &str,
+    line: &str,
+    anchor: &str,
+    place: &str,
+) -> Result<EpicLineBinding, WorkStartError> {
+    let line = logical_target(line);
+    let epic_id = match super::line_adoption::epic_id(line) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+    };
+    let may_target = if let Some(plan) = branch.strip_prefix("plan/") {
+        super::line_adoption::epic_id(&format!("integration/{plan}")) == Ok(epic_id)
+    } else if let Some(record) = declared_work_record_at_revision(repo_root, branch, head)? {
+        if let Some(own) = record.epic_id.as_deref() {
+            own == epic_id
+        } else {
+            if record
+                .standalone_reason
+                .as_deref()
+                .is_none_or(|reason| reason.trim().is_empty())
+            {
+                return Ok(EpicLineBinding::Refused(format!(
+                    "standalone task on branch '{branch}' has no nonblank standalone_reason"
+                )));
+            }
+            let target = record.integration_target.as_deref().unwrap_or_default();
+            if logical_target(target) != line {
+                return Ok(EpicLineBinding::Refused(format!(
+                    "standalone task on branch '{branch}' declares target '{target}', not this line '{line}'"
+                )));
+            }
+            true
+        }
+    } else {
+        false
+    };
+    if !may_target {
+        return Ok(EpicLineBinding::Refused(format!(
+            "names {epic_id}, which is not the epic of branch '{branch}'"
+        )));
+    }
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let tree = repo
+        .revparse_single(anchor)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| WorkStartError::Repository(format!("{anchor}: {error}")))?;
+    let records = records_from_tree(&repo, &tree)?;
+    let Some(epic) = records
+        .get(epic_id)
+        .filter(|record| record.kind == RecordKind::Epic)
+    else {
+        return Ok(EpicLineBinding::Unbound(format!(
+            "names {epic_id}, which has no epic record on {place}"
+        )));
+    };
+    if matches!(epic.status.as_str(), "cancelled" | "archived") {
+        return Ok(EpicLineBinding::Refused(format!(
+            "names {epic_id}, which is {} on {place}",
+            epic.status
+        )));
+    }
+    let bound = records.values().any(|record| {
+        record.kind == RecordKind::Task
+            && record.epic_id.as_deref() == Some(epic_id)
+            && record
+                .integration_target
+                .as_deref()
+                .is_some_and(|target| logical_target(target) == line)
+    });
+    if !bound {
+        return Ok(EpicLineBinding::Unbound(format!(
+            "is not the target of any task of {epic_id} on {place}"
+        )));
+    }
+    Ok(EpicLineBinding::Bound)
 }
 
 /// The `integration_target` the task record at `path` declares.
@@ -1325,37 +1471,26 @@ pub(crate) fn review_covers_pin(
     if review == pin.revision {
         return Ok(true);
     }
-    if let Some(overlay) = super::release_line::history_overlay(repo)? {
-        return Err(format!(
-            "this clone overlays its recorded history with {overlay}, so the parents from the review to the pin cannot be trusted; remove it, or judge from a clone without it"
-        ));
-    }
-    let shallow = super::release_line::shallow_boundary(repo)?;
-    if !repo
-        .graph_descendant_of(pin.revision, review)
-        .map_err(|e| e.to_string())?
-    {
+    if !history::descendant_of(repo, pin.revision, review).map_err(|e| e.to_string())? {
         return Ok(false);
     }
-    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    let mut walk = history::revwalk(repo).map_err(|e| e.to_string())?;
     walk.push(pin.revision).map_err(|e| e.to_string())?;
     walk.hide(review).map_err(|e| e.to_string())?;
     for revision in walk {
         let revision = revision.map_err(|e| e.to_string())?;
-        if shallow.contains(&revision) {
-            return Err(format!(
-                "this clone is shallow at {revision}, so the history to the reviewed commit is cut; fetch it in full"
-            ));
-        }
         let commit = repo.find_commit(revision).map_err(|e| e.to_string())?;
         // An unreadable record is an error, never a covered revision.
         let Some(content) = super::acceptance::blob_at(repo, revision, path)? else {
             return Ok(false);
         };
-        let Ok(parent) = commit.parent_id(0) else {
+        let Ok(parent) = history::parent_id(repo, &commit, 0) else {
             return Ok(false);
         };
-        if commit.parent_count() != 1
+        if history::parents(repo, &commit)
+            .map_err(|error| error.to_string())?
+            .len()
+            != 1
             || super::acceptance::later_change(repo, path, &content, parent, revision).is_some()
         {
             return Ok(false);
@@ -1383,23 +1518,29 @@ pub(crate) fn stack_base_in(
     branches: &mut Option<PinBranches>,
     pins: &[ReviewedPin],
 ) -> Result<Option<git2::Oid>, String> {
+    history::check(repo).map_err(|error| error.to_string())?;
     for pin in pins {
         PinBranches::once(branches, repo)?.pin_branch(repo, pin)?;
     }
     if pins.is_empty() {
         return Ok(None);
     }
-    pins.iter()
-        .find(|candidate| {
-            pins.iter().all(|pin| {
-                candidate.revision == pin.revision
-                    || repo
-                        .graph_descendant_of(candidate.revision, pin.revision)
-                        .unwrap_or(false)
-            })
-        })
-        .map(|pin| Some(pin.revision))
-        .ok_or_else(|| "no reviewed base contains all pins; land or stack one first".into())
+    for candidate in pins {
+        let mut contains_all = true;
+        for pin in pins {
+            if candidate.revision != pin.revision
+                && !history::descendant_of(repo, candidate.revision, pin.revision)
+                    .map_err(|error| error.to_string())?
+            {
+                contains_all = false;
+                break;
+            }
+        }
+        if contains_all {
+            return Ok(Some(candidate.revision));
+        }
+    }
+    Err("no reviewed base contains all pins; land or stack one first".into())
 }
 
 /// Start a branch already stacked on the supplied reviewed predecessors.
@@ -1412,6 +1553,7 @@ pub fn check_work_start_on(
     target: &str,
     pins: &[ReviewedPin],
 ) -> Result<WorkStartReport, WorkStartError> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(root).map_err(|e| WorkStartError::Repository(e.to_string()))?;
     let head = repo
         .head()
@@ -1430,9 +1572,8 @@ pub fn check_work_start_on(
     for pin in pins {
         pin_branch(&repo, pin).map_err(WorkStartError::InvalidGraph)?;
         if pin.revision != head
-            && !repo
-                .graph_descendant_of(head, pin.revision)
-                .unwrap_or(false)
+            && !history::descendant_of(&repo, head, pin.revision)
+                .map_err(|error| WorkStartError::Repository(error.to_string()))?
         {
             return Err(WorkStartError::InvalidGraph(format!(
                 "{} pin is not an ancestor of HEAD",
@@ -1442,7 +1583,8 @@ pub fn check_work_start_on(
     }
     // The report names the branch whose identity was checked, as the plain
     // start does, so the caller can tell it from other carriers.
-    let mut report = check_task_anchor(root, task_id, target, &branch, false, pins, None)?;
+    let mut report =
+        check_task_anchor(root, task_id, target, &branch, Admission::Start, pins, None)?;
     report.branch = branch;
     Ok(report)
 }
@@ -1541,7 +1683,15 @@ pub fn check_work_start_anchored(
         .map(|head| head_branch_text(&head, task_id))
         .transpose()?
         .unwrap_or_default();
-    check_task_anchor(repo_root, task_id, target, &branch, false, &[], None)
+    check_task_anchor(
+        repo_root,
+        task_id,
+        target,
+        &branch,
+        Admission::Start,
+        &[],
+        None,
+    )
 }
 
 /// CI admission shares structural readiness but does not try to start a closed task.
@@ -1559,7 +1709,15 @@ pub fn check_work_admission(
     branch: &str,
     head: &str,
 ) -> Result<WorkStartReport, WorkStartError> {
-    check_task_anchor(repo_root, task_id, target, branch, true, &[], Some(head))
+    check_task_anchor(
+        repo_root,
+        task_id,
+        target,
+        branch,
+        Admission::Work,
+        &[],
+        Some(head),
+    )
 }
 
 /// [`check_work_admission`] for a push of a branch stacked on reviewed
@@ -1577,7 +1735,16 @@ pub fn check_work_admission_on(
     head: &str,
     pins: &[ReviewedPin],
 ) -> Result<WorkStartReport, WorkStartError> {
-    check_task_anchor(repo_root, task_id, target, branch, true, pins, Some(head))
+    let _judgment = history::judgment();
+    check_task_anchor(
+        repo_root,
+        task_id,
+        target,
+        branch,
+        Admission::Work,
+        pins,
+        Some(head),
+    )
 }
 
 /// The reviewed predecessor heads a push of `task_id`'s branch stacks on
@@ -1634,7 +1801,7 @@ pub fn stacked_pins(
         // A tip the head contains and the target does not. An ancestry
         // that cannot be read refuses (issue 79), never reads as "no".
         let descends = |of: Oid, ancestor: Oid| {
-            repo.graph_descendant_of(of, ancestor).map_err(|error| {
+            history::descendant_of(&repo, of, ancestor).map_err(|error| {
                 format!("cannot read the ancestry of {ancestor} from {of}: {error}")
             })
         };
@@ -1670,12 +1837,46 @@ pub fn stacked_pins(
     Ok(pins)
 }
 
+/// CI admission for a validated secret-scan exemption class. It keeps the
+/// task's identity, planning anchor, graph, specs and start gate, but does not
+/// require its dependencies to be ready before the exemption reaches the base.
+/// The caller must first prove the range changes only `.gitleaksignore` and
+/// that the Task line identifies this task.
+///
+/// # Errors
+/// Returns the ordinary admission refusals except dependency readiness.
+pub fn check_secret_scan_exemption_admission(
+    repo_root: &Path,
+    task_id: &str,
+    target: &str,
+    branch: &str,
+    head: &str,
+) -> Result<WorkStartReport, WorkStartError> {
+    let _judgment = history::judgment();
+    check_task_anchor(
+        repo_root,
+        task_id,
+        target,
+        branch,
+        Admission::SecretScanExemption,
+        &[],
+        Some(head),
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Admission {
+    Start,
+    Work,
+    SecretScanExemption,
+}
+
 fn check_task_anchor(
     repo_root: &Path,
     task_id: &str,
     target: &str,
     branch: &str,
-    admission: bool,
+    admission: Admission,
     pins: &[ReviewedPin],
     head: Option<&str>,
 ) -> Result<WorkStartReport, WorkStartError> {
@@ -1692,7 +1893,14 @@ fn check_task_anchor(
     let head_id = head_commit(&repo, head)?;
     let (merge_base, mut records) = anchored_records(&repo, target, head_id)?;
     let at_base = records.contains_key(task_id);
-    standalone_at_head(&repo, &mut records, task_id, branch, admission, head_id)?;
+    standalone_at_head(
+        &repo,
+        &mut records,
+        task_id,
+        branch,
+        admission != Admission::Start,
+        head_id,
+    )?;
     // A named fix may reopen a complete task in this range (TSK-140). Only
     // its status is projected onto the anchored readiness core; every
     // planning input and dependency still comes from the merge-base. The
@@ -1722,12 +1930,20 @@ fn check_task_anchor(
             }
         }
     }
-    let anchored = validate_task_structure(&repo, &records, task_id, target, pins, &mut None)?;
+    let anchored = validate_task_structure(
+        &repo,
+        &records,
+        task_id,
+        target,
+        pins,
+        &mut None,
+        admission != Admission::SecretScanExemption,
+    )?;
     // The start gate judges the record as the merge base has it, with a
     // reopen in this range projected above: a task complete or cancelled
     // there takes no further change. A standalone record arriving with its
     // code (admission) has no base record; `standalone_at_head` judged it.
-    if !admission || at_base {
+    if admission == Admission::Start || at_base {
         start_gate(&records[task_id], task_id)?;
     }
 
@@ -1927,13 +2143,7 @@ fn refuse_retarget(
 ) -> Result<(), String> {
     let unreadable =
         |reason: String| format!("the history of task {task_id} cannot be read: {reason}");
-    if repo.is_shallow() {
-        return Err(unreadable("this clone is shallow".into()));
-    }
-    if let Some(overlay) = super::release_line::history_overlay(repo).map_err(unreadable)? {
-        return Err(unreadable(format!("this clone has {overlay}")));
-    }
-    let mut walk = repo.revwalk().map_err(|e| unreadable(e.to_string()))?;
+    let mut walk = history::revwalk(repo).map_err(|e| unreadable(e.to_string()))?;
     walk.push(head).map_err(|e| unreadable(e.to_string()))?;
     let mut seen = std::collections::HashSet::new();
     for commit in walk {
@@ -2000,7 +2210,7 @@ fn anchored_records(
         .ok_or_else(|| WorkStartError::Target(target.to_string()))?;
     // Only git's "not found" means the two have no common ancestor; any
     // other error is a history that could not be read.
-    let merge_base = match repo.merge_base(head_id, target_commit.id()) {
+    let merge_base = match history::merge_base(repo, head_id, target_commit.id()) {
         Ok(merge_base) => merge_base,
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             return Err(WorkStartError::MergeBase(target.to_string()))
@@ -2155,7 +2365,7 @@ pub(crate) fn validate_anchored_task_in(
     pins: &[ReviewedPin],
     branches: &mut Option<PinBranches>,
 ) -> Result<AnchoredTask, WorkStartError> {
-    let result = validate_task_structure(repo, records, task_id, target, pins, branches)?;
+    let result = validate_task_structure(repo, records, task_id, target, pins, branches, true)?;
     start_gate(&records[task_id], task_id)?;
     Ok(result)
 }
@@ -2167,6 +2377,7 @@ fn validate_task_structure(
     target: &str,
     pins: &[ReviewedPin],
     branches: &mut Option<PinBranches>,
+    dependencies_required: bool,
 ) -> Result<AnchoredTask, WorkStartError> {
     let task = records
         .get(task_id)
@@ -2235,15 +2446,17 @@ fn validate_task_structure(
             "--on pin does not name a code dependency of this task".into(),
         ));
     }
-    validate_dependencies(
-        repo,
-        records,
-        task_id,
-        target,
-        &task.depends_on,
-        pins,
-        branches,
-    )?;
+    if dependencies_required {
+        validate_dependencies(
+            repo,
+            records,
+            task_id,
+            target,
+            &task.depends_on,
+            pins,
+            branches,
+        )?;
+    }
     Ok(AnchoredTask {
         epic_id: task.epic_id.clone(),
         specs,
@@ -2361,9 +2574,12 @@ fn code_dependency(
     }
 }
 
-/// A research or decision dependency is met when its pin is a commit on the
-/// predecessor's target that holds the predecessor's record as complete
-/// (R-112). The predecessor need not be in this base.
+/// A research or decision dependency is met when its pin is a commit that
+/// holds the predecessor's record as complete and is on a verified target
+/// that still exists: the predecessor's target, this task's target or the
+/// default branch, each read as [`tracking_reference`] reads it (R-112). The
+/// predecessor need not be in this base, and a deleted predecessor line does
+/// not unmeet a pin that landed (sathyassn/codeflow#236).
 fn pinned_dependency(
     repo: &Repository,
     records: &BTreeMap<String, Record>,
@@ -2387,21 +2603,38 @@ fn pinned_dependency(
     let commit = commit_by_object_id(repo, pin).map_err(refuse)?;
     let line = records
         .get(&dependency.id)
-        .and_then(|record| record.integration_target.clone())
-        .unwrap_or_else(|| target.to_string());
-    let Some(tip) = target_reference(repo, &line)? else {
-        return Err(WorkStartError::DependencyLineUnknown {
-            task_id: task_id.to_string(),
-            dependency: dependency.id.clone(),
-            line,
-        });
-    };
-    if tip.id() != commit.id()
-        && !repo
-            .graph_descendant_of(tip.id(), commit.id())
-            .unwrap_or(false)
-    {
-        return Err(refuse(format!("not on '{line}'")));
+        .and_then(|record| record.integration_target.clone());
+    let mut names = line
+        .into_iter()
+        .chain([target.to_string()])
+        .collect::<Vec<_>>();
+    for default in ["main", "master"] {
+        if tracking_reference(repo, default)?.is_some() {
+            names.push(default.to_string());
+            break;
+        }
+    }
+    let (mut read, mut unfetched) = (Vec::<String>::new(), Vec::<String>::new());
+    let mut landed = false;
+    for name in names {
+        match tracking_reference(repo, &name)? {
+            Some((shown, _)) if read.contains(&shown) => {}
+            Some((shown, tip)) => {
+                if tip == commit.id()
+                    || history::descendant_of(repo, tip, commit.id())
+                        .map_err(|error| refuse(error.to_string()))?
+                {
+                    landed = true;
+                    break;
+                }
+                read.push(shown);
+            }
+            None if unfetched.contains(&name) => {}
+            None => unfetched.push(name),
+        }
+    }
+    if !landed {
+        return Err(refuse(not_landed_reason(&read, &unfetched)));
     }
     let at_pin = commit
         .tree()
@@ -2415,6 +2648,118 @@ fn pinned_dependency(
         Some(status) => Err(refuse(format!("the record there is '{status}'"))),
         None => Err(refuse("the record is not there".to_string())),
     }
+}
+
+/// The landing ref readiness reads for a target, with its tip, as output
+/// shows it (`origin/main`). In a repository with any remote, a landing ref
+/// is always a remote-tracking ref, so no local ref decides readiness
+/// (sathyassn/codeflow#236):
+/// - a branch, bare (`main`) or spelled `refs/heads/main`, reads the upstream
+///   configured for it only when that upstream is the same branch on a
+///   configured remote, `refs/remotes/<remote>/<branch>` (never remote `.`, a
+///   local branch, a tag or another branch), else
+///   `refs/remotes/origin/<branch>` on the authority remote;
+/// - an explicit remote-tracking ref (`origin/main`, `refs/remotes/...`) counts
+///   only when a configured remote's fetch mapping owns it.
+///
+/// The local branch is a landing ref only in a repository with no remote at
+/// all. `None` when the target is not fetched here.
+fn tracking_reference(
+    repo: &Repository,
+    name: &str,
+) -> Result<Option<(String, Oid)>, WorkStartError> {
+    let Some(candidates) = target_reference_names(name) else {
+        return Ok(None);
+    };
+    let exact = &candidates[0];
+    // A landing ref counts only under the exact spelling git lists
+    // (TSK-381 SF-4).
+    let read = |reference: &str| {
+        crate::hooks::repo::listed_ref_commit(repo, reference)
+            .map(|tip| tip.map(|tip| (reference_display_name(reference), tip)))
+            .map_err(|error| WorkStartError::Repository(error.to_string()))
+    };
+    let remotes = repo
+        .remotes()
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let branch = exact.strip_prefix("refs/heads/");
+    if remotes.is_empty() {
+        return branch.map_or(Ok(None), |_| read(exact));
+    }
+    let Some(branch) = branch else {
+        return if repo.branch_remote_name(exact).is_ok() {
+            read(exact)
+        } else {
+            Ok(None)
+        };
+    };
+    let landing = configured_upstream(repo, branch, &remotes)?
+        .unwrap_or_else(|| format!("refs/remotes/{}/{branch}", crate::ids::AUTHORITY));
+    read(&landing)
+}
+
+/// The upstream configured for local branch `branch`, when it is
+/// `refs/remotes/<remote>/<branch>`, the same branch on a configured remote
+/// other than `.` (the fork case). Any other upstream, including another
+/// branch of that remote and one git cannot map, is not honoured, and the
+/// caller reads the authority remote's tracking ref instead. A configured
+/// name that is not valid UTF-8 is an error, never an absent upstream (issue
+/// 79).
+fn configured_upstream(
+    repo: &Repository,
+    branch: &str,
+    remotes: &git2::string_array::StringArray,
+) -> Result<Option<String>, WorkStartError> {
+    let local = format!("refs/heads/{branch}");
+    let not_utf8 = |what: &str| {
+        WorkStartError::Repository(format!(
+            "the configured upstream {what} of '{branch}' is not valid UTF-8"
+        ))
+    };
+    let Ok(remote) = repo.branch_upstream_remote(&local) else {
+        return Ok(None);
+    };
+    let remote = remote.as_str().map_err(|_| not_utf8("remote"))?;
+    if remote == "." || !remotes.iter_bytes().any(|name| name == remote.as_bytes()) {
+        return Ok(None);
+    }
+    let Ok(upstream) = repo.branch_upstream_name(&local) else {
+        return Ok(None);
+    };
+    let upstream = upstream.as_str().map_err(|_| not_utf8("ref"))?;
+    Ok(upstream
+        .strip_prefix(&format!("refs/remotes/{remote}/"))
+        .is_some_and(|rest| rest == branch)
+        .then(|| upstream.to_owned()))
+}
+
+/// Why a pin is on no verified target: the refs read, then the targets that
+/// are not fetched here.
+fn not_landed_reason(read: &[String], unfetched: &[String]) -> String {
+    let quoted = |names: &[String], conjunction: &str| {
+        let names = names
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>();
+        match names.split_last() {
+            Some((last, rest)) if !rest.is_empty() => {
+                format!("{} {conjunction} {last}", rest.join(", "))
+            }
+            _ => names.concat(),
+        }
+    };
+    let mut parts = Vec::new();
+    if !read.is_empty() {
+        parts.push(format!("not on {}", quoted(read, "or")));
+    }
+    if !unfetched.is_empty() {
+        let verb = if unfetched.len() == 1 { "is" } else { "are" };
+        parts.push(format!(
+            "{} {verb} not fetched here",
+            quoted(unfetched, "and")
+        ));
+    }
+    parts.join("; ")
 }
 
 /// Why an object id does not resolve to a commit.
@@ -2661,13 +3006,23 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
     if !valid {
         return Err(format!("unsupported id {id}"));
     }
+    let status = string(&data, "status").unwrap_or_default();
+    let reviewed = if kind == RecordKind::Task && status == "complete" {
+        accepted_block(content)
+    } else {
+        None
+    };
     Ok(Record {
         id,
+        uid: string(&data, "uid"),
+        reviewed,
+        acceptance: active_block_text(content),
         kind,
-        status: string(&data, "status").unwrap_or_default(),
+        status,
         epic_id: string(&data, "epic_id"),
         standalone_reason: string(&data, "standalone_reason"),
         title: string(&data, "title").unwrap_or_default(),
+        created: string(&data, "created").or_else(|| string(&data, "created_at")),
         integration_target: string(&data, "integration_target"),
         specs: strings(&data, "specs")?,
         depends_on: dependencies(&data)?,
@@ -2680,6 +3035,33 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
             Vec::new()
         },
     })
+}
+
+/// The text of the record's one active acceptance block.
+fn active_block_text(content: &str) -> Option<String> {
+    let blocks = super::record_text::acceptance_blocks(content);
+    let mut active = blocks.iter().filter(|block| !block.is_superseded());
+    let block = active.next()?;
+    active.next().is_none().then(|| block.inner.clone())
+}
+
+/// The `reviewed` commit of the record's one active acceptance block, when
+/// that block parses and passes the structural acceptance rules for its
+/// criteria. Two active blocks are ambiguous and give none.
+fn accepted_block(content: &str) -> Option<String> {
+    use super::record_text::{acceptance_blocks, check_acceptance, parse_criteria};
+    let blocks = acceptance_blocks(content);
+    let mut active = blocks.iter().filter(|block| !block.is_superseded());
+    let block = active.next()?;
+    if active.next().is_some() {
+        return None;
+    }
+    match &block.parsed {
+        Ok(parsed) if check_acceptance(parsed, &parse_criteria(content).items).is_empty() => {
+            Some(parsed.reviewed.clone())
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn target_reference<'repo>(
@@ -2810,6 +3192,7 @@ fn blocker_reason(content: &str) -> Option<String> {
 /// # Errors
 /// Refuses missing or ambiguous hosted repository identity.
 pub fn review_repository(root: &std::path::Path, branch: &str) -> Result<String, String> {
+    let _judgment = history::judgment();
     ReviewRepositories::open(root)?.repository(branch)
 }
 
@@ -3235,6 +3618,80 @@ mod tests {
         git(dir.path(), &["commit", "-m", "plan"]);
         git(dir.path(), &["switch", "-c", "task/TSK-002-work"]);
         dir
+    }
+
+    #[test]
+    fn epic_line_binding_requires_an_explicit_standalone_target() {
+        let dir = fixture();
+        let root = dir.path();
+        let line = "integration/EPC-001-outcome";
+        git(root, &["switch", "main"]);
+        let path = root.join("project-management/tasks/TSK-001.md");
+        fs::write(
+            &path,
+            fs::read_to_string(&path).unwrap().replace(
+                "integration_target: main",
+                &format!("integration_target: {line}"),
+            ),
+        )
+        .unwrap();
+        git(root, &["commit", "-am", "bind epic line"]);
+        git(root, &["switch", "task/TSK-002-work"]);
+        let path = root.join("project-management/tasks/TSK-002.md");
+        let missing_reason =
+            "standalone task on branch 'task/TSK-002-work' has no nonblank standalone_reason";
+        let wrong_target = "standalone task on branch 'task/TSK-002-work' declares target 'main', not this line 'integration/EPC-001-outcome'";
+        let other_epic = "names EPC-001, which is not the epic of branch 'task/TSK-002-work'";
+        for (epic, reason, target, refusal) in [
+            ("null", Some("bounded repair"), line, None),
+            (
+                "null",
+                Some("bounded repair"),
+                "refs/heads/integration/EPC-001-outcome",
+                None,
+            ),
+            ("EPC-001", Some("null"), line, None),
+            ("EPC-002", Some("null"), line, Some(other_epic)),
+            ("null", None, line, Some(missing_reason)),
+            ("null", Some("null"), line, Some(missing_reason)),
+            ("null", Some("' '"), line, Some(missing_reason)),
+            ("null", Some("bounded repair"), "main", Some(wrong_target)),
+        ] {
+            let reason_field =
+                reason.map_or_else(String::new, |value| format!("standalone_reason: {value}\n"));
+            fs::write(&path, format!("---\nid: TSK-002\nepic_id: {epic}\n{reason_field}integration_target: {target}\nstatus: todo\n---\n")).unwrap();
+            git(root, &["commit", "-am", "declare target"]);
+            let binding = epic_line_binding(
+                root,
+                "task/TSK-002-work",
+                "HEAD",
+                line,
+                "main",
+                "protected branch",
+            )
+            .unwrap();
+            assert_eq!(
+                binding,
+                refusal.map_or(EpicLineBinding::Bound, |reason| EpicLineBinding::Refused(
+                    reason.to_string()
+                )),
+                "{epic}, {reason:?}, {target}"
+            );
+        }
+        for branch in [
+            "task/TSK-099-missing",
+            "fix/untracked",
+            "plan/EPC-002-other",
+        ] {
+            assert!(
+                matches!(
+                    epic_line_binding(root, branch, "HEAD", line, "main", "protected branch")
+                        .unwrap(),
+                    EpicLineBinding::Refused(_)
+                ),
+                "{branch}"
+            );
+        }
     }
 
     /// Pins of different tasks at one revision read that revision's graph
@@ -4238,6 +4695,70 @@ permission_preset = "strict"
                 check_epic_line(root, line, "main", "main", "HEAD"),
                 Ok("EPC-001".into())
             );
+        }
+    }
+    #[test]
+    fn pin_containment_refuses_grafts_and_replace_refs() {
+        for replace in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let record = |id| {
+                format!("---\nid: {id}\nepic_id: null\nstandalone_reason: bounded\nintegration_target: main\nstatus: todo\ndepends_on: []\n---\n")
+            };
+            let first_record = record("TSK-001");
+            let second_record = record("TSK-002");
+            let records_dir = dir.path().join("project-management/tasks");
+            std::fs::create_dir_all(&records_dir).unwrap();
+            std::fs::write(records_dir.join("TSK-001.md"), &first_record).unwrap();
+            std::fs::write(records_dir.join("TSK-002.md"), &second_record).unwrap();
+            let (repo, base) = crate::git::repo_with_tree(
+                dir.path(),
+                &[
+                    (
+                        b"project-management/tasks/TSK-001.md",
+                        first_record.as_bytes(),
+                    ),
+                    (
+                        b"project-management/tasks/TSK-002.md",
+                        second_record.as_bytes(),
+                    ),
+                    (b"source.rs", b"original"),
+                ],
+            );
+            crate::git::add_commit(&repo, &[(b"source.rs", b"unreviewed")]);
+            let head = crate::git::add_commit(&repo, &[(b"source.rs", b"original")]);
+            repo.branch(
+                "task/TSK-001-first",
+                &repo.find_commit(base).unwrap(),
+                false,
+            )
+            .unwrap();
+            repo.branch(
+                "task/TSK-002-second",
+                &repo.find_commit(head).unwrap(),
+                false,
+            )
+            .unwrap();
+            let pins = [
+                ReviewedPin {
+                    task_id: "TSK-001".into(),
+                    revision: base,
+                },
+                ReviewedPin {
+                    task_id: "TSK-002".into(),
+                    revision: head,
+                },
+            ];
+            assert_eq!(stack_base(dir.path(), &pins).unwrap(), Some(head));
+            if replace {
+                repo.reference(&format!("refs/replace/{head}"), base, false, "test")
+                    .unwrap();
+            } else {
+                std::fs::create_dir_all(repo.path().join("info")).unwrap();
+                std::fs::write(repo.path().join("info/grafts"), format!("{head} {base}\n"))
+                    .unwrap();
+            }
+            let error = stack_base(dir.path(), &pins).unwrap_err();
+            assert!(error.contains("cannot verify"), "{error}");
         }
     }
 }

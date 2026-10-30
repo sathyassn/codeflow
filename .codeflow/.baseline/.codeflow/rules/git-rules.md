@@ -77,10 +77,12 @@ missing automation for adoption rather than silently enabling publication.
 - **Secrets:** never stage credentials, API keys, tokens, or `.env` files.
   The pre-commit secret scan (and the CI secret-scan job) block them, and it
   is the one gate never relaxed, not even during bootstrap grace.
-- **Durability push:** with a remote configured, push the working branch
-  after each committed logical unit so work survives a machine failure; use
-  `git push --force-with-lease` (never bare `--force`) after a rewrite. It is
-  backup, not a merge: the secret scan and every merge gate still stand.
+- **One push at ready:** with a remote configured, push the working branch
+  once, when the unit is ready for review, and again only for a later change
+  to it, so the pre-push gate runs once per tree; use
+  `git push --force-with-lease` (never bare `--force`) after a rewrite. A
+  push is backup, not a merge: the secret scan and every merge gate still
+  stand.
   Forbid it with `git.force_push_unprotected` in `policy.json` (default
   allow).
 - When a gate blocks you, fix the cause; never bypass (`--no-verify`,
@@ -128,6 +130,10 @@ record's `line_adoptions` list: its full 40-hex `commit`, a `reason` and
 the `review` where it was reviewed. The entry lands on the line by a
 reviewed planning pull request that names the epic, or is already on the
 target, and CI prints each adoption on the line's class line.
+A landed adoption also preserves the acceptance binding of tasks landed
+before it, provided the adopted commit leaves their acceptance blocks
+unchanged. An unlanded entry or unreadable adoption history does not
+authorize the binding.
 
 ## PR bodies
 

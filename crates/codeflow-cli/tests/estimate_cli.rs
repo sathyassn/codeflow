@@ -3,6 +3,14 @@ use serde_json::{json, Value};
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[allow(dead_code)]
+#[path = "support/drain_pipe.rs"]
+mod drain_pipe;
+#[path = "support/own_repository.rs"]
+mod own_repository;
+#[cfg(unix)]
+use drain_pipe::drain_pipe;
+
 const DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 const REGISTRY: &str = "{\"schema_version\":1,\"repos\":[]}\n";
 const LIMITATION:&str="Checks supplied allocations and local evidence links only; does not establish source truth, authorization, quality completeness, or predictive accuracy.";
@@ -83,27 +91,8 @@ fn unrelated_project_state_symlink_and_fifo_are_never_opened() {
     // Drain both pipes while waiting: a host under pipe memory pressure
     // gives a new pipe a 512-byte buffer, which the report outgrows, so an
     // undrained pipe would stall the child and read as the FIFO block.
-    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                std::io::Read::read_to_end(&mut pipe, &mut bytes).unwrap();
-            }
-            bytes
-        })
-    };
-    let stdout = drain(
-        child
-            .stdout
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-    );
-    let stderr = drain(
-        child
-            .stderr
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-    );
+    let stdout = drain_pipe(child.stdout.take());
+    let stderr = drain_pipe(child.stderr.take());
     let started = Instant::now();
     while child.try_wait().unwrap().is_none() {
         if started.elapsed() > Duration::from_secs(5) {
@@ -152,6 +141,7 @@ fn unreadable_report_is_golden_and_creates_no_user_or_project_state() {
 #[test]
 fn valid_json_report_and_existing_registry_are_stable() {
     let dir = tempfile::tempdir().unwrap();
+    own_repository::own_repository(dir.path());
     let home = dir.path().join("home");
     std::fs::create_dir(&home).unwrap();
     std::fs::write(home.join("registry.json"), REGISTRY).unwrap();
@@ -218,5 +208,70 @@ fn malformed_input_is_redacted_and_no_other_verbs_exist() {
         !run(dir.path(), &home, &["estimate", "schedule", "bad.json"])
             .status
             .success()
+    );
+}
+
+/// A project reached through a link into a repository's folder still gets a
+/// repository of its own (issue 104): its lexical parents hold no `.git`.
+#[cfg(unix)]
+#[test]
+fn own_repository_judges_a_project_by_its_physical_path() {
+    let repository = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repository.path().join(".git")).unwrap();
+    let inside = repository.path().join("tmp");
+    std::fs::create_dir(&inside).unwrap();
+    let alias = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(&inside, alias.path().join("link")).unwrap();
+    let project = alias.path().join("link/proj");
+    std::fs::create_dir(&project).unwrap();
+    own_repository::own_repository(&project);
+    assert!(project.join(".git").exists());
+}
+
+/// TSK-388 round 3 (Grok F-1, security S1): a forecast's pin path and
+/// exclusion reason can hold characters a terminal hides or acts on. The
+/// JSON report stays valid, decodes to the exact values, and its bytes hold
+/// none of those characters.
+#[test]
+fn a_hidden_character_in_the_forecast_keeps_the_json_report_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    own_repository::own_repository(dir.path());
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(home.join("registry.json"), REGISTRY).unwrap();
+    std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(dir.path().join(".codeflow/policy.json"), "{}").unwrap();
+    let brief = "brief\u{202e}\u{ad}\u{e0041}.md";
+    let reason = "Fixture \u{202e}exclusion\u{ad}";
+    for path in [brief, "profile.md", "rubric.md"] {
+        std::fs::write(dir.path().join(path), "abc").unwrap();
+    }
+    let mut value = forecast();
+    value["packages"][0]["source"]["pin"]["path"] = json!(brief);
+    value["packages"][0]["stage_exclusions"][0]["reason"] = json!(reason);
+    std::fs::write(
+        dir.path().join("forecast.json"),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+    let output = run(
+        dir.path(),
+        &home,
+        &["estimate", "check", "forecast.json", "--json"],
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !text.contains(['\u{202e}', '\u{ad}', '\u{e0041}', '\u{9b}']),
+        "{text:?}"
+    );
+    let report: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"));
+    assert_eq!(report["exclusions"][0]["reason"], reason);
+    assert!(
+        report["source_digests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|digest| digest["path"] == brief),
+        "{report:#}"
     );
 }

@@ -1,5 +1,78 @@
 //! codeflow — the AI-development discipline layer CLI.
 
+// The output sink (TSK-388). These shadow `println!`, `print!`, `eprintln!`
+// and `eprint!` for this crate: what one call prints goes through
+// `codeflow_core::git::display_print`, which escapes each control, format
+// and separator character other than a line break or tab, keeps
+// backslashes, and indents each further line that does not already start
+// indented. CodeFlow quotes branch names a remote chose, record titles,
+// paths and policy values from a checkout, and errors that carry them;
+// whatever a call interpolates, a line break in it cannot start a line at
+// column 0. `term_write!` and `term_writeln!` apply the same rule to a
+// terminal writer. Text that is several column-0 lines by design is a
+// `codeflow_core::git::TextBlock`, built one `writeln!` per line under the
+// same rule, and prints through `print_block!` or `println_block!`; JSON is
+// a `TextBlock::json`. `codeflow-core` and `codeflow-present` shadow their
+// own print macros the same way. Not covered here: the standard library's
+// panic message, and clap's usage and error output.
+macro_rules! println {
+    () => {
+        ::std::println!()
+    };
+    ($($arg:tt)*) => {
+        ::std::println!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
+    };
+}
+macro_rules! print {
+    ($($arg:tt)*) => {
+        ::std::print!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
+    };
+}
+macro_rules! eprintln {
+    () => {
+        ::std::eprintln!()
+    };
+    ($($arg:tt)*) => {
+        ::std::eprintln!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
+    };
+}
+macro_rules! eprint {
+    ($($arg:tt)*) => {
+        ::std::eprint!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
+    };
+}
+
+// A block prints as it stands: its lines were written under the sink rule.
+macro_rules! print_block {
+    ($block:expr) => {
+        ::std::print!("{}", ::codeflow_core::git::TextBlock::as_str(&$block))
+    };
+}
+macro_rules! println_block {
+    ($block:expr) => {
+        ::std::println!("{}", ::codeflow_core::git::TextBlock::as_str(&$block))
+    };
+}
+// One write to a terminal writer under the sink rule.
+macro_rules! term_write {
+    ($out:expr, $($arg:tt)*) => {{
+        // For a caller that has not imported it; harmless where it has.
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+        $out.write_all(
+            ::codeflow_core::git::display_print(&::std::format!($($arg)*)).as_bytes(),
+        )
+    }};
+}
+macro_rules! term_writeln {
+    ($out:expr) => {
+        term_write!($out, "\n")
+    };
+    ($out:expr, $($arg:tt)*) => {
+        term_write!($out, "{}\n", ::std::format!($($arg)*))
+    };
+}
+
 mod cmd;
 #[cfg(test)]
 mod command_reference;
@@ -49,7 +122,12 @@ enum Command {
     },
     /// Refresh managed scaffold files (3-way merge; never clobbers).
     Update {
-        /// Write the report plus unified diffs of applied changes to a file.
+        /// Write the report plus each applied change to a file. The export
+        /// never shows a value, key name or line from the project's files or
+        /// the recorded baseline: JSON, TOML and YAML list the changed key
+        /// paths with the shipped value and a marker for the project's side;
+        /// text shows the shipped lines written and counts the rest; any
+        /// other format, or a file that does not parse, is withheld.
         #[arg(long, value_name = "FILE")]
         diff: Option<PathBuf>,
         /// Replace user-modified managed files instead of merging.
@@ -58,7 +136,9 @@ enum Command {
         /// Only pin this codeflow release for CI: download its archives,
         /// check them against its sha256.sum and write `scaffold_version` and
         /// their digests (`[scaffold_sha256]`) to .codeflow/project.toml.
-        /// Nothing else changes. Upgrade step one; land it before the update.
+        /// Nothing else changes. The version must read as MAJOR.MINOR.PATCH
+        /// with an optional -prerelease and +build; any other is refused
+        /// before a download. Upgrade step one; land it before the update.
         #[arg(long, value_name = "VERSION", conflicts_with_all = ["diff", "force"])]
         pin: Option<String>,
     },
@@ -72,6 +152,9 @@ enum Command {
     Orient,
     /// Run the test gate (configured targets or runtime stack detection).
     Test(cmd::test::TestArgs),
+
+    /// Run a direct heavy command under the shared gate lock.
+    Reserve(cmd::reserve::ReserveArgs),
     /// Adopt or reconcile the opt-in documentation portal (utility craft over durable docs).
     Portal(cmd::portal::PortalArgs),
     /// Validate record frontmatter; --docs adds the doc-graph integrity lint.
@@ -81,7 +164,7 @@ enum Command {
     Ci(cmd::ci::CiArgs),
     /// Generated status view: branch, worktrees, in-flight work, capabilities.
     Status(cmd::status::StatusArgs),
-    /// Land a branch into a target: flock(rebase -> test -> ff-merge).
+    /// Land a branch locally after gating a rebase or merge candidate.
     Integrate(cmd::integrate::IntegrateArgs),
     #[command(about = doctor_help())]
     Doctor(cmd::doctor::DoctorArgs),
@@ -106,6 +189,8 @@ enum Command {
     Adr(cmd::new::AdrArgs),
     /// Operator feedback items: record (FB-NNN), move by the transition table, list.
     Feedback(cmd::feedback::FeedbackArgs),
+    /// Follow-ups in the clone's coordination ledger (FU-NNN): add, check, close, list. The `CODEFLOW_COORD_*` role binding is cooperative ownership, not authentication.
+    Follow(cmd::follow::FollowArgs),
     /// The shared id registry: seed, backfill, sync, admit, retarget, restore, check.
     Ids(cmd::ids::IdsArgs),
     /// Check forecast allocations and compare outcomes derived from git, without writes.
@@ -131,6 +216,7 @@ fn touches_registry(command: &Command) -> bool {
             | Command::Estimate(_)
             | Command::Models(_)
             | Command::Report(_)
+            | Command::Follow(_)
     )
 }
 
@@ -140,13 +226,16 @@ fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> 
     let Some(kept) = report.pending_pr_template.clone() else {
         return Ok(());
     };
-    if let Some(decision) = prompts::decide_pr_template(&mut std::io::stdin().lock(), &kept.path)? {
+    let decision = prompts::decide_pr_template(&mut std::io::stdin().lock(), &kept.path)
+        .map_err(|error| anyhow::Error::msg(scaffold::Shown::io(&error).into_string()))?;
+    if let Some(decision) = decision {
         let line = scaffold::pr_template::record_decision(
             root,
             &kept,
             decision,
             &scaffold::pr_template::today(),
-        )?;
+        )
+        .map_err(boundary_error)?;
         report.notes.push(line);
         report.pending_pr_template = None;
     }
@@ -166,21 +255,37 @@ fn update(
         binary_version: BINARY_VERSION.to_string(),
         diff_out: diff,
     };
-    let mut report = scaffold::update(assets, cwd, &options)?;
+    // The display boundary (TSK-1029): everything update prints is a
+    // `scaffold::Shown`, and its errors are turned into one here, with no
+    // source, so the chain `main` prints holds nothing else.
+    let mut report = scaffold::update(assets, cwd, &options).map_err(boundary_error)?;
+    for file in &mut report.files {
+        file.notes
+            .retain(|note| codeflow_core::hooks::policy_schema::first_unsupported_warning(note));
+    }
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         decide_pr_template(cwd, &mut report)?;
     }
-    print!("{report}");
+    say_report(&report);
     cmd::present::provision_state_root_or_warn();
     print_workspace_hint(cwd);
-    let portal_report = scaffold::portal::update_adopted_portal(assets, cwd)?;
+    let portal_report =
+        scaffold::portal::update_adopted_portal(assets, cwd).map_err(boundary_error)?;
     if let Some(portal_report) = &portal_report {
-        print!("{portal_report}");
+        say_report(portal_report);
     }
     if report.has_conflicts() || portal_report.is_some_and(|report| report.has_conflicts()) {
         std::process::exit(2);
     }
     Ok(())
+}
+
+/// A scaffold error at the display boundary of `codeflow update`
+/// (TSK-1029): its text only, which every variant builds from `Shown`
+/// fragments, as an error with no source.
+#[allow(clippy::needless_pass_by_value)] // `map_err` hands the error over by value
+fn boundary_error(error: scaffold::ScaffoldError) -> anyhow::Error {
+    anyhow::Error::msg(scaffold::Shown::from(&error).into_string())
 }
 
 /// `codeflow update --pin <version>`: pin that release and its archive
@@ -189,7 +294,10 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
     let base = match scaffold::release_pin::release_url() {
         Ok(base) => base,
         Err(error) => {
-            eprintln!("codeflow update --pin: error: {error}");
+            cmd::warn(&codeflow_core::shown!(
+                "codeflow update --pin: error: {}",
+                error
+            ));
             return 1;
         }
     };
@@ -200,11 +308,14 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
         &scaffold::release_pin::fetch_with_curl,
     ) {
         Ok(report) => {
-            println!("{report}");
+            cmd::say(&report.shown());
             0
         }
         Err(error) => {
-            eprintln!("codeflow update --pin: error: {error}");
+            cmd::warn(&codeflow_core::shown!(
+                "codeflow update --pin: error: {}",
+                error
+            ));
             1
         }
     }
@@ -213,16 +324,27 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
 /// Plain `init` and `update` switch nothing in a folder that holds nested
 /// repositories; they name `codeflow init --workspace` instead.
 fn print_workspace_hint(root: &std::path::Path) {
-    let policy = match codeflow_core::hooks::policy::Policy::load(root) {
-        Ok(policy) => policy.git,
+    // `update` calls this after its report, so it prints only `Shown` text
+    // (TSK-1029).
+    let policy = match codeflow_core::hooks::policy::Policy::load_shown(root) {
+        Ok(policy) => policy,
         Err(error) => {
-            eprintln!("codeflow: cannot read workspace policy: {error}");
+            cmd::warn(&codeflow_core::shown!(
+                "codeflow: cannot read workspace policy: {}",
+                error
+            ));
             return;
         }
     };
-    if let Some(hint) = root_checkout::workspace_hint(root, &policy) {
-        println!("{hint}");
+    if let Some(hint) = root_checkout::workspace_hint_shown(root, &policy.git) {
+        cmd::say(&hint);
     }
+}
+
+/// Prints an init or update report: its block is built from the report's
+/// `Shown` lines.
+fn say_report(report: &scaffold::Report) {
+    print_block!(report.block());
 }
 
 /// `init --workspace` switches the root checkout before anything is
@@ -246,7 +368,7 @@ fn report_workspace(
     step: Option<root_checkout::BranchStep>,
 ) -> anyhow::Result<()> {
     match step {
-        Some(step) => println!("{}", root_checkout::finish(root, step)?),
+        Some(step) => println_block!(root_checkout::finish(root, step)?.block()),
         None => print_workspace_hint(root),
     }
     Ok(())
@@ -290,7 +412,22 @@ fn selected_tier(minimal: bool, standard: bool, full: bool) -> Option<scaffold::
     }
 }
 
-fn main() -> anyhow::Result<()> {
+/// The CLI boundary (TSK-388): an error `run` returns is printed here, its
+/// whole chain in the form Rust's own termination prints (`Error: ...`
+/// with `Caused by:`), escaped through `cmd::shown`, and the process exits
+/// with status 1 as before. A path or name in the chain cannot write a
+/// terminal escape sequence or start a line of its own.
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {}", cmd::shown(&format!("{error:?}")));
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     // A hook git fires during this command runs this binary (SPC-013 R-85):
     // the path goes only into git children's environment, so an inherited
     // value is dropped here and no other child ever sees one.
@@ -347,7 +484,7 @@ fn main() -> anyhow::Result<()> {
             if !yes {
                 decide_pr_template(&cwd, &mut report)?;
             }
-            print!("{report}");
+            print_block!(report.block());
             cmd::present::provision_state_root_or_warn();
             report_workspace(&cwd, workspace_step)?;
         }
@@ -360,6 +497,7 @@ fn main() -> anyhow::Result<()> {
         Command::GitHook(args) => std::process::exit(cmd::git_hook::run(&args)),
         Command::Orient => std::process::exit(cmd::orient::run()),
         Command::Test(args) => std::process::exit(cmd::test::run(&args)),
+        Command::Reserve(args) => std::process::exit(cmd::reserve::run(&args)),
         Command::Portal(args) => std::process::exit(cmd::portal::run(&args, &assets)),
         Command::Validate(args) => std::process::exit(cmd::validate::run(&args)),
         Command::Ci(args) => std::process::exit(cmd::ci::run(&args)),
@@ -376,6 +514,7 @@ fn main() -> anyhow::Result<()> {
         Command::Work(args) => std::process::exit(cmd::work::run(&args)),
         Command::Adr(args) => std::process::exit(cmd::new::run_adr(&args)),
         Command::Feedback(args) => std::process::exit(cmd::feedback::run(&args)),
+        Command::Follow(args) => std::process::exit(cmd::follow::run(&args)),
         Command::Ids(args) => std::process::exit(cmd::ids::run(&args)),
         Command::Estimate(args) => std::process::exit(cmd::estimate::run(&args)),
         Command::Present(args) => std::process::exit(cmd::present::run(&args)),

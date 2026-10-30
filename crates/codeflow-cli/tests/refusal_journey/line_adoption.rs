@@ -8,6 +8,7 @@ use fixture::{blocks, output, passes, Line, LINE};
 #[test]
 fn epic_line_adoption_journey_repairs_a_direct_commit_by_planning_pr() {
     let f = Line::new();
+    f.git(&["push", "-q", "origin", "main"]);
     let direct = f.direct();
     blocks(&f.ci("main", LINE), &direct[..9]);
     f.git(&["switch", "-qc", "plan/adopt"]);
@@ -30,10 +31,14 @@ fn epic_line_adoption_journey_repairs_a_direct_commit_by_planning_pr() {
 fn epic_line_adoption_unpushed_repair_keeps_work_on_a_task_branch() {
     let f = Line::new();
     let direct = f.direct();
-    blocks(&f.push(fixture::ZERO), "git reset --keep main");
+    blocks(&f.push(fixture::ZERO), "git reset --keep refs/heads/main");
     f.git(&["branch", "task/TSK-001-repair"]);
     f.git(&["reset", "--keep", "main"]);
     assert_eq!(f.git(&["rev-parse", "task/TSK-001-repair"]), direct);
+    f.git(&["push", "-q", "origin", "main"]);
+    f.git(&["switch", "task/TSK-001-repair"]);
+    f.complete_task();
+    f.git(&["switch", LINE]);
     f.merge("task/TSK-001-repair");
     passes(&f.push(fixture::ZERO));
     passes(&f.ci("main", LINE));

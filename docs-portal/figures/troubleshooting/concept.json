@@ -38,12 +38,12 @@
     ],
     "facts": [
       {
-        "claim": "doctor runs twenty-two health checks",
+        "claim": "doctor runs twenty-four health checks",
         "source": "docs/troubleshooting.md#concept",
         "derive": "the lead sentence",
         "check": {
           "kind": "contains",
-          "text": "`codeflow doctor` runs twenty-two health checks"
+          "text": "`codeflow doctor` runs twenty-four health checks"
         },
         "value": true
       },

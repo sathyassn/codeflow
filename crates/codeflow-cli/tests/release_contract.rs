@@ -634,3 +634,96 @@ fn the_release_build_writes_only_ignored_paths_so_its_binary_is_clean() {
         "the release job writes a path .gitignore does not cover: {written:?}"
     );
 }
+
+/// TSK-451 AC-7: an adopter with no `scripts/release.py` and no release
+/// workflow keeps its release-impact enforcement from `codeflow ci`, the
+/// one evaluator, at the level its policy sets: `block` passes a valid
+/// section and blocks a missing migration or a breaking change below the
+/// breaking level.
+#[test]
+fn an_adopter_without_release_tooling_is_judged_by_codeflow_ci_alone() {
+    use std::process::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+    git(&["init", "-qb", "main"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "t"]);
+    fs::create_dir_all(root.join(".codeflow")).unwrap();
+    fs::write(
+        root.join(".codeflow/policy.json"),
+        "{\n  \"schema_version\": 1,\n  \"git\": {\"pr_release_impact\": \"block\"}\n}\n",
+    )
+    .unwrap();
+    fs::write(root.join("tool.py"), "print('a')\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "chore: seed"]);
+    git(&["switch", "-qc", "feat/x"]);
+    fs::write(root.join("tool.py"), "print('b')\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "feat: change the tool"]);
+    assert!(!root.join("scripts/release.py").exists());
+    assert!(!root.join(".github/workflows").exists());
+    let ci = |release: &str| {
+        let body = format!(
+            "Task: release check\n## Summary\nChange the tool.\n\n- one change\n\n## Changes\n- one\n\n## Testing\n- ran it\nNot tested: Windows.\n\n## Reviews\nNone: fixture.\n\n## Release impact\n{release}"
+        );
+        let out = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+            .args([
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/x",
+                "--pr-body",
+                &body,
+            ])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("CODEFLOW_PR_BODY")
+            .env_remove("GITHUB_EVENT_NAME")
+            .output()
+            .unwrap();
+        (
+            out.status.code(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    let valid =
+        ci("- Impact: minor\n- Breaking: no\n- Rationale: Adds an output.\n- Migration: none\n");
+    assert_eq!(valid.0, Some(0), "{}", valid.1);
+    let no_migration = ci("- Impact: minor\n- Breaking: no\n- Rationale: Adds an output.\n");
+    assert_eq!(no_migration.0, Some(1), "{}", no_migration.1);
+    assert!(
+        no_migration
+            .1
+            .contains("requires a non-empty migration field"),
+        "{}",
+        no_migration.1
+    );
+    let inconsistent = ci("- Impact: minor\n- Breaking: yes\n- Rationale: Removes an output.\n- Migration: run the new command\n");
+    assert_eq!(inconsistent.0, Some(1), "{}", inconsistent.1);
+    assert!(
+        inconsistent
+            .1
+            .contains("Breaking: yes requires Impact of at least major"),
+        "{}",
+        inconsistent.1
+    );
+}

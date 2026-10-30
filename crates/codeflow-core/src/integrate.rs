@@ -1,8 +1,8 @@
-//! The `integrate` primitive: flock(rebase → test → ff-merge).
+//! The `integrate` primitive: lock, prepare a candidate, gate, advance the target.
 //!
 //! The local sanctioned path for landing work on a protected branch
-//! (charter §6.2, D9): rebase the branch onto the target, run the test
-//! gate, then fast-forward the target — all under an exclusive lock on
+//! (charter §6.2, D9): rebase by default, or create a merge commit without
+//! rewriting the branch, then gate and advance the target under a lock on
 //! `.git/codeflow/integrate.lock`. Failure at any stage leaves the target
 //! ref untouched.
 //!
@@ -11,6 +11,8 @@
 //! path and permits the protected-branch merge. The token is a discipline
 //! aid for agents, not a security boundary — CI + remote protection are
 //! the hard line (charter §6.5).
+
+use crate::workgraph::history;
 
 use std::path::{Path, PathBuf};
 
@@ -21,7 +23,7 @@ use crate::file_lock::{lock_path_exclusive, PathLock};
 use crate::git::conflict::{attempt_rebase, RebaseResult};
 use crate::hooks::policy::Policy;
 use crate::testing::error::TestingError;
-use crate::testing::gate::{run_gate, GateOutcome};
+use crate::testing::gate::{run_gate_with_options, GateOptions, GateOutcome};
 
 /// Environment variable carrying the gate-context token during the
 /// integrate merge. The git hooks and git-guard (workstream f-hooks) check
@@ -63,10 +65,17 @@ pub enum IntegrateError {
         conflicting_files: Vec<String>,
     },
 
+    #[error("merge of '{branch}' into '{target}' failed; nothing was merged:\n{message}")]
+    CandidateMergeFailed {
+        branch: String,
+        target: String,
+        message: String,
+    },
+
     #[error("test gate failed — nothing was merged:\n{summary}")]
     TestGateFailed { summary: String },
 
-    #[error("fast-forward merge into '{target}' failed: {message}")]
+    #[error("advance of '{target}' failed: {message}")]
     MergeFailed { target: String, message: String },
 
     #[error(transparent)]
@@ -74,6 +83,15 @@ pub enum IntegrateError {
 
     #[error("test gate: {0}")]
     Testing(#[from] TestingError),
+}
+
+/// How to prepare the commit that the integration gate tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegrateMode {
+    /// Rebase the source branch onto the target, then fast-forward (default).
+    Rebase,
+    /// Create a no-fast-forward merge commit, preserving the source head.
+    Merge,
 }
 
 /// How the test gate concluded inside an integration.
@@ -107,7 +125,31 @@ pub struct IntegrateOutcome {
 
 impl std::fmt::Display for IntegrateOutcome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "integrated '{}' into '{}'", self.branch, self.target)?;
+        f.write_str(self.block().as_str())
+    }
+}
+
+impl IntegrateOutcome {
+    /// The text as a block for a terminal: each `writeln!` is one line
+    /// under the block rule, so a quoted value cannot start a line of its
+    /// own (TSK-388).
+    #[must_use]
+    pub fn block(&self) -> crate::git::TextBlock {
+        let mut block = crate::git::TextBlock::new();
+        let _ = self.write_block(&mut block);
+        block
+    }
+
+    fn write_block(&self, f: &mut crate::git::TextBlock) -> std::fmt::Result {
+        // Branch and target names, test target names, reasons and the
+        // checkout are fields: each stays on its line (TSK-388).
+        use crate::git::{display_line, display_text};
+        writeln!(
+            f,
+            "integrated '{}' into '{}'",
+            display_text(&self.branch),
+            display_text(&self.target)
+        )?;
         writeln!(
             f,
             "  target:    {} -> {} ({} commit{})",
@@ -127,19 +169,32 @@ impl std::fmt::Display for IntegrateOutcome {
         )?;
         match &self.test_gate {
             TestGateSummary::SkippedNoTargets { reason } => {
-                writeln!(f, "  test gate: SKIPPED — {reason}")?;
+                writeln!(
+                    f,
+                    "  test gate: SKIPPED (executed 0; skipped 0; not complete): {}",
+                    display_line(reason)
+                )?;
                 writeln!(
                     f,
                     "             WARNING: no tests ran; this merge is NOT test-verified"
                 )?;
             }
             TestGateSummary::Passed { targets } => {
-                writeln!(f, "  test gate: passed ({})", targets.join(", "))?;
+                writeln!(
+                    f,
+                    "  test gate: passed (executed {}; skipped 0; {})",
+                    targets.len(),
+                    targets
+                        .iter()
+                        .map(|name| display_text(name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?;
             }
         }
-        writeln!(f, "  checkout:  {}", self.final_checkout)?;
+        writeln!(f, "  checkout:  {}", display_text(&self.final_checkout))?;
         for warning in &self.warnings {
-            writeln!(f, "  WARNING:   {warning}")?;
+            writeln!(f, "  WARNING:   {}", display_line(warning))?;
         }
         Ok(())
     }
@@ -185,6 +240,24 @@ pub fn integrate(
     branch: &str,
     target: &str,
 ) -> Result<IntegrateOutcome, IntegrateError> {
+    integrate_with_mode(repo_root, branch, target, IntegrateMode::Rebase)
+}
+
+/// Integrate using a rebase or a no-fast-forward merge candidate.
+/// The merge candidate is detached so neither branch moves before the gate.
+/// Merge mode requires a linked worktree so commit hooks retain their normal
+/// root-checkout enforcement.
+///
+/// # Errors
+///
+/// Returns the failed stage; the target is unchanged until its final atomic
+/// update. A failed merge is aborted and the original checkout restored.
+pub fn integrate_with_mode(
+    repo_root: &Path,
+    branch: &str,
+    target: &str,
+    mode: IntegrateMode,
+) -> Result<IntegrateOutcome, IntegrateError> {
     let repo = git2::Repository::open(repo_root)
         .map_err(|e| GitError::RepoOpen(format!("{}: {e}", repo_root.display())))?;
 
@@ -198,7 +271,14 @@ pub fn integrate(
             "branch and target are both '{branch}'"
         )));
     }
-    resolve_branch(&repo, branch)?; // branch must exist and have a commit
+    if mode == IntegrateMode::Merge && crate::root_checkout::is_root_checkout(&repo) {
+        return Err(IntegrateError::Preflight(
+            "--merge cannot run from a root checkout; run codeflow integrate --merge \
+             from a linked worktree instead"
+                .to_string(),
+        ));
+    }
+    let branch_oid = resolve_branch(&repo, branch)?;
     let target_oid = resolve_branch(&repo, target)?;
     let dirty = dirty_files(repo_root)?;
     if !dirty.is_empty() {
@@ -213,49 +293,44 @@ pub fn integrate(
     let original = checked_out_branch(&repo, target)?;
     let old_target_short = short_id(&repo, target_oid);
 
-    // Stage 2: rebase the branch onto the target.
-    checkout(repo_root, branch)?;
-    match attempt_rebase(repo_root, target)? {
-        RebaseResult::Success => {}
-        RebaseResult::ConflictAborted { conflicting_files } => {
-            let _ = restore_checkout(repo_root, &original);
-            return Err(IntegrateError::RebaseConflict {
-                branch: branch.to_string(),
-                target: target.to_string(),
-                conflicting_files,
-            });
-        }
-    }
-
-    // Pin the exact rebased tip that the test gate runs against, so a concurrent
-    // branch move during testing cannot land untested content (the target CAS
-    // below only guards the target ref, not the branch).
-    let tested_oid = resolve_branch(&repo, branch)?;
+    // Stage 2: prepare and pin the candidate before the gate runs.
+    let (source_oid, tested_oid) = prepare_candidate(
+        repo_root, &repo, branch, target, branch_oid, target_oid, &original, mode,
+    )?;
 
     // Stage 3: test gate (full mode), then the release structure of a
     // project that adopted CodeFlow's calculator (SPC-013 R-94).
     let test_gate = run_test_stage(repo_root, &original)?;
     run_release_structure(repo_root, &original, &tested_oid.to_string())?;
 
-    // The branch must still point at the exact commit that was tested, and the
-    // target must be an ancestor of it (a real fast-forward), before we advance.
-    let current_tip = resolve_branch(&repo, branch)?;
-    if current_tip != tested_oid {
+    // The source must still match the head used to prepare the candidate,
+    // and the old target must be an ancestor of the tested candidate.
+    let current_tip = resolve_branch(&repo, branch).inspect_err(|_| {
+        let _ = restore_checkout(repo_root, &original);
+    })?;
+    if current_tip != source_oid {
         let _ = restore_checkout(repo_root, &original);
         return Err(IntegrateError::MergeFailed {
             target: target.to_string(),
             message: format!(
                 "branch '{branch}' moved during integrate (tested {}, now {}) — \
                  refusing to land untested content",
-                short_id(&repo, tested_oid),
+                short_id(&repo, source_oid),
                 short_id(&repo, current_tip)
             ),
         });
     }
+    if mode == IntegrateMode::Merge {
+        verify_merge_head(repo_root, &repo, target, &original, tested_oid)?;
+    }
     let is_fast_forward = tested_oid == target_oid
-        || repo
-            .graph_descendant_of(tested_oid, target_oid)
-            .unwrap_or(false);
+        || history::descendant_of(&repo, tested_oid, target_oid).map_err(|error| {
+            let _ = restore_checkout(repo_root, &original);
+            IntegrateError::MergeFailed {
+                target: target.to_string(),
+                message: error.to_string(),
+            }
+        })?;
     if !is_fast_forward {
         let _ = restore_checkout(repo_root, &original);
         return Err(IntegrateError::MergeFailed {
@@ -306,6 +381,143 @@ pub fn integrate(
         original,
         test_gate,
     )
+}
+
+fn verify_merge_head(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    target: &str,
+    original: &str,
+    tested_oid: git2::Oid,
+) -> Result<(), IntegrateError> {
+    let head = repo.head().map_err(|error| {
+        let _ = restore_checkout(repo_root, original);
+        IntegrateError::MergeFailed {
+            target: target.to_string(),
+            message: format!("cannot read merge candidate HEAD after the gate: {error}"),
+        }
+    })?;
+    if head.target() != Some(tested_oid) {
+        let _ = restore_checkout(repo_root, original);
+        return Err(IntegrateError::MergeFailed {
+            target: target.to_string(),
+            message:
+                "merge candidate HEAD moved during integrate; refusing to land untested content"
+                    .to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_candidate(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    branch: &str,
+    target: &str,
+    branch_oid: git2::Oid,
+    target_oid: git2::Oid,
+    original: &str,
+    mode: IntegrateMode,
+) -> Result<(git2::Oid, git2::Oid), IntegrateError> {
+    match mode {
+        IntegrateMode::Rebase => {
+            checkout(repo_root, branch)?;
+            match attempt_rebase(repo_root, target)? {
+                RebaseResult::Success => {}
+                RebaseResult::ConflictAborted { conflicting_files } => {
+                    let _ = restore_checkout(repo_root, original);
+                    return Err(IntegrateError::RebaseConflict {
+                        branch: branch.to_string(),
+                        target: target.to_string(),
+                        conflicting_files,
+                    });
+                }
+            }
+            let rebased = resolve_branch(repo, branch)?;
+            Ok((rebased, rebased))
+        }
+        IntegrateMode::Merge => Ok((
+            branch_oid,
+            prepare_merge(
+                repo_root, repo, branch, target, branch_oid, target_oid, original,
+            )?,
+        )),
+    }
+}
+
+/// Build a merge on detached HEAD. The source and target refs stay untouched,
+/// including when Git refuses the merge or leaves conflicts in the index.
+#[allow(clippy::too_many_arguments)]
+fn prepare_merge(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    branch: &str,
+    target: &str,
+    branch_oid: git2::Oid,
+    target_oid: git2::Oid,
+    original: &str,
+) -> Result<git2::Oid, IntegrateError> {
+    let result = (|| {
+        checkout_detached(repo_root, &target_oid.to_string())?;
+        let output = crate::git::command()
+            .args([
+                "merge",
+                "--no-ff",
+                "--no-edit",
+                "-m",
+                &format!("Merge branch '{branch}' into {target}"),
+                &branch_oid.to_string(),
+            ])
+            .current_dir(repo_root)
+            .output()
+            .map_err(|error| IntegrateError::CandidateMergeFailed {
+                branch: branch.to_string(),
+                target: target.to_string(),
+                message: format!("failed to run git merge: {error}"),
+            })?;
+        if !output.status.success() {
+            let remedy = if repo.index().is_ok_and(|index| index.has_conflicts()) {
+                "\nresolve on the source branch and re-run integrate"
+            } else {
+                ""
+            };
+            return Err(IntegrateError::CandidateMergeFailed {
+                branch: branch.to_string(),
+                target: target.to_string(),
+                message: format!(
+                    "{}{}{remedy}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                ),
+            });
+        }
+        repo.head()
+            .and_then(|head| head.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| {
+                IntegrateError::Preflight(format!("cannot read merge candidate: {error}"))
+            })
+    })();
+    if result.is_err() {
+        if repo.state() == git2::RepositoryState::Merge {
+            let abort = crate::git::command()
+                .args(["merge", "--abort"])
+                .current_dir(repo_root)
+                .output();
+            if !matches!(abort, Ok(ref output) if output.status.success()) {
+                return Err(IntegrateError::CandidateMergeFailed {
+                    branch: branch.to_string(),
+                    target: target.to_string(),
+                    message: format!(
+                        "merge failed and could not be aborted: {abort:?}; run git merge --abort"
+                    ),
+                });
+            }
+        }
+        let _ = restore_checkout(repo_root, original);
+    }
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -371,12 +583,23 @@ fn run_release_structure(
 }
 
 fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, IntegrateError> {
-    match run_gate(repo_root, "full") {
+    match run_gate_with_options(
+        repo_root,
+        "full",
+        &GateOptions {
+            all: true,
+            ..GateOptions::default()
+        },
+    ) {
         Ok(GateOutcome::NoTargets { reason }) => Ok(TestGateSummary::SkippedNoTargets { reason }),
         Ok(GateOutcome::Completed {
-            results, passed, ..
+            results,
+            passed,
+            skipped,
+            complete,
+            ..
         }) => {
-            if passed {
+            if passed && complete && skipped.is_empty() && !results.is_empty() {
                 return Ok(TestGateSummary::Passed {
                     targets: results.into_iter().map(|r| r.name).collect(),
                 });
@@ -397,6 +620,12 @@ fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, I
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
+            let summary = format!(
+                "executed {}; skipped {}{}\n{summary}",
+                results.len(),
+                skipped.len(),
+                if complete { "" } else { "; not complete" }
+            );
             Err(IntegrateError::TestGateFailed { summary })
         }
         Err(e) => {
@@ -445,8 +674,21 @@ fn dirty_files(repo_root: &Path) -> Result<Vec<String>, IntegrateError> {
 }
 
 fn checkout(repo_root: &Path, name: &str) -> Result<(), IntegrateError> {
-    let output = crate::git::command()
-        .args(["checkout", name])
+    run_checkout(repo_root, name, false)
+}
+
+fn checkout_detached(repo_root: &Path, oid: &str) -> Result<(), IntegrateError> {
+    run_checkout(repo_root, oid, true)
+}
+
+fn run_checkout(repo_root: &Path, name: &str, detach: bool) -> Result<(), IntegrateError> {
+    let mut command = crate::git::command();
+    command.arg("checkout");
+    if detach {
+        command.arg("--detach");
+    }
+    let output = command
+        .arg(name)
         .current_dir(repo_root)
         .output()
         .map_err(|e| IntegrateError::CheckoutFailed {
@@ -593,7 +835,7 @@ fn count_commits(repo: &git2::Repository, old: git2::Oid, new: git2::Oid) -> usi
     if old == new {
         return 0;
     }
-    let Ok(mut walk) = repo.revwalk() else {
+    let Ok(mut walk) = history::revwalk(repo) else {
         return 0;
     };
     if walk.push(new).is_err() || walk.hide(old).is_err() {
@@ -871,6 +1113,7 @@ mod tests {
             &["worktree", "add", wt_path.to_str().unwrap(), "feat/x"],
         );
 
+        write_test_config(&wt_path, "exit 0");
         let before = branch_oid(dir.path(), "main");
         let outcome =
             integrate(&wt_path, "feat/x", "main").expect("integrate from a linked worktree lands");
@@ -1142,6 +1385,7 @@ mod tests {
     fn unprotected_target_is_reported_not_blocked() {
         let dir = repo_with_feature_branch();
         git(dir.path(), &["branch", "develop", "main"]);
+        write_test_config(dir.path(), "exit 0");
 
         let outcome = integrate(dir.path(), "feat/x", "develop").expect("integrate succeeds");
         assert!(!outcome.target_protected);
@@ -1162,7 +1406,7 @@ mod r22_regressions {
 
     #[test]
     fn r22_unreadable_release_adoption_refuses_integration() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         assert!(run_release_structure(dir.path(), "main", "HEAD").is_ok());
         std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
         std::fs::write(dir.path().join(".codeflow/project.toml"), "invalid = [").unwrap();

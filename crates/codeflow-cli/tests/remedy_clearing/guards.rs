@@ -45,6 +45,26 @@ fn assert_passes(root: &Path, which: &str, shell: &str) {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn clears_secret_selection() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    write(root, "src/public.txt", "token\n");
+    std::os::unix::fs::symlink("loop", root.join("loop")).unwrap();
+    let printed = refused(
+        root,
+        "exec-guard",
+        "grep -r token loop",
+        "security.secret_reads",
+        "SECRET_SELECTION",
+    );
+    assert!(printed.contains("narrow the search roots"));
+    assert_passes(root, "exec-guard", "grep -r token src");
+    let output = run("grep", root, &["-r", "token", "src"]);
+    assert!(String::from_utf8(output.stdout).unwrap().contains("token"));
+}
+
 /// The block a guard prints for `bad`, checked against the row.
 fn refused(root: &Path, which: &str, bad: &str, finding: &str, row: &str) -> String {
     let out = guard(root, which, bad);
@@ -105,6 +125,11 @@ fn clears_protected_branch() {
     let landing = step
         .replace("<branch>", "feat/x")
         .replace("<target>", "main");
+    write(
+        root,
+        ".codeflow/test-config.json",
+        r#"{"schema_version":"1.0","targets":[{"name":"landed-feature","runner":"custom","modes":{"full":{"command":"git ls-files --error-unmatch x.txt"}}}]}"#,
+    );
     assert_passes(root, "git-guard", &landing);
     run_printed(root, &landing, &[], &[]);
     assert_eq!(head(root, "main"), head(root, "feat/x"), "the work landed");
@@ -293,6 +318,33 @@ fn clears_hook_integrity() {
     );
     let step = printed_command(&printed, "HOOK_INTEGRITY", None);
     assert_passes(&root, "git-guard", &step);
+    run_printed(&root, &step, &[], &[]);
+}
+
+/// TSK-302: the interpreter argument refusal names the read route, which
+/// passes, and the update step, which runs.
+#[test]
+fn clears_interpreter_argument() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let printed = refused(
+        &root,
+        "exec-guard",
+        "python3 tool.py .codeflow/policy.json",
+        "git.hook_integrity",
+        "INTERPRETER_ARGUMENT",
+    );
+    assert!(
+        printed.contains("redirect it into the interpreter's stdin"),
+        "{printed}"
+    );
+    assert_passes(
+        &root,
+        "exec-guard",
+        "python3 tool.py < .codeflow/policy.json",
+    );
+    let step = printed_command(&printed, "INTERPRETER_ARGUMENT", None);
+    assert_passes(&root, "exec-guard", &step);
     run_printed(&root, &step, &[], &[]);
 }
 
@@ -756,4 +808,25 @@ fn clears_push_without_follow_tags() {
     assert_passes(root, "exec-guard", &step);
     run_printed(root, &step, &[], &[]);
     assert_eq!(head(root, "origin/feat/x"), head(root, "feat/x"));
+}
+
+#[test]
+fn clears_absent_worktree() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    git(root, &["worktree", "add", "-b", "task/missing", "linked"]);
+    std::fs::remove_dir_all(root.join("linked")).unwrap();
+    let printed = refused(
+        root,
+        "git-guard",
+        "git worktree remove --force linked",
+        "git.discard_uncommitted",
+        "ABSENT_WORKTREE",
+    );
+    let step = printed_command(&printed, "ABSENT_WORKTREE", None);
+    assert_eq!(step, "git worktree prune");
+    assert_passes(root, "git-guard", &step);
+    run_printed(root, &step, &[], &[]);
+    assert!(!root.join(".git/worktrees/linked").exists());
+    assert_passes(root, "git-guard", "printf hello");
 }

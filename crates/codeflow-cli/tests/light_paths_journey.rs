@@ -8,11 +8,11 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/outcome.rs"]
+mod outcome;
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
@@ -72,7 +72,10 @@ fn ok(out: &Output, what: &str) -> String {
     stdout
 }
 
+/// Commit everything, each new record's Outcome stated first as its
+/// author states it (TSK-435).
 fn commit(root: &Path, message: &str) {
+    outcome::state_outcomes(root);
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", message]);
 }
@@ -465,4 +468,37 @@ fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
     } else {
         rows.join("\n")
     }
+}
+
+/// TSK-398 review F1: `epic new --integration` cuts the line from the full
+/// `refs/remotes/origin/main`, never from a local branch named `origin/main`
+/// that Git's short-name lookup prefers.
+#[test]
+fn epic_line_is_cut_from_the_remote_tracking_ref_beside_an_origin_main_shadow() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    let protected = git(&root, &["rev-parse", "HEAD"]);
+    git(
+        &root,
+        &["update-ref", "refs/remotes/origin/main", &protected],
+    );
+    git(&root, &["switch", "-q", "-c", "plan/outcome"]);
+    std::fs::write(root.join("notes.md"), "Author notes.\n").unwrap();
+    commit(&root, "docs: add author notes");
+    let shadow = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["branch", "origin/main", &shadow]);
+    assert_eq!(git(&root, &["rev-parse", "origin/main"]), shadow);
+    ok(
+        &codeflow(&root, &["epic", "new", "--integration", "Outcome"]),
+        "epic new --integration",
+    );
+    assert_eq!(
+        git(&root, &["rev-parse", "integration/EPC-001-outcome"]),
+        protected
+    );
 }

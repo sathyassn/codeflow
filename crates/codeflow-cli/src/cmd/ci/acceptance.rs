@@ -13,7 +13,8 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
-    is_correction, pull_request_findings_judged, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
+    is_correction, pull_request_findings_judged, Criteria, Finding, AUTHORITY_NOTE, FROZEN_RULE,
+    IMPORT_RULE, REMOVAL_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
 use codeflow_core::workgraph::release_line;
@@ -23,11 +24,13 @@ use super::classification::{range_changes, root_branch_at, Class, Range};
 
 /// Run the checks when durable work tracking is on at the target or at the
 /// head, and a range resolves. `class` is the pull request's validated
-/// class, when it was classified.
+/// class, when it was classified. `body` is the pull request body, which
+/// gives the reason for each criterion a task removes from its own record.
 #[allow(clippy::too_many_arguments)] // The run's shared state and the stacked heads, passed once.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
+    body: Option<&str>,
     range: Option<&Range<'_>>,
     names: &super::Names<'_>,
     class: Option<&Class>,
@@ -55,6 +58,16 @@ pub(super) fn dispatch(
     let found = match judge(root, range, names) {
         Some(judged) => judged,
         None => criteria(root, range, branch, class).and_then(|criteria| {
+            println!(
+                "codeflow ci: acceptance binding: {} (branch '{}', target '{}')",
+                if criteria.amends() {
+                    "amendable"
+                } else {
+                    "frozen"
+                },
+                codeflow_core::git::display_text(branch),
+                codeflow_core::git::display_text(range.target)
+            );
             pull_request_findings_judged(
                 root,
                 range.base,
@@ -69,8 +82,14 @@ pub(super) fn dispatch(
     match found {
         Ok(found) => {
             for found in found {
-                if found.note {
-                    let remedy = if is_correction(&found) {
+                if found.rule == REMOVAL_RULE {
+                    if let Some(refused) = removal(body, &found) {
+                        tagged.push(refused);
+                    }
+                } else if found.note {
+                    let remedy = if found.rule == AUTHORITY_NOTE {
+                        codeflow_core::remedy::CRITERIA_AUTHORITY.remedy()
+                    } else if is_correction(&found) {
                         codeflow_core::remedy::CRITERIA_CORRECTION.remedy()
                     } else if found.rule == FROZEN_RULE {
                         codeflow_core::remedy::CRITERIA_DELTA.remedy()
@@ -114,18 +133,18 @@ fn judge(
     let (destination, scope) = match release_scope(root, names) {
         Ok(Some(release)) => release,
         Ok(None) => return None,
-        Err(error) => return Some(Err(unscoped(error))),
+        Err(error) => return Some(Err(unscoped(error.message()))),
     };
     // The scope this range is judged under: a result, not a finding. The
     // pre-push hook states a release push's scope itself.
     eprintln!(
         "codeflow ci: acceptance: release range ('{}'{}) under pattern '{}' ({}); each change is judged where it was introduced (SPC-013 R-120)",
-        names.branch,
+        codeflow_core::git::display_text(names.branch),
         names
             .into
-            .map(|into| format!(" into '{into}'"))
+            .map(|into| format!(" into '{}'", codeflow_core::git::display_text(into)))
             .unwrap_or_default(),
-        scope.pattern,
+        codeflow_core::git::display_text(&scope.pattern),
         scope.source
     );
     let head = match release_head(root, range, scope) {
@@ -150,26 +169,41 @@ fn judge(
     )
 }
 
+/// Acquisition failures stay separate from policy and history failures.
+pub(super) enum ScopeError {
+    Destination(String),
+    Scope(String),
+}
+
+impl ScopeError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Destination(message) | Self::Scope(message) => message,
+        }
+    }
+}
+
 /// The destination and scope of a release range, asked once per run and
 /// shared by the records rule and the acceptance check; `None` for an
 /// ordinary range.
 pub(super) fn release_scope<'n>(
     root: &Path,
     names: &'n super::Names<'_>,
-) -> Result<Option<&'n (release_line::Destination, release_line::Scope)>, &'n str> {
+) -> Result<Option<&'n (release_line::Destination, release_line::Scope)>, &'n ScopeError> {
     names
         .release
         .get_or_init(|| {
             let destination = match (names.destination, names.advertisement) {
                 (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
                 _ => release_line::ask_destination(root, names.destination),
-            }?;
-            let scope = release_line::scope(root, &destination, names.branch, names.into)?;
+            }
+            .map_err(ScopeError::Destination)?;
+            let scope = release_line::scope(root, &destination, names.branch, names.into)
+                .map_err(ScopeError::Scope)?;
             Ok(scope.release().then_some((destination, scope)))
         })
         .as_ref()
         .map(Option::as_ref)
-        .map_err(String::as_str)
 }
 
 /// The head a release range is judged at: a pull request into a release
@@ -196,7 +230,9 @@ pub(super) fn release_owner(
     range: &Range<'_>,
     names: &super::Names<'_>,
 ) -> Result<Option<String>, String> {
-    let Some((destination, scope)) = release_scope(root, names).map_err(str::to_string)? else {
+    let Some((destination, scope)) =
+        release_scope(root, names).map_err(|error| error.message().to_string())?
+    else {
         return Ok(None);
     };
     let head = release_head(root, range, scope)?;
@@ -212,7 +248,9 @@ pub(super) fn brought(
     range: &Range<'_>,
     names: &super::Names<'_>,
 ) -> Result<Option<codeflow_core::workgraph::lifecycle::Brought>, String> {
-    let Some((destination, scope)) = release_scope(root, names).map_err(unscoped)? else {
+    let Some((destination, scope)) =
+        release_scope(root, names).map_err(|error| unscoped(error.message()))?
+    else {
         return Ok(None);
     };
     let head = release_head(root, range, scope)?;
@@ -220,10 +258,17 @@ pub(super) fn brought(
         .map(|judged| Some(judged.brought))
 }
 
-pub(super) fn scope_refusal(error: &str) -> Violation {
+pub(super) fn scope_refusal(error: &ScopeError) -> Violation {
+    if let ScopeError::Destination(message) = error {
+        return Violation::always_blocking(
+            release_line::DESTINATION_RULE,
+            unscoped(message),
+            &codeflow_core::remedy::PUSH_DESTINATION_SILENT.remedy(),
+        );
+    }
     Violation::always_blocking(
         FROZEN_RULE,
-        unscoped(error),
+        unscoped(error.message()),
         "repair the destination or policy named above, then rerun codeflow ci",
     )
 }
@@ -250,11 +295,11 @@ fn criteria(
 ) -> Result<Criteria, String> {
     // A release range is judged by `judge` and does not reach here; were it
     // to, the release pull request keeps its task's criteria as tracked work.
-    if let Some(Class::Tracked { task_id } | Class::ReleaseIntegration { task_id }) = class {
+    if let Some(task_id) = class.and_then(Class::task_id) {
         let own_branch = task_id_from_branch(root, branch)
             .map_err(|error| error.to_string())?
             .as_deref()
-            == Some(task_id.as_str());
+            == Some(task_id);
         return codeflow_core::workgraph::acceptance::task_criteria(
             root, range.base, task_id, own_branch,
         );
@@ -275,10 +320,10 @@ fn criteria(
         Some(Class::EpicLine(_) | Class::RootBranch(_)) => true,
         Some(_) => false,
         None => {
-            if root_branch_at(root, range.base)?.as_deref() == Some(branch)
-                || (branch.starts_with("integration/")
-                    && check_epic_line(root, branch, range.target, range.base, range.head).is_ok())
-            {
+            let root_branch = root_branch_at(root, range.base)?.as_deref() == Some(branch);
+            let line = (!root_branch && branch.starts_with("integration/"))
+                .then(|| check_epic_line(root, branch, range.target, range.base, range.head));
+            if root_branch || matches!(line, Some(Ok(_))) {
                 true
             } else if task_id_from_branch(root, branch)
                 .map_err(|error| error.to_string())?
@@ -287,6 +332,10 @@ fn criteria(
             {
                 return Ok(Criteria::Amendment(None));
             } else {
+                // Only now are the criteria frozen, so only now say why.
+                if let Some(Err(reason)) = line {
+                    frozen_line_note(branch, &reason);
+                }
                 false
             }
         }
@@ -296,6 +345,23 @@ fn criteria(
     } else {
         Criteria::Frozen
     })
+}
+
+/// Print once why `branch`, an `integration/` head judged without a pull
+/// request body, is judged as frozen task work: it is not a verified epic
+/// line, so each completion binds at the range head (TSK-433 AC-7, issue
+/// #341). Printed only once the criteria are frozen, never when the range
+/// falls back to a planning amendment; a pull request's classification
+/// already names the reason.
+fn frozen_line_note(branch: &str, reason: &str) {
+    let note = codeflow_core::remedy::Finding::new(
+        format!(
+            "'{}' is not a verified epic line, so its completions bind at the range head with frozen criteria: {reason}",
+            codeflow_core::git::display_text(branch)
+        ),
+        codeflow_core::remedy::UNVERIFIED_LINE_FROZEN.remedy(),
+    );
+    println!("{}", note.line("codeflow ci: acceptance", "note"));
 }
 
 /// Whether the range carries only what a planning amendment may, read
@@ -315,12 +381,47 @@ fn planning_amendment_range(root: &Path, range: &Range<'_>) -> Result<bool, Stri
 /// Criteria frozen and a planning amendment's epic scope always block
 /// (R-80, ADR-0078); the binding and journey rules take the
 /// `git.work_records` level.
+/// A criterion `found` names (`<task> <criterion>`) that a task removes
+/// from its own record (TSK-451): the pull request body gives the reason on
+/// a visible line naming the criterion and its removal, or the removal is
+/// refused, so weakening a criterion stays visible to the review. A push
+/// has no body yet and is judged on its pull request.
+fn removal(body: Option<&str>, found: &Finding) -> Option<super::TaggedViolation> {
+    let (task, criterion) = found.message.split_once(' ')?;
+    let Some(body) = body else {
+        let note = codeflow_core::remedy::Finding::new(
+            format!("{REMOVAL_RULE}: {task} removes {criterion}; its pull request body gives the reason"),
+            codeflow_core::remedy::CRITERIA_DELTA.remedy(),
+        );
+        println!("{}", note.line("codeflow ci", "note"));
+        return None;
+    };
+    if super::pr_body::gives_removal_reason(body, criterion) {
+        println!("codeflow ci: {task} removes {criterion}, with the reason in the PR body");
+        return None;
+    }
+    Some(super::TaggedViolation {
+        sha: None,
+        violation: Violation::always_blocking(
+            REMOVAL_RULE,
+            format!("{task} removes its criterion {criterion}, and the PR body gives no reason for it"),
+            "give the reason in the PR body on a line naming the criterion, for example `- AC-2 removed: <why the remaining criteria suffice>`, or keep the criterion",
+        ),
+    })
+}
+
 fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
     let violation = if found.rule == FROZEN_RULE {
         Violation::always_blocking(
             found.rule,
             found.message,
             "another task's criteria change by its own PR or by a planning amendment that names its epic; a reopened task keeps its criteria; a completed standalone task's criteria text is corrected by a pull request of planning records only whose `Task:` line names it or its follow-up, keeping every criterion and tag (ADR-0080)",
+        )
+    } else if found.rule == IMPORT_RULE {
+        Violation::always_blocking(
+            found.rule,
+            found.message,
+            "fetch the named source history; repair its proof through the source task's pull request, then merge the reviewed result",
         )
     } else if found.rule == AMENDMENT_RULE {
         Violation::always_blocking(

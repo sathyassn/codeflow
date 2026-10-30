@@ -45,6 +45,26 @@
             "type": "string"
           },
           "description": "Shared input globs that select all targets."
+        },
+        "heavy_wait_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Bounded wait for heavy quick work to acquire the shared gate lock."
+        },
+        "worker_budget": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total workers allocated across concurrent heavy targets. Omitted leaves tool defaults unchanged."
+        },
+        "quick_default_class": {
+          "type": "string",
+          "enum": [
+            "light",
+            "heavy"
+          ],
+          "default": "light",
+          "description": "Default class of undeclared targets in a configured quick mode. The quick-to-essential fallback remains heavy unless a target declares heavy=false."
         }
       },
       "additionalProperties": false
@@ -211,6 +231,83 @@
           "type": "boolean",
           "default": false,
           "description": "Run alone."
+        },
+        "input_class": {
+          "type": "string",
+          "enum": [
+            "content",
+            "history",
+            "remote",
+            "time",
+            "external"
+          ],
+          "description": "Only content targets with complete dependency evidence can be skipped; omitted or other classes always run."
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tools",
+            "environment",
+            "environment_complete",
+            "membership"
+          ],
+          "properties": {
+            "tools": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "description": "Tool identity probes as executable and arguments. Output is stored only as a digest."
+            },
+            "environment": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "enum": [
+                  "audited_non_secret",
+                  "fingerprint",
+                  "sensitive",
+                  "unclassified"
+                ]
+              }
+            },
+            "environment_complete": {
+              "type": "boolean",
+              "description": "An audit confirms these are all relevant inherited and configured environment dependencies."
+            },
+            "membership": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Membership probe as executable and arguments, or an empty array when no test membership applies."
+            },
+            "covers_modes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "quick",
+                  "essential"
+                ]
+              },
+              "description": "The full execution covers these modes only when the exact command and all dependency evidence match."
+            }
+          }
+        },
+        "heavy": {
+          "type": "boolean",
+          "description": "Heavy work takes the quick gate lock; false declares light work. Omitted targets are heavy only in the quick-to-essential fallback."
+        },
+        "workers": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Workers needed before this heavy target starts; requires execution.worker_budget and cannot exceed it. Omitted targets share the available budget."
         }
       },
       "additionalProperties": false

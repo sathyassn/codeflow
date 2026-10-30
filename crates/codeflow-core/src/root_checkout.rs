@@ -20,6 +20,8 @@ use std::process::Stdio;
 use crate::git::GitName;
 use crate::hooks::policy::{GitPolicy, PolicyLevel};
 use crate::hooks::{Violation, HUMAN_OVERRIDE_ENV};
+use crate::scaffold::Shown;
+use crate::shown;
 
 /// `CodeFlow`'s convention name for an umbrella workspace's root branch. Every
 /// surface that sets up or describes workspace mode reads this constant.
@@ -663,10 +665,20 @@ fn git_stdin(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String
         Ok(out.stdout)
     } else {
         Err(format!(
-            "cannot read Git ignore rules: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "cannot read Git ignore rules ({})",
+            exit_category(out.status)
         ))
     }
+}
+
+/// How a git run ended, by its exit code only. Git's stderr is never
+/// passed on: it can quote a configuration value, a path or a ref name
+/// (TSK-1029).
+fn exit_category(status: std::process::ExitStatus) -> String {
+    status.code().map_or_else(
+        || "git was stopped by a signal".to_string(),
+        |code| format!("git exited with code {code}"),
+    )
 }
 
 /// For each relative directory path, the ignore file that matches it, if
@@ -676,32 +688,24 @@ fn ignore_sources(root: &Path, dirs: &[String]) -> Result<Vec<Option<String>>, S
 }
 
 /// A throwaway repository with an empty exclude file, removed on drop.
-struct ScratchRepo(PathBuf);
+struct ScratchRepo(tempfile::TempDir);
 
 impl ScratchRepo {
     fn new() -> Option<Self> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("codeflow-ignore-{}-{nanos}", std::process::id()));
-        let scratch = Self(dir);
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("codeflow-ignore-");
+        #[cfg(unix)]
+        builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        let scratch = Self(builder.tempdir().ok()?);
         let made = crate::git::command()
             .args(["init", "--quiet"])
-            .arg(&scratch.0)
+            .arg(scratch.0.path())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .ok()?
             .success();
         made.then_some(scratch)
-    }
-}
-
-impl Drop for ScratchRepo {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -716,7 +720,7 @@ fn tree_ignore_sources(root: &Path, dirs: &[String]) -> Result<Vec<Option<String
     let ignore_case = format!("core.ignoreCase={}", effective_ignore_case(root)?);
     let scratch =
         ScratchRepo::new().ok_or("cannot create scratch repository to read shared ignore rules")?;
-    let git_dir = scratch.0.join(".git");
+    let git_dir = scratch.0.path().join(".git");
     let git_dir = git_dir
         .to_str()
         .ok_or("scratch Git directory cannot be represented as text")?;
@@ -754,8 +758,8 @@ fn effective_ignore_case(root: &Path) -> Result<bool, String> {
     }
     if !out.status.success() {
         return Err(format!(
-            "cannot read core.ignoreCase: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "cannot read core.ignoreCase ({})",
+            exit_category(out.status)
         ));
     }
     match out.stdout.as_slice() {
@@ -1563,6 +1567,67 @@ fn workspace_hint_finding(repo_label: &str, nested: &[NestedRepo]) -> Finding {
     }
 }
 
+/// [`workspace_hint`] as `init` and `update` print it: inside the display
+/// boundary (TSK-1029). It names the repository and the nested repositories
+/// by path and counts them; a failure to read the repository is a fixed
+/// line, since its cause can quote what git read from the project's
+/// configuration.
+#[must_use]
+pub fn workspace_hint_shown(root: &Path, policy: &GitPolicy) -> Option<Shown> {
+    if !policy.root_branch.is_empty() {
+        return None;
+    }
+    let cannot_read = || {
+        Some(shown!(
+            "{}: cannot read the repository to look for nested repositories; nothing was \
+             switched. Next: restore readable repository state and rerun the check",
+            Shown::fixed(ROOT_BRANCH_KEY)
+        ))
+    };
+    let repo = match crate::hooks::repo::open(root) {
+        Ok(Some(repo)) => repo,
+        Ok(None) => return None,
+        Err(_) => return cannot_read(),
+    };
+    if !is_root_checkout(&repo) {
+        return None;
+    }
+    if head(&repo).is_err() {
+        return cannot_read();
+    }
+    let Ok(nested) = nested_repositories(&repo) else {
+        return cannot_read();
+    };
+    if nested.is_empty() {
+        return None;
+    }
+    let Some(workdir) = repo.workdir() else {
+        return cannot_read();
+    };
+    let projects = nested
+        .iter()
+        .filter(|n| n.kind == NestedKind::CodeflowProject)
+        .count();
+    let noun = Shown::fixed(if nested.len() == 1 {
+        "nested repository"
+    } else {
+        "nested repositories"
+    });
+    Some(shown!(
+        "{}: {} contains {} {} ({} with CodeFlow) ({}) and sets no {}, so it looks like a \
+         workspace; nothing was switched. Next: for an umbrella workspace, run codeflow init \
+         --workspace (root branch {}); a single project can ignore this",
+        Shown::fixed(ROOT_BRANCH_KEY),
+        Shown::path(canonical(workdir)),
+        Shown::count(nested.len()),
+        noun,
+        Shown::count(projects),
+        Shown::join(nested.iter().map(|n| Shown::path(&n.path)), ", "),
+        Shown::fixed(ROOT_BRANCH_KEY),
+        Shown::fixed(WORKSPACE_ROOT_BRANCH)
+    ))
+}
+
 /// The hint plain `init` and `update` print in a folder that holds nested
 /// repositories and names no root branch. They switch nothing.
 #[must_use]
@@ -1984,6 +2049,22 @@ fn verify_ignored(root: &Path, nested: &[NestedRepo]) -> Result<(), WorkspaceErr
 
 impl fmt::Display for WorkspaceReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.block().as_str())
+    }
+}
+
+impl WorkspaceReport {
+    /// The text as a block for a terminal: each `writeln!` is one line
+    /// under the block rule, so a quoted value cannot start a line of its
+    /// own (TSK-388).
+    #[must_use]
+    pub fn block(&self) -> crate::git::TextBlock {
+        let mut block = crate::git::TextBlock::new();
+        let _ = self.write_block(&mut block);
+        block
+    }
+
+    fn write_block(&self, f: &mut crate::git::TextBlock) -> fmt::Result {
         writeln!(f, "workspace mode:")?;
         match &self.branch {
             BranchStep::AlreadyOn(b) => writeln!(f, "  root checkout already on '{b}'")?,
@@ -2013,7 +2094,7 @@ impl fmt::Display for WorkspaceReport {
                 f,
                 "  the {} '{}' is already in .gitignore",
                 n.kind.noun(),
-                n.path
+                crate::git::display_line(&n.path)
             )?;
         }
         writeln!(f, "next steps:")?;

@@ -666,7 +666,7 @@ fn an_epic_own_block_binds_its_review_and_its_waivers() {
         (
             "a stale review",
             own(&amendment, verified, verified),
-            "changed after the reviewed commit",
+            "changed between the reviewed commit",
         ),
         (
             "a nonexistent amendment for the cancelled-only criterion",
@@ -3648,6 +3648,36 @@ fn r17_working_context_distinguishes_no_repository_from_broken_repository() {
     std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
     assert!(super::working_context(dir.path()).is_err());
     assert!(super::super::work_start::default_work_target(dir.path()).is_err());
+}
+
+/// TSK-398 review F1: the status verbs' base tree comes from the full
+/// `refs/remotes/origin/main`; a local branch or tag named `origin/main` at
+/// the head, which Git's short-name lookup prefers, never moves it.
+#[test]
+fn working_context_reads_the_full_default_ref_beside_an_origin_main_shadow() {
+    for shadow in ["branch", "tag"] {
+        let repo = Repo::new();
+        let protected = repo.commit("chore: protected tip");
+        repo.git(&["update-ref", "refs/remotes/origin/main", &protected]);
+        repo.git(&["switch", "-q", "-c", "task/TSK-001-work"]);
+        repo.write(
+            "project-management/tasks/TSK-001.md",
+            "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded work\ntitle: Work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-10-06\n---\n\n# Work\n\n## Acceptance Criteria\n\n- AC-1 Work runs.\n",
+        );
+        let head = repo.commit("docs: plan work");
+        if shadow == "branch" {
+            repo.git(&["branch", "origin/main", &head]);
+        } else {
+            repo.git(&["tag", "origin/main", &head]);
+        }
+        assert_eq!(repo.git(&["rev-parse", "origin/main"]), head, "{shadow}");
+        let (base, _) = super::working_context(repo.root()).unwrap();
+        let base = base.expect("the default target resolves");
+        assert!(
+            !base.records.contains_key("TSK-001"),
+            "{shadow}: the base tree came from the shadow at the head"
+        );
+    }
 }
 
 #[test]

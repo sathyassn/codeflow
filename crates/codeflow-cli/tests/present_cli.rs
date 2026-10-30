@@ -948,34 +948,18 @@ fn close_stops_the_browser_open_launched() {
     assert!(named.is_empty(), "clear left state: {named:?}");
 }
 
-/// `present show` on a session whose browser still runs says the browser is
-/// already open and how to reach it, and exits 4. The running browser is a
-/// stand-in process that carries the session's profile and instance
-/// arguments, the identity `CodeFlow` checks, so no window opens.
+/// `present show --no-launch` on a session whose browser still runs prints the
+/// session's address and opens nothing. The running browser is a stand-in
+/// process that carries the session's profile and instance arguments, the
+/// identity `CodeFlow` checks. Without `--no-launch`, `show` opens a window in
+/// the running browser instead of refusing (TSK-441 AC-8); the real-browser
+/// lifecycle check proves that path, since it needs a real browser.
 #[test]
-fn show_says_the_browser_is_already_open() {
+fn show_no_launch_prints_the_address_while_the_browser_runs() {
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
     let browser = register_stand_in_browser(&fixture, &session_id);
 
-    let shown = codeflow(
-        &fixture.project,
-        &fixture.home,
-        &["present", "show", &session_id],
-    );
-    assert_eq!(shown.status.code(), Some(4), "{shown:?}");
-    let message = failure(&shown);
-    for expected in [
-        format!("the browser for presentation session {session_id} is already open"),
-        "Switch to its window, or quit that browser and run".to_string(),
-        "on macOS the browser can keep running after its last window closes".to_string(),
-        format!("`codeflow present show {session_id}` again"),
-        format!("`codeflow present show {session_id} --no-launch` prints the session's address"),
-    ] {
-        assert!(message.contains(&expected), "{message}");
-    }
-    assert!(!message.contains("not qualified"), "{message}");
-    // The named step works: --no-launch prints the address of the session.
     let address = require_success(&codeflow(
         &fixture.project,
         &fixture.home,
@@ -997,38 +981,37 @@ fn unreadable_command_line_processes() -> Vec<StandIn> {
     [not_utf8, oversize]
         .iter()
         .map(|argument| {
-            StandIn(
-                Command::new("/bin/sh")
-                    .args(["-c", "sleep 120 & wait", "stand-in-unrelated"])
-                    .arg(argument)
-                    .process_group(0)
-                    .spawn()
-                    .unwrap(),
-            )
+            StandIn(vec![Command::new("/bin/sh")
+                .args(["-c", "read -r line", "stand-in-unrelated"])
+                .stdin(std::process::Stdio::piped())
+                .arg(argument)
+                .process_group(0)
+                .spawn()
+                .unwrap()])
         })
         .collect()
 }
 
 /// Starts a stand-in browser that carries the session's profile and instance
-/// arguments and records it in the session as its browser.
+/// arguments and records it in the session as its browser. A shell builtin
+/// waits on our open stdin pipe without spawning an orphan-prone helper.
 fn register_stand_in_browser(fixture: &TestProject, session_id: &str) -> StandIn {
     use std::os::unix::process::CommandExt as _;
 
     let profile = runtime_session(fixture, session_id).join("browser-profile");
     let instance = "0b5a3a6e-7c55-4c1e-9b8e-3f1d2a4c5e6f";
-    let browser = StandIn(
-        Command::new("/bin/sh")
-            .args(["-c", "sleep 120 & wait", "stand-in-browser"])
-            .arg(format!("--user-data-dir={}", profile.display()))
-            .arg(format!("--cf-present-instance={instance}"))
-            .process_group(0)
-            .spawn()
-            .unwrap(),
-    );
+    let browser = StandIn(vec![Command::new("/bin/sh")
+        .args(["-c", "read -r line", "stand-in-browser"])
+        .stdin(std::process::Stdio::piped())
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg(format!("--cf-present-instance={instance}"))
+        .process_group(0)
+        .spawn()
+        .unwrap()]);
     let session_path = session_dir(fixture, session_id).join("session.json");
     let mut session: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&session_path).unwrap()).unwrap();
-    session["browser_pid"] = browser.0.id().into();
+    session["browser_pid"] = browser.0[0].id().into();
     session["browser_instance"] = instance.into();
     fs::write(&session_path, serde_json::to_string(&session).unwrap()).unwrap();
     browser
@@ -1042,7 +1025,7 @@ fn close_ignores_other_processes_with_unreadable_command_lines() {
     let unrelated = unreadable_command_line_processes();
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
-    drop(register_stand_in_browser(&fixture, &session_id));
+    drop(register_stand_in_browser(&fixture, &session_id).with_unreaped_member());
 
     close_and_clear(&fixture, &session_id);
     drop(unrelated);
@@ -1055,7 +1038,7 @@ fn show_after_the_browser_exited_ignores_unreadable_command_lines() {
     let unrelated = unreadable_command_line_processes();
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
-    drop(register_stand_in_browser(&fixture, &session_id));
+    drop(register_stand_in_browser(&fixture, &session_id).with_unreaped_member());
 
     let shown = require_success(&codeflow(
         &fixture.project,
@@ -1084,7 +1067,7 @@ fn show_and_close_after_the_browser_group_left_an_unreaped_member() {
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
     let browser = register_stand_in_browser(&fixture, &session_id);
-    let group = i32::try_from(browser.0.id()).unwrap();
+    let group = i32::try_from(browser.0[0].id()).unwrap();
     // Not reaped until the end: it stays in the group as a zombie.
     let mut exited = Command::new("/bin/sh")
         .args(["-c", "exit 0"])
@@ -1115,16 +1098,56 @@ fn show_and_close_after_the_browser_group_left_an_unreaped_member() {
     exited.wait().unwrap();
 }
 
-/// A stand-in browser process group, killed when the test ends or fails.
-struct StandIn(std::process::Child);
+/// A stand-in process group whose children are killed and reaped on drop.
+struct StandIn(Vec<std::process::Child>);
+
+impl StandIn {
+    /// Hold an exited group member unreaped until teardown, reproducing a busy
+    /// host that does not reap the old fixture's orphaned sleep promptly.
+    fn with_unreaped_member(mut self) -> Self {
+        use std::os::unix::process::CommandExt as _;
+
+        let group = i32::try_from(self.0[0].id()).unwrap();
+        let member = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .process_group(group)
+            .spawn()
+            .unwrap();
+        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+        // SAFETY: waits only for our child and writes into a valid siginfo_t.
+        // WNOWAIT observes its exit without reaping it.
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    member.id(),
+                    status.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        eprintln!(
+            "stand-in group {group}: holding exited member {} unreaped",
+            member.id()
+        );
+        self.0.push(member);
+        self
+    }
+}
 
 impl Drop for StandIn {
     fn drop(&mut self) {
-        if let Ok(group) = i32::try_from(self.0.id()) {
+        if let Ok(group) = i32::try_from(self.0[0].id()) {
             // SAFETY: signals only the stand-in's own process group.
             unsafe { libc::kill(-group, libc::SIGKILL) };
         }
-        let _ = self.0.wait();
+        // Every member is our child. Reap them all before another command can
+        // observe a leaderless group, including on macOS where zombies still
+        // answer the group signal probe.
+        for child in &mut self.0 {
+            let _ = child.wait();
+        }
     }
 }
 
@@ -3580,4 +3603,116 @@ fn tsk193_capture_io_failure_warns_but_open_and_update_succeed() {
         assert!(revision.get("snapshots").is_none());
     }
     close_and_clear(&fixture, id);
+}
+
+#[test]
+fn check_refuses_figures_with_json_contains_checks() {
+    assert_undrawable_figure_refused("json-fact", "JSON source takes the json check");
+}
+
+#[test]
+fn check_refuses_figures_wider_than_the_render_limit() {
+    assert_undrawable_figure_refused("wide", "wide.width must be 120 to 720");
+}
+
+fn assert_undrawable_figure_refused(name: &str, expected: &str) {
+    let project = setup_project();
+    let fixture =
+        include_str!("../../codeflow-present/tests/fixtures/contract-v2/documents/v2-framed.json");
+    let mut document: serde_json::Value = serde_json::from_str(fixture).unwrap();
+    let figure = &mut document["blocks"][1]["declaration"]["figure"];
+    if name == "json-fact" {
+        figure["family"] = "sequence".into();
+        figure["facts"][0]["source"] = "facts.json".into();
+    } else {
+        figure["family"] = "coverage".into();
+        figure["wide"]["width"] = 760.into();
+    }
+    let path = project.project.join(format!("{name}.json"));
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let output = codeflow(
+        &project.project,
+        &project.home,
+        &["present", "check", "--file", path.to_str().unwrap()],
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(9), "{name}: {text}");
+    assert!(text.contains(expected), "{text}");
+}
+
+#[test]
+fn check_warns_when_an_explanation_has_no_figure() {
+    let project = setup_project();
+    let path = project.project.join("explanation.json");
+    fs::write(&path, r###"{"schema_version":2,"title":"How review works","blocks":[{"type":"narrative","id":"concept","markdown":"## Concept\nA change travels through review before it lands."}]}"###).unwrap();
+    let output = codeflow(
+        &project.project,
+        &project.home,
+        &["present", "check", "--file", path.to_str().unwrap()],
+    );
+    let text = require_success(&output);
+    assert!(text.contains("figure-balance"), "{text}");
+}
+
+#[test]
+fn check_warns_when_narrative_dominates_without_refusing() {
+    let project = setup_project();
+    let path = project.project.join("narrative.json");
+    let document = serde_json::json!({"schema_version": 2, "title": "An explanation", "blocks": [
+        {"type": "narrative", "id": "long", "markdown": "word ".repeat(501)}
+    ]});
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let output = codeflow(
+        &project.project,
+        &project.home,
+        &["present", "check", "--file", path.to_str().unwrap()],
+    );
+    let text = require_success(&output);
+    assert!(text.contains("narrative text dominates"), "{text}");
+}
+
+/// End review's route (TSK-441 AC-6) refuses a request without the session's
+/// cookie, origin and marker, and with them closes the session as
+/// `present close` does: the session reads closed and its service exits.
+#[test]
+fn tsk441_end_review_route_closes_the_session() {
+    let fixture = setup_project();
+    let running = open_recover_and_bootstrap(&fixture);
+    let body = "{}";
+    let unauthenticated = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.authority, body.len()));
+    assert!(
+        unauthenticated.starts_with("HTTP/1.1 401"),
+        "{unauthenticated}"
+    );
+    let foreign = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://example.invalid\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.cookie, body.len()));
+    assert!(foreign.starts_with("HTTP/1.1 403"), "{foreign}");
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    assert_eq!(listed[0]["status"], "active", "{listed}");
+
+    let ended = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.authority, running.cookie, body.len()));
+    assert!(ended.starts_with("HTTP/1.1 200"), "{ended}");
+    assert!(ended.contains(r#""state":"closed""#), "{ended}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+            &fixture.project,
+            &fixture.home,
+            &["present", "list"],
+        )))
+        .unwrap();
+        if listed[0]["status"] == "closed" && listed[0].get("service_pid").is_none() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "service still runs: {listed}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    close_and_clear(&fixture, &running.session_id);
 }

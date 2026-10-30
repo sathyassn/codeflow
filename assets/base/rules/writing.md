@@ -107,6 +107,11 @@ reference lists the patterns under "Meaning taken".
   references, never as the heading or the lead of a bullet.
 - **Titles name the subject in words.** An identifier or bare acronym is
   never the whole title; it goes in the body.
+- **Status names live-checked facts.** Each changeable fact a report or
+  handoff states (a seat, a check, a PR, a line, a task's status, another
+  agent's progress) is checked live for that report, or marked unverified
+  with the time of its last check; `workflow-discipline.md` "Check
+  changeable state live" is the rule.
 - A reply or report opens with the result it serves and where the work
   stands, then what would change that and who resolves it, then what the
   reader must decide or do; steps, gates, counts and tooling come last, and
@@ -154,12 +159,14 @@ marks, not the choice. Draw a figure only when a relationship carries the
 point, then draw the family that relationship names, with one idea, every
 mark explained and one caption line. The forms by surface:
 
-- Where the current surface renders one, an inline figure is the default,
-  such as an inline HTML figure in a desktop harness.
-- When people will open, comment on or share it, use a review or share
-  page: `cf-present` (standard and full tiers) when one coherent surface
-  with anchored feedback materially helps, or the harness's page publisher;
-  say why you opened it. Formatting preference alone never opens one.
+- Where the current surface renders one and the answer is short, an inline
+  figure is the default, such as an inline HTML figure in a desktop harness.
+- A figure or explanation that needs more than an inline reply goes to
+  `cf-present` (standard and full tiers) by default; say why you opened it.
+  Formatting preference alone never opens one.
+- The harness's own page or widget, such as a Claude Artifact page, is the
+  exception: use it only when the operator asks for it or the content must
+  be shared, since `cf-present` is local and cannot be shared.
 - On docs-portal pages, use the portal's figure grammar, a declared figure
   block (standard and full tiers).
 - Markdown files, PR bodies and records are ASCII surfaces. Use fenced

@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::manifest::{Ownership, Tier};
-use super::ScaffoldError;
+use super::{ScaffoldError, Shown};
+use crate::shown;
 
 pub const CODEFLOW_DIR: &str = ".codeflow";
 pub const PROJECT_TOML: &str = ".codeflow/project.toml";
@@ -75,9 +76,11 @@ impl ProjectState {
                 ScaffoldError::io(&path, e)
             }
         })?;
-        toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-            what: PROJECT_TOML.to_string(),
-            detail: e.to_string(),
+        toml::from_str(&text).map_err(|e| {
+            ScaffoldError::invalid(
+                Shown::path(PROJECT_TOML),
+                Shown::place(&crate::scaffold::ParsePlace::toml(&text, &e)),
+            )
         })
     }
 
@@ -88,18 +91,21 @@ impl ProjectState {
     ///
     /// IO failures, or an existing file that is not valid TOML.
     pub fn store(&self, root: &Path) -> Result<(), ScaffoldError> {
-        let ours = toml::Table::try_from(self).map_err(|e| ScaffoldError::InvalidState {
-            what: PROJECT_TOML.to_string(),
-            detail: e.to_string(),
+        let ours = toml::Table::try_from(self).map_err(|_| {
+            ScaffoldError::invalid(
+                Shown::path(PROJECT_TOML),
+                Shown::fixed("the project state could not be written as TOML"),
+            )
         })?;
         // Read without following a link, as the write below refuses one.
         let merged = match read_beneath_root(root, PROJECT_TOML)? {
             Some(existing) => {
-                let mut table: toml::Table =
-                    toml::from_str(&existing).map_err(|e| ScaffoldError::InvalidState {
-                        what: PROJECT_TOML.to_string(),
-                        detail: e.to_string(),
-                    })?;
+                let mut table: toml::Table = toml::from_str(&existing).map_err(|e| {
+                    ScaffoldError::invalid(
+                        Shown::path(PROJECT_TOML),
+                        Shown::place(&crate::scaffold::ParsePlace::toml(&existing, &e)),
+                    )
+                })?;
                 for (k, v) in ours {
                     table.insert(k, v);
                 }
@@ -107,9 +113,11 @@ impl ProjectState {
             }
             None => ours,
         };
-        let text = state_text(&merged).map_err(|e| ScaffoldError::InvalidState {
-            what: PROJECT_TOML.to_string(),
-            detail: e.to_string(),
+        let text = state_text(&merged).map_err(|_| {
+            ScaffoldError::invalid(
+                Shown::path(PROJECT_TOML),
+                Shown::fixed("the project state could not be written as TOML"),
+            )
         })?;
         write_record(root, PROJECT_TOML, text.as_bytes())
     }
@@ -148,42 +156,42 @@ impl ScaffoldConfig {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(e) => return Err(ScaffoldError::io(&path, e)),
         };
-        let table: toml::Table =
-            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-                what: PROJECT_TOML.to_string(),
-                detail: e.to_string(),
-            })?;
+        let table: toml::Table = toml::from_str(&text).map_err(|e| {
+            ScaffoldError::invalid(
+                Shown::path(PROJECT_TOML),
+                Shown::place(&crate::scaffold::ParsePlace::toml(&text, &e)),
+            )
+        })?;
         let ignore = match table.get("scaffold") {
             None => Vec::new(),
             Some(value) => {
-                let section = value
-                    .as_table()
-                    .ok_or_else(|| ScaffoldError::InvalidState {
-                        what: PROJECT_TOML.to_string(),
-                        detail: "scaffold: expected a table".to_string(),
-                    })?;
+                let section = value.as_table().ok_or_else(|| {
+                    ScaffoldError::invalid(
+                        Shown::path(PROJECT_TOML),
+                        Shown::fixed("scaffold: expected a table"),
+                    )
+                })?;
                 match section.get("ignore") {
                     None => Vec::new(),
                     Some(value) => {
-                        let entries =
-                            value
-                                .as_array()
-                                .ok_or_else(|| ScaffoldError::InvalidState {
-                                    what: PROJECT_TOML.to_string(),
-                                    detail: "scaffold.ignore: expected an array of strings"
-                                        .to_string(),
-                                })?;
+                        let entries = value.as_array().ok_or_else(|| {
+                            ScaffoldError::invalid(
+                                Shown::path(PROJECT_TOML),
+                                Shown::fixed("scaffold.ignore: expected an array of strings"),
+                            )
+                        })?;
                         entries
                             .iter()
                             .enumerate()
                             .map(|(index, value)| {
                                 value.as_str().map(ToString::to_string).ok_or_else(|| {
-                                    ScaffoldError::InvalidState {
-                                        what: PROJECT_TOML.to_string(),
-                                        detail: format!(
-                                            "scaffold.ignore[{index}]: expected a string"
+                                    ScaffoldError::invalid(
+                                        Shown::path(PROJECT_TOML),
+                                        shown!(
+                                            "scaffold.ignore[{}]: expected a string",
+                                            Shown::count(index)
                                         ),
-                                    }
+                                    )
                                 })
                             })
                             .collect::<Result<Vec<_>, _>>()?
@@ -243,22 +251,20 @@ impl ReadingConfig {
         let Some(text) = read_beneath_root(root, PROJECT_TOML)? else {
             return Ok(Self::default());
         };
-        let table: toml::Table =
-            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-                what: PROJECT_TOML.to_string(),
-                detail: e.to_string(),
-            })?;
-        let invalid = |detail: String| ScaffoldError::InvalidState {
-            what: PROJECT_TOML.to_string(),
-            detail,
-        };
+        let table: toml::Table = toml::from_str(&text).map_err(|e| {
+            ScaffoldError::invalid(
+                Shown::path(PROJECT_TOML),
+                Shown::place(&crate::scaffold::ParsePlace::toml(&text, &e)),
+            )
+        })?;
+        let invalid = |detail: Shown| ScaffoldError::invalid(Shown::path(PROJECT_TOML), detail);
         let Some(section) = table.get("reading") else {
             return Ok(Self::default());
         };
         let section = section
             .as_table()
-            .ok_or_else(|| invalid("reading: expected a table".to_string()))?;
-        let number = |key: &str| -> Result<Option<usize>, ScaffoldError> {
+            .ok_or_else(|| invalid(Shown::fixed("reading: expected a table")))?;
+        let number = |key: &'static str| -> Result<Option<usize>, ScaffoldError> {
             section
                 .get(key)
                 .map(|value| {
@@ -267,7 +273,10 @@ impl ReadingConfig {
                         .and_then(|n| usize::try_from(n).ok())
                         .filter(|n| *n > 0)
                         .ok_or_else(|| {
-                            invalid(format!("reading.{key}: expected a positive integer"))
+                            invalid(shown!(
+                                "reading.{}: expected a positive integer",
+                                Shown::fixed(key)
+                            ))
                         })
                 })
                 .transpose()
@@ -344,27 +353,29 @@ impl FeedbackConfig {
         let Some(text) = read_beneath_root(root, PROJECT_TOML)? else {
             return Ok(Self::default());
         };
-        let table: toml::Table =
-            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-                what: PROJECT_TOML.to_string(),
-                detail: e.to_string(),
-            })?;
-        let invalid = |detail: String| ScaffoldError::InvalidState {
-            what: PROJECT_TOML.to_string(),
-            detail,
-        };
+        let table: toml::Table = toml::from_str(&text).map_err(|e| {
+            ScaffoldError::invalid(
+                Shown::path(PROJECT_TOML),
+                Shown::place(&crate::scaffold::ParsePlace::toml(&text, &e)),
+            )
+        })?;
+        let invalid = |detail: Shown| ScaffoldError::invalid(Shown::path(PROJECT_TOML), detail);
         let Some(section) = table.get("feedback") else {
             return Ok(Self::default());
         };
         let section = section
             .as_table()
-            .ok_or_else(|| invalid("feedback: expected a table".to_string()))?;
+            .ok_or_else(|| invalid(Shown::fixed("feedback: expected a table")))?;
         let Some(topics) = section.get("topics") else {
             return Ok(Self::default());
         };
         let topics = topics
             .as_array()
-            .ok_or_else(|| invalid("feedback.topics: expected an array of strings".to_string()))?
+            .ok_or_else(|| {
+                invalid(Shown::fixed(
+                    "feedback.topics: expected an array of strings",
+                ))
+            })?
             .iter()
             .enumerate()
             .map(|(index, value)| {
@@ -374,8 +385,9 @@ impl FeedbackConfig {
                     .filter(|topic| !topic.is_empty() && !topic.contains(char::is_whitespace))
                     .map(ToString::to_string)
                     .ok_or_else(|| {
-                        invalid(format!(
-                            "feedback.topics[{index}]: expected a one-word topic string"
+                        invalid(shown!(
+                            "feedback.topics[{}]: expected a one-word topic string",
+                            Shown::count(index)
                         ))
                     })
             })
@@ -413,11 +425,12 @@ impl FeedbackConfig {
         if let Some(topics) = current.topics {
             return Ok((topics, false));
         }
-        let table: toml::Table =
-            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-                what: PROJECT_TOML.to_string(),
-                detail: e.to_string(),
-            })?;
+        let table: toml::Table = toml::from_str(&text).map_err(|e| {
+            ScaffoldError::invalid(
+                Shown::path(PROJECT_TOML),
+                Shown::place(&crate::scaffold::ParsePlace::toml(&text, &e)),
+            )
+        })?;
         let mut topics_line = String::from("topics = [\n");
         for topic in Self::DEFAULT_TOPICS {
             topics_line.push_str("    \"");
@@ -434,10 +447,7 @@ impl FeedbackConfig {
                 code == "[feedback]"
             });
             let Some(header) = header else {
-                return Err(ScaffoldError::InvalidState {
-                    what: PROJECT_TOML.to_string(),
-                    detail: "`feedback` is set without a `[feedback]` header line; add `topics` to it by hand".to_string(),
-                });
+                return Err(ScaffoldError::invalid(Shown::path(PROJECT_TOML), Shown::fixed("`feedback` is set without a `[feedback]` header line; add `topics` to it by hand")));
             };
             let mut updated = String::with_capacity(text.len() + topics_line.len() + 1);
             for (index, line) in text.split_inclusive('\n').enumerate() {
@@ -459,20 +469,24 @@ impl FeedbackConfig {
             updated.push_str(&topics_line);
             updated
         };
-        let check: toml::Table =
-            toml::from_str(&updated).map_err(|e| ScaffoldError::InvalidState {
-                what: PROJECT_TOML.to_string(),
-                detail: format!("adding the feedback topics would break the file: {e}"),
-            })?;
+        let check: toml::Table = toml::from_str(&updated).map_err(|e| {
+            ScaffoldError::invalid(
+                Shown::path(PROJECT_TOML),
+                shown!(
+                    "adding the feedback topics would break the file: {}",
+                    Shown::place(&crate::scaffold::ParsePlace::toml(&updated, &e))
+                ),
+            )
+        })?;
         if check
             .get("feedback")
             .and_then(|v| v.get("topics"))
             .is_none()
         {
-            return Err(ScaffoldError::InvalidState {
-                what: PROJECT_TOML.to_string(),
-                detail: "the feedback topics could not be added".to_string(),
-            });
+            return Err(ScaffoldError::invalid(
+                Shown::path(PROJECT_TOML),
+                Shown::fixed("the feedback topics could not be added"),
+            ));
         }
         // The state file keeps its permissions (a private one stays
         // private) and the scaffold writer's durability.
@@ -2119,7 +2133,7 @@ mod tests {
 
     #[test]
     fn init_and_update_flush_the_device_once_per_run() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let root = dir.path().join("project");
         let device = usize::from(cfg!(target_vendor = "apple"));
 
@@ -2203,7 +2217,7 @@ mod tests {
 
     #[test]
     fn an_init_or_update_stopped_by_an_error_leaves_no_torn_or_empty_file() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         // A fresh init, stopped at writes spread across the run.
         interruption::arm(None);
         crate::scaffold::init(
@@ -2528,7 +2542,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_record_never_reaches_the_disk_ahead_of_its_files() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let root = dir.path().join("project");
         interruption::arm(None);
         crate::scaffold::init(&shipped_assets(), &root, &init_opts(Tier::Standard)).unwrap();
@@ -2544,7 +2558,7 @@ mod tests {
     #[test]
     fn a_record_never_reaches_its_drive_ahead_of_files_on_another() {
         // T153-R2-1: a barrier on one drive orders nothing on another.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let root = dir.path().join("project");
         let skills = root.join(".agents");
         let device = two_devices(Some(skills.clone()));
@@ -2649,7 +2663,7 @@ mod tests {
     /// update installs the new version. With `second_drive`, `zzz/` is on a
     /// device of its own.
     fn assert_update_recovers_from_any_crash(second_drive: bool) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let old = assets_with_payload(&dir.path().join("old"), "old shipped data\n");
         let new = assets_with_payload(&dir.path().join("new"), "new shipped data\n");
         let upgrade = crate::scaffold::UpdateOptions {
@@ -2737,7 +2751,7 @@ mod tests {
             let _ = crate::scaffold::update(&shipped_assets(), &root, &force_update());
             std::process::exit(3); // not reached when the abort fires
         }
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let base = dir.path().join("base");
         crate::scaffold::init(&shipped_assets(), &base, &init_opts(Tier::Standard)).unwrap();
         assert!(edit_managed_skills(&base) > 5);

@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
+import { randomBytes } from "node:crypto";
+import { EventEmitter, once } from "node:events";
+import { existsSync } from "node:fs";
 import { chmod, cp, link, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recordFilesFor, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validateRecordsSwitch, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { pathToFileURL } from "node:url";
+import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareBacklinks, compareDeterministicText, compareIdAwareText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recordFilesFor, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validateRecordsSwitch, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
@@ -483,6 +486,30 @@ test("the adapter builds a page whose dependencies use the object or legacy form
     assert.match(consumer, /Reads the findings/);
     assert.doesNotMatch(consumer, /Source unavailable/);
   } finally { await rm(root, treeRemoval); }
+});
+
+test("ids order by number past 999 in record pages, routes and sources", () => {
+  const ids = ["TSK-10000", "TSK-1000", "TSK-999", "TSK-100"];
+  assert.deepEqual([...ids].sort(compareDeterministicText), ["TSK-100", "TSK-1000", "TSK-10000", "TSK-999"]);
+  assert.deepEqual([...ids].sort(compareIdAwareText), ["TSK-100", "TSK-999", "TSK-1000", "TSK-10000"]);
+  assert.deepEqual(["tsk-1000-001", "tsk-051-010", "tsk-051-008", "tsk-051"].sort(compareIdAwareText), ["tsk-051", "tsk-051-008", "tsk-051-010", "tsk-1000-001"]);
+  assert.deepEqual(["ADR-10000", "ADR-9999", "CAP-1000", "CAP-999"].sort(compareIdAwareText), ["ADR-9999", "ADR-10000", "CAP-999", "CAP-1000"]);
+  // Routes and source paths that carry an id order by it; other text keeps code unit order.
+  assert.deepEqual(["records/tasks/TSK-1000", "records/tasks/TSK-999"].sort(compareIdAwareText), ["records/tasks/TSK-999", "records/tasks/TSK-1000"]);
+  assert.deepEqual(["docs/guide-10.md", "docs/guide-2.md"].sort(compareIdAwareText), ["docs/guide-10.md", "docs/guide-2.md"]);
+  // Runs longer than 9,999 digits still order by number.
+  const nines = `TSK-${"9".repeat(9999)}`;
+  const tenThousandDigits = `TSK-1${"0".repeat(9999)}`;
+  assert.equal(compareIdAwareText(nines, tenThousandDigits), -1);
+  assert.equal(compareIdAwareText(tenThousandDigits, nines), 1);
+  assert.equal(compareIdAwareText(`TSK-${"9".repeat(99999)}`, `TSK-1${"0".repeat(99999)}`), -1);
+  const backlink = (id) => ({ type: "depends_on", source_route: `records/tasks/${id}`, source_id: id, target: "TSK-001" });
+  assert.deepEqual([backlink("TSK-1000"), backlink("TSK-999")].sort(compareBacklinks).map((item) => item.source_id), ["TSK-999", "TSK-1000"]);
+  assert.equal(compareIdAwareText("TSK-001", "TSK-001"), 0);
+  assert.notEqual(compareIdAwareText("TSK-01", "TSK-001"), 0);
+  const pointer = { id_prefix: "TSK", folder: "project-management/tasks" };
+  const files = new Map(ids.map((id) => [`project-management/tasks/${id}.md`, {}]));
+  assert.deepEqual(recordFilesFor(pointer, files).map((record) => record.id), ["TSK-100", "TSK-999", "TSK-1000", "TSK-10000"]);
 });
 
 test("evidence ordering is explicit and independent of the process locale", () => {
@@ -1283,6 +1310,786 @@ test("recovery quarantines invalid retired debris once and bounds diagnostics", 
     await writeFile(path.join(portal, `.workflow-lock-suspect-${token}-${"f".repeat(24)}`), "over-budget");
     await assert.rejects(withWorkflowLease(root, async () => "unexpected"), /too many candidates/);
   } finally { await rm(root, treeRemoval); }
+});
+
+// A workflow lease written by hand: its candidate directory and the claim
+// linked to it, as the real acquisition publishes them.
+async function plantWorkflowLease(root, fields) {
+  const token = randomBytes(24).toString("hex");
+  const now = Date.now();
+  const lease = { schema_version: 1, token, created_at_ms: now - 2 * 3_600_000, heartbeat_at_ms: now - 3_600_000, ...fields };
+  const candidate = path.join(root, `.portal/.workflow-lock-candidate-${token}`);
+  await mkdir(candidate, { recursive: true });
+  await writeFile(path.join(candidate, "owner.json"), JSON.stringify(lease));
+  await link(path.join(candidate, "owner.json"), path.join(root, ".portal/workflow.lock"));
+  return lease;
+}
+
+async function exitedProcessId() {
+  const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+  await new Promise((resolve) => child.once("exit", resolve));
+  return child.pid;
+}
+
+async function captureStderr(action) {
+  const original = process.stderr.write;
+  const lines = [];
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true; };
+  try { return { result: await action(), lines }; }
+  finally { process.stderr.write = original; }
+}
+
+// A coordinator in its own process: it takes the lease, optionally starts a
+// writer it records, then waits to be killed.
+async function startLeaseCoordinator(root, { writer = false } = {}) {
+  const script = path.join(root, "lease-coordinator.mjs");
+  await writeFile(script, `
+    import { spawn } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+    await withWorkflowLease(process.argv[2], async (writers) => {
+      let writer = null;
+      if (process.argv[3] === "writer") {
+        writer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+        await writers.recordWriter(writer.pid);
+      }
+      writeFileSync(process.argv[2] + "/.coordinator-ready", JSON.stringify({ pid: process.pid, writer: writer?.pid ?? null }));
+      setInterval(() => {}, 1000);
+      await new Promise(() => {});
+    });
+  `);
+  const coordinator = spawn(process.execPath, [script, root, writer ? "writer" : "none"], { stdio: "ignore" });
+  await waitUntil(async () => readFile(path.join(root, ".coordinator-ready")).then(() => true, () => false));
+  const ready = JSON.parse(await readFile(path.join(root, ".coordinator-ready"), "utf8"));
+  const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+  return { ready, exited, kill: async () => { coordinator.kill("SIGKILL"); await exited; } };
+}
+
+const processAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+test("a workflow lease records its owner and a lease without one is still read", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-owner-"));
+  try {
+    await withWorkflowLease(root, async (writers) => {
+      const claim = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8"));
+      assert.deepEqual(claim.owner, { pid: process.pid, host: os.hostname(), writers: [], starting: 0, groups: process.platform !== "win32" });
+      await writers.recordWriter(4_000_001);
+      const candidate = path.join(root, `.portal/.workflow-lock-candidate-${claim.token}/owner.json`);
+      assert.deepEqual(JSON.parse(await readFile(candidate, "utf8")).owner.writers, [4_000_001]);
+      await writers.forgetWriter(4_000_001);
+      assert.deepEqual(JSON.parse(await readFile(candidate, "utf8")).owner.writers, []);
+    });
+    await plantWorkflowLease(root, {});
+    const blocked = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(blocked), /workflow already in progress/);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a lease whose coordinator was killed with SIGKILL is reclaimed at once", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-dead-"));
+  try {
+    const coordinator = await startLeaseCoordinator(root);
+    const live = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(live), new RegExp(`workflow already in progress \\(live process ids: ${coordinator.ready.pid}\\)`));
+    await coordinator.kill();
+    const { result, lines } = await captureStderr(() => withWorkflowLease(root, async () => "reclaimed"));
+    assert.equal(result, "reclaimed");
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], new RegExp(`owner \\(process ${coordinator.ready.pid} on ${os.hostname()}\\) has exited.* \\d+s old lease\\n$`));
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a live writer blocks a lease whose coordinator was killed until it exits", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-writer-"));
+  let writerPid = null;
+  try {
+    const coordinator = await startLeaseCoordinator(root, { writer: true });
+    writerPid = coordinator.ready.writer;
+    await coordinator.kill();
+    assert.equal(processAlive(writerPid), true);
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: ${writerPid}\\)`));
+    process.kill(writerPid, "SIGKILL");
+    await waitUntil(() => !processAlive(writerPid));
+    writerPid = null;
+    assert.equal(await withWorkflowLease(root, async () => "reclaimed"), "reclaimed");
+  } finally {
+    if (writerPid !== null) { try { process.kill(writerPid, "SIGKILL"); } catch { /* already gone */ } }
+    await rm(root, treeRemoval);
+  }
+});
+
+test("a lease whose liveness cannot be decided keeps the age rule", async () => {
+  const dead = await exitedProcessId();
+  const cases = {
+    "another host": { owner: { pid: dead, host: `${os.hostname()}-elsewhere`, writers: [] } },
+    "no owner fields": {},
+  };
+  for (const [name, fields] of Object.entries(cases)) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-undecided-"));
+    try {
+      await plantWorkflowLease(root, fields);
+      const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+      assert.match(String(refused), /workflow already in progress$/, name);
+      await rm(root, treeRemoval);
+      await mkdir(root, { recursive: true });
+      await plantWorkflowLease(root, { ...fields, created_at_ms: Date.now() - 6 * 3_600_000, heartbeat_at_ms: Date.now() - 5 * 3_600_000 });
+      assert.equal(await withWorkflowLease(root, async () => "aged"), "aged", name);
+    } finally { await rm(root, treeRemoval); }
+  }
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-undecided-"));
+  try {
+    await plantWorkflowLease(root, { owner: { pid: dead, host: os.hostname(), writers: [] } });
+    const refused = await withWorkflowLease(root, async () => "unexpected", { probeProcess: () => "unknown" }).catch((error) => error);
+    assert.match(String(refused), /workflow already in progress$/, "permission error");
+    await assert.rejects(withWorkflowLease(root, async () => "unexpected", { probeProcess: "no" }), /testHooks are invalid/);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("two contenders that find the same dead owner leave one holder", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-dead-race-"));
+  try {
+    for (let round = 0; round < 5; round += 1) {
+      await plantWorkflowLease(root, { owner: { pid: await exitedProcessId(), host: os.hostname(), writers: [] } });
+      let holders = 0;
+      let most = 0;
+      // The holder keeps the lease until the other contender has settled, so a
+      // slow machine cannot turn a refusal into a later, legitimate acquisition.
+      const contenders = [];
+      const contend = (index) => withWorkflowLease(root, async () => {
+        holders += 1;
+        most = Math.max(most, holders);
+        await Promise.race([contenders[1 - index], new Promise((resolve) => setTimeout(resolve, 3000))]);
+        holders -= 1;
+        return "held";
+      }).catch((error) => error);
+      const { result } = await captureStderr(async () => {
+        contenders.push(contend(0), contend(1));
+        return Promise.all(contenders);
+      });
+      const summary = result.map(String).join(" / ");
+      assert.equal(result.filter((outcome) => outcome === "held").length, 1, summary);
+      assert.equal(result.filter((outcome) => /workflow already in progress/.test(String(outcome))).length, 1, summary);
+      assert.equal(most, 1);
+    }
+    assert.equal(await withWorkflowLease(root, async () => "future"), "future");
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a live owner blocks whatever the age of its lease", async () => {
+  const old = { created_at_ms: Date.now() - 6 * 3_600_000, heartbeat_at_ms: Date.now() - 5 * 3_600_000 };
+  const dead = await exitedProcessId();
+  const cases = {
+    "live coordinator": { owner: { pid: process.pid, host: os.hostname(), writers: [], starting: 0 }, live: process.pid },
+    "live writer of a dead coordinator": { owner: { pid: dead, host: os.hostname(), writers: [process.pid], starting: 0 }, live: process.pid },
+  };
+  for (const [name, { owner, live }] of Object.entries(cases)) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-old-live-"));
+    try {
+      await plantWorkflowLease(root, { ...old, owner });
+      const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+      assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: ${live}\\)`), name);
+    } finally { await rm(root, treeRemoval); }
+  }
+});
+
+test("an owner that exited while starting a writer is not reclaimed on its word alone", async () => {
+  const dead = await exitedProcessId();
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-starting-"));
+  try {
+    await plantWorkflowLease(root, { owner: { pid: dead, host: os.hostname(), writers: [], starting: 1 } });
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), /workflow already in progress \(its owner exited while starting a writer.*remove \.portal\/workflow\.lock/);
+    await rm(root, treeRemoval);
+    await mkdir(root, { recursive: true });
+    await plantWorkflowLease(root, { created_at_ms: Date.now() - 6 * 3_600_000, heartbeat_at_ms: Date.now() - 5 * 3_600_000, owner: { pid: dead, host: os.hostname(), writers: [], starting: 1 } });
+    assert.equal(await withWorkflowLease(root, async () => "expired"), "expired");
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a coordinator killed right after it spawned a writer leaves the lease held", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-spawn-gap-"));
+  let writer = null;
+  try {
+    await mkdir(path.join(root, "node_modules/astro/bin"), { recursive: true });
+    await writeFile(path.join(root, "node_modules/astro/bin/astro.mjs"), "import { writeFileSync } from 'node:fs'; setInterval(() => writeFileSync('writer-tick', String(Date.now())), 25);");
+    const preload = path.join(root, "freeze-spawn.mjs");
+    await writeFile(preload, `
+      import cp from "node:child_process";
+      import { syncBuiltinESMExports } from "node:module";
+      import { writeFileSync } from "node:fs";
+      const spawn = cp.spawn;
+      cp.spawn = function (...args) {
+        const child = spawn(...args);
+        writeFileSync("spawned-pid", String(child.pid));
+        process.kill(process.pid, "SIGSTOP");
+        return child;
+      };
+      syncBuiltinESMExports();
+    `);
+    const coordinator = spawn(process.execPath, ["--import", preload, path.join(import.meta.dirname, "../scripts/workflow.mjs"), "preview"], { cwd: root, stdio: "ignore" });
+    const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+    await waitUntil(async () => readFile(path.join(root, "writer-tick")).then(() => true, () => false));
+    writer = Number(await readFile(path.join(root, "spawned-pid"), "utf8"));
+    coordinator.kill("SIGKILL");
+    await exited;
+    assert.equal(processAlive(writer), true);
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), /workflow already in progress/);
+    await assertTicking(path.join(root, "writer-tick"));
+  } finally {
+    if (writer !== null) { try { process.kill(-writer, "SIGKILL"); } catch { try { process.kill(writer, "SIGKILL"); } catch { /* gone */ } } }
+    await rm(root, treeRemoval);
+  }
+});
+
+test("a writer recorded after the contender read the lease still blocks it", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-snapshot-"));
+  let writer = null;
+  const coordinatorScript = path.join(root, "snapshot-owner.mjs");
+  try {
+    await writeFile(coordinatorScript, `
+      import { spawn } from "node:child_process";
+      import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+      await withWorkflowLease(process.argv[2], async (writers) => {
+        process.send("ready");
+        await new Promise((resolve) => process.once("message", resolve));
+        const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+        await writers.recordWriter(child.pid);
+        process.send({ writer: child.pid });
+        setInterval(() => {}, 1000);
+        await new Promise(() => {});
+      });
+    `);
+    const coordinator = spawn(process.execPath, [coordinatorScript, root], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise((resolve) => coordinator.once("message", resolve));
+    let first = true;
+    const result = await withWorkflowLease(root, async () => "unexpected", {
+      probeProcess: async (pid) => {
+        if (first) {
+          first = false;
+          const recorded = new Promise((resolve) => coordinator.once("message", resolve));
+          coordinator.send("record");
+          ({ writer } = await recorded);
+          const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+          coordinator.kill("SIGKILL");
+          await exited;
+        }
+        try { process.kill(pid, 0); return "live"; } catch (error) { return error?.code === "ESRCH" ? "dead" : "unknown"; }
+      },
+    }).catch((error) => error);
+    assert.match(String(result), new RegExp(`workflow already in progress \\(live process ids: ${writer}\\)`));
+  } finally {
+    if (writer !== null) { try { process.kill(writer, "SIGKILL"); } catch { /* gone */ } }
+    await rm(root, treeRemoval);
+  }
+});
+
+test("the check workflow's test workers keep the lease held after the runner is killed", { skip: process.platform === "win32", timeout: 30_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-tree-"));
+  let worker = null;
+  try {
+    await mkdir(path.join(root, "scripts"), { recursive: true });
+    await mkdir(path.join(root, "tests"));
+    for (const file of ["package-lock.json", "scripts/runtime-scripts.json"]) await cp(path.join(import.meta.dirname, "..", file), path.join(root, file));
+    for (const file of ["composition", "chrome", "site-server"]) await writeFile(path.join(root, "tests", `${file}.test.mjs`), "");
+    await writeFile(path.join(root, "tests/adapter.test.mjs"), "import { writeFileSync } from 'node:fs'; writeFileSync('worker-pid', String(process.pid)); setInterval(() => writeFileSync('worker-tick', String(Date.now())), 25);");
+    const coordinator = spawn(process.execPath, [path.join(import.meta.dirname, "../scripts/workflow.mjs"), "check"], { cwd: root, stdio: "ignore" });
+    const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+    await waitUntil(async () => readFile(path.join(root, "worker-tick")).then(() => true, () => false));
+    worker = Number(await readFile(path.join(root, "worker-pid"), "utf8"));
+    const claim = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8"));
+    const record = JSON.parse(await readFile(path.join(root, `.portal/.workflow-lock-candidate-${claim.token}/owner.json`), "utf8"));
+    const [runner] = record.owner.writers;
+    coordinator.kill("SIGKILL");
+    await exited;
+    process.kill(runner, "SIGKILL");
+    await waitUntil(() => !processAlive(runner));
+    assert.equal(processAlive(worker), true);
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), /workflow already in progress \(live process ids: group \d+\)/);
+    process.kill(worker, "SIGKILL");
+    await waitUntil(() => !processAlive(worker));
+    worker = null;
+    assert.equal(await withWorkflowLease(root, async () => "reclaimed"), "reclaimed");
+  } finally {
+    if (worker !== null) { try { process.kill(worker, "SIGKILL"); } catch { /* gone */ } }
+    await rm(root, treeRemoval);
+  }
+});
+
+test("a dead owner stays reclaimable after the clock moved behind its lease", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-clock-"));
+  try {
+    const script = path.join(root, "clock-owner.mjs");
+    await writeFile(script, `
+      import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+      const interval = globalThis.setInterval;
+      let beat;
+      globalThis.setInterval = (callback, ms, ...args) => { if (ms === 30000) beat = callback; return interval(callback, ms, ...args); };
+      await withWorkflowLease(process.argv[2], async (writers) => {
+        const now = Date.now;
+        Date.now = () => now() - 3_600_000;
+        beat();
+        Date.now = now;
+        await writers.forgetWriter(0);
+        process.send("clock-written");
+        setInterval(() => {}, 1000);
+        await new Promise(() => {});
+      });
+    `);
+    const coordinator = spawn(process.execPath, [script, root], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise((resolve) => coordinator.once("message", resolve));
+    const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+    coordinator.kill("SIGKILL");
+    await exited;
+    const { result } = await captureStderr(() => withWorkflowLease(root, async () => "reclaimed"));
+    assert.equal(result, "reclaimed");
+  } finally { await rm(root, treeRemoval); }
+});
+
+// A scratch portal root whose astro stand-in is the given source, plus the
+// preload that shapes a workflow run: process.kill and persistence faults and a
+// spoofed platform, each switched by an environment variable.
+async function writerScratch(astroSource) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-writer-scratch-"));
+  await mkdir(path.join(root, "node_modules/astro/bin"), { recursive: true });
+  await writeFile(path.join(root, "node_modules/astro/bin/astro.mjs"), astroSource);
+  const preload = path.join(root, "fault-preload.mjs");
+  await writeFile(preload, `
+    import cp from "node:child_process";
+    import fsp from "node:fs/promises";
+    import { syncBuiltinESMExports } from "node:module";
+    import { readFileSync, writeFileSync } from "node:fs";
+    if (process.env.FAULT_WIN32) Object.defineProperty(process, "platform", { value: "win32" });
+    if (process.env.FAULT_GROUP_KILL) {
+      const kill = process.kill;
+      process.kill = function (pid, signal) {
+        if (pid < 0 && signal === "SIGKILL") throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+        return kill.call(process, pid, signal);
+      };
+    }
+    let spawned = null;
+    const spawn = cp.spawn;
+    cp.spawn = function (...args) { const child = spawn(...args); spawned = child.pid; writeFileSync("spawned-pid", String(child.pid)); return child; };
+    if (process.env.FAULT_RECORD) {
+      const rename = fsp.rename;
+      fsp.rename = async function (from, to) {
+        if (String(to).endsWith("owner.json")) {
+          let named = false;
+          try { named = JSON.parse(readFileSync(from, "utf8")).owner?.writers?.includes(spawned) === true; } catch { /* not a lease record */ }
+          if (named) {
+            await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAULT_RECORD_DELAY ?? 0)));
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          }
+        }
+        return rename.call(fsp, from, to);
+      };
+    }
+    syncBuiltinESMExports();
+  `);
+  return { root, preload };
+}
+
+function runWorkflow(scratch, env) {
+  const child = spawn(process.execPath, ["--import", scratch.preload, path.join(import.meta.dirname, "../scripts/workflow.mjs"), "preview"], { cwd: scratch.root, stdio: "ignore", env: { ...process.env, ...env } });
+  return { child, exited: new Promise((resolve) => child.once("exit", (code) => resolve(code))) };
+}
+
+test("an expired unknown snapshot does not hide a writer recorded after it was read", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-unknown-snapshot-"));
+  let writer = null;
+  try {
+    const script = path.join(root, "starting-owner.mjs");
+    await writeFile(script, `
+      import { spawn } from "node:child_process";
+      import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+      const now = Date.now;
+      Date.now = () => now() - 5 * 3_600_000;
+      await withWorkflowLease(process.argv[2], async (writers) => {
+        await writers.beginWriter();
+        process.send("ready");
+        await new Promise((resolve) => process.once("message", resolve));
+        const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+        await writers.recordWriter(child.pid);
+        process.send({ writer: child.pid });
+        setInterval(() => {}, 1000);
+        await new Promise(() => {});
+      });
+    `);
+    const coordinator = spawn(process.execPath, [script, root], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise((resolve) => coordinator.once("message", resolve));
+    let first = true;
+    const result = await withWorkflowLease(root, async () => "unexpected", {
+      probeProcess: async (pid) => {
+        if (first) {
+          first = false;
+          const recorded = new Promise((resolve) => coordinator.once("message", resolve));
+          coordinator.send("record");
+          ({ writer } = await recorded);
+          const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+          coordinator.kill("SIGKILL");
+          await exited;
+        }
+        try { process.kill(pid, 0); return "live"; } catch (error) { return error?.code === "ESRCH" ? "dead" : "unknown"; }
+      },
+    }).catch((error) => error);
+    assert.match(String(result), new RegExp(`workflow already in progress \\(live process ids: ${writer}\\)`));
+  } finally {
+    if (writer !== null) { try { process.kill(writer, "SIGKILL"); } catch { /* gone */ } }
+    await rm(root, treeRemoval);
+  }
+});
+
+test("an owner record that never settles refuses instead of reclaiming, whatever its age", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-unsettled-"));
+  try {
+    const dead = [];
+    for (let index = 0; index < 8; index += 1) dead.push(await exitedProcessId());
+    const old = { created_at_ms: Date.now() - 6 * 3_600_000, heartbeat_at_ms: Date.now() - 5 * 3_600_000 };
+    const lease = await plantWorkflowLease(root, { ...old, owner: { pid: dead[0], host: os.hostname(), writers: [], starting: 0, groups: true } });
+    const record = path.join(root, `.portal/.workflow-lock-candidate-${lease.token}/owner.json`);
+    let calls = 0;
+    const refused = await withWorkflowLease(root, async () => "unexpected", {
+      probeProcess: async () => {
+        calls += 1;
+        await writeFile(record, JSON.stringify({ ...lease, owner: { ...lease.owner, writers: [dead[1 + (calls % 7)]] } }));
+        return "dead";
+      },
+    }).catch((error) => error);
+    assert.match(String(refused), /workflow already in progress \(its owner record kept changing/);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a lease is kept when a writer's group cannot be proven stopped", { skip: process.platform === "win32", timeout: 30_000 }, async () => {
+  const scratch = await writerScratch(`
+    import { spawn } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    spawn(process.execPath, ["-e", "const fs = require('node:fs'); setInterval(() => fs.writeFileSync('worker-tick', String(Date.now())), 25);"], { stdio: "ignore" }).unref();
+    writeFileSync("astro-pid", String(process.pid));
+    setTimeout(() => process.exit(0), 200);
+  `);
+  let group = null;
+  try {
+    const run = runWorkflow(scratch, { FAULT_GROUP_KILL: "1" });
+    const code = await run.exited;
+    group = Number(await readFile(path.join(scratch.root, "astro-pid"), "utf8"));
+    assert.notEqual(code, 0);
+    await readFile(path.join(scratch.root, ".portal/workflow.lock"));
+    const refused = await withWorkflowLease(scratch.root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: group ${group}\\)`));
+    process.kill(-group, "SIGKILL");
+    await waitUntil(() => { try { process.kill(-group, 0); return false; } catch { return true; } });
+    assert.equal(await withWorkflowLease(scratch.root, async () => "reclaimed"), "reclaimed");
+  } finally {
+    if (group !== null) { try { process.kill(-group, "SIGKILL"); } catch { /* gone */ } }
+    await rm(scratch.root, treeRemoval);
+  }
+});
+
+test("without process groups a gone writer leaves the lease undecidable", async () => {
+  const dead = await exitedProcessId();
+  const owner = { pid: dead, host: os.hostname(), writers: [dead], starting: 0, groups: false };
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-no-groups-"));
+  try {
+    await plantWorkflowLease(root, { owner });
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), /workflow already in progress \(its owner exited while starting a writer, or workers a writer left behind cannot be seen here/);
+    await rm(root, treeRemoval);
+    await mkdir(root, { recursive: true });
+    await plantWorkflowLease(root, { created_at_ms: Date.now() - 6 * 3_600_000, heartbeat_at_ms: Date.now() - 5 * 3_600_000, owner });
+    assert.equal(await withWorkflowLease(root, async () => "expired"), "expired");
+    await rm(root, treeRemoval);
+    await mkdir(root, { recursive: true });
+    await plantWorkflowLease(root, { owner: { ...owner, writers: [] } });
+    const { result } = await captureStderr(() => withWorkflowLease(root, async () => "idle"));
+    assert.equal(result, "idle");
+  } finally { await rm(root, treeRemoval); }
+});
+
+for (const [name, env] of [["with process groups", {}], ["without process groups", { FAULT_WIN32: "1" }]]) {
+  test(`a writer whose lease record failed is stopped and confirmed, ${name}`, { skip: process.platform === "win32", timeout: 30_000 }, async () => {
+    const scratch = await writerScratch("import { writeFileSync } from 'node:fs'; setInterval(() => writeFileSync('writer-tick', String(Date.now())), 25);");
+    let writer = null;
+    try {
+      const run = runWorkflow(scratch, { ...env, FAULT_RECORD: "1" });
+      const code = await run.exited;
+      writer = Number(await readFile(path.join(scratch.root, "spawned-pid"), "utf8"));
+      assert.notEqual(code, 0);
+      assert.equal(processAlive(writer), false);
+      if (env.FAULT_WIN32) {
+        // Without groups the workers a writer left behind cannot be seen: the lease stays.
+        const refused = await withWorkflowLease(scratch.root, async () => "unexpected").catch((error) => error);
+        assert.match(String(refused), /workflow already in progress/);
+      } else {
+        assert.equal(await withWorkflowLease(scratch.root, async () => "free"), "free");
+      }
+    } finally {
+      if (writer !== null) { try { process.kill(writer, "SIGKILL"); } catch { /* gone */ } }
+      await rm(scratch.root, treeRemoval);
+    }
+  });
+}
+
+test("a displaced holder with an old heartbeat is kept while its owner lives", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-displaced-live-"));
+  try {
+    const dead = await exitedProcessId();
+    await plantWorkflowLease(root, { owner: { pid: dead, host: os.hostname(), writers: [], starting: 0, groups: process.platform !== "win32" } });
+    let swapped = false;
+    let replacement = null;
+    const refused = await withWorkflowLease(root, async () => "unexpected", {
+      beforeClaimRetirement: async ({ reason }) => {
+        if (reason !== "reclaim" || swapped) return;
+        swapped = true;
+        await rm(path.join(root, ".portal/workflow.lock"));
+        replacement = await plantWorkflowLease(root, {
+          created_at_ms: Date.now() - 6 * 3_600_000,
+          heartbeat_at_ms: Date.now() - 5 * 3_600_000,
+          owner: { pid: process.pid, host: os.hostname(), writers: [], starting: 0, groups: process.platform !== "win32" },
+        });
+      },
+    }).catch((error) => error);
+    assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: ${process.pid}\\)`));
+    assert.equal(JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token, replacement.token);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a displaced holder whose heartbeat becomes durable during the probe is kept", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-displaced-heartbeat-"));
+  let coordinator = null;
+  try {
+    const dead = await exitedProcessId();
+    await plantWorkflowLease(root, { created_at_ms: Date.now(), heartbeat_at_ms: Date.now(), owner: { pid: dead, host: os.hostname(), writers: [], starting: 0, groups: true } });
+    const script = path.join(root, "pending-heartbeat-owner.mjs");
+    await writeFile(script, `
+      import fsp from "node:fs/promises";
+      import { syncBuiltinESMExports } from "node:module";
+      const rename = fsp.rename;
+      let hold = true;
+      fsp.rename = async function (from, to) {
+        if (hold && String(to).endsWith("/owner.json")) {
+          hold = false;
+          process.send("write-pending");
+          await new Promise((resolve) => process.once("message", resolve));
+        }
+        return rename.call(fsp, from, to);
+      };
+      syncBuiltinESMExports();
+      const realNow = Date.now;
+      const interval = globalThis.setInterval;
+      let beat;
+      globalThis.setInterval = (callback, ms, ...args) => { if (ms === 30000) beat = callback; return interval(callback, ms, ...args); };
+      const { withWorkflowLease } = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)});
+      Date.now = () => realNow() - 5 * 3_600_000;
+      await withWorkflowLease(process.argv[2], async (writers) => {
+        Date.now = realNow;
+        beat();
+        await writers.forgetWriter(0);
+        process.send("written");
+        interval(() => {}, 1000);
+        await new Promise(() => {});
+      });
+    `);
+    let swapped = false;
+    let probed = false;
+    const refused = await withWorkflowLease(root, async () => "unexpected", {
+      beforeClaimRetirement: async ({ reason }) => {
+        if (reason !== "reclaim" || swapped) return;
+        swapped = true;
+        await rm(path.join(root, ".portal/workflow.lock"));
+        coordinator = spawn(process.execPath, [script, root], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+        const [message] = await once(coordinator, "message");
+        assert.equal(message, "write-pending");
+      },
+      probeProcess: async (pid) => {
+        if (coordinator && pid === coordinator.pid) {
+          if (!probed) {
+            probed = true;
+            const written = once(coordinator, "message");
+            coordinator.send("commit");
+            assert.equal((await written)[0], "written");
+          }
+          return "unknown";
+        }
+        try { process.kill(pid, 0); return "live"; } catch (error) { return error?.code === "ESRCH" ? "dead" : "unknown"; }
+      },
+    }).catch((error) => error);
+    assert.match(String(refused), /workflow already in progress/);
+    assert.equal(processAlive(coordinator.pid), true);
+    await readFile(path.join(root, ".portal/workflow.lock"));
+  } finally {
+    if (coordinator !== null) coordinator.kill("SIGKILL");
+    await rm(root, treeRemoval);
+  }
+});
+
+async function startIdleCoordinator(root, writeTicks = false) {
+  const script = path.join(root, "idle-coordinator.mjs");
+  await writeFile(script, `
+    import { writeFileSync } from "node:fs";
+    import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+    await withWorkflowLease(process.argv[2], async () => {
+      process.send("ready");
+      setInterval(() => ${writeTicks ? 'writeFileSync(process.argv[2] + "/tick", String(Date.now()))' : "{}"}, 25);
+      await new Promise(() => {});
+    });
+  `);
+  const coordinator = spawn(process.execPath, [script, root], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  await once(coordinator, "message");
+  return coordinator;
+}
+
+test("a read error on a displaced holder's record keeps the holder and its claim", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-displaced-eio-"));
+  let coordinator = null;
+  const fsp = (await import("node:fs/promises")).default;
+  const realOpen = fsp.open;
+  const { syncBuiltinESMExports } = await import("node:module");
+  try {
+    const dead = await exitedProcessId();
+    await plantWorkflowLease(root, { created_at_ms: Date.now(), heartbeat_at_ms: Date.now(), owner: { pid: dead, host: os.hostname(), writers: [], starting: 0, groups: true } });
+    let swapped = false;
+    let probed = false;
+    let armed = false;
+    let target = null;
+    let injected = false;
+    fsp.open = async function (file, ...args) {
+      if (armed && String(file) === target) { armed = false; injected = true; throw Object.assign(new Error("injected EIO on candidate reread"), { code: "EIO" }); }
+      return realOpen.call(fsp, file, ...args);
+    };
+    syncBuiltinESMExports();
+    const first = await withWorkflowLease(root, async () => "unexpected", {
+      beforeClaimRetirement: async ({ reason }) => {
+        if (reason !== "reclaim" || swapped) return;
+        swapped = true;
+        await rm(path.join(root, ".portal/workflow.lock"));
+        coordinator = await startIdleCoordinator(root);
+        const lease = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8"));
+        target = path.join(root, ".portal", `.workflow-lock-candidate-${lease.token}`, "owner.json");
+      },
+      probeProcess: async (pid) => {
+        if (coordinator && pid === coordinator.pid) { if (!probed) { probed = true; armed = true; } return "unknown"; }
+        try { process.kill(pid, 0); return "live"; } catch (error) { return error?.code === "ESRCH" ? "dead" : "unknown"; }
+      },
+    }).catch((error) => error);
+    fsp.open = realOpen;
+    syncBuiltinESMExports();
+    assert.equal(injected, true);
+    assert.notEqual(first, "unexpected");
+    assert.equal(processAlive(coordinator.pid), true);
+    const next = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(next), /workflow already in progress/);
+  } finally {
+    fsp.open = realOpen;
+    syncBuiltinESMExports();
+    if (coordinator !== null) coordinator.kill("SIGKILL");
+    await rm(root, treeRemoval);
+  }
+});
+
+test("a reclaimer that exits after moving a live holder's claim does not lose that holder", { skip: process.platform === "win32", timeout: 30_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-displaced-crash-"));
+  let coordinator = null;
+  try {
+    const dead = await exitedProcessId();
+    await plantWorkflowLease(root, { created_at_ms: Date.now(), heartbeat_at_ms: Date.now(), owner: { pid: dead, host: os.hostname(), writers: [], starting: 0, groups: true } });
+    let swapped = false;
+    const stopped = await withWorkflowLease(root, async () => "unexpected", {
+      beforeClaimRetirement: async ({ reason }) => {
+        if (reason !== "reclaim" || swapped) return;
+        swapped = true;
+        await rm(path.join(root, ".portal/workflow.lock"));
+        coordinator = await startIdleCoordinator(root, true);
+      },
+      afterClaimMoved: async ({ reason }) => { if (reason === "reclaim") throw new Error("simulated reclaimer exit after moving the replacement claim"); },
+    }).catch((error) => error);
+    assert.match(String(stopped), /simulated reclaimer exit/);
+    // Past the incomplete-candidate threshold, so cleanup would act on the live holder's candidate.
+    await new Promise((resolve) => setTimeout(resolve, 6100));
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: ${coordinator.pid}\\)`));
+    await assertTicking(path.join(root, "tick"));
+  } finally {
+    if (coordinator !== null) coordinator.kill("SIGKILL");
+    await rm(root, treeRemoval);
+  }
+});
+
+test("a heartbeat refreshed after the first read keeps an undecidable lease", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-heartbeat-race-"));
+  const script = path.join(root, "refreshing-owner.mjs");
+  let coordinator = null;
+  try {
+    await writeFile(script, `
+      import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+      const realNow = Date.now;
+      const interval = globalThis.setInterval;
+      let beat;
+      globalThis.setInterval = (callback, ms, ...args) => { if (ms === 30000) beat = callback; return interval(callback, ms, ...args); };
+      Date.now = () => realNow() - 5 * 3_600_000;
+      await withWorkflowLease(process.argv[2], async (writers) => {
+        Date.now = realNow;
+        process.send("ready");
+        await new Promise((resolve) => process.once("message", resolve));
+        beat();
+        await writers.forgetWriter(0);
+        process.send("refreshed");
+        interval(() => {}, 1000);
+        await new Promise(() => {});
+      });
+    `);
+    coordinator = spawn(process.execPath, [script, root], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise((resolve) => coordinator.once("message", resolve));
+    let first = true;
+    const refused = await withWorkflowLease(root, async () => "unexpected", {
+      probeProcess: async () => {
+        if (first) {
+          first = false;
+          const refreshed = new Promise((resolve) => coordinator.once("message", resolve));
+          coordinator.send("beat");
+          await refreshed;
+        }
+        return "unknown";
+      },
+    }).catch((error) => error);
+    assert.match(String(refused), /workflow already in progress/);
+    assert.equal(processAlive(coordinator.pid), true);
+  } finally {
+    if (coordinator !== null) coordinator.kill("SIGKILL");
+    await rm(root, treeRemoval);
+  }
+});
+
+for (const [name, astro, env, expectNonzero] of [
+  ["after a normal exit", "import { spawn } from 'node:child_process'; spawn(process.execPath, ['-e', \"const fs = require('node:fs'); fs.writeFileSync('descendant-pid', String(process.pid)); setInterval(() => fs.writeFileSync('tick', String(Date.now())), 25);\"], { stdio: 'ignore' }).unref(); setTimeout(() => process.exit(0), 300);", {}, false],
+  ["after an unrecordable writer is stopped", "import { spawn } from 'node:child_process'; spawn(process.execPath, ['-e', \"const fs = require('node:fs'); fs.writeFileSync('descendant-pid', String(process.pid)); setInterval(() => fs.writeFileSync('tick', String(Date.now())), 25);\"], { stdio: 'ignore' }).unref(); setInterval(() => {}, 1000);", { FAULT_RECORD: "1", FAULT_RECORD_DELAY: "1500" }, true],
+]) {
+  test(`without process groups the lease is kept with a surviving descendant, ${name}`, { skip: process.platform === "win32", timeout: 30_000 }, async () => {
+    const scratch = await writerScratch(astro);
+    let descendant = null;
+    try {
+      const run = runWorkflow(scratch, { ...env, FAULT_WIN32: "1" });
+      const code = await run.exited;
+      descendant = Number(await readFile(path.join(scratch.root, "descendant-pid"), "utf8"));
+      if (expectNonzero) assert.notEqual(code, 0); else assert.equal(code, 0);
+      assert.equal(processAlive(descendant), true);
+      await readFile(path.join(scratch.root, ".portal/workflow.lock"));
+      const refused = await withWorkflowLease(scratch.root, async () => "unexpected").catch((error) => error);
+      assert.match(String(refused), /workflow already in progress/);
+    } finally {
+      if (descendant !== null) { try { process.kill(descendant, "SIGKILL"); } catch { /* gone */ } }
+      await rm(scratch.root, treeRemoval);
+    }
+  });
+}
+
+test("changed portal scripts and tests match their starter copies", { skip: !existsSync(new URL("../../assets/docs-portal/starter/", import.meta.url)) }, async () => {
+  const here = new URL("../", import.meta.url);
+  const starter = new URL("../../assets/docs-portal/starter/", import.meta.url);
+  for (const file of ["scripts/publication.mjs", "scripts/workflow.mjs", "scripts/child-lifecycle.mjs", "tests/adapter.test.mjs"]) {
+    assert.deepEqual(await readFile(new URL(file, here)), await readFile(new URL(file, starter)), file);
+  }
 });
 
 test("workflow interruption reaches the child and releases its lease", { skip: process.platform === "win32", timeout: 15_000 }, async () => {
@@ -2585,6 +3392,17 @@ async function waitUntil(predicate, timeoutMs = 5_000) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`condition was not met within ${timeoutMs}ms`);
+}
+
+// A tick file is rewritten in place, so one read can land between the
+// truncate and the write and see an empty file. Wait for a new, non-empty
+// value instead of comparing two samples taken 100 ms apart.
+async function assertTicking(file) {
+  const before = await readFile(file, "utf8");
+  await waitUntil(async () => {
+    const now = await readFile(file, "utf8");
+    return now !== "" && now !== before;
+  });
 }
 
 function pngHeader(width, height) {

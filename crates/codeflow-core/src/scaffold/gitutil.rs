@@ -4,7 +4,36 @@
 
 use std::path::Path;
 
-use super::ScaffoldError;
+use super::{ScaffoldError, Shown};
+use crate::shown;
+
+/// The git subcommand `args` runs, named only when it is one the scaffold
+/// runs; never a path, key, value or message from the arguments.
+fn subcommand(args: &[&str]) -> Shown {
+    const KNOWN: [&str; 6] = ["add", "commit", "config", "diff", "init", "rev-parse"];
+    let first = args
+        .iter()
+        .copied()
+        .find(|arg| !arg.starts_with('-') && !arg.contains('='));
+    KNOWN
+        .into_iter()
+        .find(|known| Some(*known) == first)
+        .map_or_else(|| Shown::fixed("command"), Shown::fixed)
+}
+
+/// A failed git run, by its subcommand and exit code; git's own output is
+/// not shown, since it can quote paths, keys and values.
+fn failed(args: &[&str], out: &std::process::Output) -> ScaffoldError {
+    let code = out
+        .status
+        .code()
+        .and_then(|code| usize::try_from(code).ok())
+        .map_or_else(
+            || Shown::fixed("no exit code"),
+            |code| shown!("exit code {}", Shown::count(code)),
+        );
+    ScaffoldError::Git(shown!("git {} failed ({})", subcommand(args), code))
+}
 
 fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, ScaffoldError> {
     git_env(root, args, &[])
@@ -21,7 +50,13 @@ fn git_env(
         .args(args)
         .envs(envs.iter().copied())
         .output()
-        .map_err(|e| ScaffoldError::Git(format!("failed to run git {}: {e}", args.join(" "))))
+        .map_err(|e| {
+            ScaffoldError::Git(shown!(
+                "failed to run git {}: {}",
+                subcommand(args),
+                Shown::io(&e)
+            ))
+        })
 }
 
 fn git_ok(root: &Path, args: &[&str]) -> Result<(), ScaffoldError> {
@@ -29,21 +64,8 @@ fn git_ok(root: &Path, args: &[&str]) -> Result<(), ScaffoldError> {
     if out.status.success() {
         Ok(())
     } else {
-        Err(ScaffoldError::Git(format!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        )))
+        Err(failed(args, &out))
     }
-}
-
-fn failed(args: &[&str], out: &std::process::Output) -> ScaffoldError {
-    ScaffoldError::Git(format!(
-        "git {} failed ({}): {}",
-        args.join(" "),
-        out.status,
-        String::from_utf8_lossy(&out.stderr).trim()
-    ))
 }
 
 // rev-parse has no distinct exit code for an absent repository. A failed
@@ -51,7 +73,7 @@ fn failed(args: &[&str], out: &std::process::Output) -> ScaffoldError {
 // configuration reader establish that there is no repository to inspect.
 fn repository_absent(root: &Path) -> Result<bool, ScaffoldError> {
     if crate::hooks::repo::open(root)
-        .map_err(ScaffoldError::Git)?
+        .map_err(|_| ScaffoldError::Git(Shown::fixed("cannot open the repository")))?
         .is_some()
     {
         return Ok(false);
@@ -75,9 +97,9 @@ pub fn is_repo(root: &Path) -> Result<bool, ScaffoldError> {
     match out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout) {
         b"true" => Ok(true),
         b"false" => Ok(false),
-        _ => Err(ScaffoldError::Git(
-            "invalid work-tree answer from git".into(),
-        )),
+        _ => Err(ScaffoldError::Git(Shown::fixed(
+            "invalid work-tree answer from git",
+        ))),
     }
 }
 
@@ -93,7 +115,9 @@ pub fn has_commits(root: &Path) -> Result<bool, ScaffoldError> {
             if matches!(oid.len(), 40 | 64) && oid.iter().all(u8::is_ascii_hexdigit) {
                 Ok(true)
             } else {
-                Err(ScaffoldError::Git("invalid HEAD object id from git".into()))
+                Err(ScaffoldError::Git(Shown::fixed(
+                    "invalid HEAD object id from git",
+                )))
             }
         }
         Some(1) => Ok(false),
@@ -116,13 +140,17 @@ pub fn common_dir(root: &Path) -> Result<Option<std::path::PathBuf>, ScaffoldErr
     // Only Git's own newline is framing; preserve the name's exact bytes.
     let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
     if bytes.is_empty() || bytes.contains(&0) {
-        return Err(ScaffoldError::Git(
-            "invalid common directory from git".into(),
-        ));
+        return Err(ScaffoldError::Git(Shown::fixed(
+            "invalid common directory from git",
+        )));
     }
     let dir = crate::git::GitName::from_bytes(bytes)
         .os_path()
-        .map_err(|error| ScaffoldError::Git(error.to_string()))?;
+        .map_err(|_| {
+            ScaffoldError::Git(Shown::fixed(
+                "git gave a common directory that is not a path here",
+            ))
+        })?;
     Ok(Some(root.join(dir)))
 }
 
@@ -145,12 +173,12 @@ pub fn config_get_key(root: &Path, key: &str) -> Result<Option<String>, Scaffold
         Some(1) => Ok(None),
         Some(0) => {
             let bytes = out.stdout.strip_suffix(&[0]).ok_or_else(|| {
-                ScaffoldError::Git("git config returned an unframed value".into())
+                ScaffoldError::Git(Shown::fixed("git config returned an unframed value"))
             })?;
             if bytes.contains(&0) {
-                return Err(ScaffoldError::Git(
-                    "git config returned multiple values".into(),
-                ));
+                return Err(ScaffoldError::Git(Shown::fixed(
+                    "git config returned multiple values",
+                )));
             }
             Ok(Some(crate::git::GitName::from_bytes(bytes).storage_key()))
         }
@@ -214,11 +242,7 @@ pub fn add_and_commit(root: &Path, paths: &[String], message: &str) -> Result<()
     if out.status.success() {
         Ok(())
     } else {
-        Err(ScaffoldError::Git(format!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        )))
+        Err(failed(&args, &out))
     }
 }
 
@@ -313,12 +337,9 @@ mod tests {
         .unwrap();
         std::fs::write(dir.path().join("a.txt"), "after").unwrap();
         let error = add_and_commit(dir.path(), &["a.txt".to_string()], "fixture").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("git diff --cached --quiet failed"),
-            "{error}"
-        );
+        // The step is named by its subcommand only; git's own output and
+        // arguments are not shown (TSK-1029).
+        assert!(error.to_string().contains("git diff failed"), "{error}");
     }
 
     #[test]

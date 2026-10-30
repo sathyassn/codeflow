@@ -41,6 +41,8 @@
       ".claude/settings.json",
       "scripts/proofs/**",
       "scripts/test_gate_contracts.py",
+      "scripts/contract-scans.py",
+      "scripts/test_contract_scans.py",
       "scripts/windows-partitions.py",
       "scripts/windows-test-times.json",
       "scripts/test_windows_partitions.py",
@@ -50,8 +52,11 @@
       "scripts/coverage-test-times.json",
       "scripts/coverage-merge.py",
       "scripts/test_coverage_merge.py",
-      "scripts/fixtures/coverage-merge/**"
-    ]
+      "scripts/fixtures/coverage-merge/**",
+      "scripts/test_gate_portal_windows.py"
+    ],
+    "worker_budget": 9,
+    "heavy_wait_seconds": 0
   },
   "defaults": {
     "coverage": []
@@ -93,7 +98,9 @@
       ],
       "outputs": [],
       "exclusive": false,
-      "timeout_seconds": 1200
+      "timeout_seconds": 1200,
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "codeflow-bin",
@@ -108,13 +115,15 @@
         }
       },
       "requires": [
-        "present-web-build"
+        "rust-build"
       ],
       "outputs": [
         "target/debug/codeflow"
       ],
       "exclusive": false,
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "rust-format",
@@ -139,13 +148,20 @@
       "runner": "cargo",
       "modes": {
         "essential": {
-          "command": "cargo test --workspace --quiet"
+          "command": "run_tmp=$(mktemp -d \"${TMPDIR:-/tmp}/cf.XXXXXX\") || exit; trap 'status=$?; rm -rf -- \"$run_tmp\" || exit 1; exit \"$status\"' EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; export TMPDIR=\"$run_tmp\"; cargo nextest run --workspace --no-fail-fast --profile essential && cargo test --workspace --doc"
         }
       },
       "timeout_seconds": 3600,
       "requires": [
         "rust-build"
-      ]
+      ],
+      "report": {
+        "format": "junit",
+        "path": "target/nextest/essential/junit.xml"
+      },
+      "shell": "sh",
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "repository-update-noop",
@@ -156,7 +172,9 @@
           "command": "cargo test -p codeflow-core --test repository_update_noop --quiet"
         }
       },
-      "requires": []
+      "requires": [],
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "contract-scans",
@@ -164,10 +182,12 @@
       "runner": "custom",
       "modes": {
         "quick": {
-          "command": "cargo test -p codeflow-core --test git_spawn_contract --test artifact_budget_contract --quiet"
+          "command": "python3 -B scripts/contract-scans.py"
         }
       },
-      "requires": []
+      "requires": [],
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "rust-doctest",
@@ -179,8 +199,10 @@
         }
       },
       "requires": [
-        "rust-build"
-      ]
+        "codeflow-bin"
+      ],
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "rust-clippy",
@@ -197,7 +219,12 @@
           "command": "cargo clippy --workspace --all-targets -- -D warnings"
         }
       },
-      "requires": []
+      "requires": [],
+      "heavy": true,
+      "env": {
+        "CARGO_TARGET_DIR": "target/clippy"
+      },
+      "workers": 9
     },
     {
       "name": "rustdoc",
@@ -212,8 +239,10 @@
         }
       },
       "requires": [
-        "rust-build"
-      ]
+        "codeflow-bin"
+      ],
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "rust-coverage",
@@ -231,7 +260,9 @@
       "report": {
         "format": "junit",
         "path": "target/nextest/codeflow/junit.xml"
-      }
+      },
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "release-automation",
@@ -246,7 +277,8 @@
         }
       },
       "requires": [
-        "codeflow-bin"
+        "codeflow-bin",
+        "rust-build"
       ],
       "narrow": [
         "scripts/release.py",
@@ -264,15 +296,32 @@
       "runner": "custom",
       "modes": {
         "quick": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_contract_scans.py"
         },
         "essential": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_contract_scans.py"
         },
         "full": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_contract_scans.py"
         }
       }
+    },
+    {
+      "name": "docs-portal-windows",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "python3 -B scripts/test_gate_portal_windows.py"
+        },
+        "full": {
+          "command": "python3 -B scripts/test_gate_portal_windows.py"
+        }
+      },
+      "requires": [
+        "docs-portal"
+      ],
+      "timeout_seconds": 300
     },
     {
       "name": "model-eval-kit",
@@ -286,6 +335,9 @@
           "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py"
         }
       },
+      "requires": [
+        "codeflow-bin"
+      ],
       "narrow": [
         "evals/**",
         ".agents/skills/**",
@@ -397,6 +449,9 @@
           "command": "python3 -B scripts/journey-gate.py --part python"
         }
       },
+      "requires": [
+        "codeflow-bin"
+      ],
       "timeout_seconds": 900
     },
     {
@@ -465,7 +520,9 @@
       ],
       "outputs": [],
       "exclusive": true,
-      "timeout_seconds": 900
+      "timeout_seconds": 900,
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "prose-exhaustive",
@@ -481,7 +538,9 @@
       ],
       "outputs": [],
       "exclusive": false,
-      "timeout_seconds": 7200
+      "timeout_seconds": 7200,
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "present-supply-chain",
@@ -505,7 +564,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run check:browser --prefix crates/codeflow-present/web && npm run check:figures --prefix crates/codeflow-present/web && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web\""
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run check:browser --prefix crates/codeflow-present/web && npm run check:figures --prefix crates/codeflow-present/web && npm run check:type-scale --prefix crates/codeflow-present/web && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web\""
         }
       },
       "requires": [
@@ -529,7 +588,9 @@
       ],
       "outputs": [],
       "exclusive": false,
-      "timeout_seconds": 2400
+      "timeout_seconds": 2400,
+      "heavy": true,
+      "workers": 9
     }
   ],
   "_description": "Candidate gate: model-eval-kit is a structural and tooling check, not native behavioural qualification."

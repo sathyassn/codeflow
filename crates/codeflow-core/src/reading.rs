@@ -1014,6 +1014,11 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "PLAN.md",
     "TASK.md",
     "index.md",
+    // An adopter's document index, named by the planning amendment example.
+    "DOC-INDEX.md",
+    // Adopter-owned tool inputs named as forbidden index declarations.
+    "CONVENTIONS.md",
+    "llms*.md",
     "portal.config.json",
     "epics/EPC-NNN.md",
     "specs/SPC-NNN.md",
@@ -1025,6 +1030,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     // A retention fixture's window setting (TSK-130), in the disposable
     // fixture only.
     ".claude/settings.local.json",
+    // A person's own Claude Code settings, named where cf-customize says
+    // where each person sets their effort (TSK-1028).
+    "~/.claude/settings.json",
     ".grok/hooks/codeflow.json",
     ".codeflow/estimate.json",
     ".codeflow/manifest.json",

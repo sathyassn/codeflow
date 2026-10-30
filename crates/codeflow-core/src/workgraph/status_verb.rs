@@ -8,6 +8,8 @@
 //! since the read (a concurrent edit), and replaces it atomically through a
 //! temporary file in the same directory.
 
+use crate::workgraph::history;
+
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -34,6 +36,12 @@ pub struct StatusChange {
     pub by: Option<String>,
     /// An acceptance block (the text between the fences) to add on completion.
     pub acceptance: Option<String>,
+    /// The receiving target's tip to bind a completion against (`--base`),
+    /// in place of what `origin` advertises (TSK-340).
+    pub base: Option<String>,
+    /// The receiving target's branch name (`--into`); with `--base` and no
+    /// `--into`, the branch `--base` names.
+    pub into: Option<String>,
 }
 
 /// A written status change.
@@ -125,6 +133,11 @@ pub fn set_status(
         target: change.target.clone(),
         allowed: allowed_text,
     };
+    if kind != RecordKind::Task && (change.base.is_some() || change.into.is_some()) {
+        return Err(VerbError::Refused(vec![
+            "`--base` and `--into` apply only to a task completion".into(),
+        ]));
+    }
     let written = allowed.contains(&change.target.as_str());
     if !written && !judged_only(kind, &change.target) {
         return Err(vocabulary_error());
@@ -174,7 +187,7 @@ pub fn set_status(
     }
     let mut warnings = verdict.warnings;
     if change.target == "complete" {
-        bind_completion_of(repo_root, kind, &graph, &after, &mut warnings)?;
+        bind_completion_of(repo_root, kind, &graph, &after, change, &mut warnings)?;
     }
     replace_if_unchanged(repo_root, &record.path, digest.as_slice(), &proposed)?;
     Ok(VerbOutcome {
@@ -185,6 +198,65 @@ pub fn set_status(
     })
 }
 
+/// Replace only a task's acceptance and criteria wording, keeping its results.
+/// The replacement is the entire edited record; the verb writes the digest
+/// and review annotation and refuses unrelated work in the same range.
+///
+/// # Errors
+/// Refuses an unreadable source, changed results, or work outside the record.
+pub fn redact(
+    repo_root: &Path,
+    id: &str,
+    replacement: &str,
+    review: &str,
+) -> Result<PathBuf, VerbError> {
+    let refuse = |message: String| VerbError::Refused(vec![message]);
+    let graph = Graph::from_worktree(repo_root).map_err(refuse)?;
+    let old = graph
+        .records
+        .get(id)
+        .filter(|r| r.kind == RecordKind::Task)
+        .ok_or_else(|| VerbError::NotFound(id.into()))?;
+    let repo = git2::Repository::discover(repo_root).map_err(|e| refuse(e.to_string()))?;
+    let head = repo
+        .head()
+        .and_then(|r| r.peel_to_commit())
+        .map_err(|e| refuse(e.to_string()))?
+        .id();
+    let target =
+        super::work_start::resolve_work_target(repo_root, old.integration_target.as_deref())
+            .map_err(|e| refuse(e.to_string()))?;
+    let target = target_commit(&repo, target.as_deref())
+        .map_err(refuse)?
+        .ok_or_else(|| refuse("redaction target does not resolve".into()))?;
+    let source = history::merge_base(&repo, target, head).map_err(|e| refuse(e.to_string()))?;
+    let original = super::acceptance::blob_at(&repo, source, &old.path)
+        .map_err(refuse)?
+        .ok_or_else(|| refuse("redaction source has no record".into()))?;
+    if original != old.content {
+        return Err(refuse(
+            "the source record must be unchanged; put the replacement in a separate file".into(),
+        ));
+    }
+    let paths =
+        super::lifecycle::changed_paths(&repo, &source.to_string(), None).map_err(refuse)?;
+    if let Some(path) = paths.iter().find(|path| *path != &old.path) {
+        return Err(refuse(format!("redaction changes {path} outside the record; keep the replacement file outside the repository")));
+    }
+    let note = serde_json::json!({"source": source.to_string(), "sha256": crate::scaffold::sha256_hex(original.as_bytes()), "review": review});
+    let proposed =
+        set_frontmatter_value(replacement, "redaction", &note.to_string()).map_err(refuse)?;
+    let new = RecordView::parse(RecordKind::Task, &old.path, &proposed).map_err(refuse)?;
+    super::redaction::preserves(old, &new).map_err(refuse)?;
+    replace_if_unchanged(
+        repo_root,
+        &old.path,
+        Sha256::digest(old.content.as_bytes()).as_slice(),
+        &proposed,
+    )?;
+    Ok(repo_root.join(&old.path))
+}
+
 /// Bind a completion (R-60): a task's block to its reviewed commit, after
 /// its reopened criteria stay frozen, and an epic's own block (R-33), each
 /// with its own remedy.
@@ -193,6 +265,7 @@ fn bind_completion_of(
     kind: RecordKind,
     graph: &Graph,
     after: &RecordView,
+    change: &StatusChange,
     warnings: &mut Vec<crate::remedy::Finding>,
 ) -> Result<(), VerbError> {
     if kind == RecordKind::Task {
@@ -213,12 +286,18 @@ fn bind_completion_of(
             &graph.with(after.clone()),
         )
         .map_err(|e| VerbError::Refused(vec![e]))?;
+        let findings = binding(repo_root, &graph.with(after.clone()), after, change);
         if !frozen.is_empty() {
-            return Err(VerbError::Refused(
-                frozen.into_iter().map(|f| f.message).collect(),
-            ));
+            // The binding's own refusals follow the frozen criteria, so a
+            // waiver the reopen cannot take is named with them (issue #278).
+            let mut refused: Vec<String> = frozen.into_iter().map(|f| f.message).collect();
+            refused.extend(
+                findings
+                    .into_iter()
+                    .filter(|finding| !finding.contains(super::acceptance::REOPENED_CRITERIA)),
+            );
+            return Err(VerbError::Refused(refused));
         }
-        let findings = binding(repo_root, &graph.with(after.clone()), after);
         let remedy =
             crate::remedy::ACCEPTANCE_BINDING.with(&[("note", super::acceptance::SCOPE_NOTE)]);
         gate_binding(
@@ -308,42 +387,29 @@ fn epic_binding(repo_root: &Path, epic: &RecordView) -> Vec<String> {
     .collect()
 }
 
-/// The merge base of the task's own branch with its target, when `HEAD` is
-/// that branch: the range a record-only amendment waiver may name (TSK-184).
-/// A branch name that is not valid UTF-8 is not the task's own branch, so no
-/// waiver is offered for its range.
-fn own_range_base(
-    repo_root: &Path,
-    repo: &git2::Repository,
-    task: &RecordView,
-    head: git2::Oid,
-) -> Option<git2::Oid> {
-    repo.head()
-        .ok()
-        .and_then(|head| {
-            crate::git::name::reference_shorthand(&head)
-                .rule_text()
-                .ok()
-                .map(str::to_string)
+/// Whether the clone has any remote; an unreadable remote list refuses,
+/// since it decides whether the receiving target must be pinned.
+fn has_remotes(repo: &git2::Repository, task: &RecordView) -> Result<bool, Vec<String>> {
+    repo.remotes()
+        .map(|remotes| !remotes.is_empty())
+        .map_err(|error| {
+            vec![format!(
+                "{}: {}: cannot read the remotes: {error}",
+                super::acceptance::BINDING_RULE,
+                task.id
+            )]
         })
-        .filter(|branch| {
-            super::task_id_from_branch(repo_root, branch)
-                .is_ok_and(|id| id.as_deref() == Some(task.id.as_str()))
-        })
-        .and_then(|_| {
-            super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-                .ok()
-                .flatten()
-        })
-        .and_then(|target| repo.revparse_single(&target).ok())
-        .and_then(|object| object.peel_to_commit().ok())
-        .and_then(|target| repo.merge_base(head, target.id()).ok())
 }
 
 /// The binding of a completion to the reviewed commit (R-60), with the
 /// working tree over `HEAD` as the completion: the verb runs where the
 /// reviewed result is checked out, and applies the judge CI applies.
-fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
+fn binding(
+    repo_root: &Path,
+    graph: &Graph,
+    task: &RecordView,
+    change: &StatusChange,
+) -> Vec<String> {
     let Ok(repo) = git2::Repository::discover(repo_root) else {
         return vec!["cannot open the repository to bind the acceptance block".into()];
     };
@@ -362,15 +428,26 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             task.id
         )];
     };
-    // A task without a declared target belongs to the default one.
-    let default_name = match super::work_start::resolve_work_target(repo_root, None) {
-        Ok(name) => name,
-        Err(error) => return vec![error.to_string()],
+    let remoted = match has_remotes(&repo, task) {
+        Ok(remoted) => remoted,
+        Err(refused) => return refused,
     };
-    let default_target = match target_commit(&repo, default_name.as_deref()) {
-        Ok(target) => target,
-        Err(error) => return vec![error],
+    if remoted && change.base.is_none() {
+        return unpinned_binding(&repo, graph, task, head, &changed);
+    }
+    // One qualified set of receiving lines and one anchor, carried through
+    // both binding attempts (TSK-340 review round 5).
+    let qualified = match qualify(repo_root, &repo, task, head, change) {
+        Ok(qualified) => qualified,
+        Err(error) => {
+            return vec![format!(
+                "{}: {}: {error}",
+                super::acceptance::BINDING_RULE,
+                task.id
+            )]
+        }
     };
+    let default_target = qualified.default;
     let landing = super::acceptance::Landing::Worktree {
         head,
         changed: &changed,
@@ -384,15 +461,19 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     // The reviewed-span check applies on every branch. Only when direct binding fails does the
     // branch decide: a release branch binds a direct completion to its head
     // (SPC-013 R-120), and any other branch also takes a landing merge.
-    let at_head = super::acceptance::bind_completion(
+    let at_head = super::acceptance::bind_completion_with_amendment(
         &repo,
         task,
         graph,
         landing,
         default_target,
         super::acceptance::Transport::Direct,
+        qualified.base,
         None,
-    );
+        &qualified.run.stacking(),
+        &qualified.run.criteria(),
+    )
+    .findings;
     if at_head.is_empty() {
         return Vec::new();
     }
@@ -413,27 +494,25 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     match super::release_line::checkout_scope(repo_root, into) {
         Ok(scope) if scope.release() => shown(at_head),
         Ok(_) => {
-            // On the task's own branch, a waiver may name a record-only
-            // amendment commit in the pull request's own range (TSK-184).
-            // The binder withholds it from a range that reopens the task,
-            // as it does for CI.
-            let own_range_base = own_range_base(repo_root, &repo, task, head);
-            let run = match verb_authorities(repo_root, &repo, task, default_target) {
-                Ok(run) => run,
-                Err(error) => return vec![error],
-            };
-            shown(super::acceptance::bind_completion_with_amendment(
-                &repo,
-                task,
-                graph,
-                landing,
-                default_target,
-                super::acceptance::Transport::TaskLanding,
-                None,
-                own_range_base,
-                &run.stacking(),
-                &run.criteria(),
-            ))
+            // In the task's own pull request, a waiver may name a record-only
+            // amendment commit of its range (TSK-184). The binder withholds
+            // it from a range that reopens a landed completion, as it does
+            // for CI (TSK-340).
+            shown(
+                super::acceptance::bind_completion_with_amendment(
+                    &repo,
+                    task,
+                    graph,
+                    landing,
+                    default_target,
+                    super::acceptance::Transport::TaskLanding,
+                    qualified.base,
+                    qualified.base,
+                    &qualified.run.stacking(),
+                    &qualified.run.criteria(),
+                )
+                .findings,
+            )
         }
         Err(error) => {
             let mut refused = shown(at_head);
@@ -461,27 +540,249 @@ fn target_commit(
         .transpose()
 }
 
-/// The target tips a clean merge after the review may come from when the
-/// verb binds a completion. The verb has no run base, so it reads the
-/// task's target as `work start` anchors it, beside the default target. It
-/// is a local preview: CI judges the same chain against its own base
-/// (TSK-220).
-fn verb_authorities(
+/// The receiving lines `task status` binds against, settled once from
+/// what a requester cannot move (TSK-340 review round 5).
+struct Qualified {
+    /// The default target's tip and, when it qualifies, the declared
+    /// target's tip: landing, stacking and waiver authority.
+    run: super::acceptance::RunBases,
+    /// The default target's tip.
+    default: Option<git2::Oid>,
+    /// The range anchor: the merge-base of `HEAD` with the qualified
+    /// target, or `None` on the target branch itself.
+    base: Option<git2::Oid>,
+}
+
+/// Settle the verb's receiving lines (TSK-340, operator decision of
+/// 2026-10-27). The default target comes from explicit pins: `--base`
+/// names its tip and `--into` its name; only a clone with no remotes falls
+/// back to its local `main`, else `master` ([`default_target`]). A clone
+/// with remotes and no pins never reaches here ([`unpinned_binding`]). The
+/// declared target adds a tip only when records read at the pinned
+/// default tip name it: the policy's protected list there, or an open
+/// epic there with a task declaring that line ([`epic_line_at`]); a name's
+/// shape, such as an `integration/` prefix, and a name the record alone
+/// supplies never qualify. In a clone with remotes its tip is read only
+/// from `origin`'s remote-tracking ref, and a missing ref refuses, naming
+/// the fetch. The anchor is the merge-base with the qualified declared
+/// target, else the default.
+fn qualify(
     repo_root: &Path,
     repo: &git2::Repository,
     task: &RecordView,
-    default_target: Option<git2::Oid>,
-) -> Result<super::acceptance::RunBases, String> {
-    Ok(super::acceptance::RunBases::new(
-        target_commit(
-            repo,
-            super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-                .map_err(|error| error.to_string())?
-                .as_deref(),
-        )?
+    head: git2::Oid,
+    change: &StatusChange,
+) -> Result<Qualified, String> {
+    let default = default_target(repo, change)?;
+    let default = default.as_ref().map(|(name, tip)| (name.as_str(), *tip));
+    let declared = task
+        .integration_target
+        .as_deref()
+        .filter(|target| !target.is_empty())
+        .map(super::work_start::logical_target);
+    // Only data at the default target's tip names a receiving line; a
+    // name's shape (an `integration/` prefix) earns nothing.
+    let protected = |name: &str| -> Result<bool, String> {
+        let Some((_, tip)) = default else {
+            return Ok(false);
+        };
+        let text = crate::hooks::landed_policy::policy_text_at(repo_root, &tip.to_string())?;
+        let listed = text
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|policy| policy.get("git")?.get("protected_branches").cloned())
+            .and_then(|names| serde_json::from_value::<Vec<String>>(names).ok())
+            .unwrap_or_else(|| vec!["main".into(), "master".into()]);
+        if listed.iter().any(|listed| listed == name) {
+            return Ok(true);
+        }
+        epic_line_at(repo, tip, name)
+    };
+    let mut target = default.map(|(_, tip)| tip);
+    let mut target_name = default.map(|(name, _)| name.to_string());
+    if let Some(name) = declared {
+        if default.is_some_and(|(default, _)| default == name) || protected(name)? {
+            let Some(tip) = receiving_tip(repo, name)? else {
+                return Err(format!(
+                    "the target `{name}` does not resolve here; fetch it (`git fetch origin {name}`)"
+                ));
+            };
+            target = Some(tip);
+            target_name = Some(name.to_string());
+        }
+    }
+    let on_target = repo.head().ok().is_some_and(|reference| {
+        reference.is_branch()
+            && target_name.as_deref().is_some_and(|name| {
+                crate::git::name::reference_shorthand(&reference).bytes() == name.as_bytes()
+            })
+    });
+    let base = match target {
+        Some(tip) if !on_target => Some(
+            history::merge_base(repo, head, tip)
+                .map_err(|error| format!("cannot read the merge-base with the target: {error}"))?,
+        ),
+        _ => None,
+    };
+    Ok(Qualified {
+        run: super::acceptance::RunBases::new(
+            default.map(|(_, tip)| tip).into_iter().chain(target),
+        ),
+        default: default.map(|(_, tip)| tip),
+        base,
+    })
+}
+
+/// Whether the records at `tip` name `line` as an epic's integration line,
+/// as `check_epic_line` binds a landing line: the epic the line's name
+/// carries exists there, neither cancelled nor archived, and a task of
+/// that epic there declares exactly this line. Epic records carry no line
+/// field, so their tasks at the trusted tip are the record of it.
+fn epic_line_at(repo: &git2::Repository, tip: git2::Oid, line: &str) -> Result<bool, String> {
+    let Ok(epic_id) = super::line_adoption::epic_id(line) else {
+        return Ok(false);
+    };
+    let graph = Graph::from_revision(repo, &tip.to_string())?;
+    let open = graph
+        .records
+        .get(epic_id)
+        .is_some_and(|epic| !matches!(epic.status.as_str(), "cancelled" | "archived"));
+    Ok(open
+        && graph.records.values().any(|task| {
+            task.kind == RecordKind::Task
+                && task.epic_id.as_deref() == Some(epic_id)
+                && task
+                    .integration_target
+                    .as_deref()
+                    .is_some_and(|target| super::work_start::logical_target(target) == line)
+        }))
+}
+
+/// The default target's name and tip for a pinned or remoteless run
+/// (TSK-340, operator decision of 2026-10-27). Explicit `--base` and
+/// `--into` are the operator's pin. A clone with no remotes uses its local
+/// `main`, else `master`. A clone with remotes and no pins is bound by
+/// [`unpinned_binding`] instead and never reaches here; nothing local
+/// chooses its default for authority.
+fn default_target(
+    repo: &git2::Repository,
+    change: &StatusChange,
+) -> Result<Option<(String, git2::Oid)>, String> {
+    if let Some(base) = change.base.as_deref() {
+        let name = change
+            .into
+            .clone()
+            .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
+        let tip = repo
+            .revparse_single(base)
+            .and_then(|object| object.peel_to_commit())
+            .map_err(|error| {
+                format!("`--base {base}` does not name a commit here ({error}); fetch it (`git fetch origin {name}`)")
+            })?
+            .id();
+        return Ok(Some((name, tip)));
+    }
+    let remotes = repo
+        .remotes()
+        .map_err(|error| format!("cannot read the remotes: {error}"))?;
+    if remotes.is_empty() {
+        for name in ["main", "master"] {
+            if let Some(tip) = receiving_tip(repo, name)? {
+                return Ok(Some((name.to_string(), tip)));
+            }
+        }
+        return Ok(None);
+    }
+    // A clone with remotes binds only against explicit pins: the caller
+    // never reaches here without them (TSK-340, operator decision of
+    // 2026-10-27).
+    Err(UNPINNED.into())
+}
+
+/// Why local `task status` in a clone with remotes grants no authority
+/// without explicit pins (operator decision, 2026-10-27).
+const UNPINNED: &str = "local `task status` grants no landing, stacking or waiver authority in a clone with remotes unless the receiving target is pinned, because any process in this clone can change the git settings that would otherwise decide it; pass `--base origin/<name> --into <name>` (hosted CI pins its own base and is the authority)";
+
+/// The binding of a completion in a clone with remotes and no pins: only
+/// the reviewed span itself, with no receiving line, no landing, no target
+/// merge and no waiver authority, and no anchor read from any ref (the
+/// record's declared target is set aside, so the history below `HEAD` is
+/// the only evidence). A refusal names the pins that would let the
+/// receiving lines be judged.
+fn unpinned_binding(
+    repo: &git2::Repository,
+    graph: &Graph,
+    task: &RecordView,
+    head: git2::Oid,
+    changed: &[crate::git::GitName],
+) -> Vec<String> {
+    let mut view = task.clone();
+    view.integration_target = None;
+    let none = super::acceptance::RunBases::new(None);
+    let findings = super::acceptance::bind_completion_with_amendment(
+        repo,
+        &view,
+        graph,
+        super::acceptance::Landing::Worktree { head, changed },
+        None,
+        super::acceptance::Transport::Direct,
+        None,
+        None,
+        &none.stacking(),
+        &none.criteria(),
+    )
+    .findings;
+    if findings.is_empty() {
+        return Vec::new();
+    }
+    let mut refused: Vec<String> = findings
         .into_iter()
-        .chain(default_target),
-    ))
+        .map(|finding| format!("{}: {}", finding.rule, finding.message))
+        .collect();
+    refused.push(format!(
+        "{}: {}: {UNPINNED}",
+        super::acceptance::BINDING_RULE,
+        task.id
+    ));
+    refused
+}
+
+/// The tip of the branch `name` as the clone's receiving source holds it.
+/// A clone with no remotes has only local branches. Otherwise the source
+/// is `origin`'s remote-tracking ref; a clone with remotes but no `origin`,
+/// or whose `origin` lacks the ref, refuses and names what to set up.
+fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid>, String> {
+    let remotes = repo
+        .remotes()
+        .map_err(|error| format!("cannot read the remotes: {error}"))?;
+    let reference = if remotes.is_empty() {
+        format!("refs/heads/{name}")
+    } else {
+        let origin = remotes
+            .iter()
+            .any(|remote| matches!(remote, Ok(Some("origin"))));
+        if !origin {
+            return Err(format!(
+                "this clone has remotes but no `origin`, so the target `{name}` has no receiving source; add the remote that carries it as `origin` and fetch it (`git fetch origin {name}`)"
+            ));
+        }
+        format!("refs/remotes/origin/{name}")
+    };
+    match repo.find_reference(&reference) {
+        Ok(found) => found
+            .peel_to_commit()
+            .map(|commit| Some(commit.id()))
+            .map_err(|error| format!("cannot read {reference}: {error}")),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            if reference.starts_with("refs/heads/") {
+                Ok(None)
+            } else {
+                Err(format!(
+                    "the target `{name}` has no remote-tracking ref {reference} here, and a local branch is never the target's authority; fetch it (`git fetch origin {name}`) and run this again"
+                ))
+            }
+        }
+        Err(error) => Err(format!("cannot read {reference}: {error}")),
+    }
 }
 
 /// Replace the record at `relative` (a `/`-separated path beneath

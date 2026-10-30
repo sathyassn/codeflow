@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import tomllib
 from pathlib import Path
 import unittest
 
@@ -107,7 +108,7 @@ class GateContracts(unittest.TestCase):
         for key in ('gates', 'windows', 'windows-build', 'windows-release-journey'):
             with self.subTest(job=key):
                 self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs[key])
-                self.assertIn('    needs: reuse\n', jobs[key])
+                self.assertIn('    needs: [reuse, gates-build]\n' if key == 'gates' else '    needs: reuse\n', jobs[key])
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
@@ -131,7 +132,7 @@ class GateContracts(unittest.TestCase):
         "            \"${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\"\n"
     )
 
-    def assert_policy_cancels_only_superseded_pull_request_runs(self, workflow):
+    def assert_policy_cancels_only_superseded_pull_request_runs(self, workflow, admission=False):
         self.assertEqual(workflow.count('concurrency:'), 1, 'one workflow-level group, no job-level one')
         self.assertIn(self.POLICY_CONCURRENCY, workflow)
         self.assertLess(workflow.index(self.POLICY_CONCURRENCY), workflow.index('\njobs:\n'))
@@ -139,9 +140,10 @@ class GateContracts(unittest.TestCase):
         self.assertIn('          GH_TOKEN: ${{ github.token }}\n', workflow)
         self.assertIn('          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}\n', workflow)
         self.assertNotIn('github.event.pull_request.body', workflow)
-        self.assertIn('    permissions:\n      contents: read\n      pull-requests: read\n    steps:\n', workflow)
+        actions = '      actions: read\n' if admission else ''
+        self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)
         self.assertNotIn(': write', workflow)
-        self.assertIn('    timeout-minutes: 20\n', workflow)
+        self.assertIn('    timeout-minutes: 45\n' if admission else '    timeout-minutes: 20\n', workflow)
 
     def test_one_target_source_build_judges_policy_and_registry_and_cancels_only_pr_runs(self):
         workflow = read('.github/workflows/codeflow-policy.yml')
@@ -150,13 +152,81 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(workflow.count('cargo build --release'), 1)
         self.assertIn('codeflow ids check --base', workflow)
         self.assertIn('codeflow ci --base', workflow)
-        self.assert_policy_cancels_only_superseded_pull_request_runs(workflow)
+        self.assert_policy_cancels_only_superseded_pull_request_runs(workflow, admission=True)
         self.assertIn('Swatinem/rust-cache@', workflow)
         self.assertNotIn('github.event.pull_request.head.sha }}\n          fetch-depth', workflow)
         self.assertFalse((ROOT / '.github/workflows/codeflow-registry.yml').exists())
 
+    def test_commit_standards_admits_only_the_exact_heads_ready_run(self):
+        # TSK-449 AC-6: merge admission is the required `commit standards`
+        # check. It reruns when a draft is made ready, reads run records with
+        # a read-only token from the trusted target checkout, and refuses a
+        # draft at once (no wait) while a ready head waits for its run.
+        workflow = read('.github/workflows/codeflow-policy.yml')
+        self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n', workflow)
+        step = workflow.split("      - name: the exact head's ready codeflow-ci run passed\n", 1)[1]
+        self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
+        self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
+        self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
+        self.assertIn('--workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', step)
+        self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
+        self.assertIn('          if [ "$DRAFT" = true ]; then wait=0; fi\n', step)
+        wait = int(re.search(r'^          wait=(\d+)$', step, re.M).group(1))
+        self.assertLessEqual(wait, 40 * 60, 'the wait stays inside the 45-minute job bound')
+        self.assertNotIn('pull_request.head.ref', step)
+
+    def test_release_tier_targets_leave_the_hosted_landing_gate(self):
+        # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and
+        # present-binary-delta run in gates-release, which runs on the release
+        # candidate (a pull request into main or master), pushes to main or
+        # master, the weekly schedule and manual runs, and never on a pull
+        # request into integration/**. The landing gate parts name none of them.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        release_targets = ('prose-exhaustive', 'read-benchmark', 'present-browser', 'present-binary-delta')
+        def named(job):
+            return {n for line in re.findall(r'^\s*only:\s*(\S+)$', jobs[job], re.M) for n in line.split(',')}
+        self.assertFalse(set(release_targets) & named('gates'))
+        self.assertEqual(named('gates-release'), set(release_targets))
+        condition = re.search(r'^    if: (.+)$', jobs['gates-release'], re.M).group(1)
+        self.assertNotIn('integration/', condition)
+        self.assertIn("contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref)", condition)
+        for event in ("github.event_name == 'schedule'", "github.event_name == 'workflow_dispatch'"):
+            self.assertIn(event, condition)
+        self.assertIn('    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n',
+                      jobs['gates-verdict'])
+        # The local full gate keeps them: the test config still gives them a
+        # full mode, since a schedule tier would change the adopter schema.
+        config = json.loads(read('.codeflow/test-config.json'))
+        modes = {t['name']: set(t['modes']) for t in config['targets']}
+        for name in release_targets:
+            self.assertEqual(modes[name], {'full'}, name)
+
+    def test_the_release_binary_is_built_once_and_windows_skips_fmt(self):
+        # TSK-449 AC-5: one release build per workflow, shared by every gate
+        # part; Windows runs clippy, doctests, rustdoc and the partitions,
+        # and no fmt.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        builds = [name for name, text in jobs.items() if re.search(r'^\s*run: cargo build --release', text, re.M)]
+        self.assertEqual(builds, ['gates-build'])
+        self.assertIn('name: codeflow-release', jobs['gates'])
+        self.assertNotIn('cargo build', jobs['gates'])
+        windows = [name for name in jobs if name.startswith('windows')]
+        runs = '\n'.join(re.findall(r'^\s*run: (.+)$', ''.join(jobs[n] for n in windows), re.M))
+        self.assertNotIn('cargo fmt', runs)
+        for command in ('cargo clippy --workspace --all-targets -- -D warnings', 'cargo test --workspace --doc',
+                        'cargo nextest run --archive-file'):
+            self.assertIn(command, runs)
+
     def test_the_adopter_policy_template_cancels_only_pr_runs_the_same_way(self):
         self.assert_policy_cancels_only_superseded_pull_request_runs(read('assets/base/ci/codeflow-policy.yml'))
+        # Marking a draft ready reruns the standards, so a check that reads
+        # the pull request at ready (its Testing citation) judges it then.
+        self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n',
+                      read('assets/base/ci/codeflow-policy.yml'))
 
     def test_release_reuses_cache_and_only_cancels_pr_events(self):
         workflow = read('.github/workflows/codeflow-release.yml')
@@ -230,6 +300,33 @@ class GateContracts(unittest.TestCase):
         self.assertIn('cleanup', cleanup)
         self.assertIn('check:real-browser-cleanup', read('.codeflow/test-config.json'))
 
+    def test_essential_rust_keeps_doctests_and_full_gate_membership(self):
+        targets = {t['name']: t for t in json.loads(read('.codeflow/test-config.json'))['targets']}
+        workspace = targets['rust-workspace']
+        self.assertEqual(set(workspace['modes']), {'essential'})
+        command = workspace['modes']['essential']['command']
+        self.assertEqual(workspace.get('shell'), 'sh')
+        self.assertTrue(command.startswith('run_tmp=$(mktemp -d "${TMPDIR:-/tmp}/cf.XXXXXX") || exit; '))
+        self.assertIn('trap \'status=$?; rm -rf -- "$run_tmp" || exit 1; exit "$status"\' EXIT;', command)
+        self.assertIn('export TMPDIR="$run_tmp";', command)
+        self.assertTrue(command.endswith('cargo nextest run --workspace --no-fail-fast --profile essential && cargo test --workspace --doc'))
+        self.assertEqual(workspace['report'], {'format': 'junit', 'path': 'target/nextest/essential/junit.xml'})
+        self.assertEqual(targets['rust-coverage']['modes'], {'full': {'command':
+            'cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow'}})
+        self.assertEqual(targets['rust-doctest']['modes'], {'full': {'command': 'cargo test --workspace --doc'}})
+        nextest = tomllib.loads(read('.config/nextest.toml'))
+        profiles = nextest['profile']
+        self.assertEqual(nextest['test-groups']['serial']['max-threads'], 1)
+        self.assertNotIn('test-threads', profiles['essential'])
+        self.assertEqual(json.loads(read('.codeflow/test-config.json'))['execution']['worker_budget'], 9)
+        self.assertEqual(workspace['workers'], 9)
+        self.assertEqual(profiles['essential']['overrides'], profiles['codeflow']['overrides'])
+        self.assertFalse(profiles['essential']['fail-fast'])
+        self.assertEqual(profiles['essential']['junit']['path'], 'junit.xml')
+        self.assertNotIn('default-filter', profiles['essential'])
+        for name in ('read-benchmark', 'prose-exhaustive'):
+            self.assertEqual(set(targets[name]['modes']), {'full'})
+
     def test_own_config_publishes_the_producer_graph_and_quality_floors(self):
         cfg = json.loads(read('.codeflow/test-config.json'))
         targets = {t['name']: t for t in cfg['targets']}
@@ -245,12 +342,22 @@ class GateContracts(unittest.TestCase):
             return found
         for name in ['rust-build', 'codeflow-bin', 'rust-coverage', 'rust-doctest', 'rustdoc', 'docs-validation', 'docs-portal', 'journey-gate', 'cf-present-qualification', 'present-browser', 'read-benchmark']:
             self.assertIn('present-web-build', closure(name), name)
-        # The quick gate stays light: no quick target pulls in a build producer
-        # (fmt and clippy need no web build; there is no present build.rs).
+        self.assertIn('rust-build', closure('codeflow-bin'))
+        # The Python release journeys read PR bodies with the built binary at
+        # import time, so a cold checkout needs its producer too.
+        for name in ['rust-doctest', 'rustdoc', 'journey-python']:
+            self.assertIn('codeflow-bin', closure(name), name)
+        self.assertEqual(targets['rust-clippy']['env']['CARGO_TARGET_DIR'], 'target/clippy')
+        for name in ['rust-build', 'codeflow-bin', 'rust-clippy', 'rustdoc', 'rust-doctest', 'repository-update-noop', 'contract-scans', 'present-binary-delta']:
+            self.assertEqual(targets[name]['workers'], cfg['execution']['worker_budget'], name)
+        # Quick keeps its membership and does not pull in the web build.
+        # Its Cargo checks declare their need for heavy admission.
         quick = {name for name, t in targets.items() if 'quick' in t['modes']}
         self.assertEqual(quick, {'rust-format', 'rust-clippy', 'repository-update-noop', 'contract-scans', 'gate-parity', 'skill-triggers', 'herdr-delivery'})
         for name in quick:
             self.assertLessEqual(closure(name), quick, name)
+        for name in ['rust-clippy', 'repository-update-noop', 'contract-scans']:
+            self.assertTrue(targets[name]['heavy'], name)
         # TSK-256: the push set replays `codeflow update` on this repository, so a
         # shipped asset changed without a resync fails before review. The replay
         # runs from the quick mode only (essential and full already reach it
@@ -259,16 +366,17 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(replay['modes'], {'quick': {'command': 'cargo test -p codeflow-core --test repository_update_noop --quiet'}})
         self.assertEqual(replay.get('requires', []), [])
         self.assertTrue((ROOT / 'crates/codeflow-core/tests/repository_update_noop.rs').is_file())
-        # TSK-261: the push set runs the cross-cutting source scans: the one that
-        # judges every git spawn and the one that checks every instruction
-        # artifact reference. A branch that holds a refused spawn or a stale
-        # reference fails before push, not in hosted CI after a merge. Quick mode
-        # only, no producer, like the replay.
+        # TSK-385: preserve one target while discovering core repository
+        # contracts and checking the remedy catalogue and derived lookups.
+        # Its runner controls use real Cargo and run in gate-parity too.
         scans = targets['contract-scans']
-        self.assertEqual(scans['modes'], {'quick': {'command': 'cargo test -p codeflow-core --test git_spawn_contract --test artifact_budget_contract --quiet'}})
+        self.assertEqual(scans['modes'], {'quick': {'command': 'python3 -B scripts/contract-scans.py'}})
         self.assertEqual(scans.get('requires', []), [])
         self.assertTrue((ROOT / 'crates/codeflow-core/tests/git_spawn_contract.rs').is_file())
         self.assertTrue((ROOT / 'crates/codeflow-core/tests/artifact_budget_contract.rs').is_file())
+        for mode in ['quick', 'essential', 'full']:
+            self.assertIn('python3 -B scripts/test_contract_scans.py',
+                          targets['gate-parity']['modes'][mode]['command'])
         for name in ['present-browser', 'read-benchmark', 'present-web-build']:
             self.assertTrue(targets[name]['exclusive'], name)
         self.assertEqual(targets['journey-gate']['requires'], ['rust-coverage'])

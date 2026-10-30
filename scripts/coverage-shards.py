@@ -20,8 +20,16 @@ days):
     gh run download <run id> --repo sathyassn/codeflow -p 'coverage-shard-*' -D runs/<run id>
     python3 -B scripts/coverage-shards.py measure runs/<oldest> ... runs/<newest>
 
+A shard's job takes the test run plus about 6 minutes of build and setup, so
+`check` fails a shard whose test minutes pass 18 (24 job minutes, the margin
+of the 30 minute limit), and a plan that puts a shard past 14 test minutes
+fails `plan` and `drift` (TSK-1063). The shards cannot read a test list
+before they build, so a binary the data does not know runs in the rest shard;
+`drift` bounds how much of the suite that can be.
+
 Usage: coverage-shards.py filter <shard>
        coverage-shards.py plan
+       coverage-shards.py drift --list <nextest list json>...
        coverage-shards.py check --list <nextest list json>... --results <dir>
        coverage-shards.py measure <junit dir>...
 """
@@ -39,6 +47,9 @@ DATA = HERE / "coverage-test-times.json"
 RESULTS = "coverage-shard"
 SOURCE = "on ubuntu-24.04 under cargo llvm-cov from the coverage-shard results"
 REFRESH = "scripts/coverage-shards.py measure"
+# Minutes of a shard's job outside the test run, and the longest planned run.
+SETUP_MINUTES = 6
+PLAN_MINUTES = 14
 
 if __name__ == "__main__":
-    sys.exit(planner.main(DATA, RESULTS, SOURCE, REFRESH, __doc__))
+    sys.exit(planner.main(DATA, RESULTS, SOURCE, REFRESH, __doc__, SETUP_MINUTES, PLAN_MINUTES, spread=False))

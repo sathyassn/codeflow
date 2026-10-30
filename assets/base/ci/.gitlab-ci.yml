@@ -71,11 +71,11 @@ codeflow:
           remote=origin
           [ "${CI_MERGE_REQUEST_PROJECT_ID:-}" = "${CI_PROJECT_ID:-}" ] ||
             remote="${CI_MERGE_REQUEST_PROJECT_URL:-}.git"
-          git fetch -q --no-tags "$remote" "+refs/heads/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}:refs/codeflow/target" || {
+          git fetch -q --no-tags "$remote" "+refs/heads/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}:refs/remotes/origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}" || {
             echo "codeflow: error: cannot fetch the merge request's target branch ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}; the pinned install never judges by the diff base" >&2
             exit 1
           }
-          BASE=$(git rev-parse refs/codeflow/target)
+          BASE=$(git rev-parse "refs/remotes/origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}")
         fi
       else
         BASE="$CI_COMMIT_SHA"
@@ -100,21 +100,66 @@ codeflow:
         git show "$1:.codeflow/project.toml" 2>/dev/null |
           sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1
       }
-      # Succeeds when version $1 is older than $2: numeric core first, and a
-      # pre-release before its release, as codeflow orders versions.
+      # Succeeds (0) when version $1 is older than $2, fails (1) when it is not,
+      # and refuses (2) a version that is not MAJOR.MINOR.PATCH with an optional
+      # -prerelease and +build. Orders as codeflow does: numbers by length then
+      # digits (no arithmetic, so no overflow), a pre-release before its release,
+      # pre-release identifiers numeric before alphanumeric, build ignored.
       codeflow_older() {
-        awk -v a="$1" -v b="$2" 'BEGIN {
-          i = index(a, "-"); ca = i ? substr(a, 1, i - 1) : a; pa = i ? substr(a, i + 1) : ""
-          j = index(b, "-"); cb = j ? substr(b, 1, j - 1) : b; pb = j ? substr(b, j + 1) : ""
-          n = split(ca, x, "."); m = split(cb, y, ".")
-          for (k = 1; k <= (n > m ? n : m); k++) {
-            if (x[k] + 0 < y[k] + 0) exit 0
-            if (x[k] + 0 > y[k] + 0) exit 1
+        LC_ALL=C awk -v a="$1" -v b="$2" '
+          function alnum(s) { return s != "" && s !~ /[^0-9A-Za-z-]/ }
+          function numeric(s) { return s !~ /[^0-9]/ }
+          function idents(s, pre,   n, p, i) {
+            if (s == "") return 0
+            n = split(s, p, ".")
+            for (i = 1; i <= n; i++) {
+              if (!alnum(p[i])) return 0
+              if (pre && numeric(p[i]) && length(p[i]) > 1 && substr(p[i], 1, 1) == "0") return 0
+            }
+            return 1
           }
-          if (pa != "" && pb == "") exit 0
-          if (pa == "" || pb == "") exit 1
-          exit (pa < pb) ? 0 : 1
-        }'
+          function parse(v, k,   plus, dash, i, t, c) {
+            plus = index(v, "+")
+            if (plus) {
+              if (!idents(substr(v, plus + 1), 0)) return 0
+              v = substr(v, 1, plus - 1)
+            }
+            dash = index(v, "-")
+            has[k] = 0
+            if (dash) {
+              if (!idents(substr(v, dash + 1), 1)) return 0
+              pre[k] = substr(v, dash + 1)
+              has[k] = 1
+              v = substr(v, 1, dash - 1)
+            }
+            if (split(v, c, ".") != 3) return 0
+            for (i = 1; i <= 3; i++) {
+              t = c[i] ""
+              if (t == "" || !numeric(t) || (length(t) > 1 && substr(t, 1, 1) == "0")) return 0
+              if (length(t) > 20 || (length(t) == 20 && t > "18446744073709551615")) return 0
+              core[k, i] = t
+            }
+            return 1
+          }
+          function scmp(x, y) { x = x ""; y = y ""; return x < y ? -1 : (x > y ? 1 : 0) }
+          function ncmp(x, y) { if (length(x) != length(y)) return length(x) < length(y) ? -1 : 1; return scmp(x, y) }
+          BEGIN {
+            if (!parse(a, 1) || !parse(b, 2)) exit 2
+            for (i = 1; i <= 3; i++) {
+              r = ncmp(core[1, i], core[2, i])
+              if (r) exit (r < 0 ? 0 : 1)
+            }
+            if (has[1] && !has[2]) exit 0
+            if (!has[1]) exit 1
+            n = split(pre[1], p, "."); m = split(pre[2], q, ".")
+            for (i = 1; i <= n && i <= m; i++) {
+              pn = numeric(p[i]); qn = numeric(q[i])
+              if (pn != qn) exit (pn ? 0 : 1)
+              r = pn ? ncmp(p[i], q[i]) : scmp(p[i], q[i])
+              if (r) exit (r < 0 ? 0 : 1)
+            }
+            exit (n < m) ? 0 : 1
+          }'
       }
       # The [scaffold_sha256] table a commit pins, as "<version> <digest>" for
       # this triple with "-" for a missing value, or nothing without a table.
@@ -179,7 +224,7 @@ codeflow:
         else
           echo "codeflow: warning: no release digest is pinned in .codeflow/project.toml at $3, so codeflow $1 is checked only against its release's own sha256.sum; run \`codeflow update --pin $1\` and land it to pin the reviewed digest" >&2
         fi
-        work=$(mktemp -d)
+        work=$(mktemp -d "${codeflow_tmp}/release.XXXXXX")
         curl -fsSL "${url}/sha256.sum" -o "${work}/sha256.sum" ||
           codeflow_fail "codeflow $1 has no published checksum file (sha256.sum); refusing an unverified binary"
         expected=$(awk -v a="$asset" '{n=$2; sub(/^\*/, "", n)} n == a {print $1; exit}' "${work}/sha256.sum")
@@ -218,7 +263,18 @@ codeflow:
         if [ "$head_pin" = "$(codeflow_pin "$base")" ]; then kept=yes; else kept=no; break; fi
       done
       [ "$kept" != yes ] || head_pin="$pin"
-      bin=$(mktemp -d)
+      # Everything the run downloads and checks out goes in one temporary folder
+      # of its own, made under TMPDIR, which macOS's `mktemp -d` would ignore.
+      # The exit trap removes that folder and nothing else, after a failure too,
+      # and the signal traps make every sh run it when the runner stops the job.
+      codeflow_tmp=$(mktemp -d "${TMPDIR:-/tmp}/codeflow.XXXXXX")
+      case $codeflow_tmp in /*) ;; *) codeflow_tmp="$(pwd)/${codeflow_tmp}" ;; esac
+      readonly codeflow_tmp
+      trap 'rm -rf "$codeflow_tmp" || true' EXIT
+      trap 'exit 129' HUP
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+      bin="${codeflow_tmp}/bin"
       codeflow_install "$pin" "$bin" "$target"
       PATH="${bin}:${PATH}"
       export PATH
@@ -226,7 +282,7 @@ codeflow:
       if [ "$head_pin" != "$pin" ]; then
         if [ -n "$head_pin" ] && codeflow_older "$pin" "$head_pin"; then
           # Upgrade step one: test the candidate the head pins, never enforce with it.
-          candidate=$(mktemp -d)
+          candidate="${codeflow_tmp}/candidate"
           codeflow_install "$head_pin" "$candidate" "$head"
           "${candidate}/codeflow" --version
           "${candidate}/codeflow" validate --docs
@@ -236,9 +292,9 @@ codeflow:
       fi
       # The target's binary judges the range from a checkout of the target, so the
       # target's policy applies and the head is read only as git data.
-      judge=$(mktemp -d)
+      judge="${codeflow_tmp}/judge"
       git worktree add -q --detach "${judge}/target" "$target"
-      trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true' EXIT
+      trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; rm -rf "$codeflow_tmp" || true' EXIT
       branch=$(git symbolic-ref --short -q HEAD || true)
       (cd "${judge}/target" && codeflow ci --base "$target" --head "$head" ${branch:+--branch "$branch"})
       # Refuse a lowered pin before the project's own code runs, so nothing the
@@ -252,19 +308,23 @@ codeflow:
       # update` never writes it.
       # The hook runs with the gate's authority, like this file, so it is
       # reviewed as this file is. These lines keep it from skipping the gate
-      # by accident: the shell variables naming the binary and folder are
-      # read-only (the binary itself is not), set -eu holds again once it
-      # returns, and a run it ends (an `exit`) fails.
+      # by accident: the shell variables naming the binary, the folder and the
+      # exit action are read-only (the binary itself is not), set -eu and the
+      # exit trap hold again once it returns, and a run it ends (an `exit`)
+      # fails while it leaves the exit trap in place. The cleanup never changes
+      # the run's status.
       codeflow_bin=$(command -v codeflow)
       codeflow_root=$(pwd)
-      readonly codeflow_bin codeflow_root
+      codeflow_exit='codeflow_status=$?; git -C "$codeflow_root" worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; rm -rf "$codeflow_tmp" || true; [ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }; exit "$codeflow_status"'
+      readonly codeflow_bin codeflow_root codeflow_exit
       codeflow_gated=
-      trap 'codeflow_status=$?; git -C "$codeflow_root" worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; [ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }; exit "$codeflow_status"' EXIT
+      trap "$codeflow_exit" EXIT
       if [ -f .codeflow/ci-setup.sh ]; then
         echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
         . ./.codeflow/ci-setup.sh
         set -eu
         cd "$codeflow_root"
+        trap "$codeflow_exit" EXIT
       fi
       codeflow_gated=1
       "$codeflow_bin" test --strict

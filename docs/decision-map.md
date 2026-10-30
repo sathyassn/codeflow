@@ -39,7 +39,7 @@ The release chain is the longest. Some records in these chains still read
 
 ## Technical
 
-69 decisions, 3 with `status: superseded`. A
+70 decisions, 3 with `status: superseded`. A
 decision is proposed, then accepted, and may later be superseded; its
 content is never rewritten, and only `superseded_by` or a dated note is added.
 
@@ -92,6 +92,7 @@ Two pages link back to the decisions:
 | Duo orchestration and quality | [ADR-0035](decisions/ADR-0035-capability-routed-duo-execution.md) | route duo execution by verified per-task capability | accepted | none |
 | Duo orchestration and quality | [ADR-0038](decisions/ADR-0038-critical-path-deferral-stewardship.md) | preserve critical-path focus without reflexive deferral or escalation | accepted | none |
 | Duo orchestration and quality | [ADR-0056](decisions/ADR-0056-high-primary-effort-with-bounded-workers.md) | High primary effort with bounded workers | accepted | none |
+| Duo orchestration and quality | [ADR-0087](decisions/ADR-0087-effort-is-each-person-s-setting-not-the-project.md) | Effort is each person's setting, not the project's | accepted | none |
 | Duo orchestration and quality | [ADR-0060](decisions/ADR-0060-accountable-worker-delegation.md) | separate primary accountability from worker execution | accepted | none |
 | Model and harness qualification | [ADR-0027](decisions/ADR-0027-native-interactive-model-evaluation.md) | qualify model and harness bindings with native-interactive evaluations | accepted | none |
 | Model and harness qualification | [ADR-0039](decisions/ADR-0039-qualified-model-harness-bindings.md) | separate durable orchestration doctrine from qualified model and harness bindings | accepted | none |
@@ -103,6 +104,7 @@ Two pages link back to the decisions:
 | Verification and evidence | [ADR-0040](decisions/ADR-0040-task-graph-and-verification-strength.md) | settle task graphs and select verification strength by evidence | accepted | none |
 | Verification and evidence | [ADR-0042](decisions/ADR-0042-layered-code-verification.md) | combine selected deterministic analyzers with contextual agentic verification | accepted | none |
 | Verification and evidence | [ADR-0044](decisions/ADR-0044-whole-flow-and-ui-resource-isolation.md) | require whole-flow evidence and isolated UI resources | accepted | none |
+| Verification and evidence | [ADR-0085](decisions/ADR-0085-gate-selection-requires-evidence-for-the-exact-c.md) | Gate selection requires evidence for the exact check | proposed | none |
 | Durable work records | [ADR-0045](decisions/ADR-0045-durable-work-authority-and-layout.md) | define durable work authority and canonical record layout | superseded | ADR-0046 |
 | Durable work records | [ADR-0046](decisions/ADR-0046-independent-work-ids-and-stable-planning-anchor.md) | use independent work ids and a stable planning anchor | accepted | none |
 | Session orientation and memory | [ADR-0013](decisions/ADR-0013-codex-orient-and-compaction-resilience.md) | Codex gets the orient digest (SessionStart); compaction resilience is a disposition, not a snapshot | accepted | none |

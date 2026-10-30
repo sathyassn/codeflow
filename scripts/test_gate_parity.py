@@ -17,14 +17,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("gate_parity", ROOT / "scripts" / "gate-parity.py")
 parity = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(parity)
 
-CONFIG = json.loads(parity.CONFIG.read_text())
-WORKFLOW = parity.WORKFLOW.read_text()
+CONFIG = json.loads(parity.CONFIG.read_text(encoding="utf-8"))
+WORKFLOW = parity.WORKFLOW.read_text(encoding="utf-8")
 CI = parity.ci_rust_job_commands(WORKFLOW)
 PORTAL = "docs-portal"
 PRESENT = "present-browser"
@@ -54,9 +55,15 @@ def doctest_name() -> str:
                 if full_command(CONFIG, t["name"]) == parity.DOCTESTS)
 
 
+def gate_event_condition(workflow: str) -> str:
+    gate = parity.workflow_jobs(workflow)["gates"]
+    condition = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M).group(1)
+    return parity.GATES_IF.match(condition).group(1)
+
+
 class GateParityControls(unittest.TestCase):
     def assert_parity(self, cfg: dict) -> None:
-        self.assertEqual(parity.local_rust_commands(cfg), CI)
+        self.assertEqual(parity.windows_owed(parity.local_rust_commands(cfg)), CI)
 
     def assert_drift(self, cfg: dict) -> list[str]:
         notes: list[str] = []
@@ -154,18 +161,6 @@ class NodePinControls(unittest.TestCase):
                 problems = self.problems(mutated(old_form))
                 self.assert_problem(problems, name, "double quotes")
 
-    @unittest.skipUnless(os.name == "nt", "requires cmd.exe and the Windows CI Node install")
-    def test_docs_portal_target_runs_through_cmd_on_windows(self):
-        # The target ends with `$CODEFLOW_BIN validate --portal`, which
-        # `codeflow test` supplies; run directly, the caller must.
-        if not os.environ.get("CODEFLOW_BIN"):
-            self.fail("set CODEFLOW_BIN to a built codeflow: the docs-portal target validates the portal with it")
-        command = full_command(CONFIG, PORTAL)
-        run = subprocess.run(f'cmd.exe /D /S /C "{command}"', cwd=ROOT,
-                             capture_output=True, text=True, check=False)
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertIn("with-node: Node 24.18.0", run.stderr)
-
     def test_each_node_target_runs_through_its_version_file(self):
         for name, pin in ((PORTAL, "docs-portal/.node-version"),
                           (PRESENT, "crates/codeflow-present/web/.node-version")):
@@ -244,21 +239,165 @@ class GateBinaryControls(unittest.TestCase):
                 problems = parity.gate_binary_problems(mutated(drop))
                 self.assertTrue(any(PRESENT in p and "CARGO_TARGET_DIR" in p for p in problems), problems)
 
+    def test_model_eval_requires_the_binary_in_each_mode(self):
+        for mode in ("essential", "full"):
+            for change in ("missing dependency", "wrong dependency", "missing mode", "disabled", "wrong output"):
+                with self.subTest(mode=mode, change=change):
+                    cfg = copy.deepcopy(CONFIG)
+                    consumer = target(cfg, "model-eval-kit")
+                    consumer["modes"] = {mode: consumer["modes"][mode]}
+                    producer = target(cfg, "codeflow-bin")
+                    if change == "missing dependency":
+                        consumer["requires"] = []
+                    elif change == "wrong dependency":
+                        consumer["requires"] = ["release-automation"]
+                        target(cfg, "release-automation")["requires"] = []
+                    elif change == "missing mode":
+                        del producer["modes"][mode]
+                    elif change == "disabled":
+                        producer["enabled"] = False
+                    else:
+                        producer["outputs"] = ["target/release/codeflow"]
+                    self.assertTrue(any("model-eval-kit" in p and mode in p
+                                        for p in parity.gate_binary_problems(cfg)))
+
+    def test_a_direct_binary_path_needs_a_matching_producer(self):
+        cfg = copy.deepcopy(CONFIG)
+        consumer = target(cfg, "model-eval-kit")
+        consumer["requires"] = ["codeflow-bin"]
+        consumer["modes"] = {"essential": {"command": "target/release/codeflow status"}}
+        self.assertTrue(any("target/release/codeflow" in p for p in parity.gate_binary_problems(cfg)))
+        target(cfg, "codeflow-bin")["outputs"] = ["target/release/codeflow"]
+        self.assertEqual([p for p in parity.gate_binary_problems(cfg) if "model-eval-kit" in p], [])
+
+    def test_a_longer_binary_name_is_not_a_codeflow_input(self):
+        for name in ("codeflow-present", "codeflow.exe-wrapper", "codeflow_extra", "codeflow/helper"):
+            with self.subTest(name=name):
+                cfg = copy.deepcopy(CONFIG)
+                consumer = target(cfg, "model-eval-kit")
+                consumer["requires"] = []
+                consumer["modes"] = {"full": {"command": f"target/debug/{name} status"}}
+                self.assertFalse(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+
+    def test_an_unlisted_script_using_the_binary_needs_a_producer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "scripts" / "new-consumer.py"
+            script.parent.mkdir()
+            script.write_text('import os\nprint(os.environ["CODEFLOW_BIN"])\n')
+            cfg = copy.deepcopy(CONFIG)
+            consumer = target(cfg, "model-eval-kit")
+            consumer["modes"] = {"full": {"command": f'python3 -B "{script}"'}}
+            consumer["requires"] = []
+            self.assertTrue(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+            consumer["requires"] = ["codeflow-bin"]
+            self.assertFalse(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+
+    def test_windows_script_operands_keep_the_drive_and_separators(self):
+        for script in (r'C:\repo\scripts\consumer.py', 'C:/repo/scripts/consumer.py',
+                       r'\\server\share\consumer.py', r'\\?\C:\repo\consumer.py',
+                       r'scripts\consumer.py'):
+            for command in (f'python3 -B "{script}"', f"python3 -B '{script}'",
+                            f'python3 -B {script}'):
+                with self.subTest(command=command):
+                    self.assertIn(script, parity.literal_script_paths(command))
+
+    def test_quoted_script_with_spaces_reads_the_real_binary_dependency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            script = Path(temp) / "new consumer.py"
+            cfg = copy.deepcopy(CONFIG)
+            consumer = target(cfg, "model-eval-kit")
+            consumer["requires"] = []
+            for quote in ('"', "'"):
+                with self.subTest(quote=quote):
+                    consumer["modes"] = {"full": {"command": f'python3 -B {quote}{script}{quote}'}}
+                    # CRLF and UTF-8 are real bytes read by the discovery.
+                    script.write_bytes('# \u201d\r\nprint(CODEFLOW_BIN)\r\n'.encode("utf-8"))
+                    self.assertTrue(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+                    script.write_bytes(b'print("ordinary script")\r\n')
+                    self.assertFalse(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+
+    def test_script_operands_after_colons_and_questions_keep_binary_discovery(self):
+        cases = (
+            ("python3 scripts/a.py:scripts/b.py", "scripts/b.py"),
+            ("X=lib:scripts/x.py python3 scripts/x.py", "scripts/x.py"),
+            ("node --cfg=file:scripts/x.js", "scripts/x.js"),
+            ("python3 a:scripts/x.py", "scripts/x.py"),
+            ("node --cfg=file?scripts/x.js", "scripts/x.js"),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "scripts").mkdir()
+            for command, script in cases:
+                with self.subTest(command=command):
+                    (root / script).write_text("print(CODEFLOW_BIN)\n", encoding="utf-8")
+                    # Inspect the prefixed operand itself, so the second
+                    # explicit x.py in the assignment case cannot mask a miss.
+                    operand = next(word for word in command.split() if ":" in word or "?" in word)
+                    self.assertIn(script, parity.literal_script_paths(operand))
+                    self.assertIn(script, parity.literal_script_paths(command))
+                    self.assertTrue(parity.script_uses_codeflow_bin(command, root))
+
+    def test_utf8_script_discovery_with_windows_default_decoding(self):
+        # Exercise a real byte read with the cp1252 default from hosted Windows.
+        # Explicit encodings still reach Path.read_text unchanged.
+        original = Path.read_text
+
+        def windows_read(path, encoding=None, errors=None):
+            return original(path, encoding=encoding or "cp1252", errors=errors)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "consumer.py"
+            script.write_bytes('# \u201d\nprint(CODEFLOW_BIN)\n'.encode("utf-8"))
+            with mock.patch.object(Path, "read_text", windows_read):
+                self.assertTrue(parity.script_uses_codeflow_bin("python consumer.py", root))
+                script.write_bytes('# \u201d\nprint("ordinary script")\n'.encode("utf-8"))
+                self.assertFalse(parity.script_uses_codeflow_bin("python consumer.py", root))
+
+    def test_invalid_utf8_script_names_the_file_and_refuses(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "malformed.py"
+            script.write_bytes(b"# \xff\nprint(CODEFLOW_BIN)\n")
+            with self.assertRaisesRegex(ValueError, r"malformed\.py: repository text must be UTF-8"):
+                parity.script_uses_codeflow_bin("python malformed.py", root)
+
+    def test_windows_portal_check_has_its_own_binary_prerequisite(self):
+        portal = target(CONFIG, "docs-portal-windows")
+        self.assertEqual(set(portal["modes"]), {"essential", "full"})
+        self.assertEqual(portal["requires"], ["docs-portal"])
+        self.assertTrue({"codeflow-bin", "docs-portal-deps"} <=
+                        parity.requires_closure(CONFIG, {"docs-portal-windows"}))
+        for settings in portal["modes"].values():
+            self.assertEqual(settings["command"], "python3 -B scripts/test_gate_portal_windows.py")
+        self.assertIn('python scripts/test_gate_parity.py && CODEFLOW_BIN=', WORKFLOW)
+        self.assertIn('python scripts/test_gate_portal_windows.py', WORKFLOW)
+
 
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
                 '--extract-overwrite --no-fail-fast --profile codeflow '
-                '-E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }})"')
+                '-E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }} '
+                '--list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"')
 ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst"
 
 
 class WindowsRefereeControls(unittest.TestCase):
     def test_every_raw_rust_floor_is_required(self):
-        for command in ["cargo fmt --all -- --check", ARCHIVED_RUN, ARCHIVE, parity.DOCTESTS,
+        for command in [ARCHIVED_RUN, ARCHIVE, parity.DOCTESTS,
                         "cargo clippy --workspace --all-targets -- -D warnings",
                         'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps']:
             with self.subTest(command=command):
                 self.assertIn("run: " + command, WORKFLOW)
                 self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(WORKFLOW.replace("run: " + command, "run: echo removed")))
+
+    def test_windows_runs_no_fmt_and_the_parity_needs_none(self):
+        # TSK-449 AC-5: formatting is platform independent, so only the Linux
+        # rust-format target runs it; Windows keeps the other raw floors.
+        windows = parity.workflow_jobs(WORKFLOW)["windows"]
+        self.assertNotIn("cargo fmt", windows)
+        self.assertIn("cargo fmt --all -- --check", parity.local_rust_commands(CONFIG))
+        self.assertEqual(parity.rust_parity(), 0)
 
 
 class WindowsPartitionControls(unittest.TestCase):
@@ -290,7 +429,8 @@ class WindowsPartitionControls(unittest.TestCase):
                                                              "--archive-file target/other.tar.zst")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--no-fail-fast ", "")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$(python -B scripts/windows-partitions.py filter '
-                                                             '${{ matrix.partition }})"',
+                                                             '${{ matrix.partition }} '
+                                                             '--list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"',
                                                              "--partition count:${{ matrix.partition }}/12"))):
             with self.subTest(new=new):
                 workflow = WORKFLOW.replace("run: " + old, "run: " + new)
@@ -318,9 +458,28 @@ class GatePartControls(unittest.TestCase):
 
     def test_a_target_no_part_names_is_refused(self):
         self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: rust-format"),
-                            "no gate part or coverage job runs", "read-benchmark")
-        self.assert_problem(WORKFLOW.replace(",journey-python\n", "\n"),
-                            "no gate part or coverage job runs", "journey-python")
+                            "no gate part, release part or coverage job runs", "read-benchmark")
+        self.assert_problem(WORKFLOW.replace(",journey-python,", ","),
+                            "no gate part, release part or coverage job runs", "journey-python")
+
+    def test_release_tier_targets_run_only_in_the_release_job(self):
+        # TSK-449 AC-4: the four release-tier targets leave the hosted
+        # landing gate; a target neither the landing gate nor the release
+        # path runs is refused, and so is a release job on landing events.
+        landing = parity.workflow_jobs(WORKFLOW)["gates"]
+        release = parity.workflow_jobs(WORKFLOW)["gates-release"]
+        for name in parity.RELEASE_TARGETS:
+            self.assertNotIn(name, landing)
+            self.assertIn(name, release)
+        self.assertNotIn("integration/", re.search(r"^ {4}if:\s*(.+?)\s*$", release, re.M).group(1))
+        self.assert_problem(WORKFLOW.replace("only: present-browser,present-binary-delta", "only: present-browser"),
+                            "no gate part, release part or coverage job runs", "present-binary-delta")
+        self.assert_problem(WORKFLOW.replace("only: present-supply-chain,cf-present-qualification",
+                                             "only: present-supply-chain,cf-present-qualification,read-benchmark"),
+                            "landing gate parts name release-tier targets")
+        self.assert_problem(WORKFLOW.replace(parity.RELEASE_IF, parity.RELEASE_IF.replace(
+            "github.event_name == 'schedule'", "github.event_name == 'pull_request' || github.event_name == 'schedule'")),
+                            "gates-release job's condition")
 
     def test_a_new_full_mode_target_must_join_a_part(self):
         def add(c):
@@ -342,17 +501,18 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
-    VERDICT_IF = ("    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), "
-                  "github.event.pull_request.base.ref) || github.event_name == 'push')\n    name: codeflow gates\n")
+    DRAFT_NEUTRAL = "${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}"
+    VERDICT_IF = (f"    if: {DRAFT_NEUTRAL}\n"
+                  "    name: codeflow gates\n")
     EXACT = "must be exactly the verdict job"
 
     def test_the_verdict_must_exist_need_the_parts_and_never_be_skipped(self):
         self.assertIn(self.VERDICT_IF, WORKFLOW)
         self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
                             "exactly one job must be named")
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n"), self.EXACT)
         self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
                                              "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
                             self.EXACT)
@@ -364,17 +524,17 @@ class GatePartControls(unittest.TestCase):
         """The four forms the TSK-203 review showed a substring check accepting."""
         controls = {
             "a condition that never runs": WORKFLOW.replace(
-                "    if: always() && (github.event_name", "    if: always() && false && (github.event_name"),
+                self.VERDICT_IF, self.VERDICT_IF.replace("always() && ", "always() && false && ")),
             "a forgiven exit": WORKFLOW.replace(
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
             "continue-on-error on the verdict": WORKFLOW.replace(
-                "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
+                "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
             "a reuse that needs no skipped part": WORKFLOW.replace(
-                '[ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]',
+                '[ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]',
                 '[ "$REUSE" = success ]'),
             "a reuse that needs only the parts skipped": WORKFLOW.replace(
-                '[ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]', '[ "$PARTS" = skipped ]'),
+                '[ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]', '[ "$PARTS" = skipped ]'),
         }
         for label, workflow in controls.items():
             with self.subTest(label):
@@ -479,14 +639,14 @@ class GatePartControls(unittest.TestCase):
         })
 
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
-        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
+        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
         self.assertNotEqual(workflow, WORKFLOW)
         self.assertEqual(self.problems(workflow), [])
 
 
-def verdict_script(workflow: str = WORKFLOW) -> str:
+def verdict_script(workflow: str = WORKFLOW, name: str = "gates-verdict") -> str:
     """The `codeflow gates` verdict's bash script, as the runner sees it."""
-    job = parity.workflow_jobs(workflow)["gates-verdict"]
+    job = parity.workflow_jobs(workflow)[name]
     lines = job.splitlines()
     start = lines.index("        run: |") + 1
     script = []
@@ -506,14 +666,23 @@ class VerdictOutcomeControls(unittest.TestCase):
     when all succeeded or the reuse decision named a run and all were
     skipped. Each case runs the committed script in bash."""
 
-    def verdict(self, parts, shards, report, reuse="skipped", reused=""):
+    def verdict(self, parts, shards, report, reuse="skipped", reused="", release="skipped"):
         env = {"PATH": os.environ.get("PATH", ""), "PARTS": parts, "SHARDS": shards, "REPORT": report,
+               "RELEASE": release,
                "REUSE": reuse, "REUSED": reused, "GITHUB_SERVER_URL": "https://github.com",
                "GITHUB_REPOSITORY": "sathyassn/codeflow"}
         return subprocess.run(["bash", "-c", verdict_script()], env=env, capture_output=True, text=True).returncode
 
     def test_it_passes_only_when_every_job_passed(self):
         self.assertEqual(self.verdict("success", "success", "success"), 0)
+
+    def test_the_release_parts_pass_when_run_or_skipped_and_fail_otherwise(self):
+        # TSK-449 AC-4: the release parts are skipped by their own condition
+        # on a landing pull request; a failed or cancelled run fails.
+        for release in ("success", "skipped"):
+            self.assertEqual(self.verdict("success", "success", "success", release=release), 0, release)
+        for release in ("failure", "cancelled"):
+            self.assertEqual(self.verdict("success", "success", "success", release=release), 1, release)
 
     def test_a_failed_cancelled_or_skipped_job_fails_it(self):
         for outcome in ("failure", "cancelled", "skipped"):
@@ -523,6 +692,17 @@ class VerdictOutcomeControls(unittest.TestCase):
                 with self.subTest(outcome=outcome, job=("parts", "shards", "report")[which]):
                     self.assertEqual(self.verdict(*results), 1)
 
+    def test_both_verdicts_fail_clearly_when_the_gates_did_not_run(self):
+        env = {"PATH": os.environ.get("PATH", ""), "REUSE": "skipped", "REUSED": ""}
+        env.update({key: "skipped" for key in (
+            "PARTS", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE")})
+        for name in ("gates-verdict", "windows-verdict"):
+            with self.subTest(verdict=name):
+                result = subprocess.run(["bash", "-c", verdict_script(name=name)], env=env,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("gates did not run", result.stdout)
+
     def test_reuse_passes_only_when_every_job_was_skipped(self):
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", "123"), 0)
         for results in (("skipped", "success", "skipped"), ("skipped", "skipped", "failure"),
@@ -531,6 +711,70 @@ class VerdictOutcomeControls(unittest.TestCase):
                 self.assertEqual(self.verdict(*results, "success", "123"), 1)
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", ""), 1)
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "failure", "123"), 1)
+
+
+class HostedEventParityControls(unittest.TestCase):
+    """Ready integration pull requests must keep both verdict contracts intact."""
+
+    READY = ("github.event_name == 'pull_request' && !github.event.pull_request.draft && "
+             "(contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || "
+             "startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || "
+             "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")
+
+    def test_both_verdicts_run_for_every_event_but_a_draft(self):
+        # TSK-449 AC-6: a draft's verdicts are skipped (neutral); every
+        # other event gets a verdict, and a weaker or missing guard is drift.
+        for name in ("gates-verdict", "windows-verdict"):
+            job = parity.workflow_jobs(WORKFLOW)[name]
+            condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
+            self.assertEqual(condition, GatePartControls.DRAFT_NEUTRAL)
+        for old, new in (("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+                          "    if: always()\n    name: windows\n"),
+                         ("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+                          "    if: ${{ always() && !github.event.pull_request.draft }}\n    name: windows\n")):
+            self.assertIn(old, WORKFLOW)
+            problems = parity.windows_verdict_problems(WORKFLOW.replace(old, new))
+            self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
+
+    def test_a_draft_skips_every_gate_job(self):
+        # Every gate job's pull request clause requires a non-draft, whatever
+        # the base, so a draft runs no gate and spends no runner on one.
+        self.assertTrue(self.READY.startswith(
+            "github.event_name == 'pull_request' && !github.event.pull_request.draft && ("))
+
+    def test_schedule_and_dispatch_keep_unconditional_security_jobs(self):
+        trigger = WORKFLOW.split("permissions:", 1)[0]
+        self.assertIn("  schedule:\n", trigger)
+        self.assertIn("  workflow_dispatch:", trigger)
+        for name in ("secret-scan", "gitleaks-canary", "security-review"):
+            job = parity.workflow_jobs(WORKFLOW)[name]
+            self.assertIsNone(re.search(r"^ {4}if:", job, re.M), name)
+            self.assertNotIn("    needs:", job, name)
+
+    def test_schedule_and_dispatch_select_every_expensive_job(self):
+        for name in ("gates", "gates-coverage", "gates-coverage-report", "windows-build",
+                     "windows-tests", "windows", "windows-release-journey", "windows-journeys"):
+            job = parity.workflow_jobs(WORKFLOW)[name]
+            condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
+            for event in ("schedule", "workflow_dispatch"):
+                self.assertIn(f"github.event_name == '{event}'", condition, name)
+
+    def ready_workflow(self):
+        return WORKFLOW.replace(gate_event_condition(WORKFLOW), self.READY)
+
+    def test_ready_integration_conditions_keep_both_verdict_contracts(self):
+        self.assertEqual(gate_event_condition(WORKFLOW), self.READY)
+        workflow = self.ready_workflow()
+        self.assertEqual(parity.gate_part_problems(CONFIG, workflow), [])
+        self.assertEqual(parity.windows_verdict_problems(workflow), [])
+
+    def test_a_windows_verdict_with_a_different_event_condition_is_refused(self):
+        workflow = self.ready_workflow()
+        job = parity.workflow_jobs(workflow)["windows-verdict"]
+        narrowed = job.replace("    if: ${{ always() && ", "    if: ${{ always() && github.event_name == 'push' && ")
+        self.assertNotEqual(job, narrowed)
+        problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
+        self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
 
 
 class CoverageShardControls(unittest.TestCase):
@@ -627,7 +871,7 @@ class CoverageShardControls(unittest.TestCase):
 
     def test_without_the_coverage_jobs_their_targets_go_unrun(self):
         start = WORKFLOW.index("  gates-coverage:\n")
-        end = WORKFLOW.index("  # The required check.")
+        end = WORKFLOW.index("  gates-verdict:\n")
         problems = parity.gate_part_problems(CONFIG, WORKFLOW[:start] + WORKFLOW[end:])
         self.assertTrue(any("`gates-coverage` job must be exactly" in p for p in problems), problems)
 
@@ -706,7 +950,7 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
         self.assertEqual(parity.all_timeout_problems(), [])
         values = []
         for relative in parity.workflow_files():
-            text = (ROOT / relative).read_text()
+            text = (ROOT / relative).read_text(encoding="utf-8")
             values += [int(v) for v in re.findall(r"^ {4}timeout-minutes: (\d+)$", text, re.M)]
         self.assertTrue(values)
         self.assertLessEqual(max(values), parity.MAX_TIMEOUT_MINUTES)
@@ -813,7 +1057,7 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
 
     OWN = {
         ".github/workflows/codeflow-ci.yml", ".github/workflows/codeflow-policy.yml",
-        ".github/workflows/codeflow-release.yml", ".github/workflows/codeflow-release-integration.yml",
+        ".github/workflows/codeflow-release.yml",
         ".github/workflows/portal-pages.yml", ".github/workflows/release.yml",
         ".github/workflows/release-main-recheck.yml", ".github/workflows/release-plan-authority.yml",
         ".github/workflows/release-post-announce.yml",
@@ -821,7 +1065,7 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
     SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml"}
 
     def files(self) -> dict[str, str]:
-        return {path.as_posix(): (parity.ROOT / path).read_text() for path in parity.workflow_files()}
+        return {path.as_posix(): (parity.ROOT / path).read_text(encoding="utf-8") for path in parity.workflow_files()}
 
     def problems(self, path: str, text: str) -> list[str]:
         return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
@@ -958,7 +1202,7 @@ class JobHeaderControls(unittest.TestCase):
     CI = ".github/workflows/codeflow-ci.yml"
 
     def files(self) -> dict[str, str]:
-        return {path.as_posix(): (parity.ROOT / path).read_text() for path in parity.workflow_files()}
+        return {path.as_posix(): (parity.ROOT / path).read_text(encoding="utf-8") for path in parity.workflow_files()}
 
     def problems(self, path: str, text: str) -> list[str]:
         return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
@@ -1137,7 +1381,7 @@ class EveryActionIsPinnedByCommit(unittest.TestCase):
         # of any real file must fail.
         checked = 0
         for relative in parity.workflow_files():
-            text = (parity.ROOT / relative).read_text()
+            text = (parity.ROOT / relative).read_text(encoding="utf-8")
             shipped = relative.parts[0] != ".github"
             for number, line in enumerate(text.splitlines()):
                 found = parity.USES_LINE.match(line)

@@ -55,13 +55,9 @@ const METHOD_ARTIFACTS: [&str; 5] = [
     ".claude/workflows/pipeline.workflow.js",
 ];
 
-/// Shared isolated `CODEFLOW_HOME` so the suite never writes the developer's
-/// real `~/.codeflow/registry.json` (the `init_e2e.rs` pattern).
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 /// Runs the binary under test with the git-hook shims pointed back at it (they
 /// `exec codeflow` from PATH) and host git config neutralized.
@@ -571,7 +567,8 @@ fn push_set_blocks_a_bad_push_at_every_tier() {
             "{tier}: block did not name the push set check:\n{err}"
         );
 
-        // A failing `quick` target blocks too.
+        // A failing `quick` target no longer runs on push (TSK-449): the push
+        // set is `codeflow ci`, and the quick gate is cited at ready.
         let config = r#"{"schema_version": "1.0", "targets": [
   {"name": "lint", "runner": "custom", "modes": {"quick": {"command": "false"}, "full": {"command": "true"}}}
 ]}"#;
@@ -579,10 +576,10 @@ fn push_set_blocks_a_bad_push_at_every_tier() {
         let cfg = ".codeflow/test-config.json";
         commit_on_branch(&root, "feat/base", "feat/quick-fails", cfg, config, &msg);
         let (ok, err) = push(&root, "feat/quick-fails");
-        assert!(!ok, "{tier}: failing quick target pushed");
+        assert!(ok, "{tier}: a quick target stopped the push:\n{err}");
         assert!(
-            err.contains("push set failed for: lint"),
-            "{tier}: block did not name the failing target:\n{err}"
+            !err.contains("quick targets"),
+            "{tier}: a quick target ran:\n{err}"
         );
     }
 }
@@ -1150,7 +1147,7 @@ const CLAUDE_SETTINGS_BASELINE: &str = ".codeflow/.baseline/.claude/settings.jso
 fn shipped_compaction_env() -> serde_json::Value {
     serde_json::json!({
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
-        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "35"
     })
 }
 
@@ -1255,6 +1252,448 @@ fn update_keeps_the_projects_compaction_choices() {
             "update {attempt} restored an env the project removed"
         );
     }
+}
+
+/// Roll a fresh install back to a release that shipped the compaction
+/// percentage at `shipped`, with the project's own `env` entries on top.
+fn roll_back_compaction(root: &Path, shipped: &str, project_env: &serde_json::Value) {
+    for rel in [CLAUDE_SETTINGS, CLAUDE_SETTINGS_BASELINE] {
+        let mut earlier = read_json(root, rel);
+        earlier["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = serde_json::json!(shipped);
+        if rel == CLAUDE_SETTINGS {
+            for (key, value) in project_env.as_object().unwrap() {
+                earlier["env"][key] = value.clone();
+            }
+        }
+        write_json(root, rel, &earlier);
+    }
+}
+
+/// TSK-1029 review: an `env` value can be a secret, so neither the printed
+/// report nor the `--diff` file of an update that changes the settings
+/// shows one, even as context beside a migrated value.
+#[test]
+fn update_diff_never_shows_an_env_value() {
+    // A synthetic value standing for a secret; no output may show it.
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    let (tmp, root) = project();
+    init(&root, "--minimal");
+    roll_back_compaction(&root, "50", &serde_json::json!({"PROJECT_TOKEN": SECRET}));
+    let diff_file = tmp.path().join("update.diff");
+
+    let out = codeflow(
+        &root,
+        &["update", "--diff", diff_file.to_str().expect("utf-8 path")],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "update failed: {stdout}\n{stderr}");
+    let diff = std::fs::read_to_string(&diff_file).expect("diff file");
+
+    let env = &read_json(&root, CLAUDE_SETTINGS)["env"];
+    assert_eq!(env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "35", "{stdout}");
+    assert_eq!(env["PROJECT_TOKEN"], SECRET, "{stdout}");
+    assert!(
+        diff.contains("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
+        "the diff does not name the migrated key:\n{diff}"
+    );
+    for (name, text) in [("stdout", &stdout), ("stderr", &stderr), ("diff", &diff)] {
+        assert!(!text.contains(SECRET), "{name} shows an env value:\n{text}");
+    }
+}
+
+/// Run `codeflow update` with `extra` flags and `--diff`, and return its
+/// stdout, its stderr and the diff file.
+fn update_with_diff(tmp: &Path, root: &Path, extra: &[&str]) -> [String; 3] {
+    let diff_file = tmp.join("update.diff");
+    let mut args = vec!["update"];
+    args.extend_from_slice(extra);
+    args.extend(["--diff", diff_file.to_str().expect("utf-8 path")]);
+    let out = codeflow(root, &args);
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "update failed: {stdout}\n{stderr}");
+    let diff = std::fs::read_to_string(&diff_file).expect("diff file");
+    [stdout, stderr, diff]
+}
+
+/// TSK-1029 review 02: a project field that the shipped settings lack never reaches
+/// the `--diff` file, whatever its name is spelled like and whatever type
+/// its value has.
+#[test]
+fn update_diff_never_shows_a_project_api_key_value() {
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    const NUMBER: i64 = 271_828;
+    let (tmp, root) = project();
+    init(&root, "--minimal");
+    roll_back_compaction(&root, "50", &serde_json::json!({}));
+    // The project's fields go right after `env`, so the changed env line
+    // has them as patch context.
+    let mut settings = serde_json::Map::new();
+    for (key, value) in read_json(&root, CLAUDE_SETTINGS).as_object().unwrap() {
+        settings.insert(key.clone(), value.clone());
+        if key == "env" {
+            settings.insert("api-key".into(), serde_json::json!(SECRET));
+            settings.insert("api key".into(), serde_json::json!(NUMBER));
+            settings.insert(
+                "projectTools".into(),
+                serde_json::json!({
+                    "httpHeaders": {"Authorization": SECRET},
+                    "http-headers": {"X-Trace": NUMBER},
+                    "api.key": [SECRET],
+                }),
+            );
+        }
+    }
+    write_json(&root, CLAUDE_SETTINGS, &settings.into());
+
+    let outputs = update_with_diff(tmp.path(), &root, &[]);
+    assert_eq!(
+        read_json(&root, CLAUDE_SETTINGS)["api-key"],
+        SECRET,
+        "the update dropped a project field"
+    );
+    assert!(
+        outputs[2].contains("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
+        "the diff does not name the migrated key:\n{}",
+        outputs[2]
+    );
+    for (name, text) in ["stdout", "stderr", "diff"].iter().zip(&outputs) {
+        assert!(
+            !text.contains(SECRET),
+            "{name} shows a project value:\n{text}"
+        );
+        assert!(
+            !text.contains(&NUMBER.to_string()),
+            "{name} shows a project number:\n{text}"
+        );
+    }
+}
+
+/// TSK-1029 review 02: `update --force --diff` over a managed workflow the
+/// project edited shows the shipped lines and hides the project's
+/// values; a workflow that no longer parses is withheld whole.
+#[test]
+fn update_force_diff_hides_project_values_in_a_managed_workflow() {
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    const WORKFLOW: &str = ".github/workflows/codeflow-ci.yml";
+    for malformed in [false, true] {
+        let (tmp, root) = project();
+        init(&root, "--minimal");
+        let shipped = read(&root, WORKFLOW);
+        let edited = if malformed {
+            format!("{shipped}\nenv: [\n  RELEASE_NOTE: {SECRET}\n")
+        } else {
+            format!("{shipped}\nenv:\n  RELEASE_NOTE: {SECRET}\n")
+        };
+        std::fs::write(root.join(WORKFLOW), edited).expect("edit workflow");
+
+        let outputs = update_with_diff(tmp.path(), &root, &["--force"]);
+        assert_eq!(read(&root, WORKFLOW), shipped, "--force did not restore");
+        let diff = &outputs[2];
+        assert!(diff.contains(&format!("=== {WORKFLOW}")), "{diff}");
+        if malformed {
+            assert!(diff.contains("content withheld"), "{diff}");
+        } else {
+            assert!(
+                diff.contains("keys the shipped file does not have (names not shown): 1 removed"),
+                "{diff}"
+            );
+            assert!(
+                !diff.contains("RELEASE_NOTE"),
+                "a project key is named:\n{diff}"
+            );
+        }
+        for (name, text) in ["stdout", "stderr", "diff"].iter().zip(&outputs) {
+            assert!(
+                !text.contains(SECRET),
+                "{name} shows a project value:\n{text}"
+            );
+        }
+    }
+}
+
+/// Run `codeflow update` with `extra` flags and `--diff`, whether or not it
+/// succeeds, and return its stdout, its stderr and the diff file (empty when
+/// none was written).
+fn update_outputs(tmp: &Path, root: &Path, extra: &[&str]) -> [String; 3] {
+    let diff_file = tmp.join("update.diff");
+    let _ = std::fs::remove_file(&diff_file);
+    let mut args = vec!["update"];
+    args.extend_from_slice(extra);
+    args.extend(["--diff", diff_file.to_str().expect("utf-8 path")]);
+    let out = codeflow(root, &args);
+    [
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+        std::fs::read_to_string(&diff_file).unwrap_or_default(),
+    ]
+}
+
+fn assert_nowhere(outputs: &[String; 3], secret: &str, case: &str) {
+    for (name, text) in ["stdout", "stderr", "diff"].iter().zip(outputs) {
+        assert!(
+            !text.contains(secret),
+            "{case}: {name} shows a project value:\n{text}"
+        );
+    }
+}
+
+/// TSK-1029 review 03: a project value that replaces a shipped scalar, of
+/// the same type or another, never reaches the export, even as context
+/// beside the migrated compaction value.
+#[test]
+fn update_diff_never_shows_a_replaced_shipped_scalar() {
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    let (tmp, root) = project();
+    init(&root, "--minimal");
+    roll_back_compaction(&root, "50", &serde_json::json!({}));
+    let mut settings = read_json(&root, CLAUDE_SETTINGS);
+    settings["$schema"] =
+        serde_json::json!(format!("https://user:{SECRET}@example.invalid/s.json"));
+    settings["includeCoAuthoredBy"] = serde_json::json!(SECRET);
+    write_json(&root, CLAUDE_SETTINGS, &settings);
+
+    let outputs = update_with_diff(tmp.path(), &root, &[]);
+    assert!(
+        outputs[2].contains("env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
+        "{}",
+        outputs[2]
+    );
+    assert_nowhere(&outputs, SECRET, "replaced scalar");
+}
+
+/// TSK-1029 review 03: the recorded baseline is the project's to write, so
+/// a tampered, stale, missing or malformed baseline never lets a project
+/// line, list item or scalar into the export.
+#[test]
+fn update_diff_never_trusts_the_baseline() {
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    const RULES: &str = ".codeflow/rules/writing.md";
+    let line = format!("export DEPLOY_KEY={SECRET}");
+    let item = format!("Bash(curl -H 'Authorization: {SECRET}')");
+    let url = format!("https://user:{SECRET}@example.invalid/s.json");
+    for baseline in ["tampered", "stale", "missing", "malformed"] {
+        let (tmp, root) = project();
+        init(&root, "--minimal");
+        let shipped_rules = read(&root, RULES);
+        let rules_baseline = root.join(".codeflow/.baseline").join(RULES);
+        let settings_baseline = root.join(CLAUDE_SETTINGS_BASELINE);
+
+        // The project's copies hold the planted line, item and scalar.
+        std::fs::write(root.join(RULES), format!("{shipped_rules}{line}\n")).unwrap();
+        roll_back_compaction(&root, "50", &serde_json::json!({}));
+        let mut settings = read_json(&root, CLAUDE_SETTINGS);
+        settings["$schema"] = serde_json::json!(url);
+        settings["permissions"]["allow"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(item));
+        write_json(&root, CLAUDE_SETTINGS, &settings);
+
+        match baseline {
+            "tampered" => {
+                std::fs::write(&rules_baseline, format!("{shipped_rules}{line}\n")).unwrap();
+                write_json(&root, CLAUDE_SETTINGS_BASELINE, &settings);
+            }
+            "stale" => {
+                let older = shipped_rules.replacen('\n', "\nan older shipped line\n", 1);
+                std::fs::write(&rules_baseline, older).unwrap();
+            }
+            "missing" => {
+                std::fs::remove_file(&rules_baseline).unwrap();
+                std::fs::remove_file(&settings_baseline).unwrap();
+            }
+            _ => {
+                std::fs::write(&rules_baseline, format!("{line}\n<<<<<<<\n")).unwrap();
+                std::fs::write(&settings_baseline, format!("{{\"x\": \"{SECRET}\"")).unwrap();
+            }
+        }
+
+        let outputs = update_outputs(tmp.path(), &root, &["--force"]);
+        assert_nowhere(&outputs, SECRET, baseline);
+    }
+}
+
+/// TSK-1029 review 03: update's own report lines name places, never what
+/// the project wrote: a step before the secret scan is named by its
+/// position, a policy value by its key, and a malformed project TOML line
+/// by its line and column, on success and on failure alike.
+#[test]
+fn update_reports_never_show_project_values() {
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    const WORKFLOW: &str = ".github/workflows/codeflow-ci.yml";
+    const CHECKOUT: &str = "          fetch-depth: 0\n";
+    const POLICY: &str = ".codeflow/policy.json";
+    const POLICY_BASELINE: &str = ".codeflow/.baseline/.codeflow/policy.json";
+    let (tmp, root) = project();
+    init(&root, "--minimal");
+
+    // Steps before the gitleaks step, one named and one unnamed.
+    let workflow = read(&root, WORKFLOW);
+    let at = workflow.find("  secret-scan:").expect("secret-scan job");
+    let checkout = at + workflow[at..].find(CHECKOUT).expect("checkout step") + CHECKOUT.len();
+    let mut planted = workflow.clone();
+    planted.insert_str(
+        checkout,
+        &format!("      - name: {SECRET}\n        run: echo one\n      - run: echo {SECRET}\n"),
+    );
+    std::fs::write(root.join(WORKFLOW), planted).unwrap();
+
+    // A policy value that held the recorded default, and one the project
+    // chose where the recorded default differs from the shipped one.
+    for rel in [POLICY, POLICY_BASELINE] {
+        let mut policy = read_json(&root, rel);
+        policy["git"]["force_push_unprotected"] = serde_json::json!(SECRET);
+        policy["git"]["test_gate_on_push"] = if rel == POLICY {
+            serde_json::json!(SECRET)
+        } else {
+            serde_json::json!("warn")
+        };
+        write_json(&root, rel, &policy);
+    }
+
+    let outputs = update_outputs(tmp.path(), &root, &[]);
+    assert!(
+        outputs[0].contains("before its gitleaks step"),
+        "the step warning is missing:\n{}",
+        outputs[0]
+    );
+    assert_nowhere(&outputs, SECRET, "report");
+
+    // A malformed project TOML line fails the update without showing it.
+    let toml = root.join(".codeflow/project.toml");
+    let text = std::fs::read_to_string(&toml).unwrap();
+    std::fs::write(&toml, format!("{text}\nbroken = \"{SECRET}\n")).unwrap();
+    let outputs = update_outputs(tmp.path(), &root, &[]);
+    assert!(
+        outputs[1].contains("project.toml") && outputs[1].contains("line "),
+        "the parse error lost its place:\n{}",
+        outputs[1]
+    );
+    assert_nowhere(&outputs, SECRET, "malformed project.toml");
+}
+
+/// TSK-1029 review 03, second pass: every refusal update reaches names the
+/// file and place of a bad value and never the value, even when the value
+/// holds the delimiters a parser puts around it. Each case checks that its
+/// own diagnostic fired and that update still refuses or warns as before.
+#[test]
+fn update_refusals_never_show_adversarial_values() {
+    const SECRET: &str = "opaque-neighbour-value-31337";
+    const PROJECT: &str = ".codeflow/project.toml";
+    const POLICY: &str = ".codeflow/policy.json";
+    const PENDING: &str = ".codeflow/.pending-update/.codeflow/rules/writing.md.json";
+
+    /// Plants one bad value in a fresh install.
+    type Plant = fn(&Path);
+    // Each case: its name, how it plants the value, whether update must
+    // refuse (`None`: a warning only, the outcome is not judged), and the
+    // texts its own diagnostic prints in stderr.
+    let cases: [(&str, Plant, Option<bool>, &[&str]); 4] = [
+        (
+            "unparseable scaffold_version",
+            |root| {
+                let text = read(root, PROJECT);
+                let pinned = text
+                    .lines()
+                    .find(|line| line.starts_with("scaffold_version"))
+                    .expect("scaffold_version line")
+                    .to_string();
+                let bad = format!("scaffold_version = \"1.0` {SECRET}\"");
+                std::fs::write(root.join(PROJECT), text.replace(&pinned, &bad)).unwrap();
+            },
+            Some(false),
+            &["scaffold_version", PROJECT, "not a parseable version"],
+        ),
+        (
+            "duplicate project key",
+            |root| {
+                let text = read(root, PROJECT);
+                let planted = format!("{text}\n\"{SECRET}\" = 1\n\"{SECRET}\" = 2\n");
+                std::fs::write(root.join(PROJECT), planted).unwrap();
+            },
+            Some(false),
+            &["project.toml", "TOML parse error at line "],
+        ),
+        (
+            "pending resolution holding an escaped quote",
+            |root| {
+                let folder = Path::new(PENDING).parent().expect("pending folder");
+                std::fs::create_dir_all(root.join(folder)).unwrap();
+                std::fs::write(root.join(PENDING), format!("\"x\\\" {SECRET}\"")).unwrap();
+            },
+            Some(false),
+            &[PENDING, "line 1, column "],
+        ),
+        (
+            "policy value holding a backtick",
+            |root| {
+                let mut policy = read_json(root, POLICY);
+                policy["git"]["test_gate_on_push"] = serde_json::json!(format!("x` {SECRET}"));
+                write_json(root, POLICY, &policy);
+            },
+            None,
+            &["cannot parse policy", ", column "],
+        ),
+    ];
+
+    let mut problems = Vec::new();
+    for (case, plant, succeeds, expected) in cases {
+        let (_tmp, root) = project();
+        init(&root, "--minimal");
+        plant(&root);
+        let out = codeflow(&root, &["update"]);
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        );
+        for (name, text) in [("stdout", &stdout), ("stderr", &stderr)] {
+            if text.contains(SECRET) {
+                problems.push(format!("{case}: {name} shows the value:\n{text}"));
+            }
+        }
+        if succeeds.is_some_and(|succeeds| succeeds != out.status.success()) {
+            problems.push(format!("{case}: the outcome changed:\n{stderr}"));
+        }
+        for text in expected {
+            if !stderr.contains(text) {
+                problems.push(format!("{case}: stderr lacks {text:?}:\n{stderr}"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n\n"));
+}
+
+/// TSK-1029 review: when the shipped default changes and the project keeps
+/// its own value, the update says so by key, even when nothing else in the
+/// settings changes; the next update, with nothing new shipped, is quiet.
+#[test]
+fn update_reports_a_kept_project_value_when_the_default_moves() {
+    const LINE: &str =
+        "settings: kept the project's \"env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\"; the shipped default changed";
+    let (_tmp, root) = project();
+    init(&root, "--minimal");
+    roll_back_compaction(&root, "50", &serde_json::json!({}));
+    let mut chosen = read_json(&root, CLAUDE_SETTINGS);
+    chosen["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = serde_json::json!("40");
+    write_json(&root, CLAUDE_SETTINGS, &chosen);
+    let before = read(&root, CLAUDE_SETTINGS);
+
+    let first = update(&root);
+    assert_eq!(read(&root, CLAUDE_SETTINGS), before, "{first}");
+    assert!(first.contains(LINE), "no kept-value notice:\n{first}");
+    assert!(
+        !first.contains("\"40\""),
+        "the report printed a value:\n{first}"
+    );
+
+    let second = update(&root);
+    assert_eq!(read(&root, CLAUDE_SETTINGS), before, "{second}");
+    assert!(
+        !second.contains("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
+        "the next update repeated the notice with nothing new shipped:\n{second}"
+    );
 }
 
 /// TSK-211 AC-2: a project installed before the default, whose recorded

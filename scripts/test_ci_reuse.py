@@ -61,7 +61,8 @@ GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"), job("wind
 
 def run(**changes):
     record = {"id": 77, "run_number": 5, "run_attempt": 1, "event": "pull_request", "head_sha": HEAD,
-              "path": WORKFLOW, "status": "completed", "conclusion": "success"}
+              "path": WORKFLOW, "status": "completed", "conclusion": "success",
+              "pull_requests": [{"number": 95, "base": {"ref": "main"}}]}
     record.update(changes)
     return record
 
@@ -142,6 +143,24 @@ class DecisionTests(unittest.TestCase):
     def test_the_newest_run_decides_even_when_an_older_one_passed(self):
         runs = [run(), run(id=78, run_number=6, conclusion="failure")]
         self.assertIn("run 78", self.skipped(api=FakeApi(runs=runs)))
+
+    def test_a_newer_success_for_another_pull_request_is_not_reused(self):
+        runs = [run(), run(id=78, run_number=6,
+                           pull_requests=[{"number": 96, "base": {"ref": "main"}}])]
+        self.assertIn("merged pull request #95 into main",
+                      self.skipped(api=FakeApi(runs=runs, jobs={77: GREEN_JOBS, 78: GREEN_JOBS})))
+
+    def test_a_newer_success_into_integration_is_not_reused(self):
+        runs = [run(), run(id=78, run_number=6,
+                           pull_requests=[{"number": 95, "base": {"ref": "integration/epic"}}])]
+        self.assertIn("merged pull request #95 into main",
+                      self.skipped(api=FakeApi(runs=runs, jobs={77: GREEN_JOBS, 78: GREEN_JOBS})))
+
+    def test_a_run_without_pull_request_associations_is_not_reused(self):
+        for associations in ([], None):
+            with self.subTest(associations=associations):
+                self.assertIn("merged pull request #95 into main",
+                              self.skipped(api=FakeApi(runs=[run(pull_requests=associations)])))
 
     def test_another_workflow_another_event_or_another_head_runs_everything(self):
         for other in (run(path=".github/workflows/codeflow-policy.yml"), run(event="push"),
@@ -243,6 +262,99 @@ class MainTests(unittest.TestCase):
             raise KeyError("head")
         self.assertEqual(self.main(refuse), (0, ""))
         self.assertEqual(self.main(broken), (0, ""))
+
+
+class AdmissionTests(unittest.TestCase):
+    """TSK-449 AC-6: `commit standards` admits a pull request only on a
+    completed successful ready run at the exact head; each other case
+    refuses, and only a pending or absent run is worth waiting for."""
+
+    def admitted(self, api):
+        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95)
+
+    def refused(self, api, pending=False):
+        with self.assertRaises(reuse.Skip) as caught:
+            self.admitted(api)
+        self.assertEqual(isinstance(caught.exception, reuse.Pending), pending, str(caught.exception))
+        return str(caught.exception)
+
+    def test_a_successful_ready_run_at_the_exact_head_admits(self):
+        self.assertEqual(self.admitted(FakeApi()), 77)
+
+    def test_a_draft_neutral_run_at_the_same_head_refuses(self):
+        draft = [job("codeflow gates", "skipped"), job("windows", "skipped"), job("secret scan")]
+        reason = self.refused(FakeApi(jobs={77: draft}))
+        self.assertIn("'codeflow gates' of run 77 concluded skipped", reason)
+        self.assertIn("mark the pull request ready", reason)
+
+    def test_no_ready_run_refuses_and_may_be_waited_for(self):
+        self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95 exists",
+                      self.refused(FakeApi(runs=[]), pending=True))
+
+    def test_a_pending_run_refuses_and_may_be_waited_for(self):
+        for status in ("queued", "in_progress", "waiting"):
+            with self.subTest(status=status):
+                api = FakeApi(runs=[run(status=status, conclusion=None)])
+                self.assertIn(f"is {status}", self.refused(api, pending=True))
+
+    def test_a_cancelled_or_failed_run_refuses(self):
+        for conclusion in ("cancelled", "failure", "timed_out", "skipped"):
+            with self.subTest(conclusion=conclusion):
+                self.assertIn(f"concluded {conclusion}", self.refused(FakeApi(runs=[run(conclusion=conclusion)])))
+
+    def test_a_green_run_on_another_head_refuses(self):
+        api = FakeApi(runs=[run(head_sha=MAIN)])
+        self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run", self.refused(api, pending=True))
+
+    def test_a_green_run_at_the_same_head_for_another_pull_request_refuses(self):
+        other = run(pull_requests=[{"number": 96, "base": {"ref": "main"}}])
+        self.assertIn("run of #95 exists", self.refused(FakeApi(runs=[other]), pending=True))
+        self.refused(FakeApi(runs=[run(pull_requests=[])]), pending=True)
+
+    def test_another_workflow_or_event_never_admits(self):
+        for changes in ({"path": ".github/workflows/other.yml"}, {"event": "push"}):
+            with self.subTest(changes=changes):
+                self.refused(FakeApi(runs=[run(**changes)]), pending=True)
+
+    def test_the_newest_run_at_the_head_decides(self):
+        # A ready run started after the draft's neutral run is still pending.
+        api = FakeApi(runs=[run(), run(id=78, run_number=6, status="in_progress", conclusion=None)])
+        self.assertIn("run 78", self.refused(api, pending=True))
+        # A missing verdict job refuses.
+        self.assertIn("'windows' of run 77 concluded nothing",
+                      self.refused(FakeApi(jobs={77: [job("codeflow gates")]})))
+
+    def test_main_waits_only_for_a_pending_run_and_fails_closed(self):
+        def run_main(api, wait):
+            out = io.StringIO()
+            with mock.patch.object(reuse, "Api", return_value=api), \
+                    mock.patch.object(reuse.time, "sleep") as sleep, redirect_stdout(out):
+                code = reuse.admit_main(["--repo", "o/r", "--head", HEAD, "--workflow", WORKFLOW,
+                                         "--require", "codeflow gates", "--require", "windows",
+                                         "--pull", "95", "--wait", str(wait)])
+            return code, out.getvalue(), sleep.call_count
+        self.assertEqual(run_main(FakeApi(), 0)[0], 0)
+        code, text, slept = run_main(FakeApi(runs=[run(status="in_progress", conclusion=None)]), 0)
+        self.assertEqual((code, slept), (1, 0), text)
+        code, text, slept = run_main(FakeApi(runs=[run(conclusion="failure")]), 600)
+        self.assertEqual((code, slept), (1, 0), text)
+
+        class Finishing(FakeApi):
+            calls = 0
+
+            def runs(self, head):
+                Finishing.calls += 1
+                return [run()] if Finishing.calls > 2 else [run(status="in_progress", conclusion=None)]
+        with mock.patch.object(reuse.time, "monotonic", return_value=0.0):
+            code, text, slept = run_main(Finishing(), 600)
+        self.assertEqual((code, slept), (0, 2), text)
+
+        class Broken(FakeApi):
+            def runs(self, head):
+                raise OSError("network down")
+        code, text, _ = run_main(Broken(), 0)
+        self.assertEqual(code, 1)
+        self.assertIn("refused: the decision failed", text)
 
 
 class GitTests(unittest.TestCase):

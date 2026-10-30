@@ -12,20 +12,9 @@ use codeflow_core::scaffold::{
 
 // --- fixtures ---------------------------------------------------------------
 
-/// Point git at empty global/system config for the whole test process. The
-/// engine under test spawns its own `git` subprocesses which inherit the
-/// process environment, so per-`Command` `.env()` cannot reach them. The
-/// process-global mutation is made race-free by doing it exactly once behind
-/// a `Once` that every test synchronizes on before its first spawn — POSIX
-/// `setenv` concurrent with `getenv`/spawn is a data race, so repeated
-/// `set_var` from parallel tests (even with identical values) is not benign.
-fn isolate_git() {
-    static ISOLATE: std::sync::Once = std::sync::Once::new();
-    ISOLATE.call_once(|| {
-        std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
-        std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
-    });
-}
+#[path = "support/git_isolation.rs"]
+mod git_isolation;
+use git_isolation::isolate_git;
 
 const MANIFEST: &str = r#"
 schema_version = 1
@@ -246,8 +235,8 @@ fn update_opts(version: &str) -> UpdateOptions {
     }
 }
 
-fn git(root: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+fn git_output(root: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
         .arg("-C")
         .arg(root)
         .args(args)
@@ -255,8 +244,71 @@ fn git(root: &Path, args: &[&str]) -> String {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .output()
-        .expect("git runs");
+        .expect("git runs")
+}
+
+/// Runs git in `root` and returns its trimmed stdout. A command that fails
+/// fails the test, so one that ran against the wrong repository, or not at
+/// all, is not read as empty output (issue 104).
+fn git(root: &Path, args: &[&str]) -> String {
+    let out = git_output(root, args);
+    assert!(
+        out.status.success(),
+        "git {args:?} in {} failed: {}",
+        root.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// The value of a git config `key`, or an empty string when it is unset
+/// (`git config` exits 1 for an unset key; any other failure fails the test).
+fn git_config(root: &Path, key: &str) -> String {
+    let out = git_output(root, &["config", key]);
+    if out.status.code() == Some(1) && out.stdout.is_empty() {
+        return String::new();
+    }
+    git(root, &["config", key])
+}
+
+/// The fixture `git` helper reports a failed command, so a command that ran
+/// against the wrong repository, or not at all, fails the test (issue 104).
+/// A fixture reached through a link into a repository's folder still gets a
+/// repository of its own (issue 104): its lexical parents hold no `.git`.
+#[cfg(unix)]
+#[test]
+fn own_repository_judges_a_fixture_by_its_physical_path() {
+    isolate_git();
+    let repository = tempfile::tempdir().unwrap();
+    git(repository.path(), &["init", "-q"]);
+    let inside = repository.path().join("tmp");
+    std::fs::create_dir(&inside).unwrap();
+    let alias = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(&inside, alias.path().join("link")).unwrap();
+    let fixture = alias.path().join("link/proj");
+    std::fs::create_dir(&fixture).unwrap();
+    git_isolation::own_repository(&fixture);
+    assert!(
+        fixture.join(".git").exists(),
+        "the fixture has its own repository"
+    );
+}
+
+#[test]
+fn the_git_helper_returns_stdout_when_git_succeeds() {
+    isolate_git();
+    let (_dir, root) = project_dir();
+    git(&root, &["init", "-q"]);
+    assert_eq!(git(&root, &["rev-parse", "--is-inside-work-tree"]), "true");
+}
+
+#[test]
+#[should_panic(expected = "git [\"rev-parse\", \"no-such-ref\"] in")]
+fn the_git_helper_fails_the_test_when_git_fails() {
+    isolate_git();
+    let (_dir, root) = project_dir();
+    git(&root, &["init", "-q"]);
+    git(&root, &["rev-parse", "no-such-ref"]);
 }
 
 fn read(root: &Path, rel: &str) -> String {
@@ -281,6 +333,7 @@ fn project_dir() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("project tempdir");
     let root = dir.path().join("proj");
     std::fs::create_dir(&root).unwrap();
+    git_isolation::own_repository(&root);
     (dir, root)
 }
 
@@ -701,7 +754,7 @@ fn init_into_existing_repo_is_nondestructive() {
     );
 
     // husky: hooks left alone, recorded unwired, instructions printed.
-    assert_eq!(git(&root, &["config", "core.hooksPath"]), "");
+    assert_eq!(git_config(&root, "core.hooksPath"), "");
     assert!(read(&root, ".codeflow/project.toml").contains("git_hooks = \"unwired\""));
     assert!(report.notes.iter().any(|n| n.contains("husky")));
     assert_eq!(read(&root, ".husky/pre-commit"), "npx lint-staged\n");
@@ -883,6 +936,176 @@ fn init_v1(root: &Path) -> tempfile::TempDir {
     assets_dir
 }
 
+/// Include untracked files, baselines and the digest table, not just git's diff.
+fn tree_bytes(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, dir: &Path, files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                files.insert(
+                    path.strip_prefix(root).unwrap().into(),
+                    std::fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    visit(root, root, &mut files);
+    files
+}
+
+#[test]
+fn init_tier_upgrade_refuses_an_older_binary_without_writing_any_file() {
+    isolate_git();
+    for (force, has_repo) in [(false, true), (true, true), (false, false)] {
+        let (_p, root) = project_dir();
+        let (_a1, assets_v1) = fixture_assets(false);
+        scaffold::init(&assets_v1, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+        let state_path = root.join(".codeflow/project.toml");
+        let state = read(&root, ".codeflow/project.toml");
+        std::fs::write(&state_path, format!("{state}\n[scaffold_sha256]\nversion = \"2.0.0\"\nx86_64-unknown-linux-gnu = \"{}\"\n", "a".repeat(64))).unwrap();
+        let (_a2, assets_v2) = fixture_assets(true);
+        let mut options = opts(Some(Tier::Standard), "1.9.0");
+        options.force = force;
+        if !has_repo {
+            std::fs::remove_dir_all(root.join(".git")).unwrap();
+        }
+        let before = tree_bytes(&root);
+        let result = scaffold::init(&assets_v2, &root, &options);
+        assert_eq!(
+            tree_bytes(&root),
+            before,
+            "init refusal must leave every byte intact"
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("1.9.0"), "{message}");
+        assert!(message.contains("2.0.0"), "{message}");
+        assert!(message.contains("install the pinned version"), "{message}");
+    }
+}
+
+#[test]
+fn init_tier_upgrade_refuses_an_unparsable_pin_without_writing_any_file() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let (_a, assets) = fixture_assets(false);
+    scaffold::init(&assets, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+    let path = root.join(".codeflow/project.toml");
+    let state = read(&root, ".codeflow/project.toml").replace(
+        "scaffold_version = \"2.0.0\"",
+        "scaffold_version = \"broken\"",
+    );
+    std::fs::write(path, state).unwrap();
+    let before = tree_bytes(&root);
+    let result = scaffold::init(&assets, &root, &opts(Some(Tier::Standard), "2.1.0"));
+    assert_eq!(tree_bytes(&root), before);
+    let message = result.unwrap_err().to_string();
+    // TSK-1029: the refusal names the file, never the value it holds.
+    assert!(!message.contains("broken"), "{message}");
+    assert!(message.contains(".codeflow/project.toml"), "{message}");
+    assert!(message.contains("correct it and retry"), "{message}");
+    assert!(!message.contains("older"), "{message}");
+}
+
+#[test]
+fn update_refuses_an_older_binary_without_writing_any_file() {
+    isolate_git();
+    for force in [false, true] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        let state_path = root.join(".codeflow/project.toml");
+        let state = read(&root, ".codeflow/project.toml");
+        std::fs::write(&state_path, format!("{state}\n[scaffold_sha256]\nversion = \"2.0.0\"\nx86_64-unknown-linux-gnu = \"{}\"\n", "a".repeat(64))).unwrap();
+        let (_a2, assets_v2) = fixture_assets(true);
+        let mut options = update_opts("1.9.0");
+        options.force = force;
+        options.diff_out = Some(root.join("update.diff"));
+        let before = tree_bytes(&root);
+        let result = scaffold::update(&assets_v2, &root, &options);
+        assert_eq!(
+            tree_bytes(&root),
+            before,
+            "refusal must leave every byte intact"
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("1.9.0"), "{message}");
+        assert!(message.contains("2.0.0"), "{message}");
+        assert!(message.contains("install the pinned version"), "{message}");
+    }
+}
+
+#[test]
+fn update_refuses_an_unparsable_pin_without_writing_any_file() {
+    isolate_git();
+    for pin in [
+        "broken",
+        "",
+        "2.no.0",
+        "2..0",
+        "2.0.0-",
+        "2.0.0+",
+        "2.0.0-01",
+        "18446744073709551616.0.0",
+    ] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        let path = root.join(".codeflow/project.toml");
+        let state = read(&root, ".codeflow/project.toml").replace(
+            "scaffold_version = \"2.0.0\"",
+            &format!("scaffold_version = \"{pin}\""),
+        );
+        std::fs::write(path, state).unwrap();
+        let (_a2, assets_v2) = fixture_assets(true);
+        let before = tree_bytes(&root);
+        let result = scaffold::update(&assets_v2, &root, &update_opts("2.1.0"));
+        assert_eq!(tree_bytes(&root), before, "invalid pin {pin:?}");
+        let message = result.unwrap_err().to_string();
+        // TSK-1029: the refusal names the file, never the value it holds.
+        assert!(pin.is_empty() || !message.contains(pin), "{message}");
+        assert!(message.contains("scaffold_version"), "{message}");
+        assert!(message.contains(".codeflow/project.toml"), "{message}");
+        assert!(message.contains("correct it and retry"), "{message}");
+        assert!(!message.contains("older"), "{message}");
+    }
+}
+
+#[test]
+fn update_with_an_equal_binary_still_refreshes_managed_files() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let (_a2, assets_v2) = fixture_assets(true);
+    scaffold::update(&assets_v2, &root, &update_opts("2.0.0")).unwrap();
+    assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V2);
+    assert!(read(&root, ".codeflow/project.toml").contains("scaffold_version = \"2.0.0\""));
+}
+
+#[test]
+fn update_compares_prereleases_and_ignores_build_metadata() {
+    isolate_git();
+    for (pin, binary, allowed) in [
+        ("2.0.0", "2.0.0-rc.1", false),
+        ("2.0.0-rc.10", "2.0.0-rc.2", false),
+        ("2.0.0-rc.2", "2.0.0-rc.10", true),
+        ("2.0.0-rc.1", "2.0.0", true),
+        ("2.0.0+build.1", "2.0.0+build.2", true),
+        ("2.0.1+build.1", "2.0.0+build.2", false),
+    ] {
+        let (_p, root) = project_dir();
+        let (_a1, assets_v1) = fixture_assets(false);
+        scaffold::init(&assets_v1, &root, &opts(None, pin)).unwrap();
+        let (_a2, assets_v2) = fixture_assets(true);
+        let before = tree_bytes(&root);
+        let result = scaffold::update(&assets_v2, &root, &update_opts(binary));
+        assert_eq!(result.is_ok(), allowed, "{pin} -> {binary}: {result:?}");
+        if !allowed {
+            assert_eq!(tree_bytes(&root), before);
+        }
+    }
+}
+
 #[test]
 fn update_replaces_unmodified_managed_files() {
     isolate_git();
@@ -1036,6 +1259,313 @@ fn update_twice_preserves_merged_user_edits() {
         "second update wiped the merged user edit"
     );
     assert!(!root.join(".claude/workflows/develop.md.new").exists());
+}
+
+#[test]
+fn update_resolved_conflict_stays_resolved() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let dest = ".claude/workflows/develop.md";
+    let mine = DEVELOP_V1.replace("step one", "step one (project)");
+    std::fs::write(root.join(dest), &mine).unwrap();
+    let (_a2, assets_v2) = fixture_assets(true);
+    let first = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&first, dest), Action::Conflicted);
+    assert_shipped_baseline(&root, dest, DEVELOP_V1);
+
+    let resolved = DEVELOP_V2.replace("step one (improved)", "step one (project)");
+    std::fs::write(root.join(format!("{dest}.new")), &resolved).unwrap();
+    std::fs::rename(root.join(format!("{dest}.new")), root.join(dest)).unwrap();
+    let second = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&second, dest), Action::KeptUserModified);
+    assert!(!second.has_conflicts());
+    assert_eq!(read(&root, dest), resolved);
+    assert!(!root.join(format!("{dest}.new")).exists());
+    assert_shipped_baseline(&root, dest, DEVELOP_V2);
+}
+
+// Doctor previews through `decide`: an open proposal stays a conflict there,
+// while the update itself refuses until the proposal is resolved.
+#[test]
+fn update_preview_reports_an_open_proposal_as_a_conflict() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let dest = ".claude/workflows/develop.md";
+    std::fs::write(
+        root.join(dest),
+        DEVELOP_V1.replace("step one", "step one (project)"),
+    )
+    .unwrap();
+    let (_a2, source) = fixture_assets(true);
+    let first = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&first, dest), Action::Conflicted);
+    assert!(root
+        .join(format!(".codeflow/.pending-update/{dest}.json"))
+        .exists());
+
+    let decision = scaffold::update::decide(&source, &root, dest, "2.1.0").unwrap();
+    assert!(
+        matches!(
+            decision,
+            Some(scaffold::update::Decision::ConflictProposal(_))
+        ),
+        "{decision:?}"
+    );
+    let error = scaffold::update(&source, &root, &update_opts("2.1.0"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("update changed nothing"), "{error}");
+    assert_shipped_baseline(&root, dest, DEVELOP_V1);
+}
+
+fn assert_shipped_baseline(root: &Path, dest: &str, shipped: &str) {
+    assert_eq!(read(root, &format!(".codeflow/.baseline/{dest}")), shipped);
+    let manifest: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap();
+    assert_eq!(
+        manifest["files"][dest]["sha256"],
+        scaffold::sha256_hex(shipped.as_bytes())
+    );
+}
+
+// Start at v1, conflict at v2, then retain the project edit in the v2 file.
+fn resolved_update_fixture() -> (tempfile::TempDir, PathBuf, tempfile::TempDir, DirSource) {
+    isolate_git();
+    let (project, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let dest = ".claude/workflows/develop.md";
+    std::fs::write(
+        root.join(dest),
+        DEVELOP_V1.replace("step one", "step one (project)"),
+    )
+    .unwrap();
+    let (assets, source) = fixture_assets(true);
+    let report = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, dest), Action::Conflicted);
+    assert_shipped_baseline(&root, dest, DEVELOP_V1);
+    std::fs::write(
+        root.join(dest),
+        DEVELOP_V2.replace("step one (improved)", "step one (project)"),
+    )
+    .unwrap();
+    std::fs::remove_file(root.join(format!("{dest}.new"))).unwrap();
+    (project, root, assets, source)
+}
+
+#[test]
+fn update_resolved_conflict_merges_later_release_against_accepted_base() {
+    for accept_on_same_release in [true, false] {
+        for overlaps in [true, false] {
+            let (_p, root, assets, source) = resolved_update_fixture();
+            let dest = ".claude/workflows/develop.md";
+            if accept_on_same_release {
+                scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+                assert_shipped_baseline(&root, dest, DEVELOP_V2);
+            }
+            let third = if overlaps {
+                DEVELOP_V2.replace("step one (improved)", "step one (v3)")
+            } else {
+                DEVELOP_V2.replace("step eight", "step eight (v3)")
+            };
+            std::fs::write(
+                assets.path().join("base/claude/workflows/develop.md"),
+                &third,
+            )
+            .unwrap();
+            let report = scaffold::update(&source, &root, &update_opts("2.2.0")).unwrap();
+            let live = read(&root, dest);
+            assert!(live.contains("step one (project)"));
+            if overlaps {
+                assert_eq!(action_of(&report, dest), Action::Conflicted);
+                let proposal = read(&root, &format!("{dest}.new"));
+                assert!(
+                    proposal.contains("step one (improved)"),
+                    "v2 is the conflict base: {proposal}"
+                );
+                assert!(proposal.contains("step one (v3)"));
+                assert!(proposal.contains("step one (project)"));
+                assert_shipped_baseline(&root, dest, DEVELOP_V2);
+            } else {
+                assert_eq!(action_of(&report, dest), Action::Merged);
+                assert!(live.contains("step eight (v3)"));
+                assert_shipped_baseline(&root, dest, &third);
+            }
+        }
+    }
+}
+
+fn snapshot_files(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, dir: &Path, files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let kind = entry.file_type().unwrap();
+            if kind.is_dir() {
+                visit(root, &entry.path(), files);
+            } else if kind.is_file() {
+                files.insert(
+                    entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                    std::fs::read(entry.path()).unwrap(),
+                );
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    visit(root, root, &mut files);
+    files
+}
+
+#[test]
+fn update_pending_resolution_refuses_invalid_state_without_writes() {
+    let dest = ".claude/workflows/develop.md";
+    for case in [
+        "proposal",
+        "opening",
+        "base",
+        "separator",
+        "separator_crlf",
+        "closing",
+        "baseline",
+        "manifest",
+        "pending",
+        "missing",
+    ] {
+        for force in [false, true] {
+            let (_p, root, _assets, source) = resolved_update_fixture();
+            match case {
+                "proposal" => {
+                    std::fs::write(root.join(format!("{dest}.new")), "partly resolved proposal")
+                        .unwrap();
+                }
+                "opening" | "base" | "separator" | "separator_crlf" | "closing" => {
+                    let marker = match case {
+                        "opening" => "<<<<<<< ours",
+                        "base" => "||||||| base",
+                        "separator" => "=======",
+                        "separator_crlf" => "=======\r",
+                        _ => ">>>>>>> theirs",
+                    };
+                    std::fs::write(root.join(dest), format!("{marker}\n{}", read(&root, dest)))
+                        .unwrap();
+                }
+                "baseline" => std::fs::write(
+                    root.join(format!(".codeflow/.baseline/{dest}")),
+                    "not shipped",
+                )
+                .unwrap(),
+                "manifest" => {
+                    let mut manifest: serde_json::Value =
+                        serde_json::from_str(&read(&root, ".codeflow/manifest.json")).unwrap();
+                    manifest["files"][dest]["sha256"] = "not a shipped hash".into();
+                    std::fs::write(
+                        root.join(".codeflow/manifest.json"),
+                        serde_json::to_vec(&manifest).unwrap(),
+                    )
+                    .unwrap();
+                }
+                "pending" => std::fs::write(
+                    root.join(format!(".codeflow/.pending-update/{dest}.json")),
+                    "invalid json",
+                )
+                .unwrap(),
+                "missing" => std::fs::remove_file(root.join(dest)).unwrap(),
+                _ => unreachable!(),
+            }
+            let before = snapshot_files(&root);
+            let mut opts = update_opts("2.1.0");
+            opts.force = force;
+            opts.diff_out = Some(root.join("update.diff"));
+            let error = scaffold::update(&source, &root, &opts)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("update changed nothing"), "{case}: {error}");
+            assert_eq!(snapshot_files(&root), before, "{case}, force={force}");
+            // Invalid metadata is preserved; unaffected metadata remains pristine.
+            if !["baseline", "manifest"].contains(&case) {
+                assert_shipped_baseline(&root, dest, DEVELOP_V1);
+            }
+        }
+    }
+}
+
+#[test]
+fn update_resolution_recovers_partial_baseline_writes_and_keeps_ours() {
+    let dest = ".claude/workflows/develop.md";
+    for new_baseline in [false, true] {
+        for new_manifest in [false, true] {
+            let (_p, root, _assets, source) = resolved_update_fixture();
+            // Keeping exactly the pre-update file is a valid resolution too.
+            let mine = DEVELOP_V1.replace("step one", "step one (project)");
+            std::fs::write(root.join(dest), &mine).unwrap();
+            if new_baseline {
+                std::fs::write(root.join(format!(".codeflow/.baseline/{dest}")), DEVELOP_V2)
+                    .unwrap();
+            }
+            if new_manifest {
+                let mut manifest: serde_json::Value =
+                    serde_json::from_str(&read(&root, ".codeflow/manifest.json")).unwrap();
+                manifest["files"][dest]["sha256"] =
+                    scaffold::sha256_hex(DEVELOP_V2.as_bytes()).into();
+                std::fs::write(
+                    root.join(".codeflow/manifest.json"),
+                    serde_json::to_vec(&manifest).unwrap(),
+                )
+                .unwrap();
+            }
+            let decision = scaffold::update::decide(&source, &root, dest, "2.1.0").unwrap();
+            assert_eq!(
+                decision,
+                Some(scaffold::update::Decision::KeptUserModification)
+            );
+            let report = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+            assert_eq!(action_of(&report, dest), Action::KeptUserModified);
+            assert_eq!(read(&root, dest), mine);
+            assert_shipped_baseline(&root, dest, DEVELOP_V2);
+            assert!(!root
+                .join(format!(".codeflow/.pending-update/{dest}.json"))
+                .exists());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn update_pending_resolution_refuses_linked_metadata_without_writes() {
+    let dest = ".claude/workflows/develop.md";
+    for rel in [
+        format!(".codeflow/.pending-update/{dest}.json"),
+        format!(".codeflow/.baseline/{dest}"),
+        dest.to_string(),
+    ] {
+        let (_p, root, _assets, source) = resolved_update_fixture();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        let content = read(&root, &rel);
+        std::fs::write(&sentinel, &content).unwrap();
+        std::fs::remove_file(root.join(&rel)).unwrap();
+        std::os::unix::fs::symlink(&sentinel, root.join(&rel)).unwrap();
+        let before = snapshot_files(&root);
+        let error = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap_err();
+        assert!(error.to_string().contains("symlink"), "{error}");
+        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), content);
+        assert_eq!(snapshot_files(&root), before);
+    }
+}
+
+#[test]
+fn update_pending_resolution_honors_ignored_paths() {
+    let (_p, root, _assets, source) = resolved_update_fixture();
+    let dest = ".claude/workflows/develop.md";
+    let pending = format!(".codeflow/.pending-update/{dest}.json");
+    let before = read(&root, &pending);
+    std::fs::write(root.join(format!("{dest}.new")), "unresolved").unwrap();
+    add_scaffold_ignore(&root, &[".claude/**"]);
+    let report = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, dest), Action::Skipped);
+    assert_eq!(read(&root, &pending), before);
+    assert_eq!(read(&root, &format!("{dest}.new")), "unresolved");
+    assert_shipped_baseline(&root, dest, DEVELOP_V1);
 }
 
 #[test]
@@ -1380,13 +1910,17 @@ fn update_moves_test_gate_on_push_at_the_old_default_and_recommends_block() {
         (
             "warn",
             "block",
-            Some("moved git.test_gate_on_push from \"warn\" to \"block\""),
+            Some("moved git.test_gate_on_push to \"block\""),
         ),
-        ("off", "off", Some("kept git.test_gate_on_push = \"off\"")),
+        (
+            "off",
+            "off",
+            Some("kept the project's git.test_gate_on_push"),
+        ),
         (
             "allow",
             "allow",
-            Some("kept git.test_gate_on_push = \"allow\""),
+            Some("kept the project's git.test_gate_on_push"),
         ),
         ("block", "block", None),
     ] {
@@ -1602,6 +2136,30 @@ fn update_requires_initialized_project() {
     assert!(err.to_string().contains("codeflow init"));
 }
 
+#[cfg(unix)]
+#[test]
+fn update_diff_output_ignores_planted_temporary_link() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let (_a2, assets_v2) = fixture_assets(true);
+    let outside = tempfile::tempdir().unwrap();
+    let sentinel = outside.path().join("sentinel");
+    std::fs::write(&sentinel, b"unchanged").unwrap();
+    let planted = root.join("update.tmp");
+    std::os::unix::fs::symlink(&sentinel, &planted).unwrap();
+    let mut options = update_opts("2.1.0");
+    options.diff_out = Some(root.join("update.diff"));
+
+    scaffold::update(&assets_v2, &root, &options).unwrap();
+
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+    assert!(std::fs::symlink_metadata(planted).unwrap().is_symlink());
+    assert!(std::fs::read_to_string(root.join("update.diff"))
+        .unwrap()
+        .contains("+ step one (improved)"));
+}
+
 #[test]
 fn update_writes_diff_file() {
     isolate_git();
@@ -1616,7 +2174,7 @@ fn update_writes_diff_file() {
 
     let diff = std::fs::read_to_string(&diff_path).unwrap();
     assert!(diff.contains("=== .claude/workflows/develop.md"));
-    assert!(diff.contains("+step one (improved)"));
+    assert!(diff.contains("+ step one (improved)"));
 }
 
 // --- version skew -------------------------------------------------------------
@@ -1784,6 +2342,8 @@ fn update_records_the_work_records_baseline_once_for_existing_records() {
         "---\nid: TSK-001\ntitle: t\nstatus: complete\nwork_type: feat\n---\n",
     )
     .unwrap();
+    git(&root, &["config", "user.name", "Scaffold fixture"]);
+    git(&root, &["config", "user.email", "scaffold@example.test"]);
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-q", "-m", "chore: add a record"]);
     let head = git(&root, &["rev-parse", "HEAD"]);
@@ -1806,6 +2366,100 @@ fn update_records_the_work_records_baseline_once_for_existing_records() {
     assert!(
         read(&root, ".codeflow/project.toml").contains(&head),
         "a recorded baseline is never moved"
+    );
+}
+
+// --- the Outcome adoption marker (TSK-435) -----------------------------------
+
+/// The marker's `commit` and `uids`, or `None` when it is absent.
+fn outcome_marker(root: &Path) -> Option<(Option<String>, Vec<String>)> {
+    let state: toml::Table = toml::from_str(&read(root, ".codeflow/project.toml")).unwrap();
+    let uids = state.get("outcome_present_uids")?;
+    let commit = state
+        .get("outcome_required_since")
+        .and_then(toml::Value::as_str)
+        .map(str::to_string);
+    let uids = uids
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|uid| uid.as_str().unwrap().to_string())
+        .collect();
+    Some((commit, uids))
+}
+
+/// AC-3, AC-6: a fresh init lists no record, so every record the project
+/// creates must state its Outcome; the first update of a project made by
+/// an older release lists every task and epic record in its working tree,
+/// committed or not, at its HEAD, and a later update never moves it.
+#[test]
+fn update_writes_the_outcome_marker_once_listing_present_records() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let (_, fresh) = outcome_marker(&root).expect("a fresh init writes the marker");
+    assert!(fresh.is_empty(), "{fresh:?}");
+
+    // A project the previous release made has no marker.
+    let mut state: toml::Table = toml::from_str(&read(&root, ".codeflow/project.toml")).unwrap();
+    state.remove("outcome_present_uids");
+    state.remove("outcome_required_since");
+    std::fs::write(
+        root.join(".codeflow/project.toml"),
+        toml::to_string(&state).unwrap(),
+    )
+    .unwrap();
+    let record = |dir: &str, id: &str, uid: &str, status: &str| {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+        std::fs::write(
+            root.join(dir).join(format!("{id}.md")),
+            format!(
+                "---\nid: {id}\nuid: {uid}\ntitle: t\nstatus: {status}\nwork_type: feat\n---\n"
+            ),
+        )
+        .unwrap();
+    };
+    let closed = "11111111-1111-4111-8111-111111111111";
+    let open = "22222222-2222-4222-8222-222222222222";
+    let morning = "33333333-3333-4333-8333-333333333333";
+    record("project-management/tasks", "TSK-001", closed, "complete");
+    record("project-management/epics", "EPC-001", open, "in_progress");
+    git(&root, &["config", "user.name", "Scaffold fixture"]);
+    git(&root, &["config", "user.email", "scaffold@example.test"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "chore: add records"]);
+    let head = git(&root, &["rev-parse", "HEAD"]);
+    // Made the same morning by the older release and not yet committed.
+    record("project-management/tasks", "TSK-002", morning, "todo");
+
+    let (_a2, assets) = fixture_assets(true);
+    let report = scaffold::update(&assets, &root, &update_opts("2.2.0")).unwrap();
+    let (commit, mut uids) = outcome_marker(&root).expect("update writes the marker");
+    uids.sort();
+    assert_eq!(commit.as_deref(), Some(head.as_str()));
+    assert_eq!(uids, [closed, open, morning]);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("outcome_present_uids") && n.contains("3 present")),
+        "{:?}",
+        report.notes
+    );
+
+    record(
+        "project-management/tasks",
+        "TSK-003",
+        "44444444-4444-4444-8444-444444444444",
+        "todo",
+    );
+    scaffold::update(&assets, &root, &update_opts("2.3.0")).unwrap();
+    let (again, mut kept) = outcome_marker(&root).unwrap();
+    kept.sort();
+    assert_eq!(
+        (again, kept),
+        (commit, uids),
+        "a written marker is never moved"
     );
 }
 
@@ -1983,13 +2637,10 @@ fn update_warns_about_a_kept_step_before_the_secret_scan() {
     const INSTALL: &str =
         "      - run: curl -sSfL https://example.invalid/gitleaks.tar.gz | tar -xz gitleaks\n";
     let layouts = [
-        (vec![SETUP], "`setup`"),
-        (vec![CANARY, SETUP], "`canary`, `setup`"),
-        (
-            vec![INSTALL, SETUP],
-            "`run: curl -sSfL https://example.invalid/gitleaks.tar.gz | tar -xz gitleaks`, `setup`",
-        ),
-        (vec![SETUP, CANARY], "`setup`, `canary`"),
+        (vec![SETUP], "step 2"),
+        (vec![CANARY, SETUP], "step 2, step 3"),
+        (vec![INSTALL, SETUP], "step 2, step 3"),
+        (vec![SETUP, CANARY], "step 2, step 3"),
     ];
     for (steps, named) in layouts {
         kept_steps_are_warned_about(&steps.concat(), named);

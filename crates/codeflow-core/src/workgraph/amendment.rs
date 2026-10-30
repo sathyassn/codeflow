@@ -20,6 +20,8 @@
 //! the target, and a line takes it by merging the target; a record that
 //! changed on its line since the line last merged the target is flagged.
 
+use crate::workgraph::history;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use git2::{Oid, Repository};
@@ -100,10 +102,12 @@ pub fn findings(
             groups.entry(key).or_default().extend(lines.iter().cloned());
         }
     }
+    // range_problem has already admitted these paths. Outside the record
+    // home they are plans, docs, declared indexes or root AGENTS.md.
     let files: Vec<&str> = changed_paths
         .iter()
         .map(String::as_str)
-        .filter(|path| *path == "AGENTS.md" || path.starts_with("docs/"))
+        .filter(|path| !path.starts_with("project-management/"))
         .collect();
     let mut found = refused;
     // Named epics first, in the order the line names them, then the rest.
@@ -290,7 +294,7 @@ fn newer_on_line(repo: &Repository, target_tip: Oid, record: &RecordView) -> Opt
         Err(error) => return Some(format!("cannot read task target {line}: {error}")),
     };
     tips.into_iter().find_map(|(name, tip)| {
-        let shared = match repo.merge_base(tip, target_tip) { Ok(shared) => shared, Err(error) => return Some(format!("cannot read task target history: {error}")) };
+        let shared = match history::merge_base(repo, tip, target_tip) { Ok(shared) => shared, Err(error) => return Some(format!("cannot read task target history: {error}")) };
         let before = match blob_at(repo, shared, &record.path) { Ok(value) => value, Err(error) => return Some(error) };
         let after = match blob_at(repo, tip, &record.path) { Ok(value) => value, Err(error) => return Some(error) };
         (after != before).then(|| {
@@ -300,6 +304,149 @@ fn newer_on_line(repo: &Repository, target_tip: Oid, record: &RecordView) -> Opt
             )
         })
     })
+}
+
+/// Who judges a standalone cancellation, and with what it binds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancellationJudge<'a> {
+    /// A pull request whose `Task:` line names this task on a `plan/`
+    /// branch: the range must be exactly that one cancellation.
+    PullRequest(&'a str),
+    /// A push, which has no `Task:` line yet. The same range may be an
+    /// epic's planning amendment, so only what no `Task:` line could make
+    /// valid is refused.
+    Push,
+}
+
+/// Identify a standalone cancellation carried by a planning branch: a
+/// standalone task record absent from the merge-base and added at
+/// `cancelled`. Any other change to a standalone record is an ordinary
+/// planning amendment and returns `None`, so it keeps its existing route.
+/// Callers restrict this check to `plan/` branches.
+///
+/// For a pull request ([`CancellationJudge::PullRequest`]) the range must
+/// be that one record, inside `project-management/`, with its reason and
+/// scope; the named task's record already on the target is refused toward
+/// the task status route. A push ([`CancellationJudge::Push`]) refuses
+/// only a new cancelled record without its reason or scope, or a range a
+/// planning amendment cannot carry, and always returns `None`.
+///
+/// # Errors
+/// Returns a diagnostic for unreadable history or an invalid cancellation
+/// range. Lifecycle validation still checks the record's full schema.
+pub fn cancelled_standalone(
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+    paths: &[crate::git::GitName],
+    judge: CancellationJudge<'_>,
+) -> Result<Option<String>, String> {
+    let repo = Repository::discover(root).map_err(|error| error.to_string())?;
+    let oid = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| error.to_string())
+    };
+    let (base, head) = (oid(base)?, oid(head)?);
+    let anchor = history::merge_base(&repo, base, head).map_err(|error| error.to_string())?;
+    let before = Graph::from_revision(&repo, &anchor.to_string())?;
+    let after = Graph::from_revision(&repo, &head.to_string())?;
+    let changed = |record: &&RecordView| {
+        paths
+            .iter()
+            .any(|path| path.bytes() == record.path.as_bytes())
+    };
+    let standalone =
+        |record: &&RecordView| record.kind == RecordKind::Task && record.epic_id.is_none();
+    let candidates: Vec<_> = after
+        .records
+        .values()
+        .filter(changed)
+        .filter(standalone)
+        .filter(|record| !before.records.contains_key(&record.id) && record.status == "cancelled")
+        .collect();
+    let task = match judge {
+        CancellationJudge::Push => {
+            if candidates.is_empty() {
+                return Ok(None);
+            }
+            for record in &candidates {
+                cancellation_lines(record)?;
+            }
+            return match range_problem(&repo, base, head, &rule_texts(paths)?) {
+                Some(problem) => Err(problem),
+                None => Ok(None),
+            };
+        }
+        CancellationJudge::PullRequest(task) => task,
+    };
+    if candidates.is_empty() {
+        let landed = after
+            .records
+            .values()
+            .filter(changed)
+            .filter(standalone)
+            .any(|record| {
+                record.id == task
+                    && record.status == "cancelled"
+                    && before.records.contains_key(&record.id)
+            });
+        if landed {
+            return Err(format!(
+                "{task} is already on the target, so this is not a new cancelled standalone record; cancel it with `codeflow task status {task} cancelled --reason <why> --scope <where it went>` in its own task pull request"
+            ));
+        }
+        return Ok(None);
+    }
+    let [record] = candidates.as_slice() else {
+        return Err("a standalone cancellation amendment names and adds one task record".into());
+    };
+    let id = &record.id;
+    cancellation_lines(record)?;
+    let texts = rule_texts(paths)?;
+    if texts
+        .iter()
+        .any(|path| !path.starts_with("project-management/"))
+    {
+        return Err("a standalone cancellation amendment changes only project-management/ paths; keep product changes on the task branch".into());
+    }
+    if let Some(problem) = range_problem(&repo, base, head, &texts) {
+        return Err(problem);
+    }
+    if before
+        .records
+        .values()
+        .chain(after.records.values())
+        .filter(changed)
+        .any(|other| other.id != *id)
+    {
+        return Err(format!(
+            "a standalone cancellation amendment for {id} cannot change another work record"
+        ));
+    }
+    Ok(Some(id.clone()))
+}
+
+/// A cancelled record carries its reason and scope in the Closeout.
+fn cancellation_lines(record: &RecordView) -> Result<(), String> {
+    let missing = super::record_text::parse_cancellation(&record.body).missing();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} needs Closeout lines `- cancelled: <reason>` and `- scope: <where it went>` (missing {})",
+        record.id,
+        missing.join(", ")
+    ))
+}
+
+fn rule_texts(paths: &[crate::git::GitName]) -> Result<Vec<String>, String> {
+    paths
+        .iter()
+        .map(|path| path.rule_text().map(str::to_string))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
 }
 
 /// Why a planning amendment judged at `head` on the target `base` cannot
@@ -407,9 +554,11 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
     for path in paths {
         match amendment_path(path, &project) {
             None => {
+                let path = crate::git::display_key(path);
                 return Some(format!(
-                    "a planning-only pull request touches a product path: {path}; a planning amendment carries records, plans, docs outside the adopter-facing set and AGENTS.md outside its managed block"
-                ))
+                    "a planning-only pull request touches a path outside the admitted set: {path}; admitted paths: project-management/** except templates, docs/plan/**, docs/** and git.document_indexes from the target policy ({}), all outside the adopter-facing set, hidden paths and harness instruction files; AGENTS.md only outside its managed block",
+                    if project.document_indexes.is_empty() { "none declared".to_string() } else { project.document_indexes.join(", ") }
+                ));
             }
             Some(AmendmentPath::Record) => {}
             Some(kind) => {
@@ -419,6 +568,7 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
         }
     }
     if let Some(path) = text {
+        let path = crate::git::display_key(path);
         for (side, at) in [("target", base), ("head", head)] {
             if let Some((kind, entry)) = first_special(repo, at) {
                 return Some(format!(
@@ -455,7 +605,7 @@ fn odd_name_problem(shown: &str) -> String {
 }
 
 /// What an entry of `mode` is when it is not a regular file or folder.
-fn special(mode: i32) -> Option<&'static str> {
+pub(crate) fn special_entry_kind(mode: i32) -> Option<&'static str> {
     match mode {
         LINK_MODE => Some("symbolic link"),
         GITLINK_MODE => Some("submodule"),
@@ -509,7 +659,7 @@ fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, Str
                 let message = odd_name_problem(&shown);
                 return Some((shown, message));
             }
-            if let Some(kind) = special(i32::from(file.mode())) {
+            if let Some(kind) = special_entry_kind(i32::from(file.mode())) {
                 let message = format!(
                     "a planning-only pull request changes the {kind} {shown}; a planning amendment carries regular files only"
                 );
@@ -534,7 +684,7 @@ fn first_special(repo: &Repository, commit: Oid) -> Option<(&'static str, String
         return unreadable();
     };
     let mut found = None;
-    let walked = crate::git::walk_tree(repo, &tree, &mut |path, entry| match special(
+    let walked = crate::git::walk_tree(repo, &tree, &mut |path, entry| match special_entry_kind(
         entry.filemode(),
     ) {
         Some(kind) => {
@@ -569,8 +719,8 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<(i32, V
 
 /// The project's product and watched paths from the policy at `commit`: its
 /// `git.product_paths`, else the default for the stack its project file
-/// records, and its `git.breaking_watch_paths`.
-fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
+/// records, its `git.breaking_watch_paths` and its `git.document_indexes`.
+pub(super) fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let list =
         |value: Option<&serde_json::Value>, key: &str| -> Result<Option<Vec<String>>, String> {
             let Some(value) = value else { return Ok(None) };
@@ -620,6 +770,8 @@ fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let paths = ProjectPaths {
         product,
         watched: list(git.get("breaking_watch_paths"), "breaking_watch_paths")?.unwrap_or_default(),
+        document_indexes: list(git.get("document_indexes"), "document_indexes")?
+            .unwrap_or_default(),
     };
     paths.validate()?;
     Ok(paths)
@@ -677,6 +829,44 @@ pub(super) fn landing_problem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planning_refusal_escapes_control_characters_in_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        for (path, escaped) in [
+            ("index\x1b.md", r"index\x1b.md"),
+            ("index\n.md", r"index\x0a.md"),
+        ] {
+            let head = crate::git::add_commit(&repo, &[(path.as_bytes(), b"y")]);
+            let problem = range_problem(&repo, base, head, &[path.to_string()]).unwrap();
+            assert!(problem.contains(escaped), "{problem:?}");
+            assert!(
+                !problem.contains(path),
+                "raw control character: {problem:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn special_tree_refusal_escapes_the_document_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        let base = crate::git::add_commit_modes(&repo, &[(b"link", b"target", 0o120_000)]);
+        for (path, escaped) in [
+            ("docs/index\x1b.md", r"docs/index\x1b.md"),
+            ("docs/index\n.md", r"docs/index\x0a.md"),
+        ] {
+            let head = crate::git::add_commit(&repo, &[(path.as_bytes(), b"y")]);
+            let problem = range_problem(&repo, base, head, &[path.to_string()]).unwrap();
+            assert!(problem.contains("symbolic link"), "{problem:?}");
+            assert_eq!(problem.matches(escaped).count(), 2, "{problem:?}");
+            assert!(
+                !problem.contains(path),
+                "raw control character: {problem:?}"
+            );
+        }
+    }
 
     /// Round 23: a changed path that is not valid UTF-8 is refused by name
     /// before any rule reads the paths as text, with or without a readable

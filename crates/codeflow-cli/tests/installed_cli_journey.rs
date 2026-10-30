@@ -16,11 +16,11 @@ use std::process::{Command, Output};
 
 const LINE: &str = "integration/EPC-001-offline";
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/outcome.rs"]
+mod outcome;
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
@@ -93,7 +93,10 @@ fn refused(out: &Output, what: &str, reason: &str) -> String {
     all
 }
 
+/// Commit everything, each new record's Outcome stated first as its
+/// author states it (TSK-435).
 fn commit(root: &Path, message: &str) -> String {
+    outcome::state_outcomes(root);
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", message]);
     git(root, &["rev-parse", "HEAD"])
@@ -401,4 +404,392 @@ fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
     } else {
         rows.join("\n")
     }
+}
+
+/// TSK-287: the installed shim and both local judging commands refuse a
+/// graft hiding a source change and its revert. A clone carries the same
+/// commits without the local overlay and passes all three checks.
+#[test]
+#[cfg(unix)]
+#[allow(clippy::too_many_lines)] // Keep the clean and overlaid installed journey together.
+fn history_overlay_is_refused_by_installed_hook_work_start_and_ci() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let (dir, root) = project("--standard");
+    let default = git(&root, &["branch", "--show-current"]);
+    let default_tip = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["switch", "-qc", "feat/history"]);
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "new",
+                "--standalone-reason",
+                "bounded history fix",
+                "--into",
+                &default,
+                "History",
+            ],
+        ),
+        "allocate task",
+    );
+    edit(
+        &root,
+        "project-management/tasks/TSK-001.md",
+        "- AC-1\n",
+        "- AC-1 History reads shall refuse an overlay.\n",
+    );
+    commit(&root, "docs: record history criteria");
+    ok(&codeflow(&root, &["work", "claim", "TSK-001"]), "claim");
+    let branch = git(&root, &["branch", "--show-current"]);
+    let base = git(&root, &["rev-parse", "HEAD"]);
+    let remote = dir.path().join("destination.git");
+    codeflow_fixture::clone(dir.path(), root.to_str().unwrap(), "destination.git")
+        .bare()
+        .run();
+    let url = remote.to_str().unwrap();
+    git(&root, &["remote", "add", "origin", url]);
+    git(&root, &["fetch", "origin"]);
+    ok(
+        &codeflow(&root, &["ids", "seed"]),
+        "seed destination registry",
+    );
+    std::fs::write(root.join("source.rs"), "unreviewed source\n").unwrap();
+    commit(&root, "fix: change source");
+    std::fs::remove_file(root.join("source.rs")).unwrap();
+    let head = commit(&root, "fix: restore source");
+    let pre_push = |root: &Path| {
+        let mut child = with_env(&mut Command::new("sh"))
+            .arg(root.join(".codeflow/git-hooks/pre-push"))
+            .args(["origin", url])
+            .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                format!("refs/heads/{branch} {head} refs/heads/{branch} {base}\n").as_bytes(),
+            )
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    // The clean clone has identical objects and no local graft file.
+    codeflow_fixture::clone(dir.path(), root.to_str().unwrap(), "clean").run();
+    let clean = dir.path().join("clean");
+    git(&clean, &["remote", "set-url", "origin", url]);
+    for location in [&root, &clean] {
+        git(
+            location,
+            &[
+                "fetch",
+                "origin",
+                "codeflow/registry:refs/remotes/origin/codeflow/registry",
+            ],
+        );
+        ok(
+            &codeflow(location, &["work", "start", "TSK-001"]),
+            "clean work start",
+        );
+        ok(&ci(location, &default_tip, &branch, None), "clean local ci");
+        ok(&pre_push(location), "clean installed pre-push");
+    }
+    std::fs::create_dir_all(root.join(".git/info")).unwrap();
+    std::fs::write(root.join(".git/info/grafts"), format!("{head} {base}\n")).unwrap();
+    refused(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "overlaid work start",
+        "cannot verify",
+    );
+    refused(
+        &ci(&root, &default_tip, &branch, None),
+        "overlaid local ci",
+        "cannot verify",
+    );
+    refused(
+        &pre_push(&root),
+        "overlaid installed pre-push",
+        "cannot verify",
+    );
+    ok(
+        &pre_push(&clean),
+        "clean clone after overlay was planted elsewhere",
+    );
+}
+
+#[test]
+fn taskless_ci_without_a_body_refuses_a_grafted_range() {
+    let (_dir, root) = project("--standard");
+    git(&root, &["switch", "-qc", "feat/plain"]);
+    let base = git(&root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("source.rs"), "unreviewed source\n").unwrap();
+    commit(&root, "fix: change source");
+    std::fs::remove_file(root.join("source.rs")).unwrap();
+    let head = commit(&root, "fix: restore source");
+    ok(&ci(&root, &base, "feat/plain", None), "clean taskless ci");
+    std::fs::create_dir_all(root.join(".git/info")).unwrap();
+    std::fs::write(root.join(".git/info/grafts"), format!("{head} {base}\n")).unwrap();
+    refused(
+        &ci(&root, &base, "feat/plain", None),
+        "grafted taskless ci without a body",
+        "cannot verify",
+    );
+}
+
+#[test]
+fn ci_resolves_the_shallow_override_in_the_git_query_directory() {
+    let (_dir, root) = project("--standard");
+    git(&root, &["switch", "-qc", "feat/plain"]);
+    let base = git(&root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("source.rs"), "source\n").unwrap();
+    let head = commit(&root, "fix: change source");
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let query = |file: &str| {
+        with_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+            .current_dir(&nested)
+            .env("GIT_SHALLOW_FILE", file)
+            .args([
+                "ci",
+                "--base",
+                &base,
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/plain",
+            ])
+            .output()
+            .unwrap()
+    };
+    let git_shallow = |file: &str| {
+        let out = with_env(&mut Command::new("git"))
+            .current_dir(&nested)
+            .env("GIT_SHALLOW_FILE", file)
+            .arg("-C")
+            .arg(&root)
+            .args(["rev-parse", "--is-shallow-repository"])
+            .output()
+            .unwrap();
+        ok(&out, "native shallow query").trim().to_string()
+    };
+    assert_eq!(git_shallow("boundary"), "false");
+    ok(&query("boundary"), "absent shallow override");
+    std::fs::write(nested.join("boundary"), format!("{head}\n")).unwrap();
+    assert_eq!(git_shallow("boundary"), "false");
+    ok(
+        &query("boundary"),
+        "override is relative to Git's directory",
+    );
+    std::fs::write(root.join("boundary"), format!("{head}\n")).unwrap();
+    assert_eq!(git_shallow("boundary"), "true");
+    refused(
+        &query("boundary"),
+        "reachable override boundary",
+        "cannot verify",
+    );
+    assert_eq!(git_shallow(""), "false");
+    ok(&query(""), "empty shallow override value");
+    std::fs::write(root.join("boundary"), "").unwrap();
+    // Git reports the file's existence as shallow, but an empty file cuts
+    // no parents and the complete range remains readable.
+    let count = with_env(&mut Command::new("git"))
+        .current_dir(&nested)
+        .env("GIT_SHALLOW_FILE", "boundary")
+        .arg("-C")
+        .arg(&root)
+        .args(["rev-list", "--count", &format!("{base}..HEAD")])
+        .output()
+        .unwrap();
+    assert_eq!(ok(&count, "empty boundary range").trim(), "1");
+    ok(&query("boundary"), "empty override");
+}
+
+#[path = "../../codeflow-core/tests/support/forged_graph.rs"]
+mod forged_graph;
+
+fn security_range() -> (tempfile::TempDir, PathBuf, String, String) {
+    let (dir, root) = project("--standard");
+    git(&root, &["switch", "-qc", "feat/security"]);
+    let base = git(&root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("source.rs"), "source\n").unwrap();
+    commit(&root, "fix: change source");
+    std::fs::remove_file(root.join("source.rs")).unwrap();
+    commit(&root, "fix: restore source");
+    git(
+        &root,
+        &["commit", "--allow-empty", "-m", "fix: extend history"],
+    );
+    let head = git(&root, &["rev-parse", "HEAD"]);
+    (dir, root, base, head)
+}
+
+fn security_replace_ref(remainder: &str) {
+    for prefix in ["refs/replace/", "refs/custom/"] {
+        let (_dir, root, base, head) = security_range();
+        let replacement = git(
+            &root,
+            &[
+                "commit-tree",
+                &format!("{base}^{{tree}}"),
+                "-p",
+                &base,
+                "-m",
+                "fix: replacement",
+            ],
+        );
+        let name = format!("{prefix}{}", remainder.replace("OID", &head));
+        git(&root, &["update-ref", &name, &replacement]);
+        let out = with_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+            .current_dir(&root)
+            .env("GIT_REPLACE_REF_BASE", prefix)
+            .args([
+                "ci",
+                "--base",
+                &base,
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/security",
+            ])
+            .output()
+            .unwrap();
+        refused(&out, &name, "cannot verify");
+    }
+}
+
+#[test]
+fn security_nested_replace_refs_refuse() {
+    security_replace_ref("nested/OID");
+}
+
+#[test]
+fn security_suffixed_replace_refs_refuse() {
+    security_replace_ref("OID-x");
+}
+
+#[test]
+fn security_linked_shallow_worktree_refuses() {
+    let (dir, root, _, _) = security_range();
+    let shallow = dir.path().join("shallow");
+    codeflow_fixture::clone(dir.path(), format!("file://{}", root.display()), &shallow)
+        .depth(1)
+        .run();
+    let base = git(&shallow, &["rev-parse", "HEAD"]);
+    std::fs::write(shallow.join("extra"), "extra").unwrap();
+    commit(&shallow, "fix: extend shallow history");
+    let linked = dir.path().join("linked");
+    git(
+        &shallow,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feat/linked",
+            linked.to_str().unwrap(),
+        ],
+    );
+    for empty_private_file in [false, true] {
+        if empty_private_file {
+            let gitdir = git(&linked, &["rev-parse", "--absolute-git-dir"]);
+            std::fs::write(Path::new(&gitdir).join("shallow"), "").unwrap();
+        }
+        refused(
+            &ci(&linked, &base, "feat/linked", None),
+            "linked shallow CI",
+            "cannot verify",
+        );
+    }
+}
+
+#[test]
+fn security_forged_graph_refuses_ci() {
+    let (_dir, root, base, head) = security_range();
+    ok(
+        &ci(&root, &base, "feat/security", None),
+        "clean graph-free CI",
+    );
+    let forged = git(&root, &["rev-parse", &format!("{head}^")]);
+    forged_graph::plant(&root, &forged, &base);
+    refused(
+        &ci(&root, &base, "feat/security", None),
+        "forged graph CI",
+        "cannot verify",
+    );
+}
+
+#[test]
+fn security_repository_environment_cannot_redirect_ci() {
+    let (dir, root, base, _) = security_range();
+    let other = dir.path().join("other");
+    git(dir.path(), &["init", other.to_str().unwrap()]);
+    for key in [
+        "GIT_DIR",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+        with_env(&mut command).current_dir(&root);
+        match key {
+            "GIT_DIR" => command.env("GIT_DIR", other.join(".git")),
+            "GIT_COMMON_DIR" => command.env("GIT_COMMON_DIR", other.join(".git")),
+            "GIT_OBJECT_DIRECTORY" => command.env("GIT_OBJECT_DIRECTORY", other.join(".git")),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES" => {
+                command.env("GIT_ALTERNATE_OBJECT_DIRECTORIES", other.join(".git"))
+            }
+            _ => unreachable!(),
+        };
+        let out = command
+            .args([
+                "ci",
+                "--base",
+                &base,
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/security",
+            ])
+            .output()
+            .unwrap();
+        ok(&out, &format!("CI ignores {key}"));
+    }
+}
+
+#[test]
+fn security_relative_graft_uses_query_root() {
+    let (_dir, root, base, head) = security_range();
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(root.join("grafts"), format!("{head} {base}\n")).unwrap();
+    let out = with_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .current_dir(&nested)
+        .env("GIT_GRAFT_FILE", "grafts")
+        .args([
+            "ci",
+            "--base",
+            &base,
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/security",
+        ])
+        .output()
+        .unwrap();
+    refused(&out, "relative graft from subdirectory", "cannot verify");
+}
+
+#[test]
+fn security_ordinary_commit_graph_remains_allowed_by_ci() {
+    let (_dir, root, base, _) = security_range();
+    git(&root, &["commit-graph", "write", "--reachable"]);
+    ok(
+        &ci(&root, &base, "feat/security", None),
+        "ordinary commit-graph CI",
+    );
 }

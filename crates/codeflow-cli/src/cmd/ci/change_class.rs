@@ -58,7 +58,8 @@ pub(super) fn range_inventory(
     base: &str,
     head: &str,
 ) -> Result<Vec<RangeEntry>, String> {
-    let out = codeflow_core::git::command()
+    codeflow_core::workgraph::history::check_command(root)?;
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args([
@@ -119,7 +120,8 @@ fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
 /// `git.product_paths` and `git.breaking_watch_paths` at `base`, so neither
 /// side can narrow the surfaces the other names. The target side is read
 /// strictly: a present key that is not an array of strings, or a glob that
-/// does not parse, refuses; an absent key adds nothing.
+/// does not parse, refuses; an absent key adds nothing. `is_light_path` does
+/// not read `git.document_indexes`.
 pub(super) fn project_paths(root: &Path, base: &str) -> Result<ProjectPaths, String> {
     let mut project = ProjectPaths::load(root)?;
     let target = codeflow_core::hooks::landed_policy::policy_text_at(root, base)?
@@ -132,6 +134,7 @@ pub(super) fn project_paths(root: &Path, base: &str) -> Result<ProjectPaths, Str
         let target = ProjectPaths {
             product: target_globs(&policy, "product_paths")?,
             watched: target_globs(&policy, "breaking_watch_paths")?,
+            document_indexes: Vec::new(),
         };
         target
             .validate()
@@ -359,6 +362,7 @@ mod tests {
         let project = ProjectPaths {
             product: vec!["src/**".into(), "docs/runtime/**".into()],
             watched: vec!["docs/api/contract.md".into()],
+            document_indexes: Vec::new(),
         };
         for path in [
             "docs/guide.md",

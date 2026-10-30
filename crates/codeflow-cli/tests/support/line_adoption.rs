@@ -48,6 +48,48 @@ impl Line {
         f.git(&["switch", "-qc", LINE]);
         f
     }
+    /// A standalone repair after reviewed work on a remotely published line.
+    /// The protected branch has no epic records; only the remote line binds it.
+    pub fn standalone_on_remote_line() -> (Self, String) {
+        let f = Self::new();
+        let task =
+            std::fs::read_to_string(f.root().join("project-management/tasks/TSK-001.md")).unwrap();
+        let policy = "{\"schema_version\":1,\"git\":{\"product_paths\":[\"src/**\"],\"test_gate_on_push\":\"warn\"}}\n";
+        f.git(&["switch", "-q", "main"]);
+        f.git(&["rm", "-q", "-r", "project-management"]);
+        f.write(
+            "project-management/README.md",
+            "Records live on the line.\n",
+        );
+        f.write(".codeflow/policy.json", policy);
+        f.commit("docs: keep records on the line");
+        f.git(&["push", "-q", "origin", "main"]);
+        f.git(&["switch", "-q", LINE]);
+        f.write(".codeflow/policy.json", policy);
+        f.commit("chore: enable push checks");
+        f.land_task();
+        let tip = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["push", "-q", "origin", LINE]);
+        f.git(&["switch", "-qc", "task/TSK-002-repair"]);
+        f.write(
+            "project-management/tasks/TSK-002.md",
+            &task.replace("TSK-001", "TSK-002").replace(
+                "epic_id: EPC-001",
+                "epic_id: null\nstandalone_reason: Bounded repair",
+            ),
+        );
+        f.commit("docs: plan standalone repair");
+        f.write("src/lib.rs", "pub fn repaired() {}\n");
+        f.commit("fix: repair work");
+        passes(
+            &f.command(env!("CARGO_BIN_EXE_codeflow"))
+                .args(["ids", "seed"])
+                .output()
+                .unwrap(),
+        );
+        (f, tip)
+    }
+
     pub fn root(&self) -> &Path {
         self.dir.path()
     }
@@ -90,6 +132,30 @@ impl Line {
         self.git(&["commit", "-qm", message]);
         self.git(&["rev-parse", "HEAD"])
     }
+    /// A protected local name placed on a criterion change, followed by code.
+    pub fn protected_target_shadow(&self) -> String {
+        self.git(&["switch", "-q", "main"]);
+        let path = "project-management/tasks/TSK-001.md";
+        let record = std::fs::read_to_string(self.root().join(path)).unwrap();
+        self.write(
+            "project-management/tasks/TSK-002.md",
+            &record.replace("TSK-001", "TSK-002"),
+        );
+        self.commit("docs: plan another task");
+        self.git(&["switch", "-qc", "task/TSK-001-work"]);
+        self.write(path, &record.replace(LINE, "master"));
+        self.write(
+            "project-management/tasks/TSK-002.md",
+            &record
+                .replace("TSK-001", "TSK-002")
+                .replace("AC-1 Work runs.", "AC-1 Changed the criterion."),
+        );
+        let hidden = self.commit("docs: change the criterion");
+        self.git(&["branch", "master", &hidden]);
+        self.write("src/lib.rs", "pub fn changed() {}\n");
+        self.commit("fix: change work");
+        hidden
+    }
     pub fn land_task(&self) {
         self.git(&["switch", "-qc", "task/TSK-001-work"]);
         self.write("src/lib.rs", "pub fn work() {}\n");
@@ -98,11 +164,18 @@ impl Line {
             .unwrap()
             .replace("AC-1 Work runs.", "AC-1 The planned work runs.");
         self.write(path, &record);
-        let reviewed = self.commit("feat: implement planned work");
-        self.write(path, &format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/2\n  criteria:\n    AC-1: verified | focused test\n    AC-2: verified | journey\n  journey: verified | exercised command\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n", record.replace("status: todo", "status: complete")));
-        self.commit("docs: complete planned work");
+        self.commit("feat: implement planned work");
+        self.complete_task();
         self.git(&["switch", "-q", LINE]);
         self.merge("task/TSK-001-work");
+    }
+    /// Record the review of the current task head before its line landing.
+    pub fn complete_task(&self) {
+        let reviewed = self.git(&["rev-parse", "HEAD"]);
+        let path = "project-management/tasks/TSK-001.md";
+        let record = std::fs::read_to_string(self.root().join(path)).unwrap();
+        self.write(path, &format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/2\n  criteria:\n    AC-1: verified | focused test\n    AC-2: verified | journey\n  journey: verified | exercised command\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n", record.replace("status: todo", "status: complete")));
+        self.commit("docs: complete planned work");
     }
     pub fn direct(&self) -> String {
         self.write("src/lib.rs", "pub fn direct() {}\n");
@@ -131,6 +204,9 @@ impl Line {
         self.command(env!("CARGO_BIN_EXE_codeflow")).args(["ci", "--base", base, "--head", "HEAD", "--branch", branch, "--pr-body", "## Summary\nRepair the line.\n\n- adopt reviewed work\n\nTask: EPC-001\n\n## Changes\n- repair\n\n## Testing\n- fixture\n"]).output().unwrap()
     }
     pub fn push(&self, old: &str) -> Output {
+        self.push_branch(LINE, old)
+    }
+    pub fn push_branch(&self, branch: &str, old: &str) -> Output {
         let head = self.git(&["rev-parse", "HEAD"]);
         let mut child = self
             .command(env!("CARGO_BIN_EXE_codeflow"))
@@ -147,7 +223,7 @@ impl Line {
             .unwrap();
         writeln!(
             child.stdin.take().unwrap(),
-            "refs/heads/{LINE} {head} refs/heads/{LINE} {old}"
+            "refs/heads/{branch} {head} refs/heads/{branch} {old}"
         )
         .unwrap();
         child.wait_with_output().unwrap()

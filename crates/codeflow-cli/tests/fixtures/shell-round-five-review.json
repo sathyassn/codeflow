@@ -1,0 +1,707 @@
+[
+  [
+    "mkdir L && pax -rwl .claude L && printf x > L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && pax -rwl .codeflow L && printf x > L/.codeflow/policy.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && pax -rwl .worktrees L && rm -rf L/.worktrees/w",
+    2,
+    null
+  ],
+  [
+    "mkdir L && echo .claude/settings.json | cpio -pdl L && printf x > L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "rsync -a --link-dest=$PWD/.claude .claude/ L/ && printf x > L/settings.json",
+    2,
+    null
+  ],
+  [
+    "rsync -a --link-dest=../.claude .claude/ L/ && printf x > L/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && pax -rwl .codeflow L && python3 tool.py L/.codeflow/policy.json",
+    null,
+    2
+  ],
+  [
+    "gdd if=/dev/null of=.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "gtee .claude/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "ginstall evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "gcp evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "gtruncate -s0 .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "gmv evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "dd if=/dev/null of=.codeflow/policy.json",
+    2,
+    null
+  ],
+  [
+    "tee .claude/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "truncate -s0 .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && pax -rwl .claude L && printf x > L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && pax -rwl .claude L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "mkdir L && pax -r -w -l .claude L && printf x > L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && pax -r -w -l .claude L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "mkdir L && /bin/pax -l -rw .claude L && printf x > L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && /bin/pax -l -rw .claude L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "mkdir L && echo .claude/settings.json | cpio -pdl L && printf x > L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && echo .claude/settings.json | cpio -pdl L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "mkdir L && printf \"%s\\n\" .claude/settings.json | cpio -p -d -l L && printf x > L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && printf \"%s\\n\" .claude/settings.json | cpio -p -d -l L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "mkdir L && echo .claude/settings.json | cpio --pass-through --link L && printf x > L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && echo .claude/settings.json | cpio --pass-through --link L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "mkdir L && rsync -a --link-dest=$PWD/.claude .claude/ L/ && printf x > L/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && rsync -a --link-dest=$PWD/.claude .claude/ L/ && python3 tool.py L/settings.json",
+    null,
+    2
+  ],
+  [
+    "mkdir L && rsync -a --link-dest ../.claude .claude/ L/ && printf x > L/settings.json",
+    2,
+    null
+  ],
+  [
+    "mkdir L && rsync -a --link-dest ../.claude .claude/ L/ && python3 tool.py L/settings.json",
+    null,
+    2
+  ],
+  [
+    "gdd if=/dev/null of=.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && gdd if=/dev/null of=L/settings.json",
+    2,
+    null
+  ],
+  [
+    "gdd if=/dev/null of=ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "/opt/homebrew/bin/gdd if=/dev/null of=.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && /opt/homebrew/bin/gdd if=/dev/null of=L/settings.json",
+    2,
+    null
+  ],
+  [
+    "/opt/homebrew/bin/gdd if=/dev/null of=ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "env gdd if=/dev/null of=.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && env gdd if=/dev/null of=L/settings.json",
+    2,
+    null
+  ],
+  [
+    "env gdd if=/dev/null of=ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "command gdd if=/dev/null of=.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && command gdd if=/dev/null of=L/settings.json",
+    2,
+    null
+  ],
+  [
+    "command gdd if=/dev/null of=ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "gtee .claude/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && gtee L/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "gtee ordinary.txt < /dev/null",
+    0,
+    0
+  ],
+  [
+    "/opt/homebrew/bin/gtee .claude/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && /opt/homebrew/bin/gtee L/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "/opt/homebrew/bin/gtee ordinary.txt < /dev/null",
+    0,
+    0
+  ],
+  [
+    "env gtee .claude/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && env gtee L/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "env gtee ordinary.txt < /dev/null",
+    0,
+    0
+  ],
+  [
+    "command gtee .claude/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && command gtee L/settings.json < /dev/null",
+    2,
+    null
+  ],
+  [
+    "command gtee ordinary.txt < /dev/null",
+    0,
+    0
+  ],
+  [
+    "gtruncate -s0 .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && gtruncate -s0 L/settings.json",
+    2,
+    null
+  ],
+  [
+    "gtruncate -s0 ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "/opt/homebrew/bin/gtruncate -s0 .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && /opt/homebrew/bin/gtruncate -s0 L/settings.json",
+    2,
+    null
+  ],
+  [
+    "/opt/homebrew/bin/gtruncate -s0 ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "env gtruncate -s0 .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && env gtruncate -s0 L/settings.json",
+    2,
+    null
+  ],
+  [
+    "env gtruncate -s0 ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "command gtruncate -s0 .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && command gtruncate -s0 L/settings.json",
+    2,
+    null
+  ],
+  [
+    "command gtruncate -s0 ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "ginstall evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && ginstall evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "ginstall evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "/opt/homebrew/bin/ginstall evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && /opt/homebrew/bin/ginstall evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "/opt/homebrew/bin/ginstall evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "env ginstall evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && env ginstall evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "env ginstall evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "command ginstall evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && command ginstall evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "command ginstall evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "gmv evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && gmv evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "gmv evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "/opt/homebrew/bin/gmv evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && /opt/homebrew/bin/gmv evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "/opt/homebrew/bin/gmv evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "env gmv evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && env gmv evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "env gmv evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "command gmv evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && command gmv evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "command gmv evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "gcp evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && gcp evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "gcp evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "/opt/homebrew/bin/gcp evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && /opt/homebrew/bin/gcp evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "/opt/homebrew/bin/gcp evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "env gcp evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && env gcp evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "env gcp evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "command gcp evil .claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "ln -s .claude L && command gcp evil L/settings.json",
+    2,
+    null
+  ],
+  [
+    "command gcp evil ordinary.txt",
+    0,
+    0
+  ],
+  [
+    "mkdir L && pax -rwl src L && printf x > L/src/app.py",
+    0,
+    0
+  ],
+  [
+    "mkdir L && pax -rwl src L && python3 tool.py L/src/app.py",
+    0,
+    0
+  ],
+  [
+    "mkdir L && echo src/app.py | cpio -pdl L && printf x > L/src/app.py",
+    0,
+    0
+  ],
+  [
+    "mkdir L && echo src/app.py | cpio -pdl L && python3 tool.py L/src/app.py",
+    0,
+    0
+  ],
+  [
+    "mkdir L && rsync -a --link-dest=../src src/ L/ && printf x > L/app.py",
+    0,
+    0
+  ],
+  [
+    "mkdir L && rsync -a --link-dest=../src src/ L/ && python3 tool.py L/app.py",
+    2,
+    2
+  ],
+  [
+    "pax -rw -l .claude L && gdd if=/dev/null of=L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "pax -rw -l .claude L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "printf '%s\\n' .claude/settings.json | cpio -p -d -l L && gdd if=/dev/null of=L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "printf '%s\\n' .claude/settings.json | cpio -p -d -l L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "printf '%s\\0' .claude/settings.json | cpio -0pdl L && gdd if=/dev/null of=L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "printf '%s\\0' .claude/settings.json | cpio -0pdl L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "rsync -a --link-dest ../.claude src/ L/ && gdd if=/dev/null of=L/settings.json",
+    2,
+    null
+  ],
+  [
+    "rsync -a --link-dest ../.claude src/ L/ && python3 tool.py L/settings.json",
+    null,
+    2
+  ],
+  [
+    "gdd if=/dev/null of=$HOME/.bashrc",
+    null,
+    2
+  ],
+  [
+    "gdd if=/dev/null of=src/out",
+    0,
+    0
+  ],
+  [
+    "gtee $HOME/.bashrc",
+    null,
+    2
+  ],
+  [
+    "gtee src/out",
+    0,
+    0
+  ],
+  [
+    "gtruncate -s0 $HOME/.bashrc",
+    null,
+    2
+  ],
+  [
+    "gtruncate -s0 src/out",
+    0,
+    0
+  ],
+  [
+    "ginstall evil $HOME/.bashrc",
+    null,
+    2
+  ],
+  [
+    "ginstall evil src/out",
+    0,
+    0
+  ],
+  [
+    "gmv evil $HOME/.bashrc",
+    null,
+    2
+  ],
+  [
+    "gmv evil src/out",
+    0,
+    0
+  ],
+  [
+    "gcp evil $HOME/.bashrc",
+    null,
+    2
+  ],
+  [
+    "gcp evil src/out",
+    0,
+    0
+  ],
+  [
+    "pax -rwHl .claude L && gtee L/.claude/settings.json",
+    2,
+    null
+  ],
+  [
+    "pax -rwl -p e .claude L && python3 tool.py L/.claude/settings.json",
+    null,
+    2
+  ],
+  [
+    "pax -rwl -s ',.claude,renamed,' .claude L && gdd of=L/renamed/settings.json",
+    2,
+    null
+  ],
+  [
+    "echo .claude/settings.json | cpio -pdlr L && python3 tool.py L/renamed",
+    null,
+    2
+  ],
+  [
+    "pax -rwl .worktrees L && python3 tool.py L/.worktrees/w",
+    null,
+    2
+  ],
+  [
+    "printf '%s\\n' .worktrees/w | cpio -pdl L && python3 tool.py L/.worktrees/w",
+    null,
+    2
+  ],
+  [
+    "rsync -a --link-dest=../.worktrees .worktrees/ L/ && python3 tool.py L/w",
+    null,
+    2
+  ],
+  [
+    "gdd if=image of=/dev/sda",
+    null,
+    2
+  ],
+  [
+    "/opt/homebrew/bin/gdd if=image of=/dev/disk1",
+    null,
+    2
+  ],
+  [
+    "gcp $HOME/.ssh/id_rsa ordinary",
+    null,
+    2
+  ],
+  [
+    "X=$UNSET; gmv $X ordinary",
+    2,
+    null
+  ]
+]

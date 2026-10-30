@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium } from "@playwright/test";
+import { serveBuiltSite } from "../scripts/site-server.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { collectBuiltArtifacts } from "../scripts/publication.mjs";
 import { applyDisplayState, assertAltitudeTablist, observePortalPage, revealAltitudePanel } from "../scripts/browser-verify.mjs";
@@ -161,29 +162,49 @@ test("the altitude tablist is held to three connected tabs that each open their 
   const root = await selfContainedPortalFixture();
   try {
     await rm(path.join(root, "docs/seed.md"));
-    await writeFile(path.join(root, "docs/product.md"), COMPOSED_PAGE);
+    await writeFile(path.join(root, "docs/product.md"), COMPOSED_PAGE.replace("One governing claim,", "### Handoff\n\n#### Review detail\n\nOne governing claim,"));
     commitFixture(root, "compose a page that carries the trio");
     runLocalAdapter(root);
     buildFixture(root);
-    const built = pathToFileURL(path.join(root, "dist/orient/product/index.html")).href;
-    const tabScript = await readFile(path.join(root, "public/portal-tabs.js"), "utf8");
+    const site = await serveBuiltSite({ directory: path.join(root, "dist") });
+    const built = `${site.origin}/orient/product/`;
     const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
     try {
       const page = await browser.newPage();
+      await page.emulateMedia({ reducedMotion: "reduce" });
       const load = async (breakage) => {
         await page.goto(built);
-        await page.addScriptTag({ content: tabScript });
+        await page.waitForFunction(() => document.documentElement.dataset.cfpTabs === "on");
+        await page.evaluate(() => document.fonts.ready);
         if (breakage) await page.evaluate(breakage);
       };
       await load(null);
       assert.deepEqual(await assertAltitudeTablist(page), ["portal-panel-concept", "portal-panel-architecture", "portal-panel-technical"]);
+      await page.getByRole("tab", { name: "Concept", exact: true }).click();
+      const sizes = await page.locator(".sl-markdown-content").evaluate(root => ["h1", "h3", "h4"].map(tag => {
+        const heading = tag === "h1" ? document.querySelector("h1") : root.querySelector(tag);
+        return parseFloat(getComputedStyle(heading).fontSize);
+      }));
+      assert.ok(sizes[0] > sizes[1] && sizes[1] > sizes[2], `portal hierarchy: ${sizes}`);
+      await page.getByRole("tab", { name: "Concept", exact: true }).focus();
+      await page.keyboard.press("End");
+      assert.equal(await page.locator("#portal-panel-technical").isVisible(), true);
+      await page.keyboard.press("Home");
+      assert.equal(await page.locator("#portal-panel-concept").isVisible(), true);
+      if (process.env.CF_PARITY_EVIDENCE) {
+        for (const width of [1280, 375]) for (const theme of ["light", "dark"]) {
+          await page.setViewportSize({ width, height: 900 });
+          await applyDisplayState(page, "graphite", theme);
+          await page.screenshot({ path: path.join(process.env.CF_PARITY_EVIDENCE, `portal-tabs-headings-${theme}-${width}.png`), animations: "disabled" });
+        }
+      }
       await load(() => document.querySelector(".portal-altitude-tabs").remove());
       await assert.rejects(assertAltitudeTablist(page), /offers 0 tab\(s\), the trio needs 3/);
       await load(() => document.querySelector('[role="tab"][aria-controls="portal-panel-technical"]').setAttribute("aria-controls", "portal-panel-elsewhere"));
       await assert.rejects(assertAltitudeTablist(page), /tabs control .*portal-panel-elsewhere/);
       await load(() => document.querySelector("#portal-panel-technical").style.setProperty("display", "none", "important"));
       await assert.rejects(assertAltitudeTablist(page), /selecting the technical tab did not open its panel/);
-    } finally { await browser.close(); }
+    } finally { await browser.close(); await site.close(); }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

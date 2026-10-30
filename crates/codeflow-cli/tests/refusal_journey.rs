@@ -319,6 +319,9 @@ fn ordinary_and_discard_journey(project: &Project) {
             .output()
             .unwrap(),
     );
+    // init updated the tracked ignore file; preserve that edit before pushing.
+    project.git(&["add", ".gitignore"]);
+    project.git(&["commit", "-m", "chore: record scaffold ignores"]);
     project.git(&["push", "origin", "task/x"]);
     project.git(&[
         "symbolic-ref",
@@ -808,3 +811,6 @@ mod landed;
 
 #[path = "refusal_journey/line_adoption.rs"]
 mod line_adoption;
+
+#[path = "refusal_journey/secret_paths.rs"]
+mod secret_paths;

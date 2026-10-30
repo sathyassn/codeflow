@@ -3,11 +3,22 @@
 //! time on a machine, and a warning for a cargo target directory outside the
 //! worktree.
 
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
+
+#[path = "support/drain_pipe.rs"]
+mod drain_pipe;
+#[path = "test_gate_cli/evidence.rs"]
+mod evidence;
+#[path = "test_gate_cli/named_config.rs"]
+mod named_config;
+#[path = "support/own_repository.rs"]
+mod own_repository;
+use drain_pipe::{drain_lines, drain_pipe};
 
 fn git(dir: &Path, args: &[&str]) {
     let output = Command::new("git")
@@ -29,6 +40,8 @@ fn git(dir: &Path, args: &[&str]) {
 fn repo(config: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q", "-b", "main"]);
+    git(dir.path(), &["config", "user.name", "Test"]);
+    git(dir.path(), &["config", "user.email", "test@example.com"]);
     std::fs::write(dir.path().join("README.md"), "hello\n").unwrap();
     git(dir.path(), &["add", "README.md"]);
     git(dir.path(), &["commit", "-q", "-m", "chore: initial commit"]);
@@ -58,23 +71,106 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
 }
 
-/// Spawn with piped stderr, returning the child and a line receiver.
-fn spawn(mut cmd: Command) -> (Child, Receiver<String>) {
+#[test]
+fn default_comparison_names_the_task_line_and_explicit_controls_override_it() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[{"name":"check","runner":"custom","modes":{"quick":{"command":"echo checked"}}}]}"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+    std::fs::write(
+        dir.path().join("project-management/tasks/TSK-001.md"),
+        "---\nid: TSK-001\nintegration_target: integration/test-line\n---\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: declare task line"]);
+    git(dir.path(), &["branch", "integration/test-line"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-selection"]);
+    let base = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let base = String::from_utf8(base.stdout).unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains(base.trim()), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("TSK-001 integration target integration/test-line"),
+        "{}",
+        stderr(&output)
+    );
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "quick", "--since", "HEAD"],
+    );
+    assert!(
+        stderr(&output).contains("explicit --since HEAD"),
+        "{}",
+        stderr(&output)
+    );
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "quick", "--all"],
+    );
+    assert!(
+        stderr(&output).contains("--all: every target"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// What a spawned gate has written to stdout, read to the end on its own
+/// thread (`join` returns the bytes once the gate has exited).
+type Stdout = std::thread::JoinHandle<Vec<u8>>;
+
+/// Spawn with both outputs piped and drained while the gate runs, so a gate
+/// whose output outgrows a small pipe buffer is never stalled by the test
+/// (issue 100). Returns the child, a receiver of its stderr lines and its
+/// stdout.
+fn spawn(mut cmd: Command) -> (Child, Receiver<String>, Stdout) {
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("codeflow spawns");
-    let err = child.stderr.take().unwrap();
-    let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(err).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                break;
-            }
+    let stdout = drain_pipe(child.stdout.take());
+    let rx = drain_lines(child.stderr.take());
+    (child, rx, stdout)
+}
+
+/// The helper that every gate test spawns through reads both streams while
+/// the child runs: a child that writes a mebibyte to each, far past any pipe
+/// buffer, still exits. With a reader missing, it blocks in `write` and the
+/// bound below fails the test (issue 100).
+#[cfg(unix)]
+#[test]
+fn the_spawn_helper_drains_both_streams_past_a_pipe_buffer() {
+    let mut cmd = Command::new("sh");
+    cmd.args([
+        "-c",
+        "yes out | head -c 1048576; yes err | head -c 1048576 >&2",
+    ]);
+    let (mut child, rx, stdout) = spawn(cmd);
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
         }
-    });
-    (child, rx)
+        if started.elapsed() > Duration::from_secs(10) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("the child blocked on a pipe: a stream is not drained while the test waits");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    assert_eq!(stdout.join().unwrap().len(), 1_048_576);
+    assert_eq!(rx.iter().count(), 1_048_576 / 4);
 }
 
 /// Wait for a stderr line containing `needle`; panics after 20 s.
@@ -103,7 +199,7 @@ const TWO_SLEEPERS: &str = r#"{"schema_version": "1.0", "targets": [
 fn sequential_start_lines_precede_each_target_and_stdout_is_unchanged() {
     let dir = repo(TWO_SLEEPERS);
     let home = tempfile::tempdir().unwrap();
-    let (mut child, rx) = spawn(command(dir.path(), home.path(), &["test"]));
+    let (mut child, rx, out) = spawn(command(dir.path(), home.path(), &["test"]));
 
     assert_eq!(wait_for(&rx, "'first'"), start("first", "full"));
     assert!(
@@ -116,14 +212,20 @@ fn sequential_start_lines_precede_each_target_and_stdout_is_unchanged() {
         "the start line arrived before the second target finished"
     );
 
-    let output = child.wait_with_output().unwrap();
-    assert_eq!(output.status.code(), Some(0));
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.join().unwrap()).into_owned();
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 3, "stdout: {stdout}");
-    assert!(lines[0].starts_with("first: ok (exit 0, "), "{stdout}");
-    assert!(lines[1].starts_with("second: ok (exit 0, "), "{stdout}");
-    assert_eq!(lines[2], "test gate: passed (2 target(s))");
+    assert!(
+        lines[0].starts_with("target first: ok (exit 0, "),
+        "{stdout}"
+    );
+    assert!(
+        lines[1].starts_with("target second: ok (exit 0, "),
+        "{stdout}"
+    );
+    assert_eq!(lines[2], "test gate: passed (executed 2; skipped 0)");
     assert!(
         !stdout.contains("[codeflow test]"),
         "start lines stay off stdout"
@@ -163,7 +265,7 @@ fn a_killed_gate_has_already_named_its_running_target() {
 ]}"#,
     );
     let home = tempfile::tempdir().unwrap();
-    let (mut child, rx) = spawn(command(dir.path(), home.path(), &["test"]));
+    let (mut child, rx, _stdout) = spawn(command(dir.path(), home.path(), &["test"]));
     let named = wait_for(&rx, "starting target");
     assert_eq!(named, start("sleeper", "full"));
     assert!(child.try_wait().unwrap().is_none(), "still running");
@@ -212,7 +314,7 @@ const QUICK_PASS: &str = r#"{"schema_version": "1.0", "targets": [
 fn a_second_full_gate_is_refused_naming_the_holder() {
     let home = tempfile::tempdir().unwrap();
     let first = repo(HOLDER);
-    let (child, rx) = spawn(command(
+    let (mut child, rx, _stdout) = spawn(command(
         first.path(),
         home.path(),
         &["test", "--mode", "full"],
@@ -225,7 +327,7 @@ fn a_second_full_gate_is_refused_naming_the_holder() {
     let refused = run(other.path(), home.path(), &["test", "--mode", "full"]);
     let err = stderr(&refused);
     assert_eq!(refused.status.code(), Some(1), "{err}");
-    assert!(err.contains("another full gate is running"), "{err}");
+    assert!(err.contains("another heavy gate is running"), "{err}");
     assert!(err.contains(&format!("pid {}", child.id())), "{err}");
     assert!(!err.contains("starting target"), "no target ran: {err}");
 
@@ -243,8 +345,8 @@ fn a_second_full_gate_is_refused_naming_the_holder() {
     let q = run(quick.path(), home.path(), &["test", "--mode", "quick"]);
     assert_eq!(q.status.code(), Some(0), "{}", stderr(&q));
 
-    let done = child.wait_with_output().unwrap();
-    assert_eq!(done.status.code(), Some(0));
+    let done = child.wait().unwrap();
+    assert_eq!(done.code(), Some(0));
     let after = run(other.path(), home.path(), &["test", "--mode", "full"]);
     assert_eq!(after.status.code(), Some(0), "{}", stderr(&after));
 }
@@ -252,19 +354,26 @@ fn a_second_full_gate_is_refused_naming_the_holder() {
 #[cfg(unix)]
 #[test]
 fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
+    killed_gate_keeps_its_lock_until_its_target_exits("full");
+    killed_gate_keeps_its_lock_until_its_target_exits("essential");
+}
+
+#[cfg(unix)]
+fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
     let home = tempfile::tempdir().unwrap();
     // The target records its process group (the shell's pid leads it), then
     // outlives the gate that started it.
     let first = repo(
-        r#"{"schema_version": "1.0", "targets": [
+        &r#"{"schema_version": "1.0", "targets": [
   {"name": "survivor", "runner": "custom",
    "modes": {"full": {"command": "echo $$ > group.txt; sleep 30"}}}
-]}"#,
+]}"#
+        .replace("full", mode),
     );
-    let (mut gate, rx) = spawn(command(
+    let (mut gate, rx, _stdout) = spawn(command(
         first.path(),
         home.path(),
-        &["test", "--mode", "full"],
+        &["test", "--mode", mode],
     ));
     wait_for(&rx, "starting target 'survivor'");
     let group_file = first.path().join("group.txt");
@@ -278,10 +387,10 @@ fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
             parsed
         })
         .expect("the target wrote its group");
-    // The gate records the group in its lock file just after the target
+    // The gate records the group in its holder record just after the target
     // starts, and the target can write its file first: wait for the record
     // before killing the gate, or the kill can land between the two.
-    let lock_file = home.path().join("locks/full-gate.lock");
+    let lock_file = home.path().join("locks/full-gate.record");
     let recorded = (0..200).any(|_| {
         let text = std::fs::read_to_string(&lock_file).unwrap_or_default();
         let found = text.lines().any(|l| l == format!("group={group}"));
@@ -306,9 +415,9 @@ fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
 
     // Its gate process is gone, so the OS released the lock, but its target
     // still runs: a second full gate refuses, from any repository.
-    let other = repo(QUICK_PASS);
+    let other = repo(&QUICK_PASS.replace("full", mode));
     for dir in [other.path(), first.path()] {
-        let refused = run(dir, home.path(), &["test", "--mode", "full"]);
+        let refused = run(dir, home.path(), &["test", "--mode", mode]);
         let err = stderr(&refused);
         assert_eq!(refused.status.code(), Some(1), "{err}");
         assert!(err.contains("targets are still running"), "{err}");
@@ -329,7 +438,7 @@ fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
         !alive_now
     });
     assert!(gone, "the target group exited");
-    let after = run(other.path(), home.path(), &["test", "--mode", "full"]);
+    let after = run(other.path(), home.path(), &["test", "--mode", mode]);
     let err = stderr(&after);
     assert_eq!(after.status.code(), Some(0), "{err}");
     assert!(err.contains("reclaimed a stale gate lock"), "{err}");
@@ -378,11 +487,12 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("proj");
     std::fs::create_dir(&root).unwrap();
+    own_repository::own_repository(&root);
     let init = run(&root, home.path(), &["init", "--yes", "--minimal"]);
     assert!(init.status.success(), "init: {}", stderr(&init));
     std::fs::write(root.join(".codeflow/test-config.json"), LONG_TARGET).unwrap();
 
-    let (mut gate, rx) = spawn(command(&root, home.path(), &["test", "--mode", "full"]));
+    let (mut gate, rx, _stdout) = spawn(command(&root, home.path(), &["test", "--mode", "full"]));
     wait_for(&rx, "starting target 'long'");
     let pid_file = root.join("pid.txt");
     let pid = (0..1200)
@@ -448,7 +558,8 @@ fn a_stale_lock_from_a_dead_gate_is_reclaimed() {
     let err = stderr(&output);
     assert_eq!(output.status.code(), Some(0), "{err}");
     assert!(
-        err.contains("reclaimed a stale gate lock") && err.contains("pid 999999 in /gone"),
+        err.contains("reclaimed a stale gate lock")
+            && err.contains("pid 999999 in an unknown directory"),
         "{err}"
     );
 }
@@ -584,7 +695,27 @@ fn unavailable_gate_lock_refuses_before_start() {
 }
 
 #[cfg(unix)]
-fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
+struct SelectionHome {
+    path: std::path::PathBuf,
+    evidence: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl SelectionHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SelectionHome {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.evidence).unwrap();
+    }
+}
+
+#[cfg(unix)]
+fn selection_repo() -> (tempfile::TempDir, SelectionHome, String) {
     let dir = repo(
         r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2,"run_everything":["crates/**","assets/**","Cargo.*",".codeflow/**"]},"targets":[
       {"name":"producer","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo producer >> runs"}}},
@@ -592,6 +723,24 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
       {"name":"present","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo present >> runs"}}},
       {"name":"release","runner":"custom","narrow":["scripts/**"],"modes":{"full":{"command":"echo release >> runs"}}}] }"#,
     );
+    let path = dir.path().join(".codeflow/test-config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for target in config["targets"].as_array_mut().unwrap() {
+        target["input_class"] = serde_json::json!("content");
+        target["evidence"] = serde_json::json!({"tools":{},"environment":{},"environment_complete":true,"membership":[],"covers_modes":["quick"]});
+    }
+    config["targets"][0]["outputs"] = serde_json::json!(["target/producer"]);
+    config["targets"][0]["modes"]["full"]["command"] =
+        serde_json::json!("echo producer >> runs; echo produced > target/producer");
+    for target in config["targets"].as_array_mut().unwrap() {
+        target["modes"]["quick"] = target["modes"]["full"].clone();
+    }
+    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    for folder in ["crates", "scripts"] {
+        std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+        std::fs::write(dir.path().join(folder).join("input"), "base").unwrap();
+    }
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/guide.md"), "base\n").unwrap();
     std::fs::write(dir.path().join(".gitignore"), "target/\nruns\n").unwrap();
@@ -603,8 +752,13 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
         .output()
         .unwrap();
     let base = String::from_utf8(base.stdout).unwrap().trim().to_owned();
-    let home = tempfile::tempdir().unwrap();
-    let output = run(dir.path(), home.path(), &["test", "--all"]);
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    git(dir.path(), &["branch", "fixture-base"]);
+    let output = evidence::run(
+        dir.path(),
+        &home,
+        &["integrate", "main", "--into", "fixture-base"],
+    );
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
     let artifact = err
@@ -615,7 +769,20 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
     assert_eq!(raw["clean"], true, "{raw}");
     assert_eq!(raw["complete"], true, "{raw}");
     std::fs::remove_file(dir.path().join("runs")).unwrap();
-    (dir, home, base)
+    let evidence = Path::new(artifact)
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    (
+        dir,
+        SelectionHome {
+            path: home,
+            evidence,
+        },
+        base,
+    )
 }
 
 #[cfg(unix)]
@@ -623,12 +790,17 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
 fn selection_narrows_only_with_green_base_and_keeps_prerequisite_closure() {
     let (dir, home, base) = selection_repo();
     std::fs::write(dir.path().join("docs/guide.md"), "changed\n").unwrap();
-    let output = run(dir.path(), home.path(), &["test", "--since", &base]);
+    let output = evidence::run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "quick", "--since", &base],
+    );
     assert!(output.status.success(), "{}", stderr(&output));
     let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
     assert_eq!(runs, "producer\ndocs\n", "{}", stderr(&output));
     assert!(stderr(&output).contains("skipped present"));
-    let output = run(dir.path(), home.path(), &["test", "--all"]);
+    let isolated = tempfile::tempdir().unwrap();
+    let output = evidence::run(dir.path(), isolated.path(), &["test", "--all"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stderr(&output).contains("selected present"));
 }
@@ -670,11 +842,18 @@ fn selection_runs_everything_for_shared_unmatched_rename_deletion_and_unproven_b
                 let mut config: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
                 config["execution"]["max_parallel"] = 1.into();
+                for target in config["targets"].as_array_mut().unwrap() {
+                    target["modes"]["quick"] = target["modes"]["full"].clone();
+                }
                 std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
             }
             _ => unreachable!(),
         }
-        let output = run(dir.path(), home.path(), &["test", "--since", &comparison]);
+        let output = evidence::run(
+            dir.path(),
+            home.path(),
+            &["test", "--mode", "quick", "--since", &comparison],
+        );
         assert!(output.status.success(), "{case}: {}", stderr(&output));
         let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
         for target in ["producer", "docs", "present", "release"] {
@@ -875,12 +1054,14 @@ fn only_runs_the_named_targets_with_prerequisites_and_is_never_complete() {
     );
     let err = stderr(&output);
     assert!(output.status.success(), "{err}");
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("executed 3; skipped 0; not full-gate evidence"));
     let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
     let mut ran: Vec<&str> = runs.lines().collect();
     ran.sort_unstable();
     assert_eq!(ran, ["docs", "producer", "release"], "{err}");
     assert!(
-        err.contains("skipped present: --only: the named targets and their prerequisites"),
+        err.contains("excluded present: --only: the named targets and their prerequisites"),
         "{err}"
     );
     let artifact = err
@@ -889,6 +1070,7 @@ fn only_runs_the_named_targets_with_prerequisites_and_is_never_complete() {
         .unwrap();
     let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
     assert_eq!(raw["complete"], false, "{raw}");
+    assert_eq!(raw["selection"]["skipped"], serde_json::json!([]));
     assert_eq!(raw["passed"], true, "{raw}");
 
     // A limited run is never complete evidence, even when its names cover
@@ -1012,4 +1194,568 @@ fn a_tracked_path_that_is_not_utf8_does_not_stop_the_gate() {
     let output = run(dir.path(), home.path(), &["test"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(String::from_utf8_lossy(&output.stdout).contains("test gate: passed"));
+}
+
+/// A target that runs until a `release` file appears, on every platform.
+fn held_until_released_anywhere(mode: &str) -> tempfile::TempDir {
+    let command = if cfg!(windows) {
+        r#"powershell -NoProfile -NonInteractive -Command \"while (-not (Test-Path release)) { Start-Sleep -Milliseconds 50 }\""#
+    } else {
+        "while ! test -f release; do sleep 0.01; done"
+    };
+    repo(&format!(
+        r#"{{"schema_version":"1.0","targets":[{{"name":"holder","runner":"custom","timeout_seconds":120,"modes":{{"{mode}":{{"command":"{command}"}}}}}}]}}"#
+    ))
+}
+
+/// TSK-1021 AC-1 (journey), on Linux, macOS and Windows: the built binary
+/// takes the gate lock only after the lock path's file and the locked handle
+/// compare equal by `FileIdentity`; a second gate is refused naming the
+/// holder, and once the holder ends the next gate takes the lock again.
+#[test]
+fn a_gate_takes_the_lock_through_the_identity_check_and_refuses_a_contender() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = held_until_released_anywhere("essential");
+    let (mut holder, rx, _stdout) = spawn(command(
+        repo.path(),
+        home.path(),
+        &["test", "--mode", "essential"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+    let contender = run(repo.path(), home.path(), &["test", "--mode", "essential"]);
+    let error = stderr(&contender);
+    assert_eq!(contender.status.code(), Some(1), "{error}");
+    assert!(error.contains(&format!("pid {}", holder.id())), "{error}");
+    std::fs::write(repo.path().join("release"), "").unwrap();
+    assert!(holder.wait().unwrap().success(), "the holder's gate passes");
+    let next = run(repo.path(), home.path(), &["test", "--mode", "essential"]);
+    assert!(next.status.success(), "{}", stderr(&next));
+    assert!(String::from_utf8_lossy(&next.stdout).contains("test gate: passed"));
+}
+
+#[cfg(unix)]
+fn held_until_released(mode: &str) -> tempfile::TempDir {
+    repo(&format!(
+        r#"{{"schema_version":"1.0","targets":[{{"name":"holder","runner":"custom","timeout_seconds":10,"modes":{{"{mode}":{{"command":"while ! test -f release; do sleep 0.01; done"}}}}}}]}}"#
+    ))
+}
+
+#[cfg(unix)]
+#[test]
+fn essential_and_full_refuse_every_mode_pair_across_worktrees_and_repositories() {
+    for holder in ["essential", "full"] {
+        let home = tempfile::tempdir().unwrap();
+        let first = held_until_released(holder);
+        let other = repo(QUICK_PASS);
+        let linked = first.path().join("linked");
+        git(
+            first.path(),
+            &["worktree", "add", "--detach", linked.to_str().unwrap()],
+        );
+        let (mut child, rx, _stdout) = spawn(command(
+            first.path(),
+            home.path(),
+            &["test", "--mode", holder],
+        ));
+        wait_for(&rx, "starting target 'holder'");
+        for contender in ["essential", "full"] {
+            for directory in [other.path(), linked.as_path()] {
+                let output = run(directory, home.path(), &["test", "--mode", contender]);
+                let error = stderr(&output);
+                assert_eq!(
+                    output.status.code(),
+                    Some(1),
+                    "{holder}/{contender}: {error}"
+                );
+                assert!(error.contains(&format!("pid {}", child.id())), "{error}");
+                assert!(error.contains(&format!("{holder} mode")), "{error}");
+                // The holder's folder is shown only to a gate that trusts
+                // it: a worktree of the same repository. Another repository
+                // sees an unknown directory (TSK-1003).
+                if directory == linked.as_path() {
+                    assert!(error.contains(first.path().to_str().unwrap()), "{error}");
+                } else {
+                    assert!(error.contains("in an unknown directory"), "{error}");
+                    assert!(!error.contains(first.path().to_str().unwrap()), "{error}");
+                }
+                assert!(!error.contains("starting target"), "{error}");
+            }
+        }
+        std::fs::write(first.path().join("release"), "done").unwrap();
+        assert!(child.wait().unwrap().success());
+        std::fs::write(
+            first.path().join(".codeflow/test-config.json"),
+            QUICK_PASS.replace("full", holder),
+        )
+        .unwrap();
+        let after = run(first.path(), home.path(), &["test", "--mode", holder]);
+        assert!(after.status.success(), "{}", stderr(&after));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn quick_runs_light_targets_but_refuses_declared_and_fallback_heavy_targets() {
+    for fallback in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let first = held_until_released("full");
+        let linked = first.path().join("linked");
+        git(
+            first.path(),
+            &["worktree", "add", "--detach", linked.to_str().unwrap()],
+        );
+        let mode = if fallback { "essential" } else { "quick" };
+        let declaration = if fallback { "" } else { "\"heavy\":true," };
+        std::fs::create_dir_all(linked.join(".codeflow")).unwrap();
+        std::fs::write(linked.join(".codeflow/test-config.json"), format!(r#"{{"schema_version":"1.0","execution":{{"parallel":true,"max_parallel":2,"heavy_wait_seconds":1}},"targets":[
+          {{"name":"workspace-clippy","runner":"custom",{declaration}"modes":{{"{mode}":{{"command":"touch heavy-ran"}}}}}},
+          {{"name":"light","timeout_seconds":5,"heavy":false,"runner":"custom","modes":{{"{mode}":{{"command":"touch light-ran"}}}}}}
+        ]}}"#)).unwrap();
+        let (mut child, rx, _stdout) = spawn(command(first.path(), home.path(), &["test"]));
+        wait_for(&rx, "starting target 'holder'");
+        let start = Instant::now();
+        let output = run(&linked, home.path(), &["test", "--mode", "quick"]);
+        let error = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{error}");
+        assert!(start.elapsed() >= Duration::from_secs(1));
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(linked.join("light-ran").exists());
+        assert!(!linked.join("heavy-ran").exists());
+        assert!(error.contains(&format!("pid {}", child.id())), "{error}");
+        assert!(error.contains("full mode"), "{error}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("target light: ok"));
+        std::fs::write(first.path().join("release"), "done").unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(run(&linked, home.path(), &["test", "--mode", "quick"])
+            .status
+            .success());
+        assert!(linked.join("heavy-ran").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn reserve_refuses_beside_a_gate_then_runs_exact_arguments() {
+    let home = tempfile::tempdir().unwrap();
+    let first = held_until_released("full");
+    let linked = first.path().join("linked");
+    git(
+        first.path(),
+        &["worktree", "add", "--detach", linked.to_str().unwrap()],
+    );
+    let args = [
+        "reserve",
+        "--",
+        "sh",
+        "-c",
+        "printf '%s' \"$1\" > result",
+        "sh",
+        "literal $value; spaces",
+    ];
+    let (mut child, rx, _stdout) = spawn(command(first.path(), home.path(), &["test"]));
+    wait_for(&rx, "starting target 'holder'");
+    let refused = run(&linked, home.path(), &args);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(!linked.join("result").exists());
+    assert!(stderr(&refused).contains(&format!("pid {}", child.id())));
+    std::fs::write(first.path().join("release"), "done").unwrap();
+    assert!(child.wait().unwrap().success());
+    let after = run(&linked, home.path(), &args);
+    assert!(after.status.success(), "{}", stderr(&after));
+    assert_eq!(
+        std::fs::read_to_string(linked.join("result")).unwrap(),
+        "literal $value; spaces"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_heavy_targets_share_the_configured_workers_while_light_work_runs() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"worker_budget":8},"targets":[
+      {"name":"a","timeout_seconds":5,"heavy":true,"runner":"custom","modes":{"quick":{"command":"echo $CARGO_BUILD_JOBS:$NEXTEST_TEST_THREADS:$RUST_TEST_THREADS:$CODEFLOW_ORACLE_WORKERS > a; while ! test -f b; do sleep 0.01; done; test -f light || sleep 0.2"}}},
+      {"name":"b","timeout_seconds":5,"heavy":true,"runner":"custom","modes":{"quick":{"command":"echo $CARGO_BUILD_JOBS:$NEXTEST_TEST_THREADS:$RUST_TEST_THREADS:$CODEFLOW_ORACLE_WORKERS > b; while ! test -f a; do sleep 0.01; done; test -f light || sleep 0.2"}}},
+      {"name":"light","timeout_seconds":5,"heavy":false,"runner":"custom","modes":{"quick":{"command":"touch light"}}}
+    ]}"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    for name in ["a", "b"] {
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(name))
+                .unwrap()
+                .trim(),
+            "4:4:1:4"
+        );
+    }
+    assert!(dir.path().join("light").exists());
+    assert!(stderr(&output).contains("workers for 'a': jobs=4"));
+    assert!(stderr(&output).contains("workers for 'b': jobs=4"));
+}
+
+#[cfg(unix)]
+#[test]
+fn killing_heavy_quick_fallback_and_reservation_reaps_each_command_group() {
+    use std::os::unix::process::CommandExt as _;
+    for mode in ["reserve", "quick", "essential"] {
+        let dir = repo(QUICK_PASS);
+        let home = tempfile::tempdir().unwrap();
+        let args = if mode == "reserve" {
+            vec![
+                "reserve",
+                "--",
+                "sh",
+                "-c",
+                "echo $$ > group; sleep 30 & wait",
+            ]
+        } else {
+            let weight = if mode == "quick" {
+                "\"heavy\":true,"
+            } else {
+                ""
+            };
+            std::fs::write(dir.path().join(".codeflow/test-config.json"), format!(r#"{{"schema_version":"1.0","targets":[{{"name":"heavy","runner":"custom",{weight}"modes":{{"{mode}":{{"command":"echo $$ > group; sleep 30 & wait"}}}}}}]}}"#)).unwrap();
+            vec!["test", "--mode", "quick"]
+        };
+        let mut launch = command(dir.path(), home.path(), &args);
+        launch.process_group(0);
+        let (mut supervisor, rx, _stdout) = spawn(launch);
+        wait_for(
+            &rx,
+            if mode == "reserve" {
+                "[codeflow reserve] started process"
+            } else {
+                "supervising heavy target"
+            },
+        );
+        let group = (0..100)
+            .find_map(|_| {
+                let value = std::fs::read_to_string(dir.path().join("group"))
+                    .unwrap_or_default()
+                    .trim()
+                    .parse::<u32>()
+                    .ok();
+                if value.is_none() {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                value
+            })
+            .expect("reserved command group");
+        if mode == "quick" {
+            assert!(Command::new("kill")
+                .args(["-TERM", "--", &format!("-{}", supervisor.id())])
+                .status()
+                .unwrap()
+                .success());
+        } else {
+            supervisor.kill().unwrap();
+        }
+        supervisor.wait().unwrap();
+        let gone = (0..100).any(|_| {
+            let alive = Command::new("kill")
+                .args(["-0", "--", &format!("-{group}")])
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            if alive {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            !alive
+        });
+        assert!(gone, "reserved group {group} survived its supervisor");
+        let output = run(
+            dir.path(),
+            home.path(),
+            &["reserve", "--", "sh", "-c", "exit 0"],
+        );
+        assert!(output.status.success(), "{}", stderr(&output));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_heavy_target_waits_for_its_requested_share_without_blocking_light_work() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"worker_budget":8},"targets":[
+      {"name":"first","timeout_seconds":5,"heavy":true,"workers":8,"runner":"custom","modes":{"quick":{"command":"test \"$CARGO_BUILD_JOBS\" = 8 && touch first-start && sleep 0.3 && touch first-done"}}},
+      {"name":"second","timeout_seconds":5,"heavy":true,"workers":4,"runner":"custom","modes":{"quick":{"command":"test -f first-done && test \"$CARGO_BUILD_JOBS\" = 4"}}},
+      {"name":"light","timeout_seconds":5,"heavy":false,"runner":"custom","modes":{"quick":{"command":"while ! test -f first-start; do sleep 0.01; done; test ! -f first-done"}}}
+    ]}"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn invalid_worker_budgets_refuse_before_starting_a_target() {
+    for (execution, weight) in [
+        (r#"{"worker_budget":0}"#, r#""heavy":true"#),
+        (r#"{"worker_budget":8}"#, r#""heavy":true,"workers":9"#),
+        (r#"{"worker_budget":8}"#, r#""heavy":false,"workers":1"#),
+        ("{}", r#""heavy":true,"workers":1"#),
+    ] {
+        let dir = repo(&format!(
+            r#"{{"schema_version":"1.0","execution":{execution},"targets":[{{"name":"invalid","runner":"custom",{weight},"modes":{{"quick":{{"command":"touch ran"}}}}}}]}}"#
+        ));
+        let home = tempfile::tempdir().unwrap();
+        let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(!dir.path().join("ran").exists());
+        assert!(stderr(&output).contains("worker_budget"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn essential_refuses_an_unavailable_lock_directory_before_any_target() {
+    let dir = repo(&QUICK_PASS.replace("full", "essential"));
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("locks"), "blocked").unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "essential"]);
+    assert_eq!(output.status.code(), Some(1));
+    let error = stderr(&output);
+    assert!(error.contains("gate lock unavailable"), "{error}");
+    assert!(
+        error.contains("codeflow doctor --check permissions"),
+        "{error}"
+    );
+    assert!(!error.contains("starting target"), "{error}");
+}
+
+/// TSK-1003: with an existing lock file in a lock folder `codeflow` cannot
+/// write, the lock still opens read only, but the holder record cannot be
+/// written. `reserve` refuses without running its command, and the
+/// permissions doctor names the folder.
+#[cfg(unix)]
+#[test]
+fn reserve_refuses_when_the_holder_record_cannot_be_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = repo(QUICK_PASS);
+    let home = tempfile::tempdir().unwrap();
+    let locks = home.path().join("locks");
+    std::fs::create_dir(&locks).unwrap();
+    std::fs::write(locks.join("full-gate.lock"), "").unwrap();
+    std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let reserved = run(
+        dir.path(),
+        home.path(),
+        &["reserve", "--", "touch", "reserved-ran"],
+    );
+    let doctor = run(
+        dir.path(),
+        home.path(),
+        &["doctor", "--check", "permissions"],
+    );
+    std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(reserved.status.code(), Some(1), "{}", stderr(&reserved));
+    assert!(
+        stderr(&reserved).contains("holder record cannot be written"),
+        "{}",
+        stderr(&reserved)
+    );
+    assert!(!dir.path().join("reserved-ran").exists(), "the command ran");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&doctor.stdout),
+        stderr(&doctor)
+    );
+    // A warning, as for every other unwritable gate folder.
+    assert!(
+        report.contains("warn  permissions:") && report.contains("locks: Permission denied"),
+        "{report}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn quick_default_class_controls_undeclared_targets_and_keeps_explicit_light_work() {
+    for class in ["heavy", "light"] {
+        let home = tempfile::tempdir().unwrap();
+        let holder = held_until_released("full");
+        let linked = holder.path().join("linked");
+        git(
+            holder.path(),
+            &["worktree", "add", "--detach", linked.to_str().unwrap()],
+        );
+        std::fs::create_dir_all(linked.join(".codeflow")).unwrap();
+        std::fs::write(linked.join(".codeflow/test-config.json"), format!(r#"{{"schema_version":"1.0","execution":{{"quick_default_class":"{class}","heavy_wait_seconds":1}},"targets":[
+          {{"name":"undeclared","runner":"custom","modes":{{"quick":{{"command":"touch default-ran"}}}}}},
+          {{"name":"light","runner":"custom","heavy":false,"modes":{{"quick":{{"command":"touch light-ran"}}}}}}
+        ]}}"#)).unwrap();
+        let (mut child, rx, _stdout) = spawn(command(holder.path(), home.path(), &["test"]));
+        wait_for(&rx, "starting target 'holder'");
+        let start = Instant::now();
+        let output = run(&linked, home.path(), &["test", "--mode", "quick"]);
+        let error = stderr(&output);
+        assert!(linked.join("light-ran").exists());
+        if class == "heavy" {
+            assert_eq!(output.status.code(), Some(1), "{error}");
+            assert!(start.elapsed() >= Duration::from_secs(1));
+            assert!(!linked.join("default-ran").exists());
+            assert!(error.contains("waiting up to 1s"), "{error}");
+            assert!(error.contains(&format!("pid {}", child.id())), "{error}");
+            assert!(error.contains("full mode"), "{error}");
+            assert!(error.contains(holder.path().to_str().unwrap()), "{error}");
+        } else {
+            assert!(output.status.success(), "{error}");
+            assert!(linked.join("default-ran").exists());
+        }
+        std::fs::write(holder.path().join("release"), "done").unwrap();
+        assert!(child.wait().unwrap().success());
+        let after = run(&linked, home.path(), &["test", "--mode", "quick"]);
+        assert!(after.status.success(), "{}", stderr(&after));
+        assert!(linked.join("default-ran").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
+    let home = tempfile::tempdir().unwrap();
+    let root = held_until_released("essential");
+    let path = home.path().join("locks/full-gate.record");
+    let empty = run(root.path(), home.path(), &["test", "--lock-status"]);
+    assert!(empty.status.success(), "{}", stderr(&empty));
+    assert!(String::from_utf8_lossy(&empty.stdout).contains("no recorded holder"));
+    assert!(
+        !home.path().join("locks").exists(),
+        "status must not create lock directories"
+    );
+    assert!(!root.path().join(".git/codeflow").exists());
+    let (mut child, rx, _stdout) = spawn(command(
+        root.path(),
+        home.path(),
+        &["test", "--mode", "essential"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let before = loop {
+        let record = std::fs::read_to_string(&path).unwrap();
+        if record.contains("group=") {
+            break record;
+        }
+        assert!(Instant::now() < deadline, "target group was not recorded");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let started = before
+        .lines()
+        .find_map(|line| line.strip_prefix("started="))
+        .unwrap();
+    let status = run(root.path(), home.path(), &["test", "--lock-status"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let text = String::from_utf8_lossy(&status.stdout);
+    assert_eq!(text.matches("recorded holder:").count(), 2, "{text}");
+    for value in [
+        format!("pid {}", child.id()),
+        "essential mode".into(),
+        root.path().display().to_string(),
+        format!("started_unix={started}"),
+    ] {
+        assert!(text.contains(&value), "{text}");
+    }
+    assert!(!stderr(&status).contains("starting target"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    assert_eq!(
+        run(root.path(), home.path(), &["test"]).status.code(),
+        Some(1)
+    );
+    std::fs::write(root.path().join("release"), "done").unwrap();
+    assert!(child.wait().unwrap().success());
+    let after = run(root.path(), home.path(), &["test", "--lock-status"]);
+    assert!(after.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&after.stdout)
+            .matches("no recorded holder")
+            .count(),
+        2
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reserve_keeps_the_calling_binary_for_git_hook_dispatch() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(r#"{"schema_version":"1.0","targets":[]}"#);
+    let hook = root.path().join(".git/hooks/pre-commit");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nprintf '%s' \"$CODEFLOW_HOOK_BINARY\" > hook-binary\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = command(
+        root.path(),
+        home.path(),
+        &[
+            "reserve",
+            "--",
+            "git",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "test: dispatch",
+        ],
+    )
+    .env("CODEFLOW_HOOK_BINARY", "unrelated-codeflow")
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let expected = std::env::var_os("CODEFLOW_TEST_GATE_BIN")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_codeflow").into());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("hook-binary")).unwrap(),
+        expected.to_str().unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reserve_refuses_dangling_config_links_before_starting_the_command() {
+    for ancestor in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let root = repo(r#"{"schema_version":"1.0","targets":[]}"#);
+        let path = if ancestor {
+            root.path().join(".codeflow")
+        } else {
+            root.path().join(".codeflow/test-config.json")
+        };
+        if ancestor {
+            std::fs::remove_dir_all(&path).unwrap();
+        } else {
+            std::fs::remove_file(&path).unwrap();
+        }
+        std::os::unix::fs::symlink("missing-config", &path).unwrap();
+        let output = run(
+            root.path(),
+            home.path(),
+            &["reserve", "--", "sh", "-c", "touch started"],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(!root.path().join("started").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_status_refuses_dangling_record_links_instead_of_reporting_an_empty_record() {
+    for ancestor in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let root = repo(r#"{"schema_version":"1.0","targets":[]}"#);
+        let path = if ancestor {
+            home.path().join("locks")
+        } else {
+            std::fs::create_dir(home.path().join("locks")).unwrap();
+            home.path().join("locks/full-gate.lock")
+        };
+        std::os::unix::fs::symlink("missing-record", &path).unwrap();
+        let output = run(root.path(), home.path(), &["test", "--lock-status"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(stderr(&output).contains("cannot read gate lock"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("no recorded holder"));
+    }
 }

@@ -261,16 +261,22 @@ fn choose(git: &Git, ledgers: &[&Ledger], request: &Request) -> Result<RegId, Id
         }
     }
     let kind = request.kind;
-    let history = ledgers
-        .iter()
-        .map(|ledger| ledger.max_seq(kind))
-        .max()
-        .unwrap_or(0);
+    let mut history = 0;
+    for ledger in ledgers {
+        history = history.max(ledger.max_seq(kind)?);
+    }
     let refs = inventory::max_seq_on_refs(git, kind)?;
-    let worktree = inventory::max_seq_in_worktree(git.root(), kind).map_err(|error| {
-        IdsError::Invalid(format!("cannot inventory work records before issuing an ID: {error}; restore readable record directories, then retry"))
+    let worktree = inventory::max_seq_in_worktree(git.root(), kind)?;
+    successor(kind, history.max(refs).max(worktree))
+}
+
+/// The id after the highest issued sequence, or an error when none is left.
+fn successor(kind: Kind, highest: u64) -> Result<RegId, IdsError> {
+    let next = highest.checked_add(1).ok_or_else(|| {
+        IdsError::Invalid(format!(
+            "{kind}-{highest} is the last {kind} number there is, so no next id exists"
+        ))
     })?;
-    let next = history.max(refs).max(worktree) + 1;
     Ok(RegId::canonical(kind, next))
 }
 
@@ -381,13 +387,14 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
     if output.status.success() {
         return Ok(Fetched::Ok);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let raw_stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = crate::git::remote_query::display_urls(raw_stderr.trim());
     if stderr.is_empty() {
         return Err(IdsError::Git(format!(
             "fetching the registry from {remote} failed without a message"
         )));
     }
-    let lower = stderr.to_lowercase();
+    let lower = raw_stderr.to_lowercase();
     if lower.contains("couldn't find remote ref") || lower.contains("could not find remote ref") {
         let name = format!("refs/heads/{}", super::REGISTRY_BRANCH);
         match crate::git::remote_query::ls_remote(git.root(), &["--exit-code", remote, &name]) {
@@ -483,6 +490,7 @@ fn classify_push(text: &str) -> Pushed {
         .filter(|line| !line.is_empty() && *line != "Done")
         .collect::<Vec<_>>()
         .join("; ");
+    let reason = crate::git::remote_query::display_urls(&reason);
     let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
     if has(&["codeflow pre-push"]) {
         return Pushed::Failed(IdsError::Refused(reason));
@@ -1022,6 +1030,38 @@ pub fn resume(root: &Path, id: &RegId) -> Result<Unwritten, IdsError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_last_sequence_has_no_successor() {
+        use crate::ids::Kind;
+        assert_eq!(
+            super::successor(Kind::Tsk, 999).unwrap().to_string(),
+            "TSK-1000"
+        );
+        assert_eq!(
+            super::successor(Kind::Adr, u64::MAX - 1)
+                .unwrap()
+                .to_string(),
+            "ADR-18446744073709551615"
+        );
+        let error = super::successor(Kind::Tsk, u64::MAX)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no next id exists"), "{error}");
+    }
+
+    #[test]
+    fn failed_push_redacts_urls_without_changing_classification() {
+        let text =
+            "To https://u:FAKE_REGISTRY_TOKEN@host.invalid/repo\nfatal: authentication failed";
+        let super::Pushed::Failed(crate::ids::IdsError::Permission(reason)) =
+            super::classify_push(text)
+        else {
+            panic!("authentication failure must stay a permission failure");
+        };
+        assert!(!reason.contains("FAKE_REGISTRY_TOKEN"));
+        assert!(reason.contains("https://***@host.invalid/repo"));
+    }
+
     #[test]
     fn r20_pending_registry_query_failure_refuses() {
         let root = tempfile::tempdir().unwrap();

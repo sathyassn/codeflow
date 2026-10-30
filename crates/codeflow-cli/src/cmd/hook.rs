@@ -20,6 +20,7 @@
 //! - `delegate-turn`: schema-v2 state mode handles the full lifecycle without
 //!   tmux; legacy result mode preserves its existing terminal signal contract.
 
+use super::shown;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
@@ -92,6 +93,21 @@ pub fn run(args: &HookArgs) -> i32 {
         );
         return 2;
     }
+    let guard = match args.name {
+        HookName::GitGuard => Some("git-guard"),
+        HookName::ExecGuard => Some("exec-guard"),
+        HookName::EditGuard => Some("edit-guard"),
+        _ => None,
+    };
+    if let Some(guard) = guard {
+        if let Err(error) = arm_guard_deadline(guard) {
+            eprintln!(
+                "codeflow {guard}: cannot start the guard's deadline ({error}); refusing",
+                error = shown(&error)
+            );
+            return 2;
+        }
+    }
     let stdin = if matches!(args.name, HookName::DelegateTurn) && args.state_dir.is_some() {
         match read_bounded_utf8(std::io::stdin(), MAX_SCHEMA_HOOK_INPUT_BYTES) {
             Ok(stdin) => stdin,
@@ -99,14 +115,17 @@ pub fn run(args: &HookArgs) -> i32 {
                 // A schema-v2 input that cannot be inspected must not advance
                 // the harness or the lifecycle. Exit 2 is the fail-closed hook
                 // outcome; terminal callers recover through the bounded waiter.
-                eprintln!("codeflow delegate-turn: {error}");
+                eprintln!("codeflow delegate-turn: {error}", error = shown(&error));
                 return 2;
             }
         }
     } else {
         let mut stdin = String::new();
         if let Err(error) = std::io::stdin().read_to_string(&mut stdin) {
-            eprintln!("codeflow hook: cannot read hook input: {error}");
+            eprintln!(
+                "codeflow hook: cannot read hook input: {error}",
+                error = shown(&error)
+            );
             return 2;
         }
         stdin
@@ -123,6 +142,79 @@ pub fn run(args: &HookArgs) -> i32 {
     }
 }
 
+/// Refuse on the guard's own clock (TSK-1082). A harness that times a
+/// guard out lets the tool call through in Grok and Codex, and in Claude
+/// without `onFailure`, so a guard that has not decided within
+/// [`GUARD_DEADLINE_SECS`](codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS),
+/// inside the shipped hook timeout, ends its own process with exit 2 and a
+/// reason on stderr, which every harness reads as a block. The thread
+/// starts before the payload is read, so a stalled stdin counts too; a
+/// guard that decides in time exits first and the thread dies with it.
+fn arm_guard_deadline(guard: &'static str) -> std::io::Result<()> {
+    use codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS;
+    std::thread::Builder::new()
+        .name("guard-deadline".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(GUARD_DEADLINE_SECS));
+            let finding = codeflow_core::remedy::Finding::new(
+                format!(
+                    "BLOCKED: the guard reached no decision within {GUARD_DEADLINE_SECS} seconds, so it cannot show the call is allowed; refusing"
+                ),
+                codeflow_core::remedy::GUARD_DEADLINE.remedy(),
+            );
+            let line = format!("{}\n", finding.line(&format!("codeflow {guard}"), "error"));
+            // The reason goes out without std's stderr lock, which the main
+            // thread may hold, and the exit never waits on it for longer than
+            // REFUSAL_WRITE_WAIT: a stderr pipe nobody reads blocks a raw
+            // write too, and the exit has to come first.
+            write_within(line.into_bytes(), REFUSAL_WRITE_WAIT, |bytes| {
+                let _ = write_stderr_unlocked(bytes);
+            });
+            std::process::exit(2);
+        })
+        .map(drop)
+}
+
+/// How long the deadline's refusal waits for its reason to be written
+/// before it exits 2 regardless.
+const REFUSAL_WRITE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Run `write` on its own thread and wait at most `wait` for it to finish;
+/// whether it finished in time. A write that blocks keeps its thread, which
+/// the process exit ends.
+fn write_within(
+    bytes: Vec<u8>,
+    wait: std::time::Duration,
+    write: impl FnOnce(&[u8]) + Send + 'static,
+) -> bool {
+    let (done, finished) = std::sync::mpsc::channel();
+    let started = std::thread::Builder::new()
+        .name("guard-deadline-write".into())
+        .spawn(move || {
+            write(&bytes);
+            let _ = done.send(());
+        });
+    started.is_ok() && finished.recv_timeout(wait).is_ok()
+}
+
+/// Write to the process's stderr through a duplicate of its descriptor or
+/// handle, which never takes the lock `std::io::stderr()` writes hold.
+fn write_stderr_unlocked(bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let owned = {
+        use std::os::fd::AsFd as _;
+        std::io::stderr().as_fd().try_clone_to_owned()?
+    };
+    #[cfg(windows)]
+    let owned = {
+        use std::os::windows::io::AsHandle as _;
+        std::io::stderr().as_handle().try_clone_to_owned()?
+    };
+    let mut file = std::fs::File::from(owned);
+    file.write_all(bytes)?;
+    file.flush()
+}
+
 /// The advisory entry: dispatch on the payload's event. Output writes do not
 /// panic, so a closed stdout does not fail the session. Unreadable repository
 /// state is reported as a nonzero result. The guards never pass through here.
@@ -133,18 +225,24 @@ fn session_orient(stdin: &str) -> i32 {
             let root = match super::project_root(&cwd) {
                 Ok(root) => root,
                 Err(error) => {
-                    eprintln!("codeflow: cannot read project root: {error}");
+                    eprintln!(
+                        "codeflow: cannot read project root: {error}",
+                        error = shown(&error)
+                    );
                     return 2;
                 }
             };
             let digest = orient::generate(&root);
             let mut out = std::io::stdout();
-            let _ = write!(out, "{digest}");
+            // The digest quotes branch names and record text: a block, each
+            // line written under the sink rule (TSK-388).
+            let _ = out.write_all(digest.as_str().as_bytes());
             // The digest's own off-switch also silences the guidance block.
             if !digest.is_empty() {
                 let source = guidance::payload_source(stdin).unwrap_or_default();
                 if let Some(block) = guidance::session_guidance(&root, &source) {
-                    let _ = write!(out, "\n{block}");
+                    let _ = out.write_all(b"\n");
+                    let _ = out.write_all(block.as_str().as_bytes());
                 }
             }
             let _ = out.flush();
@@ -162,14 +260,17 @@ fn prompt_reminder(stdin: &str) -> i32 {
         &match super::project_root(&cwd) {
             Ok(root) => root,
             Err(error) => {
-                eprintln!("codeflow: cannot read project root: {error}");
+                eprintln!(
+                    "codeflow: cannot read project root: {error}",
+                    error = shown(&error)
+                );
                 return 2;
             }
         },
         stdin,
     ) {
         let mut out = std::io::stdout();
-        let _ = writeln!(out, "{line}");
+        let _ = term_writeln!(out, "{line}");
         let _ = out.flush();
     }
     0
@@ -204,7 +305,7 @@ fn delegate_turn(args: &HookArgs, stdin: &str) -> i32 {
             match delegate_turn::record_and_signal(&config, stdin) {
                 Ok(()) => 0,
                 Err(error) => {
-                    eprintln!("codeflow delegate-turn: {error}");
+                    eprintln!("codeflow delegate-turn: {error}", error = shown(&error));
                     1
                 }
             }
@@ -213,7 +314,7 @@ fn delegate_turn(args: &HookArgs, stdin: &str) -> i32 {
             match codeflow_core::delegate::handle_hook(&run_id, state_dir, stdin) {
                 Ok(()) => 0,
                 Err(error) => {
-                    eprintln!("codeflow delegate-turn: {error}");
+                    eprintln!("codeflow delegate-turn: {error}", error = shown(&error));
                     if codeflow_core::delegate::is_prompt_submission(stdin) {
                         2
                     } else {
@@ -232,7 +333,59 @@ fn delegate_turn(args: &HookArgs, stdin: &str) -> i32 {
     }
 }
 
+// Quoted or escaped words use the established POSIX grammar only when the
+// tool proves that grammar. Portable literal words also permit recovery in
+// other shells; repository validation still proves a force-removal target.
+fn worktree_recovery(
+    payload: &git_guard::HookPayload,
+    command: &str,
+    cwd: &std::path::Path,
+) -> bool {
+    let portable_literal = command
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || " \t/._-:".contains(c));
+    if !portable_literal && payload.tool_name != "Bash" {
+        let Ok(shell) = std::env::var_os("SHELL")
+            .map(std::ffi::OsString::into_string)
+            .transpose()
+        else {
+            return false;
+        };
+        if !exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)) {
+            return false;
+        }
+    }
+    codeflow_core::hooks::repo::worktree_recovery(command, cwd)
+}
+
+fn inspect_discard(
+    payload: &git_guard::HookPayload,
+    command: &str,
+    cwd: &std::path::Path,
+    query: &git_guard::DiscardQuery<'_>,
+) -> Result<Option<String>, String> {
+    // Policy and command checks still run. Only the discard-state probe
+    // accepts a registered absent tree, with the original shell grammar.
+    if query.target.is_none()
+        && matches!(
+            query.intent,
+            codeflow_core::hooks::git_discard::Intent::ForceRemoveWorktree(_)
+        )
+        && worktree_recovery(payload, command, cwd)
+    {
+        return Ok(None);
+    }
+    if query.requires_absence {
+        return Err(
+            "literal worktree recovery requires a proven-absent checkout and known shell grammar"
+                .into(),
+        );
+    }
+    codeflow_core::hooks::git_discard::inspect(cwd, query.target, query.intent)
+}
+
 fn git_guard(stdin: &str) -> i32 {
+    let _facts = edit_guard::RepoFactsScope::enter();
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
         Err(e) => {
@@ -253,7 +406,13 @@ fn git_guard(stdin: &str) -> i32 {
     let root = match super::project_root(&cwd) {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: cannot read project root: {error}");
+            if worktree_recovery(&payload, command, &cwd) {
+                return 0;
+            }
+            eprintln!(
+                "codeflow: cannot read project root: {error}",
+                error = shown(&error)
+            );
             return 2;
         }
     };
@@ -263,29 +422,30 @@ fn git_guard(stdin: &str) -> i32 {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
                 return 0;
             }
-            eprintln!("codeflow git-guard: {error}");
+            eprintln!("codeflow git-guard: {error}", error = shown(&error));
             return 2;
         }
     };
     let policy = &authority.policy;
     let repo_info = match codeflow_core::hooks::RepoInfo::discover(&root) {
         Ok(value) => value,
-        Err(error) => {
-            eprintln!("codeflow git-guard: {error}");
-            return 2;
-        }
+        Err(error) => return guard_refusal(&error),
     };
     let branch = repo_info
         .as_ref()
         .map(|info| info.branch.clone())
         .unwrap_or_default();
+    // Whether non-ASCII ref names may alias here, probed once for this
+    // invocation; outside a repository it stays undecided, failing closed.
+    let _aliasing = repo_info.as_ref().map(|info| {
+        codeflow_core::hooks::policy::NonAsciiAliasingScope::set(
+            codeflow_core::hooks::repo::case_insensitive_git_dir(&info.common_dir),
+        )
+    });
     // The session's root checkout, when the command runs in one (TSK-165).
     let root_checkout = match codeflow_core::root_checkout::RootCheckout::at(&root, &policy.git) {
         Ok(value) => value,
-        Err(error) => {
-            eprintln!("codeflow git-guard: {error}");
-            return 2;
-        }
+        Err(error) => return guard_refusal(&error),
     };
 
     let lookup = gh_pr_base;
@@ -306,8 +466,8 @@ fn git_guard(stdin: &str) -> i32 {
         git_guard::read_branch_name(&branch_cwd, target, name)
     };
     let discard_cwd = cwd.clone();
-    let discard = move |query: &git_guard::DiscardQuery<'_>| {
-        codeflow_core::hooks::git_discard::inspect(&discard_cwd, query.target, query.intent)
+    let discard = |query: &git_guard::DiscardQuery<'_>| {
+        inspect_discard(&payload, command, &discard_cwd, query)
     };
     let ctx = git_guard::GuardContext {
         policy: &policy.git,
@@ -332,6 +492,12 @@ fn git_guard(stdin: &str) -> i32 {
         &authority.source,
     );
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
+}
+
+/// A git-guard refusal for an input it cannot read: the error, escaped.
+fn guard_refusal(error: &dyn std::fmt::Display) -> i32 {
+    eprintln!("codeflow git-guard: {}", shown(error));
+    2
 }
 
 /// Grok shows only a hook's first stderr line as the reason it denied a
@@ -359,7 +525,11 @@ fn grok_deny(
     let mut reason: Vec<String> = violations.iter().map(|v| v.render(plane)).collect();
     reason.push(format!("policy source: {source}"));
     let decision = serde_json::json!({"decision": "deny", "reason": reason.join("\n")});
-    let _ = writeln!(out, "{decision}");
+    let _ = term_writeln!(
+        out,
+        "{}",
+        codeflow_core::git::display_json(&decision.to_string())
+    );
     let _ = out.flush();
 }
 
@@ -427,7 +597,7 @@ fn shell_call(
         Ok(p) => p,
         Err(e) => {
             let finding = payload_finding("exec-guard", &e);
-            let _ = writeln!(err, "{}", finding.line("codeflow exec-guard", "error"));
+            let _ = term_writeln!(err, "{}", finding.line("codeflow exec-guard", "error"));
             return Err(e);
         }
     };
@@ -449,13 +619,14 @@ fn exec_guard_answer(
     root: Option<&std::path::Path>,
 ) -> i32 {
     if !violations.is_empty() {
-        let _ = writeln!(err, "policy source: {source}");
+        let _ = term_writeln!(err, "policy source: {source}");
     }
     grok_deny(out, stdin, "exec-guard", violations, source);
     super::render_outcome_to(err, "exec-guard", root, violations, &[], 2)
 }
 
 fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let _facts = edit_guard::RepoFactsScope::enter();
     let (payload, command) = match shell_call(stdin, err) {
         Ok(Some(call)) => call,
         Ok(None) => return 0,
@@ -471,7 +642,13 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let root = match super::project_root(&cwd) {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: cannot read project root: {error}");
+            if worktree_recovery(&payload, command, &cwd) {
+                return 0;
+            }
+            eprintln!(
+                "codeflow: cannot read project root: {error}",
+                error = shown(&error)
+            );
             return 2;
         }
     };
@@ -482,7 +659,7 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
                 return 0;
             }
-            let _ = writeln!(err, "codeflow hook: {error}");
+            let _ = term_writeln!(err, "codeflow hook: {error}", error = shown(&error));
             return 2;
         }
     };
@@ -492,7 +669,7 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         .map(std::ffi::OsString::into_string)
         .transpose()
     else {
-        let _ = writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
+        let _ = term_writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
         return 2;
     };
     let violations = exec_guard::evaluate_in(
@@ -507,11 +684,12 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
 }
 
 fn edit_guard(stdin: &str) -> i32 {
+    let _facts = edit_guard::RepoFactsScope::enter();
     let request = match edit_guard::parse_payload(stdin) {
         Ok(Some(request)) => request,
         Ok(None) => return 0,
         Err(error) => {
-            eprintln!("codeflow edit-guard: git.hook_integrity: cannot inspect edit payload: {error}; the operator repairs the edit hook payload in {HARNESS_HOOK_FILES}");
+            eprintln!("codeflow edit-guard: git.hook_integrity: cannot inspect edit payload: {error}; the operator repairs the edit hook payload in {HARNESS_HOOK_FILES}", error = shown(&error));
             return 2;
         }
     };
@@ -523,14 +701,17 @@ fn edit_guard(stdin: &str) -> i32 {
     let root = match super::project_root(&cwd) {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: cannot read project root: {error}");
+            eprintln!(
+                "codeflow: cannot read project root: {error}",
+                error = shown(&error)
+            );
             return 2;
         }
     };
     let authority = match codeflow_core::hooks::landed_policy::load(&root) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("codeflow hook: {error}");
+            eprintln!("codeflow hook: {error}", error = shown(&error));
             return 2;
         }
     };
@@ -544,7 +725,7 @@ fn edit_guard(stdin: &str) -> i32 {
     let repo = match codeflow_core::hooks::RepoInfo::discover(&root) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("codeflow edit-guard: {error}");
+            eprintln!("codeflow edit-guard: {error}", error = shown(&error));
             return 2;
         }
     };
@@ -570,7 +751,7 @@ fn edit_guard(stdin: &str) -> i32 {
             super::render_outcome("edit-guard", &root, &findings, &[], 2)
         }
         Err(error) => {
-            eprintln!("codeflow edit-guard: git.hook_integrity: cannot inspect edit target: {error}; the operator inspects the named path before editing");
+            eprintln!("codeflow edit-guard: git.hook_integrity: cannot inspect edit target: {error}; the operator inspects the named path before editing", error = shown(&error));
             2
         }
     }
@@ -620,14 +801,20 @@ fn session_summary(stdin: &str) -> i32 {
         &match super::project_root(&cwd) {
             Ok(root) => root,
             Err(error) => {
-                eprintln!("codeflow: cannot read project root: {error}");
+                eprintln!(
+                    "codeflow: cannot read project root: {error}",
+                    error = shown(&error)
+                );
                 return 2;
             }
         },
         stdin,
     ) {
         Ok(Some(path)) => {
-            eprintln!("codeflow session-summary: recorded to {}", path.display());
+            eprintln!(
+                "codeflow session-summary: recorded to {}",
+                codeflow_core::git::display_path(&path)
+            );
             0
         }
         Ok(None) => {
@@ -652,6 +839,40 @@ fn session_summary(stdin: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-1082 review nit 3: the deadline's reason is written without the
+    /// lock `std::io::stderr()` holds, so a main thread holding that lock
+    /// cannot keep the refusal from being written.
+    #[test]
+    fn the_deadline_writes_its_reason_while_another_thread_holds_the_stderr_lock() {
+        let held = std::io::stderr().lock();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let written = super::write_stderr_unlocked(
+                b"codeflow guard-deadline test: written past a held stderr lock\n",
+            );
+            let _ = done.send(written.is_ok());
+        });
+        let result = finished.recv_timeout(std::time::Duration::from_secs(10));
+        drop(held);
+        assert_eq!(result, Ok(true));
+    }
+
+    /// TSK-1082 review nit 3: a write that never finishes, such as one to a
+    /// stderr pipe nobody reads, holds the exit back by at most the wait.
+    #[test]
+    fn a_write_that_never_finishes_holds_the_exit_back_only_for_the_wait() {
+        let (_never, blocked) = std::sync::mpsc::channel::<()>();
+        let blocked = std::sync::Mutex::new(blocked);
+        let wait = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let finished = super::write_within(b"x".to_vec(), wait, move |_| {
+            let _ = blocked.lock().unwrap().recv();
+        });
+        assert!(!finished);
+        assert!(started.elapsed() < wait + std::time::Duration::from_secs(5));
+        assert!(super::write_within(b"x".to_vec(), wait, |_| {}));
+    }
+
     #[test]
     fn r16_guard_payload_parse_errors_refuse() {
         assert_eq!(super::git_guard("{"), 2);

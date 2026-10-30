@@ -15,7 +15,10 @@ use codeflow_core::git::GitName;
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::amendment;
-use codeflow_core::workgraph::classify::{is_spike_path, path_sets, ProjectPaths};
+use codeflow_core::workgraph::classify::{
+    is_secret_scan_exemption, is_spike_path, path_sets, validate_secret_scan_exemption_entry,
+    ProjectPaths,
+};
 use codeflow_core::workgraph::line_adoption::AdoptionReport;
 use codeflow_core::workgraph::{
     check_epic_line, check_epic_line_with_adoptions, durable_work_tracking_enabled,
@@ -121,6 +124,9 @@ fn epic_list(value: &str) -> Option<TaskLine> {
 pub(super) enum Class {
     /// Tracked work for the task named in the body.
     Tracked { task_id: String },
+    /// Only the scanner's ignore file; dependency readiness does not block
+    /// the exemption from reaching the trusted base before its work lands.
+    SecretScanExemption(ExemptionWork),
     /// A release pull request (SPC-013 R-120): a release head whose body
     /// names the task the release checks select as its owner. They judge
     /// what the range brings and bind that task's completion to the head,
@@ -137,6 +143,37 @@ pub(super) enum Class {
     /// (ADR-0074); small edits land on it directly, and each nested project
     /// lands through its own repository.
     RootBranch(String),
+}
+
+/// The existing unit whose reviewed false positive an exemption names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ExemptionWork {
+    Task(String),
+    Epic(String),
+}
+
+impl Class {
+    pub(super) fn task_id(&self) -> Option<&str> {
+        match self {
+            Self::Tracked { task_id }
+            | Self::ReleaseIntegration { task_id }
+            | Self::SecretScanExemption(ExemptionWork::Task(task_id)) => Some(task_id),
+            _ => None,
+        }
+    }
+
+    /// Task review rows bind ordinary work and its exemption, while release
+    /// integration has its own acceptance check.
+    pub(super) fn review_task(&self) -> Option<&str> {
+        match self {
+            Self::ReleaseIntegration { .. } => None,
+            _ => self.task_id(),
+        }
+    }
+
+    pub(super) fn is_secret_scan_exemption(&self) -> bool {
+        matches!(self, Self::SecretScanExemption(_))
+    }
 }
 
 /// A release head (SPC-013 R-120) and the one task the release checks
@@ -186,7 +223,11 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                     ));
                 }
             }
-            Ok(Class::Tracked { task_id })
+            if is_secret_scan_exemption(input.files) {
+                Ok(Class::SecretScanExemption(ExemptionWork::Task(task_id)))
+            } else {
+                Ok(Class::Tracked { task_id })
+            }
         }
         Some(TaskLine::Epic(epic)) => {
             if input.branch_task.is_some() {
@@ -202,7 +243,14 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                     None => Err(format!("'{}' is not a verified epic line", input.branch)),
                 };
             }
-            planning(input, vec![epic])
+            if is_secret_scan_exemption(input.files) {
+                if let Some(problem) = (input.epic_problem)(&epic) {
+                    return Err(problem);
+                }
+                Ok(Class::SecretScanExemption(ExemptionWork::Epic(epic)))
+            } else {
+                planning(input, vec![epic])
+            }
         }
         Some(TaskLine::Epics(epics)) => {
             if input.branch_task.is_some() {
@@ -274,12 +322,13 @@ pub(super) fn root_branch_at(root: &Path, base: &str) -> Result<Option<String>, 
 /// Whether durable work tracking is on at the head or at the target, so a
 /// pull request cannot switch it off for itself.
 pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool, String> {
-    let at_target = range.map(|range| durable_work_tracking_enabled_at(root, range.base));
-    match (durable_work_tracking_enabled(root), at_target) {
-        (Err(error), _) => Err(error.to_string()),
-        (_, Some(Err(error))) => Err(error),
-        (Ok(head), target) => Ok(head || matches!(target, Some(Ok(true)))),
+    let mut enabled = durable_work_tracking_enabled(root).map_err(|error| error.to_string())?;
+    if let Some(range) = range {
+        for revision in [range.base, range.head] {
+            enabled |= durable_work_tracking_enabled_at(root, revision)?;
+        }
     }
+    Ok(enabled)
 }
 
 /// With durable tracking on, an `integration/*` head that is not a release
@@ -600,7 +649,11 @@ pub(super) fn dispatch(
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
     };
-    let class = match classify(&input).map(|class| release_class(release, class)) {
+    let class = match classify(&input)
+        .and_then(|class| cancellation_entry(root, branch, range, &files, class))
+        .and_then(|class| exemption_entry(root, range, &changes, class))
+        .map(|class| release_class(release, class))
+    {
         Ok(class) => class,
         Err(reason) => {
             push(
@@ -612,9 +665,9 @@ pub(super) fn dispatch(
             return None;
         }
     };
+    announce(&class, epic_line.as_ref());
     match &class {
-        Class::Tracked { task_id } => {
-            println!("codeflow ci: pull request class: tracked {task_id} (from the Task: line)");
+        Class::Tracked { task_id } | Class::SecretScanExemption(ExemptionWork::Task(task_id)) => {
             let own_branch = input.branch_task.as_deref() == Some(task_id.as_str());
             let level = git.work_planning_level();
             let anchor = Anchor {
@@ -623,17 +676,15 @@ pub(super) fn dispatch(
                 branch,
                 base: range.base,
                 head: range.head,
+                exemption: class.is_secret_scan_exemption(),
             };
             tracked(root, task_id, anchor, &files, &changes, tagged);
             range_journey(root, git, task_id, range, tagged);
         }
         Class::ReleaseIntegration { task_id } => {
-            println!(
-                "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
-            );
             range_journey(root, git, task_id, range, tagged);
         }
-        untracked => announce(untracked, epic_line.as_ref()),
+        _ => {}
     }
     Some(class)
 }
@@ -647,15 +698,99 @@ fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
         .map_err(Clone::clone)
 }
 
+/// The task-named cancellation is an amendment and starts no work. Both
+/// entry points use the same merge-base and range validation.
+fn cancellation_entry(
+    root: &Path,
+    branch: &str,
+    range: &Range<'_>,
+    files: &[GitName],
+    class: Class,
+) -> Result<Class, String> {
+    if branch.starts_with("plan/") {
+        if let Class::Tracked { task_id } = &class {
+            if let Some(cancelled) = amendment::cancelled_standalone(
+                root,
+                range.base,
+                range.head,
+                files,
+                amendment::CancellationJudge::PullRequest(task_id),
+            )? {
+                if cancelled != *task_id {
+                    return Err(format!(
+                        "`Task: {task_id}` does not name the cancelled task {cancelled}"
+                    ));
+                }
+                return Ok(Class::PlanningOnly { epics: Vec::new() });
+            }
+        }
+    }
+    Ok(class)
+}
+
+/// A push has no Task line yet, and the same `plan/` range may be an
+/// epic's planning amendment. Refuse only a new cancelled standalone record
+/// that no `Task:` line could make valid; the PR binds the rest.
+pub(super) fn cancellation_push_check(
+    root: &Path,
+    branch: &str,
+    range: Option<&Range<'_>>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    let Some(range) = range.filter(|_| branch.starts_with("plan/")) else {
+        return;
+    };
+    let result = range_changes(root, range.base, range.head).and_then(|changes| {
+        let paths: Vec<_> = changes.into_iter().map(|(_, path)| path).collect();
+        amendment::cancelled_standalone(
+            root,
+            range.base,
+            range.head,
+            &paths,
+            amendment::CancellationJudge::Push,
+        )
+    });
+    if let Err(problem) = result {
+        push(tagged, RULE, problem, HINT);
+    }
+}
+
+/// An exemption adds or edits the regular file; it cannot remove or replace it.
+/// A task-named range of another shape stays ordinary tracked work, as it was
+/// before the class existed; an epic-named one is refused.
+fn exemption_entry(
+    root: &Path,
+    range: &Range<'_>,
+    changes: &[(String, GitName)],
+    class: Class,
+) -> Result<Class, String> {
+    let Class::SecretScanExemption(work) = class else {
+        return Ok(class);
+    };
+    let shape = if matches!(changes, [(status, _)] if status == "A" || status == "M") {
+        validate_secret_scan_exemption_entry(root, range.base, range.head)
+    } else {
+        Err("a secret-scan exemption must add or modify .gitleaksignore; deletions and type changes are not exemptions".into())
+    };
+    match (shape, work) {
+        (Ok(()), work) => Ok(Class::SecretScanExemption(work)),
+        (Err(_), ExemptionWork::Task(task_id)) => Ok(Class::Tracked { task_id }),
+        (Err(problem), ExemptionWork::Epic(_)) => Err(problem),
+    }
+}
+
 /// Print the class and the direct commits its reviewer is accepting.
 fn announce(class: &Class, line: Option<&EpicLineResult>) {
     let adoptions = line
         .and_then(|result| result.as_ref().ok())
         .map(|(_, report)| report);
     match class {
+        Class::SecretScanExemption(ExemptionWork::Task(id) | ExemptionWork::Epic(id)) => println!(
+            "codeflow ci: pull request class: secret-scan exemption for {id} (only .gitleaksignore; dependency readiness is not required)"
+        ),
         Class::PlanningOnly { epics } => println!(
             "codeflow ci: pull request class: planning-only amendment of {}",
-            epics.join(", ")
+            if epics.is_empty() { "no epic".to_string() } else { epics.join(", ") }
         ),
         Class::EpicLine(epic) => {
             print!("codeflow ci: pull request class: epic integration line of {epic}");
@@ -687,7 +822,12 @@ fn announce(class: &Class, line: Option<&EpicLineResult>) {
         Class::RootBranch(name) => {
             println!("codeflow ci: pull request class: workspace root branch {name}");
         }
-        Class::Tracked { .. } | Class::ReleaseIntegration { .. } => {}
+        Class::Tracked { task_id } => println!(
+            "codeflow ci: pull request class: tracked {task_id} (from the Task: line)"
+        ),
+        Class::ReleaseIntegration { task_id } => println!(
+            "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
+        ),
     }
 }
 
@@ -742,7 +882,7 @@ fn selection_check(
 }
 
 const RULE: &str = "work.classification";
-const HINT: &str = "add exactly one Task: TSK-NNN, or Task: EPC-NNN for the epic's planning change or integration line; where durable tracking is inactive, name the tracked unit";
+const HINT: &str = codeflow_core::remedy::WORK_CLASSIFICATION.text;
 
 fn push(tagged: &mut Vec<super::TaggedViolation>, rule: &str, message: String, hint: &str) {
     tagged.push(super::TaggedViolation {
@@ -768,6 +908,7 @@ struct Anchor<'a> {
     branch: &'a str,
     base: &'a str,
     head: &'a str,
+    exemption: bool,
 }
 
 fn anchor_failure(
@@ -795,30 +936,12 @@ fn tracked(
     if branch.starts_with("spike/") {
         spike_paths(task_id, files, tagged);
     }
-    // Matched as bytes: an added record whose name is not valid UTF-8 is
-    // never this task's own record, so it counts against the task.
-    let added_records: Vec<&GitName> = changes
-        .iter()
-        .filter(|(status, _)| status == "A")
-        .map(|(_, path)| path)
-        .filter(|path| is_added_work_record(path.bytes()))
-        .collect();
-    if added_records.iter().any(|path| {
-        path.rule_text()
-            .map_or(true, |path| !is_record_of(path, task_id))
-    }) || (added_records.len() > 1)
-    {
-        push(
-            tagged,
-            RULE,
-            "a task PR may add only its own standalone task record".into(),
-            "put the other records in the epic amendment",
-        );
-    }
+    task_record_additions(root, task_id, anchor, changes, tagged);
     // A range of planning records only that corrects a completed
     // standalone task, named by the Task line or followed up by the task
     // it names in any status, starts no work, so there is nothing to admit
-    // (ADR-0080). Its own branch keeps the own-branch preflight.
+    // (ADR-0080). A validated redaction of the named record also starts no
+    // work (ADR-0084). Its own branch keeps the own-branch preflight.
     if !anchor.own_branch
         && codeflow_core::workgraph::acceptance::records_correction(
             root,
@@ -830,7 +953,7 @@ fn tracked(
         .unwrap_or(false)
     {
         println!(
-            "codeflow ci: this range of planning records only corrects the records of a completed standalone task that {task_id} names or follows up, and starts no work, so the anchored preflight does not apply (ADR-0080)"
+            "codeflow ci: this range only corrects a completed standalone record that {task_id} names or follows up, or redacts the named record, and starts no work, so the anchored preflight does not apply (ADR-0080, ADR-0084)"
         );
         return;
     }
@@ -865,9 +988,12 @@ fn tracked(
             return;
         }
     };
-    match codeflow_core::workgraph::work_start::check_work_admission(
-        root, task_id, &target, branch, head,
-    ) {
+    let admission = if anchor.exemption {
+        codeflow_core::workgraph::work_start::check_secret_scan_exemption_admission
+    } else {
+        codeflow_core::workgraph::work_start::check_work_admission
+    };
+    match admission(root, task_id, &target, branch, head) {
         Ok(report) => {
             if report.work_type.as_deref() == Some("spike") && !branch.starts_with("spike/") {
                 spike_paths(task_id, files, tagged);
@@ -887,6 +1013,57 @@ fn tracked(
             codeflow_core::remedy::WORK_START_MERGE_PLANNING
                 .with(&[("target", &target), ("id", task_id)]),
         ),
+    }
+}
+
+/// Imported records keep their proven source; new records belong to this task.
+fn task_record_additions(
+    root: &Path,
+    task_id: &str,
+    anchor: Anchor<'_>,
+    changes: &[(String, GitName)],
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    let imported_paths = match codeflow_core::workgraph::acceptance::imported_record_paths(
+        root,
+        anchor.base,
+        anchor.head,
+    ) {
+        Ok(paths) => paths,
+        Err(error) => {
+            push(
+                tagged,
+                codeflow_core::workgraph::acceptance::IMPORT_RULE,
+                error,
+                "fetch and verify the named source history before classifying imported records",
+            );
+            return;
+        }
+    };
+    // Matched as bytes: an added record whose name is not valid UTF-8 is
+    // never this task's own record, so it counts against the task.
+    let added_records: Vec<&GitName> = changes
+        .iter()
+        .filter(|(status, _)| status == "A")
+        .map(|(_, path)| path)
+        .filter(|path| is_added_work_record(path.bytes()))
+        .filter(|path| {
+            !imported_paths
+                .iter()
+                .any(|imported| imported.as_bytes() == path.bytes())
+        })
+        .collect();
+    if added_records.iter().any(|path| {
+        path.rule_text()
+            .map_or(true, |path| !is_record_of(path, task_id))
+    }) || (added_records.len() > 1)
+    {
+        push(
+            tagged,
+            RULE,
+            "a task PR may add only its own standalone task record".into(),
+            "put the other records in the epic amendment",
+        );
     }
 }
 
@@ -990,7 +1167,7 @@ pub(super) fn range_changes(
 /// The raw `git diff -z --name-status` output for the net change from
 /// `base` to `head`.
 fn name_status(root: &Path, base: &str, head: &str) -> Result<Vec<u8>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args([
@@ -1101,6 +1278,7 @@ mod tests {
                     dir.path(),
                     "TSK-001",
                     Anchor {
+                        exemption: false,
                         own_branch,
                         level: PolicyLevel::Off,
                         branch: "task/TSK-001-test",
@@ -1131,6 +1309,7 @@ mod tests {
                 dir.path(),
                 "TSK-001",
                 Anchor {
+                    exemption: false,
                     own_branch,
                     level: PolicyLevel::Off,
                     branch: "spike/TSK-001-test",
@@ -1159,6 +1338,7 @@ mod tests {
                 dir.path(),
                 "TSK-001",
                 Anchor {
+                    exemption: false,
                     own_branch,
                     level: PolicyLevel::Off,
                     branch: "spike/TSK-001-test",
@@ -1274,6 +1454,7 @@ mod tests {
         let project = ProjectPaths {
             product: vec!["src/**".to_string()],
             watched: Vec::new(),
+            document_indexes: Vec::new(),
         };
         files
             .iter()
@@ -1284,7 +1465,11 @@ mod tests {
                 )
                 .is_none()
             })
-            .map(|path| format!("a planning-only pull request touches a product path: {path}"))
+            .map(|path| {
+                format!(
+                    "a planning-only pull request touches a path outside the admitted set: {path}"
+                )
+            })
     }
 
     fn input<'a>(body: &'a str, branch: &'a str, files: &'a [GitName]) -> Input<'a> {
@@ -1441,7 +1626,7 @@ mod tests {
                 refused
                     .as_ref()
                     .unwrap_err()
-                    .contains(&format!("touches a product path: {path}")),
+                    .contains(&format!("touches a path outside the admitted set: {path}")),
                 "{path}: {refused:?}"
             );
         }

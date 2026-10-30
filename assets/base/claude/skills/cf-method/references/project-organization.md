@@ -222,6 +222,36 @@ release branch or a body-of-work `integration/` branch, never a task branch,
 and it resolves to a real local or remote-tracking branch, never `HEAD`, a
 tag, an object ID, or a revision expression.
 
+A planning amendment may carry records under `project-management/` (except
+its templates), plans under `docs/plan/`, other documentation under `docs/`,
+and exact document index files declared in `git.document_indexes` in the
+target's `.codeflow/policy.json`. It may also edit the project-owned part
+of root `AGENTS.md` while keeping the target's managed block byte for byte.
+Declare an index such as `DOC-INDEX.md` in a prior task PR after upgrading
+the pinned binary; the new key is absent from the shipped policy file.
+A declaration is a reviewed policy change on the target and must not name a
+file a harness or build tool loads. Only documentation files with extensions
+`.md`, `.mdx`, `.rst` or `.adoc` can be declared, with case-insensitive
+extension matching. Text files are excluded because tools can load them.
+The hosted check reads the target policy and enforces the declaration.
+On a re-push of a `plan/` branch, pre-push can fall back to the earlier
+pushed tip; with an advertised work target it judges from the merge base
+with that target. The hosted check enforces the target-policy boundary.
+
+Product and watched paths and hidden paths remain excluded even when
+declared as indexes. Index file names beginning `AGENT.`, `AGENTS.`,
+`CLAUDE.`, `GEMINI.`, `WARP.`, `QWEN.` or `CRUSH.` are excluded without case.
+`SKILL.md`, `CONVENTIONS.md` and `llms*.md` are also refused without case.
+A file name whose stem contains a tilde followed by a digit is refused as a
+possible Windows short-name alias. These exclusions do not identify every
+file a tool loads; the policy review must check that boundary.
+Independently of declarations, planning paths exclude file names beginning
+`AGENTS.`, `CLAUDE.` or `GEMINI.`; root `AGENTS.md` keeps its project-section
+exception. Files must be regular; carrying documentation, indexes or
+`AGENTS.md` also requires both trees to have no symbolic links or submodules.
+A refusal names the excluded path and the admitted set. Carry an excluded
+file in a task PR.
+
 ### Dependencies
 
 An entry of `depends_on` is either a bare task id, a code dependency, or
@@ -243,8 +273,14 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
   reviewed pull request. CI still requires the predecessor complete at the
   merge base when the task lands, so the stack lands in order.
 - A **research or decision dependency** is met when the predecessor is
-  `complete` at the pinned commit on its target. The planner writes the pin
-  when it is known; an entry without a pin is unmet.
+  `complete` at the pinned commit and that commit is on a target that still
+  exists: the predecessor's target, this task's target or the default
+  branch, so a landed line can be deleted. With any remote, each target is
+  read at a remote-tracking ref: the branch's configured upstream when it is
+  a `refs/remotes/<remote>/<branch>` ref of a configured remote, else
+  `origin/<branch>`; a local branch counts only in a repository with no
+  remote. The planner writes the pin when it is known; an entry without a
+  pin is unmet.
 - **Guarded plans:** only the selected branch of a decision is written into
   `depends_on`. Until the selection is approved on the target, the join task
   carries `awaiting_selection: <plan or decision path>`, is `blocked` with the
@@ -294,6 +330,17 @@ table does not list is refused, whoever writes it:
 | todo or blocked to cancelled | `codeflow task status TSK-NNN cancelled --reason <why> --scope <where it went>` | the reason and scope disposition in the Closeout |
 | complete to todo (reopen) | `codeflow task status TSK-NNN todo --reason <why>` | the old acceptance block, kept and marked superseded |
 
+A standalone task cancelled before its record reached the target can leave
+its cancellation record through a `plan/` pull request. Run `codeflow task
+status TSK-NNN cancelled --reason <why> --scope <where it went>` on the task
+branch, then cut a fresh `plan/` branch from the target and copy only the
+cancelled record onto it. Keep the range inside `project-management/` and
+name that task with `Task: TSK-NNN`. The record must be absent from the
+merge-base and carry both Closeout lines. No `work start` claim is needed;
+the planning amendment reports the task under `no epic`. Product commits
+stay on the cancelled task's branch. A record already on the target uses
+the ordinary task status route above.
+
 `in_progress` stays readable on older records, but no verb writes it: a
 visible task branch shows the work in progress. The acceptance block is the
 completion record; each follow-up gets one real home, filed with
@@ -315,6 +362,17 @@ corrected by a pull request of planning records only, off its own task
 branch, whose `Task:` line names the task or a follow-up of it: every
 criterion and tag stays, CI prints the delta, the reviewer confirms the
 meaning is unchanged, and the task stays complete (ADR-0080).
+
+An amendment may leave a note under the criterion it changes: an indented
+dash sub-bullet whose first word is exactly `Amended` or `Moved`, followed
+by a `YYYY-MM-DD` date, as in `- Amended 2026-10-14 (plan version 5): <what
+changed>`. Tags are read on the criterion without its notes and their
+wrapped lines, so a `(journey)`, `(serves EPC-NNN AC-n)` or `(after
+release)` tag closing the head line still counts. Wrapped lines and every
+other sub-bullet, before or after a note, stay criterion text; when one
+of them hides a tag, or a tag sits only in a note, the refusal names it.
+A reflow that keeps the words but changes which tags count is a criteria
+change.
 
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
@@ -341,6 +399,63 @@ terminal acts. A
 multi-task epic lands in gated batch candidates on its integration branch and
 reaches the protected branch as one reviewed body (cf-method, "Managing a body
 of work").
+
+### Acceptance waivers and redactions
+
+A waiver is a criterion result in the fenced `yaml` acceptance block under
+`## Closeout`. Its format is `AC-N: waived | <full amendment commit SHA>`
+inside `acceptance.criteria`. The evidence after `|` is the commit alone,
+not a review URL or an explanation. The named commit must change that
+criterion and change planning records only. The completion must contain it.
+
+A task can name an amendment already on its integration target. Before its
+first landing, it can also name an amendment in its own task range. In that
+case the amendment changes only its record and is strictly after the range's
+merge-base and strictly before `reviewed` in commit ancestry. The amendment
+cannot be the reviewed commit or the completion commit. A range that
+reopens a completion that never landed keeps that own-range allowance,
+whatever caused the reopen. A range that reopens a landed completion cannot
+use it. A waiver refused as not on the target is told what that requires: a
+receiving line the run pins holds the commit. The refusal names the route: a
+planning pull request into the target that amends the criterion, merged into
+the branch before the review. An epic waiver names a planning
+amendment that its reviewed commit contains. A waiver changes a criterion's
+result; it does not authorize redacting an acceptance block.
+
+A record-only redaction keeps the status, criterion identifiers and tags,
+every criterion result, the journey result, the verdict, `reviewed`, and
+`review`. It may replace criteria wording and the descriptive text in active
+or superseded acceptance blocks. A waived criterion keeps its amendment SHA.
+The reviewer confirms that meaning and evidence remain unchanged.
+
+1. Start a `plan/` branch from the task's integration target. Keep the
+   original record unchanged and edit a copy outside the repository.
+2. Obtain a review of the replacement and run
+   `codeflow task redact TSK-NNN --replacement <file> --review <reference>`.
+   The reference identifies the redaction review; it never replaces the
+   original acceptance block's review provenance.
+3. Commit only that record. Name it in the pull request's `Task:` line and
+   run `codeflow ci` and pre-push. No other file belongs in this range.
+
+The command writes a `redaction` mapping in the record's frontmatter:
+
+| Field | Meaning |
+|---|---|
+| `source` | Full commit SHA on the target at the branch point, holding the original record |
+| `sha256` | Lowercase SHA-256 of the original record's exact UTF-8 bytes, including its trailing newline |
+| `review` | Non-empty reference to the review of this replacement |
+
+A hand edit with the same fields receives the same CI checks. The source
+record must match the target's record, and the digest must match its bytes.
+The range changes only that regular record file. Unrelated commits already
+on the target do not invalidate the original acceptance. The route also
+works when the record is already reopened and its old block is
+`acceptance_superseded`; redaction leaves its status unchanged.
+
+The digest retains an audit reference without copying the replaced text
+into the new record. Earlier Git objects still contain the original text;
+this command does not rewrite history. Changed meaning, results, reviewed
+commits or review provenance require the normal reopen and review route.
 
 ### Operator feedback
 
@@ -520,10 +635,12 @@ Shared engineering, security, testing, design, and review doctrine stays in
 `AGENTS.md` and the relevant skills. Repeating it in every task creates stale
 checklist theater. A record instantiates only what is specific:
 
-- outcome, audience where relevant, scope, and non-goals;
+- outcome, audience where relevant, scope, and non-goals, with the value
+  line under `## Outcome`;
 - affected capabilities, surfaces, interfaces, and direct dependencies;
 - each task's deliverables and their homes as paths in the project's
-  structure (`## Deliverables`), and the homes an epic's tasks write;
+  structure (`## Deliverables`), and an epic's own `## Deliverables` with
+  the homes its tasks write;
 - testable acceptance criteria and selected evidence;
 - producer and reviewer for non-trivial work;
 - task-specific risk, recovery, test-data, or environment requirements, in

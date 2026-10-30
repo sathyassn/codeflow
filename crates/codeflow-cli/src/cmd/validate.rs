@@ -34,7 +34,7 @@ pub fn run(args: &ValidateArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -121,7 +121,10 @@ fn run_transition_validation(root: &Path, since: &str) -> bool {
                 eprintln!("{}", warning.line("validate --since", "warning"));
             }
             for error in &verdict.errors {
-                eprintln!("validate --since: error: {error}");
+                eprintln!(
+                    "validate --since: error: {error}",
+                    error = crate::cmd::shown(&error)
+                );
             }
             if verdict.is_clean() {
                 println!("validate --since {since}: record transitions clean");
@@ -129,7 +132,10 @@ fn run_transition_validation(root: &Path, since: &str) -> bool {
             verdict.is_clean()
         }
         Err(error) => {
-            eprintln!("validate --since: error: {error}");
+            eprintln!(
+                "validate --since: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             false
         }
     }
@@ -140,7 +146,10 @@ fn run_transition_validation(root: &Path, since: &str) -> bool {
 fn validate_policy(root: &Path) -> bool {
     match policy_schema::validate_policy(root) {
         Ok(()) => {
-            for warning in policy_schema::deprecation_warnings(root) {
+            for warning in policy_schema::deprecation_warnings(root)
+                .into_iter()
+                .filter(|warning| policy_schema::first_unsupported_warning(&warning.text))
+            {
                 eprintln!("{}", warning.line("validate", "warning"));
             }
             if root.join(".codeflow").join("policy.json").exists() {
@@ -152,7 +161,7 @@ fn validate_policy(root: &Path) -> bool {
         }
         Err(errors) => {
             for e in &errors {
-                eprintln!("validate: error: policy: {e}");
+                eprintln!("validate: error: policy: {e}", e = crate::cmd::shown(&e));
             }
             eprintln!(
                 "validate: .codeflow/policy.json is invalid — see `codeflow policy explain` for every key's valid values"
@@ -170,6 +179,7 @@ fn validate_policy(root: &Path) -> bool {
 /// Frontmatter validation over a file or tree. Returns `true` when clean.
 fn validate_records(root: &Path, path: Option<&Path>) -> bool {
     let base = path.map_or_else(|| root.join("project-management"), Path::to_path_buf);
+    let shown = codeflow_core::git::display_path(&base);
 
     let metadata = match std::fs::metadata(&base) {
         Ok(metadata) => metadata,
@@ -181,14 +191,12 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
                 && std::fs::symlink_metadata(&base)
                     .is_err_and(|leaf| leaf.kind() == std::io::ErrorKind::NotFound) =>
         {
-            println!(
-                "validate: {} absent — no records to validate at this tier",
-                base.display()
-            );
+            println!("validate: {shown} absent — no records to validate at this tier");
             return true;
         }
         Err(error) => {
-            eprintln!("validate: cannot read {}: {error}", base.display());
+            let error = crate::cmd::shown(&error);
+            eprintln!("validate: cannot read {shown}: {error}");
             return false;
         }
     };
@@ -199,8 +207,7 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
         let name = base.file_name().unwrap_or_default().as_encoded_bytes();
         if !name.starts_with(b"TSK-") && !name.starts_with(b"EPC-") && !name.starts_with(b"SPC-") {
             eprintln!(
-                "validate: {} is not a work record (expected an EPC-*/SPC-*/TSK-* filename) — nothing validated",
-                base.display()
+                "validate: {shown} is not a work record (expected an EPC-*/SPC-*/TSK-* filename) — nothing validated"
             );
             return false;
         }
@@ -209,17 +216,15 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
         match collect_record_files(&base) {
             Ok(files) => files,
             Err(error) => {
-                eprintln!(
-                    "validate: cannot read records under {}: {error}",
-                    base.display()
-                );
+                let error = crate::cmd::shown(&error);
+                eprintln!("validate: cannot read records under {shown}: {error}");
                 return false;
             }
         }
     };
 
     if files.is_empty() {
-        println!("validate: no work records under {}", base.display());
+        println!("validate: no work records under {shown}");
         return true;
     }
 
@@ -243,13 +248,17 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
         match result {
             Ok((errors, warnings)) => {
                 for e in &errors {
-                    eprintln!("{}: error: {e}", file.display());
+                    eprintln!(
+                        "{}: error: {e}",
+                        codeflow_core::git::display_path(&file),
+                        e = crate::cmd::shown(&e)
+                    );
                 }
                 for w in &warnings {
                     eprintln!(
                         "{}",
                         w.finding(&file)
-                            .line(&file.display().to_string(), "warning")
+                            .line(&codeflow_core::git::display_path(&file), "warning")
                     );
                 }
                 if !errors.is_empty() {
@@ -257,7 +266,11 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
                 }
             }
             Err(e) => {
-                eprintln!("{}: error: {e}", file.display());
+                eprintln!(
+                    "{}: error: {e}",
+                    codeflow_core::git::display_path(&file),
+                    e = crate::cmd::shown(&e)
+                );
                 clean = false;
             }
         }
@@ -275,7 +288,7 @@ fn collect_record_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut paths = std::fs::read_dir(dir)?
         .map(|entry| entry.map(|e| e.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
-    paths.sort();
+    paths.sort_by(|a, b| codeflow_core::ids::compare_id_paths(a, b));
     for path in paths {
         if std::fs::metadata(&path)?.is_dir() {
             out.extend(collect_record_files(&path)?);
@@ -299,8 +312,10 @@ fn run_docs_lint(root: &Path) -> bool {
     for warning in &report.warnings {
         eprintln!("{}", warning.line("validate --docs", "warning"));
     }
+    // An issue starts with a checkout file path: a fixed label owns the
+    // line's first bytes (TSK-388).
     for issue in &report.issues {
-        eprintln!("{issue}");
+        eprintln!("validate --docs: error: {issue}");
     }
 
     if report.is_clean() {

@@ -53,6 +53,10 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
         }
     }
     match sub {
+        "update-ref" | "symbolic-ref" if super::git_guard::ref_plumbing_aliases(sub, rest) => Some(
+            "a ref name with a non-ASCII character or a case-different `refs/` prefix can name a protected or remote-tracking ref on a case-insensitive filesystem"
+                .into(),
+        ),
         "update-ref" | "symbolic-ref" if super::git_guard::ref_plumbing_tampers(sub, rest) => Some(
             "remote-tracking refs may only be updated by the configured remote's fetch mapping"
                 .into(),
@@ -599,7 +603,15 @@ mod tests {
         );
         let read_only =
             r21_report_command(root.path(), r#"git -C "$R21_UNKNOWN_REPOSITORY" status"#);
-        assert!(read_only.violations.is_empty(), "{read_only:?}");
+        // Status can run a configured filesystem monitor. An unknown target
+        // has unread command settings even though no ref update is requested.
+        assert!(
+            read_only.violations.iter().any(|finding| {
+                finding.rule == "git.hook_integrity"
+                    && finding.level == super::super::policy::PolicyLevel::Block
+            }),
+            "{read_only:?}"
+        );
     }
 
     #[test]

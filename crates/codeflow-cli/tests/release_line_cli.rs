@@ -9,11 +9,9 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn clean_env(command: &mut Command) -> &mut Command {
     command
@@ -327,8 +325,10 @@ impl Fx {
     }
 
     /// The pre-push hook for pushing `local` to `branch`, which the
-    /// destination holds at `remote` (all zeros for a new branch). The
-    /// checkout moves off `local` first, so only `codeflow ci` runs.
+    /// destination holds at `remote` (all zeros for a new branch). A separate
+    /// fixture ref already holds the candidate, isolating range checks from
+    /// whole-tree validation of these intentionally minimal legacy records.
+    /// Keep another commit checked out; a checkable candidate must run targets.
     fn pre_push(&self, branch: &str, local: &str, remote: &str) -> (i32, String) {
         self.pre_push_to(self.origin.to_str().unwrap(), branch, local, remote)
     }
@@ -336,6 +336,8 @@ impl Fx {
     /// As [`Fx::pre_push`], pushing to `url` directly.
     fn pre_push_to(&self, url: &str, branch: &str, local: &str, remote: &str) -> (i32, String) {
         let back = self.git(&["rev-parse", "--abbrev-ref", "HEAD"]);
+        let fixture_ref = format!("{local}:refs/heads/fixture/tree-{local}");
+        self.git(&["push", "-q", "origin", &fixture_ref]);
         self.git(&["switch", "-q", "--detach", "main"]);
         let mut child = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
             .args(["git-hook", "pre-push", url, url])
@@ -411,6 +413,19 @@ fn blocks(result: &(i32, String), what: &str, needles: &[&str]) {
     }
 }
 
+// Unreadable history stops CI before any policy judgment, with exit 2.
+fn cannot_verify(result: &(i32, String), what: &str, needles: &[&str]) {
+    assert_eq!(result.0, 2, "{what}:\n{}", result.1);
+    assert!(result.1.contains("cannot verify history"), "{}", result.1);
+    for needle in needles {
+        assert!(
+            result.1.contains(needle),
+            "{what}: missing {needle:?}: {}",
+            result.1
+        );
+    }
+}
+
 /// The acceptance findings of one run: each rule with its message line.
 fn findings(result: &(i32, String)) -> Vec<String> {
     let lines: Vec<&str> = result.1.lines().collect();
@@ -444,7 +459,13 @@ fn agree(fx: &Fx, what: &str) -> (i32, String) {
         ci.1,
         hook.1
     );
-    assert_eq!(ci.0 == 0, hook.0 == 0, "{what}: exit codes differ");
+    assert_eq!(
+        ci.0 == 0,
+        hook.0 == 0,
+        "{what}: exit codes differ\nCI:\n{}\npre-push:\n{}",
+        ci.1,
+        hook.1
+    );
     assert!(
         ci.1.contains(SCOPE_LINE),
         "{what}: not judged as a release range:\n{}",
@@ -985,10 +1006,10 @@ fn a_shallow_default_history_is_never_read_as_unadopted() {
         .run();
     let shallow = parent.join("shallow");
     let cut = [
-        "this clone's history is shallow at",
+        "cannot verify history: this clone is shallow",
         "git fetch --unshallow",
     ];
-    blocks(&ci_empty_at(&shallow, &url), "shallow CI", &cut);
+    cannot_verify(&ci_empty_at(&shallow, &url), "shallow CI", &cut);
     let tip = run_git(&shallow, &["rev-parse", "HEAD"]);
     run_git(
         &shallow,
@@ -1035,11 +1056,11 @@ fn a_shallow_boundary_in_the_range_is_named() {
     ]);
     fx.git(&["switch", "-q", "--detach", &head]);
     fx.write(".git/shallow", &format!("{boundary}\n"));
-    blocks(
+    cannot_verify(
         &fx.ci(&default, &head, RELEASE, None),
         "a boundary inside the range",
         &[
-            "this clone's history is shallow, so the release range's history cannot be read",
+            "cannot verify history: this clone is shallow",
             "git fetch --unshallow",
         ],
     );
@@ -1099,7 +1120,7 @@ fn a_graft_never_stands_in_for_recorded_history() {
     for graft in [format!("{removal}\n"), format!("{removal} {before}\n")] {
         std::fs::write(&grafts, &graft).unwrap();
         let needle = ["overlays its recorded history with the graft file"];
-        blocks(&ci_empty_at(&fx.root, &url), "grafted CI", &needle);
+        cannot_verify(&ci_empty_at(&fx.root, &url), "grafted CI", &needle);
         fx.git(&["switch", "-q", LINE_A]);
         blocks(
             &pre_push_new(&fx.root, &url, RELEASE, &removal),
@@ -1129,7 +1150,7 @@ fn a_replace_ref_never_stands_in_for_recorded_history() {
     passes(&ci_empty_at(&fx.root, &url), "a kept marker, no overlay");
     fx.git(&["replace", "--graft", &tip]);
     let replacement = fx.git(&["rev-parse", &format!("refs/replace/{tip}")]);
-    blocks(
+    cannot_verify(
         &ci_empty_at(&fx.root, &url),
         "a replace ref",
         &[&format!("the replace ref refs/replace/{tip}")],
@@ -1147,7 +1168,7 @@ fn a_replace_ref_never_stands_in_for_recorded_history() {
         &format!("refs/other-replace/{tip}"),
         &replacement,
     ]);
-    blocks(
+    cannot_verify(
         &ci_empty_with(
             &fx.root,
             &url,
@@ -1184,20 +1205,25 @@ fn a_replace_ref_base_is_a_literal_prefix() {
             .current_dir(&fx.root)
             .output()
             .unwrap();
-        let judged = |result: &(i32, String), what: &str| {
+        let judged = |result: &(i32, String), what: &str, is_ci: bool| {
             if read.status.success() {
-                blocks(result, what, &[&format!("the replace ref {name}")]);
+                if is_ci {
+                    cannot_verify(result, what, &[&format!("the replace ref {name}")]);
+                } else {
+                    blocks(result, what, &[&format!("the replace ref {name}")]);
+                }
             } else {
                 assert_ne!(result.0, 0, "{what}: git refuses the base:\n{}", result.1);
                 // A git that stops on the base can leave its index lock.
                 let _ = std::fs::remove_file(fx.root.join(".git/index.lock"));
             }
         };
-        judged(&ci_empty_with(&fx.root, &url, &env), base);
+        judged(&ci_empty_with(&fx.root, &url, &env), base, true);
         fx.git(&["switch", "-q", LINE_A]);
         judged(
             &pre_push_new_with(&fx.root, &url, RELEASE, &tip, &env),
             &format!("{base} at pre-push"),
+            false,
         );
         fx.git(&["switch", "-q", "main"]);
         fx.git(&["update-ref", "-d", &name]);
@@ -1284,7 +1310,7 @@ fn an_unresolved_new_release_branch_is_not_pushed_unjudged() {
     blocks(
         &hook,
         "a dangling destination",
-        &["cannot be decided", "default branch"],
+        &["ci.destination_unavailable", "default branch"],
     );
 
     // An empty destination: no default target to judge the release against.
@@ -1303,7 +1329,11 @@ fn an_unresolved_new_release_branch_is_not_pushed_unjudged() {
     // makes release branches (Codex R145-R2-2): every name is refused.
     for name in [RELEASE, "feat/any", "feat/release-probe"] {
         let hook = fx.pre_push_to("/nonexistent/destination.git", name, &head, zero);
-        blocks(&hook, "an unreachable destination", &["did not answer"]);
+        blocks(
+            &hook,
+            "an unreachable destination",
+            &["ci.destination_unavailable", "`git ls-remote` failed"],
+        );
     }
 }
 
@@ -1725,14 +1755,18 @@ fn a_completion_into_the_release_branch_binds_alike_in_status_and_ci() {
         )
     };
     fx.write(&path("TSK-006"), &proposed("todo"));
-    let needle = format!("src/other.rs changed after the reviewed commit {reviewed}");
-    blocks(&fx.status_complete("TSK-006"), "the verb", &[&needle]);
+    let needle = format!("changed between the reviewed commit {reviewed} and ");
+    blocks(
+        &fx.status_complete("TSK-006"),
+        "the verb",
+        &[&needle, "first: src/other.rs"],
+    );
     fx.write(&path("TSK-006"), &proposed("complete"));
     fx.commit("docs(records): complete TSK-006");
     blocks(
         &fx.ci(RELEASE, "HEAD", "task/TSK-006-fix", Some(RELEASE)),
         "CI into the release branch",
-        &[&needle],
+        &[&needle, "first: src/other.rs"],
     );
 }
 
@@ -1755,8 +1789,12 @@ fn the_release_owner_binds_at_the_head_in_task_status() {
         &path(HOLDER),
         &record(HOLDER, "todo", CRITERIA, &block(&reviewed)),
     );
-    let needle = format!("src/other.rs changed after the reviewed commit {reviewed}");
-    blocks(&fx.status_complete(HOLDER), "the verb", &[&needle]);
+    let needle = format!("changed between the reviewed commit {reviewed} and ");
+    blocks(
+        &fx.status_complete(HOLDER),
+        "the verb",
+        &[&needle, "first: src/other.rs"],
+    );
     fx.write(
         &path(HOLDER),
         &record(HOLDER, "complete", CRITERIA, &block(&reviewed)),
@@ -1765,7 +1803,7 @@ fn the_release_owner_binds_at_the_head_in_task_status() {
     blocks(
         &fx.ci(RELEASE, "HEAD", "task/TSK-009-fix", Some(RELEASE)),
         "CI into the release branch",
-        &[&needle],
+        &[&needle, "first: src/other.rs"],
     );
 }
 
@@ -1853,11 +1891,11 @@ fn a_direct_completion_binds_to_the_release_head() {
     fx.write("src/later.rs", "// later\n");
     let later = fx.commit("fix: a later change");
     let result = agree(&fx, "a direct completion followed by code");
-    let needle = format!("src/later.rs changed after the reviewed commit {reviewed}");
+    let needle = format!("changed between the reviewed commit {reviewed} and ");
     // The finding names the commit that made the completion, and the path
     // report shows how each commit was judged.
     let named = format!(
-        "TSK-002 (completed directly on the release line at {}): {needle}",
+        "TSK-002 (completed directly on the release line at {}): 1 path {needle}",
         &made[..9]
     );
     let completion = format!(
@@ -1884,7 +1922,7 @@ fn a_direct_completion_binds_to_the_release_head() {
     blocks(
         &verb,
         "the verb after later code",
-        &[&format!("TSK-002: {needle}")],
+        &[&format!("TSK-002: 1 path {needle}"), "first: src/later.rs"],
     );
 
     // Control: a task already complete gets the status refusal, apart from
@@ -1948,7 +1986,7 @@ fn after_a_brought_repair(repair: Repair) -> (i32, String) {
     blocks(
         &first,
         "the brought completion with a late change",
-        &["TSK-001", "src/late.rs changed after the reviewed commit"],
+        &["TSK-001", "first: src/late.rs"],
     );
 
     // Line A reopens the task by a planning pull request, then completes
@@ -2020,7 +2058,7 @@ fn after_a_brought_repair(repair: Repair) -> (i32, String) {
 /// one reaching the release through another line, leaves the refusal.
 #[test]
 fn a_valid_re_completion_from_its_line_supersedes_a_brought_one() {
-    let old = "src/late.rs changed after the reviewed commit";
+    let old = "first: src/late.rs";
     let count = |result: &(i32, String)| {
         findings(result)
             .iter()
@@ -2129,7 +2167,7 @@ fn three_completions_on_line_a() -> (Fx, String, String) {
 /// The real git merge of the same tips is the control.
 #[test]
 fn an_older_octopus_parent_cannot_hide_a_newer_completion() {
-    let needle = "src/newlate.rs changed after the reviewed commit";
+    let needle = "first: src/newlate.rs";
     let (fx, l2, l3) = three_completions_on_line_a();
     let release = fx.head();
     // The real merge: git drops L2, which L3 contains.
@@ -2164,7 +2202,7 @@ fn an_older_octopus_parent_cannot_hide_a_newer_completion() {
     blocks(
         &result,
         "the octopus restoring L2",
-        &["TSK-001", "src/late.rs changed after the reviewed commit"],
+        &["TSK-001", "first: src/late.rs"],
     );
     assert!(
         result.1.contains(&format!(
@@ -2291,8 +2329,8 @@ fn both_supersession_guards_hold_through_faithful_imports() {
     fx.git(&["push", "-q", "origin", LINE_B]);
 
     // L1's finding names its reviewed commit, L3's names main.
-    let l1_finding = format!("src/late.rs changed after the reviewed commit {reviewed}");
-    let l3_finding = format!("src/late.rs changed after the reviewed commit {main}");
+    let l1_finding = format!("changed between the reviewed commit {reviewed} and ");
+    let l3_finding = format!("changed between the reviewed commit {main} and ");
     for sides in [[&l3, &foreign], [&foreign, &l3]] {
         let merge = faithful_merge(&fx, &tree, &[&release_l1, sides[0], sides[1]]);
         let result = fx.ci("main", "HEAD", RELEASE, Some("main"));
@@ -2399,7 +2437,7 @@ fn a_foreign_completion_never_replaces_a_direct_one() {
     );
     let direct = fx.commit("docs(records): replace the completion");
     let stale = format!(
-        "TSK-001 (completed directly on the release line at {}): src/work.rs changed after the reviewed commit",
+        "TSK-001 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
         &direct[..9]
     );
     let before = fx.ci("main", "HEAD", RELEASE, Some("main"));
@@ -2611,7 +2649,7 @@ fn a_resolution_restoring_an_older_record_is_refused() {
             "TSK-001 changes its criteria directly on the release line (the resolution of merge",
             "work.acceptance_binding",
             &format!(
-                "TSK-001 (completed directly on the release line at {}): src/one.rs changed after the reviewed commit {first}",
+                "TSK-001 (completed directly on the release line at {}): 1 path changed between the reviewed commit {first} and ",
                 &merge[..9]
             ),
         ],
@@ -2851,7 +2889,7 @@ fn a_clean_octopus_with_an_unverified_parent_is_direct_work() {
             "is no import",
             NO_OWNER,
             &format!(
-                "TSK-002 (completed directly on the release line at {}): src/untrusted.rs changed after the reviewed commit",
+                "TSK-002 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
                 &octopus[..9]
             ),
         ],
@@ -3067,7 +3105,7 @@ fn direct_code_belongs_to_the_release_integration_task() {
         &result,
         "code after the completion",
         &[&format!(
-            "TSK-009 (completed directly on the release line at {}): src/after.rs changed after the reviewed commit",
+            "TSK-009 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
             &completed[..9]
         )],
     );
@@ -3236,13 +3274,22 @@ fn the_release_pull_request_names_its_release_integration_task() {
             owner.1
         );
         for other in ["TSK-001", "TSK-007", "TSK-008"] {
+            let result = pr(other);
             blocks(
-                &pr(other),
+                &result,
                 &format!("{other} named on {release}"),
                 &[
                     &format!("pull request class: tracked {other}"),
-                    "a task PR may add only its own standalone task record",
+                    "work.stable_planning_anchor",
+                    &format!("task {other} cannot start from status"),
                 ],
+            );
+            assert!(
+                !result
+                    .1
+                    .contains("a task PR may add only its own standalone task record"),
+                "imported planning records are not this task's additions: {}",
+                result.1
             );
         }
     }
@@ -4279,506 +4326,17 @@ fn a_legacy_record_gets_no_relief_from_an_unapproved_records_cutoff() {
     );
 }
 
-#[allow(dead_code)]
-#[path = "../examples/release_integration.rs"]
-mod automation;
-
-/// Locate the repository-owned integration job without assuming its filename.
-fn integration_workflow() -> serde_yaml::Value {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");
-    let jobs: Vec<_> = std::fs::read_dir(root)
-        .unwrap()
-        .map(Result::unwrap)
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "yml"))
-        .filter_map(|entry| {
-            let text = std::fs::read_to_string(entry.path()).unwrap();
-            let parsed: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
-            (!parsed["jobs"]["release-integration"].is_null()).then_some(parsed)
-        })
-        .collect();
-    assert_eq!(jobs.len(), 1, "one repository-owned integration job");
-    jobs.into_iter().next().unwrap()
-}
-
+/// The release-state workflow only reads: it never holds a write token.
+/// TSK-310 retired the one workflow that wrote to a release branch.
 #[test]
-fn automation_privileged_job_uses_default_branch_events() {
-    let workflow = integration_workflow();
-    let events = workflow["on"].as_mapping().unwrap();
-    assert!(
-        events
-            .keys()
-            .all(|key| matches!(key.as_str(), Some("workflow_run" | "schedule"))),
-        "write-token YAML must not be loaded from a pushed line or a task PR: {events:?}"
-    );
-    assert_eq!(
-        workflow["on"]["workflow_run"]["workflows"][0].as_str(),
-        Some("codeflow-release")
-    );
-    assert_eq!(
-        workflow["on"]["workflow_run"]["types"][0].as_str(),
-        Some("completed")
-    );
-    assert_eq!(
-        workflow["on"]["workflow_run"]["branches"][0].as_str(),
-        Some("integration/EPC-*")
-    );
-    let job = &workflow["jobs"]["release-integration"];
-    let condition = job["if"].as_str().unwrap();
-    for boundary in [
-        "github.event.workflow_run.event == 'push'",
-        "github.event.workflow_run.head_repository.full_name == github.repository",
-    ] {
-        assert!(
-            condition.contains(boundary),
-            "missing source boundary: {condition}"
-        );
-    }
-    assert_eq!(job["permissions"]["contents"].as_str(), Some("write"));
-    assert_eq!(
-        job["steps"][0]["with"]["ref"].as_str(),
-        Some("${{ github.sha }}")
-    );
-    assert_eq!(
-        job["steps"][0]["with"]["persist-credentials"].as_bool(),
-        Some(false)
-    );
-    let integrate = job["steps"].as_sequence().unwrap().last().unwrap();
-    assert_eq!(
-        integrate["env"]["LANDED_LINE"].as_str(),
-        Some("${{ github.event.workflow_run.head_branch }}")
-    );
-    assert!(
-        !integrate["run"].as_str().unwrap().contains("${{"),
-        "upstream metadata must not be interpolated into shell source"
-    );
-}
-
-/// Execute the actual workflow shell with capture-only auth/runner stand-ins.
-/// The resulting arguments drive the real integration runner below.
-#[cfg(unix)]
-fn workflow_landing_args(line: &str) -> (Vec<String>, String) {
-    use std::os::unix::fs::PermissionsExt as _;
-    let workflow = integration_workflow();
-    let step = workflow["jobs"]["release-integration"]["steps"]
-        .as_sequence()
-        .unwrap()
-        .iter()
-        .find(|step| step["name"].as_str() == Some("Integrate verified epic lines"))
-        .unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let runner = dir.path().join("target/debug/examples/release_integration");
-    std::fs::create_dir_all(runner.parent().unwrap()).unwrap();
-    std::fs::write(
-        &runner,
-        "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$CAPTURE_ARGS\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let gh = dir.path().join("gh");
-    std::fs::write(&gh, "#!/bin/sh\n[ \"$*\" = 'auth setup-git' ]\n").unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let args = dir.path().join("args");
-    let out = clean_env(&mut Command::new("sh"))
-        .args(["-eu", "-c", step["run"].as_str().unwrap()])
-        .current_dir(dir.path())
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                dir.path().display(),
-                std::env::var("PATH").unwrap()
-            ),
-        )
-        .env("CAPTURE_ARGS", &args)
-        .env("EVENT_NAME", "push")
-        .env("LANDED_LINE", line)
-        .env("RELEASE_BRANCH", RELEASE)
-        .env_remove("GH_TOKEN")
-        .env_remove("GITHUB_TOKEN")
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(!dir.path().join("injected").exists());
-    let args = std::fs::read_to_string(args)
-        .unwrap()
-        .split_terminator('\0')
-        .map(str::to_owned)
-        .collect();
-    (args, String::from_utf8(out.stdout).unwrap())
-}
-
-#[cfg(unix)]
-#[test]
-fn automation_landing_metadata_stays_data() {
-    let line = "integration/EPC-003-$(touch${IFS}injected)";
-    let (args, log) = workflow_landing_args(line);
-    assert_eq!(args, ["--release", RELEASE, "--push"]);
-    assert!(log.contains(line), "landing metadata stays literal: {log}");
-}
-
-#[cfg(unix)]
-#[test]
-fn automation_surviving_landing_catches_up_pending_lines() {
-    let fx = Fx::new(true);
-    fx.configure_automation();
-    // No job for A survives the queue. The job for B must import both tips.
-    for (line, id, file) in [
-        (LINE_A, "TSK-001", "src/a.rs"),
-        (LINE_B, "TSK-002", "src/b.rs"),
-    ] {
-        fx.build_and_complete(line, id, file);
-        fx.land(line, &format!("task/{id}-work"));
-    }
-    let (args, log) = workflow_landing_args(LINE_B);
-    assert_eq!(
-        args,
-        ["--release", RELEASE, "--push"],
-        "every surviving job catches up all verified lines"
-    );
-    assert!(
-        log.contains(LINE_B),
-        "the triggering landing remains visible: {log}"
-    );
-    let (code, report) = fx.automate(Some(&args[1]), None);
-    assert_eq!(code, 0, "{report}");
-    fx.git(&["fetch", "-q", "origin"]);
-    for line in [LINE_A, LINE_B] {
-        fx.git(&[
-            "merge-base",
-            "--is-ancestor",
-            line,
-            &format!("origin/{RELEASE}"),
-        ]);
-    }
-    let tip = fx.remote_release();
-    assert_eq!(fx.automate(Some(&args[1]), None).0, 0);
-    assert_eq!(tip, fx.remote_release(), "a later queued run is idempotent");
-}
-
-#[test]
-fn automation_uses_default_target_owner_before_conflicting_merge() {
-    let fx = Fx::new(false);
-    fx.configure_automation();
-    fx.build_and_complete(LINE_A, "TSK-001", "src/clash.rs");
-    fx.land(LINE_A, "task/TSK-001-work");
-    assert_eq!(fx.automate(Some(RELEASE), Some(LINE_A)).0, 0);
-    fx.build_and_complete(LINE_B, "TSK-002", "src/clash.rs");
-    fx.land(LINE_B, "task/TSK-002-work");
-    // Only the destination's default branch gains the owner. The caller and
-    // release checkouts still predate that planning record.
-    fx.git(&["switch", "-q", "main"]);
-    fx.write(
-        &path(HOLDER),
-        &record(HOLDER, "todo", CRITERIA, "Pending.\n"),
-    );
-    fx.commit("docs: assign the release owner");
-    fx.git(&["push", "-q", "origin", "main"]);
-    fx.git(&["switch", "-q", RELEASE]);
-    assert!(!fx.root.join(path(HOLDER)).exists());
-    let before = fx.remote_release();
-    let (code, report) = fx.automate(Some(RELEASE), Some(LINE_B));
-    assert_ne!(code, 0, "{report}");
-    assert!(report.contains("CONFLICT"), "{report}");
-    assert!(report.contains(&format!("Owner: {HOLDER}")), "{report}");
-    assert!(!report.contains(NO_OWNER), "{report}");
-    assert_eq!(before, fx.remote_release());
-}
-
-impl Fx {
-    fn configure_automation(&self) {
-        self.git(&["switch", "-q", "main"]);
-        self.write(
-            ".github/workflows/codeflow-release-integration.yml",
-            "jobs:\n  release-integration:\n",
-        );
-        self.commit("ci: configure release integration");
-        // The configuration exists before the lines fork.
-        for line in [LINE_A, LINE_B] {
-            self.git(&["branch", "-f", line, "main"]);
-        }
-        self.git(&["push", "-q", "origin", "main", LINE_A, LINE_B]);
-        self.cut_release();
-    }
-
-    fn automate(&self, release: Option<&str>, line: Option<&str>) -> (i32, String) {
-        match automation::integrate(
-            &self.root,
-            release,
-            line,
-            true,
-            Path::new(env!("CARGO_BIN_EXE_codeflow")),
-        ) {
-            Ok(report) => (0, report),
-            Err(report) => (1, report),
-        }
-    }
-
-    fn remote_release(&self) -> String {
-        self.git(&["ls-remote", "origin", &format!("refs/heads/{RELEASE}")])
-            .split_whitespace()
-            .next()
-            .unwrap()
-            .to_string()
-    }
-}
-
-#[test]
-fn automation_integrates_each_landing_and_daily_catches_up() {
-    let fx = Fx::new(true);
-    fx.configure_automation();
-    for (line, id, file) in [
-        (LINE_A, "TSK-001", "src/a.rs"),
-        (LINE_B, "TSK-002", "src/b.rs"),
-    ] {
-        let before = fx.remote_release();
-        fx.build_and_complete(line, id, file);
-        let landed = fx.land(line, &format!("task/{id}-work"));
-        let (code, report) = fx.automate(Some(RELEASE), Some(line));
-        assert_eq!(code, 0, "{report}");
-        let after = fx.remote_release();
-        assert_ne!(before, after);
-        fx.git(&["fetch", "-q", "origin"]);
-        assert_eq!(fx.git(&["rev-parse", &format!("{after}^1")]), before);
-        assert_eq!(fx.git(&["rev-parse", &format!("{after}^2")]), landed);
-    }
-    fx.build_and_complete(LINE_A, "TSK-003", "src/c.rs");
-    fx.land(LINE_A, "task/TSK-003-work");
-    fx.build_and_complete(LINE_B, "TSK-004", "src/d.rs");
-    fx.land(LINE_B, "task/TSK-004-work");
-    let (code, report) = fx.automate(Some(RELEASE), None);
-    assert_eq!(code, 0, "{report}");
-    fx.git(&["fetch", "-q", "origin"]);
-    for line in [LINE_A, LINE_B] {
-        fx.git(&[
-            "merge-base",
-            "--is-ancestor",
-            line,
-            &format!("origin/{RELEASE}"),
-        ]);
-    }
-    let tip = fx.remote_release();
-    assert_eq!(fx.automate(Some(RELEASE), None).0, 0);
-    assert_eq!(tip, fx.remote_release(), "daily reruns must be idempotent");
-}
-
-#[test]
-fn automation_conflict_reports_owner_and_reproduction_without_push() {
-    for holder in [true, false] {
-        let fx = Fx::new(holder);
-        fx.configure_automation();
-        fx.build_and_complete(LINE_A, "TSK-001", "src/clash.rs");
-        fx.land(LINE_A, "task/TSK-001-work");
-        assert_eq!(fx.automate(Some(RELEASE), Some(LINE_A)).0, 0);
-        fx.build_and_complete(LINE_B, "TSK-002", "src/clash.rs");
-        fx.land(LINE_B, "task/TSK-002-work");
-        let before = fx.remote_release();
-        let (code, report) = fx.automate(Some(RELEASE), Some(LINE_B));
-        assert_ne!(code, 0, "{report}");
-        assert!(report.contains("CONFLICT"), "{report}");
-        assert!(
-            report.contains(if holder {
-                HOLDER
-            } else {
-                "no release-integration task to own it"
-            }),
-            "{report}"
-        );
-        assert!(
-            report.contains("cargo run") && report.contains("--release") && report.contains(LINE_B),
-            "{report}"
-        );
-        assert_eq!(before, fx.remote_release());
-    }
-}
-
-#[test]
-fn automation_binding_and_frozen_findings_push_nothing() {
-    for frozen in [false, true] {
-        let fx = Fx::new(true);
-        fx.configure_automation();
-        fx.build_and_complete(LINE_A, "TSK-001", "src/a.rs");
-        if frozen {
-            fx.write(
-                &path("TSK-001"),
-                &record("TSK-001", "complete", LOOSER, &block(&fx.head())),
-            );
-        } else {
-            fx.write(
-                &path("TSK-001"),
-                &record(
-                    "TSK-001",
-                    "complete",
-                    CRITERIA,
-                    &block(&fx.git(&["rev-parse", "main"])),
-                ),
-            );
-        }
-        fx.commit("docs: change the completion");
-        fx.land(LINE_A, "task/TSK-001-work");
-        let before = fx.remote_release();
-        let (code, report) = fx.automate(Some(RELEASE), Some(LINE_A));
-        assert_ne!(code, 0, "{report}");
-        assert!(
-            report.contains(if frozen { "frozen" } else { "binding" }),
-            "{report}"
-        );
-        assert!(report.contains(HOLDER), "{report}");
-        assert_eq!(before, fx.remote_release());
-    }
-}
-
-#[test]
-fn automation_without_configuration_is_a_noop() {
-    let fx = Fx::new(true);
-    assert_eq!(
-        fx.automate(None, Some(LINE_A)),
-        (0, "no release integration configured\n".into())
-    );
-}
-
-#[test]
-fn automation_workflow_and_release_owner_contract() {
+fn the_release_state_workflow_stays_read_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read_workflow =
         std::fs::read_to_string(root.join(".github/workflows/codeflow-release.yml")).unwrap();
     assert!(read_workflow.contains("github.event_name == 'push'"));
     assert!(!read_workflow.contains("contents: write"));
-    let parsed = integration_workflow();
-    let job = &parsed["jobs"]["release-integration"];
-    assert!(job["if"]
-        .as_str()
-        .unwrap()
-        .contains("github.event_name == 'schedule'"));
-    assert!(
-        job["needs"].is_null(),
-        "post-landing integration has no task-PR dependency"
-    );
-    assert_eq!(
-        parsed["on"]["schedule"][0]["cron"].as_str(),
-        Some("17 3 * * *")
-    );
-    assert_eq!(
-        job["steps"][0]["with"]["ref"].as_str(),
-        Some("${{ github.sha }}")
-    );
-    assert_eq!(
-        job["concurrency"]["cancel-in-progress"].as_bool(),
-        Some(false)
-    );
-
-    let record = std::fs::read_to_string(root.join(path("TSK-010"))).unwrap();
-    assert!(
-        record.contains("role: release-integration"),
-        "AC-4 role missing"
-    );
-    assert!(
-        record.contains("nine other-line")
-            && record.contains("TSK-150")
-            && record.contains("within the release pull request")
-    );
 }
 
-#[test]
-fn automation_reading_finding_and_unverified_line_push_nothing() {
-    for reading in [true, false] {
-        let fx = Fx::new(true);
-        fx.configure_automation();
-        let before = fx.remote_release();
-        if reading {
-            fx.git(&["switch", "-q", "-c", "task/TSK-001-work", LINE_A]);
-            fx.write(
-                ".agents/skills/cf-ship/SKILL.md",
-                "# Ship\n\nRead [missing](missing.md).\n",
-            );
-            let reviewed = fx.commit("feat: change shipping guidance");
-            fx.write(
-                &path("TSK-001"),
-                &record("TSK-001", "complete", CRITERIA, &block(&reviewed)),
-            );
-            fx.commit("docs: complete the task");
-            fx.land(LINE_A, "task/TSK-001-work");
-        } else {
-            fx.git(&["switch", "-q", LINE_A]);
-            fx.write("src/direct.rs", "// direct\n");
-            fx.commit("feat: bypass the line landing");
-            fx.git(&["push", "-q", "origin", LINE_A]);
-        }
-        let (code, report) = fx.automate(Some(RELEASE), Some(LINE_A));
-        assert_ne!(code, 0, "{report}");
-        assert!(
-            report.contains(if reading {
-                "reading-check finding"
-            } else {
-                "directly on the line"
-            }),
-            "{report}"
-        );
-        assert_eq!(before, fx.remote_release());
-    }
-}
-
-#[test]
-fn automation_daily_failure_is_atomic_and_preview_never_pushes() {
-    let fx = Fx::new(true);
-    fx.configure_automation();
-    let before = fx.remote_release();
-    for (line, id) in [(LINE_A, "TSK-001"), (LINE_B, "TSK-002")] {
-        fx.build_and_complete(line, id, "src/conflict.rs");
-        fx.land(line, &format!("task/{id}-work"));
-    }
-    let preview = automation::integrate(
-        &fx.root,
-        Some(RELEASE),
-        Some(LINE_A),
-        false,
-        Path::new(env!("CARGO_BIN_EXE_codeflow")),
-    );
-    assert!(preview.is_ok(), "{preview:?}");
-    assert_eq!(before, fx.remote_release());
-    let (code, report) = fx.automate(Some(RELEASE), None);
-    assert_ne!(code, 0, "{report}");
-    assert!(report.contains("CONFLICT"), "{report}");
-    assert_eq!(before, fx.remote_release());
-}
-
-#[test]
-fn automation_rechecks_the_existing_combined_release() {
-    let fx = Fx::new(true);
-    fx.configure_automation();
-    fx.build_and_complete(LINE_A, "TSK-001", "src/a.rs");
-    fx.write(
-        &path("TSK-001"),
-        &record(
-            "TSK-001",
-            "complete",
-            CRITERIA,
-            &block(&fx.git(&["rev-parse", "main"])),
-        ),
-    );
-    fx.commit("docs: change the completion");
-    fx.land(LINE_A, "task/TSK-001-work");
-    fx.import(LINE_A);
-    fx.git(&["push", "-q", "origin", RELEASE]);
-    let before = fx.remote_release();
-    fx.build_and_complete(LINE_B, "TSK-002", "src/b.rs");
-    fx.land(LINE_B, "task/TSK-002-work");
-    let (code, report) = fx.automate(Some(RELEASE), Some(LINE_B));
-    assert_ne!(
-        code, 0,
-        "an earlier bad binding still blocks the combined release: {report}"
-    );
-    assert!(report.contains("binding"), "{report}");
-    assert_eq!(before, fx.remote_release());
-}
-
-/// SPC-013 R-120 as reconciled by resolution 41 (WP7 row 20): a criteria
-/// change the task's own reviewed and completed pull request landed on its
-/// line is accepted when the release imports the line; unchanged criteria
-/// are the control. Astra's review probe A184-1, kept as the regression.
 #[test]
 fn an_own_task_amendment_landed_by_its_reviewed_pr_is_accepted() {
     for criteria in [CRITERIA, STRONGER] {

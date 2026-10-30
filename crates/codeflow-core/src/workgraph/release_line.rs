@@ -35,12 +35,14 @@
 //! [`super::acceptance::SCOPE_NOTE`]); whether a planning-only landing on a
 //! line passed that line's review stays with the host's checks (R-80).
 
+use crate::workgraph::history;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use git2::{Oid, Repository};
 
-use crate::git::GitName;
+use crate::git::{display_text, GitName};
 
 use super::acceptance::{
     active_block, bind_completion, blob_at, commit_of, finding, introduced_at, is_clean_remerge,
@@ -49,6 +51,9 @@ use super::acceptance::{
 use super::classify::is_planning_path;
 use super::lifecycle::{Brought, Graph, RecordView};
 use super::work_start::{record_kind_for_tree_path, RecordKind};
+
+/// A destination lookup failure, independent of work-record lifecycle rules.
+pub const DESTINATION_RULE: &str = "ci.destination_unavailable";
 
 /// The `role` value of the task that owns direct release work.
 pub const RELEASE_ROLE: &str = "release-integration";
@@ -130,7 +135,11 @@ pub fn pattern_problem(pattern: &str, protected: &[String]) -> Option<String> {
         .filter(|branch| !branch.contains(['*', '?', '[']))
         .find(|branch| parsed.matches(branch))
         .map(|branch| {
-            format!("it matches the protected branch '{branch}'; the default target is never a release branch")
+            // The default target is among them, and a remote names it.
+            format!(
+                "it matches the protected branch '{}'; the default target is never a release branch",
+                display_text(branch)
+            )
         })
 }
 
@@ -173,8 +182,9 @@ pub fn ask(repo_root: &Path, url: Option<&str>) -> Result<Result<Destination, St
 }
 
 /// What `url` advertises: its default branch, branches and tags (peeled),
-/// in one bounded `git ls-remote --symref`. A caller that already holds
-/// it, such as the pre-push hook, passes it on instead of asking again.
+/// in one bounded lookup (`git ls-remote --symref`, with timeout retries).
+/// A caller that already holds it, such as pre-push, passes it on instead
+/// of asking again.
 ///
 /// # Errors
 ///
@@ -184,7 +194,10 @@ pub fn advertisement(repo_root: &Path, url: &str) -> Result<String, String> {
         repo_root,
         &["--symref", url, "HEAD", "refs/heads/*", "refs/tags/*"],
     )
-    .map_err(|why| format!("asking the destination {url} for its default branch: {why}"))
+    .map_err(|why| {
+        let shown = crate::git::remote_query::display_url(url);
+        format!("asking the destination {shown} for its default branch: {why}")
+    })
 }
 
 /// The destination `url` is, read from its [`advertisement`].
@@ -194,6 +207,8 @@ pub fn advertisement(repo_root: &Path, url: &str) -> Result<String, String> {
 /// Returns why the answer names no usable default target: it has branches
 /// but its HEAD names none it has.
 pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String> {
+    // Messages name the destination without any credential in its URL.
+    let shown = crate::git::remote_query::display_url(url);
     let mut symref = None;
     let mut heads = Vec::new();
     for line in listed.strip_suffix('\n').unwrap_or(listed).split('\n') {
@@ -201,7 +216,7 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
             break;
         }
         let (left, name) = line.split_once('\t').ok_or_else(|| {
-            format!("cannot read the destination {url} advertisement: malformed ref record")
+            format!("cannot read the destination {shown} advertisement: malformed ref record")
         })?;
         if let Some(target) = left.strip_prefix("ref: ") {
             if name == "HEAD" {
@@ -211,11 +226,11 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
         }
         if left.len() != 40 {
             return Err(format!(
-                "cannot read the destination {url} advertisement: expected a full object ID"
+                "cannot read the destination {shown} advertisement: expected a full object ID"
             ));
         }
         let oid = Oid::from_str(left).map_err(|error| {
-            format!("cannot read the destination {url} advertisement object ID: {error}")
+            format!("cannot read the destination {shown} advertisement object ID: {error}")
         })?;
         if let Some(branch) = name.strip_prefix("refs/heads/") {
             heads.push((branch.to_string(), oid));
@@ -227,14 +242,15 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
             None if heads.is_empty() => None,
             None => {
                 return Err(format!(
-                    "the destination {url} names '{name}' as its default branch, which it does not have; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)"
+                    "the destination {shown} names '{}' as its default branch, which it does not have; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)",
+                    display_text(&name)
                 ))
             }
         },
         None if heads.is_empty() => None,
         None => {
             return Err(format!(
-                "the destination {url} does not name a default branch it has; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)"
+                "the destination {shown} does not name a default branch it has; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)"
             ))
         }
     };
@@ -261,8 +277,12 @@ pub fn default_tracks_work(repo_root: &Path, destination: &Destination) -> Resul
     };
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     ensure_objects(repo_root, &repo, destination, &[(name.as_str(), *tip)])?;
-    crate::workgraph::durable_work_tracking_enabled_at(repo_root, &tip.to_string())
-        .map_err(|why| format!("durable work tracking at the default target {name}: {why}"))
+    crate::workgraph::durable_work_tracking_enabled_at(repo_root, &tip.to_string()).map_err(|why| {
+        format!(
+            "durable work tracking at the default target {}: {why}",
+            display_text(name)
+        )
+    })
 }
 
 /// Whether a range is a release range, and under which pattern.
@@ -310,14 +330,16 @@ pub fn scope(
         Some((name, tip)) => {
             let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
             ensure_objects(repo_root, &repo, destination, &[(name.as_str(), *tip)])?;
-            let pattern = pattern_at(&repo, *tip, name)
-                .map_err(|why| format!("the policy at the default target {name} ({tip}): {why}"))?;
+            let shown = display_text(name);
+            let pattern = pattern_at(&repo, *tip, name).map_err(|why| {
+                format!("the policy at the default target {shown} ({tip}): {why}")
+            })?;
             let short = &tip.to_string()[..9];
             match pattern {
-                Some(pattern) => (pattern, format!("{name} at {short}")),
+                Some(pattern) => (pattern, format!("{shown} at {short}")),
                 None => (
                     BUILTIN_PATTERN.to_string(),
-                    format!("built in (no release_branch_pattern at {name} {short})"),
+                    format!("built in (no release_branch_pattern at {shown} {short})"),
                 ),
             }
         }
@@ -388,7 +410,7 @@ pub fn pull_request_merge(repo_root: &Path, base: &str, head: &str) -> Result<Oi
     };
     let (ours, theirs) = (commit(base)?, commit(head)?);
     let error = |error: git2::Error| error.message().to_string();
-    let mut index = repo.merge_commits(&ours, &theirs, None).map_err(error)?;
+    let mut index = history::merge_commits(&repo, &ours, &theirs).map_err(error)?;
     if index.has_conflicts() {
         let paths: BTreeSet<crate::git::GitName> = index
             .conflicts()
@@ -472,7 +494,9 @@ fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Option<Strin
     protected.push(default.to_string());
     match pattern_problem(&pattern, &protected) {
         Some(problem) => Err(format!(
-            "git.release_branch_pattern '{pattern}' is refused: {problem}"
+            "git.release_branch_pattern '{}' is refused: {problem}",
+            // The policy at the default target is remote content (TSK-388).
+            display_text(&pattern)
         )),
         None => Ok(Some(pattern)),
     }
@@ -496,7 +520,12 @@ pub fn advertised_tip_here(
         .chain(destination.default.iter())
         .find(|(name, _)| name == branch)
         .map(|(_, tip)| *tip)
-        .ok_or_else(|| format!("the destination advertises no branch '{branch}'"))?;
+        .ok_or_else(|| {
+            format!(
+                "the destination advertises no branch '{}'",
+                display_text(branch)
+            )
+        })?;
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     ensure_objects(repo_root, &repo, destination, &[(branch, tip)])?;
     Ok(tip)
@@ -530,13 +559,14 @@ fn ensure_objects(
         || Err("no destination to fetch from".to_string()),
         |url| crate::git::remote_query::fetch_objects(repo_root, url, &refs),
     );
+    history::refresh(repo);
     let still = missing(wanted);
     if still.is_empty() {
         return Ok(());
     }
     let named: Vec<String> = still
         .iter()
-        .map(|(name, tip)| format!("{name} at {tip}"))
+        .map(|(name, tip)| format!("{} at {tip}", display_text(name)))
         .collect();
     Err(format!(
         "the judge needs {}, which is not in this clone and could not be fetched{}",
@@ -627,7 +657,12 @@ fn expected_import(
 ) -> Result<BTreeMap<String, Entry>, String> {
     let error =
         |error: git2::Error| history_error(repo, &format!("{}: {}", merge.id(), error.message()));
-    let all: Vec<git2::Commit<'_>> = merge.parents().collect();
+    let all: Vec<git2::Commit<'_>> = history::parents(repo, merge)
+        .map_err(error)?
+        .into_iter()
+        .map(|id| repo.find_commit(id))
+        .collect::<Result<_, _>>()
+        .map_err(error)?;
     let first = &all[0];
     let parents: Vec<&git2::Commit<'_>> = all.iter().skip(1).collect();
     let mut ours = first.tree().map_err(error)?;
@@ -636,8 +671,7 @@ fn expected_import(
     for (position, incoming) in parents.iter().enumerate() {
         let mut bases = vec![incoming.id()];
         bases.extend(merged.iter().copied());
-        let ancestor = repo
-            .merge_base_many(&bases)
+        let ancestor = history::merge_base_many(repo, &bases)
             .and_then(|base| repo.find_commit(base))
             .and_then(|base| base.tree())
             .map_err(error)?;
@@ -747,6 +781,7 @@ impl<'a> Lines<'a> {
     }
 
     fn chain(&mut self, tip: Oid) -> &HashSet<Oid> {
+        let _judgment = history::judgment();
         let repo = self.repo;
         self.chains.entry(tip).or_insert_with(|| {
             let mut chain = HashSet::new();
@@ -758,7 +793,7 @@ impl<'a> Lines<'a> {
                 at = repo
                     .find_commit(oid)
                     .ok()
-                    .and_then(|commit| commit.parent_id(0).ok());
+                    .and_then(|commit| history::parent_id(repo, &commit, 0).ok());
             }
             chain
         })
@@ -796,15 +831,17 @@ impl<'a> Lines<'a> {
             .map(|(_, tip)| *tip)
         else {
             return Some(format!(
-                "{line} is not an epic line the destination advertises"
+                "{} is not an epic line the destination advertises",
+                display_text(line)
             ));
         };
         if !self.verified(line, tip) {
-            return Some(format!("{line} fails the epic-line check"));
+            return Some(format!("{} fails the epic-line check", display_text(line)));
         }
         if !self.chain(tip).contains(&cutoff) {
             return Some(format!(
-                "{line}'s cutoff {} is not on its first-parent chain",
+                "{}'s cutoff {} is not on its first-parent chain",
+                display_text(line),
                 short(cutoff)
             ));
         }
@@ -822,7 +859,8 @@ impl<'a> Lines<'a> {
         }
         if !self.chain(cutoff).contains(&landing) {
             return Some(format!(
-                "the landing is not on {line}'s first-parent chain at or before its release-rule cutoff {}",
+                "the landing is not on {}'s first-parent chain at or before its release-rule cutoff {}",
+                display_text(line),
                 short(cutoff)
             ));
         }
@@ -852,7 +890,7 @@ impl<'a> Lines<'a> {
                 at = repo
                     .find_commit(oid)
                     .ok()
-                    .and_then(|found| found.parent_id(0).ok());
+                    .and_then(|found| history::parent_id(repo, &found, 0).ok());
             }
             order.reverse();
             order
@@ -866,7 +904,7 @@ impl<'a> Lines<'a> {
             .position(|chain| *chain == commit)
             .unwrap_or_else(|| {
                 order.partition_point(|chain| {
-                    if let Ok(descends) = repo.graph_descendant_of(*chain, commit) {
+                    if let Ok(descends) = history::descendant_of(repo, *chain, commit) {
                         !descends
                     } else {
                         failed = true;
@@ -928,7 +966,11 @@ fn own_line_position(
     introduced: Oid,
 ) -> Result<Option<usize>, String> {
     let mut newest: Option<(usize, Oid)> = None;
-    for parent in merge.parent_ids().skip(1) {
+    for parent in history::parents(repo, merge)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .skip(1)
+    {
         if lines.line_of(parent)?.as_deref() != Some(target) {
             continue;
         }
@@ -961,7 +1003,7 @@ fn first_parent_path(
     anchor: Oid,
     default_tip: Option<Oid>,
 ) -> Result<Vec<Oid>, String> {
-    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
+    let mut walk = history::revwalk(repo).map_err(|error| error.to_string())?;
     walk.push(head)
         .and_then(|()| walk.hide(anchor))
         .and_then(|()| default_tip.map_or(Ok(()), |tip| walk.hide(tip)))
@@ -1022,6 +1064,7 @@ pub fn release_owner(
     base: &str,
     head: &str,
 ) -> Result<Option<String>, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -1030,8 +1073,7 @@ pub fn release_owner(
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
     let head_oid = oid(head)?;
-    let anchor = repo
-        .merge_base(oid(base)?, head_oid)
+    let anchor = history::merge_base(&repo, oid(base)?, head_oid)
         .map_err(|error| history_error(&repo, error.message()))?;
     let default_tip = destination.default.as_ref().map(|(_, tip)| *tip);
     let path = first_parent_path(&repo, head_oid, anchor, default_tip)?;
@@ -1041,7 +1083,7 @@ pub fn release_owner(
     let start = repo
         .find_commit(*oldest)
         .ok()
-        .and_then(|commit| commit.parent_id(0).ok());
+        .and_then(|commit| history::parent_id(&repo, &commit, 0).ok());
     let graph = Graph::from_revision(&repo, &head_oid.to_string())?;
     Ok(match owners(&repo, &graph, start)?.as_slice() {
         [owner] => Some(owner.id.clone()),
@@ -1165,6 +1207,7 @@ fn judge(
     head: &str,
     approved: &[(&str, &str)],
 ) -> Result<Judgement, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -1172,21 +1215,24 @@ fn judge(
             .map(|commit| commit.id())
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
-    if let Some(overlay) = history_overlay(&repo)? {
-        return Err(format!(
-            "this clone overlays its recorded history with {overlay}, so the commits a release check walks are not the ones the destination holds; remove it, or judge from a clone without it, then retry (SPC-013 R-120)"
-        ));
-    }
+    history::check(&repo).map_err(|error| error.to_string())?;
     let head_oid = oid(head)?;
-    let anchor = repo
-        .merge_base(oid(base)?, head_oid)
+    let anchor = history::merge_base(&repo, oid(base)?, head_oid)
         .map_err(|error| history_error(&repo, error.message()))?;
     let default_tip = destination.default.as_ref().map(|(_, tip)| *tip);
     let path = first_parent_path(&repo, head_oid, anchor, default_tip)?;
     let mut lines = Lines::new(repo_root, &repo, destination);
-    // Read at the default target's tip, never from the range.
+    // Read at the default target's tip, never from the range. The bridge
+    // only names the default target in its messages.
     let bridge = match &destination.default {
-        Some((name, tip)) => bridge(&repo, name, *tip, &path, &mut lines, approved)?,
+        Some((name, tip)) => bridge(
+            &repo,
+            &display_text(name),
+            *tip,
+            &path,
+            &mut lines,
+            approved,
+        )?,
         None => Bridge::default(),
     };
     let cutoffs = &bridge.rules;
@@ -1196,12 +1242,12 @@ fn judge(
     let start = repo
         .find_commit(*oldest)
         .ok()
-        .and_then(|commit| commit.parent_id(0).ok());
+        .and_then(|commit| history::parent_id(&repo, &commit, 0).ok());
     let graph = Graph::from_revision(&repo, &head_oid.to_string())?;
     let policy_at = destination
         .default
         .as_ref()
-        .map(|(name, tip)| format!("{name} at {}", short(*tip)))
+        .map(|(name, tip)| format!("{} at {}", display_text(name), short(*tip)))
         .unwrap_or_default();
     let mut notes = Vec::new();
     let mut findings = Vec::new();
@@ -1227,18 +1273,31 @@ fn judge(
             .find_commit(*commit_oid)
             .map_err(|error| error.message().to_string())?;
         let at = short(*commit_oid);
-        let first = commit.parent_id(0).ok();
+        let first = history::parent_id(&repo, &commit, 0).ok();
         let changed = changes(&repo, first, *commit_oid)?;
         let mut unqualified = None;
-        if commit.parent_count() > 1 {
-            for parent in commit.parent_ids().skip(1) {
+        if history::parents(&repo, &commit)
+            .map_err(|error| error.to_string())?
+            .len()
+            > 1
+        {
+            for parent in history::parents(&repo, &commit)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .skip(1)
+            {
                 if lines.line_of(parent)?.is_none() {
                     unqualified = Some(parent);
                     break;
                 }
             }
         }
-        if commit.parent_count() > 1 && unqualified.is_none() {
+        if history::parents(&repo, &commit)
+            .map_err(|error| error.to_string())?
+            .len()
+            > 1
+            && unqualified.is_none()
+        {
             // An import: each path is brought or a resolution.
             let expected = expected_import(&repo, &commit)?;
             let after = commit_entries(&repo, *commit_oid)?;
@@ -1281,7 +1340,11 @@ fn judge(
                 if record_kind_for_tree_path(path).is_none() || resolutions.contains(&path) {
                     continue;
                 }
-                for parent in commit.parent_ids().skip(1) {
+                for parent in history::parents(&repo, &commit)
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .skip(1)
+                {
                     if entry_at(&repo, parent, path)? == after.get(path).copied() {
                         record_sources.insert(path.clone(), parent);
                         break;
@@ -1297,8 +1360,9 @@ fn judge(
                 // The resolution may keep a `uid` one side holds (one line's
                 // backfill), but never drop the release side's `uid` nor
                 // bring one that neither side held.
-                let ours = commit
-                    .parent_ids()
+                let ours = history::parents(&repo, &commit)
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
                     .next()
                     .map(|parent| record_at(&repo, parent, path))
                     .transpose()?
@@ -1341,7 +1405,11 @@ fn judge(
                     continue;
                 };
                 let mut source = None;
-                for parent in commit.parent_ids().skip(1) {
+                for parent in history::parents(&repo, &commit)
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .skip(1)
+                {
                     if record_at(&repo, parent, path)?.is_some_and(|there| {
                         there.criteria.signature() == now.criteria.signature()
                             && active_block(&there) == active_block(&now)
@@ -1418,7 +1486,11 @@ fn judge(
                     match (source, active_block(&now)) {
                         (Some(source), Some(block)) => {
                             let introduced = introduced_at(&repo, &now, &block, source)?;
-                            let bound = bind_completion(
+                            // The attributed source line is where the task
+                            // landed: a receiving line for its landing merge,
+                            // never a clean-merge stacking authority.
+                            let run = super::acceptance::RunBases::new(default_tip);
+                            let bound = super::acceptance::bind_completion_with_amendment(
                                 &repo,
                                 &now,
                                 &graph,
@@ -1426,7 +1498,11 @@ fn judge(
                                 default_tip,
                                 Transport::TaskLanding,
                                 super::acceptance::source_landing_base(&repo, source, introduced)?,
-                            );
+                                None,
+                                &run.stacking().with_landing_line(source),
+                                &run.criteria(),
+                            )
+                            .findings;
                             // Where the task's own line landed it, when the
                             // import brings it from that line.
                             let target = now
@@ -1544,6 +1620,7 @@ fn judge(
                     Transport::Direct,
                     Some(anchor),
                 )
+                .findings
                 .into_iter()
                 .map(|mut found| {
                     if let Some(rest) = found.message.strip_prefix(&prefix) {
@@ -1591,15 +1668,18 @@ fn judge(
             }
             [owner] if owner.status == "complete" => {
                 if !direct_completions.contains_key(&owner.id) {
-                    findings.extend(bind_completion(
-                        &repo,
-                        owner,
-                        &graph,
-                        Landing::Commit(head_oid),
-                        default_tip,
-                        Transport::Direct,
-                        Some(anchor),
-                    ));
+                    findings.extend(
+                        bind_completion(
+                            &repo,
+                            owner,
+                            &graph,
+                            Landing::Commit(head_oid),
+                            default_tip,
+                            Transport::Direct,
+                            Some(anchor),
+                        )
+                        .findings,
+                    );
                 }
             }
             [owner] => {
@@ -1676,10 +1756,15 @@ fn landing_on_line(
     source: Oid,
     holds: &dyn Fn(Oid) -> Result<bool, String>,
 ) -> Result<Oid, String> {
+    let _judgment = history::judgment();
     let mut at = source;
     loop {
         let commit = repo.find_commit(at).map_err(|error| error.to_string())?;
-        let Some(parent) = commit.parent_ids().next() else {
+        let Some(parent) = history::parents(repo, &commit)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .next()
+        else {
             return Ok(at);
         };
         if !holds(parent)? {
@@ -1743,7 +1828,7 @@ fn brought_records(
             })?;
             let problem = match super::acceptance::non_planning_change(
                 repo,
-                repo.find_commit(landing).map_err(|error| error.to_string())?.parent_ids().next(),
+                history::parents(repo, &repo.find_commit(landing).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?.into_iter().next(),
                 landing,
             ) {
                 Ok(None) => None,
@@ -1856,7 +1941,12 @@ fn landed_criteria(
                 ),
             ));
         };
-        let Some(parent) = commit.parent_ids().next() else {
+        let Some(parent) = (match history::parents(repo, &commit) {
+            Ok(parents) => parents,
+            Err(error) => return Landed::Unreadable(finding(FROZEN_RULE, error.to_string())),
+        })
+        .into_iter()
+        .next() else {
             break commit;
         };
         match carries(parent) {
@@ -1867,7 +1957,7 @@ fn landed_criteria(
     };
     // Resolution 43: a reopened task keeps its criteria. Judged first, as
     // the task pull request rule judges it before the class exemptions.
-    if let Ok(parent) = landing.parent_id(0) {
+    if let Ok(parent) = history::parent_id(repo, &landing, 0) {
         let found = reopened.entry(landing.id()).or_insert_with(|| {
             let base = parent.to_string();
             let head = landing.id().to_string();
@@ -1898,7 +1988,11 @@ fn landed_criteria(
             }
         }
     }
-    match super::amendment::landing_problem(repo, landing.parent_id(0).ok(), landing.id()) {
+    match super::amendment::landing_problem(
+        repo,
+        history::parent_id(repo, &landing, 0).ok(),
+        landing.id(),
+    ) {
         Ok(None) => Landed::Planning,
         Ok(Some(_)) if own_task_landing(repo, path, &landing) => Landed::OwnTask {
             landing: landing.id(),
@@ -1937,10 +2031,17 @@ fn own_task_landing_read(
     path: &str,
     landing: &git2::Commit<'_>,
 ) -> Result<bool, String> {
-    if landing.parent_count() != 2 {
+    if history::parents(repo, landing)
+        .map_err(|error| error.to_string())?
+        .len()
+        != 2
+    {
         return Ok(false);
     }
-    let (Ok(first), Ok(second)) = (landing.parent_id(0), landing.parent_id(1)) else {
+    let (Ok(first), Ok(second)) = (
+        history::parent_id(repo, landing, 0),
+        history::parent_id(repo, landing, 1),
+    ) else {
         return Ok(false);
     };
     let Ok(changed) = changes(repo, Some(first), landing.id()) else {
@@ -1993,8 +2094,7 @@ fn own_review_reaches(repo: &Repository, from: Oid, reviewed: Oid) -> Result<boo
     if from == reviewed {
         Ok(true)
     } else {
-        repo.graph_descendant_of(from, reviewed)
-            .map_err(|error| error.to_string())
+        history::descendant_of(repo, from, reviewed).map_err(|error| error.to_string())
     }
 }
 
@@ -2016,8 +2116,11 @@ impl Marker {
         match self {
             Self::Absent => "removed".to_string(),
             Self::Adopted => format!("{MARKER_KEY} = 1"),
-            Self::Changed(value) => format!("changed to `{MARKER_KEY} = {value}`"),
-            Self::Invalid(why) => format!("unreadable ({why})"),
+            // Project config at the default target is remote content.
+            Self::Changed(value) => {
+                format!("changed to `{MARKER_KEY} = {}`", display_text(value))
+            }
+            Self::Invalid(why) => format!("unreadable ({})", display_text(why)),
         }
     }
 }
@@ -2123,37 +2226,6 @@ fn history_error(repo: &Repository, why: &str) -> String {
     }
 }
 
-/// A commit's first parent as its object records it, read from the object
-/// database: grafts, replace refs and shallow boundaries never apply.
-///
-/// # Errors
-///
-/// Returns a message when the object is missing or is not a commit.
-fn recorded_first_parent(odb: &git2::Odb<'_>, commit: Oid) -> Result<Option<Oid>, String> {
-    let object = odb.read(commit).map_err(|error| {
-        format!(
-            "commit {commit} is not in this clone ({}); fetch the default target's full history, then retry (SPC-013 R-120)",
-            error.message()
-        )
-    })?;
-    if object.kind() != git2::ObjectType::Commit {
-        return Err(format!("{commit} is not a commit"));
-    }
-    for line in object.data().split(|byte| *byte == b'\n') {
-        if line.is_empty() {
-            break;
-        }
-        if let Some(parent) = line.strip_prefix(b"parent ") {
-            let hex = std::str::from_utf8(parent)
-                .map_err(|_| format!("commit {commit} records a malformed parent"))?;
-            let parent = Oid::from_str(hex)
-                .map_err(|_| format!("commit {commit} records a malformed parent"))?;
-            return Ok(Some(parent));
-        }
-    }
-    Ok(None)
-}
-
 /// The history overlay of the repository at `repo_root`: a non-empty
 /// graft file or a replace ref, as the release judge finds it. The push
 /// set treats a clone with one as unable to prove two histories unrelated.
@@ -2170,7 +2242,7 @@ pub fn history_overlay_at(repo_root: &Path) -> Result<Option<String>, String> {
 /// A local overlay that makes git or libgit2 read commits' parents or
 /// objects as something other than what they record: a non-empty graft
 /// file, or a replace ref: a ref named by the literal prefix
-/// `refs/replace/` or `GIT_REPLACE_REF_BASE` followed by an object id.
+/// `refs/replace/` or `GIT_REPLACE_REF_BASE`, regardless of the remainder.
 /// The release walks go through libgit2, which follows grafts, and the
 /// push set through git, which follows both.
 ///
@@ -2183,7 +2255,7 @@ pub(super) fn history_overlay(repo: &Repository) -> Result<Option<String>, Strin
         repo.path().join("info").join("grafts"),
     ];
     if let Some(file) = std::env::var_os("GIT_GRAFT_FILE") {
-        grafts.push(std::path::PathBuf::from(file));
+        grafts.push(repo.workdir().unwrap_or(repo.path()).join(file));
     }
     for file in grafts {
         match std::fs::read_to_string(&file) {
@@ -2202,26 +2274,22 @@ pub(super) fn history_overlay(repo: &Repository) -> Result<Option<String>, Strin
     }
     // As git reads them: the base is a literal prefix, `refs/replace/`
     // unless `GIT_REPLACE_REF_BASE` names another (`refs/custom` selects
-    // `refs/custom<id>`), and a ref replaces the object its remainder names.
+    // `refs/custom<id>`). Git also accepts nested and suffixed names.
     // The built-in base is checked either way.
     let mut bases = vec![b"refs/replace/".to_vec()];
     if let Some(base) = std::env::var_os("GIT_REPLACE_REF_BASE") {
         bases.push(base.as_encoded_bytes().to_vec());
     }
-    let object_id =
-        |rest: &[u8]| matches!(rest.len(), 40 | 64) && rest.iter().all(u8::is_ascii_hexdigit);
     let references = repo
         .references()
         .map_err(|error| error.message().to_string())?;
     for reference in references {
         let reference = reference.map_err(|error| error.message().to_string())?;
         let name = reference.name_bytes();
-        let replaces = bases
-            .iter()
-            .any(|base| name.strip_prefix(base.as_slice()).is_some_and(&object_id));
+        let replaces = bases.iter().any(|base| name.starts_with(base));
         if replaces {
             return Ok(Some(format!(
-                "the replace ref {} (`git replace -d` removes it)",
+                "the replace ref {} (remove this ref before judging history)",
                 crate::git::GitName::from_bytes(name).display()
             )));
         }
@@ -2237,23 +2305,29 @@ pub(super) fn history_overlay(repo: &Repository) -> Result<Option<String>, Strin
 /// Returns a message when the clone is shallow but its boundary list
 /// cannot be read.
 pub(super) fn shallow_boundary(repo: &Repository) -> Result<HashSet<Oid>, String> {
-    if !repo.is_shallow() {
-        return Ok(HashSet::new());
-    }
-    // A linked worktree shares the list with its main checkout.
-    // Only a missing file falls back; any other read error refuses.
-    let listed = match std::fs::read_to_string(repo.path().join("shallow")) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::read_to_string(repo.commondir().join("shallow"))
+    // Git uses the common directory in linked worktrees. Libgit2 may also
+    // use the private file, so neither an absent nor an empty file masks
+    // a boundary in the other location.
+    let mut boundary = HashSet::new();
+    for file in [
+        repo.commondir().join("shallow"),
+        repo.path().join("shallow"),
+    ] {
+        let listed = match std::fs::read_to_string(&file) {
+            Ok(listed) => listed,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "shallow boundary {} cannot be read: {error}",
+                    file.display()
+                ))
+            }
+        };
+        for line in listed.split('\n').filter(|line| !line.is_empty()) {
+            boundary.insert(Oid::from_str(line).map_err(|error| error.message().to_string())?);
         }
-        read => read,
     }
-    .map_err(|error| format!("this clone is shallow and its boundary cannot be read: {error}"))?;
-    listed
-        .split('\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| Oid::from_str(line).map_err(|error| error.message().to_string()))
-        .collect()
+    Ok(boundary)
 }
 
 /// The default target's history, read from the parents each commit
@@ -2263,6 +2337,7 @@ struct History<'r> {
     repo: &'r Repository,
     odb: git2::Odb<'r>,
     boundary: HashSet<Oid>,
+    /// The default target's name as messages show it.
     default: &'r str,
     blobs: HashMap<Oid, Config>,
 }
@@ -2281,7 +2356,7 @@ impl<'r> History<'r> {
     }
 
     fn parent_of(&self, commit: Oid) -> Result<Option<Oid>, String> {
-        let Some(parent) = recorded_first_parent(&self.odb, commit)? else {
+        let Some(parent) = history::recorded_first_parent(self.repo, &self.odb, commit)? else {
             return Ok(None);
         };
         if self.odb.exists(parent) {
@@ -2345,7 +2420,8 @@ struct Bridge {
 /// finding uses the entry; and, once every entry meets those, each entry
 /// one of the `approved` cutoffs, which [`release_findings`] fixes to
 /// [`APPROVED_CUTOFFS`]. `lines` fetches the advertised lines, whose
-/// history holds the cutoffs, before they are read.
+/// history holds the cutoffs, before they are read. `default` is the
+/// default target's name as messages show it, and only messages use it.
 ///
 /// # Errors
 ///
@@ -2379,8 +2455,9 @@ fn bridge(
             (None, Marker::Adopted) => adopted = Some(at),
             (None, Marker::Changed(value)) => {
                 return Err(format!(
-                    "the adoption marker on {default} first appears at {} as `{MARKER_KEY} = {value}`; its one value is 1, so every release check refuses (SPC-013 R-120)",
-                    short(chain[at])
+                    "the adoption marker on {default} first appears at {} as `{MARKER_KEY} = {}`; its one value is 1, so every release check refuses (SPC-013 R-120)",
+                    short(chain[at]),
+                    display_text(value)
                 ))
             }
             (Some(first), Marker::Absent | Marker::Changed(_) | Marker::Invalid(_)) => {
@@ -2431,11 +2508,7 @@ fn bridge(
                     .map(|why| format!("but {why}")),
             };
             if let Some(why) = why {
-                return Err(bridge_refusal(
-                    key,
-                    default,
-                    &format!("names {} as the cutoff of {line}, {why}", short(*cutoff)),
-                ));
+                return Err(cutoff_refusal(key, default, &short(*cutoff), line, &why));
             }
         }
     }
@@ -2443,13 +2516,12 @@ fn bridge(
         for (line, cutoff) in table {
             let cutoff = cutoff.to_string();
             if !approved.contains(&(line.as_str(), cutoff.as_str())) {
-                return Err(bridge_refusal(
+                return Err(cutoff_refusal(
                     key,
                     default,
-                    &format!(
-                        "names {} as the cutoff of {line}, which is not one of CodeFlow's approved cutoffs: the tables bridge only CodeFlow's own 2.x to 3.0 history, and no consuming project can use one",
-                        &cutoff[..9]
-                    ),
+                    &cutoff[..9],
+                    line,
+                    "which is not one of CodeFlow's approved cutoffs: the tables bridge only CodeFlow's own 2.x to 3.0 history, and no consuming project can use one",
                 ));
             }
         }
@@ -2457,6 +2529,20 @@ fn bridge(
     let records = tables.pop().unwrap_or_default();
     let rules = tables.pop().unwrap_or_default();
     Ok(Bridge { rules, records })
+}
+
+/// The refusal of a transition-table entry: `key` on `default` names
+/// `cutoff` as the cutoff of `line`, then `why`. The line is a key of
+/// project config at the default target, so it is shown escaped (TSK-388).
+fn cutoff_refusal(key: &str, default: &str, cutoff: &str, line: &str, why: &str) -> String {
+    bridge_refusal(
+        key,
+        default,
+        &format!(
+            "names {cutoff} as the cutoff of {}, {why}",
+            display_text(line)
+        ),
+    )
 }
 
 fn bridge_refusal(key: &str, default: &str, condition: &str) -> String {
@@ -2541,8 +2627,7 @@ fn cutoff_problem(
         return Ok(None);
     };
     let after = cutoff == adoption
-        || repo
-            .graph_descendant_of(cutoff, adoption)
+        || history::descendant_of(repo, cutoff, adoption)
             .map_err(|error| error.message().to_string())?;
     Ok(after.then(|| {
         format!(
@@ -2569,7 +2654,7 @@ fn parse_table(key: &str, value: &toml::Value) -> Result<BTreeMap<String, Oid>, 
     for (line, value) in table {
         let entry = value
             .as_str()
-            .ok_or_else(|| format!("{key} entry for {line} is not a string"))?;
+            .ok_or_else(|| format!("{key} entry for {} is not a string", display_text(line)))?;
         let full = entry.len() == 40
             && entry
                 .bytes()
@@ -2579,7 +2664,9 @@ fn parse_table(key: &str, value: &toml::Value) -> Result<BTreeMap<String, Oid>, 
             .flatten()
             .ok_or_else(|| {
                 format!(
-                    "{key} entry for {line} at the default target (`{entry}`) is not a full 40-character lowercase commit id"
+                    "{key} entry for {} at the default target (`{}`) is not a full 40-character lowercase commit id",
+                    display_text(line),
+                    display_text(entry)
                 )
             })?;
         cutoffs.insert(line.clone(), oid);

@@ -72,6 +72,7 @@ impl Hosted {
         assert!(out.contains("TSK-001"), "{out}");
         let task = read(&self.root, TASK).replacen("- AC-1\n", CRITERION, 1);
         write(&self.root, TASK, &task);
+        state_outcome(&self.root, TASK);
         commit_all(&self.root, "docs: plan the work");
     }
 
@@ -145,6 +146,83 @@ fn record_baseline(root: &Path) {
 }
 
 const CRITERION: &str = "- AC-1 When run, the system shall work.\n";
+
+#[test]
+fn clears_work_classification() {
+    const BRANCH: &str = "plan/EPC-001-index";
+    const INDEX: &str = "DOC-INDEX.md";
+    let hosted = registered();
+    let root = &hosted.root;
+    hosted.branch("plan/outcome");
+    plan_epic(root, "the outcome");
+    set_field(root, TASK, "epic_id", "EPC-001");
+    set_field(root, TASK, "standalone_reason", "null");
+    write(root, INDEX, "# Documents\n");
+    commit_all(root, "docs: associate the task with the epic");
+    hosted.land("plan/outcome");
+    hosted.branch(BRANCH);
+    let amended = read(root, TASK).replace(
+        CRITERION,
+        "- AC-1 When run, the system shall register its planning home.\n",
+    );
+    write(root, TASK, &amended);
+    write(
+        root,
+        INDEX,
+        "# Documents\n\n- The outcome's planning home.\n",
+    );
+    commit_all(root, "docs: amend the criterion and index");
+    let body = hosted.dir.path().join("body.md");
+    std::fs::write(
+        &body,
+        "Task: EPC-001\n\n## Summary\nRegister the planning home.\n\n\
+         - Amend its criterion and index.\n\n## Changes\n- Register the home.\n\n\
+         ## Reviews\nNone: independent review follows.\n\n\
+         ## Release impact\nImpact: none\nBreaking: no\n\
+         Rationale: amend planning documents only.\nMigration: none\n",
+    )
+    .unwrap();
+    let check = || hosted.ci(BRANCH, &["--pr-body-file", body.to_str().unwrap()]);
+    prove(
+        "WORK_CLASSIFICATION",
+        "work.classification",
+        check,
+        |printed| {
+            assert!(printed.contains(INDEX), "{printed}");
+            assert!(printed.contains("none declared"), "{printed}");
+            assert!(
+                printed.contains("on the target through a task pull request"),
+                "{printed}"
+            );
+            let Step::Edit(policy_path) = catalogued("WORK_CLASSIFICATION").step else {
+                panic!("the classification remedy must name the policy to edit");
+            };
+            assert!(printed.contains(policy_path), "{printed}");
+            // Apply the printed edit on a task branch and land it on the
+            // target before bringing that policy into the amendment.
+            hosted.branch("task/TSK-001-declare-index");
+            let mut policy: serde_json::Value =
+                serde_json::from_str(&read(root, policy_path)).unwrap();
+            policy["git"]["document_indexes"] = serde_json::json!([INDEX]);
+            write(
+                root,
+                policy_path,
+                &serde_json::to_string_pretty(&policy).unwrap(),
+            );
+            commit_all(root, "chore: declare the documentation index");
+            hosted.land("task/TSK-001-declare-index");
+            git(root, &["switch", "-q", BRANCH]);
+            git(root, &["merge", "-q", "--no-edit", &hosted.upstream()]);
+        },
+    );
+    let after = check();
+    assert!(
+        after.contains("planning-only amendment of EPC-001"),
+        "{after}"
+    );
+    assert!(!after.contains("work.criteria_frozen"), "{after}");
+    assert!(after.contains("codeflow ci: clean"), "{after}");
+}
 
 // ---------------------------------------------------------------------------
 // History a clone does not have: `git fetch --unshallow`, as printed.
@@ -226,7 +304,7 @@ fn clears_ci_range_unreadable() {
     };
     prove(
         "CI_RANGE_UNREADABLE",
-        "could not diff the range",
+        "cannot verify history: this clone is shallow",
         check,
         |printed| {
             let step = printed_command(printed, "CI_RANGE_UNREADABLE", None);
@@ -508,6 +586,7 @@ fn clears_work_start_merge_planning() {
     hosted.seed();
     let out = codeflow(root, &["epic", "new", "an outcome"]);
     assert!(out.contains("EPC-001"), "{out}");
+    state_outcome(root, EPIC);
     set_field(root, TASK, "epic_id", "EPC-001");
     set_field(root, TASK, "standalone_reason", "null");
     commit_all(root, "docs: plan the epic");
@@ -615,7 +694,7 @@ fn clears_acceptance_binding() {
     commit(root, "y.txt", "feat: add y");
     prove(
         "ACCEPTANCE_BINDING",
-        "changed after the reviewed commit",
+        "changed between the reviewed commit",
         || hosted.ci("task/TSK-001-work", &[]),
         |printed| {
             // Review the pull request head, then take the printed steps in
@@ -672,9 +751,16 @@ fn clears_review_row_binding() {
     assert!(out.contains("todo -> complete"), "{out}");
     commit_all(root, "chore: complete the work");
     let body = hosted.dir.path().join("review-row.md");
+    // A short form that holds a digit: the Reviews reader takes a hex word
+    // without one for prose, so an all-letter prefix such as `bbfbddbaa`
+    // names no commit and the section defers to the block (hosted run
+    // 40734999603).
+    let short = reviewed
+        .find(|c: char| c.is_ascii_digit())
+        .map_or(reviewed.len(), |at| (at + 1).max(9));
     let house = format!(
         "| Reviewer | whole unit at `{}` | approved, no findings |",
-        &reviewed[..9]
+        &reviewed[..short]
     );
     let table = format!("| Seat | Scope | Verdict |\n|---|---|---|\n{house}");
     std::fs::write(&body, BODY.replace("None: pending review.", &table)).unwrap();

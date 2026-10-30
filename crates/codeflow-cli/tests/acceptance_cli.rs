@@ -9,11 +9,9 @@
 use std::path::Path;
 use std::process::Command;
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
@@ -29,7 +27,13 @@ fn codeflow() -> Command {
         .env_remove("BITBUCKET_PR_ID")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
+        .env_remove("GIT_INDEX_FILE")
+        // A caller's agent session must not judge fixture commits.
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CODEX_CI")
+        .env_remove("GROK_SESSION_ID");
     cmd
 }
 
@@ -42,6 +46,11 @@ fn git_out(dir: &Path, args: &[&str]) -> String {
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CODEX_CI")
+        .env_remove("GROK_SESSION_ID")
         .output()
         .expect("git runs");
     assert!(
@@ -266,14 +275,20 @@ fn a_completion_binds_to_the_reviewed_commit() {
     assert_passes(&pass, "reviewed code commit, record-only after it");
     assert!(pass.1.contains(SCOPE), "scope note: {}", pass.1);
 
+    // TSK-433 AC-8 (issue #320): the finding says what it compared and how
+    // much: the count of other paths from the reviewed commit to the point
+    // it binds at, and the first one.
     write(root, "src/lib.rs", "pub fn later() {}\n");
-    commit(root, "feat: change after review");
+    write(root, "src/more.rs", "pub fn also() {}\n");
+    let later = commit(root, "feat: change after review");
     assert_blocks(
         &ci(root, BRANCH, "TSK-001"),
         "a later code change",
         &[
             "work.acceptance_binding",
-            "src/lib.rs changed after the reviewed commit",
+            &format!(
+                "2 paths changed between the reviewed commit {reviewed} and {later}, first: src/lib.rs (commit {later}: src/lib.rs changed); review the result again"
+            ),
         ],
     );
 
@@ -554,7 +569,8 @@ fn task_status_complete_binds_the_block() {
         assert!(
             result
                 .1
-                .contains("src/lib.rs changed after the reviewed commit"),
+                .contains("1 path changed between the reviewed commit")
+                && result.1.contains("first: src/lib.rs"),
             "{policy}: {}",
             result.1
         );
@@ -898,8 +914,8 @@ fn a_waiver_amendment_changes_planning_records_only() {
 
 // The binding of a completion made after its task landed (the merge rule):
 // R is the second parent of a clean landing merge M on the completion's
-// first-parent chain, only merges and planning records follow M, and the
-// completion changes planning records only. `task status complete` and
+// first-parent chain, only merges, planning records and landed adoptions
+// follow M, and the completion changes planning records only. `task status complete` and
 // `codeflow ci` apply the same judge.
 
 const LINE: &str = "integration/EPC-001-line";
@@ -914,8 +930,13 @@ fn line_task(id: &str, status: &str, closeout: &str) -> String {
 
 /// `main` holds `ids` targeting [`LINE`], which is cut from it.
 fn line_repo(ids: &[&str]) -> tempfile::TempDir {
+    line_repo_with(ids, "")
+}
+
+/// [`line_repo`] with `extra_policy` inside the policy's `git` object.
+fn line_repo_with(ids: &[&str], extra_policy: &str) -> tempfile::TempDir {
     let tasks: Vec<(&str, &str)> = ids.iter().map(|id| (*id, OWN_JOURNEY)).collect();
-    let dir = repo(&tasks, "");
+    let dir = repo(&tasks, extra_policy);
     let root = dir.path();
     for id in ids {
         write(root, &record_path(id), &line_task(id, "todo", "Pending.\n"));
@@ -974,7 +995,7 @@ fn binding_lines(result: &(i32, String)) -> Vec<&str> {
 /// judged where it was introduced, not at the line tip.
 #[test]
 fn the_line_into_main_binds_each_completion_where_it_was_made() {
-    let dir = line_repo(&["TSK-001", "TSK-002", "TSK-003"]);
+    let dir = line_repo(&["TSK-001", "TSK-002", "TSK-003", "TSK-004"]);
     let root = dir.path();
     let first = build(root, "task/TSK-001-one", "src/one.rs");
     write_done(root, "TSK-001", "complete", &first);
@@ -986,7 +1007,9 @@ fn the_line_into_main_binds_each_completion_where_it_was_made() {
     land(root, "task/TSK-001-one");
     land(root, "task/TSK-002-two");
     land(root, "task/TSK-003-three");
-    build(root, "feat/other", "src/other.rs");
+    let other = build(root, "feat/other", "src/other.rs");
+    write_done(root, "TSK-004", "complete", &other);
+    commit(root, "docs: complete the other reviewed task");
     land(root, "feat/other");
     git(root, &["switch", "-C", "plan/complete-tsk003", LINE]);
     write_done(root, "TSK-003", "complete", &third);
@@ -1060,6 +1083,148 @@ fn a_late_completion_binds_to_the_landing_merge() {
         assert_passes(&result, what);
         assert!(binding_lines(&result).is_empty(), "{what}: {}", result.1);
     }
+}
+
+fn write_adoption(root: &Path, commit: &str) {
+    write(
+        root,
+        "project-management/epics/EPC-001.md",
+        &EPIC.replacen(
+            "specs: []",
+            &format!("specs: []\nline_adoptions:\n  - commit: {commit}\n    reason: Owner exemption\n    review: https://example.test/pr/2#review"),
+            1,
+        ),
+    );
+}
+
+fn refused_adoption(what: &str) {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    write(root, ".gitleaksignore", "# Owner exemption\n");
+    if what == "changed acceptance" {
+        write_done(root, "TSK-001", "todo", &reviewed);
+    }
+    let direct = commit(root, "chore: direct exemption");
+    if what != "absent" {
+        git(root, &["switch", "-c", "plan/adopt", LINE]);
+        write_adoption(
+            root,
+            if what == "wrong commit" {
+                &reviewed
+            } else {
+                &direct
+            },
+        );
+        commit(root, "docs: adopt exemption");
+        if !matches!(what, "branch only" | "branch merge") {
+            land(root, "plan/adopt");
+        }
+    }
+    if what == "branch merge" {
+        git(root, &["switch", LINE]);
+    }
+    // Keep an unlanded entry in the completion branch for the forgery case.
+    git(root, &["switch", "-c", "plan/complete-tsk001"]);
+    if what == "branch merge" {
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "merge: unlanded adoption",
+                "plan/adopt",
+            ],
+        );
+    }
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs: complete task");
+    let result = ci_on(root, LINE, "plan/complete-tsk001", "");
+    let reason = if what == "changed acceptance" {
+        "changes TSK-001's acceptance block"
+    } else {
+        "changes .gitleaksignore after the landing merge"
+    };
+    assert_blocks(&result, what, &["work.acceptance_binding", reason]);
+}
+
+#[test]
+fn a_direct_commit_without_an_adoption_refuses_binding() {
+    refused_adoption("absent");
+}
+
+#[test]
+fn an_adoption_only_on_the_completion_branch_refuses_binding() {
+    refused_adoption("branch only");
+}
+
+#[test]
+fn an_adoption_merged_only_into_the_completion_branch_refuses_binding() {
+    refused_adoption("branch merge");
+}
+
+#[test]
+fn an_adoption_of_another_commit_refuses_binding() {
+    refused_adoption("wrong commit");
+}
+
+#[test]
+fn an_adopted_commit_that_changes_acceptance_refuses_binding() {
+    refused_adoption("changed acceptance");
+}
+
+/// An owner's direct exemption is reviewed and adopted by a landed planning
+/// PR before a separate planning PR completes the already-landed task.
+#[test]
+fn a_late_completion_binds_after_a_landed_line_adoption() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    write(root, ".gitleaksignore", "# Owner's reviewed exemption\n");
+    let adopted = commit(root, "chore: record an exemption");
+    git(root, &["switch", "-c", "plan/adopt", LINE]);
+    write_adoption(root, &adopted);
+    commit(root, "docs: adopt the exemption");
+    land(root, "plan/adopt");
+    git(root, &["switch", "-c", "plan/complete-tsk001", LINE]);
+    write_done(root, "TSK-001", "in_progress", &reviewed);
+    assert_passes(&status_complete(root, "TSK-001"), "status after adoption");
+    commit(root, "docs: complete the task");
+    assert_passes(
+        &ci_on(root, LINE, "plan/complete-tsk001", ""),
+        "completion after landed adoption",
+    );
+    land(root, "plan/complete-tsk001");
+    let result = ci_on(root, "main", LINE, "");
+    assert_passes(&result, "adopted line into main");
+    assert!(
+        result
+            .1
+            .lines()
+            .any(|line| line.contains("pull request class:")
+                && line.contains(&format!("adopts {}", &adopted[..9]))),
+        "{}",
+        result.1
+    );
+}
+
+#[test]
+fn status_on_the_line_binds_after_a_landed_adoption() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    write(root, ".gitleaksignore", "# Owner's reviewed exemption\n");
+    let adopted = commit(root, "chore: record an exemption");
+    git(root, &["switch", "-c", "plan/adopt", LINE]);
+    write_adoption(root, &adopted);
+    commit(root, "docs: adopt the exemption");
+    land(root, "plan/adopt");
+    write_done(root, "TSK-001", "in_progress", &reviewed);
+    assert_passes(&status_complete(root, "TSK-001"), "status on the line");
 }
 
 /// A late completion fails when the landing merge is not the clean
@@ -1238,6 +1403,10 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
             "the task branch's head",
             "strictly before the reviewed revision",
         ),
+        (
+            "merged into the task after the review",
+            "which the reviewed commit does not contain",
+        ),
     ] {
         let dir = line_repo(&["TSK-001"]);
         let root = dir.path();
@@ -1257,6 +1426,14 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
                 amend(root, "plan/narrow");
                 let amendment = land(root, "plan/narrow");
                 git(root, &["switch", "task/TSK-001-work"]);
+                (reviewed, amendment)
+            }
+            "merged into the task after the review" => {
+                let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+                amend(root, "plan/narrow");
+                let amendment = land(root, "plan/narrow");
+                git(root, &["switch", "task/TSK-001-work"]);
+                git(root, &["merge", "--no-ff", "-m", "merge: line", LINE]);
                 (reviewed, amendment)
             }
             _ => {
@@ -1299,11 +1476,13 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
     }
 }
 
-/// A late completion cut exactly at the amendment merge completes: the
-/// verb's `HEAD` is the completion's parent, so naming it as the waiver's
-/// amendment is not naming the head.
+/// A late completion cut exactly at the amendment merge does not waive by
+/// that amendment (TSK-340 review round 2): the review predates it, and a
+/// waiver names an amendment the reviewed commit contains, whatever the
+/// merge topology after the review. Naming the head itself is still not the
+/// refusal: the verb's `HEAD` is the completion's parent.
 #[test]
-fn a_completion_cut_at_the_amendment_merge_binds() {
+fn a_completion_cut_at_the_amendment_merge_needs_an_amendment_the_review_saw() {
     let dir = line_repo(&["TSK-001"]);
     let root = dir.path();
     let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
@@ -1321,12 +1500,864 @@ fn a_completion_cut_at_the_amendment_merge_binds() {
             &waived_block(&reviewed, &amendment),
         ),
     );
+    let needles = ["AC-1 waiver", "which the reviewed commit does not contain"];
     let verb = status_complete(root, "TSK-001");
-    assert_eq!(verb.0, 0, "the verb: {}", verb.1);
-    commit(root, "docs(records): complete TSK-001");
-    let result = ci_on(root, LINE, "plan/complete-tsk001", "");
-    assert_passes(&result, "the completion pull request");
-    assert!(binding_lines(&result).is_empty(), "{}", result.1);
+    assert_blocks(&verb, "the verb", &needles);
+    assert!(
+        !verb.1.contains("names the pull request head"),
+        "{}",
+        verb.1
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended_task("TSK-001", "complete", &waived_block(&reviewed, &amendment)),
+    );
+    commit(root, "docs(records): complete TSK-001 by hand");
+    assert_blocks(
+        &ci_on(root, LINE, "plan/complete-tsk001", ""),
+        "the completion pull request",
+        &needles,
+    );
+}
+
+/// TSK-340 review round 3: merge shape alone proves no landing. The review
+/// lies on a task branch; a separate branch from `main` adds unreviewed
+/// product and merges the review as its second parent, then completes with
+/// that review and no waiver. The merge is on no first-parent line this
+/// run trusts, so its first-parent work is not line work: the verb and CI
+/// refuse it.
+#[test]
+fn a_side_branch_merge_of_the_review_is_no_landing() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+    let branch = "task/TSK-001-side";
+    git(root, &["switch", "-c", branch, "main"]);
+    write(root, "src/side.rs", "pub fn unreviewed() {}\n");
+    commit(root, "feat: add unreviewed product");
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the review",
+            "task/TSK-001-review",
+        ],
+    );
+    let done = fix_block(&reviewed);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &done),
+    );
+    let verb = status_complete(root, "TSK-001");
+    complete(root, "TSK-001", OWN_JOURNEY, &done);
+    for result in [verb, ci(root, branch, "TSK-001")] {
+        assert_blocks(
+            &result,
+            "a side-branch merge of the review",
+            &["work.acceptance_binding", "TSK-001", "src/side.rs"],
+        );
+    }
+}
+
+/// TSK-340 review round 4: with base, head and `--into` pinned, no ref the
+/// requester controls makes a side-branch merge of the review a landing.
+/// The clone has `origin`; `origin/main` is the pinned base. Moving the
+/// local `main` onto the side merge, fetching an `origin/auxiliary` branch
+/// at it, or declaring that branch as the task's target, each leaves the
+/// refusal standing in CI, and the verb judges `origin/main`, never the
+/// moved local branch.
+#[test]
+#[allow(clippy::too_many_lines)] // One fixture per spoof keeps base, head and --into pinned.
+fn no_requester_ref_turns_a_side_branch_merge_into_a_landing() {
+    for spoof in ["local main", "fetched auxiliary", "declared auxiliary"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let origin = root.parent().unwrap().join(format!(
+            "origin-{}.git",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        git(
+            root,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
+        git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(root, &["push", "-q", "origin", "main"]);
+        git(root, &["fetch", "-q", "origin"]);
+        let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+        let branch = "task/TSK-001-side";
+        git(root, &["switch", "-c", branch, "main"]);
+        write(root, "src/side.rs", "pub fn unreviewed() {}\n");
+        commit(root, "feat: add unreviewed product");
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "chore: merge the review",
+                "task/TSK-001-review",
+            ],
+        );
+        let side = head(root);
+        let done = fix_block(&reviewed);
+        let declared = if spoof == "declared auxiliary" {
+            "auxiliary"
+        } else {
+            "main"
+        };
+        let record = |status: &str, closeout: &str| {
+            task("TSK-001", status, OWN_JOURNEY, closeout).replace(
+                "integration_target: main",
+                &format!("integration_target: {declared}"),
+            )
+        };
+        match spoof {
+            "local main" => git(root, &["branch", "-f", "main", &side]),
+            _ => git(
+                root,
+                &["update-ref", "refs/remotes/origin/auxiliary", &side],
+            ),
+        }
+        write(root, &record_path("TSK-001"), &record("todo", &done));
+        let verb = status_complete(root, "TSK-001");
+        write(root, &record_path("TSK-001"), &record("complete", &done));
+        commit(root, "docs(records): record the acceptance");
+        let out = codeflow()
+            .args([
+                "ci",
+                "--base",
+                "origin/main",
+                "--head",
+                "HEAD",
+                "--branch",
+                branch,
+                "--into",
+                "main",
+                "--pr-body",
+                &with_reviews(
+                    root,
+                    "HEAD",
+                    "## Summary\nA change.\n\n- one change\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n",
+                ),
+            ])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let ci = (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        );
+        // The verb refuses every spoof too (TSK-340 review round 5): it
+        // never takes a target the record names as a receiving line.
+        for (surface, result) in [("ci", ci), ("verb", verb)] {
+            assert_ne!(result.0, 0, "{spoof} ({surface}): {}", result.1);
+            assert!(
+                result.1.contains("work.acceptance_binding") && result.1.contains("src/side.rs"),
+                "{spoof} ({surface}): {}",
+                result.1
+            );
+        }
+    }
+}
+
+/// `codeflow ci` with `--base origin/main --into main` pinned.
+fn ci_pinned(root: &Path, branch: &str, id: &str) -> (i32, String) {
+    let out = codeflow()
+        .args([
+            "ci",
+            "--base",
+            "origin/main",
+            "--head",
+            "HEAD",
+            "--branch",
+            branch,
+            "--into",
+            "main",
+            "--pr-body",
+            &with_reviews(
+                root,
+                "HEAD",
+                &format!(
+                    "## Summary\nA change.\n\n- one change\n\nTask: {id}\n\n## Changes\n- one\n\n## Testing\n- test\n"
+                ),
+            ),
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// TSK-340 review round 4: "on the target" is the pinned target, never a
+/// branch the requester controls. A landed task is reopened in a fix pull
+/// request; its waiver names an AC-1 amendment (amended, then restored)
+/// made on the local `main` or on a fetched `origin/auxiliary`, neither of
+/// which `origin/main` holds. The verb and CI refuse it, naming the
+/// planning commit on the target a reopened task's waiver needs.
+#[test]
+fn a_waiver_off_the_pinned_target_is_refused() {
+    for source in ["local main", "fetched auxiliary"] {
+        let (dir, _, archived) = one_pr_fix();
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        let _remote = with_origin(root, "main");
+        let start = if source == "local main" {
+            "main"
+        } else {
+            "origin/main"
+        };
+        git(root, &["switch", "-C", "amend/off-target", start]);
+        let path = record_path("TSK-001");
+        let on_main = std::fs::read_to_string(root.join(&path)).unwrap();
+        write(
+            root,
+            &path,
+            &on_main.replacen("shall work.", "shall mostly work.", 1),
+        );
+        let amendment = commit(root, "docs(records): amend TSK-001 AC-1");
+        write(root, &path, &on_main);
+        let restored = commit(root, "docs(records): restore TSK-001 AC-1");
+        if source == "local main" {
+            git(root, &["branch", "-f", "main", &restored]);
+        } else {
+            git(
+                root,
+                &["update-ref", "refs/remotes/origin/auxiliary", &restored],
+            );
+        }
+        git(root, &["switch", "task/TSK-001-fix"]);
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "chore: merge the amendment",
+                &restored,
+            ],
+        );
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        let waiver = block(
+            &reviewed,
+            &[
+                &format!("AC-1: waived | {amendment}"),
+                "AC-2: verified | journey",
+            ],
+            "verified | journey",
+            "none: done",
+        );
+        let closeout = format!("{archived}{waiver}");
+        write(
+            root,
+            &path,
+            &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+        );
+        // Pinned, the verb judges the waiver against `origin/main`.
+        let verb = status_complete_args(
+            root,
+            "TSK-001",
+            &["--base", "origin/main", "--into", "main"],
+        );
+        complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+        for (surface, result) in [
+            ("verb", verb),
+            ("ci", ci_pinned(root, "task/TSK-001-fix", "TSK-001")),
+        ] {
+            assert_blocks(
+                &result,
+                &format!("a waiver from {source} ({surface})"),
+                &[
+                    "AC-1 waiver",
+                    "a reopened task's waiver must name a planning commit on the target",
+                ],
+            );
+        }
+    }
+}
+
+/// TSK-340 review round 4: `task status` pins the target to its
+/// remote-tracking ref. A clone with `origin` but no `origin/main` refuses
+/// the completion and names the fetch to run.
+#[test]
+fn task_status_refuses_without_the_remote_tracking_target() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    let origin = root.parent().unwrap().join(format!(
+        "origin-{}.git",
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    git(
+        root,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    // `origin` holds and advertises `main`, but this clone never fetched it.
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
+    );
+    let verb = status_complete_args(
+        root,
+        "TSK-001",
+        &["--base", "origin/main", "--into", "main"],
+    );
+    assert_ne!(verb.0, 0, "{}", verb.1);
+    assert!(verb.1.contains("git fetch origin main"), "{}", verb.1);
+}
+
+/// A side branch from `main` with unreviewed product that merges a reviewed
+/// task head as its second parent; returns the reviewed commit and the
+/// merge.
+fn side_merge(root: &Path) -> (String, String) {
+    let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+    git(root, &["switch", "-c", "task/TSK-001-side", "main"]);
+    write(root, "src/side.rs", "pub fn unreviewed() {}\n");
+    commit(root, "feat: add unreviewed product");
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the review",
+            "task/TSK-001-review",
+        ],
+    );
+    (reviewed, head(root))
+}
+
+/// TSK-340 review round 5: local git configuration selects no receiving
+/// source for `task status`. With `branch.main.remote` set to a review
+/// remote whose fetched `main` is the side merge, the verb still reads
+/// `origin/main` and refuses; with a review remote and no `origin`, it
+/// refuses and names the remote to set up.
+#[test]
+fn local_config_selects_no_receiving_source() {
+    for case in ["configured upstream", "no origin"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let _remote = (case == "configured upstream").then(|| with_origin(root, "main"));
+        let (reviewed, side) = side_merge(root);
+        git(
+            root,
+            &["remote", "add", "review", "https://example.test/review.git"],
+        );
+        if case == "configured upstream" {
+            git(root, &["update-ref", "refs/remotes/review/main", &side]);
+            git(root, &["config", "branch.main.remote", "review"]);
+        }
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
+        );
+        let verb = status_complete(root, "TSK-001");
+        assert_ne!(verb.0, 0, "{case}: {}", verb.1);
+        assert!(
+            verb.1.contains("--base origin/<name> --into <name>"),
+            "{case}: {}",
+            verb.1
+        );
+        if case == "configured upstream" {
+            let pinned = status_complete_args(
+                root,
+                "TSK-001",
+                &["--base", "origin/main", "--into", "main"],
+            );
+            assert_ne!(pinned.0, 0, "{case} pinned: {}", pinned.1);
+            assert!(
+                pinned.1.contains("src/side.rs"),
+                "{case} pinned: {}",
+                pinned.1
+            );
+        }
+    }
+}
+
+/// TSK-340 review round 5: `task status` anchors once, on the receiving
+/// source. A landed task is fixed in one pull request: complete, reopen,
+/// complete again with the same block. The verb accepts it whatever the
+/// local `main` points at, and refuses it with the reopen's archive entry
+/// deleted.
+#[test]
+fn moving_the_local_target_does_not_move_the_anchor() {
+    for dropped in [false, true] {
+        let (dir, _, archived) = one_pr_fix();
+        let root = dir.path();
+        let _remote = with_origin(root, "main");
+        git(root, &["switch", "task/TSK-001-fix"]);
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        let done = fix_block(&reviewed);
+        complete(root, "TSK-001", OWN_JOURNEY, &format!("{archived}{done}"));
+        let again = done.replace(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: same review again\n",
+        );
+        let reopened = if dropped {
+            archived.clone()
+        } else {
+            format!("{archived}{again}")
+        };
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &reopened),
+        );
+        commit(root, "docs: reopen the task again");
+        // Only the local target moves, onto the reviewed fix.
+        git(root, &["branch", "-f", "main", &reviewed]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &format!("{reopened}{done}")),
+        );
+        let verb = status_complete_args(
+            root,
+            "TSK-001",
+            &["--base", "origin/main", "--into", "main"],
+        );
+        if dropped {
+            assert_ne!(verb.0, 0, "dropped archive: {}", verb.1);
+            assert!(verb.1.contains("is missing"), "{}", verb.1);
+        } else {
+            assert_eq!(
+                verb.0, 0,
+                "valid repeat with a moved local main: {}",
+                verb.1
+            );
+        }
+    }
+}
+
+/// TSK-340 review round 5, the coordinator's follow-up: an `integration/`
+/// name earns no authority. TSK-001 declares `integration/EPC-009-rogue`,
+/// which no epic or policy at `main` names. The verb refuses a side-branch
+/// landing on it, a clean merge of it after the review, and a waiver whose
+/// batched amendment was made on it.
+#[test]
+fn an_unrecorded_integration_line_earns_no_authority() {
+    const ROGUE: &str = "integration/EPC-009-rogue";
+    for case in ["landing", "stacking", "waiver"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let path = record_path("TSK-001");
+        let rogue_task = |status: &str, closeout: &str| {
+            task("TSK-001", status, OWN_JOURNEY, closeout).replace(
+                "integration_target: main",
+                &format!("integration_target: {ROGUE}"),
+            )
+        };
+        write(root, &path, &rogue_task("todo", "Pending.\n"));
+        commit(root, "docs(records): target the rogue line");
+        let (reviewed, waiver) = match case {
+            "landing" => {
+                let (reviewed, side) = side_merge(root);
+                git(root, &["branch", ROGUE, &side]);
+                (reviewed, None)
+            }
+            "stacking" => {
+                let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+                git(root, &["switch", "-c", ROGUE, "main"]);
+                write(root, "src/rogue.rs", "pub fn unreviewed() {}\n");
+                commit(root, "feat: unreviewed line work");
+                git(root, &["switch", "task/TSK-001-review"]);
+                git(
+                    root,
+                    &["merge", "--no-ff", "-m", "chore: merge the line", ROGUE],
+                );
+                (reviewed, None)
+            }
+            _ => {
+                git(root, &["switch", "-c", ROGUE, "main"]);
+                let on_line = std::fs::read_to_string(root.join(&path)).unwrap();
+                write(
+                    root,
+                    &path,
+                    &on_line.replacen("shall work.", "shall mostly work.", 1),
+                );
+                let epic = "project-management/epics/EPC-001.md";
+                let epic_text = std::fs::read_to_string(root.join(epic)).unwrap();
+                write(
+                    root,
+                    epic,
+                    &epic_text.replace("An outcome.", "An amended outcome."),
+                );
+                let amendment = commit(root, "docs(records): batched amendment");
+                write(root, &path, &on_line);
+                commit(root, "docs(records): restore TSK-001 AC-1");
+                git(root, &["switch", "-c", "task/TSK-001-review", ROGUE]);
+                write(root, "src/lib.rs", "pub fn work() {}\n");
+                (commit(root, "feat: the work"), Some(amendment))
+            }
+        };
+        let ac1 = waiver.map_or("AC-1: verified | unit".to_string(), |by| {
+            format!("AC-1: waived | {by}")
+        });
+        let done = block(
+            &reviewed,
+            &[&ac1, "AC-2: verified | journey"],
+            "verified | journey",
+            "none: done",
+        );
+        write(root, &path, &rogue_task("todo", &done));
+        let verb = status_complete(root, "TSK-001");
+        assert_ne!(verb.0, 0, "{case}: {}", verb.1);
+        let needle = match case {
+            "landing" => "src/side.rs",
+            "stacking" => "src/rogue.rs",
+            _ => "AC-1 waiver",
+        };
+        assert!(verb.1.contains(needle), "{case}: {}", verb.1);
+    }
+}
+
+/// `task status <id> complete` with extra arguments.
+fn status_complete_args(root: &Path, id: &str, extra: &[&str]) -> (i32, String) {
+    let mut args = vec!["task", "status", id, "complete"];
+    args.extend_from_slice(extra);
+    let out = codeflow().args(&args).current_dir(root).output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// `task status <id> complete` with extra arguments and environment.
+fn status_complete_env(
+    root: &Path,
+    id: &str,
+    extra: &[&str],
+    env: &[(&str, &str)],
+) -> (i32, String) {
+    let mut args = vec!["task", "status", id, "complete"];
+    args.extend_from_slice(extra);
+    let mut command = codeflow();
+    command.args(&args).current_dir(root);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let out = command.output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// TSK-340, operator decision of 2026-10-27: local `task status` grants no
+/// landing, stacking or waiver authority in a clone with remotes without
+/// explicit `--base` and `--into`. Each probe of Codex's rounds 4 to 8
+/// steers a side merge of the review towards authority: a shadowing local
+/// `main`, a declared `auxiliary` target, a local `origin/HEAD`, and a
+/// rogue remote reached through `url.insteadOf`, `remote.origin.url`,
+/// `core.sshCommand` or `GIT_SSH_COMMAND`. Unpinned, each refuses and
+/// names the pins; pinned to `origin/main`, each refuses naming the
+/// unreviewed file. A valid completion passes pinned and unpinned, and a
+/// clone with no remotes still completes.
+#[test]
+#[allow(clippy::too_many_lines)] // One fixture per probe, sharing the side merge.
+fn local_task_status_needs_pins_for_authority() {
+    let pins = ["--base", "origin/main", "--into", "main"];
+    let names_pins = "--base origin/<name> --into <name>";
+    let probes = [
+        "local main shadow",
+        "declared auxiliary",
+        "origin/HEAD steering",
+        "insteadOf",
+        "remote.origin.url",
+        "core.sshCommand",
+        "GIT_SSH_COMMAND",
+    ];
+    for probe in probes {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let _remote = with_origin(root, "main");
+        let (reviewed, side) = side_merge(root);
+        let mut declared = "main";
+        let mut env: Vec<(&str, String)> = Vec::new();
+        // A rogue remote advertising `auxiliary` as its default, holding the
+        // side merge, which this clone has also "fetched" as
+        // `origin/auxiliary`. The name is not a Windows device name (`aux`
+        // is one, and cannot be a ref there).
+        let rogue = root.join(".git").join("rogue.git");
+        let rogue_path = rogue.to_str().unwrap().to_string();
+        let rogue_remote = |root: &Path| {
+            git(
+                root,
+                &["init", "-q", "--bare", "-b", "auxiliary", &rogue_path],
+            );
+            git(
+                root,
+                &[
+                    "push",
+                    "-q",
+                    &rogue_path,
+                    &format!("{side}:refs/heads/auxiliary"),
+                ],
+            );
+            git(
+                root,
+                &["update-ref", "refs/remotes/origin/auxiliary", &side],
+            );
+        };
+        let fake_ssh = root.join(".git").join("fake-ssh.sh");
+        let ssh_script = |path: &Path| {
+            std::fs::write(
+                path,
+                format!("#!/bin/sh\nexec git-upload-pack '{rogue_path}'\n"),
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        };
+        match probe {
+            "local main shadow" => git(root, &["branch", "-f", "main", &side]),
+            "declared auxiliary" => {
+                git(
+                    root,
+                    &["update-ref", "refs/remotes/origin/auxiliary", &side],
+                );
+                declared = "auxiliary";
+            }
+            "origin/HEAD steering" => {
+                git(
+                    root,
+                    &["update-ref", "refs/remotes/origin/auxiliary", &side],
+                );
+                git(
+                    root,
+                    &[
+                        "symbolic-ref",
+                        "refs/remotes/origin/HEAD",
+                        "refs/remotes/origin/auxiliary",
+                    ],
+                );
+            }
+            "insteadOf" => {
+                rogue_remote(root);
+                let url = git_out(root, &["remote", "get-url", "origin"]);
+                git(
+                    root,
+                    &["config", &format!("url.{rogue_path}.insteadOf"), &url],
+                );
+            }
+            "remote.origin.url" => {
+                rogue_remote(root);
+                git(root, &["remote", "set-url", "origin", &rogue_path]);
+            }
+            _ => {
+                rogue_remote(root);
+                ssh_script(&fake_ssh);
+                git(
+                    root,
+                    &[
+                        "remote",
+                        "set-url",
+                        "origin",
+                        "ssh://example.invalid/repo.git",
+                    ],
+                );
+                let command = fake_ssh.to_str().unwrap().to_string();
+                if probe == "core.sshCommand" {
+                    git(root, &["config", "core.sshCommand", &command]);
+                } else {
+                    env.push(("GIT_SSH_COMMAND", command));
+                }
+            }
+        }
+        git(root, &["branch", "--unset-upstream", "main"]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)).replace(
+                "integration_target: main",
+                &format!("integration_target: {declared}"),
+            ),
+        );
+        let env: Vec<(&str, &str)> = env
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
+        let unpinned = status_complete_env(root, "TSK-001", &[], &env);
+        assert_ne!(unpinned.0, 0, "{probe} unpinned: {}", unpinned.1);
+        assert!(
+            unpinned.1.contains(names_pins),
+            "{probe} unpinned: {}",
+            unpinned.1
+        );
+        if probe == "local main shadow" {
+            // Pinned to `origin/main`, a moved local `main` is irrelevant.
+            git(root, &["branch", "-f", "main", "origin/main"]);
+        }
+        let pinned = status_complete_env(root, "TSK-001", &pins, &env);
+        assert_ne!(pinned.0, 0, "{probe} pinned: {}", pinned.1);
+        assert!(
+            pinned.1.contains("src/side.rs"),
+            "{probe} pinned: {}",
+            pinned.1
+        );
+    }
+
+    // A valid completion passes pinned and unpinned.
+    for pinned in [true, false] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let _remote = with_origin(root, "main");
+        let reviewed = code_change(root, "task/TSK-001-work", "pub fn work() {}\n");
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
+        );
+        let extra: &[&str] = if pinned { &pins } else { &[] };
+        let verb = status_complete_args(root, "TSK-001", extra);
+        assert_eq!(verb.0, 0, "valid (pinned: {pinned}): {}", verb.1);
+    }
+
+    // A clone with no remotes completes against its local `main`.
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, "task/TSK-001-work", "pub fn work() {}\n");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &fix_block(&reviewed)),
+    );
+    let verb = status_complete(root, "TSK-001");
+    assert_eq!(verb.0, 0, "no remotes: {}", verb.1);
+}
+
+/// TSK-340 review round 8: `--base` and `--into` pin a task completion's
+/// receiving target; `epic status` does not take them, so it refuses them
+/// rather than ignoring them.
+#[test]
+fn epic_status_takes_no_receiving_target() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    for flags in [
+        &["--base", "main"][..],
+        &["--base", "main", "--into", "main"][..],
+    ] {
+        let mut args = vec!["epic", "status", "EPC-001", "complete"];
+        args.extend_from_slice(flags);
+        let out = codeflow().args(&args).current_dir(root).output().unwrap();
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert_ne!(out.status.code(), Some(0), "{flags:?}: {said}");
+        assert!(
+            said.contains("unexpected argument '--base'"),
+            "{flags:?}: {said}"
+        );
+    }
+}
+
+/// TSK-340 review round 2: reversing the merge parents manufactures no
+/// landing authority. The review lies on a task branch; `main` amends and
+/// restores AC-1; a branch from that `main` merges the review as its second
+/// parent and completes with the amendment as the waiver. The verb and CI
+/// refuse it, as they refuse the ordinary orientation.
+#[test]
+fn reversed_merge_parents_grant_no_waiver() {
+    for reversed in [true, false] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let reviewed = code_change(root, "task/TSK-001-review", "pub fn work() {}\n");
+        git(root, &["switch", "main"]);
+        let path = record_path("TSK-001");
+        let on_main = std::fs::read_to_string(root.join(&path)).unwrap();
+        write(
+            root,
+            &path,
+            &on_main.replacen("shall work.", "shall mostly work.", 1),
+        );
+        let amendment = commit(root, "docs(records): amend TSK-001 AC-1");
+        write(root, &path, &on_main);
+        commit(root, "docs(records): restore TSK-001 AC-1");
+        let branch = "task/TSK-001-reversed";
+        if reversed {
+            git(root, &["switch", "-c", branch, "main"]);
+            git(
+                root,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-m",
+                    "chore: merge the review",
+                    "task/TSK-001-review",
+                ],
+            );
+        } else {
+            git(root, &["switch", "-c", branch, "task/TSK-001-review"]);
+            git(
+                root,
+                &["merge", "--no-ff", "-m", "chore: merge main", "main"],
+            );
+        }
+        let waiver = block(
+            &reviewed,
+            &[
+                &format!("AC-1: waived | {amendment}"),
+                "AC-2: verified | journey",
+            ],
+            "verified | journey",
+            "none: done",
+        );
+        write(root, &path, &task("TSK-001", "todo", OWN_JOURNEY, &waiver));
+        let verb = status_complete(root, "TSK-001");
+        complete(root, "TSK-001", OWN_JOURNEY, &waiver);
+        for result in [verb, ci(root, branch, "TSK-001")] {
+            assert_ne!(result.0, 0, "reversed: {reversed}: {}", result.1);
+            assert!(
+                result.1.contains("AC-1 waiver"),
+                "reversed: {reversed}: {}",
+                result.1
+            );
+        }
+    }
 }
 
 #[test]
@@ -1816,7 +2847,7 @@ fn assert_invalid_fix(fault: &str) {
     );
     let reason = match fault {
         "copied" => "inside the fix range",
-        "later-code" => "after the reviewed commit",
+        "later-code" => "changed between the reviewed commit",
         "dropped" | "edited" => "old acceptance block",
         "reason" => "reason",
         "missing" | "unverified" => "AC-1",
@@ -1950,7 +2981,7 @@ fn a_late_completion_carries_an_ancestor_review_past_unrelated_line_work() {
 
 /// Complete a task after its first reviewed work has landed on its line.
 fn late_completed_line() -> (tempfile::TempDir, String, String) {
-    let dir = line_repo(&["TSK-001"]);
+    let dir = line_repo(&["TSK-001", "TSK-002"]);
     let root = dir.path();
     let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
     land(root, "task/TSK-001-work");
@@ -2035,7 +3066,9 @@ fn a_separate_reopen_then_a_landed_fix_binds_a_late_recompletion() {
         let fixed = commit(root, "fix: repair the reopened work");
         git(root, &["switch", "-c", "other/change", LINE]);
         write(root, "src/other.rs", "pub fn other() {}\n");
-        commit(root, "feat: other line work");
+        let other = commit(root, "feat: other line work");
+        write_done(root, "TSK-002", "complete", &other);
+        commit(root, "docs: complete the other reviewed task");
         land(root, "other/change");
         land(root, "task/TSK-001-fix");
         if direct {
@@ -2118,7 +3151,10 @@ fn a_one_pr_reopen_does_not_carry_a_merged_review_past_later_code() {
     assert_blocks(
         &ci_on(root, LINE, "task/TSK-001-fix", "Task: TSK-001"),
         "a merged review carried past later code in a reopening range",
-        &["src/side.rs changed after the reviewed commit"],
+        &[
+            "1 path changed between the reviewed commit",
+            "first: src/side.rs",
+        ],
     );
 }
 
@@ -2298,11 +3334,12 @@ fn a_recompletion_keeps_a_criterion_amended_on_the_target() {
     );
 }
 
-/// TSK-140 and TSK-184 composed: a task pull request may merge its target
-/// after the review (TSK-184), but a one-PR fix reviews its own range and
-/// never stacks such a merge on that review (TSK-140, R-119).
+/// TSK-140, TSK-184 and TSK-340 composed: a task pull request may merge its
+/// target after the review (TSK-184), and since TSK-340 (issue #217) a
+/// one-PR fix takes the same allowance: its review still lies inside its
+/// own fix range, which starts where the review left the target.
 #[test]
-fn a_one_pr_fix_never_stacks_a_line_merge_on_its_review() {
+fn a_one_pr_fix_stacks_a_clean_line_merge_on_its_review() {
     for stacked in [false, true] {
         let (dir, _, archived) = one_pr_fix();
         let root = dir.path();
@@ -2325,15 +3362,12 @@ fn a_one_pr_fix_never_stacks_a_line_merge_on_its_review() {
             &format!("{archived}{}", fix_block(&reviewed)),
         );
         let result = ci(root, "task/TSK-001-fix", "TSK-001");
-        if stacked {
-            assert_blocks(
-                &result,
-                "a fix range does not stack a line merge",
-                &["work.acceptance_binding", "TSK-001", "inside the fix range"],
-            );
+        let what = if stacked {
+            "a fix range stacks a clean line merge"
         } else {
-            assert_passes(&result, "one pull request fix");
-        }
+            "one pull request fix"
+        };
+        assert_passes(&result, what);
     }
 }
 
@@ -2381,11 +3415,16 @@ fn an_own_range_waiver_is_the_target_amendment_once_the_task_lands() {
             BRANCH,
         ],
     );
-    let landed = codeflow_core::workgraph::acceptance::pull_request_findings(
+    // The line's judge pins the receiving line it judges (TSK-340): the
+    // range's own head, as a verified line, holds the landed amendment.
+    let landed = codeflow_core::workgraph::acceptance::pull_request_findings_judged(
         root,
         &before,
         "main",
         &codeflow_core::workgraph::acceptance::Criteria::Amendable,
+        None,
+        Some("main"),
+        &[],
     )
     .unwrap();
     assert!(
@@ -2418,10 +3457,10 @@ fn reopened_in_its_own_range() -> (tempfile::TempDir, String) {
 }
 
 /// A completion made and reopened inside its own pull request is a
-/// reopening range too (R-119): a clean merge of the target after the fix
-/// review is not stacked on that review, by the verb or by CI.
+/// reopening range too (R-119): since TSK-340 a clean merge of the target
+/// after the fix review stacks on that review, by the verb and by CI.
 #[test]
-fn a_completion_reopened_in_its_own_range_never_stacks_a_line_merge() {
+fn a_completion_reopened_in_its_own_range_stacks_a_clean_line_merge() {
     for stacked in [false, true] {
         let (dir, archived) = reopened_in_its_own_range();
         let root = dir.path();
@@ -2446,14 +3485,68 @@ fn a_completion_reopened_in_its_own_range_never_stacks_a_line_merge() {
         let verb = status_complete(root, "TSK-001");
         complete(root, "TSK-001", OWN_JOURNEY, &closeout);
         let result = ci(root, "task/TSK-001-fix", "TSK-001");
-        if stacked {
-            let needle = "src/line.rs changed after the reviewed commit";
-            assert_ne!(verb.0, 0, "the verb stacked a line merge: {}", verb.1);
-            assert!(verb.1.contains(needle), "{}", verb.1);
-            assert_blocks(&result, "an in-range reopen stacks nothing", &[needle]);
+        assert_passes(&verb, "the verb on an in-range reopen and fix");
+        assert_passes(&result, "an in-range reopen and fix");
+    }
+}
+
+/// TSK-340 review round 1: the clean target merge that a reopening range
+/// may now stack after its review never brings in a waiver the review did
+/// not see. The target amends AC-1 and restores it after the review; the
+/// fix branch merges it cleanly and names the amendment as its waiver. The
+/// verb and CI refuse it, for a reopen of a landed completion and for one
+/// made inside its own range (R-60).
+#[test]
+fn a_clean_line_merge_never_brings_a_late_target_waiver() {
+    for in_range in [false, true] {
+        let (dir, archived) = if in_range {
+            reopened_in_its_own_range()
         } else {
-            assert_passes(&verb, "the verb on an in-range reopen and fix");
-            assert_passes(&result, "an in-range reopen and fix");
+            let (dir, _, archived) = one_pr_fix();
+            (dir, archived)
+        };
+        let root = dir.path();
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        git(root, &["switch", "main"]);
+        let path = record_path("TSK-001");
+        let on_main = std::fs::read_to_string(root.join(&path)).unwrap();
+        write(
+            root,
+            &path,
+            &on_main.replacen("shall work.", "shall mostly work.", 1),
+        );
+        let amendment = commit(root, "docs(records): amend TSK-001 AC-1");
+        write(root, &path, &on_main);
+        commit(root, "docs(records): restore TSK-001 AC-1");
+        git(root, &["switch", "task/TSK-001-fix"]);
+        git(
+            root,
+            &["merge", "--no-ff", "-m", "chore: merge line", "main"],
+        );
+        let waiver = block(
+            &reviewed,
+            &[
+                &format!("AC-1: waived | {amendment}"),
+                "AC-2: verified | journey",
+            ],
+            "verified | journey",
+            "none: done",
+        );
+        let closeout = format!("{archived}{waiver}");
+        write(
+            root,
+            &path,
+            &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+        );
+        let verb = status_complete(root, "TSK-001");
+        complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+        for result in [verb, ci(root, "task/TSK-001-fix", "TSK-001")] {
+            assert_blocks(
+                &result,
+                &format!("a late target waiver (in range: {in_range})"),
+                &["AC-1 waiver", "which the reviewed commit does not contain"],
+            );
         }
     }
 }
@@ -2505,22 +3598,23 @@ fn a_one_pr_fix_has_no_own_range_waiver() {
         assert_blocks(
             &result,
             "an own-range waiver in a reopening range",
-            &["AC-1 waiver", "which is not on the target"],
+            &[
+                "AC-1 waiver",
+                "which is not on the target; a reopened task's waiver must name a planning commit on the target that amends this criterion",
+            ],
         );
     }
 }
 
-/// The same refusal when the range itself completed and reopened the task,
-/// which is still `todo` on its target.
+/// When the range itself completed and reopened the task, which is still
+/// `todo` on its target, no completion landed: the range is still the
+/// task's own pull request, so the own-range waiver stands, by the verb and
+/// by CI (TSK-340, issue #278).
 #[test]
-fn a_completion_reopened_in_its_own_range_has_no_own_range_waiver() {
+fn a_completion_reopened_in_its_own_range_keeps_the_own_range_waiver() {
     let (dir, archived) = reopened_in_its_own_range();
     for result in waive_by_own_amendment(dir.path(), &archived) {
-        assert_blocks(
-            &result,
-            "an own-range waiver after an in-range reopen",
-            &["AC-1 waiver", "which is not on the target"],
-        );
+        assert_passes(&result, "an own-range waiver after an in-range reopen");
     }
 }
 
@@ -2680,7 +3774,12 @@ fn a_clean_merge_of_the_moved_target_keeps_the_binding() {
         &standalone("TSK-001", "todo", "main", &valid_block(&reviewed_here)),
     );
     assert_passes(
-        &status_complete(root, "TSK-001"),
+        // A clone with remotes grants stacking authority only with pins.
+        &status_complete_args(
+            root,
+            "TSK-001",
+            &["--base", "origin/main", "--into", "main"],
+        ),
         "the verb after a clean merge of origin/main",
     );
     commit(root, "docs(records): complete the task");
@@ -2747,11 +3846,11 @@ fn anything_but_a_clean_target_merge_still_blocks_and_names_the_commit() {
                 "merge {culprit} is not a clean re-merge from the task's integration target"
             )],
             "commit" => vec![
-                format!("after the reviewed commit {reviewed}"),
+                format!("changed between the reviewed commit {reviewed} and {culprit}, first: src/extra.rs"),
                 format!("(commit {culprit}: src/extra.rs changed)"),
             ],
             _ => vec![
-                format!("after the reviewed commit {reviewed}"),
+                format!("changed between the reviewed commit {reviewed} and "),
                 format!("merge {culprit} brings"),
                 "which is not on the first-parent line of the target tip this run is judged against".to_string(),
             ],
@@ -2845,17 +3944,28 @@ fn local_refs_and_overlays_never_make_a_merge_the_target() {
             ],
         );
         let merge = head(root);
-        let needle = if case == "graft" {
-            "overlays its recorded history with the graft file".to_string()
-        } else {
-            format!("merge {merge} brings {foreign}, which is not on the first-parent line of the target tip this run is judged against ({published})")
-        };
+        let result = ci_on(root, &published, BRANCH, "Task: TSK-001");
+        if case == "graft" {
+            // An overlay now refuses before CI can trust the range enough
+            // to make an acceptance or target-containment judgment.
+            assert_eq!(result.0, 2, "grafted history: {}", result.1);
+            assert!(result.1.contains("cannot verify history"), "{}", result.1);
+            assert!(
+                result
+                    .1
+                    .contains("overlays its recorded history with the graft file"),
+                "{}",
+                result.1
+            );
+            continue;
+        }
+        let needle = format!("merge {merge} brings {foreign}, which is not on the first-parent line of the target tip this run is judged against ({published})");
         assert_blocks(
-            &ci_on(root, &published, BRANCH, "Task: TSK-001"),
+            &result,
             case,
             &[
                 "work.acceptance_binding",
-                &format!("src/unreviewed.rs changed after the reviewed commit {reviewed}"),
+                &format!("1 path changed between the reviewed commit {reviewed} and {merge}, first: src/unreviewed.rs"),
                 &needle,
             ],
         );
@@ -2934,6 +4044,14 @@ fn reopen_with_criteria(root: &Path, id: &str, old: &str, criteria: &str) -> [(i
 fn a_task_new_in_its_range_may_change_criteria_on_reopen() {
     let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
     let root = dir.path();
+    // The record is in the reviewed commit, as a task introduced in its own
+    // range is when it completes, so the fixture's first completion is a
+    // structurally valid one (the task is still absent from the target).
+    write(
+        root,
+        &record_path("TSK-002"),
+        &new_standalone(&task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n")),
+    );
     let reviewed = code_change(root, "task/TSK-002-new", "pub fn initial() {}\n");
     let old = fix_block(&reviewed);
     let record = new_standalone(&task("TSK-002", "complete", OWN_JOURNEY, &old));
@@ -3563,6 +4681,241 @@ fn a_task_on_a_diverged_line_completes_before_main_holds_it() {
     );
 }
 
+/// Issue 176, with both held records present and the hook's fixed main
+/// authority. Only the line replaces the criteria unless `competing`.
+fn held_version_push(competing: bool) -> ((i32, String), String, String, String, String) {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let path = record_path("TSK-001");
+    git(root, &["switch", LINE]);
+    let newer = line_task("TSK-001", "todo", "Pending.\n")
+        .replace("the system shall work.", "the system shall work fast.");
+    write(root, &path, &newer);
+    let line = commit(root, "docs: amend the line criterion");
+    let line_blob = git_out(root, &["rev-parse", &format!("HEAD:{path}")]);
+    git(root, &["switch", "main"]);
+    if competing {
+        write(root, &path, &newer.replace("work fast.", "stop."));
+    } else {
+        write(root, "unrelated.txt", "unrelated\n");
+    }
+    let main = commit(root, "docs: change main after the fork");
+    let main_blob = git_out(root, &["rev-parse", &format!("HEAD:{path}")]);
+    git(root, &["switch", "-c", BRANCH, LINE]);
+    write(root, &path, &format!("{newer}\nA description note.\n"));
+    commit(root, "docs: describe the task");
+    let out = codeflow()
+        .args([
+            "ci",
+            "--base",
+            &line,
+            "--head",
+            "HEAD",
+            "--branch",
+            BRANCH,
+            "--policy-from",
+            &main,
+            "--commits-from",
+            &main,
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        ),
+        line,
+        line_blob,
+        main,
+        main_blob,
+    )
+}
+
+#[test]
+fn a_task_on_a_diverged_line_uses_its_newer_held_version() {
+    let (result, line, blob, main, _) = held_version_push(false);
+    assert_passes(&result, "main inherited the version the line replaced");
+    for text in [
+        "criteria authority",
+        &line[..9],
+        &blob[..9],
+        &main[..9],
+        "holds older version",
+    ] {
+        assert!(result.1.contains(text), "missing {text}: {}", result.1);
+    }
+    assert!(!result.1.contains("work.criteria_frozen"), "{}", result.1);
+}
+
+#[test]
+fn competing_held_versions_name_the_points_and_blobs() {
+    let (result, line, blob, main, main_blob) = held_version_push(true);
+    assert_blocks(
+        &result,
+        "independent amendments compete",
+        &[
+            "work.criteria_frozen",
+            "different versions",
+            &line[..9],
+            &blob[..9],
+            &main[..9],
+            &main_blob[..9],
+        ],
+    );
+}
+
+/// `ci` on a task branch cut from the line, judged with `main` as the
+/// hook's fixed authority.
+fn ci_on_line(root: &Path, line: &str, main: &str, branch: &str) -> (i32, String) {
+    let out = codeflow()
+        .args([
+            "ci",
+            "--base",
+            line,
+            "--head",
+            "HEAD",
+            "--branch",
+            branch,
+            "--policy-from",
+            main,
+            "--commits-from",
+            main,
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// SEC-306-03: one run judges every task with one record store. TSK-001's
+/// line replaced the criteria main still holds; TSK-002 has the same two
+/// criteria, but main amended it concurrently. TSK-001's proof is judged
+/// first and must not answer for TSK-002, which still refuses.
+#[test]
+fn an_earlier_task_cannot_clear_a_later_tasks_competing_versions() {
+    let dir = line_repo(&["TSK-001", "TSK-002"]);
+    let root = dir.path();
+    let criterion = |id: &str, text: &str| {
+        line_task(id, "todo", "Pending.\n").replace("the system shall work.", text)
+    };
+    write(
+        root,
+        &record_path("TSK-001"),
+        &criterion("TSK-001", "the system shall stop."),
+    );
+    commit(root, "docs: plan TSK-001 to stop");
+    git(root, &["branch", "-f", LINE, "main"]);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &criterion("TSK-002", "the system shall stop."),
+    );
+    commit(root, "docs: amend TSK-002 on main");
+    git(root, &["switch", LINE]);
+    for id in ["TSK-001", "TSK-002"] {
+        write(
+            root,
+            &record_path(id),
+            &criterion(id, "the system shall work fast."),
+        );
+    }
+    let line = commit(root, "docs: amend both on the line");
+    git(root, &["switch", "main"]);
+    write(root, "unrelated.txt", "unrelated\n");
+    let main = commit(root, "chore: unrelated");
+    git(root, &["switch", "-c", BRANCH, LINE]);
+    for id in ["TSK-001", "TSK-002"] {
+        let text = format!(
+            "{}\nA description note.\n",
+            criterion(id, "the system shall work fast.")
+        );
+        write(root, &record_path(id), &text);
+    }
+    commit(root, "docs: describe the tasks");
+    let result = ci_on_line(root, &line, &main, BRANCH);
+    assert_blocks(
+        &result,
+        "TSK-002's concurrent amendment competes",
+        &[
+            "lifecycle invariant work.criteria_frozen",
+            "TSK-002 changes its record",
+            "TSK-001 criteria authority:",
+            "holds older version",
+            "TSK-002 criteria authority unknown",
+        ],
+    );
+}
+
+/// SEC-306-04: on a record neither judged point holds, a status change
+/// after the line resolved main's concurrent amendment does not erase the
+/// line's earlier decision, so main's amendment still competes.
+#[test]
+fn a_status_change_does_not_settle_a_recovered_records_competing_criteria() {
+    let dir = line_repo(&["TSK-002"]);
+    let root = dir.path();
+    let path = record_path("TSK-002");
+    let version = |status: &str, text: &str| {
+        line_task("TSK-002", status, "Pending.\n").replace("the system shall work.", text)
+    };
+    write(root, &path, &version("todo", "the system shall stop."));
+    commit(root, "docs: amend on main");
+    git(root, &["switch", LINE]);
+    write(root, &path, &version("todo", "the system shall work fast."));
+    commit(root, "docs: amend on the line");
+    Command::new("git")
+        .args(["merge", "--no-ff", "--no-commit", "main"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    write(root, &path, &version("todo", "the system shall work fast."));
+    commit(root, "merge main, keep the line");
+    write(
+        root,
+        &path,
+        &version("blocked", "the system shall work fast."),
+    );
+    commit(root, "docs: block the task");
+    git(root, &["rm", "-q", &path]);
+    let line = commit(root, "docs: retire on the line");
+    git(root, &["switch", "main"]);
+    write(root, "unrelated.txt", "unrelated\n");
+    commit(root, "chore: unrelated");
+    git(root, &["rm", "-q", &path]);
+    let main = commit(root, "docs: retire on main");
+    let branch = "task/TSK-002-work";
+    git(root, &["switch", "-c", branch, LINE]);
+    write(
+        root,
+        &path,
+        &version("blocked", "the system shall work fast."),
+    );
+    commit(root, "docs: restore the task");
+    let result = ci_on_line(root, &line, &main, branch);
+    assert_blocks(
+        &result,
+        "main's amendment competes with the line's",
+        &[
+            "lifecycle invariant work.criteria_frozen",
+            "TSK-002 criteria authority unknown",
+        ],
+    );
+}
+
 /// Round 2 of the TSK-220 review: a line range's own line carries a merge
 /// after the review only for a task whose target is that line. A task
 /// bound for `main` that merges the line after its review still refuses
@@ -3586,7 +4939,9 @@ fn a_line_carries_merges_only_for_the_tasks_that_target_it() {
         let reviewed = build(root, BRANCH, "src/reviewed.rs");
         git(root, &["switch", "-q", "-c", "feat/side", LINE]);
         write(root, "src/side.rs", "pub fn side() {}\n");
-        commit(root, "feat: work on the line");
+        let side = commit(root, "feat: work on the line");
+        write_done(root, "TSK-002", "complete", &side);
+        commit(root, "docs: complete the other reviewed task");
         let line_tip = land(root, "feat/side");
         git(root, &["switch", "-q", BRANCH]);
         git(
@@ -3609,7 +4964,9 @@ fn a_line_carries_merges_only_for_the_tasks_that_target_it() {
                 &[
                     "work.acceptance_binding",
                     "TSK-001",
-                    "src/side.rs changed after the reviewed commit",
+                    "changed between the reviewed commit",
+                    "first: project-management/tasks/TSK-002.md",
+                    "not on the first-parent line of the target tip",
                 ],
             );
         } else {
@@ -3868,8 +5225,10 @@ fn wrongly_accepted(case: &str, results: [(i32, String); 2], needle: &str) -> Ve
 }
 
 /// The target's tip on a configured upstream of another remote holds the
-/// landed task, while the local target branch is stale: the verb reads that
-/// upstream as CI does (TSK-217, issue #67).
+/// landed task, while the local target branch is stale. CI pinned to that
+/// upstream refuses the changed criteria (TSK-217, issue #67); the verb
+/// never takes `branch.main.remote` as a receiving source, so in a clone
+/// with no `origin` it refuses and names the remote to set up (TSK-340).
 #[test]
 fn a_configured_upstream_on_another_remote_holds_the_task() {
     let dir = repo(&[], "");
@@ -3895,9 +5254,19 @@ fn a_configured_upstream_on_another_remote_holds_the_task() {
     git(root, &["config", "branch.main.merge", "refs/heads/main"]);
     git(root, &["branch", "-f", "main", &early]);
     let shape = |record: String| standalone_one(&record);
-    let results =
+    let [verb, ci] =
         complete_reopen_complete(root, &path, &shape, "refs/remotes/upstream/main", false);
-    let wrong = wrongly_accepted("upstream", results, "reopened task keeps its criteria");
+    assert_ne!(verb.0, 0, "upstream verb: {}", verb.1);
+    assert!(
+        verb.1.contains("--base origin/<name> --into <name>"),
+        "upstream verb: {}",
+        verb.1
+    );
+    let wrong = wrongly_accepted(
+        "upstream",
+        [(1, "reopened task keeps its criteria".into()), ci],
+        "reopened task keeps its criteria",
+    );
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
 
@@ -5339,3 +6708,258 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
         format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
     }
 }
+
+/// An acceptance file at `name` in `inputs`, a directory the test owns and
+/// keeps outside the repository, with `text`.
+fn acceptance_file(inputs: &tempfile::TempDir, name: &str, text: &str) -> std::path::PathBuf {
+    let path = inputs.path().join(name);
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// `codeflow task status <id> complete --acceptance <file>`.
+fn status_complete_with(root: &Path, id: &str, file: &Path) -> (i32, String) {
+    let out = codeflow()
+        .args(["task", "status", id, "complete", "--acceptance"])
+        .arg(file)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// A repository with `TSK-001` in progress on its task branch, one code
+/// change in, an owned directory for acceptance files, and the head that
+/// change made.
+fn in_progress_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
+    let dir = repo(&[("TSK-001", NO_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "in_progress", NO_JOURNEY, "Pending.\n"),
+    );
+    commit(root, "docs(records): start the work");
+    (dir, tempfile::tempdir().unwrap(), reviewed)
+}
+
+/// TSK-307 AC-1 (issue 175): a file whose top level is the block's fields,
+/// without the `acceptance:` key, is refused before the record is written,
+/// by a message that names the file and the key, not the task record.
+#[test]
+fn an_acceptance_file_without_its_top_level_key_is_refused_by_name() {
+    let (dir, inputs, reviewed) = in_progress_repo();
+    let root = dir.path();
+    let file = acceptance_file(
+        &inputs,
+        "fields-only.yaml",
+        &format!(
+            "reviewed: {reviewed}\nreview: https://example.test/pr/1#review\ncriteria:\n  AC-1: verified | cargo test\njourney: none | no journey criterion\nnot_verified: none\nfollow_ups: none\nverdict: approved\n"
+        ),
+    );
+    let before = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    let result = status_complete_with(root, "TSK-001", &file);
+    assert_eq!(result.0, 1, "{}", result.1);
+    assert!(
+        result.1.contains("fields-only.yaml"),
+        "names the file: {}",
+        result.1
+    );
+    assert!(
+        result.1.contains("top-level `acceptance:` key"),
+        "names the key: {}",
+        result.1
+    );
+    assert!(
+        result.1.contains("reviewed, review, criteria, journey"),
+        "lists the fields: {}",
+        result.1
+    );
+    assert!(
+        !result.1.contains("TSK-001") && !result.1.contains("a complete record needs"),
+        "does not blame the record: {}",
+        result.1
+    );
+    let after = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    assert_eq!(before, after, "the record is not written");
+}
+
+/// TSK-307 AC-2: a file that is not YAML and does not open with the header
+/// is refused with the file name and the parse error.
+#[test]
+fn an_acceptance_file_that_is_not_yaml_is_refused_with_the_parse_error() {
+    let (dir, inputs, _) = in_progress_repo();
+    let root = dir.path();
+    let file = acceptance_file(
+        &inputs,
+        "broken.yaml",
+        "reviewed: [unclosed\nreview: x: y\n",
+    );
+    let before = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    let result = status_complete_with(root, "TSK-001", &file);
+    assert_eq!(result.0, 1, "{}", result.1);
+    assert!(
+        result.1.contains("broken.yaml"),
+        "names the file: {}",
+        result.1
+    );
+    assert!(
+        result.1.contains("not valid YAML"),
+        "says why: {}",
+        result.1
+    );
+    assert!(
+        result.1.contains("top-level `acceptance:` key"),
+        "names the key: {}",
+        result.1
+    );
+    assert!(!result.1.contains("TSK-001"), "{}", result.1);
+    let after = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    assert_eq!(before, after, "the record is not written");
+}
+
+/// TSK-307 AC-3: a file with the top-level key behaves as before. It is
+/// not refused for its shape (a value the block grammar allows but YAML
+/// does not, `none: nothing deferred`, included) and a real field problem
+/// is still reported by the field checks.
+#[test]
+fn a_file_with_the_key_reaches_the_field_checks() {
+    let (dir, inputs, reviewed) = in_progress_repo();
+    let root = dir.path();
+    let good = acceptance_file(
+        &inputs,
+        "good.yaml",
+        &block(
+            &reviewed,
+            &["AC-1: verified | cargo test | 3 passed"],
+            "none | no journey criterion",
+            "none: nothing deferred",
+        )
+        .replace("```yaml\n", "")
+        .replace("```\n", ""),
+    );
+    let result = status_complete_with(root, "TSK-001", &good);
+    assert_eq!(result.0, 0, "{}", result.1);
+    let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    assert!(record.contains("status: complete"), "{record}");
+
+    let (dir, inputs, _) = in_progress_repo();
+    let root = dir.path();
+    let wrong = acceptance_file(
+        &inputs,
+        "wrong-field.yaml",
+        "acceptance:\n  reviewed: not-a-commit\n  review: https://example.test/pr/1#review\n  criteria:\n    AC-1: verified | cargo test\n  journey: none | no journey criterion\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n",
+    );
+    let result = status_complete_with(root, "TSK-001", &wrong);
+    assert_eq!(result.0, 1, "{}", result.1);
+    assert!(
+        !result.1.contains("top-level `acceptance:` key"),
+        "{}",
+        result.1
+    );
+    assert!(
+        result.1.contains("reviewed"),
+        "field problem named: {}",
+        result.1
+    );
+}
+
+/// TSK-307 AC-2, AC-3: a malformed file that opens with the `acceptance:`
+/// header is not refused as bad YAML, because the block grammar accepts
+/// values that strict YAML rejects; the block parser reports it, the record
+/// is not written, and the message is the block's own, not a parse error.
+#[test]
+fn a_malformed_file_with_the_header_reaches_the_block_error() {
+    let (dir, inputs, _) = in_progress_repo();
+    let root = dir.path();
+    let file = acceptance_file(
+        &inputs,
+        "malformed.yaml",
+        "acceptance:\n  reviewed: [unclosed\n",
+    );
+    let before = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    let result = status_complete_with(root, "TSK-001", &file);
+    assert_eq!(result.0, 1, "{}", result.1);
+    assert!(
+        result
+            .1
+            .contains("acceptance block line 1: missing `criteria`"),
+        "the block parser's error: {}",
+        result.1
+    );
+    assert!(
+        !result.1.contains("not valid YAML"),
+        "not a YAML parse refusal: {}",
+        result.1
+    );
+    let after = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    assert_eq!(before, after, "the record is not written");
+}
+
+/// TSK-307 AC-5: on one repository, otherwise-valid bare fields are refused
+/// by file and key with the record unchanged, and the same fields wrapped
+/// under `acceptance:` complete the record.
+#[test]
+fn the_same_fields_wrapped_under_the_key_complete_the_record() {
+    let (dir, inputs, reviewed) = in_progress_repo();
+    let root = dir.path();
+    let fields = format!(
+        "reviewed: {reviewed}\nreview: https://example.test/pr/1#review\ncriteria:\n  AC-1: verified | cargo test\njourney: none | no journey criterion\nnot_verified: none\nfollow_ups: \"none: nothing deferred\"\nverdict: approved\n"
+    );
+    let bare = acceptance_file(&inputs, "bare.yaml", &fields);
+    let indented = fields.replace('\n', "\n  ");
+    let wrapped_text = format!("acceptance:\n  {}\n", indented.trim_end());
+    let wrapped = acceptance_file(&inputs, "wrapped.yaml", &wrapped_text);
+    let before = std::fs::read(root.join(record_path("TSK-001"))).unwrap();
+    let refused = status_complete_with(root, "TSK-001", &bare);
+    assert_eq!(refused.0, 1, "{}", refused.1);
+    assert!(refused.1.contains("bare.yaml"), "{}", refused.1);
+    assert!(
+        refused.1.contains("top-level `acceptance:` key"),
+        "{}",
+        refused.1
+    );
+    assert_eq!(
+        before,
+        std::fs::read(root.join(record_path("TSK-001"))).unwrap(),
+        "the refusal leaves the record byte-identical"
+    );
+    let done = status_complete_with(root, "TSK-001", &wrapped);
+    assert_eq!(done.0, 0, "{}", done.1);
+    let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    assert!(record.contains("status: complete"), "{record}");
+}
+
+/// TSK-307 AC-4: the option's help says the file holds a top-level
+/// `acceptance:` key and lists its fields.
+#[test]
+fn the_acceptance_help_names_the_key_and_its_fields() {
+    for command in [["task", "status"], ["epic", "status"]] {
+        let out = codeflow().args(command).arg("--help").output().unwrap();
+        let help = String::from_utf8_lossy(&out.stdout).to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "top-level `acceptance:` key",
+            "`reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`",
+        ] {
+            assert!(
+                flat.contains(needle),
+                "{command:?}: missing {needle:?} in {help}"
+            );
+        }
+    }
+}
+
+#[path = "acceptance_cli/imports.rs"]
+mod imports;
+
+#[path = "acceptance_cli/epic_line.rs"]
+mod epic_line;

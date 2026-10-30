@@ -9,6 +9,12 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+#[path = "hooks_cli/checkout_identity.rs"]
+mod checkout_identity;
+
+#[path = "hooks_cli/target_repository.rs"]
+mod target_repository;
+
 #[cfg(unix)]
 struct RestorePermissions {
     path: std::path::PathBuf,
@@ -36,18 +42,19 @@ impl Drop for RestorePermissions {
     }
 }
 
-/// Shared isolated `CODEFLOW_HOME`: these tests initialize tempdir repos
-/// (policy.json / project.toml), so without the override every invocation's
-/// registry touch would write them into the developer's real
-/// `~/.codeflow/registry.json` (per the `recall_remote_cli.rs` pattern).
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[allow(dead_code)]
+#[path = "support/drain_pipe.rs"]
+mod drain_pipe;
+
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    isolated_codeflow(Command::new(env!("CARGO_BIN_EXE_codeflow")))
+}
+
+fn isolated_codeflow(mut cmd: Command) -> Command {
     // Isolate from the developer's environment.
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
@@ -613,11 +620,12 @@ fn git_guard_holds_the_text_floor_for_wrapped_writes() {
             "sed -n '1,5p' .codeflow/policy.json",
             "git clean -ffdxn",
             "rm -rf .worktrees/v/target",
-            r#"rm -f "$d""#,
+            r#"d=build/a.o; rm -f "$d""#,
         ],
         "git.hook_integrity",
     );
-    // Keep this native environment expansion bounded, independent of host PATH.
+    // Non-shell-managed writer variables retain the process-environment
+    // reading. Directory names such as PWD never use this fallback.
     let payload = serde_json::json!({"tool_name":"Bash","tool_input":{"command":r#"rm -rf "$CODEFLOW_R16_GUARD_PATH/codeflow-scratch-tsk216""#},"cwd":root}).to_string();
     let out = run_with_stdin(
         codeflow()
@@ -627,7 +635,7 @@ fn git_guard_holds_the_text_floor_for_wrapped_writes() {
         &payload,
     );
     assert!(
-        out.status.success(),
+        out.status.code() == Some(0),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
@@ -954,8 +962,8 @@ const REVIEWER_ALLOWED: &[&str] = &[
     // Round sixteen: braces and run-time values in ordinary work.
     "rm build/{a,b}.o",
     "rm build/out{1..100}.o",
-    r#"rm "$tmpfile""#,
-    r#"cp README.md "$OUT"/notes.md"#,
+    r#"tmpfile=build/tmp; rm "$tmpfile""#,
+    r#"OUT=build; cp README.md "$OUT"/notes.md"#,
     "awk '{print $1}' README.md > build/out.txt",
     "git log --format='%H,%s' > build/log.txt",
     // Round eighteen: conditions in parentheses, and zsh qualifiers on
@@ -1548,11 +1556,10 @@ fn git_guard_resolves_aliases_and_rebase_branches() {
         );
     }
     // Controls: the same alias on a feature branch, a read-only alias, a
-    // name that is no alias, and a rebase of the current branch.
+    // rebase of the current branch.
     for (command, from) in [
         ("git x --allow-empty -m x", &feat),
         ("git st", &main),
-        ("git frobnicate", &main),
         ("git rebase main", &feat),
     ] {
         let out = guard_run(command, from);
@@ -1563,6 +1570,9 @@ fn git_guard_resolves_aliases_and_rebase_branches() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+    let unknown = guard_run("git frobnicate", &main);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("git.hook_integrity"));
 }
 
 // TSK-112 round 5: every row of Codex's boundary script
@@ -1594,11 +1604,11 @@ fn git_guard_round_5_boundaries() {
             "main",
             2,
         ),
-        // Git rejects an attached `-c`, so nothing runs.
+        // An invalid global-option spelling is unclassified under integrity.
         (
             "git -calias.x=commit x --allow-empty -m \"fix: probe\"".to_string(),
             "main",
-            0,
+            2,
         ),
         (
             "git checkout main && git x --allow-empty -m \"fix: probe\"".to_string(),
@@ -1825,6 +1835,364 @@ fn git_guard_blocks_remote_tracking_ref_poisoning_with_exit_2() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("git.local_ref_protection"));
 }
 
+/// TSK-381 review round 2 (Grok F1): a case-different `refs/remotes/`
+/// prefix names the same ref on a case-insensitive filesystem, so git-guard
+/// refuses each spelling with exit 2.
+#[test]
+fn git_guard_blocks_case_different_remote_tracking_writes_with_exit_2() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for name in [
+        "REFS/REMOTES/origin/evil",
+        "refs/Remotes/origin/evil",
+        "Refs/remotes/origin/evil",
+    ] {
+        let cmd = format!("git update-ref {name} deadbeef");
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", "git-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(&cmd, dir.path()),
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{cmd}: {stderr}");
+        assert!(stderr.contains("git.policy_authority"), "{cmd}: {stderr}");
+    }
+}
+
+/// TSK-381 round 3: a case-different protected branch name is refused by
+/// git-guard (exit 2), in a local and a remote-tracking ref, and by the
+/// reference-transaction backstop on a real `git update-ref`; an unrelated
+/// branch stays allowed by both.
+#[test]
+fn case_different_protected_branch_names_are_refused_by_both_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(
+        dir.path(),
+        &["commit", "--allow-empty", "-q", "-m", "chore: second"],
+    );
+    git(dir.path(), &["checkout", "-q", "-b", "feat/x"]);
+    let main = rev(dir.path(), "main");
+    let first = rev(dir.path(), "main~1");
+    for cmd in [
+        format!("git update-ref refs/heads/MAIN {first}"),
+        format!("git update-ref refs/heads/Main {first}"),
+        format!("git update-ref refs/remotes/origin/MAIN {first}"),
+    ] {
+        let out = guard_run(&cmd, dir.path());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{cmd}: {err}");
+    }
+    let out = guard_run(
+        &format!("git update-ref refs/heads/feat/Main {first}"),
+        dir.path(),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    wire_reference_transaction_hook(dir.path());
+    for name in ["refs/heads/MAIN", "refs/heads/Main"] {
+        let out = git_out(dir.path(), &["update-ref", name, &first]);
+        assert!(!out.status.success(), "{name} must block");
+        assert_eq!(rev(dir.path(), "main"), main, "{name} moved main");
+    }
+    let out = git_out(dir.path(), &["update-ref", "refs/heads/feat/Main", &first]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Whether the test repository's git directory is on a case-insensitive
+/// filesystem, where the guards refuse non-ASCII ref names (TSK-381 SF-3).
+fn case_insensitive_git_dir(dir: &Path) -> bool {
+    codeflow_core::hooks::repo::case_insensitive_git_dir(&dir.join(".git"))
+}
+
+/// A repository on `feat/x` whose `main` has two commits; returns the tip
+/// and the first commit.
+fn two_commit_main(dir: &Path) -> (String, String) {
+    init_repo(dir, "main");
+    git(
+        dir,
+        &["commit", "--allow-empty", "-q", "-m", "chore: second"],
+    );
+    git(dir, &["checkout", "-q", "-b", "feat/x"]);
+    (rev(dir, "main"), rev(dir, "main~1"))
+}
+
+/// TSK-381 SF-3: APFS folds `ſ` to `s`, so on a case-insensitive git
+/// directory a non-ASCII ref name can name a protected or remote-tracking
+/// ref, and git-guard refuses the three spellings with exit 2; on a
+/// case-sensitive one they are ordinary names. A case-different `refs/`
+/// prefix is refused on both, and an ordinary feature ref stays free.
+#[test]
+fn git_guard_refuses_non_ascii_ref_names_with_exit_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, first) = two_commit_main(dir.path());
+    let insensitive = case_insensitive_git_dir(dir.path());
+    for name in [
+        "refs/heads/ma\u{17f}ter",
+        "ref\u{17f}/heads/main",
+        "ref\u{17f}/remotes/origin/evil",
+    ] {
+        let cmd = format!("git update-ref {name} {first}");
+        let out = guard_run(&cmd, dir.path());
+        let err = String::from_utf8_lossy(&out.stderr);
+        if insensitive {
+            assert_eq!(out.status.code(), Some(2), "{cmd}: {err}");
+            assert!(err.contains("git.policy_authority"), "{cmd}: {err}");
+        } else {
+            assert_eq!(out.status.code(), Some(0), "{cmd}: {err}");
+        }
+    }
+    let out = guard_run(
+        &format!("git update-ref REFS/heads/feat/y {first}"),
+        dir.path(),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = guard_run(
+        &format!("git update-ref refs/heads/feat/y {first}"),
+        dir.path(),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// TSK-381 SF-3: the wired reference-transaction hook blocks a real
+/// `git update-ref` whose `refs/` prefix is a folded spelling, so `main`
+/// does not move; an ordinary feature ref stays free.
+#[test]
+fn reference_transaction_blocks_folded_ref_prefixes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (main, first) = two_commit_main(dir.path());
+    let insensitive = case_insensitive_git_dir(dir.path());
+    wire_reference_transaction_hook(dir.path());
+    let out = git_out(dir.path(), &["update-ref", "REFS/heads/main", &first]);
+    assert!(!out.status.success(), "a case-different prefix must block");
+    assert_eq!(rev(dir.path(), "main"), main, "REFS/heads/main moved main");
+    // `refſ/heads/main` is `refs/heads/main` where the git directory folds
+    // names, and another ref on a case-sensitive one.
+    let out = git_out(dir.path(), &["update-ref", "ref\u{17f}/heads/main", &first]);
+    assert_eq!(out.status.success(), !insensitive, "ref\u{17f}/heads/main");
+    assert_eq!(
+        rev(dir.path(), "main"),
+        main,
+        "ref\u{17f}/heads/main moved main"
+    );
+    let out = git_out(dir.path(), &["update-ref", "refs/heads/feat/y", &first]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// TSK-381 Codex round 2 F2: `git pack-refs --all` keeps every value, so the
+/// wired hook lets it pack an existing Unicode branch; where the git
+/// directory folds names, a move and a deletion of that branch, and a move
+/// through an alias of a protected branch, are still refused.
+#[test]
+fn reference_transaction_lets_pack_refs_keep_a_unicode_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (main, first) = two_commit_main(dir.path());
+    let insensitive = case_insensitive_git_dir(dir.path());
+    git(dir.path(), &["branch", "master", &main]);
+    git(dir.path(), &["branch", "feat/caf\u{e9}", &main]);
+    wire_reference_transaction_hook(dir.path());
+    let out = git_out(dir.path(), &["pack-refs", "--all"]);
+    assert!(
+        out.status.success(),
+        "pack-refs: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rev(dir.path(), "refs/heads/feat/caf\u{e9}"), main);
+    let packed = std::fs::read_to_string(dir.path().join(".git/packed-refs")).unwrap();
+    assert!(packed.contains("refs/heads/feat/caf\u{e9}"), "{packed}");
+    let out = git_out(
+        dir.path(),
+        &["update-ref", "refs/heads/feat/caf\u{e9}", &first],
+    );
+    assert_eq!(
+        out.status.success(),
+        !insensitive,
+        "a move of feat/caf\u{e9}"
+    );
+    let out = git_out(
+        dir.path(),
+        &["update-ref", "refs/heads/ma\u{17f}ter", &first],
+    );
+    assert_eq!(
+        out.status.success(),
+        !insensitive,
+        "a move through ma\u{17f}ter"
+    );
+    assert_eq!(rev(dir.path(), "master"), main, "master moved");
+    if insensitive {
+        let out = git_out(
+            dir.path(),
+            &["update-ref", "-d", "refs/heads/feat/caf\u{e9}"],
+        );
+        assert!(
+            !out.status.success(),
+            "a deletion of feat/caf\u{e9} must block"
+        );
+        assert_eq!(rev(dir.path(), "refs/heads/feat/caf\u{e9}"), main);
+    }
+}
+
+/// TSK-381 Codex F1: with `master` protected, the wired reference-transaction
+/// hook blocks a move through `refs/heads/maſter`, which APFS stores as the
+/// loose ref of `master`; an ordinary feature ref stays free.
+#[test]
+fn reference_transaction_blocks_a_non_ascii_spelling_of_a_protected_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (main, first) = two_commit_main(dir.path());
+    git(dir.path(), &["branch", "master", &main]);
+    let insensitive = case_insensitive_git_dir(dir.path());
+    wire_reference_transaction_hook(dir.path());
+    let out = git_out(
+        dir.path(),
+        &["update-ref", "refs/heads/ma\u{17f}ter", &first],
+    );
+    // Blocked where it aliases `master`; elsewhere an ordinary branch.
+    assert_eq!(
+        out.status.success(),
+        !insensitive,
+        "refs/heads/ma\u{17f}ter"
+    );
+    assert_eq!(rev(dir.path(), "master"), main, "master moved");
+    let out = git_out(dir.path(), &["update-ref", "refs/heads/feat/y", &first]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// TSK-381 Codex F1: a git-directory path component that does not exist yet
+/// cannot be checked against the disk, and one with a non-ASCII byte may be
+/// stored as a protected name (`remoteſ` and `remotes`), so the edit guard
+/// refuses it; the same characters in the working tree stay free.
+#[test]
+fn edit_guard_refuses_a_non_ascii_git_path() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let write = |relative: &str| {
+        let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+            "file_path":dir.path().join(relative), "content":"0123"}, "cwd":dir.path()})
+        .to_string();
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "edit-guard"])
+                .current_dir(dir.path()),
+            &payload,
+        )
+    };
+    for relative in [
+        ".git/refs/remote\u{17f}/origin/x",
+        ".git/ref\u{17f}/remotes/origin/x",
+    ] {
+        let out = write(relative);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{relative}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let out = write("notes/remote\u{17f}/x");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// TSK-381 review: a direct write of a loose branch ref moves it without a
+/// ref transaction, so the edit guard refuses writes under `.git/refs/heads`.
+#[test]
+fn edit_guard_refuses_a_loose_branch_ref_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, first) = two_commit_main(dir.path());
+    for relative in [".git/refs/heads/main", ".git/refs/heads/feat/x"] {
+        let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+            "file_path":dir.path().join(relative), "content":format!("{first}\n")},
+            "cwd":dir.path()})
+        .to_string();
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", "edit-guard"])
+                .current_dir(dir.path()),
+            &payload,
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{relative}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// TSK-381 round 3: before `.git/refs/remotes` exists, a case-different
+/// spelling of it cannot be corrected from the disk, and a case-insensitive
+/// filesystem would create the protected directory; the edit guard refuses
+/// it. An unrelated path stays allowed.
+#[test]
+fn edit_guard_refuses_a_case_different_remote_tracking_path() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    assert!(!dir.path().join(".git/refs/remotes").exists());
+    let write = |relative: &str| {
+        let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+            "file_path":dir.path().join(relative), "content":"0123"}, "cwd":dir.path()})
+        .to_string();
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "edit-guard"])
+                .current_dir(dir.path()),
+            &payload,
+        )
+    };
+    for relative in [
+        ".git/refs/remotes/origin/x",
+        ".git/Refs/Remotes/origin/x",
+        ".git/REFS/REMOTES/origin/x",
+    ] {
+        let out = write(relative);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{relative}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let out = write("notes/Refs/Remotes/x");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn exec_guard_blocks_dangerous_command_with_exit_2() {
     // Task 6: a PreToolUse block must map to exit 2, not 0.
@@ -1843,6 +2211,514 @@ fn exec_guard_blocks_dangerous_command_with_exit_2() {
         "dangerous command must block with exit 2"
     );
     assert!(String::from_utf8_lossy(&out.stderr).contains("security.dangerous_commands"));
+}
+
+#[test]
+fn configuration_operands_and_missing_includes_allow_ordinary_git_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let work = dir.path().join("work");
+    git(
+        dir.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "task/config",
+            work.to_str().unwrap(),
+        ],
+    );
+    let global = dir.path().join("fixture-global");
+    std::fs::write(
+        &global,
+        "[includeIf \"gitdir:/nowhere/work/\"]\n path = missing\n[alias]\n st = status\n",
+    )
+    .unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "git commit -m 'docs: explain gitconfig includes'",
+            "git commit -m 'move to HOME page'",
+            // Git restores no path under `.git`, and a checkout operand is
+            // a write, so the control names a configuration note elsewhere
+            // (TSK-1002 Fable review 15).
+            "git checkout -- docs/gitconfig-notes.md",
+            "git log -1 -- docs/gitconfig.md && git push origin feat/x",
+            "git push origin task/x",
+            "git st",
+        ] {
+            let out = run_with_stdin(
+                codeflow()
+                    .args(["hook", hook])
+                    .env("GIT_CONFIG_GLOBAL", &global)
+                    .current_dir(&work),
+                &guard_payload(command, &work),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+    let out = codeflow()
+        .args(["doctor", "--check", "git-config-includes"])
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        output.contains("missing; contributes no configuration"),
+        "{output}"
+    );
+    assert!(
+        output.contains(dir.path().join("missing").to_str().unwrap()),
+        "{output}"
+    );
+}
+
+#[test]
+fn relative_configuration_includes_work_from_subdirectories() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(dir.path().join("extra"), "[alias]\n st = status\n").unwrap();
+    git(dir.path(), &["config", "include.path", "../extra"]);
+    for hook in ["git-guard", "exec-guard"] {
+        for (cwd, command) in [
+            (&sub, "git st"),
+            (&dir.path().to_path_buf(), "git -C sub st"),
+            (&dir.path().to_path_buf(), "cd sub && git st"),
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(cwd),
+                &guard_payload(command, cwd),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn exec_guard_alone_refuses_environment_release_aliases() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let global = dir.path().join("extra-config");
+    std::fs::write(&global, "[alias]\n ship = push origin v9.9.9\n").unwrap();
+    for command in [
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin v9.9.9' git ship".to_string(),
+        "GIT_CONFIG_PARAMETERS=\"'alias.ship=push origin v9.9.9'\" git ship".to_string(),
+        format!("GIT_CONFIG_GLOBAL='{}' git ship", global.display()),
+        "{GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\" git ship".to_string(),
+        "{GIT_CONFIG_COUNT,X}=1 {GIT_CONFIG_KEY_0,Y}=alias.ship {GIT_CONFIG_VALUE_0,Z}='push origin v9.9.9' git ship".to_string(),
+        format!("{{GIT_CONFIG_GLOBAL,X}}='{}' git ship", global.display()),
+        "export {GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\"; git ship".to_string(),
+    ] {
+        let out = exec_guard_tool(dir.path(), "Bash", &command);
+        assert_eq!(out.status.code(), Some(2), "{command}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"), "{command}");
+    }
+}
+
+#[test]
+fn assignment_prefixes_do_not_hide_git_paths_containing_equals() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(dir.path(), &["tag", "v9.9.9"]);
+    for (hook, target) in [("git-guard", "HEAD:main"), ("exec-guard", "v9.9.9")] {
+        for prefix in ["/tmp/a=b/git", "env /tmp/a=b/git", "FOO=/usr/bin/git git"] {
+            let command = format!("{prefix} push origin {target}");
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(&command, dir.path()),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(2),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    git(dir.path(), &["config", "alias.zz", "status"]);
+    let home = dir.path().join("home");
+    let nested = home.join("src/x");
+    std::fs::create_dir_all(&nested).unwrap();
+    init_repo(&nested, "task/x");
+    let refusals = [
+        "git -c x.y=$[HOME=1] zz",
+        "git zz $[HOME=1]",
+        "git ship $[HOME=1]",
+        "git -c x.y=$[GIT_CONFIG_COUNT=1] zz",
+        "git zz $[GIT_CONFIG_COUNT=1]",
+        "git ship $[GIT_CONFIG_COUNT=1]",
+        "cat <<EOF\n$[HOME=1]\nEOF\ngit zz",
+        "declare -a arr=(1 2); git zz",
+        "arr=(1 2); git zz",
+        "export {GIT_CONFIG_PARAMETERS,X}=\"'remote.origin.push=HEAD:refs/heads/main'\"; git push origin",
+        "export {HOME,X}=/evil; git zz",
+        "export H{OME,X}=/evil; git zz",
+        "{HOME,X}=/evil git zz",
+        "env H{OME,X}=/evil git zz",
+        "command env HOM?=/evil git push origin task/x",
+        "printf -v {HOME,X} %s /evil; git zz",
+        "read {HOME,X} < f; git zz",
+        "for H{OME,X} in /evil; do git zz; done",
+        "getln HOM?; git zz",
+        ": ${H?ME=/evil}; git zz",
+        ": ${$V=/evil}; git zz",
+        "cat <<EOF\n${(P)V::=/evil}\nEOF\ngit zz",
+        "V=HOME; : ${(P)V::=/evil}; git zz",
+        ": ${(P)V::=/evil}; git zz",
+        "print -z /evil; getln HOME; git zz",
+        "exec {HOME}>/dev/null; git zz",
+        "exec {slot}</dev/null; git zz",
+        "export HOM?=/evil; git zz",
+        "read HOM? < f; git push origin task/x",
+        "HOM?=/evil; git push origin task/x",
+        "cat <<EOF\n${HOME:=/evil}\nEOF\ngit zz",
+        "getln GIT_DIR; git push origin task/x",
+        "getln GIT_COMMON_DIR; git push origin task/x",
+        "getln GIT_EXEC_PATH; git push origin task/x",
+        "getln XDG_CONFIG_HOME; git push origin task/x",
+        "printf HOME; git zz",
+        "git zz; getln HOME",
+    ];
+    let allowed = [
+        "export PATH=$PATH:/x; git status",
+        "V=1; echo $V",
+        "git status",
+        "git log -1",
+        "git log -1 \"$((1+1))\"",
+        "/tmp/a=b/git push origin task/x",
+        "export FOO=$(pwd); git push origin task/x",
+        "export FOO='(1 2)'; git push origin task/x",
+        "read -r answer < f; git push origin task/x",
+        "printf -v out %s x",
+        "cd \"$HOME/src/x\" && git push origin task/x",
+        "git commit -m \"set HOME\"",
+        "printf '%s' \"${HOME}\"; git push origin task/x",
+        // A `GIT_*` name in a Git operand is text (TSK-1002 Codex reviews
+        // 12 and 13); this control names a classified one all the same.
+        "git log -- HOME GIT_DIR; git push origin task/x",
+        "getln HOME; git status",
+        "export PATH=$PATH:/x",
+        "read -p \"...\" answer",
+        "echo \"${HOME:-/x}\"",
+        "declare -a arr=(1 2)",
+        ": ${FOO:=bar}",
+        "grep HOME f",
+        "env | grep HOME",
+    ];
+    let mut failures = Vec::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for (commands, expected) in [(&refusals[..], 2), (&allowed[..], 0)] {
+            for command in commands {
+                let out = run_with_stdin(
+                    codeflow()
+                        .args(["hook", hook])
+                        .env("HOME", &home)
+                        .current_dir(dir.path()),
+                    &guard_payload(command, dir.path()),
+                );
+                let diagnostic = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(expected)
+                    || (command.contains("arr=(1 2); git") && !diagnostic.contains("arr"))
+                    || (expected == 2
+                        && !diagnostic.contains("configuration")
+                        && !diagnostic.contains("configured remote"))
+                {
+                    failures.push(format!(
+                        "{hook}: {command}: expected {expected}, got {:?}: {}",
+                        out.status.code(),
+                        String::from_utf8_lossy(&out.stderr)
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn mixed_case_aliases_cannot_hide_protected_pushes_or_releases() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(
+        dir.path(),
+        &["config", "alias.toMain", "push origin HEAD:main"],
+    );
+    git(dir.path(), &["tag", "v9.9.9"]);
+    let mut failures = Vec::new();
+    for hook in ["git-guard", "exec-guard"] {
+        // Each plane owns a different decision: protected branch vs release.
+        let commands: &[&str] = if hook == "git-guard" {
+            git(
+                dir.path(),
+                &["config", "alias.ship", "push origin HEAD:main"],
+            );
+            &[
+                "git -c alias.pm='push origin HEAD:main' Pm",
+                "git SHIP",
+                "git Ship",
+                "git toMain",
+            ]
+        } else {
+            git(dir.path(), &["config", "alias.ship", "push origin v9.9.9"]);
+            &[
+                "git SHIP",
+                "git Ship",
+                "git -c alias.rel='push origin v9.9.9' Rel",
+            ]
+        };
+        for command in commands {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            if out.status.code() != Some(2) {
+                failures.push(format!("{hook}: {command}: {:?}", out.status.code()));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn unresolved_configuration_writes_refuse_in_both_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(dir.path(), &["config", "alias.zz", "status"]);
+    let writes = [
+        "V=HOME; export $V=/evil",
+        "export \"$(echo HOME)=/evil\"",
+        "export `echo HOME`=/evil",
+        ": ${HOME::=/evil}",
+        "print -v HOME /evil",
+        "HOME[1,-1]=/evil",
+        "declare -n r=HOME; r=/evil",
+        "typeset -n r=HOME; r=/evil",
+        "declare -nx r=HOME",
+        "local -n r=HOME",
+        "V=HOME; declare $V=/evil",
+        "V=HOME; typeset $V=/evil",
+        "V=HOME; readonly $V=/evil",
+        "V=HOME; local $V=/evil",
+        "V=HOME; unset $V",
+        "V=HOME; read $V",
+        "V=HOME; printf -v $V %s /evil",
+        "V=HOME; print -v $V /evil",
+        "V=HOME; getopts x $V",
+        "V=HOME; mapfile $V",
+        "V=HOME; readarray $V",
+        "V=HOME; let $V=1",
+        "getopts x HOME",
+        "mapfile HOME",
+        "readarray HOME",
+        "let HOME=1",
+        "HOME+=/evil",
+        "export HOME[0]=/evil",
+        "V=GIT_CONFIG_PARAMETERS; export $V=\"'remote.origin.push=HEAD:refs/heads/main'\"",
+        "V=GIT_CONFIG_PARAMETERS; K=core.hooks; export $V=\"'${K}Path=/dev/null'\"",
+    ];
+    let mut failures = Vec::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for write in writes {
+            for operation in ["git zz", "git push origin", "git reset --hard"] {
+                // Exec-guard owns outward actions; discard belongs to git-guard.
+                if hook == "exec-guard" && operation == "git reset --hard" {
+                    continue;
+                }
+                let command = format!("{write}; {operation}");
+                let out = run_with_stdin(
+                    codeflow().args(["hook", hook]).current_dir(dir.path()),
+                    &guard_payload(&command, dir.path()),
+                );
+                let diagnostic = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2)
+                    || ![
+                        "environment variable",
+                        "unresolved variable destination",
+                        "nameref option",
+                    ]
+                    .iter()
+                    .any(|reason| diagnostic.contains(reason))
+                {
+                    failures.push(format!(
+                        "{hook}: {command}: {:?}: {diagnostic}",
+                        out.status.code()
+                    ));
+                }
+            }
+        }
+        for command in ["export PATH=$PATH:/x; git zz", "V=1; echo $V; git zz"] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn configuration_builtins_refuse_in_both_guards_while_alias_operands_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(dir.path(), &["config", "alias.st", "status"]);
+    for hook in ["git-guard", "exec-guard"] {
+        for (command, expected) in [
+            (
+                "declare -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/x",
+                2,
+            ),
+            (
+                "typeset -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/x",
+                2,
+            ),
+            ("export HOME=/tmp/config; git push origin task/x", 2),
+            ("readonly HOME=/tmp/config; git push origin task/x", 2),
+            ("read HOME < file; git ship", 2),
+            ("printf -v HOME %s /tmp/config; git ship", 2),
+            ("for HOME in /tmp/config; do git ship; done", 2),
+            (": ${HOME:=/tmp/config}; git ship", 2),
+            ("git st docs/gitconfig.md", 0),
+            ("git st -- HOME", 0),
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(expected),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn installed_exec_guard_and_include_diagnostic_journey() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let installed = codeflow()
+        .args(["init", "--minimal", "--yes"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    // This shell-event fixture wires only exec-guard. No git-guard call can
+    // supply the missing refusal on its behalf.
+    let out = exec_guard_tool(dir.path(), "Bash", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin v9.9.9' git ship");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"));
+
+    let included = dir.path().join("included-config");
+    std::fs::write(&included, "[alias]\n ship = push origin v9.9.9\n").unwrap();
+    git(
+        dir.path(),
+        &["config", "include.path", included.to_str().unwrap()],
+    );
+    let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+        "file_path":included, "content":"[core]\n pager = planted\n"}, "cwd":dir.path()})
+    .to_string();
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "edit-guard"])
+            .current_dir(dir.path()),
+        &payload,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
+        &guard_payload(
+            &format!("printf planted > '{}'", included.display()),
+            dir.path(),
+        ),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doctor = codeflow()
+        .args(["doctor", "--check", "git-config-includes"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&doctor.stdout),
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    assert!(output.contains("included-config"), "{output}");
+    assert!(output.contains("writable"), "{output}");
+}
+
+#[test]
+fn doctor_reports_writable_global_and_system_include_files() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let parent = dir.path().join("parent-config");
+    let included = dir.path().join("included-config");
+    std::fs::write(&parent, "[include]\n path = included-config\n").unwrap();
+    std::fs::write(&included, "[core]\n pager = planted\n").unwrap();
+    for variable in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+        let out = codeflow()
+            .env(variable, &parent)
+            .env("GIT_CONFIG_NOSYSTEM", "false")
+            .args(["doctor", "--check", "git-config-includes"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            output.contains("included-config") && output.contains("writable"),
+            "{variable}: {output}"
+        );
+    }
 }
 
 #[test]
@@ -3946,12 +4822,9 @@ fn session_orient_survives_a_closed_stdout() {
             .spawn()
             .unwrap();
         drop(child.stdout.take());
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.as_bytes())
-            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        input.write_all(payload.as_bytes()).unwrap();
+        drop(input);
         let out = child.wait_with_output().unwrap();
         assert_eq!(out.status.code(), Some(0), "{payload}: {out:?}");
     }
@@ -4604,51 +5477,182 @@ fn sibling_repo() -> tempfile::TempDir {
 
 #[cfg(unix)]
 #[test]
-fn push_set_tree_checks_never_pass_for_a_sibling_ref() {
+fn push_set_queries_the_destination_once_for_multiple_refs() {
     let dir = sibling_repo();
     let good = rev(dir.path(), "feat/good");
     let bad = rev(dir.path(), "feat/bad");
+    let trace = dir.path().join(".git/advertisement.trace");
+    let url = push_url(dir.path(), "upstream");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", "upstream", &url])
+            .env("GIT_TRACE", &trace)
+            .current_dir(dir.path()),
+        &format!("refs/heads/feat/good {good} refs/heads/feat/good {ZERO_SHA}\nrefs/heads/feat/bad {bad} refs/heads/feat/bad {ZERO_SHA}\n"),
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    // No quick target runs on push (TSK-449), so the failing `feat/bad`
+    // passes the hook; CI and `codeflow test` judge its tree.
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    let calls = std::fs::read_to_string(trace).unwrap();
+    assert_eq!(
+        calls.matches("built-in: git ls-remote ").count(),
+        1,
+        "{calls}"
+    );
+}
 
-    // Multi-ref push from the clean `feat/good` checkout: the tree checks run
-    // for `feat/good` only, and say they did not run for `feat/bad`.
-    let (code, err) = push_hook(
+/// A minimal scaffold on `feat/probe` whose test config holds a heavy quick
+/// target that sleeps past any push and a quick target that fails, with an
+/// answering destination `upstream`.
+#[cfg(unix)]
+fn push_without_gate_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
         dir.path(),
-        "upstream",
-        &[("feat/good", &good), ("feat/bad", &bad)],
+        &["init", "--yes", "--minimal"],
     );
-    assert_eq!(code, Some(0), "{err}");
-    assert!(
-        err.contains("quick targets passed on the working checkout (1 target(s)"),
-        "{err}"
+    ok("git", dir.path(), &["switch", "-c", "feat/probe"]);
+    std::fs::write(
+        dir.path().join(".codeflow/test-config.json"),
+        serde_json::json!({
+            "schema_version": "1.0",
+            "targets": [
+                {"name": "slow-check", "runner": "custom", "heavy": true,
+                    "modes": {"quick": {"command": "sleep 30"}}},
+                {"name": "failing-check", "runner": "custom",
+                    "modes": {"quick": {"command": "false"}}}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    ok("git", dir.path(), &["add", ".codeflow/test-config.json"]);
+    ok(
+        "git",
+        dir.path(),
+        &["commit", "-m", "chore: configure quick targets"],
     );
-    assert!(
-        err.contains(
-            "tree checks (`codeflow validate --docs`, quick targets) did not run for 'feat/bad'"
-        ),
-        "{err}"
+    answering_destination(dir.path(), "upstream");
+    dir
+}
+
+// TSK-449 AC-1: the push set is `codeflow ci` over the range and nothing
+// that reads the tree: no `codeflow validate --docs`, no test-config
+// target. A failing or slow quick target no longer stops or slows a push,
+// and the hook still refuses a protected-branch push and a staged secret.
+#[cfg(unix)]
+#[test]
+fn installed_push_hook_runs_codeflow_ci_and_no_test_target() {
+    let dir = push_without_gate_repo();
+    let started = std::time::Instant::now();
+    let pushed = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "HEAD:refs/heads/feat/probe"],
     );
-    assert!(err.contains("is not the checked-out commit"), "{err}");
+    let elapsed = started.elapsed();
+    let output = both_streams(&pushed);
+    assert!(pushed.status.success(), "{output}");
     assert!(
-        !err.contains("quick targets) did not run for 'feat/good'"),
-        "{err}"
+        elapsed < std::time::Duration::from_secs(30),
+        "{elapsed:?}: {output}"
+    );
+    assert!(output.contains("push set finished"), "{output}");
+    for absent in [
+        "quick targets",
+        "slow-check",
+        "failing-check",
+        "validate --docs",
+    ] {
+        assert!(!output.contains(absent), "{absent}: {output}");
+    }
+    assert!(ok("git", dir.path(), &["ls-remote", "upstream"]).contains(&rev(dir.path(), "HEAD")));
+    eprintln!("durability push without the quick gate: {elapsed:?}\n{output}");
+
+    // A commit `codeflow ci` refuses still stops the push.
+    std::fs::write(dir.path().join("x.txt"), "x\n").unwrap();
+    ok("git", dir.path(), &["add", "x.txt"]);
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "-m",
+            "Add x",
+        ],
+    );
+    let refused = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "HEAD:refs/heads/feat/probe"],
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", both_streams(&refused));
+    // The reference-transaction hook needs the binary on PATH; this reset
+    // only undoes the fixture commit, so it runs without hooks.
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "reset",
+            "-q",
+            "--hard",
+            "HEAD~1",
+        ],
     );
 
-    // The same bad commit checked out is blocked by its quick target.
-    git(dir.path(), &["checkout", "feat/bad"]);
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
-    assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("push set failed for: lint"), "{err}");
-
-    // Uncommitted tracked changes cannot stand in for the pushed tree: a
-    // dirty checkout runs no tree checks and says so.
-    std::fs::write(dir.path().join("base.txt"), "edited\n").unwrap();
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
-    assert_eq!(code, Some(0), "{err}");
-    assert!(
-        err.contains("did not run for 'feat/bad': tracked files differ"),
-        "{err}"
+    let protected = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "HEAD:refs/heads/main"],
     );
-    assert!(!err.contains("quick targets passed"), "{err}");
+    let output = both_streams(&protected);
+    assert_eq!(protected.status.code(), Some(1), "{output}");
+    assert!(
+        output.contains("direct push to protected branch 'main'"),
+        "{output}"
+    );
+
+    std::fs::write(
+        dir.path().join("leak.txt"),
+        format!("AKIA{}\n", "IOSFODNN7EXAMPLF"),
+    )
+    .unwrap();
+    ok("git", dir.path(), &["add", "leak.txt"]);
+    let before = rev(dir.path(), "HEAD");
+    let staged = with_installed_hooks("git", dir.path(), &["commit", "-m", "feat: add leak"]);
+    assert_ne!(staged.status.code(), Some(0), "{}", both_streams(&staged));
+    assert_eq!(rev(dir.path(), "HEAD"), before);
+}
+
+// TSK-449 AC-2: with the heavy-work admission lock held, a push neither
+// waits for nor is refused by it, since it runs no quick target.
+#[cfg(unix)]
+#[test]
+fn installed_push_hook_completes_while_the_gate_lock_is_held() {
+    let dir = push_without_gate_repo();
+    let held = hold_lock(&dir.path().join(".git/codeflow/full-gate.lock"));
+    let started = std::time::Instant::now();
+    let pushed = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "HEAD:refs/heads/feat/probe"],
+    );
+    let elapsed = started.elapsed();
+    drop(held);
+    let output = both_streams(&pushed);
+    assert!(pushed.status.success(), "{output}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "{elapsed:?}: {output}"
+    );
+    assert!(!output.contains("lock"), "{output}");
+    assert!(ok("git", dir.path(), &["ls-remote", "upstream"]).contains(&rev(dir.path(), "HEAD")));
 }
 
 /// Push one ref whose destination currently holds `remote_sha`.
@@ -5029,16 +6033,26 @@ fn declared_line(bare: &Path, local: &Path) -> String {
     receive(bare, local, "main:stable");
     git(local, &["fetch", "-q", "dest"]);
     integration_line(bare, local);
+    std::fs::create_dir_all(local.join("project-management/epics")).unwrap();
+    commit_file(
+        local,
+        "project-management/epics/EPC-001.md",
+        "---\nid: EPC-001\ntitle: Work\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-10-16\n---\n",
+        "docs: plan the epic",
+    );
     std::fs::create_dir_all(local.join("project-management/tasks")).unwrap();
     let tip = commit_file(
         local,
         "project-management/tasks/TSK-001.md",
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: integration/line\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
+        "---\nid: TSK-001\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: integration/EPC-001-line\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
         "docs: declare the task target",
     );
-    receive(bare, local, "line:integration/line");
+    receive(bare, local, "line:integration/EPC-001-line");
     git(local, &["fetch", "-q", "dest"]);
-    git(local, &["branch", "-f", "integration/line", "line"]);
+    git(local, &["branch", "-f", "integration/EPC-001-line", "line"]);
+    // The shared declaration check reads binding records from origin.
+    git(local, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    git(local, &["fetch", "-q", "origin"]);
     tip
 }
 
@@ -5055,9 +6069,9 @@ fn declared_task_on_moved_line(bare: &Path, local: &Path, own: &[(&str, &str)]) 
     receive(bare, local, "task/TSK-001-change:task/TSK-001-change");
     git(local, &["checkout", "-q", "line"]);
     commit_file(local, "line2.txt", "line2\n", "Legacy line subject two.");
-    receive(bare, local, "line:integration/line");
+    receive(bare, local, "line:integration/EPC-001-line");
     git(local, &["fetch", "-q", "dest"]);
-    git(local, &["branch", "-f", "integration/line", "line"]);
+    git(local, &["branch", "-f", "integration/EPC-001-line", "line"]);
     git(local, &["checkout", "-q", "task/TSK-001-change"]);
     old
 }
@@ -5076,11 +6090,14 @@ fn push_set_declared_target_rebase_checks_the_line_s_commits_from_the_default() 
     // judged too, and refuse the push.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = declared_task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
-    git(local.path(), &["rebase", "-q", "dest/integration/line"]);
+    git(
+        local.path(),
+        &["rebase", "-q", "dest/integration/EPC-001-line"],
+    );
     let rebased = rev(local.path(), "HEAD");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &rebased, &old);
     assert!(
-        err.contains("uses advertised target 'integration/line'"),
+        err.contains("uses advertised target 'integration/EPC-001-line'"),
         "{err}"
     );
     assert!(
@@ -5121,7 +6138,7 @@ fn push_set_declared_target_rewrite_checks_the_added_bad_commit() {
             "rebase",
             "-q",
             "--onto",
-            "dest/integration/line",
+            "dest/integration/EPC-001-line",
             "line~1",
             "HEAD~1",
         ],
@@ -5129,7 +6146,7 @@ fn push_set_declared_target_rewrite_checks_the_added_bad_commit() {
     let bad = commit_file(local.path(), "c.txt", "c\n", "Not conventional.");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &bad, &old);
     assert!(
-        err.contains("uses advertised target 'integration/line'"),
+        err.contains("uses advertised target 'integration/EPC-001-line'"),
         "{err}"
     );
     assert_eq!(code, Some(1), "{err}");
@@ -5160,7 +6177,7 @@ fn push_set_declared_target_new_branch_checks_the_line_s_commits_from_the_defaul
     let good = commit_file(local.path(), "n.txt", "n\n", "feat: add new work");
     let (code, err) = push_hook(local.path(), "dest", &[("task/TSK-001-change", &good)]);
     assert!(
-        err.contains("uses advertised target 'integration/line'"),
+        err.contains("uses advertised target 'integration/EPC-001-line'"),
         "{err}"
     );
     assert_eq!(code, Some(1), "{err}");
@@ -5320,7 +6337,19 @@ fn push_hook_over_http(
     dir: &Path,
     url: &str,
     askpass: &Path,
+    helper: &Path,
 ) -> (Option<i32>, String, std::time::Duration) {
+    git(dir, &["config", "--local", "credential.helper", ""]);
+    git(
+        dir,
+        &[
+            "config",
+            "--local",
+            "--add",
+            "credential.helper",
+            helper.to_str().unwrap(),
+        ],
+    );
     git(dir, &["remote", "add", "dest", url]);
     let head = rev(dir, "HEAD");
     let started = std::time::Instant::now();
@@ -5328,6 +6357,7 @@ fn push_hook_over_http(
         codeflow()
             .args(["git-hook", "pre-push", "dest", url])
             .env("GIT_ASKPASS", askpass)
+            .env("HOME", askpass.parent().unwrap())
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .current_dir(dir),
         &format!("refs/heads/feat/h {head} refs/heads/feat/h {ZERO_SHA}\n"),
@@ -5343,8 +6373,8 @@ fn push_hook_over_http(
 #[test]
 fn push_set_never_prompts_and_bounds_the_destination_query() {
     // NB-2: a destination asking for credentials gets no askpass prompt, and
-    // one that never answers is abandoned at the deadline; either way the
-    // hook says why, and refuses the unjudged push (SPC-013 R-120).
+    // one that never answers is abandoned after bounded timeout retries.
+    // Both refuse the unjudged push (SPC-013 R-120).
     use std::os::unix::fs::PermissionsExt;
     let scratch = tempfile::tempdir().unwrap();
     let marker = scratch.path().join("askpass-called");
@@ -5358,24 +6388,42 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
     )
     .unwrap();
     std::fs::set_permissions(&askpass, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let helper = scratch.path().join("credential-helper");
+    let calls = scratch.path().join("helper-calls");
+    std::fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\nexit 0\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
-    let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(true), &askpass);
+    let (code, err, took) =
+        push_hook_over_http(dir.path(), &http_destination(true), &askpass, &helper);
     assert_eq!(code, Some(1), "{err}");
     assert!(!marker.exists(), "askpass was invoked: {err}");
+    assert!(std::fs::read_to_string(&calls)
+        .unwrap()
+        .lines()
+        .any(|line| line == "get"));
     assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
     assert!(
-        err.contains("cannot prove push inputs") && err.contains("`git ls-remote` failed"),
+        err.contains("cannot prove push inputs") && err.contains("remote authentication failed"),
         "{err}"
     );
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
-    let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(false), &askpass);
+    let (code, err, took) =
+        push_hook_over_http(dir.path(), &http_destination(false), &askpass, &helper);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("no answer within 10s"), "{err}");
-    assert!(took < std::time::Duration::from_secs(30), "{took:?}");
+    assert!(err.contains("3 attempts"), "{err}");
+    assert!(took < std::time::Duration::from_secs(50), "{took:?}");
 }
 
 #[test]
@@ -5464,148 +6512,6 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     assert!(err.contains("cannot prove push inputs"), "{err}");
 }
 
-/// A repo on `feat/t` whose quick target is `command`, committed.
-fn quick_repo(command: &str) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path(), "feat/t");
-    std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
-    std::fs::write(
-        dir.path().join(".codeflow/test-config.json"),
-        format!(
-            r#"{{"schema_version": "1.0", "targets": [
-  {{"name": "lint", "runner": "custom", "modes": {{"quick": {{"command": "{command}"}}}}}}]}}"#
-        ),
-    )
-    .unwrap();
-    git(dir.path(), &["add", "."]);
-    git(
-        dir.path(),
-        &["commit", "-q", "-m", "chore: add a lint target"],
-    );
-    answering_destination(dir.path(), "upstream");
-    dir
-}
-
-#[test]
-fn push_set_untracked_input_is_named_in_the_pass_line() {
-    // R2-1 control 1: an untracked file flips the quick target. The hook
-    // cannot tell, so its pass line says it checked the working checkout.
-    let dir = quick_repo("test -f lint-ignore || test ! -f bad.txt");
-    let head = commit_file(dir.path(), "bad.txt", "bad\n", "feat: add bad");
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(1), "complete control blocks: {err}");
-    std::fs::write(dir.path().join("lint-ignore"), "").unwrap();
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(0), "{err}");
-    assert!(
-        err.contains("quick targets passed on the working checkout")
-            && err.contains("untracked files there can influence them"),
-        "{err}"
-    );
-}
-
-#[test]
-fn push_set_does_not_run_tree_checks_on_a_sparse_checkout() {
-    // R2-1 control 2.
-    let dir = quick_repo("test ! -f omitted/bad.txt");
-    std::fs::create_dir_all(dir.path().join("omitted")).unwrap();
-    let head = commit_file(dir.path(), "omitted/bad.txt", "bad\n", "feat: add omitted");
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(1), "complete control blocks: {err}");
-    git(dir.path(), &["sparse-checkout", "init", "--cone"]);
-    git(dir.path(), &["sparse-checkout", "set", ".codeflow"]);
-    assert!(!dir.path().join("omitted/bad.txt").exists());
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(0), "{err}");
-    assert!(
-        err.contains("did not run for 'feat/t': the checkout is sparse"),
-        "{err}"
-    );
-    assert!(!err.contains("quick targets passed"), "{err}");
-}
-
-#[test]
-fn push_set_does_not_run_tree_checks_with_an_uninitialized_submodule() {
-    // R2-1 control 3.
-    let vendor = tempfile::tempdir().unwrap();
-    init_repo(vendor.path(), "main");
-    commit_file(vendor.path(), "bad.txt", "bad\n", "feat: add bad");
-    let dir = quick_repo("test ! -f vendor/bad.txt");
-    let url = vendor.path().to_str().unwrap();
-    git(
-        dir.path(),
-        &[
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            "-q",
-            url,
-            "vendor",
-        ],
-    );
-    git(dir.path(), &["commit", "-q", "-m", "chore: add vendor"]);
-    let head = rev(dir.path(), "HEAD");
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(1), "complete control blocks: {err}");
-    git(dir.path(), &["submodule", "deinit", "-q", "-f", "vendor"]);
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(0), "{err}");
-    assert!(
-        err.contains("did not run for 'feat/t': submodule vendor is not initialized"),
-        "{err}"
-    );
-    assert!(!err.contains("quick targets passed"), "{err}");
-}
-
-/// The submodule state comes from git, never from whether `.gitmodules`
-/// can be found: a `.gitmodules` that is a dangling link is a mapping git
-/// cannot read, so the push refuses instead of judging the checkout whole.
-#[cfg(unix)]
-#[test]
-fn r23_push_set_reads_submodules_whatever_gitmodules_is() {
-    let vendor = tempfile::tempdir().unwrap();
-    init_repo(vendor.path(), "main");
-    commit_file(vendor.path(), "bad.txt", "bad\n", "feat: add bad");
-    let dir = quick_repo("test ! -f vendor/bad.txt");
-    let url = vendor.path().to_str().unwrap();
-    git(
-        dir.path(),
-        &[
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            "-q",
-            url,
-            "vendor",
-        ],
-    );
-    git(dir.path(), &["commit", "-q", "-m", "chore: add vendor"]);
-    git(dir.path(), &["submodule", "deinit", "-q", "-f", "vendor"]);
-    // The control: a readable mapping names the uninitialized submodule.
-    let head = rev(dir.path(), "HEAD");
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(0), "{err}");
-    assert!(
-        err.contains("did not run for 'feat/t': submodule vendor is not initialized"),
-        "{err}"
-    );
-
-    std::fs::remove_file(dir.path().join(".gitmodules")).unwrap();
-    std::os::unix::fs::symlink("gone", dir.path().join(".gitmodules")).unwrap();
-    git(dir.path(), &["add", ".gitmodules"]);
-    git(
-        dir.path(),
-        &["commit", "-q", "-m", "chore: link the mapping"],
-    );
-    let head = rev(dir.path(), "HEAD");
-    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_ne!(code, Some(0), "{err}");
-    assert!(err.contains("cannot read Git submodule answer"), "{err}");
-    assert!(!err.contains("quick targets passed"), "{err}");
-}
-
 /// SPC-013 R-85: the shims probe the binary's hook capability first. An
 /// older binary refuses with the install command; the current binary dispatches.
 #[cfg(unix)]
@@ -5634,7 +6540,11 @@ fn hook_shims_refuse_when_the_binary_is_older() {
                 .arg(shims.join(stage))
                 .arg("ARG")
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env_remove("CODEFLOW_HOOK_BINARY")
                 .env("CODEFLOW_HOME", isolated_home())
+                // The binary under test is chosen through PATH; an inherited
+                // designated hook binary would replace it.
+                .env_remove("CODEFLOW_HOOK_BINARY")
                 .current_dir(dir.path())
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -7113,7 +8023,17 @@ fn root_branch_with_unicode_whitespace_is_compared_exactly_by_the_hook() {
     assert_eq!(wrong.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&wrong.stderr).contains("git.root_checkout_commits"));
     git(dir.path(), &["checkout", "release\u{a0}"]);
-    assert_eq!(run().status.code(), Some(0));
+    let right = run();
+    if case_insensitive_git_dir(dir.path()) {
+        // TSK-381 SF-3: on a case-insensitive git directory git-guard treats
+        // a branch name with a non-ASCII byte as protected, failing closed;
+        // the root checkout rule still compares the name exactly and is met.
+        let err = String::from_utf8_lossy(&right.stderr);
+        assert!(!err.contains("git.root_checkout_commits"), "{err}");
+        assert!(err.contains("git.commit_to_protected"), "{err}");
+    } else {
+        assert_eq!(right.status.code(), Some(0));
+    }
 }
 
 #[test]
@@ -7168,34 +8088,57 @@ fn epic_line_adoption_pre_push_refuses_only_unadopted_pushed_direct_commits() {
     let f = Line::new();
     passes(&f.push(ZERO));
     let direct = f.direct();
-    blocks(&f.push(ZERO), "git reset --keep main");
+    blocks(&f.push(ZERO), "git reset --keep refs/heads/main");
     let refused = f.push(&f.git(&["rev-parse", "main"]));
     blocks(&refused, &direct[..9]);
-    assert!(output(&refused).contains(&format!("git reset --keep origin/{LINE}")));
+    assert!(output(&refused).contains(&format!("git reset --keep refs/remotes/origin/{LINE}")));
     assert!(output(&refused).contains("line_adoptions"));
     // The already shared direct commit must not prevent unrelated merges.
-    f.git(&["switch", "-qc", "task/TSK-001-work"]);
-    f.write("src/lib.rs", "pub fn work() {}\n");
-    f.commit("feat: build work");
-    f.git(&["switch", "-q", LINE]);
-    f.merge("task/TSK-001-work");
+    f.git(&["push", "-q", "origin", "main"]);
+    f.land_task();
     passes(&f.push(&direct));
     f.land_adoption(&direct);
     passes(&f.push(ZERO));
     passes(&f.push(&direct));
 }
 
+/// TSK-398 review F1: with `refs/remotes/origin/main` at the protected tip,
+/// a local branch or tag named `origin/main` at the line tip cannot empty a
+/// first push's range. The direct commit is still refused and named, and the
+/// remedy spells the remote-tracking ref in full.
+#[test]
+fn epic_line_first_push_reads_the_full_default_ref_beside_an_origin_main_shadow() {
+    use line_adoption_fixture::{blocks, output, Line, LINE, ZERO};
+    for shadow in ["branch", "tag", "both"] {
+        let f = Line::new();
+        f.git(&["push", "-q", "origin", "main"]);
+        let direct = f.direct();
+        if shadow != "tag" {
+            f.git(&["branch", "origin/main", LINE]);
+        }
+        if shadow != "branch" {
+            f.git(&["tag", "origin/main", LINE]);
+        }
+        assert_eq!(f.git(&["rev-parse", "origin/main"]), direct, "{shadow}");
+        let out = f.push(ZERO);
+        blocks(&out, &direct[..9]);
+        assert!(
+            output(&out).contains("git reset --keep refs/remotes/origin/main"),
+            "{shadow}: {}",
+            output(&out)
+        );
+    }
+}
+
 /// TSK-248 AC-3 controls: a push of merges only passes, on an update and on
 /// the line's first push.
 #[test]
 fn epic_line_adoption_pre_push_merge_only_control() {
-    use line_adoption_fixture::{passes, Line, LINE, ZERO};
+    use line_adoption_fixture::{passes, Line, ZERO};
     let f = Line::new();
     let old = f.git(&["rev-parse", "HEAD"]);
-    f.git(&["switch", "-qc", "task/TSK-001-work"]);
-    f.direct();
-    f.git(&["switch", "-q", LINE]);
-    f.merge("task/TSK-001-work");
+    f.git(&["push", "-q", "origin", "main"]);
+    f.land_task();
     passes(&f.push(&old));
     passes(&f.push(ZERO));
 }
@@ -7205,10 +8148,16 @@ fn epic_line_adoption_pre_push_merge_only_control() {
 /// adoption route, so the push check stays off, as before this change.
 #[test]
 fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
-    use line_adoption_fixture::{passes, Line, ZERO};
+    use line_adoption_fixture::{passes, Line, LINE, ZERO};
     let f = Line::untracked();
     let first = f.direct();
     passes(&f.push(ZERO));
+    // The hook payloads are simulated and never publish anything, so the
+    // second payload names `first` as the line's remote tip while the
+    // destination is still empty. Publish `main` and the line (at `first`)
+    // so the destination holds what that payload claims: the Outcome marker
+    // check reads the destination's advertised default branch.
+    f.git(&["push", "-q", "origin", "main", LINE]);
     f.write("src/lib.rs", "pub fn again() {}\n");
     f.commit("fix: second direct change");
     passes(&f.push(&first));
@@ -7489,4 +8438,2698 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
         ],
         "git.hook_integrity",
     );
+}
+
+#[test]
+fn first_push_without_declared_target_survives_default_branch_advancing() {
+    let (bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
+        true,
+    );
+    let fork = rev(local.path(), "feat/x");
+    git(local.path(), &["switch", "-q", "main"]);
+    git(local.path(), &["branch", "-d", "feat/x"]);
+    commit_file(
+        local.path(),
+        "main.txt",
+        "advanced\n",
+        "docs: advance default",
+    );
+    receive(bare.path(), local.path(), "main:stable");
+    git(local.path(), &["fetch", "-q", "dest"]);
+    for branch in [
+        "fix/unbound",
+        "docs/unbound",
+        "chore/unbound",
+        "plan/non-epic",
+    ] {
+        git(local.path(), &["switch", "-q", "-C", branch, &fork]);
+        let head = commit_file(local.path(), "notes.md", "notes\n", "docs: add notes");
+        let (code, err) = push_hook(local.path(), "dest", &[(branch, &head)]);
+        assert_eq!(code, Some(0), "{branch}: {err}");
+        assert!(err.contains("push set finished"), "{err}");
+    }
+}
+
+/// TSK-302 AC-6 (issue 173): in a fresh project with a linked worktree,
+/// the built binary's exec-guard refuses an interpreter whose arguments
+/// name an enforcement path, the issue's commands included, through the
+/// wrappers it reads, and still allows ordinary arguments and reads.
+#[test]
+#[allow(clippy::too_many_lines)] // One journey: refusal payloads, then controls.
+fn exec_guard_judges_the_paths_an_interpreter_is_given() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    enforced_repo(&root);
+    let linked = root.join(".worktrees/w");
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&linked)],
+    );
+    let repo = shell_path(&root);
+    let tree = shell_path(&linked);
+    std::fs::write(root.join("case-probe"), "probe").unwrap();
+    let folds_case = root.join("CASE-PROBE").exists();
+    let case_result = exec_guard_contract_3(&root, "python3 tool.py .WORKTREES/W/.GIT");
+    assert_eq!(
+        case_result.status.code(),
+        Some(if folds_case { 2 } else { 0 }),
+        "{case_result:?}"
+    );
+    assert_eq!(
+        interpreter_argument_refused(&case_result),
+        folds_case,
+        "{case_result:?}"
+    );
+    let refused = [
+        format!("W={repo}; python3 -I -B - \"$W/.claude/settings.json\" <<'PY'\nimport json, sys\np = sys.argv[1]\nopen(p, 'w').write('')\nPY"),
+        format!("python3 - \"{repo}/.codeflow/policy.json\" <<'PY'\nimport sys\nPY"),
+        format!("W={tree}; python3 - \"$W/.claude/settings.json\" <<'PY'\nimport sys\nPY"),
+        format!("python3 edit.py \"{repo}/.claude/settings.json\""),
+        format!("python3 edit.py \"{tree}/.claude/settings.json\""),
+        format!("python3 tool.py \"{tree}/\".*"),
+        format!("python3 tool.py \"{tree}/\".cla*"),
+        format!("python3 tool.py \"{repo}/\".worktrees/*"),
+        "python3 tool.py .worktrees/w/{.git,.claude}".to_string(),
+        "python3 tool.py .worktrees/{w,x}/.git".to_string(),
+        "python3 tool.py .worktrees/w/.git{,}".to_string(),
+        "python3 tool.py .worktrees/w/.git".to_string(),
+        "node tool.js .worktrees/w/.git".to_string(),
+        "python3 tool.py .claude".to_string(),
+        "python3 tool.py .worktrees/w".to_string(),
+        "python3 tool.py .worktrees".to_string(),
+        "python3 tool.py .worktrees/w/*(D)".to_string(),
+        "python3 tool.py .claude/*(D)".to_string(),
+        "python3 tool.py .cla(ude)/settings.json".to_string(),
+        "python3 tool.py .worktrees/w/(.git|x)".to_string(),
+        "python3 tool.py .worktrees/w/.g(i)t".to_string(),
+        "python3 tool.py .worktrees/w/@(.git|.claude)".to_string(),
+        "python3 tool.py .worktrees/w/^src(D)".to_string(),
+        "python3 tool.py *(D)".to_string(),
+        "python3 tool.py .worktrees/w/<1-9>".to_string(),
+        "cd .cla* && python3 tool.py settings.json".to_string(),
+        "cd .c?aude && python3 tool.py settings.json".to_string(),
+        "cd .[c]laude && python3 tool.py settings.json".to_string(),
+        "cd {.claude,x} && python3 tool.py settings.json".to_string(),
+        "pushd .cla* && python3 tool.py settings.json".to_string(),
+        "env -C .cla* python3 tool.py settings.json".to_string(),
+        "ruby -C .cla* tool.rb settings.json".to_string(),
+        "cd .wor* && python3 tool.py w/.g*".to_string(),
+        "python3 -c 'import sys' .claude/settings.json".to_string(),
+        "node -e 'x' .codeflow/policy.json".to_string(),
+        "perl -i -pe 's/a/b/' .claude/settings.json".to_string(),
+        "ruby script.rb .codeflow/policy.json".to_string(),
+        "python3 -c 'import sys' .git/config".to_string(),
+        "env -S 'python3 edit.py .claude/settings.json'".to_string(),
+        "bash -c 'python3 edit.py .claude/settings.json'".to_string(),
+        "echo .claude/settings.json | xargs python3 edit.py".to_string(),
+        "find . -name settings.json -exec python3 edit.py {} +".to_string(),
+        "cd .claude && python3 edit.py settings.json".to_string(),
+        "P=.codeflow/policy.json; python3 edit.py \"$P\"".to_string(),
+        // TSK-302 review F1 to F3.
+        "cd .claude && python3 -c 'import sys' -c settings.json".to_string(),
+        "python3 -c 'import argparse' -o.claude/settings.json".to_string(),
+        "cd -- .claude && python3 -c 'import sys' settings.json".to_string(),
+        "cd -P .claude && python3 -c 'import sys' settings.json".to_string(),
+        "find . -name '*.json' -execdir python3 tool.py settings.json \\;".to_string(),
+        "echo .git/config | xargs python3 tool.py".to_string(),
+        "python3 tool.py .git/con*".to_string(),
+        // Round 2: untracked directory changes, composed chdir, clusters,
+        // merged authority, and the known conservative refusals.
+        "command cd .claude && python3 tool.py settings.json".to_string(),
+        "builtin cd .claude && python3 tool.py settings.json".to_string(),
+        "pushd .claude >/dev/null && python3 tool.py settings.json".to_string(),
+        "env -C.claude python3 tool.py settings.json".to_string(),
+        "cd .claude && command cd .. && python3 tool.py .claude/settings.json".to_string(),
+        "cd .claude && python3 -c 'open(\"settings.json\",\"w\")'".to_string(),
+        "python3 tool.py .claude/settings.json .git/config".to_string(),
+        "python3 -c 'import argparse' -vo.claude/settings.json".to_string(),
+        "command cd .git && python3 tool.py config".to_string(),
+        "cd .claude && cd .. && python3 tool.py settings.json".to_string(),
+        "find . -execdir python3 lint.py notes.txt \\;".to_string(),
+        // Round 3: launcher grammar, source, execdir from the line set and
+        // find's own spelling, and code literals in an unknown directory.
+        "env -u FOO -C.claude python3 tool.py settings.json".to_string(),
+        "nice env -C.claude python3 tool.py settings.json".to_string(),
+        "env -iC.claude python3 tool.py settings.json".to_string(),
+        "source go.sh && python3 tool.py settings.json".to_string(),
+        "command cd .claude && find settings.json -execdir python3 tool.py settings.json \\;".to_string(),
+        "find . -path '*cla*json' -execdir python3 tool.py settings.json \\;".to_string(),
+        "find .claude/settings.json -execdir python3 tool.py settings.json \\;".to_string(),
+        "D=.claude; cd \"$D\" && python3 -c 'open(\"settings.json\",\"w\")'".to_string(),
+        "command cd .git && find config -execdir python3 tool.py config \\;".to_string(),
+        // Round 4: unmodeled words before a directory change, zsh
+        // precommands and GNU-prefixed or macOS launchers.
+        "noglob cd .claude && python3 tool.py settings.json".to_string(),
+        "true; - cd .git && python3 tool.py config".to_string(),
+        "bash -c 'builtin -- cd .git && python3 tool.py config'".to_string(),
+        "caffeinate env -C.claude python3 tool.py settings.json".to_string(),
+        "xcrun env -C.git python3 tool.py config".to_string(),
+        "genv -C.git python3 tool.py config".to_string(),
+        "gtimeout 5 env -C.claude python3 tool.py settings.json".to_string(),
+        // An unknown program that launches an interpreter.
+        "frobnicate env -C.claude python3 tool.py settings.json".to_string(),
+        "frobnicate env -C.git python3 tool.py config".to_string(),
+        // A bare `--` does not hide the interpreter (Grok round 5 F1).
+        "sandbox-exec -p '(version 1)(allow default)' -- python3 tool.py .git/config".to_string(),
+        "taskpolicy -- python3 tool.py .claude/settings.json".to_string(),
+        // A script string an unknown program runs (Grok round 6 F1).
+        "expect -c 'spawn python3 tool.py .claude/settings.json'".to_string(),
+        "expect -c 'spawn python3 tool.py .git/config'".to_string(),
+        "osascript -e 'do shell script \"python3 tool.py .claude/settings.json\"'".to_string(),
+        "osascript -e 'do shell script \"python3 tool.py .git/config\"'".to_string(),
+    ];
+    let allowed = [
+        "python3 tool.py \"foo (bar)\"",
+        "python3 tool.py \"x (y)\"",
+        "python3 tool.py \"x (y)\" notes.txt",
+        "python3 tool.py \"print(x)\"",
+        "python3 tool.py \"my file(1).txt\"",
+        "python3 tool.py 'notes (draft).md'",
+        "node x.js --filter \"(a|b)\"",
+        "python3 tool.py .",
+        "python3 -m pytest .",
+        "python3 -m black .",
+        "python3 -m pip install -e .",
+        "python3 -m ruff check .",
+        "node x.js .",
+        "python3 edit.py notes.txt out.json",
+        "INPUT=src/app.py; python3 tool.py \"$INPUT\"",
+        "python3 -c 'import json, sys; print(json.load(sys.stdin))' < .codeflow/policy.json",
+        "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
+        "find . -name '*.py' -exec python3 -m py_compile {} +",
+        "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
+        "python3 tool.py -v -n3 -o out.json",
+        "cd src && python3 app.py settings.json",
+        "find . -name '*.rs' -execdir python3 lint.py {} +",
+        "find src -execdir python3 lint.py notes.txt \\;",
+        "cd .codex && python3 -c 'print(1)'",
+        "cd .codeflow/git-hooks && python3 -c 'print(1)'",
+        "source go.sh && python3 tool.py notes.txt",
+        "nice python3 tool.py data.json",
+        "timeout 5 node x.js out.json",
+        "noglob cd .claude && python3 tool.py notes.txt",
+        "caffeinate python3 tool.py data.json",
+        "docker run img python3 app.py data.json",
+        "cargo run -- python3",
+        "npm run x -- --flag",
+        "taskpolicy -- python3 tool.py notes.txt",
+        "echo -e 'hello'",
+        "cargo test -- --nocapture",
+        // `cargo run -- python3 -c 'print(1)'` refuses since TSK-1002
+        // review 03 ruling 4: inline code under a launcher the guard does
+        // not model runs in an unknown directory (target_repository.rs).
+        "git commit -m \"python3 x\"",
+        "python3 <<< 'print(1)'",
+        "echo 'print(1)' | python3",
+        "expect -c 'spawn python3 tool.py {notes.txt}'",
+        "python3 <<< 'print(x)'",
+        "echo x | python3",
+        "python3 /dev/stdin <<< 'print(1)'",
+        "source <(echo 'python3 tool.py notes.txt')",
+        "python3 <<< $'print(17330\\x32)'",
+        "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
+        "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
+        "print -r '.cla\\x75de/settings.json'",
+    ];
+    let mut wrong = Vec::new();
+    for command in &refused {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        // Refused for what the interpreter is given, not for its code.
+        if !interpreter_argument_refused(&out) {
+            wrong.push(format!("should refuse: {command}: {err}"));
+        }
+    }
+    // Code a shell or interpreter takes from a here-string, a process
+    // substitution or a pipe (review round 7): the refusal may name the code
+    // or the line, so only the rule and exit are checked.
+    for command in [
+        "sh <<< 'python3 tool.py .git/config'",
+        "python3 <<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'",
+        "bash <(printf '%s\\n' 'python3 tool.py .claude/settings.json')",
+        "echo 'open(\".git/config\").read()' | python3",
+        "expect -c 'spawn python3 tool.py {.git/config}'",
+        // Round 8: descriptors, `source <(...)`, a literal `-c` that runs
+        // its stdin.
+        "python3 /dev/fd/3 3<<< 'open(\".git/config\").read()'",
+        "source <(echo 'python3 tool.py .claude/settings.json')",
+        "python3 -c 'import sys; exec(sys.stdin.read())' <<< 'open(\".git/config\").read()'",
+        // Round 9: `$'...'` decoded, `printf` joins.
+        "python3 <<< $'open(\".gi\\x74/config\").read()'",
+        "printf -v p '%s%s' '.cla' 'ude/settings.json'; python3 tool.py \"$p\"",
+        // Round 10: printf escapes, empty-separator joins, echo -e decode.
+        "printf '%b' '.gi\\x74/config' | python3 -c 'import sys; print(open(sys.stdin.read().strip()).read())'",
+        "IFS=; arr=('.cla' 'ude/settings.json'); python3 -c \"open(\\\"${arr[*]}\\\",\\\"w\\\")\"",
+        "echo -e '.cla\\x75de/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+        // Round 11: a value built from an expansion, a format from a
+        // variable; each resolved exactly or refused as cannot-verify.
+        "a=.cla; b=\"${a}ude/settings.json\"; python3 -c \"open('$b','w')\"",
+        "f='.cla\\x75de/settings.json'; printf \"$f\" | python3 -c 'import sys; open(sys.stdin.read(),\"w\")'",
+    ] {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("should refuse: {command}: {err}"));
+        }
+    }
+    // From inside the linked worktree, its own enforcement files and the
+    // main checkout's are refused too.
+    for command in [
+        "python3 tool.py .git".to_string(),
+        "python3 tool.py ../..".to_string(),
+        format!("python3 tool.py \"{repo}\""),
+        "python3 tool.py ../../.worktrees".to_string(),
+        "python3 tool.py ..".to_string(),
+        "python3 edit.py .codeflow/policy.json".to_string(),
+        format!("python3 edit.py \"{repo}/.claude/settings.json\""),
+    ] {
+        let out = exec_guard_contract_3(&linked, &command);
+        if out.status.code() != Some(2) {
+            wrong.push(format!("should refuse in the worktree: {command}"));
+        }
+    }
+    for command in allowed {
+        let out = exec_guard_contract_3(&root, command);
+        if out.status.code() != Some(0) {
+            let err = String::from_utf8_lossy(&out.stderr);
+            wrong.push(format!("should allow: {command}: {err}"));
+        }
+    }
+    for cwd in [&root, &linked] {
+        std::fs::create_dir_all(cwd.join("src")).unwrap();
+        for command in [
+            "python3 tool.py .",
+            "python3 -m pytest .",
+            "python3 -m black .",
+            "python3 -m pip install -e .",
+            "python3 -m ruff check .",
+            "node x.js .",
+        ] {
+            let out = exec_guard_contract_3(cwd, command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("should allow in {cwd:?}: {command}: {out:?}"));
+            }
+        }
+        for command in ["python3 tool.py ..", "python3 tool.py ."] {
+            let out = exec_guard_contract_3(&cwd.join("src"), command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("should allow in {cwd:?}/src: {command}: {out:?}"));
+            }
+        }
+    }
+    let src = root.join("src");
+    let parent = shell_path(root.parent().unwrap());
+    for (cwd, paths) in [
+        (
+            &linked,
+            vec!["../..", "..", "../../..", "../../.worktrees", &repo],
+        ),
+        (&root, vec!["..", &parent]),
+        (&src, vec!["../.."]),
+    ] {
+        for path in paths {
+            for command in [
+                format!(r#"python3 -c 'import shutil; shutil.rmtree("{path}")'"#),
+                format!(r#"node -e 'require("fs").rmSync("{path}",{{recursive:true}})'"#),
+                format!(r#"perl -e 'use File::Path qw(remove_tree); remove_tree("{path}")'"#),
+                format!(r#"ruby -e 'require "fileutils"; FileUtils.rm_rf("{path}")'"#),
+            ] {
+                let out = exec_guard_contract_3(cwd, &command);
+                let err = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+                    wrong.push(format!(
+                        "should refuse code path in {cwd:?}: {command}: {out:?}"
+                    ));
+                }
+            }
+        }
+    }
+    let filesystem_root = root.ancestors().last().unwrap().to_string_lossy();
+    let plain_root = filesystem_root
+        .trim_start_matches(r"\\?\")
+        .replace('\\', "/");
+    for cwd in [&root, &linked, &src] {
+        for suffix in ["", ".", ".."] {
+            let path = format!("{plain_root}{suffix}");
+            let command = format!(r#"python3 -c 'print("{path}")'"#);
+            let out = exec_guard_contract_3(cwd, &command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!(
+                    "should allow code root in {cwd:?}: {command}: {out:?}"
+                ));
+            }
+        }
+        for command in [
+            r#"python3 -c 'print("/.")'"#,
+            r#"python3 -c 'print("/..")'"#,
+            r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#,
+        ] {
+            let out = exec_guard_contract_3(cwd, command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!(
+                    "should allow code fragment in {cwd:?}: {command}: {out:?}"
+                ));
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        let alias = tmp.path().join("alias");
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        std::os::unix::fs::symlink(&linked, plain.join("x")).unwrap();
+        let command = format!("python3 tool.py \"{}\"", shell_path(&alias));
+        let out = exec_guard_contract_3(&linked, &command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("should refuse ancestor alias: {command}: {out:?}"));
+        }
+        for path in [
+            alias.join(".worktrees/w/.git"),
+            alias.join(".worktrees/w/.g*"),
+            alias.join(".worktrees/*/.git"),
+            plain.join("x/.git"),
+        ] {
+            // Each harness runs both hooks. Interpreter arguments belong
+            // to exec-guard; writer operands and redirects to git-guard.
+            for (hook, command) in [
+                (
+                    "exec-guard",
+                    format!("python3 tool.py {}", shell_path(&path)),
+                ),
+                ("git-guard", format!("cp x {}", shell_path(&path))),
+                ("git-guard", format!("echo hi > {}", shell_path(&path))),
+            ] {
+                let out = if hook == "exec-guard" {
+                    exec_guard_contract_3(&root, &command)
+                } else {
+                    guard_run(&command, &root)
+                };
+                let err = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+                    wrong.push(format!("{hook} should refuse alias: {command}: {out:?}"));
+                }
+            }
+        }
+    }
+    let command = "python3 tool.py ~/repo/.worktrees/w/.git";
+    let payload = serde_json::json!({
+        "tool_name": "Bash", "tool_input": {"command": command}, "cwd": root,
+    });
+    let out = run_with_stdin(
+        codeflow()
+            .env("HOME", tmp.path())
+            .env("USERPROFILE", tmp.path())
+            .args(["hook", "exec-guard", "--contract", "3"])
+            .current_dir(&root),
+        &payload.to_string(),
+    );
+    if out.status.code() != Some(2) {
+        wrong.push(format!("should refuse: {command}: {out:?}"));
+    }
+    let many = root.join("many");
+    std::fs::create_dir(&many).unwrap();
+    for n in 0..5000 {
+        std::fs::write(many.join(format!("f{n}")), "").unwrap();
+    }
+    let out = exec_guard_contract_3(&root, "python3 tool.py many/*");
+    let err = String::from_utf8_lossy(&out.stderr);
+    // The secret reader uses the larger search budget: 5000 ordinary
+    // matches can be verified completely without replacing them by a prefix.
+    if !out.status.success() {
+        wrong.push(format!(
+            "should allow the completely verified ordinary glob: {err}"
+        ));
+    }
+    let payload = serde_json::json!({
+        "tool_name": "Bash", "tool_input": {"command": "python3 tool.py many/*"}, "cwd": root,
+    });
+    let out = run_with_stdin(
+        codeflow()
+            .env("GIT_CONFIG_GLOBAL", many.join("f0"))
+            .args(["hook", "exec-guard", "--contract", "3"])
+            .current_dir(&root),
+        &payload.to_string(),
+    );
+    if out.status.code() != Some(2) {
+        wrong.push(format!(
+            "should refuse a glob holding configured authority: {out:?}"
+        ));
+    }
+    for command in [
+        "python3 tool.py many/*/../../.claude/settings.json",
+        "python3 tool.py many/*/../.claude/x",
+    ] {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+            wrong.push(format!("should refuse an escaping glob: {command}: {err}"));
+        }
+    }
+    for (command, refuse) in [
+        ("tee many/*/../../.cla[u]de/settings.json < x", true),
+        ("tee many/*/../.claude/x < x", true),
+        ("rm many/*.o", false),
+        ("printf '%s\\n' many/* | xargs rm", false),
+    ] {
+        let out = guard_run(command, &root);
+        let err = String::from_utf8_lossy(&out.stderr);
+        let correct = if refuse {
+            out.status.code() == Some(2) && err.contains("git.hook_integrity")
+        } else {
+            out.status.code() == Some(0)
+        };
+        if !correct {
+            wrong.push(format!("{command}: refuse={refuse}: {err}"));
+        }
+    }
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/many", "many/linked"],
+    );
+    for protected in ["linked", ".claude"] {
+        if protected == ".claude" {
+            git(&root, &["worktree", "remove", "many/linked"]);
+            std::fs::create_dir(many.join(protected)).unwrap();
+        }
+        for (hook, command) in [
+            ("exec-guard", "python3 tool.py many/*"),
+            ("git-guard", "tee many/* < x"),
+        ] {
+            let out = if hook == "exec-guard" {
+                exec_guard_contract_3(&root, command)
+            } else {
+                guard_run(command, &root)
+            };
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+                wrong.push(format!(
+                    "should refuse glob holding {protected}: {command}: {err}"
+                ));
+            }
+        }
+    }
+    let other = tmp.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    enforced_repo(&other);
+    git(&other, &["worktree", "add", "-b", "task/away", "away/w"]);
+    let command = format!("env -C \"{}\" python3 tool.py away/w", shell_path(&other));
+    let out = exec_guard_contract_3(&root, &command);
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() != Some(2) || !err.contains("interpreter") {
+        wrong.push(format!(
+            "should refuse in another repository: {command}: {err}"
+        ));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The exec-guard's answer to `command` from `dir` through the hook
+/// contract the harness presets name, `--contract 3`.
+fn exec_guard_contract_3(dir: &Path, command: &str) -> Output {
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": dir,
+    })
+    .to_string();
+    run_with_stdin(
+        codeflow()
+            .env("SHELL", "/bin/zsh")
+            .args(["hook", "exec-guard", "--contract", "3"])
+            .current_dir(dir),
+        &payload,
+    )
+}
+
+fn interpreter_argument_refused(output: &Output) -> bool {
+    let err = String::from_utf8_lossy(&output.stderr);
+    output.status.code() == Some(2)
+        && err.contains("git.hook_integrity")
+        && err.contains("interpreter")
+        && !err.contains("interpreter code")
+}
+
+#[test]
+fn guards_preserve_discovered_checkout_when_registration_is_rewritten() {
+    let mut wrong = Vec::new();
+    for mode in ["absolute", "relative", "repair"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        enforced_repo(&root);
+        let linked = root.join(".worktrees/w");
+        git(
+            &root,
+            &["worktree", "add", "-b", "task/w", &shell_path(&linked)],
+        );
+        let admin = root.join(".git/worktrees/w");
+        let registration = admin.join("gitdir");
+        let decoy = temp.path().join("decoy");
+        std::fs::create_dir(&decoy).unwrap();
+        if mode == "relative" {
+            git(&decoy, &["init"]);
+        } else {
+            std::fs::copy(linked.join(".git"), decoy.join(".git")).unwrap();
+        }
+        let edit = |path: &Path| {
+            run_with_stdin(
+                codeflow().args(["hook", "edit-guard"]).current_dir(&linked),
+                &serde_json::json!({
+                    "tool_name": "Write", "cwd": linked,
+                    "tool_input": {"file_path": path, "content": "{}"},
+                })
+                .to_string(),
+            )
+        };
+        for path in [&registration, &linked.join(".git")] {
+            let output = edit(path);
+            if output.status.code() != Some(2) {
+                wrong.push(format!("{mode}: edit {}: {output:?}", path.display()));
+            }
+        }
+        let r = shell_path(&registration);
+        let d = shell_path(&decoy);
+        for (guard, command) in [
+            ("git-guard", format!("printf '%s\\n' '{d}/.git' > '{r}'")),
+            (
+                "exec-guard",
+                format!(r#"python3 -c 'open("{r}", "w").write("{d}/.git")'"#),
+            ),
+            ("git-guard", format!("git worktree repair '{d}'")),
+        ] {
+            let output = run_with_stdin(
+                codeflow().args(["hook", guard]).current_dir(&linked),
+                &guard_payload(&command, &linked),
+            );
+            if output.status.code() != Some(2) {
+                wrong.push(format!("{mode}: {guard}: {command}: {output:?}"));
+            }
+        }
+        // Simulate external corruption, then exercise each guard's real
+        // discovery path. Git itself still discovers the original checkout.
+        match mode {
+            "repair" => git(&root, &["worktree", "repair", &shell_path(&decoy)]),
+            "relative" => std::fs::write(&registration, "../../../../decoy/.git\n").unwrap(),
+            _ => std::fs::write(&registration, format!("{}\n", decoy.join(".git").display()))
+                .unwrap(),
+        }
+        let output = Command::new("git")
+            .current_dir(&linked)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap(),
+        );
+        for command in ["rm -rf .claude", "python3 tool.py .claude/settings.json"] {
+            for guard in ["git-guard", "exec-guard"] {
+                let output = run_with_stdin(
+                    codeflow().args(["hook", guard]).current_dir(&linked),
+                    &guard_payload(command, &linked),
+                );
+                if output.status.code() != Some(2) {
+                    wrong.push(format!("{mode}: corrupted {guard}: {command}: {output:?}"));
+                }
+            }
+        }
+        for path in [
+            linked.join(".claude/settings.json"),
+            linked.join(".codeflow/policy.json"),
+        ] {
+            let output = edit(&path);
+            if output.status.code() != Some(2) {
+                wrong.push(format!(
+                    "{mode}: corrupted edit {}: {output:?}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_epic_integration_from_ahead_plan_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-b", "main"]);
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        dir.path(),
+        &["init", "--yes", "--minimal"],
+    );
+    answering_destination(dir.path(), "origin");
+    let main = rev(dir.path(), "HEAD");
+    receive(
+        &dir.path().join(".git/origin-destination.git"),
+        dir.path(),
+        "HEAD:refs/heads/main",
+    );
+    let plan = dir.path().join(".worktrees/plan-probe");
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "plan/probe",
+            plan.to_str().unwrap(),
+        ],
+    );
+    ok(
+        "git",
+        &plan,
+        &["commit", "--allow-empty", "-m", "docs: record planning"],
+    );
+    let out = with_installed_hooks(
+        env!("CARGO_BIN_EXE_codeflow"),
+        &plan,
+        &["epic", "new", "Probe epic", "--integration"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", both_streams(&out));
+    let remote = ok(
+        "git",
+        &plan,
+        &[
+            "ls-remote",
+            "origin",
+            "refs/heads/integration/EPC-001-probe-epic",
+        ],
+    );
+    assert_eq!(
+        remote.trim(),
+        format!("{main}\trefs/heads/integration/EPC-001-probe-epic")
+    );
+    eprintln!("epic integration journey: {}\n{remote}", both_streams(&out));
+}
+
+#[test]
+fn protected_advertised_target_cannot_hide_a_criterion_from_pre_push() {
+    use line_adoption_fixture::{blocks, output, Line, ZERO};
+    let f = Line::new();
+    f.git(&["switch", "-q", "main"]);
+    let policy = std::fs::read_to_string(f.root().join(".codeflow/policy.json"))
+        .unwrap()
+        .replace("\"off\"", "\"warn\"");
+    f.write(".codeflow/policy.json", &policy);
+    f.commit("chore: enable the push check");
+    f.protected_target_shadow();
+    let destination = f.root().join(".git/destination.git");
+    receive(&destination, f.root(), "main:main");
+    // Neither a local-only protected name nor one advertised ahead of the
+    // destination default may shorten the criteria range.
+    blocks(
+        &f.push_branch("task/TSK-001-work", ZERO),
+        "work.criteria_frozen",
+    );
+    receive(&destination, f.root(), "master:master");
+    let out = f.push_branch("task/TSK-001-work", ZERO);
+    blocks(&out, "work.criteria_frozen");
+    assert!(
+        output(&out).contains("uses advertised target 'main'"),
+        "{}",
+        output(&out)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_task_push_uses_remote_bound_line_through_installed_hook() {
+    use line_adoption_fixture::{output, passes, Line, LINE};
+    let (f, tip) = Line::standalone_on_remote_line();
+    let out = installed_standalone_push(&f);
+    let text = output(&out);
+    assert!(
+        text.contains(&format!("uses advertised target '{LINE}'")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("codeflow ci --base {tip} --head")),
+        "{text}"
+    );
+    passes(&out);
+    assert_eq!(
+        f.git(&["rev-parse", "HEAD"]),
+        f.git(&["rev-parse", "refs/remotes/origin/task/TSK-002-repair"])
+    );
+}
+
+#[cfg(unix)]
+fn installed_standalone_push(f: &line_adoption_fixture::Line) -> Output {
+    use std::os::unix::fs::PermissionsExt;
+    // Install the shipped shim verbatim and run Git, including its ref payload.
+    let hook = f.root().join(".git/hooks/pre-push");
+    std::fs::write(
+        &hook,
+        include_str!("../../../assets/base/git-hooks/pre-push"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.command("git")
+        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+        .args(["push", "origin", "task/TSK-002-repair"])
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_task_push_refuses_decoy_lines_and_other_epic_through_installed_hook() {
+    use line_adoption_fixture::{output, Line, LINE};
+    for case in ["local_only", "wrong_line", "other_epic"] {
+        let (f, _) = Line::standalone_on_remote_line();
+        let path = "project-management/tasks/TSK-002.md";
+        let record = std::fs::read_to_string(f.root().join(path)).unwrap();
+        match case {
+            "local_only" => {
+                f.git(&["push", "origin", &format!(":{LINE}")]);
+            }
+            "wrong_line" => {
+                let decoy = "integration/EPC-001-decoy";
+                f.git(&["push", "origin", &format!("{LINE}:{decoy}")]);
+                f.write(path, &record.replace(LINE, decoy));
+                f.commit("docs: declare decoy line");
+            }
+            _ => {
+                f.write(
+                    path,
+                    &record.replace("epic_id: null", "epic_id: EPC-002").replace(
+                        "standalone_reason: Bounded repair",
+                        "standalone_reason: null",
+                    ),
+                );
+                f.commit("docs: assign another epic");
+            }
+        }
+        let out = installed_standalone_push(&f);
+        let text = output(&out);
+        assert!(!out.status.success(), "{case}: {text}");
+        assert!(text.contains("is not a bound epic line"), "{case}: {text}");
+        assert!(
+            text.contains("uses advertised target 'main'"),
+            "{case}: {text}"
+        );
+        assert!(text.contains("work.import_authority"), "{case}: {text}");
+        assert!(
+            f.git(&["ls-remote", "origin", "refs/heads/task/TSK-002-repair"])
+                .is_empty(),
+            "refused push transferred the branch"
+        );
+    }
+}
+
+/// TSK-398: a local branch named `origin/main` at the line's record tip
+/// cannot bind a local-only line through the installed hook. The push gets
+/// the clean clone's verdict, and the anchor stays `refs/remotes/origin/main`.
+#[cfg(unix)]
+#[test]
+fn local_origin_main_branch_cannot_bind_a_line_through_installed_hook() {
+    use line_adoption_fixture::{output, Line, LINE};
+    let (f, tip) = Line::standalone_on_remote_line();
+    f.git(&["push", "origin", &format!(":{LINE}")]);
+    let clean = installed_standalone_push(&f);
+    f.git(&["branch", "origin/main", &tip]);
+    let shadowed = installed_standalone_push(&f);
+    let (clean_text, text) = (output(&clean), output(&shadowed));
+    for (out, text) in [(&clean, &clean_text), (&shadowed, &text)] {
+        assert!(!out.status.success(), "{text}");
+        assert!(text.contains("is not a bound epic line"), "{text}");
+        assert!(text.contains("uses advertised target 'main'"), "{text}");
+        assert!(text.contains("work.import_authority"), "{text}");
+    }
+    assert!(!text.contains(&format!("--into={LINE}")), "{text}");
+    assert!(
+        f.git(&["ls-remote", "origin", "refs/heads/task/TSK-002-repair"])
+            .is_empty(),
+        "refused push transferred the branch"
+    );
+}
+
+/// TSK-380 AC-1 and AC-2 (issue 242): with the built binary, neither guard
+/// refuses a search pattern that looks like an absolute or unresolved path,
+/// for each search tool and each way it takes a pattern, nor git-guard a
+/// pattern that spells an enforcement path in a command `xargs` or
+/// `find -exec` runs. Exec-guard still refuses a path operand after the
+/// pattern, a pattern file, a `--pre` program and a redirect into a
+/// startup file, and git-guard the same forms on an enforcement path.
+/// Review round 1: a pattern the shell can expand into more words or other
+/// text (an unquoted glob, brace or `$`) is judged as before, so is one
+/// GNU `parallel` runs without `-q` and one a ripgrep configuration the
+/// line sets may turn into a path; `rg --pre` judges every root it
+/// searches; a wrapped `git grep` reads its pattern as plain `git grep`.
+#[test]
+#[allow(clippy::too_many_lines)] // One fixture: allowed forms, then each refusal class.
+fn guards_read_a_search_pattern_as_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join(".zshrc"), "# fixture\n").unwrap();
+    std::fs::write(home.join(".bashrc"), "# fixture\n").unwrap();
+    enforced_repo(&root);
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/a.md"), "a\n").unwrap();
+    let run = |hook: &str, command: &str| {
+        let payload = serde_json::json!({
+            "tool_name": "Bash", "tool_input": {"command": command}, "cwd": root,
+        });
+        run_with_stdin(
+            codeflow()
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .env("SHELL", "/bin/zsh")
+                .env_remove("ZDOTDIR")
+                .env_remove("XDG_CONFIG_HOME")
+                .env_remove("RIPGREP_CONFIG_PATH")
+                .args(["hook", hook, "--contract", "3"])
+                .current_dir(&root),
+            &payload.to_string(),
+        )
+    };
+    let mut allowed = vec![
+        "rg --files | rg '/CHANGELOG.md$'".to_string(),
+        "grep -rn '/etc/hosts' docs/".to_string(),
+        "rg --files | xargs rg '.claude/settings.json'".to_string(),
+        "rg --files | xargs rg -e x -e '.codeflow/policy.json'".to_string(),
+        "find docs -exec rg -l '.claude/settings.json' {} +".to_string(),
+        // A wrapped `git grep` reads its pattern as plain `git grep` does.
+        "rg --files | xargs git grep '/CHANGELOG.md$'".to_string(),
+        "rg --files | xargs git grep -e '/CHANGELOG.md$' --".to_string(),
+        "find docs -exec git grep '/CHANGELOG.md$' {} +".to_string(),
+        // A preprocessor over a root that holds nothing protected.
+        "rg --pre pdftotext needle docs/".to_string(),
+    ];
+    for form in ["'/CHANGELOG.md$'", "'^/etc/.*'", "\"$HOME/x\""] {
+        for tool in ["rg", "grep", "egrep", "fgrep", "git grep", "ag"] {
+            allowed.push(format!("{tool} {form} docs"));
+            // `ag` has no `-e`, and `git grep` no `--regexp`.
+            if tool != "ag" {
+                allowed.push(format!("{tool} -e {form} docs"));
+            }
+            if !matches!(tool, "ag" | "git grep") {
+                allowed.push(format!("{tool} --regexp {form} docs"));
+            }
+            if tool != "git grep" {
+                allowed.push(format!("rg --files | xargs {tool} {form}"));
+            }
+        }
+    }
+    let mut wrong = Vec::new();
+    for command in &allowed {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = run(hook, command);
+            // F4 tightens unknown filename streams without turning the
+            // child's search text into a path. Literal input remains usable.
+            let unknown_files = hook == "exec-guard" && command.starts_with("rg --files | xargs ");
+            let expected = if unknown_files { 2 } else { 0 };
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(expected)
+                || unknown_files
+                    && (!err.contains("security.secret_reads") || !err.contains("cannot verify"))
+            {
+                wrong.push(format!("{hook} expected {expected}: {command}: {err}"));
+            }
+            if unknown_files {
+                let literal = command.replacen("rg --files", "printf '%s\\n' docs/a.md", 1);
+                let out = run(hook, &literal);
+                if !out.status.success() {
+                    wrong.push(format!(
+                        "{hook} literal input should allow: {literal}: {out:?}"
+                    ));
+                }
+            }
+        }
+    }
+    for command in [
+        "rg x > ~/.zshrc",
+        "grep x docs/a.md > ~/.zshrc",
+        "rg '/x$' ~/.zshrc",
+        "rg -e '/x$' ~/.zshrc",
+        "rg -f ~/.zshrc docs",
+        "rg --pre ~/.zshrc x docs",
+        "ag x ~/.zshrc",
+        "rg --files | xargs grep '/x$' ~/.zshrc",
+        // An unquoted glob or brace in the pattern position expands to
+        // several words: the first is the pattern, the rest are searched.
+        "rg --pre tee ~/.*rc",
+        "rg --pre=tee ~/.*rc",
+        "rg --pre tee $HOME/.*rc",
+        "rg --pre tee ~/.[bz]*",
+        "rg --pre tee ~/.?shrc",
+        "rg --pre tee ~/.z*",
+        "rg --pre tee ~/.{a,zsh}rc",
+        "rg --pre ./w ~/.*rc",
+        "rg --files | xargs rg --pre tee ~/.*rc",
+        "rg --files | xargs rg --pre tee ~/.{a,zsh}rc",
+        "find . -maxdepth 0 -exec rg --pre tee ~/.*rc {} +",
+        "find . -maxdepth 0 -exec rg --pre tee ~/.?shrc {} +",
+        "parallel rg --pre tee ~/.*rc ::: x",
+        // GNU parallel runs its command through a shell unless `-q`.
+        "parallel rg --pre tee '~/.*rc' ::: x",
+        "parallel rg '~/.*rc' ::: x",
+        // A ripgrep configuration the line sets may supply the pattern.
+        "read -r RIPGREP_CONFIG_PATH <<< cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
+        "printf -v RIPGREP_CONFIG_PATH cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
+        "declare -x RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
+        // `--pre` runs on every file under each root it searches.
+        "rg --hidden --pre tee x ~",
+        "cd ~ && rg -. --pre tee x",
+        "rg --files --hidden | xargs rg --pre tee x",
+        "rg --hidden --pre tee x $(printf %s ~)",
+        "d=$HOME; rg --hidden --pre tee x $d",
+        "rg --pre-glob '*rc' --pre tee x ~",
+    ] {
+        let out = run("exec-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("security.shell_startup") {
+            wrong.push(format!("exec-guard should refuse: {command}: {err}"));
+        }
+    }
+    for command in [
+        "rg --files > .claude/settings.json",
+        "rg --files | xargs rg x .claude/settings.json",
+        "rg --files | xargs rg -f .claude/settings.json",
+        "echo .claude/settings.json | xargs rg x",
+        "find docs -exec rg x .claude/settings.json \\;",
+        "grep -l x .claude/settings.json | xargs sed -i 's/a/b/'",
+        "sed -i 's/a/b/' .claude/settings.json",
+        "rg --files | xargs rg --pre tee .claude/*",
+        "rg --files | xargs rg --pre tee .claude/{settings.json,x}",
+        "find . -exec rg --pre tee .claude/* {} +",
+        "find . -exec rg --pre tee .claude/{settings.json,x} {} +",
+        "rg --files | xargs rg .claude/*",
+        "find docs -exec rg .claude/{settings.json,x} {} +",
+        "rg --pre tee x",
+        "rg --pre tee x .",
+        "rg --pre tee x .claude",
+    ] {
+        let out = run("git-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("git-guard should refuse: {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// TSK-398 Codex review F1: when the destination advertises no tips, the
+/// pre-push range falls back to the protected tracking refs. A local branch
+/// or tag whose full name is the absent `refs/remotes/origin/main` never
+/// answers for it, so the malformed commit is still refused.
+#[test]
+fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
+    const ZERO: &str = "0000000000000000000000000000000000000000";
+    let read = |dir: &Path, args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    for shadow in ["branch", "tag"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let seed = tmp.path().join("seed");
+        std::fs::create_dir(&seed).unwrap();
+        init_repo(&seed, "master");
+        let origin = tmp.path().join("origin.git");
+        let clone = tmp.path().join("work");
+        codeflow_fixture::clone(tmp.path(), &seed, &origin)
+            .bare()
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
+        codeflow_fixture::clone(tmp.path(), &origin, &clone)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
+        git(&clone, &["config", "user.email", "t@example.com"]);
+        git(&clone, &["config", "user.name", "t"]);
+        git(&clone, &["switch", "-q", "-c", "fix/review"]);
+        std::fs::write(clone.join("review.txt"), "review\n").unwrap();
+        git(&clone, &["add", "."]);
+        git(&clone, &["commit", "-q", "-m", "invalid message"]);
+        let malformed = read(&clone, &["rev-parse", "HEAD"]);
+        // The destination no longer advertises a tip; the clone keeps its
+        // genuine refs/remotes/origin/master and has no tracking main.
+        git(&origin, &["update-ref", "-d", "refs/heads/master"]);
+        let push = || {
+            run_with_stdin(
+                codeflow()
+                    .args(["git-hook", "pre-push", "origin"])
+                    .arg(&origin)
+                    .current_dir(&clone),
+                &format!("refs/heads/fix/review {malformed} refs/heads/fix/review {ZERO}\n"),
+            )
+        };
+        let clean = push();
+        let text = String::from_utf8_lossy(&clean.stderr).to_string()
+            + &String::from_utf8_lossy(&clean.stdout);
+        assert_eq!(clean.status.code(), Some(1), "{shadow} clean: {text}");
+        assert!(text.contains("git.commit_format"), "{shadow} clean: {text}");
+        if shadow == "branch" {
+            git(&clone, &["branch", "refs/remotes/origin/main", &malformed]);
+        } else {
+            git(&clone, &["tag", "refs/remotes/origin/main", &malformed]);
+        }
+        let shadowed = push();
+        let text = String::from_utf8_lossy(&shadowed.stderr).to_string()
+            + &String::from_utf8_lossy(&shadowed.stdout);
+        assert_eq!(shadowed.status.code(), Some(1), "{shadow}: {text}");
+        assert!(text.contains("git.commit_format"), "{shadow}: {text}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unsupported_policy_fresh_and_updated_projects_commit_and_push() {
+    for upgraded in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let init = ok(
+            env!("CARGO_BIN_EXE_codeflow"),
+            root,
+            &["init", "--yes", "--minimal"],
+        );
+        assert!(!init.contains("not supported"), "{init}");
+        ok("git", root, &["switch", "-c", "feat/policy-compatibility"]);
+        if upgraded {
+            // The pinned policy is byte-identical to v3.1.0. This build installs
+            // the hooks; the fixture does not stand in for a released binary.
+            let old = include_str!("../../codeflow-core/tests/fixtures/policy-last-release.json");
+            std::fs::write(root.join(".codeflow/.baseline/.codeflow/policy.json"), old).unwrap();
+            let mut policy: serde_json::Value = serde_json::from_str(old).unwrap();
+            policy["security"]["script_bypass"] = serde_json::json!("block");
+            policy["security"]["interpreter_scan"] = serde_json::json!("warn");
+            std::fs::write(
+                root.join(".codeflow/policy.json"),
+                serde_json::to_string_pretty(&policy).unwrap(),
+            )
+            .unwrap();
+            let update = ok(env!("CARGO_BIN_EXE_codeflow"), root, &["update"]);
+            assert_unsupported_notices(&update, true);
+            eprintln!("updated from 3.1.0 policy: {update}");
+        }
+        // Exercise the real quick-gate runner with a small fixture target.
+        std::fs::write(root.join(".codeflow/test-config.json"),
+            r#"{"schema_version":"1.0","targets":[{"name":"policy-fixture","runner":"custom","modes":{"quick":{"command":"test -f proof.txt"}}}]}"#).unwrap();
+        std::fs::write(root.join("proof.txt"), "policy compatibility journey\n").unwrap();
+        ok("git", root, &["add", "."]);
+        let commit = ok(
+            "git",
+            root,
+            &["commit", "-m", "fix: preserve policy compatibility"],
+        );
+        // Doctor uses the local committed authority before the bare push
+        // destination, which has no default branch, is attached.
+        let doctor = ok(
+            env!("CARGO_BIN_EXE_codeflow"),
+            root,
+            &["doctor", "--check", "policy-source"],
+        );
+        assert_unsupported_notices(&doctor, upgraded);
+        answering_destination(root, "upstream");
+        let push = ok(
+            "git",
+            root,
+            &[
+                "push",
+                "upstream",
+                "HEAD:refs/heads/feat/policy-compatibility",
+            ],
+        );
+        for text in [&commit, &push] {
+            assert_eq!(text.contains("not supported"), upgraded, "{text}");
+            if upgraded {
+                for key in ["script_bypass", "interpreter_scan"] {
+                    assert!(
+                        text.contains(&format!("security.{key} is not supported, has no effect")),
+                        "{text}"
+                    );
+                }
+            }
+        }
+        eprintln!("upgraded={upgraded}\ncommit:\n{commit}\npush:\n{push}");
+        let remote = ok(
+            "git",
+            root,
+            &[
+                "ls-remote",
+                "upstream",
+                "refs/heads/feat/policy-compatibility",
+            ],
+        );
+        assert!(remote.starts_with(&rev(root, "HEAD")), "{remote}");
+    }
+}
+
+#[cfg(unix)]
+fn assert_unsupported_notices(text: &str, edited: bool) {
+    assert_eq!(
+        text.matches("not supported").count(),
+        if edited { 2 } else { 0 },
+        "{text}"
+    );
+    if edited {
+        for key in ["script_bypass", "interpreter_scan"] {
+            assert_eq!(
+                text.matches(&format!("security.{key} is not supported, has no effect"))
+                    .count(),
+                1,
+                "{text}"
+            );
+        }
+    }
+}
+
+/// TSK-406: judge expansions without executing any planted write.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn shell_expansions_preserve_checkout_protection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    enforced_repo(&root);
+    git(&root, &["worktree", "add", "-b", "task/w", ".worktrees/w"]);
+    let mut cases: Vec<(&str, String, bool)> = Vec::new();
+    for word in [
+        "$PWD/.worktrees/w",
+        "${PWD}/.worktrees/w",
+        "$(pwd)/.worktrees/w",
+        "`pwd`/.worktrees/w",
+        "$HOME/repo/.worktrees/w",
+        "${HOME}/repo/.worktrees/w",
+        "$(printf %s .worktrees/w)",
+        "$UNSET",
+        "$INPUT",
+        "$(cat path.txt)",
+    ] {
+        cases.push(("exec-guard", format!("python3 tool.py {word}"), true));
+    }
+    for line in [
+        "W=.worktrees/w; python3 tool.py $W",
+        "export W=.worktrees/w; python3 tool.py $W",
+        r#"python3 -c "import shutil; shutil.rmtree('$PWD/.worktrees/w')""#,
+        "python3 <<EOF\nimport shutil; shutil.rmtree(\"$PWD/.worktrees/w\")\nEOF",
+        r#"node -e "$(printf %s 'require("fs").rmSync(".worktrees/w",{recursive:true,force:true})')""#,
+        r#"python3 -c "open('$PWD/.claude/settings.json','w')""#,
+        "python3 <<EOF\nopen(\"$PWD/.claude/settings.json\",'w')\nEOF",
+        "python3 tool.py $PWD/.claude/settings.json",
+        r#"node -e "$(printf %s 'require("fs").rmSync(".worktrees/w/.claude/settings.json")')""#,
+        r#"python3 -c "$UNSET""#,
+        r#"find src -name '*.py' -exec sh -c 'python3 tool.py "$1"' sh .worktrees/w {} \;"#,
+        r#"find src -name '*.py' -exec sh -c 'python3 -c "$1"' sh {} \;"#,
+    ] {
+        cases.push(("exec-guard", line.into(), true));
+    }
+    for line in [
+        "D=src; python3 tool.py $D/app.py",
+        "python3 tool.py $PWD/src/app.py",
+        "python3 tool.py $HOME/notes.txt",
+        r#"node -e "$(printf %s 'console.log(1)')""#,
+        r#"python3 -c 'import shutil; shutil.rmtree("$PWD/.worktrees/w")'"#,
+        "python3 <<'EOF'\nimport shutil; shutil.rmtree(\"$PWD/.worktrees/w\")\nEOF",
+    ] {
+        cases.push(("exec-guard", line.into(), false));
+    }
+    for line in [
+        "rm -rf $PWD/.worktrees/w",
+        "rm -rf ${PWD}/.worktrees/w",
+        "cd docs && rm -rf $PWD/../.worktrees/w",
+        "cd docs && rm -rf ../.worktrees/w",
+        "{ cd docs; } && rm -rf $PWD/../.worktrees/w",
+        "{ cd docs; } && rm -rf ../.worktrees/w",
+        "(cd docs) && rm -rf $PWD/.worktrees/w",
+        "cd docs || true; rm -rf $PWD/../.worktrees/w",
+        "PWD=/private/tmp; rm -rf .worktrees/w",
+        "printf x > $PWD/.claude/settings.json",
+        "git worktree move .worktrees/w ../outside && rm -rf ../outside",
+    ] {
+        cases.push(("git-guard", line.into(), true));
+    }
+    for flags in ["", "-b task/n ", "-B task/n ", "--detach "] {
+        cases.push(("git-guard", format!("git worktree add {flags}.worktrees/n && printf x > .worktrees/n/.claude/settings.json"), true));
+        cases.push((
+            "git-guard",
+            format!("git worktree add {flags}.worktrees/n && git -C .worktrees/n status"),
+            false,
+        ));
+    }
+    for line in [
+        "printf x > $PWD/src/a.txt",
+        "printf '%s' \"$UNKNOWN_DATA\" > src/a.txt",
+        "find src -name \"$UNKNOWN_PATTERN\" -print",
+        "cd docs && printf x > $PWD/notes.txt",
+        "{ cd docs; } && printf x > $PWD/notes.txt",
+        "(cd docs && printf x > $PWD/notes.txt)",
+    ] {
+        cases.push(("git-guard", line.into(), false));
+    }
+    // Round 1: shell-managed directory values must never come from the hook.
+    for line in [
+        "cd docs && rm -rf $OLDPWD/.worktrees/w",
+        "rm -rf $OLDPWD/.worktrees/w",
+        r#"rm -f "$d""#,
+        r#"rm "$tmpfile""#,
+        r#"cp README.md "$OUT"/notes.md"#,
+        r#"cd docs && rm -rf "$OLDPWD"/.worktrees/w"#,
+        "cd docs && rm -rf ~-/.worktrees/w",
+        "pushd docs; rm -rf ~1/.worktrees/w",
+        "cd docs && rm -rf $PWD:h/.worktrees/w",
+        "cd .worktrees/w && rm -rf $PWD:a",
+        "git worktree add -b t .worktrees/n && printf x > docs/../.worktrees/n/.claude/settings.json",
+        "printf x > ../outside/.claude/settings.json; git worktree move .worktrees/w ../outside; printf x > ../outside/.claude/settings.json",
+        "cd docs && git worktree add -b t ../.worktrees/n && printf x > ../.worktrees/n/.claude/settings.json",
+        "cd docs && git worktree add -b t ../.worktrees/n && rm -rf ../.worktrees/n/.claude",
+    ] {
+        cases.push(("git-guard", line.into(), true));
+    }
+    for line in [
+        "python3 tool.py ~+/.worktrees/w",
+        "python3 tool.py ~+/.worktrees/'w'",
+        "cd docs && python3 tool.py ~-/.worktrees/w",
+        "pushd docs; python3 tool.py ~1/.worktrees/w",
+        r#"python3 <<< "import shutil; shutil.rmtree('$PWD/.worktrees/w')""#,
+        r#"echo "import shutil; shutil.rmtree('$PWD/.worktrees/w')" | python3"#,
+        r#"printf %s "import shutil; shutil.rmtree('$PWD/.worktrees/w')" | python3 -"#,
+        r#"cd docs || true; echo "import shutil; shutil.rmtree('$PWD/../.worktrees/w')" | python3"#,
+        "eval 'python3 tool.py $PWD/.worktrees/w'",
+        "python3 tool.py <(echo x)",
+        "cd docs && python3 tool.py $OLDPWD/.worktrees/w",
+        "python3 tool.py ${DIRSTACK[1]}",
+        "python3 tool.py $dirstack[1]",
+        "python3 tool.py $(dirs -l +1)",
+        "python3 tool.py ~99/.worktrees/w",
+        "python3 tool.py ~-1/.worktrees/w",
+        "python3 tool.py ~someone/.worktrees/w",
+        "D=src; f() { python3 tool.py $D; }; D=.worktrees/w; f",
+        "D=.worktrees/w; if false; then D=src; fi; python3 tool.py $D",
+        "W=.worktrees/w || W=src; python3 tool.py $W",
+        "PWD=$PWD/.worktrees/w; cd docs && python3 tool.py $OLDPWD",
+        "D=.worktrees/w; if false; then D=src; else python3 tool.py $D; fi",
+    ] {
+        cases.push(("exec-guard", line.into(), true));
+    }
+    for line in [
+        r#"for f in src/*.py; do python3 lint.py "$f"; done"#,
+        "D=src; if true; then python3 tool.py $D/app.py; fi",
+        "if true; then python3 tool.py $PWD/src/app.py; fi",
+    ] {
+        cases.push(("exec-guard", line.into(), false));
+    }
+    let destination = tmp.path().join("existing");
+    std::fs::create_dir(&destination).unwrap();
+    for join in ["&&", ";"] {
+        cases.push((
+            "git-guard",
+            format!(
+                "git worktree move .worktrees/w '{}' {join} rm -rf '{}/w'",
+                destination.display(),
+                destination.display()
+            ),
+            true,
+        ));
+    }
+    let mut wrong = Vec::new();
+    for (guard, line, refuse) in cases {
+        for oldpwd in [None, Some("/private/tmp")] {
+            let payload =
+                serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root})
+                    .to_string();
+            let mut command = expansion_codeflow();
+            if let Some(value) = oldpwd {
+                command.env("OLDPWD", value);
+            } else {
+                command.env_remove("OLDPWD");
+            }
+            let output = run_with_stdin(
+                command
+                    .args(["hook", guard, "--contract", "3"])
+                    .current_dir(&root)
+                    .env("PWD", tmp.path())
+                    .env("HOME", tmp.path())
+                    .env("INPUT", "src/app.py")
+                    .env_remove("UNSET")
+                    .env_remove("CDPATH"),
+                &payload,
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let expected = if refuse { 2 } else { 0 };
+            if line == "python3 tool.py <(echo x)" && stderr.contains("expansion ``") {
+                wrong.push("process substitution diagnostic names an empty word".into());
+            }
+            println!(
+                "{guard}: OLDPWD={oldpwd:?}: expected={expected} actual={:?}: {line}\n{stderr}",
+                output.status.code()
+            );
+            if output.status.code() != Some(expected)
+                || (refuse && !stderr.contains("git.hook_integrity"))
+            {
+                wrong.push(format!("{guard}: expected {expected}: {line}: {stderr}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+#[test]
+fn same_line_worktree_status_requires_known_callbacks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    enforced_repo(&root);
+    git(&root, &["config", "core.fsmonitor", "./monitor"]);
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": "git worktree add -b task/n .worktrees/n && git -C .worktrees/n status"},
+        "cwd": root
+    }).to_string();
+    let output = run_with_stdin(
+        expansion_codeflow()
+            .args(["hook", "git-guard", "--contract", "3"])
+            .current_dir(&root),
+        &payload,
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("cannot verify status callbacks before the new worktree exists"));
+}
+
+fn shell_directory_chain(count: usize, join: &str) -> String {
+    (0..count)
+        .map(|i| {
+            if join == "process" {
+                format!("bash <(echo \"cd d{i}\")")
+            } else if join == "pipe" {
+                format!("echo \"cd d{i}\" | bash")
+            } else if join == "source" {
+                format!("source <(echo \"cd d{i}\")")
+            } else if join == "here" {
+                format!("bash <<< \"cd d{i}\"")
+            } else if join == "eval" {
+                format!("eval \"cd d{i}\"")
+            } else if join == "eval-or" {
+                format!("eval \"cd d{i} || cd e{i}\"")
+            } else {
+                format!("cd d{i}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(
+            if matches!(
+                join,
+                "eval" | "eval-or" | "here" | "process" | "pipe" | "source"
+            ) {
+                "; "
+            } else {
+                join
+            },
+        )
+}
+
+/// Bound the real CLI route, including both directory readers.
+#[test]
+fn shell_expansion_chains_have_bounded_guard_time() {
+    use std::io::Write as _;
+    use std::time::{Duration, Instant};
+    let tmp = tempfile::tempdir().unwrap();
+    enforced_repo(tmp.path());
+    // Load the binary before timing commands. A freshly linked executable can
+    // spend the first launch in the platform loader rather than in the guard.
+    assert!(expansion_codeflow()
+        .arg("--version")
+        .stdout(Stdio::null())
+        .status()
+        .unwrap()
+        .success());
+    let mut failures = Vec::new();
+    let mut controls = std::collections::HashMap::new();
+    let routes = [
+        " || ", " && ", "eval", "eval-or", "here", "process", "pipe", "source",
+    ];
+    let cases = [
+        ("git-guard", "rm -rf $PWD/x"),
+        ("exec-guard", "rm -rf $PWD/x"),
+    ]
+    .into_iter()
+    .flat_map(|(guard, tail)| {
+        routes
+            .into_iter()
+            .flat_map(move |join| [20, 80].map(|count| (guard, count, join, tail, 20)))
+    });
+    let cases = cases
+        .chain([10, 20].map(|count| ("exec-guard", count, " || ", "python3 tool.py $PWD/x", 10)));
+    for (guard, count, join, tail, control_count) in cases {
+        let chain = shell_directory_chain(count, join);
+        let payload = serde_json::json!({
+            "tool_name": "Bash", "tool_input": {"command": format!("{chain}; {tail}")},
+            "cwd": tmp.path()
+        })
+        .to_string();
+        let trace = tmp.path().join(format!("{guard}-{count}.stderr"));
+        let stderr = std::fs::File::create(&trace).unwrap();
+        let mut command = expansion_codeflow();
+        // Four times the input may take six times the adjacent 20-command
+        // control plus two seconds of scheduling slack. This catches the old
+        // quadratic eval growth without a load-sensitive two-second deadline.
+        let limit = controls
+            .get(&(guard, join, tail))
+            .map_or(Duration::from_secs(30), |control: &Duration| {
+                *control * 6 + Duration::from_secs(2)
+            });
+        let start = Instant::now();
+        let mut child = command
+            .args(["hook", guard, "--contract", "3"])
+            .current_dir(tmp.path())
+            .env_remove("CDPATH")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        while child.try_wait().unwrap().is_none() && start.elapsed() < limit {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if child.try_wait().unwrap().is_none() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            failures.push(format!(
+                "{guard}: {count} commands joined by {join:?} exceeded {limit:?}\n{}",
+                std::fs::read_to_string(&trace).unwrap()
+            ));
+        }
+        child.wait().unwrap();
+        let elapsed = start.elapsed();
+        if count == control_count {
+            controls.insert((guard, join, tail), elapsed);
+        }
+        println!("{guard} {join:?} N={count}: {elapsed:?}, limit={limit:?}, tail={tail}");
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn expansion_codeflow() -> Command {
+    // Run the identical regression matrix against a saved reviewed binary.
+    std::env::var_os("TSK406_BASELINE_BINARY")
+        .map_or_else(codeflow, |binary| isolated_codeflow(Command::new(binary)))
+}
+
+/// Round 2 reviews: real CLI verdicts, with every planted command judged only.
+#[cfg(unix)]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn shell_expansions_round_two_review_matrix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("docs/sub")).unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    enforced_repo(&root);
+    git(&root, &["worktree", "add", "-b", "task/w", ".worktrees/w"]);
+    std::os::unix::fs::symlink(".worktrees", root.join("lnk")).unwrap();
+    std::os::unix::fs::symlink("docs", root.join("sl")).unwrap();
+    let mut cases = Vec::new();
+    for line in [
+        "rm -rf $PWD/build",
+        "rm -rf $PWD/src",
+        "rm -rf $PWD/notes.txt",
+        "rm -r $PWD/build",
+        "cd docs && rm -rf $PWD/build",
+        "cd src && rm -rf $PWD/__pycache__",
+        "cd docs && rm -rf $(pwd)/build",
+        "X=$PWD/build; rm -rf $X",
+        "rm -rf \"$TMPDIR\"/x",
+        "rm -rf $TMPDIR/x",
+        "cp -r src \"$TMPDIR\"/backup",
+        "mv out.txt \"$TMPDIR\"/",
+        "tee \"$TMPDIR\"/log < README.md",
+        "rm -rf $CARGO_TARGET_DIR/debug",
+        "rm -f \"$d\"",
+        "rm \"$tmpfile\"",
+        "cp README.md \"$OUT\"/notes.md",
+        "eval -- 'echo ordinary'",
+        "bash <<< 'echo ordinary'",
+        "source /dev/stdin <<< 'echo ordinary'",
+        "source <(echo 'echo ordinary')",
+    ] {
+        cases.push(("git-guard", line.to_owned(), false));
+    }
+    for line in [
+        "cat src/app.py | python3 -",
+        "cat src/app.py | python3",
+        "curl -s https://x/y | python3 -",
+    ] {
+        cases.push(("exec-guard", line.to_owned(), false));
+    }
+    for line in [
+        "eval -- 'git config core.hooksPath /x'",
+        "eval -- 'rm -rf .codeflow'",
+        "eval -- 'rm -rf .git/hooks'",
+        "eval -- 'rm -rf .worktrees/w'",
+        "eval -- 'rm -rf $PWD/.worktrees/w'",
+        "cd docs; eval -- 'rm -rf $OLDPWD/.worktrees/w'",
+        "eval -- 'cd .worktrees'; rm -rf w",
+        "eval -- 'git commit -m x'",
+        "bash <<< 'rm -rf .worktrees/w'",
+        "zsh <<< 'rm -rf .worktrees/w'",
+        "bash -s <<< 'rm -rf .worktrees/w'",
+        "dash <<< 'rm -rf .worktrees/w'",
+        "ksh <<< 'rm -rf .worktrees/w'",
+        "bash <<< \"rm -rf $PWD/.worktrees/w\"",
+        "sh <<< \"rm -rf $PWD/.worktrees/w\"",
+        "source /dev/stdin <<< 'rm -rf .worktrees/w'",
+        ". /dev/stdin <<< 'rm -rf $PWD/.worktrees/w'",
+        "bash <<< 'git commit -m x'",
+        "source /dev/stdin <<< 'git commit -m x'",
+        "sh <<< 'git reset --hard HEAD~1'",
+        ". <(echo 'rm -rf $PWD/.worktrees/w')",
+        "source <(echo \"rm -rf $PWD/.worktrees/w\")",
+        ". <(echo 'rm -rf .worktrees/w')",
+        ". <(echo 'git commit -m x')",
+        "echo 'rm -rf $PWD/.worktrees/w' | source /dev/stdin",
+        "echo 'git commit -m x' | source /dev/stdin",
+        "source /dev/stdin <<< \"$UNSET\"",
+        "bash <<< \"$UNSET\"",
+        "sh <<< \"$(cat body.txt)\"",
+        "git worktree add -fb t .worktrees/n && printf x > .worktrees/n/.claude/settings.json",
+        "git worktree add -qb t .worktrees/n && printf x > .worktrees/n/.claude/settings.json",
+        "git -c alias.wt=worktree wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json",
+        "git -calias.wt=worktree wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json",
+        "ln -s .worktrees L2 && git worktree add -b t L2/n && printf x > .worktrees/n/.claude/settings.json",
+        "git worktree add -b t lnk/n && printf x > .worktrees/n/.claude/settings.json",
+        "git worktree add -b t .worktrees/n && printf x > lnk/n/.claude/settings.json",
+        "git worktree add -b t .worktrees/n && cd lnk/n && printf x > .claude/settings.json",
+        "git worktree add -b t .worktrees/n && ln -s .worktrees/n L3 && printf x > L3/.claude/settings.json",
+        "git worktree move .worktrees/w sl && rm -rf docs/w",
+        "git worktree move .worktrees/w sl && printf x > docs/w/.claude/settings.json",
+        "ln -s docs S2 && git worktree move .worktrees/w S2 && rm -rf docs/w",
+        "git worktree move .worktrees/w sl/sub && rm -rf docs/sub/w",
+        "git worktree move .worktrees/w docs && rm -rf sl/w",
+        "git worktree move .worktrees/w docs && cd sl && rm -rf w",
+        "git worktree move .worktrees/w docs && rm -rf sl/",
+        "git -c alias.wt=worktree wt move .worktrees/w docs && rm -rf docs/w",
+        "git worktree move .worktrees/w docs/sub; find docs -name w -exec rm -rf {} +",
+        "rm -rf $UNSET/.worktrees/w",
+        "rm -rf $OLDPWD/.worktrees/w",
+        "eval 'printf x > .worktrees/n/.claude/settings.json'; git worktree add -b t .worktrees/n; eval 'printf x > .worktrees/n/.claude/settings.json'",
+    ] {
+        cases.push(("git-guard", line.to_owned(), true));
+    }
+    for line in [
+        "eval -- 'python3 tool.py $PWD/.worktrees/w'",
+        ". <(echo 'python3 tool.py $PWD/.worktrees/w')",
+        "bash <<< 'python3 tool.py $PWD/.worktrees/w'",
+        "f() { cd docs; }; f; python3 tool.py $PWD/../.worktrees/w",
+    ] {
+        cases.push(("exec-guard", line.to_owned(), true));
+    }
+    if root.join("DOCS").exists() {
+        for line in [
+            "git worktree add -b t .worktrees/n && printf x > .worktrees/N/.claude/settings.json",
+            "git worktree add -b t .worktrees/n && printf x > .WORKTREES/n/.claude/settings.json",
+            "git worktree add -b t .worktrees/N && printf x > .worktrees/n/.claude/settings.json",
+            "git worktree move .worktrees/w docs && rm -rf DOCS/W",
+        ] {
+            cases.push(("git-guard", line.to_owned(), true));
+        }
+    }
+    if std::fs::canonicalize("/tmp").ok() == std::fs::canonicalize("/private/tmp").ok() {
+        for (source, target) in [("/tmp", "/private/tmp"), ("/private/tmp", "/tmp")] {
+            cases.push((
+                "git-guard",
+                format!("git worktree move .worktrees/w {source} && rm -rf {target}/w"),
+                true,
+            ));
+        }
+    }
+    let mut failures = Vec::new();
+    for (guard, line, refuse) in cases {
+        let payload =
+            serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root})
+                .to_string();
+        let output = run_with_stdin(
+            expansion_codeflow()
+                .args(["hook", guard, "--contract", "3"])
+                .current_dir(&root)
+                .env("PWD", tmp.path())
+                .env("HOME", tmp.path())
+                .env("TMPDIR", tmp.path())
+                .env("CARGO_TARGET_DIR", tmp.path().join("target"))
+                .env("d", tmp.path().join("d"))
+                .env("tmpfile", tmp.path().join("tmpfile"))
+                .env("OUT", tmp.path().join("out"))
+                .env_remove("CDPATH")
+                .env_remove("OLDPWD")
+                .env_remove("UNSET"),
+            &payload,
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let expected = if refuse { 2 } else { 0 };
+        println!(
+            "{guard}: expected={expected} actual={:?}: {line}\n{stderr}",
+            output.status.code()
+        );
+        if output.status.code() != Some(expected)
+            || (line.starts_with("f()") && stderr.contains("metadata `f()`"))
+        {
+            failures.push(format!("{guard}: expected={expected}: {line}\n{stderr}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Round 3: script routes and same-line links, judged without executing them.
+#[cfg(unix)]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn shell_expansions_round_three_review_matrix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("docs/sub")).unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    enforced_repo(&root);
+    git(&root, &["worktree", "add", "-b", "task/w", ".worktrees/w"]);
+    std::os::unix::fs::symlink(".worktrees", root.join("lnk")).unwrap();
+    std::os::unix::fs::symlink("docs", root.join("sl")).unwrap();
+    let mut cases = [
+        ("exec-guard", "source venv/bin/activate && echo ok && python3 src/app.py", 0),
+        ("exec-guard", "source go.sh && python3 tool.py notes.txt", 0),
+        ("git-guard", "bash < <(printf %s 'printf ok')", 0),
+        ("git-guard", "ln .claude/settings.json L && printf x > L", 2),
+        ("exec-guard", "link .claude/settings.json L && python3 -c \"open('L','w').write('x')\"", 2),
+        ("git-guard", "ln -s \"$UNSET\" L && rm -rf L/w", 2),
+        ("exec-guard", "ln -s \"$UNSET\" L && python3 tool.py L/w", 2),
+        ("git-guard", "ln -s ../.worktrees sl/L && rm -rf docs/L/w", 2),
+        ("exec-guard", "ln -s ../.worktrees sl/L && python3 tool.py docs/L/w", 2),
+        ("git-guard", "env -C .worktrees bash <<< 'rm -rf w'", 2),
+        ("git-guard", "env -C .worktrees sh <(printf %s 'rm -rf w')", 2),
+        ("exec-guard", "env -C .worktrees sh <(printf %s 'python3 tool.py w')", 2),
+        ("git-guard", "printf %s 'rm -rf w' | env -C .worktrees bash", 2),
+        ("git-guard", "env -C .worktrees bash <<'EOF'\nrm -rf w\nEOF", 2),
+        ("git-guard", "printf %s 'rm -rf .worktrees/w' | bash -o pipefail", 2),
+        ("git-guard", "bash -s -- a <(printf %s 'printf ok')", 0),
+        ("git-guard", "bash -c 'printf ok' <<< 'rm -rf .worktrees/w'", 0),
+        ("git-guard", "bash -s a <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash -s a <<< 'git commit -m x'", 2),
+        ("git-guard", "bash < <(printf %s 'rm -rf .worktrees/w')", 2),
+        ("exec-guard", "bash < <(printf %s 'python3 tool.py $PWD/.worktrees/w')", 2),
+        ("git-guard", "bash /dev/fd/9", 0),
+        ("exec-guard", "bash /dev/fd/9", 0),
+        ("git-guard", "ln -s .worktrees L; ln -s L M; rm -rf M/w", 2),
+        ("exec-guard", "ln -s .worktrees L; ln -s L M; python3 tool.py M/w", 2),
+        ("git-guard", "eval - 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval - 'git config core.hooksPath /x'", 2),
+        ("exec-guard", "eval - 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval - 'git commit -m x'", 2),
+        ("git-guard", "eval '' 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval \"\" 'rm -rf $PWD/.worktrees/w'", 2),
+        ("git-guard", "eval '--' 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval \"--\" 'git config core.hooksPath /x'", 2),
+        ("exec-guard", "eval \"--\" 'git config core.hooksPath /x'", 2),
+        ("git-guard", "builtin eval -- 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "command eval -- 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "\\eval -- 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval -- eval -- 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval -- 'eval - \"rm -rf .worktrees/w\"'", 2),
+        ("exec-guard", "eval - 'python3 tool.py $PWD/.worktrees/w'", 2),
+        ("exec-guard", "eval -- 'python3 tool.py $PWD/.worktrees/w'", 2),
+        ("git-guard", "eval - 'printf x > .claude/settings.json'", 2),
+        ("git-guard", "fish <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "ksh <<< \"rm -rf $PWD/.worktrees/w\"", 2),
+        ("git-guard", "dash <<< \"rm -rf $PWD/.worktrees/w\"", 2),
+        ("git-guard", "busybox sh <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "busybox sh <<< \"rm -rf $PWD/.worktrees/w\"", 2),
+        ("git-guard", "busybox ash <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "mksh <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "yash <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "/bin/ksh <<< 'git commit -m x'", 2),
+        ("git-guard", "fish <<< 'git commit -m x'", 2),
+        ("git-guard", "busybox sh <<< 'git config core.hooksPath /x'", 2),
+        ("exec-guard", "busybox sh <<< 'git config core.hooksPath /x'", 2),
+        ("git-guard", "env bash <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "command bash <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash - <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash /dev/stdin <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash -x <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash --norc <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "ksh -s <<< 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "ksh <<< 'python3 tool.py $PWD/.worktrees/w'", 2),
+        ("git-guard", "command . <(echo 'rm -rf $PWD/.worktrees/w')", 2),
+        ("git-guard", "command source <(echo 'rm -rf .worktrees/w')", 2),
+        ("git-guard", "builtin source <(echo \"rm -rf $PWD/.worktrees/w\")", 2),
+        ("git-guard", "builtin . <(echo 'git commit -m x')", 2),
+        ("git-guard", "command . <(echo 'git config core.hooksPath /x')", 2),
+        ("exec-guard", "command . <(echo 'git config core.hooksPath /x')", 2),
+        ("git-guard", "env bash <(echo 'rm -rf $PWD/.worktrees/w')", 2),
+        ("git-guard", "command bash <(echo 'rm -rf .worktrees/w')", 2),
+        ("git-guard", "env sh <(echo 'git commit -m x')", 2),
+        ("exec-guard", "command . <(echo 'python3 tool.py $PWD/.worktrees/w')", 2),
+        ("exec-guard", "env bash <(echo 'python3 tool.py $PWD/.worktrees/w')", 2),
+        ("git-guard", "command . /dev/stdin <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "git worktree add -Bf .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -Bf2 .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -fB t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add --force -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -b t --force .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add --force -bt .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -b t -f .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -B t --force --checkout .worktrees/n && rm -rf .worktrees/n/.claude", 2),
+        ("git-guard", "git worktree add --force -b t .worktrees/n && cd .worktrees/n && printf x > .claude/settings.json", 2),
+        ("git-guard", "git worktree add --quiet --force -B t .worktrees/n && printf x > $PWD/.worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -Bf .worktrees/n", 0),
+        ("exec-guard", "git worktree add -Bf .worktrees/n", 0),
+        ("git-guard", "printf '[alias]\\n\\twt = worktree\\n' > x.cfg && git -c include.path=$PWD/x.cfg wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "printf '[alias]\\n\\twt = worktree\\n' > x.cfg && GIT_CONFIG_GLOBAL=x.cfg git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git config -f x.cfg alias.wt worktree && git -c include.path=x.cfg wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git config alias.wt worktree && git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git config --global alias.wt worktree && git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "printf '[alias]\\n\\twt = worktree\\n' >> ~/.gitconfig && git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.wt GIT_CONFIG_VALUE_0=worktree git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "WTV=worktree git --config-env=alias.wt=WTV wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "printf '[alias]\\n\\twm = worktree move\\n' > x.cfg && git -c include.path=x.cfg wm .worktrees/w docs && rm -rf docs/w", 2),
+        ("git-guard", "printf '[alias]\\n\\twt = worktree\\n' > x.cfg && git -c include.path=x.cfg wt add -b t .worktrees/n", 2),
+        ("exec-guard", "printf '[alias]\\n\\twt = worktree\\n' > x.cfg && git -c include.path=x.cfg wt add -b t .worktrees/n", 2),
+        ("git-guard", "ln -s .worktrees L && rm -rf L/w", 2),
+        ("git-guard", "ln -s .worktrees/w L && rm -rf L/", 2),
+        ("git-guard", "ln -sf .worktrees/w L && rm -rf L/.claude", 2),
+        ("git-guard", "ln -s -- .worktrees L && printf x > L/w/.claude/settings.json", 2),
+        ("git-guard", "ln -sn $PWD/.worktrees L && rm -rf L/w", 2),
+        ("git-guard", "ln -s ../.worktrees docs/L && rm -rf docs/L/w", 2),
+        ("git-guard", "ln -s .worktrees L; cd L/w && printf x > .claude/settings.json", 2),
+        ("git-guard", "ln -s . L && rm -rf L/.worktrees/w", 2),
+        ("git-guard", "ln -s .worktrees/w/.claude L && printf x > L/settings.json", 2),
+        ("git-guard", "ln -s .claude L && printf x > L/settings.json", 2),
+        ("git-guard", "ln -s .codeflow L && rm -rf L/", 2),
+        ("git-guard", "ln -s .worktrees L && git worktree add -b t .worktrees/n && printf x > L/n/.claude/settings.json", 2),
+        ("git-guard", "mkdir -p d && ln -s ../.worktrees d/L && rm -rf d/L/w", 2),
+        ("exec-guard", "ln -s .worktrees L && python3 -c \"import shutil; shutil.rmtree('L/w')\"", 2),
+        ("git-guard", "ln -s .worktrees L && cp -r evil L/w/.claude", 2),
+        ("git-guard", "ln -s src L && rm -rf L/", 0),
+        ("exec-guard", "ln -s src L && rm -rf L/", 0),
+        ("git-guard", "rm -rf .Worktrees/w", 2),
+        ("git-guard", "rm -rf .worktrees/W", 2),
+        ("git-guard", "rm -rf $PWD/.WORKTREES/W", 2),
+        ("git-guard", "printf x > .WORKTREES/W/.claude/settings.json", 2),
+        ("git-guard", "printf x > .worktrees/w/.CLAUDE/SETTINGS.JSON", 2),
+        ("git-guard", "cd .WORKTREES/W && printf x > .claude/settings.json", 2),
+        ("git-guard", "cd .WORKTREES/W && rm -rf .", 2),
+        ("git-guard", "rm -rf ../REPO/.worktrees/w", 2),
+        ("git-guard", "rm -rf {CASE_REPO}/.worktrees/w", 2),
+        ("git-guard", "printf x > ../REPO/.claude/settings.json", 2),
+        ("git-guard", "printf x > ../REPO/.CODEFLOW/policy.json", 2),
+        ("git-guard", "cd ../REPO/.worktrees/w && rm -rf .claude", 2),
+        ("git-guard", "git worktree move .WORKTREES/W docs && rm -rf docs/w", 2),
+        ("git-guard", "git worktree add -b t .Worktrees/n && printf x > .worktrees/N/.claude/settings.json", 2),
+        ("exec-guard", "python3 tool.py .WORKTREES/W", 2),
+        ("exec-guard", "python3 -c \"import shutil; shutil.rmtree('$PWD/.Worktrees/W')\"", 2),
+        ("git-guard", "rm -rf lnk/w", 2),
+        ("git-guard", "printf x > lnk/w/.claude/settings.json", 2),
+        ("git-guard", "ln -s .worktrees/w L && printf x > L/.claude/settings.json", 2),
+        ("git-guard", "ln -s .codeflow L && printf x > L/policy.json", 2),
+        ("git-guard", "ln -s .worktrees/w/.claude/settings.json L && printf x > L", 2),
+        ("git-guard", "ln -s .worktrees L && git worktree add -b t L/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("exec-guard", "ln -s .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "ln -s .worktrees L && rm -rf L/w; echo $HOME", 2),
+        ("git-guard", "ln -s .claude L && printf x > L/settings.json; true ~", 2),
+        ("git-guard", "eval - 'rm -rf .worktrees/w'; echo $HOME", 2),
+        ("exec-guard", "bash <(echo 'python3 tool.py $PWD/.worktrees/w')", 2),
+        ("exec-guard", "env bash <(echo 'python3 tool.py .worktrees/w')", 2),
+        ("git-guard", "bash <(echo 'rm -rf $PWD/.worktrees/w')", 2),
+        ("git-guard", "sh <(echo 'rm -rf .worktrees/w')", 2),
+        ("git-guard", "eval -- - 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "eval -- - 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval -- - 'git commit -m x'", 2),
+        ("git-guard", "eval - -- 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "eval - -- 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval - -- 'git commit -m x'", 2),
+        ("git-guard", "eval -- -- 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "eval -- -- 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval -- -- 'git commit -m x'", 2),
+        ("git-guard", "eval -bad 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "eval -bad 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval -bad 'git commit -m x'", 2),
+        ("git-guard", "ln -s .worktrees/w link && rm -rf link/.claude", 2),
+        ("git-guard", "ln -s .worktrees link2 && rm -rf link2/w", 2),
+        ("git-guard", "ln -s . here && rm -rf here/.worktrees/w", 2),
+        ("git-guard", "ln -s .worktrees/w link && printf x > link/.claude/settings.json", 2),
+        ("git-guard", "ln -s .claude c && printf x > c/settings.json", 2),
+        ("git-guard", "ln -s .codeflow cf && printf x > cf/policy.json", 2),
+        ("git-guard", "ln -s src L && printf x > L/new.txt", 0),
+        ("exec-guard", "ln -s src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "ln -sf .claude L && printf x > L/settings.json", 2),
+        ("exec-guard", "ln -sf .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "ln -sf src L && printf x > L/new.txt", 0),
+        ("exec-guard", "ln -sf src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "cp -s .claude L && printf x > L/settings.json", 2),
+        ("exec-guard", "cp -s .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "cp -s src L && printf x > L/new.txt", 0),
+        ("exec-guard", "cp -s src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "ln .claude L && printf x > L/settings.json", 2),
+        ("exec-guard", "ln .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "ln src L && printf x > L/new.txt", 0),
+        ("exec-guard", "ln src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "link .claude L && printf x > L/settings.json", 2),
+        ("exec-guard", "link .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "link src L && printf x > L/new.txt", 0),
+        ("exec-guard", "link src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "ln -s src L && cat L/app.py", 0),
+    ].into_iter().map(|(guard, line, expected)| (guard, line.to_owned(), expected)).collect::<Vec<_>>();
+    // Inline routes apply to known shells and launchers. Unknown programs are not shells.
+    for shell in [
+        "bash",
+        "sh",
+        "zsh",
+        "dash",
+        "ksh",
+        "mksh",
+        "yash",
+        "fish",
+        "ash",
+        "busybox sh",
+        "busybox ash",
+        "env bash",
+        "command sh",
+    ] {
+        for (body, guard) in [
+            ("rm -rf .worktrees/w", "git-guard"),
+            ("git commit -m x", "git-guard"),
+            ("python3 tool.py $PWD/.worktrees/w", "exec-guard"),
+        ] {
+            for line in [
+                format!("{shell} -c '{body}'"),
+                format!("{shell} -s -- a <<< '{body}'"),
+                format!("{shell} <(printf %s '{body}')"),
+                format!("printf %s '{body}' | {shell}"),
+                format!("{shell} <<'EOF'\n{body}\nEOF"),
+            ] {
+                cases.push((guard, line, 2));
+            }
+        }
+        for line in [
+            format!("{shell} -s -- a <<< \"$UNSET\""),
+            format!("{shell} -c \"$UNSET\""),
+        ] {
+            for guard in ["git-guard", "exec-guard"] {
+                cases.push((guard, line.clone(), 2));
+            }
+        }
+        for line in [
+            format!("{shell} -c 'printf ok'"),
+            format!("{shell} <(cat script.sh)"),
+            format!("cat script.sh | {shell}"),
+            format!("{shell} -s < script.sh"),
+            format!("{shell} -s -- a <<< 'printf ok'"),
+            format!("{shell} <(printf %s 'printf ok')"),
+        ] {
+            for guard in ["git-guard", "exec-guard"] {
+                cases.push((guard, line.clone(), 0));
+            }
+        }
+    }
+    let mut failures = Vec::new();
+    for (guard, line, expected) in cases {
+        // The case-variant rows require the volume demonstrated by the review.
+        if (line.contains(".Worktrees")
+            || line.contains(".WORKTREES")
+            || line.contains(".CLAUDE")
+            || line.contains("../REPO")
+            || line.contains("{CASE_REPO}")
+            || line.contains(".worktrees/W")
+            || line.contains(".CODEFLOW")
+            || line.contains("DOCS/"))
+            && !root.join("DOCS").exists()
+        {
+            continue;
+        }
+        let line = line.replace(
+            "{CASE_REPO}",
+            &root.with_file_name("REPO").to_string_lossy(),
+        );
+        let payload =
+            serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root})
+                .to_string();
+        let output = run_with_stdin(
+            expansion_codeflow()
+                .args(["hook", guard, "--contract", "3"])
+                .current_dir(&root)
+                .env("PWD", tmp.path())
+                .env("HOME", tmp.path())
+                .env_remove("CDPATH")
+                .env_remove("OLDPWD")
+                .env_remove("UNSET"),
+            &payload,
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        println!(
+            "{guard}: expected={expected} actual={:?}: {line}\n{stderr}",
+            output.status.code()
+        );
+        if output.status.code() != Some(expected) {
+            failures.push(format!("{guard}: expected={expected}: {line}\n{stderr}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Round 4 keeps file/data input ordinary and judges supplied inline code.
+/// The ordinary fixture transcribes Fable's 161 physical lines (155 commands).
+/// A null verdict leaves ownership to the other guard; payloads are never run.
+#[cfg(unix)]
+#[test]
+fn shell_expansions_round_four_review_matrix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    for name in ["src", "docs/sub", "scripts", "data"] {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+    }
+    enforced_repo(&root);
+    git(&root, &["worktree", "add", "-b", "task/w", ".worktrees/w"]);
+    for file in [
+        "script.sh",
+        "scripts/build.sh",
+        "scripts/clean.sh",
+        "env.sh",
+    ] {
+        std::fs::write(root.join(file), "echo ok\n").unwrap();
+    }
+    for file in ["src/app.py", "tool.py", "data/in.txt"] {
+        std::fs::write(root.join(file), "print(1)\n").unwrap();
+    }
+    let mut failures = Vec::new();
+    for (matrix, source) in [
+        (
+            "ordinary",
+            include_str!("fixtures/shell-ordinary-review.json"),
+        ),
+        (
+            "security",
+            include_str!("fixtures/shell-round-four-review.json"),
+        ),
+        (
+            "round-five",
+            include_str!("fixtures/shell-round-five-review.json"),
+        ),
+    ] {
+        let cases: Vec<(String, Option<i32>, Option<i32>)> = serde_json::from_str(source).unwrap();
+        for (line, git_expected, exec_expected) in cases {
+            for (guard, expected) in [("git-guard", git_expected), ("exec-guard", exec_expected)] {
+                let Some(expected) = expected else { continue };
+                let payload = serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root}).to_string();
+                let output = run_with_stdin(
+                    expansion_codeflow()
+                        .args(["hook", guard, "--contract", "3"])
+                        .current_dir(&root)
+                        .env("PWD", tmp.path())
+                        .env("HOME", tmp.path())
+                        .env("INPUT", "src/app.py")
+                        .env_remove("CDPATH")
+                        .env_remove("OLDPWD")
+                        .env_remove("UNSET")
+                        .env_remove("CMD")
+                        .env_remove("TOOL"),
+                    &payload,
+                );
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                println!(
+                    "{matrix} {guard}: expected={expected} actual={:?}: {line}\n{stderr}",
+                    output.status.code()
+                );
+                if line.contains("$(brew shellenv)")
+                    && stderr.contains("what this git command does")
+                {
+                    failures
+                        .push("the command substitution diagnostic misnames the program".into());
+                }
+                if output.status.code() != Some(expected) {
+                    failures.push(format!(
+                        "{matrix} {guard}: expected={expected}: {line}\n{stderr}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// SEC-406-24: a GNU program installed with a `g` prefix gets the verdict
+/// of its plain name in both guards, for every writer either guard lists,
+/// the deletion reader's `find` and `xargs`, `sed`, `patch` and the GNU
+/// launchers. The plain protected forms must refuse, so parity is not
+/// trivially two allows; the ordinary GNU forms must pass.
+#[cfg(unix)]
+#[test]
+fn gnu_prefixed_programs_share_the_plain_verdict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    enforced_repo(&root);
+    git(&root, &["worktree", "add", "-b", "task/w", ".worktrees/w"]);
+    std::fs::write(root.join("src/app.py"), "print(1)\n").unwrap();
+    let verdict = |guard: &str, line: &str| {
+        let payload =
+            serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root})
+                .to_string();
+        run_with_stdin(
+            expansion_codeflow()
+                .args(["hook", guard, "--contract", "3"])
+                .current_dir(&root)
+                .env("HOME", tmp.path())
+                .env_remove("CDPATH"),
+            &payload,
+        )
+        .status
+        .code()
+    };
+    // (program, line with `{}` for the program word, plain git-guard verdict)
+    let protected = [
+        ("sed", "{} -i s/a/b/ .claude/settings.json"),
+        ("sed", "ln -s .claude L && {} -i s/a/b/ L/settings.json"),
+        ("find", "{} .worktrees -delete"),
+        ("xargs", "echo .worktrees/w | {} rm -rf"),
+        ("patch", "{} .claude/settings.json evil.diff"),
+        ("cp", "{} evil .claude/settings.json"),
+        ("mv", "{} evil .claude/settings.json"),
+        ("ln", "{} -sf evil .claude/settings.json"),
+        ("install", "{} evil .claude/settings.json"),
+        ("tee", "{} .claude/settings.json < /dev/null"),
+        ("dd", "{} if=/dev/null of=.claude/settings.json"),
+        ("truncate", "{} -s0 .claude/settings.json"),
+        ("rm", "{} .claude/settings.json"),
+        ("rm", "{} -rf .worktrees/w"),
+        ("unlink", "{} .claude/settings.json"),
+        ("chmod", "{} 644 .claude/settings.json"),
+        ("shred", "{} -u .claude/settings.json"),
+        ("timeout", "{} 5 rm -rf .worktrees/w"),
+        ("env", "{} rm -rf .worktrees/w"),
+    ];
+    let parity_only = [
+        ("link", "{} evil .claude/settings.json"),
+        ("touch", "{} .claude/settings.json"),
+        ("mkdir", "{} .claude/x"),
+        ("mktemp", "{} .claude/settings.XXXX"),
+        ("rmdir", "{} .worktrees/w"),
+        ("chown", "{} me .claude/settings.json"),
+        ("chgrp", "{} me .claude/settings.json"),
+    ];
+    let ordinary = [
+        ("sed", "{} -n p src/app.py"),
+        ("find", "{} src -name x"),
+        ("xargs", "echo src/app.py | {} cat"),
+        ("cp", "{} src/app.py out.py"),
+        ("rm", "{} -rf build"),
+        ("tee", "{} out.log < /dev/null"),
+    ];
+    let mut failures = Vec::new();
+    for (expect_plain, rows) in [
+        (Some(2), &protected[..]),
+        (None, &parity_only[..]),
+        (Some(0), &ordinary[..]),
+    ] {
+        for (program, line) in rows {
+            let plain = line.replace("{}", program);
+            for guard in ["git-guard", "exec-guard"] {
+                let plain_code = verdict(guard, &plain);
+                if guard == "git-guard" && expect_plain.is_some() && plain_code != expect_plain {
+                    failures.push(format!("{guard} plain {plain}: {plain_code:?}"));
+                }
+                for gnu in [
+                    format!("g{program}"),
+                    format!("/opt/homebrew/bin/g{program}"),
+                ] {
+                    let line = line.replace("{}", &gnu);
+                    let code = verdict(guard, &line);
+                    println!("{guard}: plain={plain_code:?} gnu={code:?}: {line}");
+                    if code != plain_code {
+                        failures.push(format!("{guard} {line}: {code:?}, plain {plain_code:?}"));
+                    }
+                }
+            }
+        }
+    }
+    // A `g`-prefixed program outside the closed list keeps its own name.
+    for line in ["grep -r x src", "gzip -k src/app.py", "git status"] {
+        for guard in ["git-guard", "exec-guard"] {
+            if verdict(guard, line) != Some(0) {
+                failures.push(format!("{guard} ordinary {line} refused"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[path = "support/guard_cases.rs"]
+mod guard_cases;
+
+#[path = "support/guard_review_cases.rs"]
+mod guard_review_cases;
+
+#[path = "support/guard_review2_cases.rs"]
+mod guard_review2_cases;
+
+#[path = "support/guard_review3_cases.rs"]
+mod guard_review3_cases;
+
+fn review_guard_cases(finding: u8) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    let home = tmp.path().join("home");
+    std::fs::create_dir(&root).unwrap();
+    enforced_repo(&root);
+    guard_review_cases::seed(&root, &home);
+    if finding >= 40 {
+        guard_review3_cases::seed(&root, &home);
+    }
+    if finding >= 21 {
+        guard_review2_cases::seed(finding, &root, &home);
+    }
+    if finding == 13 {
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::write(root.join(".git/hooks/pre-commit"), "# planted fixture\n").unwrap();
+    }
+    #[cfg(unix)]
+    if finding == 8 {
+        guard_review_cases::seed_links(&root, &home);
+    }
+    let mut wrong = Vec::new();
+    for &(_, owner, command, refuse) in guard_review_cases::CASES
+        .iter()
+        .chain(guard_review2_cases::CASES)
+        .chain(guard_review3_cases::CASES)
+        .filter(|c| c.0 == finding)
+    {
+        let line =
+            guard_review_cases::render(command, &root, &home).replace("@HOME@", &shell_path(&home));
+        for guard in ["git-guard", "exec-guard"] {
+            let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
+                "tool_input":{"command":line}})
+            .to_string();
+            let output = run_with_stdin(
+                expansion_codeflow()
+                    .args(["hook", guard, "--contract", "3"])
+                    .current_dir(&root)
+                    .env("HOME", &home)
+                    .env("USERPROFILE", &home)
+                    .env_remove("CDPATH"),
+                &payload,
+            );
+            let code = output.status.code();
+            if !matches!(code, Some(0 | 2))
+                || (!refuse && code != Some(0))
+                || (refuse && guard == owner && code != Some(2))
+            {
+                wrong.push(format!(
+                    "F{finding}: {guard}: expected refuse={refuse}, owner={owner}: {line:?}: {output:?}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn tsk1002_review_f01_heredoc_code_and_data() {
+    review_guard_cases(1);
+}
+
+#[test]
+fn tsk1002_review_f02_process_substitution_commands() {
+    review_guard_cases(2);
+}
+
+#[test]
+fn tsk1002_review_f03_substitution_output_expands_tilde() {
+    review_guard_cases(3);
+}
+
+#[test]
+fn tsk1002_review_f04_xargs_input_becomes_operands() {
+    review_guard_cases(4);
+}
+
+#[test]
+fn tsk1002_review_f05_transfer_data_file_prefixes() {
+    review_guard_cases(5);
+}
+
+#[test]
+fn tsk1002_review_f06_interpreter_aliases_and_bodies() {
+    review_guard_cases(6);
+}
+
+#[cfg(windows)]
+#[test]
+fn tsk1002_review_f07_windows_path_spellings() {
+    review_guard_cases(7);
+}
+
+#[cfg(unix)]
+#[test]
+fn tsk1002_review_f08_glob_and_search_symlink_targets() {
+    review_guard_cases(8);
+}
+
+#[test]
+fn tsk1002_review_f09_search_ignores_and_overrides() {
+    review_guard_cases(9);
+}
+
+#[test]
+fn tsk1002_r12_make_stdin_is_code() {
+    review_guard_cases(12);
+}
+
+#[test]
+fn tsk1002_r12_redirect_globs_use_existing_matches() {
+    review_guard_cases(13);
+}
+
+#[test]
+fn tsk1002_r12_code_data_and_operand_roles() {
+    review_guard_cases(14);
+}
+
+#[test]
+fn tsk1002_review2_b01_unquoted_heredoc_substitutions() {
+    review_guard_cases(21);
+}
+
+#[test]
+fn tsk1002_review2_b02_home_store_ancestor_spellings() {
+    review_guard_cases(22);
+}
+
+#[test]
+fn tsk1002_review2_b03_dotglob_secret_reads() {
+    review_guard_cases(23);
+}
+
+#[test]
+fn tsk1002_review2_b04_substitution_and_xargs_netrc() {
+    review_guard_cases(24);
+}
+
+#[test]
+fn tsk1002_review2_b05_file_rules_do_not_deny_public_siblings() {
+    review_guard_cases(25);
+}
+
+#[test]
+fn tsk1002_review2_b07_physical_cd_follows_same_line_links() {
+    review_guard_cases(27);
+}
+
+#[test]
+fn tsk1002_review2_b08_recursive_readers_inspect_roots() {
+    review_guard_cases(28);
+}
+
+#[test]
+fn tsk1002_review2_b09_gh_uses_action_table_rules() {
+    review_guard_cases(29);
+}
+
+#[test]
+fn tsk1002_review2_b10_flat_globs_use_search_budget() {
+    review_guard_cases(30);
+}
+
+#[test]
+fn tsk1002_review2_b11_deno_eval_code() {
+    review_guard_cases(31);
+}
+
+fn guard_classification_cases(ac: u8) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    enforced_repo(&root);
+    guard_cases::seed_glob_matches(&root);
+    let mut wrong = Vec::new();
+    for &(_, line, refuse) in guard_cases::CASES.iter().filter(|c| c.0 == ac) {
+        let mut refused = false;
+        for guard in ["git-guard", "exec-guard"] {
+            let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
+                "tool_input":{"command":line}})
+            .to_string();
+            let output = run_with_stdin(
+                expansion_codeflow()
+                    .args(["hook", guard, "--contract", "3"])
+                    .current_dir(&root)
+                    .env("HOME", tmp.path())
+                    .env_remove("CDPATH"),
+                &payload,
+            );
+            assert!(
+                matches!(output.status.code(), Some(0 | 2)),
+                "{guard}: {output:?}"
+            );
+            if guard == guard_cases::refusing_guard(ac, line) {
+                refused = output.status.code() == Some(2);
+            }
+            if !refuse {
+                assert!(
+                    output.status.success(),
+                    "ordinary command refused by {guard}: {line}: {output:?}"
+                );
+            }
+        }
+        if refused != refuse {
+            wrong.push(format!("AC-{ac}: expected refuse={refuse}: {line:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn tsk1002_ac01_guard_verdicts() {
+    guard_classification_cases(1);
+}
+
+#[test]
+fn tsk1002_ac02_guard_verdicts() {
+    guard_classification_cases(2);
+}
+
+#[test]
+fn tsk1002_ac03_guard_verdicts() {
+    guard_classification_cases(3);
+}
+
+#[test]
+fn tsk1002_ac04_guard_verdicts() {
+    guard_classification_cases(4);
+}
+
+#[test]
+fn tsk1002_ac05_guard_verdicts() {
+    guard_classification_cases(5);
+}
+
+#[test]
+fn tsk1002_ac06_guard_verdicts() {
+    guard_classification_cases(6);
+}
+
+#[test]
+fn tsk1002_ac07_guard_verdicts() {
+    guard_classification_cases(7);
+}
+
+#[test]
+fn tsk1002_ac08_guard_verdicts() {
+    guard_classification_cases(8);
+}
+
+#[test]
+fn tsk1002_ac09_guard_verdicts() {
+    guard_classification_cases(9);
+}
+
+#[test]
+fn tsk1002_ac10_guard_verdicts() {
+    guard_classification_cases(10);
+}
+
+#[test]
+fn tsk1002_ac11_guard_verdicts() {
+    guard_classification_cases(11);
+}
+
+#[test]
+fn tsk1002_ac13_guard_verdicts() {
+    guard_classification_cases(13);
+}
+
+#[test]
+fn tsk1002_glob_hook_uses_actual_files_and_search_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    for dir in ["src", "other"] {
+        std::fs::create_dir(root.join(dir)).unwrap();
+        std::fs::write(root.join(dir).join("public.rs"), "fixture").unwrap();
+    }
+    let verdict = |line: &str| {
+        let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
+            "tool_input":{"command":line}})
+        .to_string();
+        let out = run_with_stdin(
+            expansion_codeflow()
+                .args(["hook", "exec-guard", "--contract", "3"])
+                .current_dir(&root)
+                .env("HOME", tmp.path()),
+            &payload,
+        );
+        assert!(matches!(out.status.code(), Some(0 | 2)), "{out:?}");
+        out.status.code() == Some(2)
+    };
+    let forms = [
+        "cat src/*.rs",
+        "rg -g '*.rs' token src",
+        "rg --glob='*.rs' token src",
+        "rg --iglob '*.RS' token src",
+        "grep -r --include='*.rs' token src",
+    ];
+    for line in forms {
+        assert!(!verdict(line), "ordinary: {line}");
+    }
+    std::fs::write(root.join("src/id_rsa.rs"), "planted fixture").unwrap();
+    for line in forms {
+        assert!(verdict(line), "secret: {line}");
+    }
+    for line in [
+        "cat other/*.rs",
+        "rg -g '*.rs' token other",
+        "grep -r --include='*.rs' token other",
+    ] {
+        assert!(!verdict(line), "other root: {line}");
+    }
+    std::fs::create_dir(tmp.path().join(".ssh")).unwrap();
+    assert!(verdict("cat $HOME/.ssh/*.rs"), "empty secret store");
+}
+
+/// TSK-422 AC-8: `CodeFlow`'s own writes under the coordination ledger pass
+/// the guards (they happen inside `codeflow follow`), and an agent's direct
+/// edit of the ledger is refused by the built edit and git guards.
+#[test]
+fn the_guards_allow_codeflow_follow_and_refuse_a_direct_ledger_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    enforced_repo(root);
+    let coord = root.join(".git/codeflow/coord");
+    std::fs::create_dir_all(&coord).unwrap();
+    std::fs::write(coord.join("events.jsonl"), "").unwrap();
+    assert_guard(
+        root,
+        &[
+            "printf x >> .git/codeflow/coord/events.jsonl",
+            "rm -rf .git/codeflow",
+            "cp /dev/null .git/codeflow/coord/counters.json",
+        ],
+        &[
+            "codeflow follow add --title t --description d --done-when w --source operator --no-link-reason none",
+            "codeflow follow list --md",
+            "cat .git/codeflow/coord/events.jsonl",
+        ],
+        "git.hook_integrity",
+    );
+    for file in ["events.jsonl", "status/s1.json"] {
+        let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+            "file_path":coord.join(file), "content":"{}\n"},
+            "cwd":root})
+        .to_string();
+        let out = run_with_stdin(
+            codeflow().args(["hook", "edit-guard"]).current_dir(root),
+            &payload,
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{file}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn tsk1002_review3_planned_recursive_links() {
+    review_guard_cases(40);
+}
+
+#[test]
+fn tsk1002_review3_recursive_directory_readers() {
+    review_guard_cases(41);
+}
+
+#[test]
+fn tsk1002_review3_physical_cd_components() {
+    review_guard_cases(42);
+}
+
+#[test]
+fn tsk1002_review3_ignored_secret_paths() {
+    review_guard_cases(43);
+}
+
+#[test]
+fn tsk1002_review3_same_line_executable_files() {
+    review_guard_cases(44);
+}
+
+#[test]
+fn tsk1002_review3_powershell_parameters() {
+    review_guard_cases(45);
+}
+
+#[test]
+fn tsk1002_review3_deno_parameters() {
+    review_guard_cases(46);
+}
+
+#[test]
+fn tsk1002_review3_applescript_bodies() {
+    review_guard_cases(47);
+}
+
+#[test]
+fn tsk1002_review3_curl_file_values() {
+    review_guard_cases(48);
+}
+
+#[test]
+fn tsk1002_review3_ordinary_home_metadata() {
+    review_guard_cases(49);
+}
+
+#[test]
+fn tsk1002_r23_recursive_detection_respects_argument_roles() {
+    review_guard_cases(50);
+}
+
+/// TSK-1082: on an ordinary call each guard decides well inside the
+/// deadline it refuses at and the hook timeout every harness entry
+/// carries, so the bounds stop only a stalled guard.
+#[test]
+fn each_guard_decides_well_inside_its_deadline() {
+    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_HOOK_TIMEOUT_SECS};
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let edit = format!(
+        r#"{{"tool_name":"Write","tool_input":{{"file_path":{},"content":"x"}},"cwd":{}}}"#,
+        json_string(&dir.path().join("notes.txt").to_string_lossy()),
+        json_string(&dir.path().to_string_lossy()),
+    );
+    for (guard, payload) in [
+        ("git-guard", guard_payload("git status", dir.path())),
+        ("exec-guard", guard_payload("ls", dir.path())),
+        ("edit-guard", edit),
+    ] {
+        let started = std::time::Instant::now();
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", guard, "--contract", "3"])
+                .current_dir(dir.path()),
+            &payload,
+        );
+        let took = started.elapsed();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{guard}: {stderr}");
+        assert!(
+            took < std::time::Duration::from_secs(GUARD_DEADLINE_SECS / 2),
+            "{guard} took {took:?}, near its {GUARD_DEADLINE_SECS} s deadline \
+             and {GUARD_HOOK_TIMEOUT_SECS} s hook timeout"
+        );
+        eprintln!("{guard} decided in {took:?}");
+    }
+}
+
+/// TSK-1082, and TSK-283's F3: a FIFO named by a git configuration include
+/// blocks repository discovery inside the guard process. Before the fix the
+/// guard waited until the harness killed it, and a killed guard lets the
+/// tool call through in Grok and Codex. Now each shell guard refuses on its
+/// own, with exit 2 and the reason on stderr, at its deadline and before
+/// the hook timeout.
+#[cfg(unix)]
+#[test]
+fn a_guard_stalled_on_a_fifo_include_refuses_at_its_deadline() {
+    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_HOOK_TIMEOUT_SECS};
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&repo, "feat/x");
+    let fifo = dir.path().join("include.fifo");
+    let c_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    // SAFETY: a valid NUL-terminated path; mkfifo has no other precondition.
+    assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo.join(".git/config"))
+        .unwrap();
+    writeln!(config, "[include]\n\tpath = {}", fifo.display()).unwrap();
+    drop(config);
+
+    let started = Instant::now();
+    let mut children = Vec::new();
+    for (guard, command) in [("git-guard", "git status"), ("exec-guard", "ls")] {
+        let mut child = codeflow()
+            .args(["hook", guard, "--contract", "3"])
+            .current_dir(&repo)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr = drain_pipe::drain_pipe(child.stderr.take());
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(guard_payload(command, &repo).as_bytes())
+            .unwrap();
+        children.push((guard, child, stderr));
+    }
+    let limit = Duration::from_secs(GUARD_HOOK_TIMEOUT_SECS);
+    for (guard, mut child, stderr) in children {
+        while child.try_wait().unwrap().is_none() {
+            if started.elapsed() > limit {
+                child.kill().unwrap();
+                panic!("{guard} still ran after the {GUARD_HOOK_TIMEOUT_SECS} s hook timeout");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let took = started.elapsed();
+        let status = child.wait().unwrap();
+        let stderr = String::from_utf8_lossy(&stderr.join().unwrap()).into_owned();
+        assert_eq!(status.code(), Some(2), "{guard}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "codeflow {guard}: error: BLOCKED: the guard reached no decision within {GUARD_DEADLINE_SECS} seconds"
+            )),
+            "{guard}: {stderr}"
+        );
+        assert!(stderr.contains("git-config-includes"), "{guard}: {stderr}");
+        assert!(
+            took >= Duration::from_secs(GUARD_DEADLINE_SECS),
+            "{guard} answered in {took:?}, before its deadline: {stderr}"
+        );
+    }
 }

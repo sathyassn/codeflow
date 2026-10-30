@@ -7,11 +7,9 @@
 use std::path::Path;
 use std::process::Command;
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
@@ -117,13 +115,23 @@ fn body(task_line: &str) -> String {
 }
 
 fn ci(root: &Path, branch: &str, pr_body: &str) -> (i32, String) {
-    ci_into(root, "main", branch, pr_body)
+    ci_into(root, "main", branch, pr_body, None)
 }
 
-fn ci_into(root: &Path, base: &str, branch: &str, pr_body: &str) -> (i32, String) {
-    let out = codeflow()
+fn ci_into(
+    root: &Path,
+    base: &str,
+    branch: &str,
+    pr_body: &str,
+    into: Option<&str>,
+) -> (i32, String) {
+    let mut command = codeflow();
+    command.arg("ci");
+    if let Some(into) = into {
+        command.args(["--into", into]);
+    }
+    let out = command
         .args([
-            "ci",
             "--base",
             base,
             "--head",
@@ -157,6 +165,76 @@ fn assert_blocks(result: &(i32, String), what: &str, needle: &str) {
         "{what}: missing {needle:?} in {}",
         result.1
     );
+}
+
+/// TSK-388: the pre-push hook hands `codeflow ci` the destination's default
+/// branch as `--into`, and a remote can put control characters in that
+/// name: an OSC title sequence, or the C1 control CSI that git accepts.
+/// `codeflow ci` names the acceptance target escaped, and an ordinary name
+/// unchanged.
+#[test]
+fn an_acceptance_target_holding_control_characters_is_named_escaped() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(
+        root,
+        "feat/tracked",
+        &[("src/lib.rs", "pub fn tracked() {}\n")],
+    );
+    for (into, shown) in [
+        ("ev\u{1b}]0;owned\u{7}il", "ev\\x1b]0;owned\\x07il"),
+        ("ev\u{9b}31mil", "ev\\x9b31mil"),
+        ("release/next", "release/next"),
+    ] {
+        let (_, printed) = ci_into(
+            root,
+            "main",
+            "feat/tracked",
+            &body("Task: TSK-001"),
+            Some(into),
+        );
+        assert!(
+            printed.contains(&format!("acceptance target '{shown}' (--into)")),
+            "{printed}"
+        );
+        assert!(
+            !printed.contains(['\u{1b}', '\u{7}', '\u{9b}']),
+            "{printed:?}"
+        );
+    }
+}
+
+/// TSK-388 round 1 (Grok F-1, F-2): `codeflow ci --branch` of a name that
+/// holds a character git accepts and a terminal acts on (the C1 control
+/// CSI, a line separator, a right-to-left override) names it escaped in
+/// the branch context, the branch line and the branch-naming refusal.
+#[test]
+fn a_branch_context_holding_control_characters_is_named_escaped() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(
+        root,
+        "feat/tracked",
+        &[("src/lib.rs", "pub fn tracked() {}\n")],
+    );
+    for (branch, shown) in [
+        ("ev\u{9b}31mil", "ev\\x9b31mil"),
+        ("ev\u{2028}il", "ev\\u{2028}il"),
+        ("ev\u{202e}lim", "ev\\u{202e}lim"),
+    ] {
+        let (_, printed) = ci_into(root, "main", branch, &body("Task: TSK-001"), None);
+        for expected in [
+            format!("branch context '{shown}' (--branch)"),
+            format!("codeflow ci: branch '{shown}'"),
+            format!("branch '{shown}' does not match"),
+        ] {
+            assert!(printed.contains(&expected), "{expected}: {printed}");
+        }
+        assert!(
+            !printed.contains(['\u{9b}', '\u{2028}', '\u{202e}']),
+            "{printed:?}"
+        );
+    }
 }
 
 /// AC-1: one fixture per class, and the unclassified and planning-only
@@ -209,7 +287,7 @@ fn each_class_passes_and_an_unclassified_pull_request_blocks() {
     assert_blocks(
         &ci(root, "plan/sneaky", &body("Task: EPC-001")),
         "planning PR with product code",
-        "planning-only pull request touches a product path: src/lib.rs",
+        "planning-only pull request touches a path outside the admitted set: src/lib.rs",
     );
 
     branch_with(root, "fix/bad", &[("docs/guide.md", "# Guide\n")]);
@@ -437,6 +515,19 @@ fn merge(root: &Path, from: &str) {
     );
 }
 
+/// Complete the product task before its merge is judged as reviewed line work.
+fn complete_line_task(root: &Path) {
+    let reviewed = head(root);
+    let path = root.join("project-management/tasks/TSK-003.md");
+    let record = std::fs::read_to_string(&path).unwrap();
+    let complete = format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/1\n  criteria:\n    AC-1: verified | test ran\n    AC-2: verified | journey ran\n  journey: verified | CLI fixture\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n", record.replace("status: todo", "status: complete"));
+    std::fs::write(path, complete).unwrap();
+    git(
+        root,
+        &["commit", "-qam", "docs: complete the reviewed line task"],
+    );
+}
+
 /// An epic line holding one planned and landed task: the whole line lands
 /// as one pull request, and only a verified line does.
 #[test]
@@ -472,6 +563,7 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     git(root, &["switch", "-q", "-c", "task/TSK-003-work"]);
     std::fs::write(root.join("src/lib.rs"), "pub fn line() {}\n").unwrap();
     git(root, &["commit", "-qam", "feat: build on the line"]);
+    complete_line_task(root);
     git(root, &["switch", "-q", line]);
     merge(root, "task/TSK-003-work");
 
@@ -529,7 +621,13 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     git(root, &["branch", "release/next", "main"]);
     git(root, &["switch", "-q", line]);
     assert_blocks(
-        &ci_into(root, "release/next", line, &body("Task: EPC-001")),
+        &ci_into(
+            root,
+            "release/next",
+            line,
+            &body("Task: EPC-001"),
+            Some("release/next"),
+        ),
         "wrong target",
         "lands on 'main', not 'release/next'",
     );
@@ -559,7 +657,7 @@ fn the_whole_range_is_classified_whatever_its_shape() {
     assert_blocks(
         &ci(root, "plan/merged", &body("Task: EPC-001")),
         "merge resolution",
-        "planning-only pull request touches a product path: src/lib.rs",
+        "planning-only pull request touches a path outside the admitted set: src/lib.rs",
     );
     assert_blocks(
         &ci(root, "plan/merged", &body("Task: none: merge")),
@@ -844,6 +942,7 @@ fn line_with_planning_landing(root: &Path, approved: &str) -> &'static str {
     git(root, &["switch", "-q", "-c", "task/TSK-003-work"]);
     std::fs::write(root.join("src/lib.rs"), "pub fn line() {}\n").unwrap();
     git(root, &["commit", "-qam", "feat: build on the line"]);
+    complete_line_task(root);
     git(root, &["switch", "-q", line]);
     merge(root, "task/TSK-003-work");
     line
@@ -1285,4 +1384,99 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
     } else {
         format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
     }
+}
+
+/// `codeflow ci` as a pull request check whose draft state is `draft`.
+fn ci_draft(root: &Path, branch: &str, pr_body: &str, draft: &str) -> (i32, String) {
+    let out = codeflow()
+        .env("CODEFLOW_PR_DRAFT", draft)
+        .env_remove("GITHUB_EVENT_PATH")
+        .args([
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            branch,
+            "--pr-body",
+            &with_reviews(root, "HEAD", pr_body),
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// TSK-451 AC-8: once ready, a code pull request's Testing section cites
+/// `codeflow test --mode quick` for the head tree, reported at the Testing
+/// check's level (warn); a draft owes none, and nor does a project without
+/// `codeflow test`.
+#[test]
+fn a_ready_code_pull_request_cites_the_quick_run_and_a_draft_owes_none() {
+    const MISSING: &str = "PR Testing cites no `codeflow test --mode quick` run for the head tree";
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(
+        root,
+        "feat/tracked",
+        &[("src/lib.rs", "pub fn tracked() {}\n")],
+    );
+    let plain = body("Task: TSK-001");
+    let unconfigured = ci_draft(root, "feat/tracked", &plain, "false");
+    assert_passes(&unconfigured, "no codeflow test configured");
+    assert!(!unconfigured.1.contains(MISSING), "{}", unconfigured.1);
+
+    branch_with(
+        root,
+        "feat/tracked",
+        &[
+            ("src/lib.rs", "pub fn tracked() {}\n"),
+            (".codeflow/test-config.json", "{}\n"),
+        ],
+    );
+    let ready = ci_draft(root, "feat/tracked", &plain, "false");
+    assert_passes(&ready, "a ready PR without the citation warns");
+    assert!(ready.1.contains(MISSING), "{}", ready.1);
+    assert!(ready.1.contains("warning"), "{}", ready.1);
+
+    let draft = ci_draft(root, "feat/tracked", &plain, "true");
+    assert_passes(&draft, "a draft");
+    assert!(!draft.1.contains(MISSING), "{}", draft.1);
+
+    let cited = plain.replace(
+        "- focused test\n",
+        "- focused test\n- At HEAD, `codeflow test --mode quick`: 12 passed\n",
+    );
+    let ready_cited = ci_draft(root, "feat/tracked", &cited, "false");
+    assert_passes(&ready_cited, "a ready PR with the citation");
+    assert!(!ready_cited.1.contains(MISSING), "{}", ready_cited.1);
+}
+
+/// TSK-451 AC-4: one `codeflow ci` run validates the docs once, as
+/// `work.valid_graph`.
+#[test]
+fn one_run_validates_the_docs_once() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(
+        root,
+        "task/TSK-001-work",
+        &[("src/lib.rs", "pub fn work() {}\n")],
+    );
+    let run = ci(root, "task/TSK-001-work", &body("Task: TSK-001"));
+    assert_passes(&run, "a tracked task pull request");
+    assert_eq!(
+        run.1.matches("codeflow ci: work.valid_graph:").count(),
+        1,
+        "{}",
+        run.1
+    );
 }

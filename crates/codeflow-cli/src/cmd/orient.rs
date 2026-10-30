@@ -1,4 +1,4 @@
-//! `codeflow orient` — print the session-start digest directly
+//! `codeflow orient` — print the session-start digest and line drift directly
 //! (charter §3.1/§3.4; the same text the `session-orient` hook injects).
 
 use codeflow_core::hooks::orient;
@@ -7,15 +7,15 @@ use codeflow_core::hooks::orient;
 #[must_use]
 pub fn run() -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    print!(
-        "{}",
-        orient::generate(&match super::project_root(&cwd) {
-            Ok(root) => root,
-            Err(error) => {
-                eprintln!("codeflow: cannot read project root: {error}");
-                return 2;
-            }
-        })
-    );
+    print_block!(orient::generate(&match super::project_root(&cwd) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!(
+                "codeflow: cannot read project root: {error}",
+                error = crate::cmd::shown(&error)
+            );
+            return 2;
+        }
+    }));
     0
 }

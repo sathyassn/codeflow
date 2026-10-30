@@ -202,6 +202,25 @@ itself, as a GitHub `pull_request` workflow does, so a change can edit its
 own install step. The pin does not defend that edit: require review of the
 CI file and `.codeflow/` in the host's rules.
 
+## Temporary folders
+
+Every template keeps what it downloads and checks out in temporary folders it
+makes itself, and removes them when the step or script ends: after a pass, a
+failure, or a hangup, interrupt or terminate signal from the runner. It never
+removes a folder it did not make. A self-hosted runner therefore keeps
+nothing from these jobs; a job killed outright (`SIGKILL`) removes nothing.
+
+| Template | Where its folders go |
+|---|---|
+| The install steps of `codeflow-ci.yml` and `codeflow-policy.yml` | `$RUNNER_TEMP`, else `$TMPDIR`, else `/tmp` |
+| The `gitleaks` and dependency audit steps of `codeflow-ci.yml` | `$RUNNER_TEMP`; the gitleaks report and log stay there for the runner to empty |
+| `.gitlab-ci.yml`, `bitbucket-pipelines.yml` and `ci-generic.sh` | One folder under `$TMPDIR`, else `/tmp`, holding the release download, the binaries and the target checkout |
+
+The shared run names `$TMPDIR` itself because macOS's `mktemp -d` ignores it.
+A signal that arrives before the target checkout exists ends the run with
+status 129, 130 or 143; one that arrives during the project setup hook ends
+it through the "ended before codeflow test ran" check.
+
 ## Timeouts and superseded runs
 
 A job with no `timeout-minutes` runs for up to GitHub's default six hours
@@ -239,12 +258,18 @@ managed and the gate runs once, on the project's toolchain:
   that runs the gate, so write POSIX sh. Variables it exports and `PATH`
   changes reach `codeflow test`; on GitHub it may also write `GITHUB_PATH`
   or `GITHUB_ENV`. A `cd` in it does not move the gate.
-- A failing command fails the job before the gate runs, and so does an
-  `exit` in it, even `exit 0`, since the gate never ran.
+- A failing command fails the job before the gate runs. An `exit` in it,
+  even `exit 0`, fails the job too, since the gate never ran, but only
+  while the hook leaves the script's `EXIT` trap in place; a hook that
+  replaces that trap and then exits can end the job green, because it
+  shares the gate's shell (below).
 - It cannot skip the gate by accident: the gate runs the `codeflow` binary
   found before the hook, from the folder the hook started in, and `set -eu`
   holds again once the hook returns, so a `codeflow` function, a `PATH`
-  entry or `set +e` in it leaves the gate running.
+  entry or `set +e` in it leaves the gate running. In the GitLab,
+  Bitbucket and generic scripts the exit trap is set again once the hook
+  returns too, so an `EXIT` trap the hook sets does not run; remove the
+  hook's own temporary files before it returns.
 - It is not a security boundary. It shares the gate's shell and runs with
   the gate's authority, as the CI file does, which a change can also edit,
   so a hook written to defeat the gate can. Review it as you would the CI
@@ -305,12 +330,44 @@ and waits for the fresh run first.
 
 ## Optional external add-ons
 
+### Landing a reviewed false-positive exemption
+
+When an integration line's scan needs a new fingerprint in `.gitleaksignore`,
+land that fingerprint on the trusted base first in a separate pull request.
+`codeflow ci` classifies a range that adds or modifies only the root `.gitleaksignore`
+as a **secret-scan exemption** when its body names one existing epic or task:
+`Task: EPC-NNN` or `Task: TSK-NNN`. A task branch still names its own task.
+This class permits a predecessor that is incomplete at the planning anchor,
+so work completed only on the integration line does not block the exemption.
+Adding any other path keeps the range out of the class. The ignore file
+remains outside planning amendments.
+The head entry must be a regular file. Deletions, type changes and mode
+changes do not qualify: such a range naming a task stays ordinary tracked
+work with its dependency check, and one naming an epic is refused.
+
+Commit standards, record and body checks, the secret scan and security review
+still apply. The repository's existing approval requirements, including
+code-owner review where configured, also apply; classification changes no
+protection setting and grants no approval. The scanner reads the base's
+exemptions, so the new fingerprint cannot suppress a finding in its own pull
+request. Once the exemption lands, rerun the integration line's scan.
+
+Reviewers must verify that each added or changed entry uses `<commit>:<path>:<rule>:<line>`,
+that its commit is already on the named epic's integration line or task's
+branch, and that a linked review establishes the finding as a false positive.
+Refuse entries without a commit: they cover that location in every later
+commit.
+
+### Scanner configuration
+
 The GitHub workflow also runs two pinned external tools; add them to any wrapper
 as extra steps when your stack warrants:
 
-- **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1 --log-opts "<target>..HEAD"`
-  on a change, so it reads only the change's own commits, and without
-  `--log-opts` on a schedule, which reads the full history.
+- **gitleaks** scans for secrets. The GitHub workflow passes resolved commit ids
+  and a final `--` in `--log-opts`, so a tracked path named `HEAD` cannot
+  change the scan. A change scans its own commits; a schedule scans the
+  full history reachable from its resolved head.
+  A wrapper can run `gitleaks detect --source . --redact --no-banner --exit-code 1 --log-opts "<base-sha>..<head-sha> --"` with resolved commit ids.
   The GitHub workflow reads every exemption from the trusted commit: the
   pull request's base, or the pushed commit on a push. A pull request
   cannot exempt the leak it adds, so a new exemption takes effect once its
@@ -323,7 +380,15 @@ as extra steps when your stack warrants:
   a `GITLEAKS_CONFIG` file in the repository, come from the trusted commit
   too; the step fails when that commit does not hold the file, and refuses
   an absolute path into the checkout. An inline `gitleaks:allow` comment
-  counts only on a commit the trusted commit already holds. The step fails
+  counts only on a commit the trusted commit already holds by default
+  (`git.secret_scan_inline_allow = "trusted"`). Setting that key to `"never"`
+  in the trusted commit's `.codeflow/policy.json` ignores every inline allow.
+  Other trusted exemptions, including `.gitleaksignore` and configuration
+  allowlists, still apply. A pull request's policy change cannot change its
+  own scan. A missing policy or key uses `"trusted"`; a malformed policy or
+  value fails closed. This key affects the managed GitHub scan only. It is
+  absent from the shipped policy to keep older binaries able to read it;
+  upgrade and land the binary and CI pin before adding it. The step fails
   before it scans when the trusted commit is not in the checkout, and it
   downloads gitleaks under the runner's temp directory. Nothing from the
   checkout runs or steers the scan: its Python helpers run isolated (they
@@ -366,7 +431,20 @@ as extra steps when your stack warrants:
   commits, or rebase onto the base when the change is on the base's side.
   Names with spaces or non-ASCII letters pass. The scan pins git's patch
   format, so git configuration on the runner, such as `diff.noprefix`,
-  cannot move a finding to another path. It then drops one
+  cannot move a finding to another path. Older remerge scans could record
+  `<commit>:b/<path>:<rule>:<line>` for a conflicted merge's unprefixed file.
+  The step diagnoses that legacy fingerprint only when the commit is
+  readable with exactly two parents, the prefixed path is absent and the
+  unprefixed path exists.
+  It prints the exact replacement for review, leaving the ignore file and
+  its exemptions unchanged. An existing `b/` path and an unreadable commit
+  receive distinct messages; neither is called legacy. A one-parent commit
+  also gets its own message without replacement advice. Review the finding
+  and land the replacement through the normal reviewed exemption path.
+  A head-only exemption cannot authorize itself on a pull request. The
+  diagnostic checks at most 64 KiB and 50 candidates within five seconds,
+  then warns to review the remainder manually; gitleaks still reads the
+  complete trusted ignore file. It then drops one
   known false positive from the report: the security-stage prose CodeFlow
   3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
   its baseline copy, which the `generic-api-key` rule mistakes for a key.

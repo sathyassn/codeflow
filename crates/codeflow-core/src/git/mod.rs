@@ -14,8 +14,9 @@ pub mod remote_query;
 pub(crate) mod stdin;
 
 pub use name::{
-    diff_paths, display_key, gitfile_dir, key_is_text, tracking_branch, walk_tree, DisplayName,
-    GitName, NotRepresentable, NotUtf8, Walk,
+    diff_paths, display_json, display_key, display_line, display_message, display_output,
+    display_path, display_print, display_relay, display_text, gitfile_dir, key_is_text,
+    tracking_branch, walk_tree, DisplayName, GitName, NotRepresentable, NotUtf8, TextBlock, Walk,
 };
 
 /// The variable a codeflow git-hook shim reads to run the codeflow binary
@@ -40,6 +41,41 @@ pub fn designate_calling_binary(binary: PathBuf) {
 #[must_use]
 pub fn command() -> std::process::Command {
     process("git")
+}
+
+/// A judging Git process whose repository is selected by its explicit path.
+/// Inherited location, object-store and command-config variables cannot steer
+/// these reads. `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`
+/// are kept on purpose: repository, user and system config remain in scope.
+/// This is not a sandbox against local-config tampering. Never changes the
+/// caller's env.
+#[must_use]
+pub fn judging_command() -> std::process::Command {
+    let mut command = command();
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+    ] {
+        command.env_remove(name);
+    }
+    for (name, _) in std::env::vars_os() {
+        let bytes = name.as_encoded_bytes();
+        if bytes
+            .strip_prefix(b"GIT_CONFIG_KEY_")
+            .or_else(|| bytes.strip_prefix(b"GIT_CONFIG_VALUE_"))
+            .is_some_and(|index| !index.is_empty() && index.iter().all(u8::is_ascii_digit))
+        {
+            command.env_remove(name);
+        }
+    }
+    command.env("GIT_NO_LAZY_FETCH", "1");
+    command
 }
 
 /// A process for `program`. When `program` runs git (its last path part,
@@ -106,7 +142,7 @@ pub fn linked_worktrees(repo: &git2::Repository) -> Result<Vec<LinkedWorktree>, 
 }
 
 /// Git writes exactly one LF after the administrative checkout path.
-fn gitdir_checkout(admin: &std::path::Path) -> Result<PathBuf, String> {
+pub(crate) fn gitdir_checkout(admin: &std::path::Path) -> Result<PathBuf, String> {
     let text = std::fs::read(admin.join("gitdir"))
         .map_err(|error| format!("cannot read worktree gitdir {}: {error}", admin.display()))?;
     let bytes = text.strip_suffix(b"\n").unwrap_or(&text);
@@ -306,6 +342,51 @@ pub fn blob_id_at(
 pub use ci::{wait_for_ci_green, CiOutcome, CiWaitConfig, CiWaitError};
 pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, RebaseResult};
 pub use stdin::{output_with_input, spawn_with_input, spawn_with_input_stopping, InputWriter};
+
+/// Whether local commit objects prove that a tip contains `sha`.
+/// Git reads commit objects with commit-graph, replace refs and grafts disabled,
+/// and inherited repository/object/config environment inputs removed. A graph
+/// written by normal maintenance is harmless and need not be removed.
+/// Missing or shallow history cannot prove ancestry; no objects are fetched.
+///
+/// # Errors
+/// Returns why repository metadata cannot establish trustworthy ancestry.
+pub fn commit_reachable_from(
+    root: &std::path::Path,
+    sha: &str,
+    tips: &[String],
+) -> Result<bool, &'static str> {
+    git2::Oid::from_str(sha).map_err(|_| "invalid commit id")?;
+    for tip in tips {
+        git2::Oid::from_str(tip).map_err(|_| "invalid branch tip id")?;
+        let out = judging_command()
+            .arg("-C")
+            .arg(root)
+            .args([
+                "--no-replace-objects",
+                "-c",
+                "core.commitGraph=false",
+                "-c",
+                "core.useReplaceRefs=false",
+                "merge-base",
+                "--is-ancestor",
+                sha,
+                tip,
+            ])
+            .env(
+                "GIT_GRAFT_FILE",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .output()
+            .map_err(|_| "cannot read destination ancestry")?;
+        match out.status.code() {
+            Some(0) => return Ok(true),
+            Some(1) => {}
+            _ => return Err("cannot prove destination ancestry from commit objects"),
+        }
+    }
+    Ok(false)
+}
 
 #[cfg(test)]
 mod tests {

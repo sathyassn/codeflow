@@ -24,6 +24,14 @@ pub const GLOBAL_VALUE_OPTIONS: &[&str] = &[
     "--shallow-file",
 ];
 
+/// Persistent changes to these keys can relocate or hide a checkout from
+/// subsequent hook discovery. Command-local `-c` settings are judged separately.
+pub(crate) fn relocates_checkout(key: &str) -> bool {
+    ["core.worktree", "core.bare", "extensions.worktreeconfig"]
+        .iter()
+        .any(|name| key.eq_ignore_ascii_case(name))
+}
+
 /// What a git configuration setting can do when git reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConfigKind {
@@ -208,6 +216,41 @@ fn config_name_matches(key: &str, pattern: &str) -> bool {
 /// a program git runs (TSK-242 review round 13).
 fn git_boolean(value: &str) -> bool {
     matches!(value, "" | "true" | "false" | "yes" | "no" | "on" | "off") || git_int(value).is_some()
+}
+
+/// Git boolean semantics, including implicit true and numeric values.
+pub(crate) fn config_boolean(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" => Some(true),
+        "" | "false" | "no" | "off" => Some(false),
+        value => git_int(value).map(|number| number != 0),
+    }
+}
+
+pub(crate) fn is_include_key(key: &[u8]) -> bool {
+    key == b"include.path" || (key.starts_with(b"includeif.") && key.ends_with(b".path"))
+}
+
+/// Whether an environment-sourced setting can change a guard decision.
+/// Harmless presentation and identity settings need no environment lookup.
+pub(crate) fn config_env_changes_decision(globals: &[String]) -> bool {
+    globals.iter().enumerate().any(|(at, arg)| {
+        let setting = if arg == "--config-env" {
+            globals.get(at + 1).map(String::as_str)
+        } else if let Some(setting) = arg.strip_prefix("--config-env=") {
+            Some(setting)
+        } else {
+            return false;
+        };
+        let Some((key, _)) = setting.and_then(|setting| setting.split_once('=')) else {
+            return true;
+        };
+        let key = key.to_ascii_lowercase();
+        config_kind(&key, "") != ConfigKind::Safe
+            || ["alias.", "core.", "push.", "remote.", "branch."]
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+    })
 }
 
 /// The `int` git reads from `value`, as `git_parse_int` does: `strtoimax`

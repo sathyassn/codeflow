@@ -69,7 +69,11 @@ orchestrator point here). Do not draft until you can state all six:
 
 1. **Problem and audience.** What hurts, for whom, in one or two sentences.
 2. **Outcome and public behavior.** The intended result and what users or
-   adopters will observe.
+   adopters will observe. Its home is the record's `## Outcome` section:
+   the epic's value line and each task's outcome, one line each, in the
+   form "after this merges, <who> can <do what>". `codeflow validate
+   --docs` refuses an open record created after the project adopted the
+   section without it.
 3. **Scope boundary.** What is in, and, more important, what is explicitly
    out. Check `docs/product.md` non-goals; an epic that violates a non-goal is
    a conversation with the human, not a workaround. Name material authority,
@@ -86,7 +90,8 @@ orchestrator point here). Do not draft until you can state all six:
 6. **Deliverables and homes.** What each task produces (files or a folder,
    a decision record, a research note, evidence, a record update, a human
    board) and its home as a path in the project's structure, in the task's
-   `## Deliverables`. Before materializing records, check every home
+   `## Deliverables`; the epic's own `## Deliverables` names what the body
+   delivers as a whole. Before materializing records, check every home
    against the project's structure authority, the document that says where
    things live (an agreed target tree, an architecture doc, the "Where
    things live" line of `AGENTS.md`), where one exists. A home not known
@@ -168,10 +173,16 @@ waive the clarity, safety, review or protected-branch conditions.
    that exact candidate. It lands through one of two
    sanctioned modes: **Local**, `codeflow integrate <candidate> --into
    integration/<…>` on a candidate cut from the current line tip (serialized,
-   runs the full gate, keeps the tested tip); or **PR** into the integration
-   branch, merged by the primary once the candidate's full gate is green and
-   the PR's required checks pass. The PR cites the gate run by its id and
-   revision from its durable home.
+   runs the non-selective full gate, keeps the tested tip); or **PR** into the
+   integration branch, merged by the primary once the candidate's
+   `codeflow test --mode full --all` gate is complete and green and the PR's
+   required checks pass. The PR cites the gate run by its id and
+   revision from its durable home. Local mode rebases by default; `--merge`
+   runs from a linked worktree and gates a no-fast-forward merge commit that
+   keeps the reviewed head and advances only the local line. Both modes execute
+   every target and refuse failures, skips and incomplete gates. A repository
+   with no targets retains the loud warning that the merge is not test-verified
+   and may land. Neither variant pushes.
 4. **A red batch is diagnosed first.** Drop a member only when evidence
    attributes the failure to it; it and its dependents leave the batch, the
    fix goes in that task's PR, and the rest is regated. A shared runner or
@@ -183,7 +194,11 @@ waive the clarity, safety, review or protected-branch conditions.
    integration branch (the full gate over everything, `validate --docs`, the
    capability, doc and epic-record updates), close the epic, and raise
    **one** PR `integration -> main`. The human reviews and merges; cleanup
-   follows the worktree rules' "Cleanup" section, merge proof first.
+   follows the worktree rules' "Cleanup" section, merge proof first. That
+   PR's `codeflow ci` judges each task of the line, and of a verified epic
+   line that joined it, at the task's landing on its line, so a task
+   reopened and re-completed in its own PR passes as it did there. An
+   early checkpoint PR from the line gets the same judgment.
 
 Boundaries are unchanged: `main` and every protected branch stay
 human-merge-only. The integration branch is not a backdoor: its content

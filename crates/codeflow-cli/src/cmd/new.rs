@@ -93,10 +93,30 @@ pub struct StatusDetails {
     /// Where a cancelled record's scope went.
     #[arg(long)]
     pub scope: Option<String>,
-    /// A file holding the acceptance block (the YAML between the fences) to
-    /// add to the Closeout on completion.
+    /// A file holding the acceptance block to add to the Closeout on
+    /// completion: the YAML between the fences, starting with a top-level
+    /// `acceptance:` key that holds `reviewed`, `review`, `criteria`,
+    /// `journey`, `not_verified`, `follow_ups` and `verdict`.
     #[arg(long, value_name = "FILE")]
     pub acceptance: Option<PathBuf>,
+}
+
+/// The receiving target a task completion binds against: the pins local
+/// `task status` needs to grant authority in a clone with remotes. Only
+/// `task status` takes them.
+#[derive(Debug, Clone, Default, Args)]
+pub struct TaskTarget {
+    /// The receiving target's tip a task completion binds against, such as
+    /// `origin/main`. In a clone with remotes, `task status` grants landing,
+    /// stacking and waiver authority only with `--base` and `--into`, because
+    /// any process in the clone can change the git settings that would
+    /// otherwise decide it; hosted CI pins its own base and is the authority.
+    #[arg(long, value_name = "REF", requires = "into")]
+    pub base: Option<String>,
+    /// The receiving target's branch name, such as `main`; given with
+    /// `--base`.
+    #[arg(long, value_name = "BRANCH", requires = "base")]
+    pub into: Option<String>,
 }
 
 /// Arguments for `codeflow task`.
@@ -109,6 +129,17 @@ pub struct TaskArgs {
 /// Task subcommands.
 #[derive(Debug, Subcommand)]
 pub enum TaskCommand {
+    /// Redact acceptance and criteria text without changing results or review provenance.
+    Redact {
+        /// Task id.
+        id: String,
+        /// Entire replacement record, in a file outside the repository.
+        #[arg(long)]
+        replacement: PathBuf,
+        /// Recheckable reference to the review of this redaction.
+        #[arg(long)]
+        review: String,
+    },
     /// Allocate the next independent `TSK-NNN` and scaffold it.
     New {
         /// Parent epic id. Mutually exclusive with --standalone-reason.
@@ -147,6 +178,8 @@ pub enum TaskCommand {
         status: TaskStatusArg,
         #[command(flatten)]
         details: StatusDetails,
+        #[command(flatten)]
+        target: TaskTarget,
     },
 }
 
@@ -200,13 +233,20 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
                 EpicStatusArg::Cancelled => "cancelled",
                 EpicStatusArg::Archived => "archived",
             };
-            return run_status(RecordKind::Epic, id, target, details, None);
+            return run_status(
+                RecordKind::Epic,
+                id,
+                target,
+                details,
+                &TaskTarget::default(),
+                None,
+            );
         }
     };
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -214,7 +254,7 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
     let template = match load_template("base/pm/epic.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -253,7 +293,10 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("error: integration branch: {error}");
+            eprintln!(
+                "error: integration branch: {error}",
+                error = crate::cmd::shown(&error)
+            );
             1
         }
     }
@@ -262,6 +305,30 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
 /// Run `codeflow task`.
 pub fn run_task(args: &TaskArgs) -> i32 {
     let (epic, standalone_reason, integration_target, title) = match &args.command {
+        TaskCommand::Redact {
+            id,
+            replacement,
+            review,
+        } => {
+            let result = super::repo_root().and_then(|root| {
+                let text = std::fs::read_to_string(replacement).map_err(|e| e.to_string())?;
+                codeflow_core::workgraph::status_verb::redact(&root, id, &text, review)
+                    .map_err(|e| e.to_string())
+            });
+            return match result {
+                Ok(path) => {
+                    println!(
+                        "{id}: redacted {}; results and review provenance retained",
+                        codeflow_core::git::display_path(&path)
+                    );
+                    0
+                }
+                Err(error) => {
+                    eprintln!("error: {id}: {error}", error = crate::cmd::shown(&error));
+                    1
+                }
+            };
+        }
         TaskCommand::New {
             follow_up_of: Some(source),
             title,
@@ -286,14 +353,15 @@ pub fn run_task(args: &TaskArgs) -> i32 {
             id,
             status,
             details,
+            target: pin,
         } => {
-            let target = match status {
+            let status_target = match status {
                 TaskStatusArg::Todo => "todo",
                 TaskStatusArg::Blocked => "blocked",
                 TaskStatusArg::Complete => "complete",
                 TaskStatusArg::Cancelled => "cancelled",
             };
-            return run_status(RecordKind::Task, id, target, details, None);
+            return run_status(RecordKind::Task, id, status_target, details, pin, None);
         }
     };
     if epic
@@ -336,7 +404,7 @@ fn new_task(
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -347,7 +415,10 @@ fn new_task(
     {
         Ok(value) => value.unwrap_or(true),
         Err(error) => {
-            eprintln!("error: cannot read epic: {error}");
+            eprintln!(
+                "error: cannot read epic: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 1;
         }
     };
@@ -355,14 +426,14 @@ fn new_task(
         eprintln!(
             "error: epic {} not found under {}",
             epic.unwrap_or_default(),
-            pm.display()
+            codeflow_core::git::display_path(&pm)
         );
         return 1;
     }
     let template = match load_template("base/pm/task.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -410,14 +481,14 @@ fn resume_task(id: &str) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
     let unwritten = match issue::resume(&root, &parsed) {
         Ok(unwritten) => unwritten,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -431,7 +502,7 @@ fn resume_task(id: &str) -> i32 {
     let template = match load_template("base/pm/task.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -461,12 +532,12 @@ fn resume_task(id: &str) -> i32 {
     match result {
         Ok(record) => {
             if let Err(error) = issue::written(&root, &parsed) {
-                eprintln!("warning: {error}");
+                eprintln!("warning: {error}", error = crate::cmd::shown(&error));
             }
             report(&record)
         }
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             1
         }
     }
@@ -481,14 +552,14 @@ fn run_follow_up(source: &str, title: &str) -> i32 {
     let template = match load_template("base/pm/task.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -540,7 +611,7 @@ pub fn run_adr(args: &AdrArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -554,7 +625,7 @@ pub fn run_adr(args: &AdrArgs) -> i32 {
     let template = match template {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -629,7 +700,7 @@ impl<'a> Issuer<'a> {
             (Ok(record), reserved) => {
                 if let Some((id, standing, note)) = reserved {
                     if let Err(error) = issue::written(self.root, &id) {
-                        eprintln!("warning: {error}");
+                        eprintln!("warning: {error}", error = crate::cmd::shown(&error));
                     }
                     eprintln!("registry: {id} {}", standing.describe());
                     if let Some(note) = note {
@@ -639,14 +710,14 @@ impl<'a> Issuer<'a> {
                 Some(record)
             }
             (Err(error), Some((id, _, _))) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {error}", error = crate::cmd::shown(&error));
                 eprintln!(
                     "{id} is reserved but its record was not written; fix the cause and run `codeflow task new --resume {id}` (tasks), or leave the number as a gap"
                 );
                 None
             }
             (Err(error), None) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {error}", error = crate::cmd::shown(&error));
                 None
             }
         }
@@ -672,6 +743,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
                 id,
                 target,
                 &StatusDetails::default(),
+                &TaskTarget::default(),
                 by.clone(),
             );
         }
@@ -679,7 +751,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -688,14 +760,17 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
         let exists = match allocate::work_item_exists(&pm, work_item) {
             Ok(exists) => exists,
             Err(error) => {
-                eprintln!("error: cannot read work item: {error}");
+                eprintln!(
+                    "error: cannot read work item: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 return 1;
             }
         };
         if !exists {
             eprintln!(
                 "error: work item {work_item} not found under {}",
-                pm.display()
+                codeflow_core::git::display_path(&pm)
             );
             return 1;
         }
@@ -703,7 +778,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
     let template = match load_template("base/pm/spec.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -727,13 +802,26 @@ fn run_status(
     id: &str,
     target: &str,
     details: &StatusDetails,
+    pin: &TaskTarget,
     by: Option<String>,
 ) -> i32 {
     let acceptance = match &details.acceptance {
         Some(path) => match std::fs::read_to_string(path) {
-            Ok(text) => Some(text),
+            Ok(text) => {
+                if target == "complete" {
+                    if let Err(problem) = check_acceptance_file(path, &text) {
+                        eprintln!("error: {problem}");
+                        return 1;
+                    }
+                }
+                Some(text)
+            }
             Err(error) => {
-                eprintln!("error: cannot read {}: {error}", path.display());
+                eprintln!(
+                    "error: cannot read {}: {error}",
+                    codeflow_core::git::display_path(path),
+                    error = crate::cmd::shown(&error)
+                );
                 return 1;
             }
         },
@@ -747,11 +835,13 @@ fn run_status(
         scope: details.scope.clone(),
         by,
         acceptance,
+        base: pin.base.clone(),
+        into: pin.into.clone(),
     };
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -764,20 +854,69 @@ fn run_status(
                 "{id}  {} -> {}  {}",
                 outcome.from,
                 outcome.to,
-                outcome.path.display()
+                codeflow_core::git::display_path(&outcome.path)
             );
             0
         }
         Err(error) => {
-            eprintln!("error: {id}: {error}");
+            eprintln!("error: {id}: {error}", error = crate::cmd::shown(&error));
             1
         }
     }
 }
 
+/// The fields the acceptance block holds under its `acceptance:` key.
+const ACCEPTANCE_FIELDS: &str =
+    "reviewed, review, criteria, journey, not_verified, follow_ups and verdict";
+
+/// Refuse an `--acceptance` file whose shape is wrong before the record is
+/// touched, naming the file and the missing top-level `acceptance:` key.
+///
+/// The block's own fields are judged later by the lifecycle check, which
+/// reads a stricter line grammar than YAML (a value such as
+/// `none: nothing deferred` is that grammar's, not valid YAML). So a file
+/// that is not valid YAML is refused only when its first line is not the
+/// `acceptance:` header; a file that opens with the header goes on to the
+/// field checks, which report the real problems.
+fn check_acceptance_file(path: &Path, text: &str) -> Result<(), String> {
+    let shown = path.display();
+    let needs = format!(
+        "the acceptance file needs a top-level `acceptance:` key holding {ACCEPTANCE_FIELDS}"
+    );
+    let opens_with_header = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| line.trim_end() == "acceptance:");
+    match serde_yaml::from_str::<serde_yaml::Value>(text) {
+        Ok(serde_yaml::Value::Mapping(map)) => {
+            if map.contains_key("acceptance") {
+                Ok(())
+            } else {
+                let found: Vec<String> = map
+                    .keys()
+                    .filter_map(|key| key.as_str().map(|name| format!("`{name}`")))
+                    .collect();
+                let found = if found.is_empty() {
+                    String::new()
+                } else {
+                    format!("; it has {} at the top level", found.join(", "))
+                };
+                Err(format!("{shown}: {needs}{found}"))
+            }
+        }
+        Ok(_) => Err(format!("{shown}: {needs}; the file is not a YAML mapping")),
+        Err(_) if opens_with_header => Ok(()),
+        Err(error) => Err(format!("{shown}: not valid YAML ({error}); {needs}")),
+    }
+}
+
 /// Print the allocated id and the file written, then return exit code 0.
 fn report(rec: &NewRecord) -> i32 {
-    println!("{}  {}", rec.id, rec.path.display());
+    println!(
+        "{}  {}",
+        rec.id,
+        codeflow_core::git::display_path(&rec.path)
+    );
     0
 }
 
@@ -805,7 +944,7 @@ fn load_template(asset: &str) -> Result<String, String> {
     };
     let (text, source) = record_template::load(&super::repo_root()?, kind, &embedded)?;
     if let TemplateSource::Fallback(reason) = source {
-        eprintln!("warning: {reason}");
+        eprintln!("warning: {reason}", reason = crate::cmd::shown(&reason));
     }
     Ok(text)
 }

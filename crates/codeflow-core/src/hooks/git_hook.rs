@@ -5,13 +5,14 @@
 //! The shims in `.git/hooks/` exec `codeflow git-hook <stage>`; ALL levels
 //! and lists come from `.codeflow/policy.json` (D7/D8 — nothing hardcoded).
 
+use crate::workgraph::history;
+
 use std::path::Path;
 
 use git2::Repository;
 
 use crate::error::HookError;
 use crate::remedy::{Finding, JUDGE_SOURCE_DRIFT};
-use crate::testing::gate::{run_gate_exact, GateOutcome, GateTargetResult};
 
 use super::policy::{GitPolicy, PolicyLevel};
 use super::repo::current_branch;
@@ -126,7 +127,10 @@ pub fn pre_commit(
         report.violations.push(Violation::new(
             "git.commit_to_protected",
             policy.commit_to_protected,
-            format!("commit on protected branch '{branch}'"),
+            format!(
+                "commit on protected branch '{}'",
+                crate::git::display_text(&branch)
+            ),
             crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
@@ -137,6 +141,20 @@ pub fn pre_commit(
             policy,
             &crate::root_checkout::process_env,
         ));
+
+    match super::landed_policy::staged_paths(root, policy)
+        .and_then(|paths| super::path_policy::staged(&repo, &paths))
+    {
+        Ok(paths) => {
+            report.violations.extend(paths.violations);
+            report.status.extend(paths.notes);
+        }
+        Err(error) => report.violations.push(Violation::always_blocking(
+            "git.path_policy",
+            format!("cannot verify staged paths: {error}"),
+            "repair the named policy source or Git object, then retry",
+        )),
+    }
 
     if policy.secret_scan.is_active() {
         scan_staged(&repo, policy, &mut report, false);
@@ -713,7 +731,10 @@ pub fn pre_merge_commit(
         report.violations.push(Violation::new(
             "git.merge_to_protected",
             policy.merge_to_protected,
-            format!("merge commit on protected branch '{branch}'"),
+            format!(
+                "merge commit on protected branch '{}'",
+                crate::git::display_text(&branch)
+            ),
             crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
@@ -740,9 +761,32 @@ pub fn pre_merge_commit(
 pub fn ref_line_touches_local_branch(line: &str) -> bool {
     // Git's protocol separates the fields with a single space, and a ref name
     // holds none: other whitespace (a no-break space) is part of the name.
-    line.splitn(3, ' ')
-        .nth(2)
-        .is_some_and(|r| r.starts_with("refs/heads/"))
+    line.splitn(3, ' ').nth(2).is_some_and(|r| {
+        super::git_guard::strip_ref_prefix(r, "refs/heads/").is_some()
+            || super::git_guard::transaction_ref_aliases(r)
+    })
+}
+
+/// Refuses a ref update whose spelling can alias a protected ref, unless
+/// the transaction is sanctioned; the ref name is shown escaped (TSK-388).
+fn refuse_alias(
+    report: &mut StageReport,
+    policy: &GitPolicy,
+    sanctioned: bool,
+    refname: &str,
+    why: &str,
+) {
+    if policy.local_ref_protection.is_active() && !sanctioned {
+        report.violations.push(Violation::new(
+            "git.local_ref_protection",
+            policy.local_ref_protection,
+            format!(
+                "ref update of '{}': {why}",
+                crate::git::display_text(refname)
+            ),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
+        ));
+    }
 }
 
 /// The reference-transaction stage (charter §6.1 plane 1; ADR-0007): the
@@ -780,18 +824,74 @@ pub fn reference_transaction(
 
     let repo = Repository::discover(root)
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
+    // Whether non-ASCII names may alias here: probed once per invocation
+    // unless a caller has decided it (TSK-381 SF-3).
+    let _aliasing = super::policy::NonAsciiAliasingScope::decide(|| {
+        super::repo::case_insensitive_git_dir(repo.commondir())
+    });
     // The integrate token and a human's override sanction the transaction
     // (git layer only — the git-guard never trusts the human override).
     let sanctioned = integrate_token || human_override;
 
+    let collisions = if super::policy::non_ascii_aliasing() {
+        folded_collisions(&repo, stdin)
+    } else {
+        std::collections::BTreeSet::new()
+    };
     for line in stdin.split('\n') {
         let Some((old_oid, new_oid, refname)) = parse_ref_line(line) else {
             continue;
         };
-        let Some(branch) = refname.strip_prefix("refs/heads/") else {
+        // On a case-insensitive git directory, a ref written under a
+        // spelling that folds onto another ref is that ref's file, so the
+        // transaction is refused (TSK-381 SF-4).
+        // Storage housekeeping that keeps the value (`git pack-refs`, `git
+        // gc`) moves nothing, so the spelling checks below let it pass.
+        let unchanged = || keeps_value(&repo, refname, old_oid, new_oid);
+        if collisions.contains(refname) && !unchanged() {
+            refuse_alias(
+                &mut report,
+                policy,
+                sanctioned,
+                refname,
+                "its name folds onto another ref's on a case-insensitive filesystem",
+            );
+            continue;
+        }
+        // A fetched remote-tracking name that folds onto a protected branch
+        // without naming it exactly (`origin/MAIN` beside a protected `main`)
+        // would land on that tracking ref once it exists (Codex F3).
+        if super::policy::non_ascii_aliasing()
+            && tracking_name_folds_onto_protected(&repo, policy, refname)
+            && !unchanged()
+        {
+            refuse_alias(
+                &mut report,
+                policy,
+                sanctioned,
+                refname,
+                "its name folds onto a protected branch's tracking ref on a \
+                 case-insensitive filesystem",
+            );
+            continue;
+        }
+        // A spelling a case-insensitive filesystem may store as a guarded ref
+        // is refused outright, failing closed (TSK-381 SF-3).
+        if super::git_guard::transaction_ref_aliases(refname) && !unchanged() {
+            refuse_alias(
+                &mut report,
+                policy,
+                sanctioned,
+                refname,
+                "a non-ASCII character or a case-different `refs/` prefix can name a \
+                 protected ref on a case-insensitive filesystem",
+            );
+            continue;
+        }
+        let Some(branch) = super::git_guard::strip_ref_prefix(refname, "refs/heads/") else {
             continue;
         };
-        if !policy.branch_is_protected(branch) {
+        if !policy.branch_is_protected_any_case(branch) {
             continue; // feature branches stay fully free (rebase, force, etc.)
         }
         // Storage housekeeping (`git pack-refs`, run by `git gc`) rewrites
@@ -807,7 +907,10 @@ pub fn reference_transaction(
                 report.violations.push(Violation::new(
                     "git.delete_protected",
                     policy.delete_protected,
-                    format!("deleting protected branch '{branch}' via a local ref update"),
+                    format!(
+                        "deleting protected branch '{}' via a local ref update",
+                        crate::git::display_text(branch)
+                    ),
                     crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
@@ -831,11 +934,118 @@ pub fn reference_transaction(
         report.violations.push(Violation::new(
             "git.local_ref_protection",
             policy.local_ref_protection,
-            format!("local update of protected branch '{branch}' that is not a sync from origin"),
+            format!(
+                "local update of protected branch '{}' that is not a sync from origin",
+                crate::git::display_text(branch)
+            ),
             crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
     Ok(report)
+}
+
+/// Whether a remote-tracking `refname` folds onto a protected branch it does
+/// not name exactly ([`GitPolicy::branch_folds_onto_protected`]). The branch
+/// is the part after the longest `refs/remotes/<remote>/` prefix of a
+/// configured remote, so `origin/feat/MAIN` is the branch `feat/MAIN`, which
+/// folds onto nothing protected. Under no configured remote, or when the
+/// remotes cannot be read, every branch the name could end in is judged,
+/// failing closed for an unconfigured destination.
+fn tracking_name_folds_onto_protected(
+    repo: &Repository,
+    policy: &GitPolicy,
+    refname: &str,
+) -> bool {
+    let Some(rest) = refname.strip_prefix("refs/remotes/") else {
+        return false;
+    };
+    // A remote name that is not valid UTF-8 names no text prefix.
+    let remote = repo.remotes().ok().and_then(|remotes| {
+        remotes
+            .iter_bytes()
+            .filter_map(|name| {
+                crate::git::GitName::from_bytes(name)
+                    .rule_text()
+                    .ok()
+                    .map(str::to_string)
+            })
+            .filter(|name| rest.starts_with(&format!("{name}/")))
+            .map(|name| name.len())
+            .max()
+    });
+    match remote {
+        Some(len) => policy.branch_folds_onto_protected(&rest[len + 1..]),
+        None => rest
+            .match_indices('/')
+            .any(|(at, _)| policy.branch_folds_onto_protected(&rest[at + 1..])),
+    }
+}
+
+/// The ref names this transaction writes (a new value that is not zero)
+/// whose folded spelling ([`super::repo::folded_ref_name`]), or that of a
+/// directory along its path, equals that of another spelling among the
+/// existing refs and the names written in the same transaction. Such a name
+/// lands in the other ref's file or directory on a case-insensitive
+/// filesystem (`origin/INTEGRATION/x` under an existing `origin/integration/`).
+/// A listing that cannot be read leaves every written name a collision,
+/// failing closed.
+fn folded_collisions(repo: &Repository, stdin: &str) -> std::collections::BTreeSet<String> {
+    let written: Vec<&str> = stdin
+        .split('\n')
+        .filter_map(parse_ref_line)
+        .filter(|(_, new_oid, _)| !is_zero_sha(new_oid))
+        .map(|(_, _, refname)| refname)
+        .collect();
+    let mut spellings: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    let every = || written.iter().map(|name| (*name).to_string()).collect();
+    let Ok(references) = repo.references() else {
+        return every();
+    };
+    let mut listed = Vec::new();
+    for reference in references {
+        // A ref that cannot be read cannot be ruled out as an alias. A name
+        // that is not valid UTF-8 is compared byte for byte: packed-refs
+        // matches names exactly, ext4 casefold treats such a name as opaque
+        // bytes and does not fold it, and APFS refuses to store it.
+        let Ok(reference) = reference else {
+            return every();
+        };
+        if let Ok(text) = crate::git::GitName::from_bytes(reference.name_bytes()).rule_text() {
+            listed.push(text.to_string());
+        }
+    }
+    // Each ref name and each directory along it ("refs/", "refs/remotes/",
+    // ...), keyed by its folded spelling.
+    let paths = |name: &str| {
+        name.match_indices('/')
+            .map(|(at, _)| name[..=at].to_string())
+            .chain(std::iter::once(name.to_string()))
+            .collect::<Vec<_>>()
+    };
+    for name in listed
+        .iter()
+        .map(String::as_str)
+        .chain(written.iter().copied())
+    {
+        for path in paths(name) {
+            spellings
+                .entry(super::repo::folded_ref_name(&path))
+                .or_default()
+                .insert(path);
+        }
+    }
+    written
+        .into_iter()
+        .filter(|name| {
+            paths(name).iter().any(|path| {
+                spellings
+                    .get(&super::repo::folded_ref_name(path))
+                    .is_some_and(|names| names.len() > 1)
+            })
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 /// `true` when a transaction line leaves `refname` resolving to the commit it
@@ -908,9 +1118,11 @@ fn new_matches_remote_head(repo: &Repository, branch: &str, new_oid: &str) -> bo
         }
         Err(_) => return false,
     };
-    repo.find_reference(&refname)
+    // Only the exact spelling git lists counts as the remote head (TSK-381
+    // SF-4): a folded alias fetched over it proves no sync.
+    super::repo::listed_ref_commit(repo, &refname)
         .ok()
-        .and_then(|reference| reference.target())
+        .flatten()
         == Some(new)
 }
 
@@ -1003,7 +1215,10 @@ pub fn pre_push(
                 report.violations.push(Violation::new(
                     "git.delete_protected",
                     policy.delete_protected,
-                    format!("push would delete protected branch '{branch}'"),
+                    format!(
+                        "push would delete protected branch '{}'",
+                        crate::git::display_text(branch)
+                    ),
                     crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
@@ -1015,7 +1230,10 @@ pub fn pre_push(
             report.violations.push(Violation::new(
                 "git.push_to_protected",
                 policy.push_to_protected,
-                format!("direct push to protected branch '{branch}'"),
+                format!(
+                    "direct push to protected branch '{}'",
+                    crate::git::display_text(branch)
+                ),
                 crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
@@ -1038,12 +1256,12 @@ pub fn pre_push(
                 Ok(false) => {},
                 Ok(true) => report.violations.push(Violation::new(
                     force_rule, force_level,
-                    format!("non-fast-forward (force) push to {}branch '{branch}'", if protected { "protected " } else { "" }),
+                    format!("non-fast-forward (force) push to {}branch '{}'", if protected { "protected " } else { "" }, crate::git::display_text(branch)),
                     remedy,
                 )),
                 Err(reason) => report.violations.push(Violation::always_blocking(
                     force_rule,
-                    format!("push to branch '{branch}' cannot be proven a fast-forward: {reason}; fetch it first"),
+                    format!("push to branch '{}' cannot be proven a fast-forward: {reason}; fetch it first", crate::git::display_text(branch)),
                     &remedy,
                 )),
             }
@@ -1057,7 +1275,10 @@ pub fn pre_push(
             report.violations.push(Violation::new(
                 "git.branch_naming",
                 policy.branch_naming,
-                format!("branch '{branch}' does not match `{{prefix}}/{{kebab-name}}`"),
+                format!(
+                    "branch '{}' does not match `{{prefix}}/{{kebab-name}}`",
+                    crate::git::display_text(branch)
+                ),
                 crate::remedy::BRANCH_NAME.with(&[("prefixes", &policy.branch_prefixes.join(" "))]),
             ));
         }
@@ -1087,12 +1308,17 @@ fn epic_line_push(
 ) {
     let skipped = |report: &mut StageReport, error: &str| {
         report.notes.push(crate::remedy::Finding::new(
-            format!("the epic-line push check for '{branch}' was skipped: {error}"),
+            format!(
+                "the epic-line push check for '{}' was skipped: {error}",
+                crate::git::display_text(branch)
+            ),
             crate::remedy::HOOK_UNEVALUATED.remedy(),
         ));
     };
     // A default target that cannot be read is reported, never read as none.
-    let default_target = crate::workgraph::default_work_target(root)
+    // Its full ref is read: a short `origin/main` peels a local branch or
+    // tag of that name before the remote-tracking ref.
+    let default_target = crate::workgraph::default_work_target_ref(root)
         .map_err(|error| format!("the default target cannot be read: {error}"));
     let target_revision = match &default_target {
         Ok(target) => target.as_deref(),
@@ -1124,7 +1350,12 @@ fn epic_line_push(
                     .map(|commit| commit.id())
                     .map_err(|e| format!("{revision}: {e}"))
             };
-            repo.merge_base(commit(&target)?, commit(&pushed.local_sha)?)
+            let target_tip = repo
+                .find_reference(&target)
+                .and_then(|reference| reference.peel_to_commit())
+                .map(|commit| commit.id())
+                .map_err(|e| format!("{target}: {e}"))?;
+            history::merge_base(repo, target_tip, commit(&pushed.local_sha)?)
                 .map_err(|e| e.to_string())?
                 .to_string()
         } else {
@@ -1159,11 +1390,11 @@ fn epic_line_push(
     let reset = if first_push {
         target
     } else {
-        format!("origin/{branch}")
+        format!("refs/remotes/origin/{branch}")
     };
     report.violations.push(Violation::always_blocking(
         "work.epic_line",
-        format!("{branch} would receive a commit made directly on the line ({ids})"),
+        format!("{} would receive a commit made directly on the line ({ids})", crate::git::display_text(branch)),
         &format!(
             "land it by a pull request: save it on a task or planning branch, then `git reset --keep {reset}` and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
         ),
@@ -1236,7 +1467,7 @@ fn is_force_update(repo: &Repository, r: &PushRef) -> Result<bool, String> {
     if local == remote {
         return Ok(false);
     }
-    repo.graph_descendant_of(local, remote)
+    history::descendant_of(repo, local, remote)
         .map(|descends| !descends)
         .map_err(|e| format!("cannot read push ancestry: {e}"))
 }
@@ -1248,94 +1479,14 @@ pub const PUSH_SET_BUDGET: std::time::Duration = std::time::Duration::from_secs(
 /// One timed step of the push set.
 #[derive(Debug, Clone)]
 pub struct PushStep {
-    /// A test-config target name, or the built-in command.
+    /// The built-in command; the push set runs no test-config target
+    /// (TSK-449).
     pub name: String,
     pub duration: std::time::Duration,
-    /// `true` for a test-config target, which its `modes.quick` key moves
-    /// out of the push set; `false` for a built-in check.
-    pub configurable: bool,
-}
-
-/// Run the test-config targets that define a `quick` mode, and only those
-/// (charter §6.1 `test_gate_on_push`). The test suite belongs to the full
-/// gate, so there is no `quick` to `essential` alias here. A missing config or
-/// an empty set is a loud note, never a violation. Returns each target's
-/// timing for the push-set budget.
-pub fn run_push_targets(
-    root: &Path,
-    policy: &GitPolicy,
-    report: &mut StageReport,
-) -> Vec<PushStep> {
-    let cfg_path = root.join(".codeflow").join("test-config.json");
-    let outcome = match crate::absence::proven_absent(&cfg_path) {
-        Ok(true) => {
-            report.notes.push(crate::remedy::Finding::new(
-                "quick targets skipped: no .codeflow/test-config.json",
-                crate::remedy::PUSH_TARGETS_UNCONFIGURED.remedy(),
-            ));
-            return Vec::new();
-        }
-        Ok(false) => run_gate_exact(root, "quick"),
-        Err(error) => Err(crate::testing::error::TestingError::Io(error)),
-    };
-    match outcome {
-        Ok(GateOutcome::NoTargets { reason }) => {
-            report.notes.push(crate::remedy::Finding::new(
-                format!(
-                    "quick targets skipped: {reason} (the push set runs the targets with a \
-                     `quick` mode)"
-                ),
-                crate::remedy::PUSH_TARGETS_NONE.remedy(),
-            ));
-            Vec::new()
-        }
-        Ok(GateOutcome::Completed {
-            results, passed, ..
-        }) => {
-            if passed {
-                report.status.push(format!(
-                    "quick targets passed on the working checkout ({} target(s); untracked \
-                     files there can influence them, CI checks the pushed commit)",
-                    results.len()
-                ));
-            } else {
-                let failed: Vec<String> = results
-                    .iter()
-                    .filter(|r| !r.passed())
-                    .map(|r| r.name.clone())
-                    .collect();
-                report.violations.push(Violation::new(
-                    "git.test_gate_on_push",
-                    policy.test_gate_on_push,
-                    format!("push set failed for: {}", failed.join(", ")),
-                    crate::remedy::PUSH_SET_FAILED.remedy(),
-                ));
-            }
-            results.iter().map(target_step).collect()
-        }
-        Err(e) => {
-            report.violations.push(Violation::new(
-                "git.test_gate_on_push",
-                policy.test_gate_on_push,
-                format!("push set could not load test-config.json: {e}"),
-                crate::remedy::TEST_CONFIG_REPAIR.remedy(),
-            ));
-            Vec::new()
-        }
-    }
-}
-
-fn target_step(result: &GateTargetResult) -> PushStep {
-    PushStep {
-        name: result.name.clone(),
-        duration: std::time::Duration::from_millis(result.duration_ms),
-        configurable: true,
-    }
 }
 
 /// When the whole push set took longer than `budget`, the note naming its
-/// slowest step and what moves it: the `modes.quick` key for a test-config
-/// target, or the push-set rule for a built-in check.
+/// slowest built-in step and the push-set rule that drops it.
 #[must_use]
 pub fn over_budget_note(
     steps: &[PushStep],
@@ -1351,14 +1502,6 @@ pub fn over_budget_note(
         budget.as_secs()
     );
     Some(match steps.iter().max_by_key(|s| s.duration) {
-        Some(slow) if slow.configurable => crate::remedy::Finding::new(
-            format!(
-                "{head}; slowest step: target '{}' ({:.1}s)",
-                slow.name,
-                slow.duration.as_secs_f64()
-            ),
-            crate::remedy::PUSH_OVER_BUDGET_TARGET.with(&[("target", &slow.name)]),
-        ),
         Some(slow) => crate::remedy::Finding::new(
             format!(
                 "{head}; slowest step: built-in `{}` ({:.1}s), which has no push-set key",
@@ -1373,27 +1516,6 @@ pub fn over_budget_note(
 
 #[cfg(test)]
 mod tests {
-
-    #[test]
-    fn r19_missing_test_config_keeps_all_absence_results() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            crate::testing::config::load_test_config(
-                &dir.path().join(".codeflow/test-config.json")
-            ),
-            Err(crate::testing::error::TestingError::ConfigNotFound(_))
-        ));
-        assert!(matches!(
-            run_gate_exact(dir.path(), "quick"),
-            Ok(GateOutcome::NoTargets { .. })
-        ));
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(steps.is_empty() && report.violations.is_empty());
-        assert!(report
-            .notes
-            .iter()
-            .any(|n| n.text.contains("no .codeflow/test-config.json")));
-    }
 
     #[cfg(unix)]
     #[test]
@@ -1411,45 +1533,6 @@ mod tests {
         )
         .unwrap();
         assert!(!keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn r19_test_config_leaf_refuses_hook() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".codeflow");
-        let path = config.join("test-config.json");
-        std::fs::create_dir(&config).unwrap();
-        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
-        let mut report = StageReport::default();
-        let steps = run_push_targets(dir.path(), &GitPolicy::default(), &mut report);
-        assert!(steps.is_empty());
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.rule == "git.test_gate_on_push" && v.level == PolicyLevel::Block),
-            "{:?}",
-            report.violations
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn r19_test_config_ancestor_refuses_hook() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".codeflow");
-        std::os::unix::fs::symlink(dir.path().join("missing"), &config).unwrap();
-        let mut report = StageReport::default();
-        let steps = run_push_targets(dir.path(), &GitPolicy::default(), &mut report);
-        assert!(steps.is_empty());
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.rule == "git.test_gate_on_push" && v.level == PolicyLevel::Block),
-            "{:?}",
-            report.violations
-        );
     }
 
     #[cfg(unix)]
@@ -1723,12 +1806,19 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_commit_allows_env_example() {
+    fn test_pre_commit_env_example_needs_a_path_exception() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env.example", "DB_PASSWORD=\n");
         let report = pre_commit(dir.path(), &scan_policy(), false, false).unwrap();
-        assert!(report.violations.is_empty());
+        assert!(report
+            .violations
+            .iter()
+            .all(|v| v.rule != "git.secret_scan"));
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.path_policy"));
     }
 
     #[test]
@@ -1748,7 +1838,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_commit_secret_scan_off_skips() {
+    fn test_pre_commit_secret_scan_off_keeps_path_policy() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env", "X=1\n");
@@ -1757,7 +1847,14 @@ mod tests {
             ..scan_policy()
         };
         let report = pre_commit(dir.path(), &policy, false, false).unwrap();
-        assert!(report.violations.is_empty());
+        assert!(report
+            .violations
+            .iter()
+            .all(|v| v.rule != "git.secret_scan"));
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.path_policy"));
     }
 
     #[test]
@@ -2629,6 +2726,302 @@ mod tests {
         assert_eq!(report.violations[0].level, PolicyLevel::Block);
     }
 
+    /// TSK-381 review round 2: git passes the ref name as typed, and on a
+    /// case-insensitive filesystem `Refs/Heads/main` is the loose ref
+    /// `refs/heads/main`, so a case-different prefix is still that branch.
+    #[test]
+    fn test_reference_transaction_reads_a_case_different_prefix_as_the_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        for name in ["Refs/Heads/main", "REFS/HEADS/main", "refs/Heads/main"] {
+            assert!(ref_line_touches_local_branch(&format!(
+                "{ZERO40} {ahead} {name}"
+            )));
+            let stdin = format!("{ZERO40} {ahead} {name}\n");
+            let report =
+                reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false)
+                    .unwrap();
+            assert_eq!(report.violations.len(), 1, "{name}");
+            assert_eq!(
+                report.violations[0].rule, "git.local_ref_protection",
+                "{name}"
+            );
+        }
+    }
+
+    /// TSK-381 round 3: a case-different protected branch name is the same
+    /// loose ref on a case-insensitive filesystem, so the backstop blocks
+    /// it; an unrelated branch stays free.
+    #[test]
+    fn test_reference_transaction_blocks_a_case_different_protected_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        for name in ["refs/heads/MAIN", "refs/heads/Main"] {
+            let stdin = format!("{ZERO40} {ahead} {name}\n");
+            let report =
+                reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false)
+                    .unwrap();
+            assert_eq!(report.violations.len(), 1, "{name}");
+            assert_eq!(
+                report.violations[0].rule, "git.local_ref_protection",
+                "{name}"
+            );
+        }
+        let stdin = format!("{ZERO40} {ahead} refs/heads/feat/Main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    /// TSK-381 SF-3: a non-ASCII or case-folded spelling may be stored as a
+    /// protected ref, so the backstop blocks it; what `git fetch` writes for
+    /// a non-ASCII remote branch or tag, and an ordinary branch, stay free.
+    #[test]
+    fn test_reference_transaction_blocks_non_ascii_and_folded_prefix_names() {
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        for name in [
+            "refs/heads/ma\u{17f}ter",
+            "ref\u{17f}/heads/main",
+            "ref\u{17f}/remotes/origin/main",
+            "REFS/remotes/origin/main",
+            "refs/heads/feat/caf\u{e9}",
+        ] {
+            assert!(
+                ref_line_touches_local_branch(&format!("{ZERO40} {ahead} {name}")),
+                "{name}"
+            );
+            let v = run(name);
+            assert_eq!(v.len(), 1, "{name}: {v:?}");
+            assert_eq!(v[0].rule, "git.local_ref_protection", "{name}");
+        }
+        // Codex F3: a fetched non-ASCII tracking name that lands on no other
+        // ref is judged by the collision checks, not refused for its bytes.
+        for name in [
+            "refs/remotes/origin/caf\u{e9}",
+            "refs/tags/caf\u{e9}",
+            "refs/heads/feat/y",
+        ] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+    }
+
+    /// TSK-381 SF-4: on a case-insensitive git directory a written name that
+    /// folds onto another ref, existing or in the same transaction, is
+    /// refused; an ordinary new tracking branch and a case-sensitive git
+    /// directory stay free.
+    #[test]
+    fn test_reference_transaction_refuses_folded_name_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        // A new value: a line that keeps a ref's value passes as housekeeping.
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |lines: &[&str]| {
+            let stdin = lines
+                .iter()
+                .map(|name| format!("{ZERO40} {ahead} {name}\n"))
+                .collect::<Vec<_>>()
+                .concat();
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false)
+                .unwrap()
+                .violations
+        };
+        {
+            let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+            assert_eq!(run(&["refs/remotes/origin/MAIN"]).len(), 1);
+            assert_eq!(
+                run(&["refs/remotes/origin/feat", "refs/remotes/origin/FEAT"]).len(),
+                2
+            );
+            assert!(run(&["refs/remotes/origin/feat/new"]).is_empty());
+        }
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        assert!(run(&["refs/remotes/origin/MAIN"]).is_empty());
+    }
+
+    /// TSK-381 Codex F3 and the folded directory finding: where the git
+    /// directory folds names, a fetched tracking name is refused only when it
+    /// lands on another ref, folds onto a protected branch it does not name,
+    /// or folds onto an existing directory spelled differently; an unrelated
+    /// Unicode or ASCII tracking name passes.
+    #[test]
+    fn test_reference_transaction_judges_tracking_names_by_where_they_land() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/remotes/origin/integration/consumer-line",
+                &base,
+            ],
+        );
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for name in [
+            "refs/remotes/origin/feat/na\u{ef}ve",
+            "refs/remotes/origin/feat/new",
+            "refs/remotes/origin/integration/producer-line",
+        ] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+        for name in [
+            "refs/remotes/origin/MAIN",
+            "refs/remotes/origin/ma\u{17f}ter",
+            "refs/remotes/origin/INTEGRATION/producer-line",
+        ] {
+            let v = run(name);
+            assert_eq!(v.len(), 1, "{name}: {v:?}");
+            assert_eq!(v[0].rule, "git.local_ref_protection", "{name}");
+        }
+    }
+
+    /// TSK-381 Fable confirm item 1: with `origin` configured, only the branch
+    /// after `refs/remotes/origin/` is judged, so `feat/MAIN` and
+    /// `release/Main` fetch; `MAIN`, `maſter` and a name under no configured
+    /// remote are refused where the git directory folds names.
+    #[test]
+    fn test_reference_transaction_judges_the_branch_after_the_configured_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        git(
+            dir.path(),
+            &["remote", "add", "origin", "/nonexistent/origin.git"],
+        );
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for name in [
+            "refs/remotes/origin/feat/MAIN",
+            "refs/remotes/origin/release/Main",
+        ] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+        for name in [
+            "refs/remotes/origin/MAIN",
+            "refs/remotes/origin/ma\u{17f}ter",
+            "refs/remotes/nobody/MAIN",
+        ] {
+            assert_eq!(run(name).len(), 1, "{name}");
+        }
+    }
+
+    /// TSK-381 SF-8: APFS ignores Unicode normalization, so an NFD spelling of
+    /// an existing NFC tracking ref is that ref's file and is refused where
+    /// the git directory folds names.
+    #[test]
+    fn test_reference_transaction_refuses_an_nfd_write_onto_an_nfc_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/remotes/origin/integration/caf\u{e9}",
+                &base,
+            ],
+        );
+        let ahead = commit_ahead_of_main(dir.path());
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        let stdin = format!("{ZERO40} {ahead} refs/remotes/origin/integration/cafe\u{301}\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert_eq!(report.violations.len(), 1, "{:?}", report.violations);
+    }
+
+    /// TSK-381 SF-4: the sync allowance trusts only the tracking ref git lists
+    /// under the exact spelling; a loose `refs/remotes/origin/MAIN`, which a
+    /// case-insensitive filesystem also opens as `.../main`, proves no sync.
+    #[test]
+    fn test_reference_transaction_sync_reads_only_the_exact_tracking_spelling() {
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        let ahead = commit_ahead_of_main(dir.path());
+        let remotes = dir.path().join(".git/refs/remotes/origin");
+        std::fs::create_dir_all(&remotes).unwrap();
+        std::fs::write(remotes.join("MAIN"), format!("{ahead}\n")).unwrap();
+        let stdin = format!("{base} {ahead} refs/heads/main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert_eq!(report.violations.len(), 1, "{:?}", report.violations);
+        assert_eq!(report.violations[0].rule, "git.local_ref_protection");
+    }
+
+    /// TSK-381 SF-3: on a case-sensitive git directory a non-ASCII name is an
+    /// ordinary branch, while a case-different `refs/` prefix still blocks.
+    #[test]
+    fn test_reference_transaction_reads_non_ascii_names_as_ordinary_on_a_case_sensitive_git_dir() {
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        for name in ["refs/heads/ma\u{17f}ter", "refs/heads/feat/caf\u{e9}"] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+        assert_eq!(run("REFS/remotes/origin/main").len(), 1);
+    }
+
     #[test]
     fn test_reference_transaction_allows_sync_to_origin_head() {
         // main moved to exactly origin/main (a `git pull` fast-forward) — allowed.
@@ -2892,6 +3285,55 @@ mod tests {
         assert_eq!(report.violations[0].rule, "git.push_to_protected");
     }
 
+    /// TSK-388 round 1 (Grok F-1, F-2): a pushed branch name can hold a
+    /// character git accepts that a terminal acts on: the C1 control CSI,
+    /// a line separator, a right-to-left override. The pre-push refusals
+    /// name it escaped, and the rendered refusal holds none of them; the
+    /// decision is still made on the exact name.
+    #[test]
+    fn pre_push_refusals_name_the_pushed_branch_escaped() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        for (name, shown, protected) in [
+            ("ev\u{9b}31mil", "ev\\x9b31mil", true),
+            ("ev\u{2028}il", "ev\\u{2028}il", false),
+            ("ev\u{202e}lim", "ev\\u{202e}lim", false),
+        ] {
+            let mut policy = GitPolicy::default();
+            if protected {
+                policy.protected_branches.push(name.to_string());
+            }
+            let reference = format!("refs/heads/{name}");
+            let refs = [pref(&reference, "abc1", &reference, ZERO)];
+            let report = pre_push(dir.path(), &policy, &refs, false, false).unwrap();
+            let expected = if protected {
+                format!("direct push to protected branch '{shown}'")
+            } else {
+                format!("branch '{shown}' does not match")
+            };
+            let rule = if protected {
+                "git.push_to_protected"
+            } else {
+                "git.branch_naming"
+            };
+            let violation = report
+                .violations
+                .iter()
+                .find(|v| v.rule == rule)
+                .unwrap_or_else(|| panic!("{name:?}: {:?}", report.violations));
+            assert!(
+                violation.message.contains(&expected),
+                "{:?}",
+                violation.message
+            );
+            let rendered = violation.render("pre-push");
+            assert!(
+                !rendered.contains(['\u{9b}', '\u{2028}', '\u{202e}']),
+                "{rendered:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_pre_push_integrate_token_passes() {
         let dir = tempfile::tempdir().unwrap();
@@ -3137,13 +3579,7 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
-    // -- push set: quick targets (the CLI hook binds them to the pushed tree) --
-
-    fn run_targets(dir: &Path, policy: &GitPolicy) -> (StageReport, Vec<PushStep>) {
-        let mut report = StageReport::default();
-        let steps = run_push_targets(dir, policy, &mut report);
-        (report, steps)
-    }
+    // -- push set: no test-config target runs on push (TSK-449) --
 
     #[test]
     fn pre_push_ref_checks_never_run_targets() {
@@ -3153,23 +3589,6 @@ mod tests {
         let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
         let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
-    }
-
-    #[test]
-    fn test_gate_skips_without_config() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty());
-        assert!(steps.is_empty());
-        assert!(
-            report
-                .notes
-                .iter()
-                .any(|n| n.text.contains("quick targets skipped")),
-            "absence must be loud: {:?}",
-            report.notes
-        );
     }
 
     fn write_test_config(dir: &Path, command: &str) {
@@ -3191,175 +3610,30 @@ mod tests {
         std::fs::write(cf.join("test-config.json"), config).unwrap();
     }
 
-    /// Write raw bytes to `.codeflow/test-config.json`.
-    fn write_raw_test_config(dir: &Path, body: &str) {
-        let cf = dir.join(".codeflow");
-        std::fs::create_dir_all(&cf).unwrap();
-        std::fs::write(cf.join("test-config.json"), body).unwrap();
-    }
-
-    #[test]
-    fn push_set_blocks_by_default() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_test_config(dir.path(), "false");
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        let gate: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.rule == "git.test_gate_on_push")
-            .collect();
-        assert_eq!(gate.len(), 1, "{:?}", report.violations);
-        assert_eq!(gate[0].level, PolicyLevel::Block);
-        assert!(gate[0].message.contains("push set failed for: demo"));
-        assert_eq!(steps.len(), 1);
-        assert!(steps[0].configurable);
-    }
-
-    #[test]
-    fn test_gate_pass_is_quiet() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_test_config(dir.path(), "true");
-        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-    }
-
-    #[test]
-    fn test_gate_no_targets_is_a_skip_note() {
-        // The only target is disabled, so NoTargets: a loud note, never a
-        // violation (charter principle 8: degradation stays legible).
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_raw_test_config(
-            dir.path(),
-            r#"{"schema_version": "1.0", "targets": [
-  {"name": "demo", "runner": "custom", "enabled": false,
-   "modes": { "quick": { "command": "true" } } }]}"#,
-        );
-        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-        assert!(
-            report
-                .notes
-                .iter()
-                .any(|n| n.text.contains("quick targets skipped")
-                    && n.text.contains("no enabled target")),
-            "{:?}",
-            report.notes
-        );
-    }
-
-    #[test]
-    fn push_set_runs_only_quick_targets_and_never_aliases_essential() {
-        // TSK-132: a target without a `quick` mode is out of the push set even
-        // when its `essential` mode would fail.
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_raw_test_config(
-            dir.path(),
-            r#"{"schema_version": "1.0", "targets": [
-    { "name": "lint", "runner": "custom",
-      "modes": { "quick": { "command": "true" }, "essential": { "command": "true" } } },
-    { "name": "suite", "runner": "custom",
-      "modes": { "essential": { "command": "false" }, "full": { "command": "false" } } }
-]}"#,
-        );
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-        let names: Vec<&str> = steps.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, vec!["lint"]);
-    }
-
-    #[test]
-    fn push_set_is_empty_for_an_essential_only_config() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_raw_test_config(
-            dir.path(),
-            r#"{"schema_version": "1.0", "targets": [
-    { "name": "suite", "runner": "custom",
-      "modes": { "essential": { "command": "false" }, "full": { "command": "false" } } }
-]}"#,
-        );
-        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-        assert!(steps.is_empty());
-        assert!(
-            report.notes.iter().any(
-                |n| n.text.contains("quick targets skipped") && n.text.contains("`quick` mode")
-            ),
-            "{:?}",
-            report.notes
-        );
-    }
-
-    #[test]
-    fn test_gate_unreadable_config_is_a_violation() {
-        // A populated but malformed config is a broken gate, not absence.
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_raw_test_config(dir.path(), "{ not json");
-        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
-        let gate: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.rule == "git.test_gate_on_push")
-            .collect();
-        assert_eq!(gate.len(), 1, "{:?}", report.violations);
-        assert!(gate[0].message.contains("could not load"));
-        assert!(gate[0].message.contains("invalid test config"));
-        assert!(!report.notes.iter().any(|n| n.text.contains("skipped")));
-    }
-
-    fn step(name: &str, secs: u64, configurable: bool) -> PushStep {
+    fn step(name: &str, secs: u64) -> PushStep {
         PushStep {
             name: name.into(),
             duration: std::time::Duration::from_secs(secs),
-            configurable,
         }
     }
 
     #[test]
-    fn over_budget_names_a_slow_target_and_its_key() {
+    fn over_budget_names_the_slowest_built_in_check() {
         let steps = [
-            step("rust-format", 1, true),
-            step("rust-clippy", 50, true),
-            step("codeflow validate --docs", 2, false),
-        ];
-        let total = std::time::Duration::from_secs(61);
-        let note = over_budget_note(&steps, total, PUSH_SET_BUDGET)
-            .unwrap()
-            .to_string();
-        assert!(note.contains("61.0s, over its 60s budget"), "{note}");
-        assert!(note.contains("target 'rust-clippy'"), "{note}");
-        assert!(note.contains("`modes.quick`"), "{note}");
-        assert!(over_budget_note(&steps, PUSH_SET_BUDGET, PUSH_SET_BUDGET).is_none());
-    }
-
-    #[test]
-    fn over_budget_names_a_slow_built_in_check_without_a_quick_hint() {
-        // Built-in work takes the total over budget while every configured
-        // target is fast (T132-5).
-        let steps = [
-            step("lint", 2, true),
-            step("codeflow ci --head abc --branch feat/x", 70, false),
+            step("codeflow ci --head abc --branch feat/x", 70),
+            step("release preflight (feat/x)", 2),
         ];
         let note = over_budget_note(&steps, std::time::Duration::from_secs(72), PUSH_SET_BUDGET)
             .unwrap()
             .to_string();
+        assert!(note.contains("72.0s, over its 60s budget"), "{note}");
         assert!(note.contains("built-in `codeflow ci"), "{note}");
         assert!(!note.contains("modes.quick"), "{note}");
-        // No configured targets at all still gets a diagnosis.
-        let only_builtin = [step("codeflow validate --docs", 65, false)];
-        let note = over_budget_note(
-            &only_builtin,
-            std::time::Duration::from_secs(65),
-            PUSH_SET_BUDGET,
-        )
-        .unwrap()
-        .to_string();
-        assert!(note.contains("validate --docs"), "{note}");
+        assert!(over_budget_note(&steps, PUSH_SET_BUDGET, PUSH_SET_BUDGET).is_none());
+        let note = over_budget_note(&[], std::time::Duration::from_secs(65), PUSH_SET_BUDGET)
+            .unwrap()
+            .to_string();
+        assert!(note.contains("65.0s, over its 60s budget"), "{note}");
     }
 
     // Regression: a one-parent commit named `Merge ...` is checked; a real

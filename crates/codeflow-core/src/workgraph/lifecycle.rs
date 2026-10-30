@@ -18,6 +18,8 @@
 //! a range whose base predates it judges older records from their baseline
 //! blobs.
 
+use crate::workgraph::history;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
@@ -611,8 +613,7 @@ fn contains(repo: &Repository, tip: git2::Oid, commit: git2::Oid) -> Result<bool
     if tip == commit {
         return Ok(true);
     }
-    repo.graph_descendant_of(tip, commit)
-        .map_err(|error| error.to_string())
+    history::descendant_of(repo, tip, commit).map_err(|error| error.to_string())
 }
 
 /// The baseline entries of a parsed project config: a list, or a single
@@ -667,6 +668,121 @@ pub fn recorded_baseline(repo_root: &Path) -> Result<Vec<String>, String> {
         .parse::<toml::Value>()
         .map_err(|error| error.to_string())?;
     baseline_entries(Some(&config))
+}
+
+/// A commit's `.codeflow/project.toml`, parsed; `None` when the commit has
+/// no such file. A file that is not valid UTF-8 or TOML is an error.
+fn project_table_at(repo: &Repository, commit: git2::Oid) -> Result<Option<toml::Table>, String> {
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    let entry = match tree.get_path(Path::new(".codeflow/project.toml")) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| error.to_string())?;
+    let text = std::str::from_utf8(blob.content()).map_err(|error| error.to_string())?;
+    text.parse::<toml::Table>()
+        .map(Some)
+        .map_err(|error| format!(".codeflow/project.toml at {commit}: {error}"))
+}
+
+/// The working tree's `.codeflow/project.toml`, parsed; `None` when it is
+/// proven absent.
+fn project_table_in(repo_root: &Path) -> Result<Option<toml::Table>, String> {
+    let path = repo_root.join(".codeflow/project.toml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(&path).map_err(|error| error.to_string())? =>
+        {
+            return Ok(None)
+        }
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    text.parse::<toml::Table>()
+        .map(Some)
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// The refusals for a change to the Outcome adoption marker (TSK-435): the
+/// head's project state file (the working tree's when `head` is `None`)
+/// judged against the file at `target`. The caller passes the tip of the
+/// branch the change lands on, from an identity the change cannot choose
+/// (the destination's advertisement, the hosting platform's target, or the
+/// target branch's ref), never a merge-base or a `--base` boundary. Only
+/// what the change itself does is judged: a head whose marker matches the
+/// marker at every best fork point from `target` leaves the target's own
+/// list in place when it merges, whatever that list now is. It does not
+/// depend on durable work tracking. A head that does not resolve has no
+/// file, which reads as a removed marker; an unreadable marker, at the head
+/// or at the target, is always judged, and an unreadable target refuses.
+///
+/// # Errors
+///
+/// Returns a message when the repository, `target`, the fork point or a
+/// project state file cannot be read; the caller refuses.
+pub fn outcome_marker_errors(
+    repo_root: &Path,
+    target: &str,
+    head: Option<&str>,
+) -> Result<Vec<String>, String> {
+    use super::outcome::Adoption;
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let target_commit = resolve_commit(&repo, target)?
+        .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
+    let target_state = project_table_at(&repo, target_commit)?;
+    let (head_state, head_commit) = match head {
+        Some(head) => match resolve_commit(&repo, head)? {
+            Some(commit) => (project_table_at(&repo, commit)?, Some(commit)),
+            None => (None, None),
+        },
+        None => (project_table_in(repo_root)?, resolve_commit(&repo, "HEAD")?),
+    };
+    let adoption =
+        |state: Option<&toml::Table>| state.map_or(Adoption::Unmarked, Adoption::in_table);
+    let head_adoption = adoption(head_state.as_ref());
+    // The shortcut needs a readable list on both sides and a head that
+    // leaves the marker as every best fork point held it; anything else is
+    // judged against the target, which refuses an unreadable target list.
+    let readable = |state: &Adoption| !matches!(state, Adoption::Unreadable(_));
+    if let (Some(head_commit), true, true) = (
+        head_commit,
+        readable(&adoption(target_state.as_ref())),
+        readable(&head_adoption),
+    ) {
+        // The guarded reader refuses a shallow cut, an overlay or unreadable
+        // history, so an unprovable fork point never skips the judgment.
+        let forks = match history::merge_bases(&repo, target_commit, head_commit) {
+            Ok(forks) => forks,
+            // Histories proven unrelated: the head is judged whole.
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Vec::new(),
+            Err(error) => {
+                return Err(format!(
+                    "no merge-base of {target} and the head: {}",
+                    error.message()
+                ))
+            }
+        };
+        let mut unchanged = !forks.is_empty();
+        for fork in forks {
+            unchanged &= adoption(project_table_at(&repo, fork)?.as_ref()) == head_adoption;
+        }
+        if unchanged {
+            return Ok(Vec::new());
+        }
+    }
+    Ok(
+        super::outcome::marker_change_errors(target_state.as_ref(), head_state.as_ref())
+            .into_iter()
+            .map(|error| format!(".codeflow/project.toml: {error}"))
+            .collect(),
+    )
 }
 
 /// The baseline entries recorded in a commit's `.codeflow/project.toml`.
@@ -840,11 +956,11 @@ impl Verdict {
     }
 
     fn sort(&mut self) {
-        self.errors.sort();
+        self.errors.sort_by(|a, b| crate::ids::compare_ids(a, b));
         self.errors.dedup();
-        self.warnings.sort();
+        self.warnings.sort_by(Finding::by_text);
         self.warnings.dedup();
-        self.notices.sort();
+        self.notices.sort_by(Finding::by_text);
         self.notices.dedup();
     }
 }
@@ -954,6 +1070,9 @@ fn release_role_problem(record: &RecordView, graph: &Graph) -> Option<String> {
 /// A new completion of an already complete task must retain its old review.
 /// An equal active block still counts when the archived history changes.
 pub(super) fn is_recompletion(before: Option<&RecordView>, after: &RecordView) -> bool {
+    if before.is_some_and(|old| super::redaction::preserves(old, after).is_ok()) {
+        return false;
+    }
     let blocks = |record: &RecordView| {
         record
             .superseded_blocks()
@@ -1080,23 +1199,61 @@ pub(super) fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -
         }
         return problems;
     }
-    let old_count = before.map_or(0, |record| record.superseded_blocks().len());
+    // One chronological archive (TSK-340, issue #217): the blocks `before`
+    // archived stay first, in order and with their provenance, and the
+    // first block this change archives is `before`'s active one. A later
+    // reopen and re-completion in the same range follow it. So the record
+    // `task status` compares with (the branch's last completion) and the
+    // one CI compares with (the anchored target, possibly an earlier
+    // completion) accept the same archive.
+    let old_archive = before
+        .map(RecordView::superseded_blocks)
+        .unwrap_or_default();
     let superseded = after.superseded_blocks();
     let old_active = before.and_then(|record| record.active_blocks().into_iter().next());
-    let kept = superseded.len() > old_count
-        && superseded.last().is_some_and(|block| {
-            block.parsed.is_ok()
-                && old_active
-                    .as_ref()
-                    .is_none_or(|old| same_block_content(old, block))
+    // An archived block stays byte for byte; only a validated redaction
+    // (`redaction::preserves`) may reword it, keeping its provenance.
+    let redacted = before.is_some_and(|old| super::redaction::preserves(old, after).is_ok());
+    let in_order = superseded.len() >= old_archive.len()
+        && old_archive.iter().zip(&superseded).all(|(old, new)| {
+            if redacted {
+                same_provenance(old, new)
+            } else {
+                old.inner == new.inner
+            }
         });
-    if !kept {
+    let kept = superseded.len() > old_archive.len()
+        && superseded.iter().all(|block| block.parsed.is_ok())
+        && old_active
+            .as_ref()
+            .is_none_or(|old| same_block_content(old, &superseded[old_archive.len()]));
+    if !in_order {
+        problems.push(
+            "the `acceptance_superseded:` blocks stay as they were archived, in chronological order and unchanged (only a validated redaction rewords one); a reopen appends the block it archives after them"
+                .into(),
+        );
+    } else if !kept {
         problems.push(
             "reopening needs the old acceptance block kept under `acceptance_superseded:` with the reopen reason"
                 .into(),
         );
     }
     problems
+}
+
+/// Whether a redacted archived block keeps its provenance: the reviewed
+/// commit, the review reference and the reopen reason. A redaction may
+/// reword evidence but never these (`redaction::preserves`).
+fn same_provenance(old: &FencedAcceptance, new: &FencedAcceptance) -> bool {
+    match (&old.parsed, &new.parsed) {
+        (Ok(old), Ok(new)) => {
+            old.superseded == new.superseded
+                && old.reviewed == new.reviewed
+                && old.review == new.review
+                && old.reason == new.reason
+        }
+        _ => false,
+    }
 }
 
 fn same_block_content(old: &FencedAcceptance, new: &FencedAcceptance) -> bool {
@@ -1739,10 +1896,13 @@ fn frozen_spec_problems(
 /// escaped YAML string names the spec too). The state is then derived at
 /// each commit that changed a relevant path, from those paths alone, and
 /// the walk stops at the first implemented state. Side branches count
-/// (`--full-history`); a shallow clone reads only the history it has.
+/// (`--full-history`); shallow clones refuse this judgment.
 fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Result<bool, String> {
     let message = |error: git2::Error| error.message().to_string();
-    let output = crate::git::command()
+    let root = repo.workdir().unwrap_or(repo.path());
+    history::check_command(root)?;
+    let output = history::command()
+        .current_dir(root)
         .arg("--git-dir")
         .arg(repo.path())
         .args([
@@ -2008,7 +2168,25 @@ pub fn judge_change(
 ///
 /// Returns a message when the repository or a revision cannot be read.
 pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<Verdict, String> {
-    judge_range_against(repo_root, base, base, head, false, None)
+    let verdict = judge_range_against(repo_root, base, base, head, false, None)?;
+    with_outcome_marker(verdict, repo_root, base, head)
+}
+
+/// `verdict` with the Outcome adoption marker's refusals added, judged
+/// against `base`, which these callers name as the target branch itself
+/// (TSK-435). `codeflow ci` judges the marker on its own, against the
+/// target's tip it resolves, since its `base` can be any boundary.
+fn with_outcome_marker(
+    mut verdict: Verdict,
+    repo_root: &Path,
+    base: &str,
+    head: Option<&str>,
+) -> Result<Verdict, String> {
+    verdict
+        .errors
+        .extend(outcome_marker_errors(repo_root, base, head)?);
+    verdict.sort();
+    Ok(verdict)
 }
 
 /// [`judge_range`] with the records diffed from `base` and the governing
@@ -2152,14 +2330,21 @@ fn landing_paths(
         RecordView::parse(record.kind, &record.path, text).map(|view| Some(view.status))
     };
     while commit.id() != base {
-        if commit.parent_count() == 0 {
+        if history::parents(repo, &commit)
+            .map_err(|error| error.to_string())?
+            .is_empty()
+        {
             return Ok(None);
         }
-        let parent = commit.parent(0).map_err(|error| error.to_string())?;
+        let parent = history::parent(repo, &commit, 0).map_err(|error| error.to_string())?;
         let arrived = status_at(&commit)?.as_deref() == Some(to)
             && status_at(&parent)?.as_deref() != Some(to);
         if arrived {
-            if commit.parent_count() < 2 {
+            if history::parents(repo, &commit)
+                .map_err(|error| error.to_string())?
+                .len()
+                < 2
+            {
                 return Ok(None);
             }
             return changed_paths(
@@ -2200,7 +2385,7 @@ pub(super) fn reopened_in_range(
     };
     let base = resolve(base)?;
     let tip = resolve(head.unwrap_or("HEAD"))?;
-    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
+    let mut walk = history::revwalk(repo).map_err(|error| error.to_string())?;
     walk.push(tip)
         .and_then(|()| walk.hide(base))
         .map_err(|error| error.to_string())?;
@@ -2213,7 +2398,11 @@ pub(super) fn reopened_in_range(
             };
             let status = RecordView::parse(record.kind, &record.path, &content)?.status;
             if status != "complete" {
-                if let Some(parent) = commit.parent_ids().next() {
+                if let Some(parent) = history::parents(repo, &commit)
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .next()
+                {
                     if let Some(content) = super::acceptance::blob_at(repo, parent, &record.path)? {
                         if RecordView::parse(record.kind, &record.path, &content)?.status
                             == "complete"
@@ -2283,19 +2472,24 @@ pub fn working_context(repo_root: &Path) -> Result<(Option<Graph>, Option<Vec<St
         Ok(_) => {}
     }
     let paths = changed_paths(&repo, "HEAD", None)?;
-    let base = match super::work_start::default_work_target(repo_root)
+    // The target's full ref: a short `origin/main` peels a local branch or
+    // tag of that name before the remote-tracking ref.
+    let base = match super::work_start::default_work_target_ref(repo_root)
         .map_err(|error| error.to_string())?
     {
         Some(target) => {
-            let resolve = |name: &str| {
-                repo.revparse_single(name)
-                    .and_then(|object| object.peel_to_commit())
+            let peel = |reference: Result<git2::Reference<'_>, git2::Error>| {
+                reference
+                    .and_then(|reference| reference.peel_to_commit())
                     .map(|commit| commit.id())
                     .map_err(|error| error.to_string())
             };
-            let anchor = repo
-                .merge_base(resolve("HEAD")?, resolve(&target)?)
-                .map_err(|error| error.to_string())?;
+            let anchor = history::merge_base(
+                &repo,
+                peel(repo.head())?,
+                peel(repo.find_reference(&target))?,
+            )
+            .map_err(|error| error.to_string())?;
             Some(Graph::from_revision(&repo, &anchor.to_string())?)
         }
         None => None,
@@ -2313,7 +2507,8 @@ pub fn working_context(repo_root: &Path) -> Result<(Option<Graph>, Option<Vec<St
 ///
 /// Returns a message when a revision or the merge-base cannot be resolved.
 pub fn judge_pull_request(repo_root: &Path, base: &str, head: &str) -> Result<Verdict, String> {
-    judge_pull_request_under(repo_root, base, head, base)
+    let verdict = judge_pull_request_under(repo_root, base, head, base)?;
+    with_outcome_marker(verdict, repo_root, base, Some(head))
 }
 
 /// [`judge_pull_request_under`] for a verified integration line judged as
@@ -2365,8 +2560,7 @@ fn judge_pull_request_shaped(
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
     let target = commit(authority)?;
-    let anchor = repo
-        .merge_base(commit(base)?, commit(head)?)
+    let anchor = history::merge_base(&repo, commit(base)?, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
     judge_range_against(
         repo_root,
@@ -2399,8 +2593,7 @@ pub fn judge_release_range(
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
     let target = commit(authority)?;
-    let anchor = repo
-        .merge_base(commit(base)?, commit(head)?)
+    let anchor = history::merge_base(&repo, commit(base)?, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
     judge_range_against(
         repo_root,
@@ -2602,7 +2795,7 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
         };
         match target {
             Some(target) => {
-                tip != target && !repo.graph_descendant_of(target, tip).unwrap_or(false)
+                tip != target && !history::descendant_of(repo, target, tip).unwrap_or(false)
             }
             None => true,
         }

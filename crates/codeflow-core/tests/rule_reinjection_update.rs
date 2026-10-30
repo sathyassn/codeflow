@@ -27,6 +27,10 @@ use codeflow_core::scaffold::{
 };
 use serde_json::Value;
 
+#[path = "support/git_isolation.rs"]
+mod git_isolation;
+use git_isolation::isolate_git;
+
 const CLAUDE_SOURCES: &str = "startup|resume|clear|compact|fork";
 const INTERIM_SOURCES: &str = "startup|resume|clear|compact";
 const ADVISORY: &str = "codeflow hook session-orient";
@@ -39,7 +43,7 @@ const CODEX_PROMPT_BLOCK: &str = r#",
         ]
       }
     ]"#;
-const GROK_GUARDS_END: &str = r#"          { "type": "command", "command": "codeflow hook edit-guard", "timeout": 10 }
+const GROK_GUARDS_END: &str = r#"          { "type": "command", "command": "codeflow hook edit-guard", "timeout": 30 }
         ]
       }
     ]"#;
@@ -72,14 +76,6 @@ fn repo_root() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("repo root resolves")
-}
-
-fn isolate_git() {
-    static ISOLATE: std::sync::Once = std::sync::Once::new();
-    ISOLATE.call_once(|| {
-        std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
-        std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
-    });
 }
 
 fn read(path: &Path) -> String {
@@ -205,6 +201,7 @@ fn older_source(older: Older) -> Overlay {
 fn scaffold_at(source: &dyn AssetSource, tier: Tier) -> tempfile::TempDir {
     isolate_git();
     let dir = tempfile::tempdir().expect("project tempdir");
+    git_isolation::own_repository(dir.path());
     let options = InitOptions {
         tier: Some(tier),
         force: false,
@@ -503,8 +500,8 @@ fn guidance_lists_every_installed_skill_and_agent_at_every_tier() {
         let agents: Vec<String> = line("Agents: ")
             .map(|l| l.split(", ").map(str::to_string).collect())
             .unwrap_or_default();
-        assert_eq!(skills, installed.skills, "{tier}\n{block}");
-        assert_eq!(agents, installed.agents, "{tier}\n{block}");
+        assert_eq!(skills, installed.skills, "{tier}\n{block:?}");
+        assert_eq!(agents, installed.agents, "{tier}\n{block:?}");
         println!(
             "{tier}: {} skills, {} agents, block {} bytes",
             skills.len(),

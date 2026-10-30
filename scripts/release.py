@@ -148,11 +148,6 @@ def guidance_text(value: str) -> str:
     return " ".join(re.sub(r"[`\"']", "", value).split()).translate(ASCII_LOWER)
 
 
-def is_unresolved_alternative(value: str) -> bool:
-    """The PR template's choice text left in place instead of a chosen value."""
-    return guidance_text(value) in UNRESOLVED_ALTERNATIVES
-
-
 def substantive_text(value: str, rejected: list[str] | set[str]) -> bool:
     """Real text: not empty, not a whole `<placeholder>`, not a placeholder
     word, and not one of `rejected`. The Rust PR-body check applies the same
@@ -174,10 +169,6 @@ def substantive_text(value: str, rejected: list[str] | set[str]) -> bool:
 def lacks_migration_guidance(value: str) -> bool:
     return not substantive_text(value, UNRESOLVED_ALTERNATIVES | {"see breaking change"})
 
-
-RELEASE_FIELDS = {
-    "unit", "impact", "breaking", "contract", "rationale", "migration", "evidence", "withdrawal",
-}
 
 # A PR body is read by the codeflow binary, the same reader `codeflow ci`
 # uses (`codeflow ci --read-release-impact`), so the two can never read a
@@ -262,55 +253,32 @@ def release_impact_fields(reading: dict[str, Any]) -> list[tuple[str, str]] | No
 def parse_release_impact(
     body: str, binary: Path | None = None, *, reading: dict[str, Any] | None = None
 ) -> dict[str, str]:
+    """The Release impact fields as the one evaluator reads them (TSK-451).
+
+    Every rule on the block itself is `codeflow ci`'s policy-controlled
+    evaluator, which this reads through `codeflow ci --read-release-impact`:
+    any finding it reports rejects the block, and this function judges
+    nothing of its own. The rules that compare the declared impact with the
+    tree and its history (marker floor, pending entries, withdrawal) stay in
+    `pr_verdict`, since no PR-body reading can see them."""
     reading = reading or read_pr_bodies([body], binary)[0]
+    # A body without exactly one section is named as such before the
+    # evaluator's findings, which then say the same thing in other words.
     pairs = release_impact_fields(reading)
     if pairs is None:
         fail("PR body must contain exactly one '## Release impact' section")
+    if reading["findings"]:
+        fail("codeflow ci rejects the Release impact block: " + "; ".join(reading["findings"]))
     fields: dict[str, str] = {}
     for key, value in pairs:
-        if key in fields:
-            if key in RELEASE_FIELDS:
-                fail(f"release impact field {key} is duplicated")
-            continue
-        fields[key] = value
+        fields.setdefault(key, value)
     for key in ["impact", "breaking", "contract"]:
         if key in fields:
             fields[key] = fields[key].translate(ASCII_LOWER)
-    for key in ["unit", "impact", "rationale", "evidence"]:
-        if key not in fields or (
-            key in {"rationale", "evidence"} and is_placeholder(fields[key])
-        ):
-            fail(f"release impact field {key} is required and substantive")
-    if fields["unit"] != "codeflow" or fields["impact"] not in IMPACT_ORDER:
-        fail("release unit/impact must be codeflow and none, patch, minor, or major")
-    # Breaking replaces the legacy three-state Contract field. During the
-    # transition either is accepted; when both appear they must agree.
-    if "breaking" not in fields and "contract" not in fields:
-        fail("release impact field breaking is required")
-    if "contract" in fields and fields["contract"] not in CONTRACT_BREAKING:
-        fail("release contract must be not-applicable, compatible, or breaking")
-    if "breaking" in fields:
-        if fields["breaking"] not in {"yes", "no"}:
-            fail("release breaking must be yes or no")
-        if "contract" in fields and CONTRACT_BREAKING[fields["contract"]] != fields["breaking"]:
-            fail("legacy contract disagrees with breaking")
-        if not fields.get("migration"):
-            fail("release impact field migration is required")
-    else:
-        fields["breaking"] = CONTRACT_BREAKING[fields["contract"]]
-    if "migration" in fields and is_unresolved_alternative(fields["migration"]):
-        fail("release impact field migration still holds the template alternatives")
+    # A legacy Contract-only block states its break through Contract.
+    if "breaking" not in fields:
+        fields["breaking"] = CONTRACT_BREAKING.get(fields.get("contract", ""), "no")
     fields[MIGRATION_GUIDANCE] = "yes" if migration_guidance(reading, fields.get("migration", "")) else "no"
-    if (fields["breaking"] == "yes") != (fields["impact"] == "major"):
-        fail("breaking must be yes if and only if impact is major")
-    if fields["breaking"] == "yes" and fields[MIGRATION_GUIDANCE] != "yes":
-        fail("a breaking change requires migration guidance")
-    # The rules `codeflow ci` applies are this check's too, whatever this
-    # file adds (TSK-147 round 5): a finding it reports rejects the block.
-    # It reads a legacy Contract-only block with the transition rules above
-    # (round 6), so no declaration is exempt.
-    if reading["findings"]:
-        fail("codeflow ci rejects the Release impact block: " + "; ".join(reading["findings"]))
     return fields
 
 
@@ -1286,8 +1254,17 @@ def validate_published_sections(
 
 
 def check_pr(args: argparse.Namespace) -> None:
-    config, state = load_config(args.config), get_host_state(args)
-    target = git("rev-parse", f"{args.target_ref}^{{commit}}", cwd=args.root)
+    print(json.dumps(pr_verdict(args), sort_keys=True))
+
+
+def pr_verdict(
+    args: argparse.Namespace, *, state: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """One verdict for hosted and local checks; preflight supplies local state."""
+    config = load_config(args.config)
+    if state is None:
+        state = get_host_state(args)
+    target = git("rev-parse", f"{args.target_ref or args.base}^{{commit}}", cwd=args.root)
     base = git("rev-parse", f"{args.base}^{{commit}}", cwd=args.root)
     head = git("rev-parse", f"{args.head}^{{commit}}", cwd=args.root)
     if base != target or git("merge-base", base, head, cwd=args.root) != base:
@@ -1390,10 +1367,12 @@ def check_pr(args: argparse.Namespace) -> None:
         )
     if assessed_impact == "major" and fields[MIGRATION_GUIDANCE] != "yes":
         fail("an added or edited major entry requires migration guidance")
+    if assessed_impact == "major" and fields["breaking"] != "yes":
+        fail("an added or edited major entry requires Breaking: yes")
     if fields["impact"] != "none":
         curated = "CHANGELOG.md" in paths or any(is_fragment_path(path) for path in paths)
-        if not curated or "changelog" not in fields["evidence"].casefold():
-            fail("non-none impact requires curated changelog change and evidence")
+        if not curated:
+            fail("non-none impact requires a curated changelog change")
     lowered = [
         after.label
         for before, after in change.edited
@@ -1415,7 +1394,7 @@ def check_pr(args: argparse.Namespace) -> None:
         result["repair"] = repair
     if base_configuration is not None:
         result["base_configuration"] = base_configuration
-    print(json.dumps(result, sort_keys=True))
+    return result
 
 
 def carried_config(
@@ -1871,22 +1850,15 @@ def tree_error(ref: str, config: dict[str, Any], state: dict[str, Any], *, cwd: 
     return None
 
 
-def draft_intent(args: argparse.Namespace, notes: list[str]) -> str | None:
-    """The declared Impact of the local PR draft, when one is given."""
-    path = args.body_file or (Path(os.environ["CODEFLOW_PR_DRAFT"]) if os.getenv("CODEFLOW_PR_DRAFT") else None)
-    if path is None:
-        return None
-    try:
-        return parse_release_impact(path.read_text(encoding="utf-8"), codeflow_bin(args))["impact"]
-    except (OSError, ReleaseError) as error:
-        notes.append(f"the PR draft {path} gives no readable Release impact: {error}")
-        return None
+def draft_path(args: argparse.Namespace) -> Path | None:
+    """The explicit PR body, else the draft named by the author."""
+    return args.body_file or (Path(os.environ["CODEFLOW_PR_DRAFT"]) if os.getenv("CODEFLOW_PR_DRAFT") else None)
 
 
 def preflight(args: argparse.Namespace) -> None:
     """R-93: the cheap local release checks pre-push runs. It blocks only a
-    push that breaks a release tree its base kept valid; a missing entry only
-    warns, and the PR job's full `check-pr` stays the gate."""
+    push that breaks a release tree its base kept valid. Declaration errors
+    and missing entries warn; the hosted `check-pr` stays the gate."""
     config = load_config(args.config)
     head = git("rev-parse", f"{args.head}^{{commit}}", cwd=args.root)
     notes: list[str] = []
@@ -1895,12 +1867,13 @@ def preflight(args: argparse.Namespace) -> None:
         state = structural_state(config, cwd=args.root)
     except ReleaseError as error:
         print(json.dumps({"status": "warn", "notes": [
-            f"release preflight could not read the recorded baseline ({error}); CI checks it"
+            f"release preflight could not read the recorded baseline ({error}); "
+            "marker floor and entry equality not checked; CI checks it"
         ]}, sort_keys=True))
         return
     base, target = resolve_pr_base(args, head, config)
     if base is None:
-        notes.append(f"release range unresolved: no local or {args.remote} ref for {target}; CI checks it")
+        notes.append(f"release range unresolved: no local or {args.remote} ref for {target}; marker floor and entry equality not checked; CI checks it")
     head_error = tree_error(head, config, state, cwd=args.root)
     if head_error is None:
         notes.append(f"release tree valid at {head[:12]} against the recorded baseline ({HOST_UNCHECKED})")
@@ -1916,7 +1889,20 @@ def preflight(args: argparse.Namespace) -> None:
     if base is not None:
         sets = load_path_sets(head, cwd=args.root)
         behaviour = [path for path in changed_paths(base, head, cwd=args.root) if is_behaviour_path(path, sets)]
-        intent = draft_intent(args, notes)
+        intent = None
+        draft = draft_path(args)
+        if draft is None:
+            notes.append("marker floor and entry equality not checked: no PR body; set CODEFLOW_PR_DRAFT")
+        else:
+            try:
+                intent = parse_release_impact(draft.read_text(encoding="utf-8"), codeflow_bin(args))["impact"]
+                verdict_args = argparse.Namespace(**{
+                    **vars(args), "base": base, "target_ref": base, "body_file": draft,
+                })
+                pr_verdict(verdict_args, state=state)
+            except (OSError, UnicodeError, ReleaseError) as error:
+                status = "blocked" if status == "blocked" else "warn"
+                notes.append(f"PR release-impact warning ({HOST_UNCHECKED}): {error}; this warning never blocks")
         if behaviour and intent != "none" and not entry_changed(base, head, config, state, cwd=args.root):
             status = "blocked" if status == "blocked" else "warn"
             shown = ", ".join(behaviour[:3]) + (f" and {len(behaviour) - 3} more" if len(behaviour) > 3 else "")
@@ -2400,16 +2386,20 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     sub = value.add_subparsers(dest="command", required=True)
 
-    check = sub.add_parser("check-pr")
-    check.add_argument("--base", required=True)
-    check.add_argument("--head", required=True)
-    check.add_argument("--target-ref", required=True)
-    source = check.add_mutually_exclusive_group(required=True)
-    source.add_argument("--body-file", type=Path)
-    source.add_argument("--body-env")
-    check.add_argument("--codeflow-bin", help=f"the codeflow that reads the body (else ${CODEFLOW_BIN})")
-    add_host_args(check)
-    check.set_defaults(func=check_pr)
+    for name in ["check-pr", "check-local"]:
+        check = sub.add_parser(
+            name, help="the hosted release-impact verdict" if name == "check-local" else None
+        )
+        check.add_argument("--base", required=True)
+        check.add_argument("--head", required=True)
+        check.add_argument("--target-ref", required=name == "check-pr",
+                           help="current target ref (check-local defaults to --base)")
+        source = check.add_mutually_exclusive_group(required=True)
+        source.add_argument("--body-file", type=Path)
+        source.add_argument("--body-env")
+        check.add_argument("--codeflow-bin", help=f"the codeflow that reads the body (else ${CODEFLOW_BIN})")
+        add_host_args(check)
+        check.set_defaults(func=check_pr)
 
     prepare = sub.add_parser("sync")
     prepare.add_argument("--cargo", default="cargo")

@@ -43,7 +43,13 @@ pub struct DocsLintIssue {
 
 impl std::fmt::Display for DocsLintIssue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}: {}", self.file.display(), self.line, self.message)
+        write!(
+            f,
+            "{}:{}: {}",
+            crate::git::display_path(&self.file),
+            self.line,
+            self.message
+        )
     }
 }
 
@@ -128,6 +134,7 @@ pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     lint_capability_epic_reciprocity(repo_root, &mut report);
     lint_tasks(repo_root, &graph, &mut report);
     lint_feedback(repo_root, &mut report);
+    lint_ledger_citations(repo_root, &mut report);
     report.note_unchecked();
 
     report
@@ -144,6 +151,55 @@ fn lint_feedback(repo_root: &Path, report: &mut DocsLintReport) {
             message: finding.message,
         }));
     report.warnings.extend(lint.warnings);
+}
+
+/// The first coordination ledger id (`FU-NNN`, `LN-NNN` or `WS-NNN`) the
+/// text cites, if any. Those ids are local to one clone's ledger (ADR-0086),
+/// so a record or a pull request body that cites one points at nothing a
+/// reader elsewhere can open. A pure text check: nothing here reads the
+/// ledger.
+///
+/// # Panics
+///
+/// Never: the pattern is a fixed, valid expression.
+#[must_use]
+pub fn ledger_citation(text: &str) -> Option<String> {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    PATTERN
+        .get_or_init(|| {
+            regex::Regex::new(r"(?:^|[^A-Za-z0-9_])((?:FU|LN|WS)-[0-9]{3,})(?:[^0-9]|$)")
+                .expect("valid pattern")
+        })
+        .captures(text)
+        .and_then(|captures| captures.get(1))
+        .map(|found| found.as_str().to_string())
+}
+
+/// Task, epic and ADR records never cite a coordination ledger id: the
+/// coupling is one way, the ledger reads records and never the reverse.
+fn lint_ledger_citations(repo_root: &Path, report: &mut DocsLintReport) {
+    let pm = repo_root.join("project-management");
+    let mut files: Vec<PathBuf> = Vec::new();
+    files.extend(crate::workgraph::layout::task_record_files(&pm).unwrap_or_default());
+    files.extend(crate::workgraph::layout::epic_record_files(&pm).unwrap_or_default());
+    files.extend(adr_files(&repo_root.join("docs/decisions")).unwrap_or_default());
+    for path in files {
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (index, line) in content.lines().enumerate() {
+            if let Some(id) = ledger_citation(line) {
+                report.issues.push(DocsLintIssue {
+                    file: path.strip_prefix(repo_root).unwrap_or(&path).to_path_buf(),
+                    line: index + 1,
+                    message: format!(
+                        "cites the coordination ledger id {id}; records never cite FU, LN or WS ids, which are local to one clone (ADR-0086): name the task, pull request or commit instead"
+                    ),
+                });
+                break;
+            }
+        }
+    }
 }
 
 const CAPABILITIES_LAYER: &str = "docs/capabilities.md";
@@ -1006,7 +1062,7 @@ fn md_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             paths.push(path);
         }
     }
-    paths.sort();
+    paths.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(paths)
 }
 fn inventory_files(
@@ -1182,6 +1238,43 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.message == "CAP-001: duplicate capability id"));
+    }
+
+    /// TSK-422 AC-8: a task, epic or ADR record that cites a coordination
+    /// ledger id is flagged; the placeholder forms the plans use are not.
+    #[test]
+    fn a_record_citing_a_ledger_id_is_flagged() {
+        for (planted, rel) in [
+            ("FU-001", "docs/decisions/ADR-0001-stack-choice.md"),
+            ("LN-002", "project-management/epics/EPC-001.md"),
+            ("WS-003", "project-management/tasks/TSK-001.md"),
+        ] {
+            let dir = clean_repo();
+            let path = dir.path().join(rel);
+            let mut text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|_| "---\nid: TSK-001\ntitle: t\nstatus: todo\n---\n".to_string());
+            text.push_str("\nSee ");
+            text.push_str(planted);
+            text.push_str(" for the open question.\n");
+            write(dir.path(), rel, &text);
+            let report = lint_docs(dir.path());
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.message.contains(planted)),
+                "{rel}: {:?}",
+                report.issues
+            );
+        }
+        for clean in ["FU-NNN", "LN-NNN", "WS-NNN-<slug>", "XFU-001", "FU-01"] {
+            assert_eq!(
+                ledger_citation(&format!("cite {clean} here")),
+                None,
+                "{clean}"
+            );
+        }
+        assert_eq!(ledger_citation("(FU-012)").as_deref(), Some("FU-012"));
     }
 
     #[test]

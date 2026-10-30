@@ -36,14 +36,17 @@ pub fn decide_pr_template(
     input: &mut impl BufRead,
     path: &str,
 ) -> std::io::Result<Option<MappingState>> {
+    use codeflow_core::scaffold::Shown;
+    // `update` asks this, so the prompt is `Shown` text (TSK-1029).
+    let question = codeflow_core::shown!(
+        "Kept PR template {}: accept the proposed heading mapping, refuse it (append the required headings to the template), or keep a custom section list set in policy? [accept | refuse | custom]: ",
+        Shown::path(path)
+    );
     loop {
-        print!(
-            "Kept PR template {path}: accept the proposed heading mapping, refuse it (append the required headings to the template), or keep a custom section list set in policy? [accept | refuse | custom]: "
-        );
-        std::io::stdout().flush()?;
+        crate::cmd::prompt(&question)?;
         let mut line = String::new();
         if input.read_line(&mut line)? == 0 {
-            println!();
+            crate::cmd::say(&Shown::default());
             return Ok(None);
         }
         match line
@@ -54,7 +57,9 @@ pub fn decide_pr_template(
             "accept" | "accepted" => return Ok(Some(MappingState::Accepted)),
             "refuse" | "refused" => return Ok(Some(MappingState::Refused)),
             "custom" => return Ok(Some(MappingState::Custom)),
-            other => println!("unknown answer {other:?}; choose accept, refuse or custom"),
+            _ => crate::cmd::say(&Shown::fixed(
+                "unknown answer; choose accept, refuse or custom",
+            )),
         }
     }
 }

@@ -452,14 +452,17 @@ fn relocated(env: &StartupEnv) -> Vec<String> {
     };
     let mut out = Vec::new();
     if let Some(z) = env.zdotdir.as_deref().filter(|z| *z != home) {
-        out.push(format!("ZDOTDIR is {}", z.display()));
+        out.push(format!("ZDOTDIR is {}", crate::git::display_path(z)));
     }
     if let Some(x) = env
         .xdg_config
         .as_deref()
         .filter(|x| *x != home.join(".config"))
     {
-        out.push(format!("XDG_CONFIG_HOME is {}", x.display()));
+        out.push(format!(
+            "XDG_CONFIG_HOME is {}",
+            crate::git::display_path(x)
+        ));
     }
     out
 }
@@ -697,7 +700,10 @@ mod tests {
         ] {
             let reopened = shipped_text.replacen(
                 anchor,
-                &format!("[permissions.cf-builder.filesystem]\n{grant}\n\n{anchor}"),
+                // The shipped `[permissions.cf-builder.filesystem]` table
+                // (TSK-1003) ends right above the anchor, so a plain grant
+                // placed there joins it.
+                &format!("{grant}\n\n{anchor}"),
                 1,
             );
             std::fs::write(root.join(".codex/config.toml"), reopened).unwrap();

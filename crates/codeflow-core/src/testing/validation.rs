@@ -300,7 +300,10 @@ pub fn emit_ledger_event(
     let line = match serde_json::to_string(&event) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("warning: failed to serialize ledger event: {e}");
+            eprintln!(
+                "warning: failed to serialize ledger event: {}",
+                crate::git::display_message(&e.to_string())
+            );
             return;
         }
     };
@@ -317,7 +320,10 @@ pub fn emit_ledger_event(
             }
         }
         Err(e) => {
-            eprintln!("warning: cannot open ledger file: {e}");
+            eprintln!(
+                "warning: cannot open ledger file: {}",
+                crate::git::display_message(&e.to_string())
+            );
         }
     }
 }
@@ -516,7 +522,11 @@ mod tests {
             requires: Vec::new(),
             outputs: Vec::new(),
             narrow: Vec::new(),
+            input_class: None,
+            evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Custom,
             modes,
             report: Some(ReportConfig {
@@ -556,6 +566,8 @@ mod tests {
 
     fn make_run_result(name: &str) -> TargetRunResult {
         TargetRunResult {
+            error: None,
+            evidence: None,
             target_name: name.to_string(),
             exit_code: 0,
             stdout: String::new(),
@@ -940,7 +952,11 @@ mod tests {
             requires: Vec::new(),
             outputs: Vec::new(),
             narrow: Vec::new(),
+            input_class: None,
+            evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Cargo,
             modes,
             report: None,
@@ -963,6 +979,8 @@ mod tests {
             name: "rust-core".to_string(),
             mode: "full".to_string(),
             run_result: TargetRunResult {
+                error: None,
+                evidence: None,
                 target_name: "rust-core".to_string(),
                 exit_code: 0,
                 stdout: String::new(),

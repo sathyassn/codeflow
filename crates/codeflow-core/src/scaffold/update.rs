@@ -46,6 +46,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::assets::Shipped;
 use super::init::{build_context, render_entry};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
 use super::prior_release;
@@ -59,8 +60,13 @@ use super::state::{
     write_record, Baseline, InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
     SyncBatch, PROJECT_TOML,
 };
-use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
+use super::version::check_write_version;
+use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError, Shown};
 use crate::hooks::policy_schema::DEPRECATED_KEYS;
+use crate::shown;
+
+mod pending;
+use pending::PendingResolution;
 
 /// Options for [`update`].
 #[derive(Debug, Clone)]
@@ -81,7 +87,8 @@ pub struct UpdateOptions {
 /// # Errors
 ///
 /// [`ScaffoldError::NotInitialized`] when the project has no
-/// `.codeflow/project.toml`; otherwise IO, JSON, or manifest failures.
+/// `.codeflow/project.toml`; invalid versions or a binary older than the
+/// project's pin refuse before writing. Otherwise IO, JSON, or manifest failures.
 /// Per-file merge conflicts are NOT errors — they are reported.
 pub fn update(
     source: &dyn super::AssetSource,
@@ -101,7 +108,7 @@ pub fn update(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     /// The update input could not be obtained; no repair is proven.
-    Unproven(String),
+    Unproven(Shown),
     /// The file already is what update would leave.
     Current,
     /// Update writes the file: it installs or replaces it, merges it
@@ -117,7 +124,7 @@ pub enum Decision {
     /// recorded baseline, so the project's edit stands.
     KeptUserModification,
     /// Update skips the path, for this reason.
-    Skipped(String),
+    Skipped(Shown),
 }
 
 /// What [`update`] without `--force` would do with the file at `dest`
@@ -163,27 +170,40 @@ pub fn decide(
     }
     match guard_beneath_root(root, Path::new(dest)) {
         Err(ScaffoldError::UnsafeSymlink { path }) => {
-            let link = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .display()
-                .to_string();
-            return Ok(Some(Decision::Skipped(format!(
-                "{link} is a symlink, and update never writes through one"
+            let link = path.strip_prefix(root).unwrap_or(&path);
+            return Ok(Some(Decision::Skipped(shown!(
+                "{} is a symlink, and update never writes through one",
+                Shown::path(link)
             ))));
         }
         Err(error) => return Err(error),
         Ok(_) => {}
     }
     let ctx = update_context(root, &state, binary_version);
-    let mut scratch = Report::new(String::new());
+    let mut scratch = Report::new(Shown::default());
     let Some(rendered) = render_entry(source, entry, &ctx, &mut scratch)? else {
         return Ok(None);
     };
     let current = super::state::read_beneath_root(root, dest)?;
     if entry.ownership == Ownership::Managed {
-        let recorded = installed.files.get(dest).map(|f| f.sha256.as_str());
-        let base = Baseline::read(root, dest)?;
+        // While the `.new` proposal is still beside the file, the conflict
+        // stays open: preview it against the recorded base, as before the
+        // pending record existed. The update itself still refuses.
+        let proposal_open =
+            super::state::read_beneath_root(root, &format!("{dest}.new"))?.is_some();
+        let pending = if proposal_open {
+            None
+        } else {
+            PendingResolution::read(root, dest, &installed)?
+        };
+        let recorded = pending
+            .as_ref()
+            .map(|pending| pending.new_sha256.as_str())
+            .or_else(|| installed.files.get(dest).map(|f| f.sha256.as_str()));
+        let base = pending
+            .as_ref()
+            .map(|pending| pending.shipped.clone())
+            .or(Baseline::read(root, dest)?);
         let step = managed_step(
             current.as_deref(),
             &rendered,
@@ -191,16 +211,7 @@ pub fn decide(
             base.as_deref(),
             false,
         );
-        return Ok(Some(match step {
-            ManagedStep::Add | ManagedStep::Replace | ManagedStep::Force => {
-                Decision::Rewrite(rendered)
-            }
-            ManagedStep::Merge(merged) => Decision::Rewrite(merged),
-            ManagedStep::Adopt => Decision::Current,
-            ManagedStep::NoBaseline => Decision::ConflictProposal(rendered),
-            ManagedStep::Conflict(proposal) => Decision::ConflictProposal(proposal),
-            ManagedStep::Kept => Decision::KeptUserModification,
-        }));
+        return Ok(Some(step.decision(rendered)));
     }
     let format = entry.region.unwrap_or(RegionFormat::Markdown);
     let next = match (format, &current) {
@@ -243,28 +254,28 @@ fn skip_note(
     entry: &ManifestEntry,
     ignore: &ScaffoldConfig,
     kept_template: Option<&pr_template::KeptTemplate>,
-) -> Result<Option<String>, ScaffoldError> {
+) -> Result<Option<Shown>, ScaffoldError> {
     if ignore.is_ignored(&entry.dest) {
         // Opted out via `[scaffold] ignore`: never rewrite it, and never
         // resurrect it if the user deleted it. Its manifest record and
         // baseline are left untouched so removing the glob later restores
         // normal management.
-        return Ok(Some(
-            "ignored via [scaffold] ignore in project.toml".to_string(),
-        ));
+        return Ok(Some(Shown::fixed(
+            "ignored via [scaffold] ignore in project.toml",
+        )));
     }
     if should_skip_initial_stack_adr(root, &entry.dest)? {
-        return Ok(Some(
-            "brownfield repository already has ADRs; starter stack decision not added".to_string(),
-        ));
+        return Ok(Some(Shown::fixed(
+            "brownfield repository already has ADRs; starter stack decision not added",
+        )));
     }
     if let Some(kept) = kept_template.filter(|_| entry.dest == pr_template::MANAGED_TEMPLATE) {
         // A kept brownfield template is the project's (SPC-013 R-84):
         // never merged into, never shadowed by a sidecar or a second
         // template.
-        return Ok(Some(format!(
+        return Ok(Some(shown!(
             "the project's PR template {} is kept; see git.pr_section_mapping",
-            kept.path
+            Shown::path(&kept.path)
         )));
     }
     Ok(None)
@@ -303,17 +314,61 @@ fn update_writes(
     opts: &UpdateOptions,
 ) -> Result<Report, ScaffoldError> {
     let mut state = ProjectState::load(root)?;
+    check_write_version(&state.scaffold_version, &opts.binary_version, "update")?;
     let ignore = ScaffoldConfig::load(root)?;
     let manifest = ScaffoldManifest::load(source)?;
     let mut installed = InstalledManifest::load_or_default(root, &state.scaffold_version)?;
 
     let ctx = update_context(root, &state, &opts.binary_version);
 
-    let mut report = Report::new(format!(
+    let mut report = Report::new(shown!(
         "codeflow update (scaffold {} -> {}, {} tier)",
-        state.scaffold_version, opts.binary_version, state.tier
+        Shown::version(&state.scaffold_version),
+        Shown::version(&opts.binary_version),
+        Shown::fixed(state.tier.as_str())
     ));
-    let mut diffs = String::new();
+    // Validate every outstanding resolution before writing anything, including
+    // state, reports and files that precede the conflicted entry in the manifest.
+    // Include old entries so pruning cannot discard an unresolved proposal.
+    let managed: std::collections::BTreeSet<_> = installed
+        .files
+        .iter()
+        .filter(|(_, file)| file.ownership == Ownership::Managed)
+        .map(|(dest, _)| dest.as_str())
+        .chain(
+            manifest
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.ownership == Ownership::Managed
+                        && entry.applies(state.tier, &state.permission_preset)
+                })
+                .map(|entry| entry.dest.as_str()),
+        )
+        .filter(|dest| !ignore.is_ignored(dest))
+        .collect();
+    let mut resolved = Vec::new();
+    for dest in managed {
+        if let Some(pending) = PendingResolution::read(root, dest, &installed)? {
+            resolved.push((dest.to_string(), pending));
+        }
+    }
+    for (dest, pending) in &resolved {
+        Baseline::write(root, dest, &pending.shipped)?;
+        // `read` requires a manifest entry with a known shipped hash.
+        if let Some(file) = installed.files.get_mut(dest) {
+            file.sha256 = hash::sha256_hex(pending.shipped.as_bytes());
+        }
+    }
+    if !resolved.is_empty() {
+        // Persist the accepted base before dropping its pending record. A retry
+        // accepts either old or new metadata after an interrupted write.
+        installed.store(root)?;
+        for (dest, _) in &resolved {
+            remove_beneath_root(root, &pending::path(dest))?;
+        }
+    }
+    let mut diffs = Shown::default();
     let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")?
         .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
         .transpose()?
@@ -378,6 +433,9 @@ fn update_writes(
     if let Some(note) = record_work_records_baseline(root)? {
         report.notes.push(note);
     }
+    if let Some(note) = record_outcome_marker(root)? {
+        report.notes.push(note);
+    }
     // The brownfield hook choice stays visible until the adopter makes it.
     if super::detect::configured_hooks_path(root)?.as_deref()
         == Some(super::detect::CODEFLOW_HOOKS_PATH)
@@ -388,15 +446,15 @@ fn update_writes(
     }
 
     if let Some(path) = &opts.diff_out {
-        let mut out = report.to_string();
+        let mut out = report.shown();
         if !diffs.is_empty() {
-            out.push('\n');
-            out.push_str(&diffs);
+            out.push(&Shown::fixed("\n"));
+            out.push(&diffs);
         }
         write_file(path, out.as_bytes())?;
         report
             .notes
-            .push(format!("diff written to {}", path.display()));
+            .push(shown!("diff written to {}", Shown::path(path)));
     }
 
     Ok(report)
@@ -420,22 +478,30 @@ fn warn_steps_before_secret_scan(root: &Path, dest: &str, report: &mut Report) {
         let Ok(text) = std::fs::read_to_string(root.join(&path)) else {
             continue;
         };
+        let name = Shown::path(&path);
         match scan_order(&text) {
             ScanOrder::NotChecked => {}
             ScanOrder::Checked(steps) if steps.is_empty() => {}
-            ScanOrder::Checked(steps) => report.warnings.push(format!(
-                "{path}: the secret-scan job runs {} before its gitleaks step. A step there can \
+            ScanOrder::Checked(steps) => report.warnings.push(shown!(
+                "{}: the secret-scan job runs {} before its gitleaks step. A step there can \
                  set the scan's environment through GITHUB_ENV or GITHUB_PATH, and one that runs \
                  the pull request's code lets the pull request hide a leak from the scan; move it \
                  after the gitleaks step or into another job. Update kept it as you wrote it.",
-                steps.join(", ")
+                name,
+                Shown::join(
+                    steps
+                        .iter()
+                        .map(|step| shown!("step {}", Shown::count(*step))),
+                    ", "
+                )
             )),
-            ScanOrder::Unrecognized => report.warnings.push(format!(
-                "{path}: the secret-scan job has no step named `gitleaks` with TRUSTED_SHA in its \
+            ScanOrder::Unrecognized => report.warnings.push(shown!(
+                "{}: the secret-scan job has no step named `gitleaks` with TRUSTED_SHA in its \
                  env, so update cannot check what runs before the scan; review the job's step \
                  order by hand. A step before the scan can set its environment through GITHUB_ENV \
                  or GITHUB_PATH, so move any step other than the checkout after the scan or into \
-                 another job."
+                 another job.",
+                name
             )),
         }
     }
@@ -452,9 +518,11 @@ enum ScanOrder {
     /// `gitleaks`, with `TRUSTED_SHA` in its env), so its order needs a
     /// person's review.
     Unrecognized,
-    /// The steps before the scan other than `actions/checkout`, each named by
-    /// its `name`, `uses` or first `run` line; empty when there are none.
-    Checked(Vec<String>),
+    /// The steps before the scan other than `actions/checkout`, each by its
+    /// position in the job, counted from 1; empty when there are none. A
+    /// step is never named by its `name`, `uses` or `run`, which the project
+    /// writes and which can hold a secret (TSK-1029).
+    Checked(Vec<usize>),
 }
 
 fn scan_order(workflow: &str) -> ScanOrder {
@@ -486,20 +554,12 @@ fn scan_order(workflow: &str) -> ScanOrder {
     ScanOrder::Checked(
         steps[..scan]
             .iter()
-            .filter(|step| {
+            .enumerate()
+            .filter(|(_, step)| {
                 !(text(step, "uses").is_some_and(|uses| uses.starts_with("actions/checkout@"))
                     && step.get("run").is_none())
             })
-            .map(|step| {
-                let label = text(step, "name")
-                    .or_else(|| text(step, "uses").map(|uses| format!("uses: {uses}")))
-                    .or_else(|| {
-                        text(step, "run")
-                            .map(|run| format!("run: {}", run.lines().next().unwrap_or("").trim()))
-                    })
-                    .unwrap_or_else(|| "a step".to_string());
-                format!("`{label}`")
-            })
+            .map(|(index, _)| index + 1)
             .collect(),
     )
 }
@@ -509,67 +569,157 @@ fn scan_order(workflow: &str) -> ScanOrder {
 /// once, as the current `HEAD`, so older records keep their exact blobs
 /// exempt and the rules apply by transition from here. A project with no
 /// record, no commit, or a recorded baseline is left alone.
-fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldError> {
+fn record_work_records_baseline(root: &Path) -> Result<Option<Shown>, ScaffoldError> {
     use crate::workgraph::lifecycle::{recorded_baseline, Graph, BASELINE_KEY};
+    // The readers' own errors quote what the records and the state file
+    // hold (a YAML diagnostic quotes the frontmatter), so each is named by
+    // a fixed text and the command that shows the detail (TSK-1029).
     if !recorded_baseline(root)
-        .map_err(ScaffoldError::Git)?
+        .map_err(|_| {
+            ScaffoldError::Git(shown!(
+                "cannot read {} in {}; run `codeflow validate` to see why",
+                Shown::fixed(BASELINE_KEY),
+                Shown::path(PROJECT_TOML)
+            ))
+        })?
         .is_empty()
         || Graph::from_worktree(root)
-            .map_err(ScaffoldError::Git)?
+            .map_err(|_| {
+                ScaffoldError::Git(Shown::fixed(
+                    "cannot read the work records for the migration; run `codeflow validate` \
+                     to see which record does not parse; update changed nothing past this point",
+                ))
+            })?
             .records
             .is_empty()
     {
         return Ok(None);
     }
-    let Some(repo) = crate::hooks::repo::open(root).map_err(|error| {
-        ScaffoldError::Git(format!("cannot read migration repository: {error}"))
-    })?
+    let Some(repo) = crate::hooks::repo::open(root)
+        .map_err(|_| ScaffoldError::Git(Shown::fixed("cannot read migration repository")))?
     else {
         return Ok(None);
     };
     let head = match repo.head() {
         Ok(head) => head,
         Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return Ok(None),
-        Err(error) => {
-            return Err(ScaffoldError::Git(format!(
-                "cannot read migration HEAD: {error}"
+        Err(_) => {
+            return Err(ScaffoldError::Git(Shown::fixed(
+                "cannot read migration HEAD",
             )))
         }
     };
     let head = head
         .peel_to_commit()
-        .map_err(|error| ScaffoldError::Git(format!("cannot read migration commit: {error}")))?
-        .id()
-        .to_string();
+        .map_err(|_| ScaffoldError::Git(Shown::fixed("cannot read migration commit")))?
+        .id();
     let path = ProjectState::path(root);
     let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
-    let mut table: toml::Table =
-        toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-            what: path.display().to_string(),
-            detail: e.to_string(),
-        })?;
-    table.insert(BASELINE_KEY.to_string(), toml::Value::String(head.clone()));
-    let next = super::state::state_text(&table).map_err(|e| ScaffoldError::InvalidState {
-        what: path.display().to_string(),
-        detail: e.to_string(),
+    let mut table: toml::Table = toml::from_str(&text).map_err(|e| {
+        ScaffoldError::invalid(
+            Shown::path(&path),
+            Shown::place(&crate::scaffold::ParsePlace::toml(&text, &e)),
+        )
+    })?;
+    table.insert(
+        BASELINE_KEY.to_string(),
+        toml::Value::String(head.to_string()),
+    );
+    let next = super::state::state_text(&table).map_err(|_| {
+        ScaffoldError::invalid(
+            Shown::path(&path),
+            Shown::fixed("the project state could not be written as TOML"),
+        )
     })?;
     write_record(root, PROJECT_TOML, next.as_bytes())?;
-    Ok(Some(format!(
-        "recorded {BASELINE_KEY} = {head}: work-record rules apply to records changed after this commit"
+    Ok(Some(shown!(
+        "recorded {} = {}: work-record rules apply to records changed after this commit",
+        Shown::fixed(BASELINE_KEY),
+        Shown::object_id(head)
+    )))
+}
+
+/// The Outcome section's adoption marker (TSK-435): written once, by the
+/// first `update` (or `init`) of a release that has the section, as the
+/// top-level `outcome_present_uids`, the `uid` of every task and epic
+/// record in the working tree, committed or not, and
+/// `outcome_required_since`, the project's `HEAD` when it has one. Those
+/// records only warn without the section; every later record must state
+/// it. A marker already present, in any shape, is left as written.
+pub(crate) fn record_outcome_marker(root: &Path) -> Result<Option<Shown>, ScaffoldError> {
+    use crate::workgraph::outcome::{present_uids, with_marker, MARKER_KEY};
+    // The readers' own errors quote record paths and what the records hold,
+    // so each is named by a fixed text and the command that shows the
+    // detail (TSK-1029).
+    let path = ProjectState::path(root);
+    let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
+    let table: toml::Table = toml::from_str(&text).map_err(|e| {
+        ScaffoldError::invalid(
+            Shown::path(&path),
+            Shown::place(&crate::scaffold::ParsePlace::toml(&text, &e)),
+        )
+    })?;
+    if table.contains_key(MARKER_KEY) {
+        return Ok(None);
+    }
+    let uids = present_uids(root).map_err(|_| {
+        ScaffoldError::Git(Shown::fixed(
+            "cannot read the work records for the Outcome marker; run `codeflow validate` \
+             to see which record does not read; update changed nothing past this point",
+        ))
+    })?;
+    let head = match crate::hooks::repo::open(root)
+        .map_err(|_| ScaffoldError::Git(Shown::fixed("cannot read the repository")))?
+    {
+        None => None,
+        Some(repo) => match repo.head() {
+            Ok(head) => Some(
+                head.peel_to_commit()
+                    .map_err(|_| {
+                        ScaffoldError::Git(Shown::fixed("cannot read the adoption commit"))
+                    })?
+                    .id(),
+            ),
+            // A repository with no commit yet: the marker has no commit.
+            Err(error) if error.code() == git2::ErrorCode::UnbornBranch => None,
+            Err(_) => {
+                return Err(ScaffoldError::Git(Shown::fixed(
+                    "cannot read the adoption HEAD",
+                )))
+            }
+        },
+    };
+    let commit = head.map(|head| head.to_string());
+    let next =
+        super::state::state_text(&with_marker(table, commit.as_deref(), &uids)).map_err(|_| {
+            ScaffoldError::invalid(
+                Shown::path(&path),
+                Shown::fixed("the project state could not be written as TOML"),
+            )
+        })?;
+    write_record(root, PROJECT_TOML, next.as_bytes())?;
+    Ok(Some(shown!(
+        "recorded {} with {} present record(s){}: they warn without an `## Outcome` section, and every later open task or epic must state one",
+        Shown::fixed(MARKER_KEY),
+        Shown::count(uids.len()),
+        head.map(|head| shown!(" at {}", Shown::object_id(head)))
+            .unwrap_or_default()
     )))
 }
 
 /// Policy values a released binary no longer accepts, rewritten to their
 /// nearest accepted value with a note. Only `git.work_records = "off"` from
 /// an unreleased build qualifies (SPC-013 R-81); every other value is kept.
-fn migrate_policy_values(dest: &str, user: &mut serde_json::Value) -> Vec<String> {
+fn migrate_policy_values(dest: &str, user: &mut serde_json::Value) -> Vec<Shown> {
     if dest != ".codeflow/policy.json" {
         return Vec::new();
     }
     match user.pointer_mut("/git/work_records") {
         Some(value) if value.as_str() == Some("off") => {
             *value = serde_json::Value::from("warn");
-            vec!["git.work_records `off` no longer exists; rewritten to `warn`".to_string()]
+            vec![Shown::fixed(
+                "git.work_records `off` no longer exists; rewritten to `warn`",
+            )]
         }
         _ => Vec::new(),
     }
@@ -601,9 +751,9 @@ fn is_safe_relative_dest(dest: &str) -> bool {
 
 fn write_dest(root: &Path, entry: &ManifestEntry, content: &str) -> Result<(), ScaffoldError> {
     if !is_safe_relative_dest(&entry.dest) {
-        return Err(ScaffoldError::ManifestInvalid(format!(
-            "refusing to write outside the repo: unsafe dest {:?}",
-            entry.dest
+        return Err(ScaffoldError::ManifestInvalid(shown!(
+            "refusing to write outside the repo: unsafe dest {}",
+            Shown::path(&entry.dest)
         )));
     }
     // Beneath-root, no-follow: refuses a leaf or ancestor symlink so the write
@@ -616,10 +766,26 @@ fn write_dest(root: &Path, entry: &ManifestEntry, content: &str) -> Result<(), S
     Ok(())
 }
 
-fn push_diff(diffs: &mut String, dest: &str, old: &str, new: &str) {
-    use std::fmt::Write;
-    let patch = diffy::create_patch(old, new);
-    let _ = write!(diffs, "=== {dest}\n{patch}\n");
+/// Append the section for `dest` to the `--diff` export. Every caller
+/// goes through here, and the section is judged only against the asset
+/// embedded in this binary (`raw`, and `rendered` as update writes it):
+/// the export never prints a value, key or line from the project's files or
+/// from the recorded baseline, which the project can write (TSK-1029,
+/// `diff_redact`).
+fn push_diff(
+    diffs: &mut Shown,
+    dest: &str,
+    old: &str,
+    new: &str,
+    rendered: &str,
+    raw: Option<Shipped<'_>>,
+) {
+    diffs.push(&super::diff_redact::section(
+        dest,
+        old,
+        new,
+        super::diff_redact::Reference { rendered, raw },
+    ));
 }
 
 /// Update's step for a whole managed file, from the file on disk (`None`
@@ -644,6 +810,19 @@ enum ManagedStep {
     Merge(String),
     /// Modified, and the 3-way merge conflicts: propose it in `.new`.
     Conflict(String),
+}
+
+impl ManagedStep {
+    fn decision(self, rendered: String) -> Decision {
+        match self {
+            Self::Add | Self::Replace | Self::Force => Decision::Rewrite(rendered),
+            Self::Merge(merged) => Decision::Rewrite(merged),
+            Self::Adopt => Decision::Current,
+            Self::NoBaseline => Decision::ConflictProposal(rendered),
+            Self::Conflict(proposal) => Decision::ConflictProposal(proposal),
+            Self::Kept => Decision::KeptUserModification,
+        }
+    }
 }
 
 fn managed_step(
@@ -685,7 +864,7 @@ fn merge_json_region(
     current: &str,
     previous: Option<&str>,
     rendered: &str,
-    lines: &mut Vec<String>,
+    lines: &mut Vec<Shown>,
 ) -> Result<String, ScaffoldError> {
     let prior = previous
         .is_none()
@@ -710,18 +889,22 @@ fn update_entry(
     opts: &UpdateOptions,
     installed: &mut InstalledManifest,
     report: &mut Report,
-    diffs: &mut String,
+    diffs: &mut Shown,
 ) -> Result<(), ScaffoldError> {
     // Refuse to touch an entry whose on-disk dest traverses a symlink (leaf or
     // ancestor): a pre-planted link would otherwise let the write below escape
     // the repo. Reported, never silent (module invariant #2).
     if let Err(e) = guard_beneath_root(root, Path::new(&entry.dest)) {
-        report.file_with_notes(&entry.dest, Action::Skipped, vec![e.to_string()]);
+        report.file_with_notes(&entry.dest, Action::Skipped, vec![Shown::from(&e)]);
         return Ok(());
     }
     let Some(rendered) = render_entry(source, entry, ctx, report)? else {
         return Ok(());
     };
+    // The embedded asset, before templating: what the `--diff` export may
+    // show of this file (TSK-1029).
+    let asset = super::assets::read_shipped(source, &format!("base/{}", entry.src))?;
+    let raw = asset.as_ref().map(super::assets::AssetText::shipped);
     let dest_path = root.join(&entry.dest);
     let exists = super::path_exists(&dest_path)?;
     let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
@@ -763,18 +946,18 @@ fn update_entry(
                     write_dest(root, entry, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(diffs, &entry.dest, old, &rendered);
+                    push_diff(diffs, &entry.dest, old, &rendered, &rendered, raw);
                     report.file(&entry.dest, Action::Changed);
                 }
                 ManagedStep::Force => {
                     write_dest(root, entry, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(diffs, &entry.dest, old, &rendered);
+                    push_diff(diffs, &entry.dest, old, &rendered, &rendered, raw);
                     report.file_with_notes(
                         &entry.dest,
                         Action::Forced,
-                        vec!["user modifications overwritten (--force)".to_string()],
+                        vec![Shown::fixed("user modifications overwritten (--force)")],
                     );
                 }
                 ManagedStep::NoBaseline => {
@@ -783,8 +966,9 @@ fn update_entry(
                     report.file_with_notes(
                         &entry.dest,
                         Action::Conflicted,
-                        vec![format!(
-                            "no baseline available for 3-way merge; new version written to {new_path}"
+                        vec![shown!(
+                            "no baseline available for 3-way merge; new version written to {}",
+                            Shown::path(&new_path)
                         )],
                     );
                 }
@@ -792,7 +976,7 @@ fn update_entry(
                     report.file_with_notes(
                         &entry.dest,
                         Action::KeptUserModified,
-                        vec!["no upstream change; your modifications stand".to_string()],
+                        vec![Shown::fixed("no upstream change; your modifications stand")],
                     );
                 }
                 ManagedStep::Merge(merged) => {
@@ -805,11 +989,13 @@ fn update_entry(
                     // on the following update.
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    push_diff(diffs, &entry.dest, old, &merged);
+                    push_diff(diffs, &entry.dest, old, &merged, &rendered, raw);
                     report.file_with_notes(
                         &entry.dest,
                         Action::Merged,
-                        vec!["3-way merge applied cleanly (base = shipped baseline)".to_string()],
+                        vec![Shown::fixed(
+                            "3-way merge applied cleanly (base = shipped baseline)",
+                        )],
                     );
                 }
                 ManagedStep::Conflict(conflicted) => {
@@ -820,17 +1006,26 @@ fn update_entry(
                     // overlapping hunks wait for you.
                     let new_path = format!("{}.new", entry.dest);
                     write_beneath_root(root, &new_path, conflicted.as_bytes())?;
-                    let mut notes = vec![format!(
+                    PendingResolution::write(
+                        root,
+                        &entry.dest,
+                        base.as_deref().expect("conflict requires a baseline"),
+                        &rendered,
+                    )?;
+                    let proposal = Shown::path(&new_path);
+                    let mut notes = vec![shown!(
                         "your modifications conflict with the new shipped version; file untouched. \
-                         {new_path} holds the 3-way merge: your changes are kept and each \
-                         overlapping hunk carries conflict markers to resolve before you replace the file"
+                         {} holds the 3-way merge: your changes are kept and each \
+                         overlapping hunk carries conflict markers. Resolve them, move {} \
+                         over the file, then rerun codeflow update to record the shipped baseline",
+                        proposal,
+                        proposal
                     )];
                     if entry.src == "ci/codeflow-ci.yml" {
-                        notes.push(
+                        notes.push(Shown::fixed(
                             "the commit standards job moved to .github/workflows/codeflow-policy.yml on \
-                             pull_request_target; drop the commit-lint job from this file when you resolve"
-                                .to_string(),
-                        );
+                             pull_request_target; drop the commit-lint job from this file when you resolve",
+                        ));
                     }
                     report.file_with_notes(&entry.dest, Action::Conflicted, notes);
                 }
@@ -861,7 +1056,7 @@ fn update_entry(
                     report.file_with_notes(&entry.dest, Action::Unchanged, lines);
                 } else {
                     write_dest(root, entry, &merged)?;
-                    push_diff(diffs, &entry.dest, &current, &merged);
+                    push_diff(diffs, &entry.dest, &current, &merged, &rendered, raw);
                     report.file_with_notes(&entry.dest, Action::Merged, lines);
                 }
             }
@@ -887,23 +1082,24 @@ fn update_entry(
                     BlockOutcome::Unchanged => report.file(&entry.dest, Action::Unchanged),
                     BlockOutcome::Replaced => {
                         write_dest(root, entry, &next)?;
-                        push_diff(diffs, &entry.dest, &current, &next);
+                        push_diff(diffs, &entry.dest, &current, &next, &block, raw);
                         report.file_with_notes(
                             &entry.dest,
                             Action::Changed,
-                            vec![
-                                "managed block regenerated; content outside markers untouched"
-                                    .to_string(),
-                            ],
+                            vec![Shown::fixed(
+                                "managed block regenerated; content outside markers untouched",
+                            )],
                         );
                     }
                     BlockOutcome::Appended => {
                         write_dest(root, entry, &next)?;
-                        push_diff(diffs, &entry.dest, &current, &next);
+                        push_diff(diffs, &entry.dest, &current, &next, &block, raw);
                         report.file_with_notes(
                             &entry.dest,
                             Action::Merged,
-                            vec!["markers were missing; codeflow block re-appended".to_string()],
+                            vec![Shown::fixed(
+                                "markers were missing; codeflow block re-appended",
+                            )],
                         );
                     }
                 }
@@ -921,20 +1117,19 @@ fn update_entry(
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("json"));
             if is_json {
-                sync_user_owned_json(root, entry, &rendered, installed, report, diffs)?;
+                sync_user_owned_json(root, entry, &rendered, raw, installed, report, diffs)?;
             } else {
-                let mut notes = vec!["user-owned: never mutated by update".to_string()];
+                let mut notes = vec![Shown::fixed("user-owned: never mutated by update")];
                 let is_new_entry = !installed.files.contains_key(&entry.dest);
                 let baseline_missing = Baseline::read(root, &entry.dest)?.is_none();
                 if is_new_entry || baseline_missing {
                     Baseline::write(root, &entry.dest, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
-                    notes.push(if is_new_entry {
-                        "existing file adopted into the installed manifest".to_string()
+                    notes.push(Shown::fixed(if is_new_entry {
+                        "existing file adopted into the installed manifest"
                     } else {
                         "missing shipped baseline restored without changing the live file"
-                            .to_string()
-                    });
+                    }));
                 }
                 report.file_with_notes(&entry.dest, Action::Skipped, notes);
             }
@@ -952,9 +1147,10 @@ fn sync_user_owned_json(
     root: &Path,
     entry: &ManifestEntry,
     rendered: &str,
+    raw: Option<Shipped<'_>>,
     installed: &mut InstalledManifest,
     report: &mut Report,
-    diffs: &mut String,
+    diffs: &mut Shown,
 ) -> Result<(), ScaffoldError> {
     let dest_path = root.join(&entry.dest);
     let current_text =
@@ -967,7 +1163,7 @@ fn sync_user_owned_json(
 
     let mut added: Vec<String> = vec![];
     let mut moved: Vec<MovedDefault> = vec![];
-    let mut recommended: Vec<String> = vec![];
+    let mut recommended: Vec<Shown> = vec![];
     // Without a recorded baseline, the policies earlier versions shipped
     // stand in for it: the oldest decides which keys are new, and a value
     // still equal to any of their defaults moves.
@@ -983,7 +1179,7 @@ fn sync_user_owned_json(
     if let Some(old) = old_default.as_ref().or(prior.first()) {
         add_new_keys(&mut user, Some(old), &new_default, "", &mut added);
         move_unchanged_defaults(&mut user, old, &new_default, "", &mut moved);
-        recommended = recommend_defaults(&user, old, &new_default);
+        recommended = recommend_defaults(&user, old, &new_default, raw);
     }
     for old in prior.iter().skip(1) {
         move_unchanged_defaults(&mut user, old, &new_default, "", &mut moved);
@@ -991,7 +1187,12 @@ fn sync_user_owned_json(
 
     // Keys the new shipped default dropped and the schema deprecates are
     // deleted (TSK-137): they are inert, and the loader warns while they stay.
-    let removed = remove_deprecated_keys(&mut user, &new_default);
+    let mut removed = remove_deprecated_keys(&mut user, &new_default);
+    removed.extend(remove_unsupported_defaults(
+        &mut user,
+        old_default.as_ref(),
+        &new_default,
+    ));
     added.extend(removed.iter().map(|k| format!("-{k}")));
 
     let migrated = migrate_policy_values(&entry.dest, &mut user);
@@ -1001,15 +1202,17 @@ fn sync_user_owned_json(
     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
 
     if added.is_empty() && migrated.is_empty() && moved.is_empty() {
-        let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
+        let mut notes = vec![Shown::fixed(
+            "user-owned: values never mutated; no new default keys",
+        )];
         notes.extend(recommended);
+        notes.extend(unsupported_policy_notes(&user));
         if !prior.is_empty() {
             notes.push(prior_release_note());
         } else if old_default.is_none() {
-            notes.push(
-                "no shipped-default baseline existed; key sync starts from this version"
-                    .to_string(),
-            );
+            notes.push(Shown::fixed(
+                "no shipped-default baseline existed; key sync starts from this version",
+            ));
         }
         report.file_with_notes(&entry.dest, Action::Skipped, notes);
         return Ok(());
@@ -1017,20 +1220,15 @@ fn sync_user_owned_json(
 
     // schema_version awareness: carry the new default's schema_version when
     // keys were added and the user has not customized it past the default.
-    let mut notes: Vec<String> = added
-        .iter()
-        .map(|k| match k.strip_prefix('-') {
-            Some(gone) => format!("removed deprecated key {gone}"),
-            None => format!("added key {k}"),
-        })
-        .collect();
-    notes.extend(moved.iter().map(MovedDefault::note));
+    let mut notes: Vec<Shown> = added.iter().map(|key| key_change_note(key, raw)).collect();
+    notes.extend(moved.iter().map(|change| change.note(raw)));
     if !prior.is_empty() {
         notes.insert(0, prior_release_note());
     }
     let migrated_any = !migrated.is_empty();
     notes.extend(migrated);
     notes.extend(recommended);
+    notes.extend(unsupported_policy_notes(&user));
     let mut schema_advanced = false;
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
@@ -1041,7 +1239,12 @@ fn sync_user_owned_json(
     ) {
         if new_sv > user_sv {
             user["schema_version"] = serde_json::Value::from(new_sv);
-            notes.push(format!("schema_version advanced {user_sv} -> {new_sv}"));
+            // The project's own number is not shown; the new one is the
+            // shipped default's.
+            notes.push(shown!(
+                "schema_version advanced to {}",
+                Shown::number(new_sv)
+            ));
             schema_advanced = true;
         }
     }
@@ -1061,18 +1264,51 @@ fn sync_user_owned_json(
         text
     };
     write_file(&dest_path, next.as_bytes())?;
-    push_diff(diffs, &entry.dest, &current_text, &next);
+    push_diff(diffs, &entry.dest, &current_text, &next, rendered, raw);
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
 }
 
 /// The report line for an update that compared with an earlier release's
 /// shipped copy because no baseline was recorded.
-fn prior_release_note() -> String {
-    format!(
+fn prior_release_note() -> Shown {
+    shown!(
         "no shipped-default baseline was recorded; compared with the copy CodeFlow {} shipped",
-        prior_release::RELEASE
+        Shown::fixed(prior_release::RELEASE)
     )
+}
+
+/// A policy key path, by the name `CodeFlow` defines: the schema's own path
+/// for the key, or each segment as the embedded default (`raw`) holds it
+/// quoted; any other key is a placeholder (TSK-1029).
+fn policy_key(path: &str, raw: Option<Shipped<'_>>) -> Shown {
+    if let Some(spec) = crate::hooks::policy_schema::spec_for(path) {
+        return Shown::fixed(spec.path);
+    }
+    if let Some((key, _)) = DEPRECATED_KEYS.iter().find(|(key, _)| *key == path) {
+        return Shown::fixed(key);
+    }
+    let segments: Option<Vec<Shown>> = raw.and_then(|raw| {
+        path.split('.')
+            .map(|segment| {
+                raw.as_str()
+                    .contains(&format!("\"{segment}\""))
+                    .then(|| Shown::shipped(segment, raw))
+                    .flatten()
+            })
+            .collect()
+    });
+    segments.map_or_else(
+        || Shown::fixed("<a key the shipped default does not hold>"),
+        |segments| Shown::join(segments, "."),
+    )
+}
+
+/// A shipped default value, as JSON, when the embedded default (`raw`)
+/// holds it as written.
+fn shipped_value(value: &serde_json::Value, raw: Option<Shipped<'_>>) -> Shown {
+    raw.and_then(|raw| Shown::shipped(&value.to_string(), raw))
+        .unwrap_or_else(|| Shown::fixed("<the new shipped default>"))
 }
 
 /// The adopter's file with only the `added` keys (and removed deprecated
@@ -1119,17 +1355,20 @@ fn preserving_edit(
 /// the new one (ADR-0075, TSK-171).
 struct MovedDefault {
     path: String,
-    old: serde_json::Value,
     new: serde_json::Value,
 }
 
 impl MovedDefault {
-    fn note(&self) -> String {
-        format!(
-            "moved {} from {} to {}: it held the previous shipped default. \
-             To keep {}, set it again in .codeflow/policy.json; update keeps a \
+    /// The report line: the key and the new shipped value, never the old
+    /// value, which comes from the project's file and its recorded baseline
+    /// (TSK-1029).
+    fn note(&self, raw: Option<Shipped<'_>>) -> Shown {
+        shown!(
+            "moved {} to {}: it held the previous shipped default. To keep the \
+             previous value, set it again in .codeflow/policy.json; update keeps a \
              value that differs from the shipped default",
-            self.path, self.old, self.new, self.old
+            policy_key(&self.path, raw),
+            shipped_value(&self.new, raw)
         )
     }
 }
@@ -1174,7 +1413,6 @@ fn move_unchanged_defaults(
             *user_val = new_val.clone();
             moved.push(MovedDefault {
                 path: key_path,
-                old: old_val.clone(),
                 new: new_val.clone(),
             });
         }
@@ -1196,7 +1434,8 @@ fn recommend_defaults(
     user: &serde_json::Value,
     old_default: &serde_json::Value,
     new_default: &serde_json::Value,
-) -> Vec<String> {
+    raw: Option<Shipped<'_>>,
+) -> Vec<Shown> {
     let mut notes = Vec::new();
     for (path, reason) in RECOMMENDED_DEFAULTS {
         let pointer = format!("/{}", path.replace('.', "/"));
@@ -1207,14 +1446,82 @@ fn recommend_defaults(
         ) else {
             continue;
         };
+        // The project's value is never printed (TSK-1029).
         if old != new && current != new {
-            notes.push(format!(
-                "kept {path} = {current}; new installs default to {new}: {reason}. \
-                 To adopt it, set it to {new} in .codeflow/policy.json"
+            let new = shipped_value(new, raw);
+            notes.push(shown!(
+                "kept the project's {}; new installs default to {}: {}. \
+                 To adopt it, set it to {} in .codeflow/policy.json",
+                Shown::fixed(path),
+                new,
+                Shown::fixed(reason),
+                new
             ));
         }
     }
     notes
+}
+
+fn unsupported_policy_notes(value: &serde_json::Value) -> impl Iterator<Item = Shown> {
+    crate::hooks::policy_schema::unsupported_control_paths(value)
+        .into_iter()
+        .map(|path| {
+            shown!(
+                "policy key {} is not supported, has no effect",
+                Shown::fixed(path)
+            )
+        })
+}
+
+fn key_change_note(key: &str, raw: Option<Shipped<'_>>) -> Shown {
+    match key.strip_prefix('-') {
+        Some(gone) => {
+            let kind = if crate::hooks::policy_schema::spec_for(gone)
+                .is_some_and(|spec| spec.is_unsupported())
+            {
+                "unsupported"
+            } else {
+                "deprecated"
+            };
+            shown!(
+                "removed {} key {}",
+                Shown::fixed(kind),
+                policy_key(gone, raw)
+            )
+        }
+        None => shown!("added key {}", policy_key(key, raw)),
+    }
+}
+
+/// Remove an unsupported policy key only when its value matches the
+/// recorded shipped baseline. Without that evidence, preserve the value.
+fn remove_unsupported_defaults(
+    user: &mut serde_json::Value,
+    old: Option<&serde_json::Value>,
+    new: &serde_json::Value,
+) -> Vec<String> {
+    use crate::hooks::policy_schema::{lookup, schema};
+    let mut removed = Vec::new();
+    for spec in schema()
+        .iter()
+        .filter(|spec| spec.path.contains('.') && spec.is_unsupported())
+    {
+        let previous = old.and_then(|value| lookup(value, spec.path));
+        if previous.is_some()
+            && lookup(user, spec.path) == previous
+            && lookup(new, spec.path).is_none()
+        {
+            let (section, key) = spec.path.split_once('.').expect("section key");
+            if let Some(object) = user
+                .get_mut(section)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                object.remove(key);
+                removed.push(spec.path.to_string());
+            }
+        }
+    }
+    removed
 }
 
 /// Delete each dotted-path [`DEPRECATED_KEYS`] entry the user file carries and
@@ -1324,7 +1631,7 @@ fn prune_orphans(
         // leaf or ancestor link would turn an orphan prune into an out-of-repo
         // delete. Report the tamper (visible, never silent), never follow it.
         if let Err(e) = guard_beneath_root(root, Path::new(&dest)) {
-            report.file_with_notes(&dest, Action::Skipped, vec![e.to_string()]);
+            report.file_with_notes(&dest, Action::Skipped, vec![Shown::from(&e)]);
             continue;
         }
         let file = installed.files[&dest].clone();
@@ -1348,7 +1655,9 @@ fn prune_orphans(
                 report.file_with_notes(
                     &dest,
                     Action::Removed,
-                    vec!["no longer shipped; unmodified managed file removed".to_string()],
+                    vec![Shown::fixed(
+                        "no longer shipped; unmodified managed file removed",
+                    )],
                 );
                 continue;
             }
@@ -1358,9 +1667,9 @@ fn prune_orphans(
             report.file_with_notes(
                 &dest,
                 Action::KeptUserModified,
-                vec![
-                    "no longer shipped; your modified copy kept and no longer managed".to_string(),
-                ],
+                vec![Shown::fixed(
+                    "no longer shipped; your modified copy kept and no longer managed",
+                )],
             );
             continue;
         }
@@ -1372,7 +1681,9 @@ fn prune_orphans(
         report.file_with_notes(
             &dest,
             Action::Skipped,
-            vec!["no longer shipped; file kept (not codeflow-owned to remove)".to_string()],
+            vec![Shown::fixed(
+                "no longer shipped; file kept (not codeflow-owned to remove)",
+            )],
         );
     }
     Ok(())
@@ -1415,15 +1726,14 @@ mod tests {
     }
 
     /// The shipped workflow and this repository's own run only the checkout
-    /// before the gitleaks step; a step added there is named, a renamed scan
+    /// before the gitleaks step; a step added there is counted by position, a renamed scan
     /// step is reported as unrecognised, and a conflict proposal that does
     /// not parse is left alone (TSK-210).
     #[test]
     fn scan_order_names_only_added_steps() {
         use super::{scan_order, ScanOrder};
         let none = ScanOrder::Checked(vec![]);
-        let named =
-            |names: &[&str]| ScanOrder::Checked(names.iter().map(|n| (*n).to_string()).collect());
+        let named = |steps: &[usize]| ScanOrder::Checked(steps.to_vec());
         let shipped = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
         let own = include_str!("../../../../.github/workflows/codeflow-ci.yml");
         assert_eq!(scan_order(shipped), none);
@@ -1439,10 +1749,7 @@ mod tests {
             ),
             1,
         );
-        assert_eq!(
-            scan_order(&added),
-            named(&["`setup`", "`uses: ./.github/actions/prepare`"])
-        );
+        assert_eq!(scan_order(&added), named(&[2, 3]));
         let renamed = added.replacen(
             "      - name: gitleaks\n",
             "      - name: Repository credential scan\n",
@@ -1460,13 +1767,7 @@ mod tests {
             ),
             1,
         );
-        assert_eq!(
-            scan_order(&canary),
-            named(&[
-                "`run: sh scripts/check-gitleaks-allowlist.sh \"$RUNNER_TEMP/gitleaks\"`",
-                "`setup`"
-            ])
-        );
+        assert_eq!(scan_order(&canary), named(&[2, 3]));
         let conflicted = format!("<<<<<<< ours\n{added}=======\n{shipped}>>>>>>> theirs\n");
         assert_eq!(scan_order(&conflicted), ScanOrder::NotChecked);
         assert_eq!(

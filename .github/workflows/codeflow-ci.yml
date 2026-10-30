@@ -3,17 +3,26 @@
 # update` (charter §4.3): an unmodified copy is replaced on update; your edits
 # are preserved via 3-way merge, never clobbered.
 #
+# Linux and Windows gates run on ready pull requests into main, master and
+# integration/**, pushes below, and scheduled or manual runs. A draft keeps
+# the security jobs and skips the gates and both verdicts, so its verdicts
+# end neutral; merge admission is `commit standards` in codeflow-policy.yml,
+# which passes only on a successful ready run at the exact head (TSK-449).
+# Marking a pull request ready starts the gates without a push.
+#
 # The commit, branch and PR-body standards run in codeflow-policy.yml on
 # `pull_request_target`, so a pull request cannot edit the job that judges it.
 name: codeflow-ci
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main, master, "integration/**"]
   # The weekly and manual runs scan the full history of the default branch
-  # for secrets and audit dependencies; every other job keeps to pull
-  # requests and pushes through its own `if:`.
+  # for secrets and audit dependencies, and run the full Linux and Windows
+  # gates. The weekly run tests main's tip. Every event receives both
+  # verdicts; skipped gates on unsupported PR bases fail.
   schedule:
     - cron: "37 5 * * 1"
   workflow_dispatch:
@@ -98,36 +107,53 @@ jobs:
           --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
           --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
 
-  gates:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
-    name: codeflow gates (${{ matrix.part }})
+  # The release binary every gate part runs `codeflow test` with is built
+  # once here and shared as an artifact, never rebuilt per part (TSK-449).
+  # It keeps for a day, long enough for a re-run of a failed part.
+  gates-build:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: codeflow build
     needs: reuse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: build-v1
+      - name: Build codeflow from source
+        run: cargo build --release -p codeflow-cli
+      - name: Keep the build for the gate parts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-release
+          path: target/release/codeflow
+          retention-days: 1
+          if-no-files-found: error
+
+  gates:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: codeflow gates (${{ matrix.part }})
+    needs: [reuse, gates-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Exclusive: the benchmark times reads, so it runs alone.
-          # visual-eval-controls sits here to balance the parts. Both portal
-          # targets require docs-portal-deps, the one target that runs
-          # `npm ci` for docs-portal, so a part installs it once (gate-parity
-          # refuses a second installer).
-          - part: benchmark
-            only: read-benchmark,visual-eval-controls
-          # The prose exemption's two exhaustive checks (TSK-233): every
-          # certified line in real shells and the full differential against
-          # the 3.0.0 verdicts. The target sets CODEFLOW_ORACLE_FULL; quick
-          # mode and the coverage run keep the sampled default.
-          - part: prose
-            only: prose-exhaustive
+          # The hosted landing gate (TSK-449). The four release-tier
+          # targets run in the gates-release job below.
           - part: present
-            only: present-supply-chain,cf-present-qualification,present-browser,present-binary-delta
+            only: present-supply-chain,cf-present-qualification
           # The journey gate's Python journeys need no test results, so they
           # run here; the coverage report job reads the Rust journeys from
-          # the shards' results (TSK-270).
+          # the shards' results (TSK-270). Both portal targets and
+          # visual-eval-controls require docs-portal-deps, the one target
+          # that runs `npm ci` for docs-portal, so this part installs it once.
           - part: checks
-            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal,journey-python
+            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal,docs-portal-windows,journey-python,visual-eval-controls
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -140,13 +166,117 @@ jobs:
       # floating stable clippy cannot break CI out from under a green local run.
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      # Each part builds different things (release, debug), so each keeps its
-      # own cache. A cache is saved only under a new key, so the key changes
+      # Each part builds different things (debug, test and benchmark
+      # builds), so each keeps its own cache. A cache is saved only under a
+      # new key, so the key changes
       # when what a part keeps in target/ changes: v1 holds the binary-delta
       # check's build, now named by the locked dependencies (TSK-270).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.part }}-v1
+      # Each Node target pins its version in a version file, and the full
+      # gate runs it through scripts/with-node.py, which finds that version
+      # here in the tool cache (TSK-142). gate-parity holds these pins to
+      # the version files. The later setup is first on PATH.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: docs-portal/package-lock.json
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26.4.0
+          cache: npm
+          cache-dependency-path: crates/codeflow-present/web/package-lock.json
+
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+
+      - name: Fetch the codeflow build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeflow-release
+          path: ${{ runner.temp }}/codeflow-bin
+      - name: Put the codeflow build on PATH
+        run: |
+          chmod 755 "$RUNNER_TEMP/codeflow-bin/codeflow"
+          echo "$RUNNER_TEMP/codeflow-bin" >> "$GITHUB_PATH"
+
+      # What adopters get passes their secret scan (TSK-206): fresh scaffolds
+      # of every tier from the binary just built, and the adopter CI
+      # template's own gitleaks step, with the pinned gitleaks.
+      - name: Scaffold secret scan
+        if: matrix.part == 'checks'
+        run: |
+          GITLEAKS_VERSION=8.30.1
+          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          sh scripts/check-scaffold-gitleaks.sh "$RUNNER_TEMP/gitleaks" "$(command -v codeflow)"
+
+      # The Linux candidate has one full gate, split into the parts above and
+      # the coverage jobs below. Windows independently runs raw Rust checks;
+      # Unix-only journeys and the read benchmark remain Linux-only. No part
+      # runs the instrumented suite now; the profile name would keep its
+      # profiles small if one did (see the coverage shards).
+      - name: codeflow test --mode full --strict
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
+
+  # The release-tier parts of the full gate (TSK-449): the exhaustive
+  # prose oracle, the read benchmark and the present browser and
+  # binary-delta checks. They run on ready pull requests into main or
+  # master (the release candidate), pushes to main or master, the weekly
+  # schedule and manual runs, never on a pull request into integration/**:
+  # the hosted landing gate is the gates job above. A local
+  # `codeflow test --mode full` still runs them, since the test config has
+  # no tier between full and the schedule. scripts/gate-parity.py refuses a
+  # full-mode target that neither job nor the coverage jobs run.
+  gates-release:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' && contains(fromJSON('["refs/heads/main","refs/heads/master"]'), github.ref) || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: codeflow gates (release ${{ matrix.part }})
+    needs: [reuse, gates-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Exclusive: the benchmark times reads, so it runs alone.
+          - part: benchmark
+            only: read-benchmark
+          # The prose exemption's two exhaustive checks (TSK-233): every
+          # certified line in real shells and the full differential against
+          # the 3.0.0 verdicts. The target sets CODEFLOW_ORACLE_FULL; quick
+          # mode and the coverage run keep the sampled default.
+          - part: prose
+            only: prose-exhaustive
+          - part: present
+            only: present-browser,present-binary-delta
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      # This repo IS codeflow, so it builds the binary from source rather than
+      # using the release installer a consumer project would. These gates block.
+      # The toolchain is pinned in rust-toolchain.toml (the single source of
+      # truth rustup honors locally and here); installing from it means a
+      # floating stable clippy cannot break CI out from under a green local run.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      # Each part builds different things (debug, test and benchmark
+      # builds), so each keeps its own cache. A cache is saved only under a
+      # new key, so the key changes
+      # when what a part keeps in target/ changes: v1 holds the binary-delta
+      # check's build, now named by the locked dependencies (TSK-270).
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-${{ matrix.part }}-v1
       # Each Node target pins its version in a version file, and the full
       # gate runs it through scripts/with-node.py, which finds that version
       # here in the tool cache (TSK-142). gate-parity holds these pins to
@@ -231,24 +361,15 @@ jobs:
           echo "::error::the Playwright install failed twice; see the attempts above"
           exit 1
 
-      - name: Build codeflow from source
+      - name: Fetch the codeflow build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeflow-release
+          path: ${{ runner.temp }}/codeflow-bin
+      - name: Put the codeflow build on PATH
         run: |
-          cargo build --release -p codeflow-cli
-          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
-
-      # What adopters get passes their secret scan (TSK-206): fresh scaffolds
-      # of every tier from the binary just built, and the adopter CI
-      # template's own gitleaks step, with the pinned gitleaks.
-      - name: Scaffold secret scan
-        if: matrix.part == 'checks'
-        run: |
-          GITLEAKS_VERSION=8.30.1
-          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$RUNNER_TEMP/$archive"
-          printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/$archive" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
-          sh scripts/check-scaffold-gitleaks.sh "$RUNNER_TEMP/gitleaks" "$(command -v codeflow)"
+          chmod 755 "$RUNNER_TEMP/codeflow-bin/codeflow"
+          echo "$RUNNER_TEMP/codeflow-bin" >> "$GITHUB_PATH"
 
       # The exhaustive prose oracle runs real zsh as well as bash.
       - name: Install zsh for the prose oracle
@@ -276,11 +397,12 @@ jobs:
   # results and checks that each listed test ran in exactly its one shard.
   # Locally, `codeflow test` still runs the one rust-coverage command.
   # Both shards build the same thing, so only the first saves the cache.
-  # Timeouts: a shard is planned at about 5 minutes of tests after a build of
-  # 1 to 2 minutes, and gets the Windows partitions' 30; the report job only
-  # reads files.
+  # Timeouts: a shard is planned at about 11 minutes of tests (14 at most)
+  # after a build and setup of about 4 to 6 minutes, and gets the Windows
+  # partitions' 30; the report job only reads files and fails a shard past
+  # the 24 minute margin (TSK-1063).
   gates-coverage:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow gates (coverage ${{ matrix.shard }} of 2)
     needs: reuse
     runs-on: ubuntu-24.04
@@ -291,6 +413,8 @@ jobs:
         shard: [1, 2]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install the differential shells
+        run: sudo apt-get update && sudo apt-get install -y bash zsh dash
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       # The key the single coverage part saved under, so the shards restore
@@ -361,7 +485,7 @@ jobs:
   # It runs when a shard fails, so the journeys and the partition check
   # still report; it only reads the shards' files.
   gates-coverage-report:
-    if: always() && needs.gates-coverage.result != 'skipped' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
+    if: always() && needs.gates-coverage.result != 'skipped' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     name: codeflow gates (coverage report)
     needs: gates-coverage
     runs-on: ubuntu-24.04
@@ -408,14 +532,14 @@ jobs:
         shell: bash
         run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json --results target/coverage/results
 
-  # The required check. It runs even when a part fails or is cancelled, so
-  # the check is never skipped, and it passes only when every part, every
-  # coverage shard and the coverage report passed, or when the reuse
-  # decision named a run and all of them were skipped.
+  # The required check runs on every event, even when a part
+  # fails, is cancelled or did not run. Draft integration pull requests and
+  # unsupported bases fail. It passes only when every part, coverage shard
+  # and report passed, or reuse named a run and all were skipped.
   gates-verdict:
-    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: codeflow gates
-    needs: [reuse, gates, gates-coverage, gates-coverage-report]
+    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -423,17 +547,28 @@ jobs:
         shell: bash
         env:
           PARTS: ${{ needs.gates.result }}
+          RELEASE: ${{ needs.gates-release.result }}
           SHARDS: ${{ needs.gates-coverage.result }}
           REPORT: ${{ needs.gates-coverage-report.result }}
           REUSE: ${{ needs.reuse.result }}
           REUSED: ${{ needs.reuse.outputs.run }}
         run: |
-          if [ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+          if [ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
             exit 0
           fi
+          if [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]; then
+            echo "::error::the Linux gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
+            exit 1
+          fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
             echo "::error::the full gate concluded parts=${PARTS} coverage shards=${SHARDS} coverage report=${REPORT}; see the codeflow gates jobs"
+            exit 1
+          fi
+          # The release parts run only on the release path; elsewhere their
+          # job is skipped by its own condition, never by a failure.
+          if [ "$RELEASE" != success ] && [ "$RELEASE" != skipped ]; then
+            echo "::error::the release parts concluded ${RELEASE}; see the codeflow gates (release) jobs"
             exit 1
           fi
           echo "every part of the full gate passed"
@@ -448,11 +583,18 @@ jobs:
   # that each listed test ran in exactly its one partition. The `windows`
   # verdict below is the one check branch rules and .release/config.json
   # read. Timeouts: the build compiled in about 3 minutes inside the old
-  # partitions (p95 about 4) and gets room for a cold dependency build; a
-  # partition is planned at about 5.5 minutes of tests, a fifth of the old
-  # 27.2 minute peak; the release journey took 4.3 to 4.7 minutes.
+  # partitions (p95 about 4) and gets room for a cold dependency build; the
+  # release journey took 4.3 to 4.7 minutes. A partition is planned at 12
+  # minutes of tests or less (about 9 today), plus up to 2 minutes of job
+  # setup, so a typical job takes about 11 minutes and a runner 1.7 times
+  # slower, the worst read, stays under 24: 80 percent of the 30 minute limit
+  # (TSK-1063). The build checks before any partition starts that the data
+  # still covers the suite and the plan is inside that margin
+  # (`windows-partitions.py drift`); the journey job fails a run whose
+  # partition took more than the margin, and names a partition that ended
+  # without its report (a timeout or a cancellation) as not finished.
   windows-build:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows test build
     needs: reuse
     runs-on: windows-latest
@@ -490,6 +632,13 @@ jobs:
           cargo nextest list --archive-file target/windows-tests.tar.zst --workspace-remap . --profile codeflow --message-format json > target/windows-tests.json
           printf '%s\n' "$GITHUB_WORKSPACE" > target/windows-workspace.txt
 
+      # Fails before any partition starts when the measurements no longer
+      # cover the suite, or the plan for this exact list puts a partition
+      # past the margin; the message names the refresh command.
+      - name: The partition plan still fits the suite
+        shell: bash
+        run: python -B scripts/windows-partitions.py drift --list target/windows-tests.json
+
       - name: Keep the archive for the partitions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -510,7 +659,7 @@ jobs:
           retention-days: 7
 
   windows-tests:
-    if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
+    if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows tests (${{ matrix.partition }} of 12)
     needs: windows-build
     runs-on: windows-latest
@@ -521,6 +670,17 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install the differential shells
+        id: shells
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MSYS
+          install: bash zsh dash
+      - name: Select the differential shell directory
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.shells.outputs.msys2-location }}
+        run: Add-Content -Path $env:GITHUB_ENV -Value "CODEFLOW_DIFFERENTIAL_SHELL_DIR=$env:MSYS2_LOCATION\usr\bin"
       # The tests run git, and a cargo they find on PATH resolves the pinned
       # toolchain; nothing is compiled here.
       - name: Install Rust (rust-toolchain.toml)
@@ -556,7 +716,7 @@ jobs:
       # compiled in, and the report at target/nextest/codeflow/junit.xml.
       - name: cargo nextest run (one partition, from the archive)
         shell: bash
-        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile codeflow -E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }})"
+        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile codeflow -E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }} --list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"
 
       - name: Keep this partition's results for the journey gate
         if: always()
@@ -568,8 +728,8 @@ jobs:
           retention-days: 7
 
   windows:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
-    name: windows checks (fmt, doc, clippy, Node)
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: windows checks (doc, clippy, Node)
     needs: reuse
     runs-on: windows-latest
     timeout-minutes: 25
@@ -580,9 +740,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-
-      - name: cargo fmt --all --check
-        run: cargo fmt --all -- --check
 
       - name: cargo doctests
         run: cargo test --workspace --doc
@@ -612,13 +769,13 @@ jobs:
 
       - name: Windows Node target through cmd.exe
         shell: bash
-        run: CODEFLOW_BIN="$(cygpath -m "$PWD")/target/debug/codeflow.exe" python scripts/test_gate_parity.py
+        run: python scripts/test_gate_parity.py && CODEFLOW_BIN="$(cygpath -m "$PWD")/target/debug/codeflow.exe" python scripts/test_gate_portal_windows.py
 
   # The journey gate's Python journeys need no test results, so they run
   # here from the start (TSK-265); the journeys job runs the rest. Together
   # the two parts run every journey once.
   windows-release-journey:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows release journey
     needs: reuse
     runs-on: windows-latest
@@ -635,11 +792,13 @@ jobs:
   # Windows. It runs when a partition fails, so the journeys still report;
   # it only reads results.
   windows-journeys:
-    if: always() && needs.windows-tests.result != 'skipped' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
+    if: always() && needs.windows-tests.result != 'skipped' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     name: windows journeys
     needs: windows-tests
     runs-on: windows-latest
     timeout-minutes: 10
+    outputs:
+      missing: ${{ steps.reports.outputs.missing }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
@@ -661,23 +820,34 @@ jobs:
           name: windows-test-list
           path: target/nextest/list
 
+      # A partition that timed out or was cancelled wrote no report. Name it
+      # here, so the steps below do not read the gap as renamed journeys or
+      # failing tests; they run only when every report exists. When one
+      # report survives, download-artifact writes it without its numbered
+      # directory, so the script numbers it by the tests the plan gives it.
+      - name: Every partition wrote its report
+        id: reports
+        shell: bash
+        run: python -B scripts/windows-partitions.py reports --results target/nextest/partitions --list target/nextest/list/windows-tests.json
+
       - name: journey gate
         shell: bash
         run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/partitions --skip-benchmark --part results
 
       # Fails when a listed test ran in no partition, in two, or outside the
-      # partition the plan gives it, and prints each partition's test time.
+      # partition the plan gives it, or a partition's time passes the margin,
+      # and prints each partition's test time against its plan.
       - name: Every test ran in exactly one partition
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.reports.outcome == 'success' }}
         shell: bash
         run: python scripts/test_windows_partitions.py && python scripts/windows-partitions.py check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
 
-  # The required Windows check. Like `codeflow gates`, it runs even when a
-  # job fails or is cancelled, so it is never skipped, and it passes only
-  # when the build, the checks, every test partition and both journey jobs
-  # passed, or when the reuse decision named a run and all were skipped.
+  # The required Windows check runs on every event, even
+  # when a job fails, is cancelled or did not run. Draft integration pull
+  # requests and unsupported bases fail. It passes only when all Windows
+  # jobs passed, or reuse named a run and all were skipped.
   windows-verdict:
-    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: windows
     needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
@@ -693,13 +863,21 @@ jobs:
           TESTS: ${{ needs.windows-tests.result }}
           JOURNEYS: ${{ needs.windows-journeys.result }}
           RELEASE: ${{ needs.windows-release-journey.result }}
+          MISSING: ${{ needs.windows-journeys.outputs.missing }}
         run: |
           if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \
             && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "Windows passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
             exit 0
           fi
+          if [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ]; then
+            echo "::error::the Windows gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
+            exit 1
+          fi
           if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
+            if [ -n "$MISSING" ]; then
+              echo "::error::Windows test partition(s) ${MISSING} ended without a report (a timeout or a cancellation); their tests did not finish, none is known to have failed"
+            fi
             echo "::error::Windows concluded checks=${CHECKS} build=${BUILD} tests=${TESTS} journeys=${JOURNEYS} release journey=${RELEASE}; see the windows jobs"
             exit 1
           fi
@@ -732,7 +910,8 @@ jobs:
       # the configuration as gitleaks does: GITLEAKS_CONFIG, then
       # GITLEAKS_CONFIG_TOML, then .gitleaks.json beside .gitleaks.toml, then
       # .gitleaks.toml, else the default rules. An inline gitleaks:allow
-      # comment counts only on a commit the trusted commit already holds.
+      # comment counts only on a commit the trusted commit already holds, unless
+      # its git.secret_scan_inline_allow policy is never, which ignores all of them.
       #
       # gitleaks resolves an [extend] path, and a relative GITLEAKS_CONFIG,
       # against its working directory. It runs from a directory that holds
@@ -835,17 +1014,20 @@ jobs:
           if ! git cat-file -e "${TRUSTED_SHA}^{commit}" 2>/dev/null; then
             echo "::error::trusted commit ${TRUSTED_SHA} is not in the checkout; refusing to scan"; exit 1
           fi
+          TRUSTED_SHA=$(git rev-parse --verify "${TRUSTED_SHA}^{commit}")
           # The history the scan reads: the event's own commits when it
           # names a start the checkout holds, else all of HEAD's.
-          scan=HEAD
+          head=$(git rev-parse --verify 'HEAD^{commit}')
+          scan=$head
           case ${SCAN_FROM:-} in
             '') scope="the full history of HEAD (a scheduled or manual run)" ;;
             *[!0-9a-f]*)
               echo "::error::scan start ${SCAN_FROM} is not a commit id; refusing to scan"; exit 1 ;;
             *[!0]*)
               if git cat-file -e "${SCAN_FROM}^{commit}" 2>/dev/null; then
-                scan="${SCAN_FROM}..HEAD"
-                scope="the $(git rev-list --count HEAD --not "$SCAN_FROM") commit(s) HEAD holds and ${SCAN_FROM} does not"
+                start=$(git rev-parse --verify "${SCAN_FROM}^{commit}")
+                scan="${start}..${head}"
+                scope="the $(git rev-list --count "$head" --not "$start" --) commit(s) HEAD holds and ${start} does not"
               else
                 scope="the full history of HEAD (the previous tip ${SCAN_FROM} is not in the checkout)"
               fi ;;
@@ -859,12 +1041,16 @@ jobs:
           GITLEAKS_VERSION=8.30.1
           GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
           archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          # The exit traps remove the folders the step makes in the runner's
+          # temp directory; the report and log below stay there.
           tool=$(mktemp -d "$RUNNER_TEMP/gitleaks-tool.XXXXXX")
+          trap 'rm -rf "$tool" || true' EXIT
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$tool/$archive"
           printf '%s  %s\n' "$GITLEAKS_SHA256" "$tool/$archive" | sha256sum -c -
           tar -xzf "$tool/$archive" -C "$tool" gitleaks
           workspace=$(pwd -P)
           trusted=$(mktemp -d "$RUNNER_TEMP/gitleaks-trusted.XXXXXX")
+          trap 'rm -rf "$tool" "$trusted" || true' EXIT
           mkdir "$trusted/tree"
           real_git=$(command -v git)
           mkdir "$trusted/bin"
@@ -885,12 +1071,12 @@ jobs:
           export PATH="$trusted/bin:$PATH"
           # Refuses what gitleaks cannot read reliably in the history the pull
           # request brings: what HEAD holds and the trusted commit does not.
-          python3 -I - "$TRUSTED_SHA" <<'PY'
+          python3 -I - "$TRUSTED_SHA" "$head" <<'PY'
           import re
           import subprocess
           import sys
 
-          sha = sys.argv[1]
+          sha, head = sys.argv[1:]
           unreadable = "gitleaks cannot read a backslash, double quote or control character in a path reliably"
           rewrite = ("rewrite the pull request's commits so that none uses the name; "
                      "renaming it in a later commit leaves it in this one")
@@ -910,7 +1096,7 @@ jobs:
 
 
           def where(commit):
-              refs = git("for-each-ref", "--contains", commit, "--format=%(refname)").stdout.decode("utf-8", "replace").split()
+              refs = git("for-each-ref", "--contains", commit, "--format=%(refname)", "--").stdout.decode("utf-8", "replace").split()
               more = f" and {len(refs) - 5} more" if len(refs) > 5 else ""
               return f"{commit} (in {', '.join(['HEAD', *refs[:5]])}{more})"
 
@@ -923,7 +1109,7 @@ jobs:
               return ascii(name.decode("utf-8", "replace"))[1:-1]
 
 
-          commits = [line.split() for line in git("rev-list", "--parents", "HEAD", "--not", sha).stdout.decode().splitlines()]
+          commits = [line.split() for line in git("rev-list", "--parents", head, "--not", sha, "--").stdout.decode().splitlines()]
           for commit, *parents in commits:
               if len(parents) > 2:
                   refuse(f"octopus merge {where(commit)} is not in the trusted commit, and git cannot show what it adds; "
@@ -931,7 +1117,7 @@ jobs:
           # Each path a commit adds, changes, renames or copies, and each path
           # a merge changes beyond its automatic result.
           listing = git("log", "-z", "--format=%x01%H", "--name-status", "--diff-filter=uxdb", "--remerge-diff",
-                        "--no-ext-diff", "HEAD", "--not", sha).stdout.split(b"\0")
+                        "--no-ext-diff", head, "--not", sha, "--").stdout.split(b"\0")
           commit, names = None, 0
           for token in listing:
               if names:
@@ -954,12 +1140,12 @@ jobs:
           for commit, *parents in commits:
               if len(parents) != 2:
                   continue
-              bases = git("merge-base", "--all", *parents, codes=(0, 1)).stdout.decode().split() or [empty]
+              bases = git("merge-base", "--all", *parents, "--", codes=(0, 1)).stdout.decode().split() or [empty]
               for base in bases:
                   for parent in parents:
-                      for name in git("diff-tree", "-r", "-z", "--name-only", base, parent).stdout.split(b"\0"):
+                      for name in git("diff-tree", "-r", "-z", "--name-only", base, parent, "--").stdout.split(b"\0"):
                           if odd(name):
-                              held = git("merge-base", "--is-ancestor", parent, sha, codes=(0, 1)).returncode == 0
+                              held = git("merge-base", "--is-ancestor", parent, sha, "--", codes=(0, 1)).returncode == 0
                               fix = "rebase the pull request onto the trusted commit instead of merging it in" if held else rewrite
                               refuse(f"merge {where(commit)} joins a change to the path \"{named(name)}\" made on its "
                                      f"parent {parent}; {unreadable}; {fix}")
@@ -970,8 +1156,11 @@ jobs:
           python3 -I - "$TRUSTED_SHA" "$workspace" "$trusted" <<'PY'
           import json
           import os
+          import re
+          import signal
           import subprocess
           import sys
+          import time
           import tomllib
 
           sha, workspace, trusted = sys.argv[1:]
@@ -1000,6 +1189,30 @@ jobs:
                   refuse(f"{path} on trusted commit {sha} is not a regular file; commit the file itself")
               return subprocess.run(["git", "cat-file", "blob", oid],
                                     capture_output=True, check=True).stdout
+
+
+          # Missing policy/key keeps the older workflow's trusted behavior.
+          # A malformed trusted value fails closed, never defaults to an allow.
+          class PolicyObject(dict):
+              def __init__(self, pairs):
+                  super().__init__(pairs)
+                  self.has_duplicates = len(pairs) != len(self)
+
+
+          policy = blob(".codeflow/policy.json")
+          try:
+              data = json.loads(policy, object_pairs_hook=PolicyObject) if policy is not None else PolicyObject([])
+              git = data.get("git", PolicyObject([]))
+              # The typed loader rejects duplicate root and Git fields too.
+              if data.has_duplicates or git.has_duplicates:
+                  raise ValueError("duplicate policy key")
+              inline_allow = git.get("secret_scan_inline_allow", "trusted")
+          except (ValueError, AttributeError):
+              refuse("cannot read git.secret_scan_inline_allow from the trusted policy; commit a JSON object with trusted or never")
+          if inline_allow not in ("trusted", "never"):
+              refuse("git.secret_scan_inline_allow on the trusted commit must be trusted or never")
+          with open(os.path.join(trusted, "inline-allow"), "w", encoding="utf-8") as handle:
+              handle.write(inline_allow)
 
 
           def in_repository(path, owner):
@@ -1062,10 +1275,110 @@ jobs:
               walk(data.decode("utf-8", "replace"), owner)
 
 
+          def diagnose_fingerprints(ignore):
+              # Advisory only: never rewrite or alias an exemption. Bound the
+              # input, candidates and total Git time independently of the scan.
+              deadline = time.monotonic() + 5
+              cache = {}
+              candidates = 0
+              clipped = len(ignore) > 65536
+              lines = ignore[:65536].splitlines(keepends=True)
+              if clipped and lines and not lines[-1].endswith(b"\n"):
+                  lines.pop()
+
+              def warning(message):
+                  message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  print(f"::warning::{message}")
+
+              def query(*args):
+                  if args not in cache:
+                      remaining = deadline - time.monotonic()
+                      if remaining <= 0:
+                          raise TimeoutError
+                      with subprocess.Popen(["git", *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                            start_new_session=True) as child:
+                          try:
+                              output, _ = child.communicate(timeout=remaining)
+                          except subprocess.TimeoutExpired:
+                              # A helper's descendants must not keep a pipe or
+                              # the diagnostic alive after its time budget.
+                              try:
+                                  os.killpg(child.pid, signal.SIGKILL)
+                              except ProcessLookupError:
+                                  pass
+                              child.stdout.close()
+                              child.wait()
+                              raise
+                      cache[args] = subprocess.CompletedProcess(args, child.returncode, output)
+                  return cache[args]
+
+              def exists(commit, path):
+                  result = query("ls-tree", "-z", "--full-tree", commit, "--", path)
+                  if result.returncode:
+                      raise ValueError
+                  if not result.stdout:
+                      return False
+                  if result.stdout.split(b"\t", 1)[-1] != path.encode("utf-8") + b"\0":
+                      raise ValueError
+                  return True
+
+              try:
+                  for number, raw in enumerate(lines, 1):
+                      if time.monotonic() >= deadline:
+                          raise TimeoutError
+                      try:
+                          fingerprint = raw.decode("utf-8").strip()
+                      except UnicodeDecodeError:
+                          warning(f".gitleaksignore line {number} is not UTF-8; review it manually")
+                          continue
+                      parts = fingerprint.split(":", 1)
+                      if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", parts[0]):
+                          continue
+                      commit, rest = parts
+                      fields = rest.rsplit(":", 2)
+                      if len(fields) != 3:
+                          continue
+                      path, rule, line = fields
+                      if not path.startswith("b/") or path.endswith("/") or not rule or not re.fullmatch(r"[1-9][0-9]*", line):
+                          continue
+                      if candidates == 50:
+                          clipped = True
+                          break
+                      candidates += 1
+                      result = query("cat-file", "-t", commit)
+                      if result.returncode or result.stdout.strip() != b"commit":
+                          warning(f".gitleaksignore line {number}: unreadable commit {commit}; fetch or investigate it before migration")
+                          continue
+                      try:
+                          if exists(commit, path):
+                              warning(f".gitleaksignore line {number}: existing b/ path for {fingerprint}; keep this fingerprint unchanged")
+                          elif exists(commit, path[2:]):
+                              result = query("rev-list", "--parents", "-n", "1", commit, "--")
+                              parents = result.stdout.split()
+                              if result.returncode or not parents or parents[0] != commit.encode("ascii"):
+                                  raise ValueError
+                              count = len(parents) - 1
+                              if count != 2:
+                                  kind = "one-parent commit" if count == 1 else f"commit with {count} parents"
+                                  warning(f".gitleaksignore line {number}: {kind} {commit}; no replacement inferred for {fingerprint}")
+                                  continue
+                              replacement = f"{commit}:{path[2:]}:{rule}:{line}"
+                              warning(f".gitleaksignore line {number}: legacy remerge fingerprint {fingerprint}; review and replace with {replacement}")
+                          else:
+                              warning(f".gitleaksignore line {number}: neither path exists for {fingerprint}; no replacement inferred")
+                      except ValueError:
+                          warning(f".gitleaksignore line {number}: cannot inspect commit or paths for {fingerprint}; no replacement inferred")
+              except (TimeoutError, subprocess.TimeoutExpired):
+                  clipped = True
+              if clipped:
+                  warning("legacy fingerprint diagnostics stopped at the review limit; review remaining entries manually")
+
+
           ignore = blob(".gitleaksignore")
           if ignore is not None:
               with open(os.path.join(trusted, "ignore"), "wb") as handle:
                   handle.write(ignore)
+              diagnose_fingerprints(ignore)
           named = os.environ.get("GITLEAKS_CONFIG", "")
           if named and os.path.isabs(named) and not in_checkout(named):
               if os.path.isfile(named):
@@ -1085,8 +1398,9 @@ jobs:
           PY
           set --
           if [ -f "$trusted/config.toml" ]; then set -- --config "$trusted/config.toml"; fi
-          if [ "$scan" != HEAD ]; then
-            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan"); then
+          inline_allow=$(cat "$trusted/inline-allow")
+          if [ "$scan" != "$head" ]; then
+            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan" --); then
               echo "::error::cannot list the file changes in ${scope}; refusing to skip the scan"; exit 1
             fi
             changed=$(printf '%s\n' "$files" | awk 'NF { n++ } END { print n + 0 }')
@@ -1101,7 +1415,7 @@ jobs:
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
           (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
-            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan}" \
+            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan} --" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \
             --report-format json --report-path "$report") 2>"$log" || rc=$?
@@ -1120,7 +1434,9 @@ jobs:
           fi
           # The report holds no line text, so an inline gitleaks:allow is read
           # from the commit that holds the finding, and only a commit the
-          # trusted commit already holds counts.
+          # trusted commit already holds counts, when its policy permits it.
+          held='[]'
+          if [ "$inline_allow" = trusted ]; then
           held=$(python3 -I - "$report" "$TRUSTED_SHA" <<'PY'
           import json
           import re
@@ -1135,7 +1451,7 @@ jobs:
               commit = finding.get("Commit") or ""
               if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
                   continue
-              ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", commit, sha],
+              ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", commit, sha, "--"],
                                         capture_output=True)
               if ancestor.returncode:
                   continue
@@ -1148,6 +1464,7 @@ jobs:
           print(json.dumps(held))
           PY
           )
+          fi
           if [ "$held" != "[]" ]; then
             echo "Allowed $(printf '%s' "$held" | jq length) finding(s) marked gitleaks:allow on commits the trusted commit holds."
           fi
@@ -1293,6 +1610,7 @@ jobs:
           # Download outside the checkout, so a link the change commits at the
           # download path cannot redirect the write.
           tool=$(mktemp -d "${RUNNER_TEMP:?}/osv-tool.XXXXXX")
+          trap 'rm -rf "$tool" || true' EXIT
           curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" -o "$tool/osv-scanner"
           printf '%s  %s\n' "$OSV_SHA256" "$tool/osv-scanner" | sha256sum -c -
           chmod +x "$tool/osv-scanner"

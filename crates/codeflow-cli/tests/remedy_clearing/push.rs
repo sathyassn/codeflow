@@ -38,6 +38,7 @@ fn push_with_path(root: &Path, first: &Path, args: &[&str]) -> String {
     .unwrap();
     text(
         &cmd.env("PATH", path)
+            .env_remove("CODEFLOW_HOOK_BINARY")
             .arg("push")
             .arg("-q")
             .args(args)
@@ -213,7 +214,7 @@ fn clears_push_destination_silent() {
     pushed(&root);
     let rewrite = reads_down(&root, &dest);
     commit(&root, "y.txt", "feat: add y");
-    let finding = "asking the destination for its branches failed";
+    let finding = "ci.destination_unavailable";
     let before = pushed(&root);
     let printed = block(&before, finding).to_string();
     assert_prints_row(&printed, "PUSH_DESTINATION_SILENT");
@@ -227,56 +228,6 @@ fn clears_push_destination_silent() {
     let after = pushed(&root);
     assert!(
         !after.contains(finding) && after.contains("push set finished"),
-        "{after}"
-    );
-}
-
-/// A test-config with a fast target and one whose quick mode sleeps past
-/// the push set's 60 s budget.
-fn slow_target_config() -> serde_json::Value {
-    let mut config: serde_json::Value = serde_json::from_str(QUICK_CONFIG).unwrap();
-    config["targets"]
-        .as_array_mut()
-        .unwrap()
-        .push(serde_json::json!({
-            "name": "slow",
-            "enabled": true,
-            "runner": "custom",
-            "modes": {"quick": {"command": "sleep 61"}, "full": {"command": "sleep 61"}},
-        }));
-    config
-}
-
-#[test]
-fn clears_push_over_budget_target() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    let mut config = slow_target_config();
-    write(
-        &root,
-        ".codeflow/test-config.json",
-        &serde_json::to_string_pretty(&config).unwrap(),
-    );
-    commit_all(&root, "chore: add a slow quick target");
-    let finding = "over its 60s budget";
-    let before = pushed(&root);
-    let printed = block(&before, finding).to_string();
-    assert_prints_row(&printed, "PUSH_OVER_BUDGET_TARGET");
-    assert!(printed.contains("target 'slow'"), "{printed}");
-    config["targets"][1]["modes"]
-        .as_object_mut()
-        .unwrap()
-        .remove("quick");
-    write(
-        &root,
-        ".codeflow/test-config.json",
-        &serde_json::to_string_pretty(&config).unwrap(),
-    );
-    commit_all(&root, "chore: move the slow target to the full gate");
-    let after = pushed(&root);
-    assert!(
-        !after.contains(finding) && after.contains("quick targets passed"),
         "{after}"
     );
 }
@@ -366,24 +317,36 @@ fn clears_push_over_budget_builtin() {
     );
 }
 
-/// A copy of the binary under test, first on the hook's `PATH` so it is the
-/// hook's own binary, and a one-shot `python3` beside it that deletes the
-/// copy and itself: the binary vanishes during the release preflight, after
-/// `codeflow ci` ran through it and before `codeflow validate --docs` does.
+/// A copy of the binary under test, and a one-shot `git` beside it that
+/// deletes the copy and itself on the destination query: run as the
+/// pre-push hook with this folder first on `PATH`, the binary vanishes after
+/// the hook started and before the push set's `codeflow ci` runs through it.
+/// (`git push` puts its own exec path first on a hook's `PATH`, so the hook
+/// runs directly here.)
 #[cfg(unix)]
 fn vanishing_binary(root: &Path) -> PathBuf {
     let bin = root.parent().unwrap().join("vanishing-bin");
     std::fs::create_dir_all(&bin).unwrap();
     let copy = bin.join("codeflow");
     std::fs::copy(exe(), &copy).unwrap();
-    python_stand_in(
-        &bin,
-        &format!(
-            "rm -f '{}' '{}'\n",
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("git"))
+        .find(|path| path.is_file())
+        .expect("git on PATH");
+    let stand_in = bin.join("git");
+    std::fs::write(
+        &stand_in,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" ls-remote \"*) rm -f '{}' '{}' ;; esac\nexec '{}' \"$@\"\n",
             copy.display(),
-            bin.join("python3").display()
+            stand_in.display(),
+            real.display()
         ),
-    );
+    )
+    .unwrap();
+    let mut mode = std::fs::metadata(&stand_in).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&stand_in, mode).unwrap();
     bin
 }
 
@@ -394,31 +357,79 @@ fn vanishing_binary(root: &Path) -> PathBuf {
 fn clears_push_set_by_hand() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
-    released(&root, &dest);
+    with_destination(&root);
+    commit(&root, "notes.txt", "docs: record an unpublished note");
     let bin = vanishing_binary(&root);
     let row = "PUSH_SET_BY_HAND";
     let finding = "push set check could not run";
-    let before = push_with_path(&root, &bin, &["origin", "HEAD"]);
+    let before = pre_push_from(&root, &bin);
     let printed = block(&before, finding).to_string();
     assert_prints_row(&printed, row);
-    assert!(
-        printed.contains("could not run: `codeflow validate --docs`"),
-        "{printed}"
-    );
+    assert!(printed.contains("could not run: `codeflow ci"), "{printed}");
+    assert!(!printed.contains("validate --docs"), "{printed}");
     // By hand, with the binary under test.
     let ci = printed_command(&printed, row, None);
     run_printed(&root, &ci, &[], &[]);
-    let validate = printed_command(&printed, row, Some("codeflow validate"));
-    assert_eq!(validate, "codeflow validate --docs", "{printed}");
-    run_printed(&root, &validate, &[], &[]);
     // The binary is back, and nothing removes it this time.
     std::fs::copy(exe(), bin.join("codeflow")).unwrap();
-    let after = push_with_path(&root, &bin, &["origin", "HEAD"]);
+    let after = pre_push_from(&root, &bin);
     assert!(
         !after.contains(finding) && after.contains("push set finished"),
         "{after}"
     );
+}
+
+/// The pre-push hook for the current branch, run by `bin`'s codeflow with
+/// `bin` first on `PATH`, as `git push origin HEAD` would run it.
+#[cfg(unix)]
+fn pre_push_from(root: &Path, bin: &Path) -> String {
+    use std::io::Write as _;
+    let head = text(
+        &command("git", root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let branch = text(
+        &command("git", root)
+            .args(["branch", "--show-current"])
+            .output()
+            .unwrap(),
+    );
+    let url = text(
+        &command("git", root)
+            .args(["remote", "get-url", "--push", "origin"])
+            .output()
+            .unwrap(),
+    );
+    let mut cmd = command(bin.join("codeflow").to_str().unwrap(), root);
+    let path = cmd
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .and_then(|(_, value)| value)
+        .unwrap()
+        .to_owned();
+    let path = std::env::join_paths(
+        std::iter::once(bin.to_path_buf()).chain(std::env::split_paths(&path)),
+    )
+    .unwrap();
+    let mut child = cmd
+        .env("PATH", path)
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .args(["git-hook", "pre-push", "origin", url.trim()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (head, branch) = (head.trim(), branch.trim());
+    writeln!(
+        child.stdin.take().unwrap(),
+        "refs/heads/{branch} {head} refs/heads/{branch} {}",
+        "0".repeat(40)
+    )
+    .unwrap();
+    text(&child.wait_with_output().unwrap())
 }
 
 // ---------------------------------------------------------------------------
@@ -757,7 +768,7 @@ const POLICY: &str = ".codeflow/policy.json";
 const FOUR_BULLETS: &str = "feat: add y\n\n- one\n- two\n- three\n- four\n";
 
 /// Set `git.<key>` in the working copy's policy.
-fn set_policy(root: &Path, entries: &[(&str, serde_json::Value)]) {
+pub(super) fn set_policy(root: &Path, entries: &[(&str, serde_json::Value)]) {
     let mut policy: serde_json::Value = serde_json::from_str(&read(root, POLICY)).unwrap();
     for (key, value) in entries {
         policy["git"][*key] = value.clone();
@@ -1513,6 +1524,16 @@ fn empty_tree(root: &Path) -> String {
     text(&made).trim().to_string()
 }
 
+fn tree_at(root: &Path, revision: &str) -> String {
+    text(&run(
+        "git",
+        root,
+        &["rev-parse", &format!("{revision}^{{tree}}")],
+    ))
+    .trim()
+    .to_string()
+}
+
 /// `git commit-tree` of `tree` with `parents` and `message`: a commit no
 /// local hook judges, as a deployment tool or another clone makes it.
 fn commit_tree(root: &Path, tree: &str, parents: &[&str], message: &str) -> String {
@@ -1540,7 +1561,9 @@ fn deployment(root: &Path, entries: &[(&str, serde_json::Value)]) -> (PathBuf, S
         root,
         &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
     );
-    let tree = empty_tree(root);
+    // Keep the scaffold in the unrelated history so its checked-out tree can
+    // run the installed hooks and validation with the destination's policy.
+    let tree = tree_at(root, "HEAD");
     let old = commit_tree(root, &tree, &[], "Deployed old pages");
     git(root, &["branch", "gh-pages", &old]);
     git(
@@ -1565,9 +1588,10 @@ fn an_unrelated_deployment_branch_checks_only_its_own_new_commits() {
         let dir = scaffolded("--standard");
         let root = project(&dir);
         let (dest, old) = deployment(&root, &entries);
-        let tree = empty_tree(&root);
+        let tree = tree_at(&root, "gh-pages");
         let new = commit_tree(&root, &tree, &[&old], message);
         git(&root, &["branch", "-f", "gh-pages", &new]);
+        git(&root, &["switch", "-q", "gh-pages"]);
         let out = push(&root, &["origin", "gh-pages"]);
         let there = text(&run("git", &dest, &["rev-parse", "gh-pages"]));
         assert_eq!(there.trim(), new, "{message}: {out}");
@@ -1659,7 +1683,7 @@ fn a_history_overlay_does_not_make_a_related_branch_unrelated() {
             "{overlay}: {out}"
         );
         // AC-10: unproven history refuses before any commit-body judgment.
-        assert!(out.contains("cannot prove history"), "{out}");
+        assert!(out.contains("cannot verify history"), "{out}");
         not_landed(&dest, &out, "feat/x", &head_sha(&root));
     }
 }
@@ -1683,7 +1707,7 @@ fn a_new_unrelated_branch_already_published_under_a_tag_lands() {
             &root,
             &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
         );
-        let tree = empty_tree(&root);
+        let tree = tree_at(&root, "HEAD");
         let published = commit_tree(&root, &tree, &[], "docs: publish the pages");
         git(&root, &["tag", "pages-v1", &published]);
         git(
@@ -1702,6 +1726,7 @@ fn a_new_unrelated_branch_already_published_under_a_tag_lands() {
             published
         };
         git(&root, &["branch", "gh-pages", &head]);
+        git(&root, &["switch", "-q", "gh-pages"]);
         let out = push(&root, &["origin", "gh-pages"]);
         let there = text(&run("git", &dest, &["rev-parse", "gh-pages"]));
         assert_eq!(there.trim(), head, "{extra}: {out}");

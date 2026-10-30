@@ -89,10 +89,12 @@ fn hook_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     files.sort();
     for name in ["settings.json", "settings.local.json"] {
         let path = root.join(".claude").join(name);
-        if path
-            .try_exists()
-            .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?
-        {
+        if path.try_exists().map_err(|error| {
+            format!(
+                "cannot inspect {}: {error}",
+                crate::git::display_path(&path)
+            )
+        })? {
             files.push(path);
         }
     }
@@ -139,9 +141,10 @@ fn parsed(root: &Path) -> Result<Vec<(String, Value)>, String> {
     let mut parsed = Vec::new();
     for path in hook_files(root)? {
         let text = std::fs::read_to_string(&path)
-            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        let value: Value = serde_json::from_str(&text)
-            .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+            .map_err(|error| format!("cannot read {}: {error}", crate::git::display_path(&path)))?;
+        let value: Value = serde_json::from_str(&text).map_err(|error| {
+            format!("cannot parse {}: {error}", crate::git::display_path(&path))
+        })?;
         if let Some(hooks) = value.get("hooks") {
             let shown = crate::git::display_key(&crate::portable_path::slashed(
                 path.strip_prefix(root).unwrap_or(&path),
@@ -547,10 +550,11 @@ mod tests {
             .find(|line| line.contains("hook exec-guard"))
             .unwrap();
         let with = |metadata: &str| {
-            SHIPPED.replace(exec_line, &exec_line.replace(r#""timeout": 10"#, metadata))
+            SHIPPED.replace(exec_line, &exec_line.replace(r#""timeout": 30"#, metadata))
         };
         for metadata in [
-            r#""timeout": 10, "env": { "PATH": "/tmp/elsewhere" }"#,
+            r#""timeout": 30, "env": { "PATH": "/tmp/elsewhere" }"#,
+            r#""timeout": 10"#,
             r#""timeout": 1"#,
             r#""timeout": 0"#,
         ] {
@@ -564,8 +568,8 @@ mod tests {
             );
         }
         for metadata in [
-            r#""timeout": 10, "env": {}"#,
-            r#""timeout": 10, "env": null"#,
+            r#""timeout": 30, "env": {}"#,
+            r#""timeout": 30, "env": null"#,
         ] {
             let dir = project(&[(".grok/hooks/codeflow.json", &with(metadata))]);
             assert_eq!(shell_guard(dir.path()), ShellGuard::Shipped, "{metadata}");

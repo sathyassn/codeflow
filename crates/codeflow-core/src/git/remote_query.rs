@@ -18,8 +18,54 @@ pub const FETCH_DEADLINE: Duration = Duration::from_secs(120);
 /// How much a remote may say.
 pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 
+/// `url` as it may be shown: the userinfo of a `scheme://` URL (a user, or
+/// `user:token`) becomes `***`, keeping the scheme, host and path. A URL may
+/// carry a credential, and every message and printed command can reach a
+/// log or a transcript. Only git itself receives the real URL. Other forms,
+/// such as a path or scp-style `host:path`, carry no userinfo and are
+/// returned unchanged.
+#[must_use]
+pub fn display_url(url: &str) -> std::borrow::Cow<'_, str> {
+    let Some(start) = url.find("://").map(|at| at + 3) else {
+        return std::borrow::Cow::Borrowed(url);
+    };
+    let rest = &url[start..];
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    match authority.rfind('@') {
+        Some(at) => std::borrow::Cow::Owned(format!("{}***{}", &url[..start], &rest[at..])),
+        None => std::borrow::Cow::Borrowed(url),
+    }
+}
+
+/// Redact URL userinfo in a diagnostic that may quote several remote URLs.
+/// Keep the original text for protocol parsing; use this only for display.
+#[must_use]
+pub fn display_urls(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (at, _) in text.match_indices("://") {
+        let start = at + 3;
+        if start < copied {
+            continue;
+        }
+        let rest = &text[start..];
+        let end = rest
+            .find(|c: char| c.is_ascii_whitespace() || matches!(c, '/' | '?' | '#'))
+            .unwrap_or(rest.len());
+        if let Some(userinfo) = rest[..end].rfind('@') {
+            shown.push_str(&text[copied..start]);
+            shown.push_str("***");
+            copied = start + userinfo;
+        }
+    }
+    shown.push_str(&text[copied..]);
+    shown
+}
+
 /// `git ls-remote <args>`, never interactive and bounded by
-/// [`LS_REMOTE_DEADLINE`] and [`MAX_ANSWER_BYTES`].
+/// [`LS_REMOTE_DEADLINE`] per attempt and [`MAX_ANSWER_BYTES`]. A default
+/// advertisement (`--symref`) retries only timeouts, at most twice, with a
+/// 100 ms backoff. Every other failure returns immediately.
 ///
 /// # Errors
 ///
@@ -28,19 +74,48 @@ pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 pub fn ls_remote(root: &Path, args: &[&str]) -> Result<String, String> {
     let mut all = vec!["ls-remote"];
     all.extend_from_slice(args);
-    match run(root, &all, LS_REMOTE_DEADLINE) {
-        Ok(answer) if args.contains(&"--exit-code") && answer.is_empty() => {
-            Err("`git ls-remote --exit-code` returned success without a matching ref".into())
+    let retries = if args.contains(&"--symref") { 2 } else { 0 };
+    ls_remote_attempts(args, retries, || run(root, &all, LS_REMOTE_DEADLINE))
+}
+
+fn ls_remote_attempts(
+    args: &[&str],
+    retries: usize,
+    mut attempt: impl FnMut() -> Result<String, Failure>,
+) -> Result<String, String> {
+    for number in 0..=retries {
+        match attempt() {
+            Err(Failure::Timeout(_)) if number < retries => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(Failure::Timeout(deadline)) => {
+                return Err(format!(
+                    "timeout: no answer within {}s per attempt ({} attempts)",
+                    deadline.as_secs(),
+                    number + 1
+                ))
+            }
+            Ok(answer) if args.contains(&"--exit-code") && answer.is_empty() => {
+                return Err(
+                    "`git ls-remote --exit-code` returned success without a matching ref".into(),
+                );
+            }
+            Ok(answer) => return Ok(answer),
+            // With --exit-code, no matching refs is still a complete answer.
+            Err(Failure::Exit(Some(2))) if args.contains(&"--exit-code") => {
+                return Ok(String::new())
+            }
+            Err(Failure::Exit(_)) => {
+                return Err(
+                    "`git ls-remote` failed (unreachable, no credentials, or no such repository)"
+                        .into(),
+                )
+            }
+            Err(Failure::Authentication) => return Err("remote authentication failed".into()),
+            Err(Failure::Other(why)) => return Err(why),
         }
-        Ok(answer) => Ok(answer),
-        // With --exit-code, Git distinguishes an empty advertisement from a
-        // transport failure. No matching refs is still a complete answer.
-        Err(Failure::Exit(Some(2))) if args.contains(&"--exit-code") => Ok(String::new()),
-        Err(Failure::Exit(_)) => Err(
-            "`git ls-remote` failed (unreachable, no credentials, or no such repository)".into(),
-        ),
-        Err(Failure::Other(why)) => Err(why),
     }
+    unreachable!("the last attempt always returns")
 }
 
 /// Fetch `refs` from `url` into the object store only: no tracking ref,
@@ -63,7 +138,9 @@ pub fn fetch_objects(root: &Path, url: &str, refs: &[&str]) -> Result<(), String
     run(root, &all, FETCH_DEADLINE)
         .map(|_| ())
         .map_err(|why| match why {
-            Failure::Exit(_) => format!("`git fetch {url}` failed"),
+            Failure::Exit(_) => format!("`git fetch {}` failed", display_url(url)),
+            Failure::Authentication => "remote authentication failed".into(),
+            Failure::Timeout(deadline) => format!("no answer within {}s", deadline.as_secs()),
             Failure::Other(why) => why,
         })
 }
@@ -71,15 +148,18 @@ pub fn fetch_objects(root: &Path, url: &str, refs: &[&str]) -> Result<(), String
 enum Failure {
     /// Git ran and exited unsuccessfully.
     Exit(Option<i32>),
+    Authentication,
+    Timeout(Duration),
     Other(String),
 }
 
 fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure> {
-    let mut command = crate::git::command();
+    let mut command = crate::git::judging_command();
     command
         .arg("-C")
         .arg(root)
         .args(args)
+        .env("LC_ALL", "C")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "false")
         .env("SSH_ASKPASS", "false")
@@ -87,7 +167,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         .env("GIT_SSH_COMMAND", batch_ssh_command(root)?)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -100,6 +180,17 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         kill_group(&mut child);
         return Err(Failure::Other("could not read its answer".to_string()));
     };
+    // Read diagnostics only to classify authentication failures. Never return
+    // remote stderr: a helper or URL could include credential material.
+    let stderr = child.stderr.take();
+    let diagnostics = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let read = match stderr {
+            Some(stderr) => stderr.take(64 << 10).read_to_end(&mut bytes),
+            None => Ok(0),
+        };
+        read.map(|_| bytes)
+    });
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -109,7 +200,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         let _ = sender.send(read.map(|_| bytes));
     });
     let until = Instant::now() + deadline;
-    let timed_out = || Failure::Other(format!("no answer within {}s", deadline.as_secs()));
+    let timed_out = || Failure::Timeout(deadline);
     let bytes = loop {
         match receiver.recv_timeout(Duration::from_millis(20)) {
             Ok(Ok(bytes)) => break bytes,
@@ -133,6 +224,22 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
             MAX_ANSWER_BYTES >> 20
         )));
     }
+    // A descendant may retain stderr after git exits. Keep git unreaped
+    // until both pipes finish, so its group ID cannot be reused before
+    // timeout cleanup, and keep the same deadline for this pipe too.
+    while !diagnostics.is_finished() {
+        if Instant::now() >= until {
+            kill_group(&mut child);
+            return Err(timed_out());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Unreadable diagnostics cannot prove an authentication failure, so a
+    // failed exit is then reported as a plain one, which still refuses.
+    let authentication = match diagnostics.join() {
+        Ok(Ok(bytes)) => authentication_failed(&bytes),
+        Ok(Err(_)) | Err(_) => false,
+    };
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -144,9 +251,32 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         }
     };
     if !status.success() {
+        if authentication {
+            return Err(Failure::Authentication);
+        }
         return Err(Failure::Exit(status.code()));
     }
     text_answer(&bytes)
+}
+
+/// Whether git's diagnostics carry an authentication marker. The bytes are
+/// matched as ASCII and never decoded: the text is not shown to anyone.
+fn authentication_failed(diagnostics: &[u8]) -> bool {
+    let bytes = diagnostics.to_ascii_lowercase();
+    [
+        "authentication failed",
+        "permission denied",
+        "could not read username",
+        "terminal prompts disabled",
+        "http basic: access denied",
+        "returned error: 401",
+    ]
+    .iter()
+    .any(|marker| {
+        bytes
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes())
+    })
 }
 
 /// The answer as text, one line per advertised ref.
@@ -243,6 +373,173 @@ fn kill_group(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostics_redact_every_url_without_changing_other_text() {
+        let text = "fatal: 'https://u:FAKE@one.invalid/x'\nTo ssh://FAKE@two.invalid\nhttps://three.invalid/u@path and git@four.invalid:path";
+        assert_eq!(display_urls(text), "fatal: 'https://***@one.invalid/x'\nTo ssh://***@two.invalid\nhttps://three.invalid/u@path and git@four.invalid:path");
+        assert_eq!(display_urls("plain diagnostic"), "plain diagnostic");
+    }
+
+    #[test]
+    fn command_line_url_rewrite_cannot_redirect_judging_queries() {
+        const CHILD: &str = "CODEFLOW_REMOTE_REWRITE_CHILD";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = Path::new(&root);
+            let destination = root.join("destination");
+            let url = destination.to_str().unwrap();
+            let answer = ls_remote(root, &[url, "refs/heads/expected"]).unwrap();
+            let fetched = fetch_objects(root, url, &["refs/heads/expected"]);
+            assert!(
+                answer.contains("refs/heads/expected"),
+                "query was redirected"
+            );
+            assert!(fetched.is_ok(), "fetch was redirected: {fetched:?}");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let destination = dir.path().join("destination");
+        let decoy = dir.path().join("decoy");
+        crate::git::repo_with_refs(&destination, &[b"refs/heads/expected"]);
+        crate::git::repo_with_refs(&decoy, &[b"refs/heads/decoy"]);
+        let parameters = format!(
+            "'url.{}.insteadOf={}'",
+            decoy.display(),
+            destination.display()
+        );
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::remote_query::tests::command_line_url_rewrite_cannot_redirect_judging_queries",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .env("GIT_CONFIG_PARAMETERS", parameters)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_stderr_keeps_the_query_within_its_deadline() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Some(root) = std::env::var_os("CODEFLOW_STDERR_ONLY_CHILD") {
+            let started = Instant::now();
+            let result = run(
+                Path::new(&root),
+                &["ls-remote", "stub"],
+                Duration::from_millis(200),
+            );
+            assert!(matches!(result, Err(Failure::Timeout(_))));
+            assert!(started.elapsed() < Duration::from_secs(5));
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let git = bin.join("git");
+        // Git exits and closes stdout while its descendant retains stderr.
+        std::fs::write(&git, "#!/bin/sh\n/bin/sleep 60 >/dev/null &\nexit 0\n").unwrap();
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = crate::git::process(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::remote_query::tests::inherited_stderr_keeps_the_query_within_its_deadline",
+                "--nocapture",
+            ])
+            .env("CODEFLOW_STDERR_ONLY_CHILD", dir.path())
+            .env("PATH", bin)
+            .env("GIT_SSH_COMMAND", "ssh")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    #[test]
+    fn display_url_hides_userinfo_and_keeps_scheme_host_and_path() {
+        for (url, shown) in [
+            (
+                "https://u:FAKE_TOKEN_3b9@h.invalid/x.git",
+                "https://***@h.invalid/x.git",
+            ),
+            ("https://FAKE_TOKEN_3b9@h.invalid", "https://***@h.invalid"),
+            (
+                "ssh://git@h.invalid:22/x.git?q=a@b",
+                "ssh://***@h.invalid:22/x.git?q=a@b",
+            ),
+            ("https://a@b:FAKE@h.invalid/x", "https://***@h.invalid/x"),
+            ("https://h.invalid/u@x.git", "https://h.invalid/u@x.git"),
+            ("git@h.invalid:x.git", "git@h.invalid:x.git"),
+            ("/srv/destination.git", "/srv/destination.git"),
+        ] {
+            assert_eq!(display_url(url), shown, "{url}");
+        }
+    }
+
+    #[test]
+    fn authentication_markers_match_raw_bytes_in_any_case() {
+        assert!(authentication_failed(
+            b"fatal: Authentication failed for 'https://example.invalid/'\n"
+        ));
+        assert!(authentication_failed(
+            b"git@example.invalid: Permission denied (publickey).\xff\n"
+        ));
+        assert!(!authentication_failed(
+            b"fatal: unable to access: Could not resolve host\n"
+        ));
+        assert!(!authentication_failed(b""));
+    }
+
+    #[test]
+    fn default_lookup_retries_only_timeouts_and_stops_at_its_bound() {
+        for (timeouts, expected, success) in [(0, 1, true), (1, 2, true), (3, 3, false)] {
+            let mut calls = 0;
+            let result = ls_remote_attempts(&["--symref"], 2, || {
+                calls += 1;
+                if calls <= timeouts {
+                    Err(Failure::Timeout(LS_REMOTE_DEADLINE))
+                } else {
+                    Ok("answer".into())
+                }
+            });
+            assert_eq!(calls, expected);
+            assert_eq!(result.is_ok(), success);
+        }
+        let mut calls = 0;
+        let result = ls_remote_attempts(&["--symref"], 2, || {
+            calls += 1;
+            Err(Failure::Authentication)
+        });
+        assert_eq!(calls, 1);
+        assert!(result.unwrap_err().contains("authentication"));
+
+        // A complete but unusable advertisement is a final answer, never
+        // another network attempt, whether malformed or missing a default.
+        for answer in [
+            "malformed",
+            "1111111111111111111111111111111111111111\trefs/heads/main\n",
+        ] {
+            let mut calls = 0;
+            let result = ls_remote_attempts(&["--symref"], 2, || {
+                calls += 1;
+                Ok(answer.into())
+            })
+            .unwrap();
+            assert!(crate::workgraph::release_line::from_advertisement("stub", &result).is_err());
+            assert_eq!(calls, 1);
+        }
+    }
 
     #[cfg(unix)]
     #[test]

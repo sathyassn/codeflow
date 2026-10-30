@@ -53,9 +53,9 @@ pub fn run_wizard(
                 serde_json::to_string(&dt.config.runner).unwrap_or_else(|_| "unknown".to_string());
             println!(
                 "  - {} (runner: {}, cwd: {})",
-                dt.config.name,
+                crate::git::display_text(&dt.config.name),
                 runner_str.trim_matches('"'),
-                dt.config.cwd.as_deref().unwrap_or("."),
+                crate::git::display_line(dt.config.cwd.as_deref().unwrap_or(".")),
             );
         }
 
@@ -242,7 +242,11 @@ pub fn run_add_target_wizard(
         requires: Vec::new(),
         outputs: Vec::new(),
         narrow: Vec::new(),
+        input_class: None,
+        evidence: None,
         exclusive: false,
+        heavy: None,
+        workers: None,
         runner,
         modes,
         report: None,
@@ -463,7 +467,11 @@ mod tests {
             requires: Vec::new(),
             outputs: Vec::new(),
             narrow: Vec::new(),
+            input_class: None,
+            evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Cargo,
             modes: BTreeMap::from([
                 (
@@ -512,7 +520,11 @@ mod tests {
             requires: Vec::new(),
             outputs: Vec::new(),
             narrow: Vec::new(),
+            input_class: None,
+            evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Cargo,
             modes: BTreeMap::new(),
             report: None,

@@ -65,15 +65,18 @@ pub fn run(args: &ModelsArgs) -> i32 {
     let result = match resolve(args) {
         Ok(result) => result,
         Err(reason) => {
-            eprintln!("models resolve: {reason}");
+            eprintln!(
+                "models resolve: {reason}",
+                reason = crate::cmd::shown(&reason)
+            );
             return 2;
         }
     };
     if args.json {
         match serde_json::to_string_pretty(&result) {
-            Ok(json) => println!("{json}"),
+            Ok(json) => println_block!(codeflow_core::git::TextBlock::json(&json)),
             Err(error) => {
-                eprintln!("models resolve: {error}");
+                eprintln!("models resolve: {error}", error = crate::cmd::shown(&error));
                 return 2;
             }
         }
@@ -218,7 +221,9 @@ fn render_text(result: &Resolution) {
     for (prefix, p) in result
         .participants
         .iter()
-        .map(|p| ("", p))
+        // Participant names come from the project's catalog: a fixed
+        // label starts each line (TSK-388).
+        .map(|p| ("participant: ", p))
         .chain(result.obligations.iter().map(|p| ("obligation: ", p)))
     {
         let label = match p.label {
@@ -260,7 +265,7 @@ fn render_text(result: &Resolution) {
         let prefix = if gap.participant.starts_with("xhigh-reasoning:") {
             "obligation: "
         } else {
-            ""
+            "participant: "
         };
         let label = if gap.label == ParticipantLabel::Required {
             "required"

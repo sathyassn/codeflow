@@ -29,9 +29,12 @@ pub const JOBS: [(&str, &[&str]); 6] = [
     ("Enforce", &["hook", "git-hook", "ci", "policy", "remote"]),
     (
         "Verify",
-        &["test", "validate", "integrate", "doctor", "work"],
+        &["test", "reserve", "validate", "integrate", "doctor", "work"],
     ),
-    ("Remember", &["orient", "status", "recall", "report"]),
+    (
+        "Remember",
+        &["orient", "status", "recall", "report", "follow"],
+    ),
     ("Delegate", &["delegate", "models"]),
     ("Present", &["portal", "present"]),
 ];

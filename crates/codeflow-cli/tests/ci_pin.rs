@@ -162,10 +162,73 @@ impl Install {
 }
 
 fn run_install(script: &str, repo: &Path, pin_ref: &str, releases: &Path) -> Install {
+    run_install_with(script, repo, pin_ref, releases, &Runner::default())
+}
+
+/// What the runner adds to an install step's environment.
+#[derive(Default)]
+struct Runner<'a> {
+    /// Directories put first on `PATH`.
+    path: Option<&'a str>,
+    /// The signal the interrupting `curl` sends.
+    interrupt: Option<&'a str>,
+    /// The runner's own temp directory.
+    temp: Option<&'a Path>,
+    /// The `curl` on `path` locks a folder inside the step's download
+    /// folder, so the step's cleanup cannot remove it; the run then leaves
+    /// exactly that download folder, which is unlocked afterwards.
+    locks_its_folder: bool,
+}
+
+/// A directory the runner already had in a step's temporary directory. No
+/// step created it, so no step may remove it.
+const KEPT: &str = "tmp.kept-by-the-runner";
+
+/// A temporary directory of its own for one step run, holding a directory
+/// the step did not create.
+fn step_temp(path: &Path) -> PathBuf {
+    std::fs::create_dir_all(path.join(KEPT)).unwrap();
+    std::fs::write(path.join(KEPT).join("note"), "kept\n").unwrap();
+    path.to_path_buf()
+}
+
+/// Fail unless the step left `temp` as it found it (TSK-386): the
+/// runner's own directory, unchanged, and nothing else.
+fn assert_temp_as_found(temp: &Path, out: &Output) {
+    let mut left: Vec<String> = std::fs::read_dir(temp)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        [KEPT],
+        "the step left these behind: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join(KEPT).join("note")).unwrap(),
+        "kept\n"
+    );
+}
+
+/// Run the install step as `runner` sets it up. Each run gets a `TMPDIR` of
+/// its own, so nothing it leaves reaches the user's temporary directory, and
+/// it must leave that directory as it found it.
+fn run_install_with(
+    script: &str,
+    repo: &Path,
+    pin_ref: &str,
+    releases: &Path,
+    runner: &Runner<'_>,
+) -> Install {
     let home = tempfile::tempdir().unwrap();
     let path_file = home.path().join("github_path");
     std::fs::write(&path_file, "").unwrap();
-    let out = Command::new("bash")
+    let temp = step_temp(&home.path().join("tmp"));
+    let mut command = Command::new("bash");
+    command
         .arg("-c")
         .arg(script)
         .current_dir(repo)
@@ -175,11 +238,40 @@ fn run_install(script: &str, repo: &Path, pin_ref: &str, releases: &Path) -> Ins
             format!("file://{}", releases.display()),
         )
         .env("HOME", home.path())
+        // The step prefers the runner's temp directory; a hosted run of
+        // these tests must not hand it that of the job running them.
+        .env_remove("RUNNER_TEMP")
+        .env("TMPDIR", &temp)
         .env("GITHUB_PATH", &path_file)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .output()
-        .expect("bash runs");
+        .env("GIT_CONFIG_SYSTEM", "/dev/null");
+    if let Some(path) = runner.path {
+        command.env("PATH", format!("{path}:{}", std::env::var("PATH").unwrap()));
+    }
+    if let Some(signal) = runner.interrupt {
+        command.env("INTERRUPT", signal);
+    }
+    if let Some(runner_temp) = runner.temp {
+        command.env("RUNNER_TEMP", runner_temp);
+    }
+    let out = command.output().expect("bash runs");
+    if runner.locks_its_folder {
+        let left: Vec<PathBuf> = std::fs::read_dir(&temp)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| !path.ends_with(KEPT))
+            .collect();
+        for folder in &left {
+            Command::new("chmod")
+                .args(["-R", "u+w"])
+                .arg(folder)
+                .status()
+                .unwrap();
+            std::fs::remove_dir_all(folder).unwrap();
+        }
+        assert_eq!(left.len(), 1, "the locked download folder stays");
+    }
+    assert_temp_as_found(&temp, &out);
     Install {
         out,
         home,
@@ -269,6 +361,137 @@ fn pinned_install_verifies_the_release_and_fails_closed() {
         "{}",
         unpinned.stderr()
     );
+}
+
+/// TSK-386: every copy of the install step removes its download directory
+/// when the runner interrupts it, as `run_install_with` checks for every
+/// passing and failing run too.
+#[test]
+fn an_interrupted_install_removes_its_download_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, "1.2.3");
+    publish(&releases, "1.2.3");
+    // A `curl` that records where it was asked to write, then signals the
+    // step's shell and itself, as a runner's cancellation reaches the whole
+    // job, while the step downloads.
+    let interrupting = dir.path().join("interrupting-bin");
+    std::fs::create_dir_all(&interrupting).unwrap();
+    std::fs::write(
+        interrupting.join("curl"),
+        "#!/bin/sh\necho \"$*\" >> \"$HOME/curl.log\"\nkill -\"$INTERRUPT\" \"$PPID\"\nkill -\"$INTERRUPT\" $$\n",
+    )
+    .unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(interrupting.join("curl"))
+        .status()
+        .unwrap();
+    let path = interrupting.display().to_string();
+    let mut steps = run_blocks(CI, "Install codeflow");
+    steps.extend(run_blocks(CI, "Install candidate codeflow"));
+    steps.extend(run_blocks(POLICY, "Install codeflow"));
+    for step in &steps {
+        for signal in ["HUP", "INT", "TERM"] {
+            let runner = Runner {
+                path: Some(&path),
+                interrupt: Some(signal),
+                ..Runner::default()
+            };
+            let stopped = run_install_with(step, &work, "HEAD", &releases, &runner);
+            assert!(
+                !stopped.out.status.success(),
+                "{signal}: {}",
+                stopped.stderr()
+            );
+            assert!(stopped.installed_version().is_none(), "{signal}");
+            // The download went to the step's own `TMPDIR`, which macOS's
+            // `mktemp -d` would ignore.
+            let asked = std::fs::read_to_string(stopped.home.path().join("curl.log")).unwrap();
+            let temp = stopped.home.path().join("tmp");
+            assert!(
+                asked.contains(&format!("{}/", temp.display())),
+                "{signal}: {asked}"
+            );
+        }
+        // On a runner the download goes to the runner's temp directory,
+        // which the runner also empties after the job.
+        let runner_temp = step_temp(&dir.path().join("runner-temp"));
+        let runner = Runner {
+            path: Some(&path),
+            interrupt: Some("TERM"),
+            temp: Some(&runner_temp),
+            ..Runner::default()
+        };
+        let stopped = run_install_with(step, &work, "HEAD", &releases, &runner);
+        assert!(!stopped.out.status.success(), "{}", stopped.stderr());
+        assert_temp_as_found(&runner_temp, &stopped.out);
+        let asked = std::fs::read_to_string(stopped.home.path().join("curl.log")).unwrap();
+        assert!(
+            asked.contains(&format!("{}/", runner_temp.display())),
+            "{asked}"
+        );
+    }
+}
+
+/// TSK-386 review F-1: a download folder the step's cleanup cannot remove
+/// does not change the step's status: an install that verifies stays 0 and
+/// one that fails stays a failure.
+#[test]
+fn a_folder_the_install_cannot_remove_keeps_the_step_status() {
+    let curl = Command::new("sh")
+        .args(["-c", "command -v curl"])
+        .output()
+        .unwrap();
+    let curl = String::from_utf8(curl.stdout).unwrap().trim().to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, "1.2.3");
+    let release = publish(&releases, "1.2.3");
+    // A `curl` that locks a folder beside the file it writes, then
+    // downloads.
+    let locking = dir.path().join("locking-bin");
+    std::fs::create_dir_all(&locking).unwrap();
+    std::fs::write(
+        locking.join("curl"),
+        format!(
+            "#!/bin/sh\nfor arg; do [ \"$previous\" = -o ] && out=$arg; previous=$arg; done\nlocked=\"$(dirname \"$out\")/locked\"\nif [ ! -d \"$locked\" ]; then mkdir \"$locked\"; : > \"$locked/file\"; chmod a-w \"$locked\"; fi\nexec '{curl}' \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(locking.join("curl"))
+        .status()
+        .unwrap();
+    let path = locking.display().to_string();
+    let runner = Runner {
+        path: Some(&path),
+        locks_its_folder: true,
+        ..Runner::default()
+    };
+    let mut steps = run_blocks(CI, "Install codeflow");
+    steps.extend(run_blocks(CI, "Install candidate codeflow"));
+    steps.extend(run_blocks(POLICY, "Install codeflow"));
+    let archive = release.join(format!("{ASSET}.tar.xz"));
+    let original = std::fs::read(&archive).unwrap();
+    for step in &steps {
+        let ok = run_install_with(step, &work, "HEAD", &releases, &runner);
+        assert_eq!(ok.out.status.code(), Some(0), "{}", ok.stderr());
+        std::fs::write(&archive, b"tampered").unwrap();
+        let bad = run_install_with(step, &work, "HEAD", &releases, &runner);
+        assert_eq!(bad.out.status.code(), Some(1), "{}", bad.stderr());
+        assert!(
+            bad.stderr().contains("checksum mismatch"),
+            "{}",
+            bad.stderr()
+        );
+        std::fs::write(&archive, &original).unwrap();
+    }
 }
 
 /// `project_toml(version)` with a `[scaffold_sha256]` table naming
@@ -713,6 +936,10 @@ fn without_a_pinned_digest_the_install_warns_and_checks_sha256_sum() {
 /// Run the gates job's `codeflow test` step in `repo` with a logging
 /// `codeflow` first on PATH. Returns the output and the log.
 fn run_test_step(repo: &Path) -> (Output, String) {
+    run_test_step_on(repo, None)
+}
+
+fn run_test_step_on(repo: &Path, event: Option<&str>) -> (Output, String) {
     let script = run_blocks(CI, "codeflow test").remove(0);
     let bin = repo.parent().unwrap().join("fake-bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -739,6 +966,7 @@ fn run_test_step(repo: &Path) -> (Output, String) {
             format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
         )
         .env("LOG", &log)
+        .env("EVENT", event.unwrap_or_default())
         .output()
         .unwrap();
     (out, std::fs::read_to_string(&log).unwrap_or_default())
@@ -760,7 +988,7 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
     assert_eq!(
         log.trim(),
         format!(
-            "codeflow test --strict HOOK_VALUE=unset PWD={}",
+            "codeflow test --strict --mode full HOOK_VALUE=unset PWD={}",
             root.display()
         )
     );
@@ -779,7 +1007,7 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
         vec![
             "hook".to_string(),
             format!(
-                "codeflow test --strict HOOK_VALUE=set PWD={}",
+                "codeflow test --strict --mode full HOOK_VALUE=set PWD={}",
                 root.display()
             )
         ]
@@ -823,7 +1051,7 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
     assert_eq!(
         log.trim(),
         format!(
-            "codeflow test --strict HOOK_VALUE=unset PWD={}",
+            "codeflow test --strict --mode full HOOK_VALUE=unset PWD={}",
             root.display()
         )
     );
@@ -904,8 +1132,10 @@ fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
     let script = run_blocks(CI, "dependency audit").remove(0);
     let bin = repo.parent().unwrap().join("audit-bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let runner_temp = repo.parent().unwrap().join("runner-temp");
-    std::fs::create_dir_all(&runner_temp).unwrap();
+    // The step downloads into the runner's temp directory and removes what
+    // it made there; the system temp directory stays untouched (TSK-386).
+    let runner_temp = step_temp(&repo.parent().unwrap().join("runner-temp"));
+    let system_temp = step_temp(&repo.parent().unwrap().join("tmp"));
     let scanner = "#!/bin/sh\ncase \" $* \" in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac\ncase ${OSV_FAKE:-} in\n  empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;\n  broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;\nesac\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho \"GHSA-test advisory in ${OSV_FAKE_SOURCE:-Cargo.lock}\"; exit 1\n";
     let curl = format!(
         "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -o) shift; printf '%s' \"{}\" > \"$1\";; esac; shift; done\n",
@@ -922,7 +1152,7 @@ fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
             .status()
             .unwrap();
     }
-    Command::new("bash")
+    let out = Command::new("bash")
         .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &script])
         .current_dir(repo)
         .env(
@@ -931,10 +1161,14 @@ fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
         )
         .env("TRUSTED_SHA", trusted)
         .env("RUNNER_TEMP", &runner_temp)
+        .env("TMPDIR", &system_temp)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .envs(fake.iter().copied())
         .output()
-        .unwrap()
+        .unwrap();
+    assert_temp_as_found(&runner_temp, &out);
+    assert_temp_as_found(&system_temp, &out);
+    out
 }
 
 fn levels(security_review: &str, dep_audit: &str) -> String {
@@ -1067,10 +1301,53 @@ fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
 }
 
-/// sathyassn/codeflow#48: the full-history secret scan runs on a schedule
-/// and on demand, and the gates job stays off the schedule.
+/// TSK-449 AC-7: the shipped gate runs essential on pull requests and full
+/// on pushes, the schedule and manual runs, and an adopter config with no
+/// essential target (or none at all) keeps running full on pull requests.
 #[test]
-fn the_ci_workflow_schedules_the_full_scan_and_keeps_the_gates_off_it() {
+fn the_shipped_gate_runs_essential_on_pull_requests_and_full_elsewhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(work.join(".codeflow")).unwrap();
+    let root = work.canonicalize().unwrap();
+    let line = |mode: &str| {
+        format!(
+            "codeflow test --strict --mode {mode} HOOK_VALUE=unset PWD={}",
+            root.display()
+        )
+    };
+    let config = work.join(".codeflow/test-config.json");
+    let full_only = r#"{"targets":[{"name":"t","modes":{"full":{"command":"true"}}}]}"#;
+    let both = r#"{"targets":[{"name":"t","modes":{"essential":{"command":"true"},"full":{"command":"true"}}}]}"#;
+    for (body, event, mode) in [
+        (None, Some("pull_request"), "full"),
+        (Some(full_only), Some("pull_request"), "full"),
+        (Some(both), Some("pull_request"), "essential"),
+        (Some(both), Some("push"), "full"),
+        (Some(both), Some("schedule"), "full"),
+        (Some(both), Some("workflow_dispatch"), "full"),
+        (Some("{ not json"), Some("pull_request"), "full"),
+    ] {
+        match body {
+            Some(body) => std::fs::write(&config, body).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&config);
+            }
+        }
+        let (out, log) = run_test_step_on(&work, event);
+        assert!(out.status.success(), "{event:?}: {out:?}");
+        assert_eq!(log.trim(), line(mode), "{body:?} on {event:?}");
+    }
+    assert!(
+        !job(CI, "gates").contains("    if:"),
+        "the gates job runs on every event"
+    );
+}
+
+/// sathyassn/codeflow#48: the full-history secret scan runs on a schedule
+/// and on demand; TSK-449 puts the full gate on the schedule too.
+#[test]
+fn the_ci_workflow_schedules_the_full_scan_and_the_full_gate() {
     let on = CI
         .split("\non:\n")
         .nth(1)
@@ -1079,7 +1356,7 @@ fn the_ci_workflow_schedules_the_full_scan_and_keeps_the_gates_off_it() {
     for event in ["pull_request:", "push:", "schedule:", "workflow_dispatch:"] {
         assert!(on.contains(event), "{event}: {on}");
     }
-    assert!(job(CI, "gates").contains("    if: github.event_name != 'schedule'\n"));
+    assert!(!job(CI, "gates").contains("    if:"));
     assert!(!job(CI, "secret-scan").contains("    if:"));
 }
 

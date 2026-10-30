@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "node scripts/workflow.mjs build",
+    "check:present": "node --test tests/present-parity.test.mjs",
     "browser:verify": "node --test tests/browser-keyboard.test.mjs tests/composition-browser.test.mjs tests/figure-rules-browser.test.mjs tests/figure-gate.test.mjs && node scripts/browser-verify.mjs",
     "check": "node scripts/workflow.mjs check",
     "deps:install": "node scripts/install-dependencies.mjs",
@@ -17,7 +18,7 @@
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.6",
-    "astro": "7.2.8",
+    "astro": "7.3.8",
     "github-slugger": "2.0.0",
     "pagefind": "1.5.2",
     "remark-gfm": "4.0.1",
@@ -34,7 +35,7 @@
   },
   "overrides": {
     "sharp": "0.35.5",
-    "fast-uri": "3.1.8",
+    "fast-uri": "3.1.9",
     "nanoid": "3.3.18",
     "devalue": "5.9.4",
     "postcss-nested": "8.0.1"

@@ -61,20 +61,99 @@ impl Clearing {
         Remedy(self.text.to_string())
     }
 
-    /// The remedy with each `{key}` replaced by its value.
+    /// The remedy with each `{key}` replaced by its value, in one pass over
+    /// the catalogued text. Only that text is read as template syntax: a
+    /// value is copied as it is, so a brace in a path neither fills nor
+    /// trips a placeholder check, and no check message quotes a value
+    /// (TSK-1029).
     #[must_use]
     pub fn with(&'static self, fills: &[(&str, &str)]) -> Remedy {
-        let mut text = self.text.to_string();
-        for (key, value) in fills {
-            text = text.replace(&format!("{{{key}}}"), value);
+        let mut text = String::with_capacity(self.text.len());
+        for piece in self.pieces() {
+            match piece {
+                Piece::Fixed(fixed) => text.push_str(fixed),
+                Piece::Key(key) => {
+                    let fill = fills.iter().find(|(name, _)| *name == key);
+                    debug_assert!(fill.is_some(), "{} has no fill for {{{key}}}", self.name);
+                    if let Some((_, value)) = fill {
+                        text.push_str(value);
+                    } else {
+                        text.push('{');
+                        text.push_str(key);
+                        text.push('}');
+                    }
+                }
+            }
         }
-        debug_assert!(
-            !text.contains('{'),
-            "{} left a placeholder: {text}",
-            self.name
-        );
         Remedy(text)
     }
+
+    /// The remedy with each `{path}` filled by `path`, as [`Shown`] text,
+    /// for a warning inside the display boundary of `codeflow update`
+    /// (TSK-1029). Only the catalogued text is read as template syntax.
+    ///
+    /// [`Shown`]: crate::scaffold::Shown
+    #[must_use]
+    pub fn shown_for(&'static self, path: &std::path::Path) -> crate::scaffold::Shown {
+        use crate::scaffold::Shown;
+        let mut text = Shown::default();
+        for piece in self.pieces() {
+            match piece {
+                Piece::Fixed(fixed) => text.push(&Shown::fixed(fixed)),
+                Piece::Key(key) => {
+                    debug_assert!(key == "path", "{} has a {{{key}}} to fill", self.name);
+                    text.push(&Shown::path(path));
+                }
+            }
+        }
+        text
+    }
+
+    /// The catalogued text split into fixed runs and `{key}` placeholders.
+    /// Every `{` in a catalogue entry opens a placeholder
+    /// (`every_catalogue_brace_opens_a_named_placeholder` checks).
+    fn pieces(&'static self) -> Vec<Piece> {
+        let mut pieces = Vec::new();
+        let mut rest = self.text;
+        while let Some(open) = rest.find('{') {
+            let Some(close) = rest[open..].find('}') else {
+                break;
+            };
+            pieces.push(Piece::Fixed(&rest[..open]));
+            pieces.push(Piece::Key(&rest[open + 1..open + close]));
+            rest = &rest[open + close + 1..];
+        }
+        pieces.push(Piece::Fixed(rest));
+        pieces
+    }
+}
+
+/// A run of a catalogued remedy text: fixed text, or a placeholder's key.
+enum Piece {
+    Fixed(&'static str),
+    Key(&'static str),
+}
+
+/// A warning or note in the form [`Finding::line`] writes, built from
+/// [`Shown`] text: what was found, then the catalogued step that clears it
+/// (TSK-1029).
+///
+/// [`Shown`]: crate::scaffold::Shown
+#[must_use]
+pub fn shown_line(
+    plane: &'static str,
+    kind: &'static str,
+    text: &crate::scaffold::Shown,
+    remedy: &crate::scaffold::Shown,
+) -> crate::scaffold::Shown {
+    use crate::scaffold::Shown;
+    crate::shown!(
+        "{}: {}: {}\n  clear it: {}",
+        Shown::fixed(plane),
+        Shown::fixed(kind),
+        text,
+        remedy
+    )
 }
 
 /// A rendered remedy, made only from a [`Clearing`], or from the sanctioned
@@ -126,6 +205,14 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// Order findings by what they say, reading an id in the text by its
+    /// number (`TSK-999` before `TSK-1000`), then by remedy.
+    #[must_use]
+    pub fn by_text(&self, other: &Self) -> std::cmp::Ordering {
+        crate::ids::compare_ids(&self.text, &other.text)
+            .then_with(|| self.remedy.cmp(&other.remedy))
+    }
+
     /// A finding and its remedy.
     #[must_use]
     pub fn new(text: impl Into<String>, remedy: Remedy) -> Self {
@@ -149,18 +236,25 @@ impl Finding {
     #[must_use]
     pub fn line(&self, plane: &str, kind: &str) -> String {
         // A finding's own text can span lines (a tool's error); they stay
-        // indented under it, so the remedy line stays with its finding.
+        // indented under it, so the remedy line stays with its finding. It
+        // can quote a name or content a remote supplied (TSK-388).
         format!(
             "{plane}: {kind}: {}\n  clear it: {}",
-            self.text.trim_end().replace('\n', "\n  "),
-            self.remedy
+            crate::git::display_message(self.text.trim_end()),
+            crate::git::display_message(&self.remedy)
         )
     }
 }
 
 impl fmt::Display for Finding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (clear it: {})", self.text, self.remedy)
+        // The text can quote a name or content a remote supplied (TSK-388).
+        write!(
+            f,
+            "{} (clear it: {})",
+            crate::git::display_message(&self.text),
+            crate::git::display_message(&self.remedy)
+        )
     }
 }
 
@@ -180,6 +274,10 @@ catalog! {
     /// Local changes or commits whose recovery has not been proved.
     DISCARD_LOCAL_WORK = Step::Git("git stash push"),
         "inspect `git status` and save tracked changes with `git stash push` or a commit; preview untracked removal with `git clean -nd`, keep or export unique files, and retain a branch or worktree until another live ref preserves its commits; restore a named file only when that is intended";
+
+    /// A missing registered worktree requested by a relative spelling.
+    ABSENT_WORKTREE = Step::Git("git worktree prune"),
+        "run `git worktree prune` or `git worktree remove --force <absolute-path>` with the exact absolute registered path";
 
     // Records.
 
@@ -211,6 +309,12 @@ catalog! {
     /// An open task that names no deliverables (sathyassn/codeflow#40).
     TASK_DELIVERABLES = Step::Edit("{path}"),
         "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`, or name the path the task changes in its Description; a home not known yet is marked provisional with what decides it";
+    /// An open record with no filled Outcome section (TSK-435).
+    RECORD_OUTCOME = Step::Edit("{path}"),
+        "in {path}, add one line under `## Outcome`, between the Description (or Summary) and the Deliverables: after this merges, <who> can <do what>";
+    /// An epic created after adoption that names no deliverables (TSK-435).
+    EPIC_DELIVERABLES = Step::Edit("{path}"),
+        "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`; a home not known yet is marked provisional with what decides it";
     /// A documentation layer the project does not have.
     DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
         "run `codeflow update`, which restores {path} at this project's tier";
@@ -255,11 +359,12 @@ catalog! {
         "restore the record's `uid` line as the target has it (`git restore --source <target> -- <path>` restores the whole record), since a uid is written once";
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
-        "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
-    /// A PR body whose Reviews section does not approve the commit the
-    /// task's acceptance block binds (issue 121).
+        "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target; see cf-method/references/project-organization.md#acceptance-waivers-and-redactions for its field and format, or the record-only redaction route ({note})";
+    /// A PR body whose Reviews row names another commit or verdict than the
+    /// task's acceptance block, from which the row is derived (issue 121,
+    /// TSK-451).
     REVIEW_ROW_BINDING = Step::Codeflow("codeflow ci"),
-        "name the reviewed commit in a Reviews row as `whole unit at {sha}` with the full 40-character commit, for example `| reviewer | whole unit at {sha} | approved |`; the verdict cell is only `approved` or `approve`, so a shorter sha or any further words in that cell do not count; review that commit first when no review covered it; a light range with no review writes `None: <reason>` instead (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
+        "name the reviewed commit in a Reviews row as `whole unit at {sha}` with the full 40-character commit, for example `| reviewer | whole unit at {sha} | approved |`; the verdict cell is only `approved` or `approve`, so a shorter sha or any further words in that cell do not count; review that commit first when no review covered it; or leave the section out or point it at the task's acceptance block, from which `codeflow ci` derives the row (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
     /// An epic's own acceptance block that does not bind to its review or
     /// whose waiver is no planning amendment the review saw (R-33, R-60).
     EPIC_ACCEPTANCE_BINDING = Step::Edit("{path}"),
@@ -275,9 +380,18 @@ catalog! {
     /// range (SPC-013 R-52, TSK-248): evidence, not a refusal.
     LINE_ADOPTION_OUTSIDE_RANGE = Step::Codeflow("codeflow ci"),
         "nothing to change: the entry adopts nothing in this range, and `codeflow ci` still refuses any direct commit in it that no entry adopts; a human reviewer confirms the entry names a commit that landed earlier, and a planning pull request that removes it from `line_adoptions` in {epic} ends this note";
+    /// An `integration/` head judged without a pull request body that fails
+    /// the epic-line proof, so its completions bind at the range head with
+    /// frozen criteria (TSK-433 AC-7).
+    UNVERIFIED_LINE_FROZEN = Step::Codeflow("codeflow ci"),
+        "land work on the line only by classified pull requests, and adopt each direct commit with a `line_adoptions` entry in its epic that a human reviewer approves in a planning pull request that lands on the line, so the line passes the epic-line proof; then rerun `codeflow ci`";
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";
+    /// The criteria version a changed task record is judged against
+    /// (TSK-306): evidence, not a refusal.
+    CRITERIA_AUTHORITY = Step::Codeflow("codeflow ci"),
+        "nothing to change: `codeflow ci` names the judged point and version whose criteria the record is compared with, and any point whose older version it set aside; a human reviewer confirms that version is the one the task keeps";
     /// A text correction of a completed standalone task's criteria
     /// (ADR-0080): evidence, not a refusal.
     CRITERIA_CORRECTION = Step::Codeflow("codeflow ci"),
@@ -305,7 +419,15 @@ catalog! {
     POLICY_DEPRECATED = Step::Codeflow("codeflow update"),
         "`codeflow update` removes it, or delete {key} from .codeflow/policy.json";
 
+    /// A policy key with no enforcement reader.
+    POLICY_UNSUPPORTED = Step::Edit(".codeflow/policy.json"),
+        "the operator removes {key} from .codeflow/policy.json; `codeflow update` removes only an unchanged retired default and preserves edited values";
+
     // Protected branches and the sanctioned landing path.
+
+    /// A pull request without a valid work class or planning path set.
+    WORK_CLASSIFICATION = Step::Edit(".codeflow/policy.json"),
+        "add exactly one Task: TSK-NNN, or Task: EPC-NNN for the epic's planning change or integration line; where durable tracking is inactive, name the tracked unit; for an excluded planning path, carry it in a task pull request, or first declare a document index in git.document_indexes in .codeflow/policy.json on the target through a task pull request; product and watched paths stay excluded";
 
     /// Work that would land on a protected branch outside a pull request.
     PROTECTED_BRANCH = Step::Codeflow("codeflow integrate"),
@@ -334,6 +456,10 @@ catalog! {
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
         "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+    /// An interpreter given an argument that names, or may name, an
+    /// enforcement path (TSK-302).
+    INTERPRETER_ARGUMENT = Step::Codeflow("codeflow update"),
+        "an interpreter can write any file its arguments name, so the guard refuses one given an enforcement path, or a value it cannot read on a line that names one: read an enforcement file with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin (`python3 tool.py < file`); give ordinary files as literal paths; hooks and policy change through a human or `codeflow update` (ADR-0009)";
     /// A recursive delete of a registered worktree or a directory holding one.
     WORKTREE_DELETE = Step::Git("git worktree remove"),
         "commit or save the worktree's work, then remove it with `git worktree remove <path>`, which refuses while it holds uncommitted changes; remove a directory that holds worktrees only after each of them is removed";
@@ -437,6 +563,9 @@ catalog! {
     /// A base git itself refuses to resolve, naming git's own cause.
     CI_BASE_REFUSED = Step::Codeflow("codeflow ci"),
         "fix the cause git names, such as a replace ref it cannot follow or a `GIT_REPLACE_REF_BASE` without a trailing slash, which git 2.55 and later refuse; then rerun `codeflow ci --base <ref> --head <ref>`";
+    /// A named range base differs from the branch's declared acceptance target.
+    CI_BASE_TARGET_DIFFER = Step::Codeflow("codeflow ci"),
+        "name both choices explicitly: `codeflow ci --base <ref> --into <target>` uses the base for the range and the target for acceptance binding";
     /// A range git could not diff or list.
     CI_RANGE_UNREADABLE = Step::Git("git fetch"),
         "fetch the whole range (`git fetch --unshallow`, or a CI checkout with fetch-depth 0), then rerun `codeflow ci`";
@@ -458,6 +587,9 @@ catalog! {
 
     // Secrets.
 
+    /// A name or path refused by the object-only path gate.
+    PATH_POLICY = Step::Edit(".codeflow/policy.json"),
+        "remove the refused path from the change, or land a narrow explained except_under/allow in the target's .codeflow/policy.json";
     /// A dotenv file staged.
     ENV_FILE_STAGED = Step::Edit(".gitignore"),
         "unstage it with `git restore --staged <file>` and keep env files out of git through `.gitignore`; commit a .env.example instead";
@@ -470,42 +602,24 @@ catalog! {
 
     // The push set.
 
-    /// A push-set target that failed.
-    PUSH_SET_FAILED = Step::Codeflow("codeflow test"),
-        "fix the failing target(s), or run `codeflow test --mode quick` to reproduce";
     /// A `codeflow ci` run in the push set that found problems.
     PUSH_SET_CI = Step::Codeflow("codeflow ci"),
         "fix the findings above, then push again; `codeflow ci {args}` reruns this check on the range as pushed";
-    /// A `codeflow validate` run in the push set that found problems.
-    PUSH_SET_VALIDATE = Step::Codeflow("codeflow validate"),
-        "fix the findings above, then rerun `codeflow validate {args}`";
     /// A push set that could not start its checks.
     PUSH_SET_BY_HAND = Step::Codeflow("codeflow ci"),
-        "run `codeflow ci` and `codeflow validate --docs` by hand";
-    /// A pushed ref whose tree checks ran on another checkout.
-    PUSH_TREE_UNCHECKED = Step::Codeflow("codeflow validate"),
-        "push from a clean checkout of the pushed commit (commit or discard tracked edits first), or run `codeflow validate --docs` and `codeflow test --mode quick` on it by hand";
+        "run `codeflow ci` by hand";
     /// A new branch whose `codeflow ci` range has no base.
     PUSH_RANGE_UNRESOLVED = Step::Git("git fetch"),
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";
-    /// A destination that did not answer for its branches.
+    /// A destination whose default-branch lookup could not be used.
     PUSH_DESTINATION_SILENT = Step::Git("git ls-remote"),
-        "make `git ls-remote <remote>` answer (network, credentials), then push again";
+        "make `git ls-remote --symref <remote>` answer (network access, remote credentials), repair the remote's advertised default branch if needed, then rerun the command or push";
     /// A push that rewrites the destination's branch.
     PUSH_REWRITE = Step::Git("git pull"),
         "push without the rewrite (`git pull --rebase` onto the destination's branch first), or let CI check the whole range";
-    /// A push set over its time budget, slowest at a test target.
-    PUSH_OVER_BUDGET_TARGET = Step::Edit(".codeflow/test-config.json"),
-        "remove the `modes.quick` of target '{target}' in .codeflow/test-config.json to move it to the full gate";
     /// A push set over its time budget, slowest at a built-in check.
     PUSH_OVER_BUDGET_BUILTIN = Step::Edit(".codeflow/policy.json"),
         "run the slowest step alone to see what makes it slow, or set `git.test_gate_on_push` to off in .codeflow/policy.json to drop the push set";
-    /// A push set with no test configuration.
-    PUSH_TARGETS_UNCONFIGURED = Step::Edit(".codeflow/test-config.json"),
-        "create .codeflow/test-config.json (the /cf-stack skill adds a stack) with a target that has a `quick` mode";
-    /// A test configuration with no quick target.
-    PUSH_TARGETS_NONE = Step::Edit(".codeflow/test-config.json"),
-        "give a target a `quick` mode in .codeflow/test-config.json";
     /// Pending id reservations not published by this push.
     IDS_PENDING_LOCAL = Step::Codeflow("codeflow ids sync"),
         "publish them to the authority with `codeflow ids sync`, or push to the authority remote";
@@ -521,9 +635,6 @@ catalog! {
     /// A push that breaks the release tree.
     RELEASE_PREFLIGHT = Step::Edit("changelog.d/"),
         "fix the release state the preflight names above (the pending entry's fragment under `changelog.d/` or the release files it lists), then rerun `python3 {script} preflight --branch {branch}`";
-    /// A test configuration that does not load.
-    TEST_CONFIG_REPAIR = Step::Edit(".codeflow/test-config.json"),
-        "repair .codeflow/test-config.json, then run `codeflow test --mode quick`";
 
     // Doctor.
 
@@ -533,6 +644,9 @@ catalog! {
     /// A project without its codeflow configuration.
     DOCTOR_INIT = Step::Codeflow("codeflow init"),
         "run `codeflow init` in the project root";
+    /// A project without the Outcome section's adoption marker (TSK-435).
+    DOCTOR_OUTCOME_MARKER = Step::Codeflow("codeflow update"),
+        "run `codeflow update`, which writes `outcome_present_uids` to .codeflow/project.toml once, listing the task and epic records present now; those only warn without an `## Outcome` section, and later ones must state it";
     /// A tool doctor looks for on PATH and does not find.
     DOCTOR_TOOL_MISSING = Step::Codeflow("codeflow doctor"),
         "install {tool} on PATH, then `codeflow doctor --check {check}` confirms it";
@@ -553,6 +667,9 @@ catalog! {
     /// Directories a full gate writes that this process cannot write.
     DOCTOR_GATE_DIRS = Step::Edit(".claude/settings.json"),
         "make {paths} writable for the process that runs the full gate: inside the Claude Code sandbox the operator adds them to `sandbox.filesystem.allowWrite` in `.claude/settings.json` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs `codeflow test --mode full` outside the sandbox; then `codeflow doctor --check permissions` confirms it";
+    /// Gate directories a Codex seat cannot write (TSK-337).
+    DOCTOR_GATE_DIRS_CODEX = Step::Codeflow("codeflow doctor --preflight"),
+        "this runs in a Codex sandbox, which cannot write {paths}. A review seat's `cf-guard` profile grants none of them, by design, so run `codeflow reserve` and quick-mode heavy targets in a builder seat; full gates stay with the primary. The operator, or the session that launched the seat, relaunches the builder seat with the Codex builder launch in cf-model-orchestrator's `resources/routing/transport.md`, from the main checkout root: its override grants `~/.codeflow/locks` and its `cf-builder` profile writes the common `.git`. Outside the seat, `codeflow doctor --preflight` checks that launch, and `codeflow doctor --check permissions` in the relaunched seat confirms it";
     /// A state the sandbox hides from doctor.
     DOCTOR_SANDBOX_UNSEEN = Step::Codeflow("codeflow doctor"),
         "the operator runs `codeflow doctor --check {check}` outside the sandbox, in a separate terminal, to confirm {what}";
@@ -571,6 +688,12 @@ catalog! {
     /// manages.
     DOCTOR_GROK_MISSING_GUARD = Step::Edit("{path}"),
         "`codeflow update` does not restore the shell guard in {path}: in it, add the shipped guard group this finding quotes to the `PreToolUse` list under `hooks`, exactly as quoted, creating the file with that list if it does not exist; then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
+    /// A `CodeFlow` guard hook entry a harness reads without the shipped
+    /// `timeout`, or a Claude one without `"onFailure": "block"`, so a
+    /// guard that does not answer in time can let the tool call through
+    /// (TSK-1082).
+    DOCTOR_GUARD_TIMEOUTS = Step::Codeflow("codeflow update"),
+        "run `codeflow update`, which gives the CodeFlow guard entries in `.claude/settings.json` the shipped fields and moves `.grok/hooks/codeflow.json` and `.codex/hooks.json` to them by a 3-way merge (where your edit overlaps, it writes a `.new` file beside the file: resolve it in favour of the shipped fields and delete it). In a file update does not manage, such as `.claude/settings.local.json`, set each named entry's `timeout` to {timeout}, and in Claude settings its `onFailure` to `block`, by hand. Codex asks you to approve a changed hook again in `/hooks`. Then `codeflow doctor --check guard-timeouts` confirms it";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";
@@ -642,6 +765,9 @@ catalog! {
     /// Harness settings without the shell startup class (TSK-242).
     DOCTOR_STARTUP_PRESETS = Step::Codeflow("codeflow update"),
         "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
+    /// Git include paths that need operator inspection.
+    DOCTOR_GIT_CONFIG_INCLUDES = Step::Git("git config"),
+        "The operator inspects git config --show-origin --includes --list and secures or removes its include paths; rerun codeflow doctor --check git-config-includes after repair.";
     /// Files the home's startup files source from outside the class.
     DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
         "the operator, in {path}, moves what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inlines it, so the guards and sandboxes protect it; an agent session may not edit a startup file";
@@ -680,6 +806,9 @@ catalog! {
     /// A git alias the guard cannot resolve.
     GUARD_ALIAS = Step::Git("git config"),
         "write the git command the alias stands for, or make the alias readable: a git-command alias (not a `!` shell alias) set with `git config`, not through `--config-env` or configuration environment variables";
+    /// Effective configuration cannot be reproduced for an outward action.
+    GUARD_GIT_CONFIGURATION = Step::Git("git config"),
+        "inspect the named input with git config --show-origin --includes --list, then run with readable configuration and without environment overrides; the operator repairs the named input";
     /// A headless peer run.
     HEADLESS_PEER_RUN = Step::Codeflow("codeflow delegate"),
         "run the peer as an interactive seat instead: the other family's own CLI in a named Herdr tab, a Claude seat's turns tracked with `codeflow delegate` (cf-delegate; the rule is cf-model-orchestrator's resources/routing/transport.md). Text that only mentions a peer, such as a brief, a commit message or a pull request body, goes in a file written with the editor tool and passed by path (`git commit -F <file>`, `gh pr create --body-file <file>`, `gh api … -F body=@<file>`); a heredoc or inline string that names a peer with a headless flag is flagged by design whenever the line cannot be fully parsed, and the policy level decides whether it is refused; {enforcement} (policy security.headless_peer_runs)";
@@ -694,6 +823,10 @@ catalog! {
     /// does not pass the payload through unchanged.
     GUARD_PAYLOAD_MALFORMED = Step::Edit("{path}"),
         "make the hook entry that runs `codeflow hook {guard}` pass the harness payload on stdin unchanged, in {path}; the next tool call is then read";
+    /// A session guard that reached no decision before its own deadline,
+    /// so it refused rather than let the harness time it out (TSK-1082).
+    GUARD_DEADLINE = Step::Codeflow("codeflow doctor"),
+        "retry the command; if the guard stalls again, something it reads blocks, such as a FIFO or device a git configuration include names, or a hung filesystem: `codeflow doctor --check git-config-includes` names the include files, and the operator repairs or removes the one that blocks";
     /// A session summary that could not be written.
     SESSION_SUMMARY_UNWRITTEN = Step::Edit("{path}"),
         "{repair}: {path}; the session ledger lives under git's common directory, and the next session end writes it";
@@ -712,6 +845,10 @@ catalog! {
     OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),
         "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
 
+    /// A recursive read or glob whose complete selected paths cannot be inspected.
+    SECRET_SELECTION = Step::Edit(".codeflow/policy.json"),
+        "narrow the search roots or file selection to paths the guard can inspect within its metadata budget, without including secret stores; the operator runs an intended secret read personally in a separate terminal; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+
     /// A branch push that would include tags because of effective Git config.
     PUSH_WITHOUT_FOLLOW_TAGS = Step::Git("git push"),
         "push only the intended branch with `git push --no-follow-tags <remote> <branch>`; tag publication remains operator-owned";
@@ -729,6 +866,7 @@ mod tests {
             &super::PROTECTED_DELETE,
             &super::PR_MERGE_PROTECTED,
             &super::OUTWARD_ACTION,
+            &super::SECRET_SELECTION,
             &super::PRIVILEGE_ESCALATION,
         ] {
             assert!(
@@ -743,6 +881,52 @@ mod tests {
             assert!(remedy
                 .text
                 .contains("HEAD while no remote-tracking refs exist"));
+        }
+    }
+
+    /// `Clearing::pieces` reads every `{` as a placeholder; each entry's
+    /// braces pair up around a plain key.
+    #[test]
+    fn every_catalogue_brace_opens_a_named_placeholder() {
+        for clearing in super::CATALOG {
+            let mut rest = clearing.text;
+            while let Some(open) = rest.find('{') {
+                let close = rest[open..]
+                    .find('}')
+                    .unwrap_or_else(|| panic!("{}: an unclosed brace", clearing.name));
+                let key = &rest[open + 1..open + close];
+                assert!(
+                    !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                    "{}: {{{key}}} is not a placeholder",
+                    clearing.name
+                );
+                rest = &rest[open + close + 1..];
+            }
+            assert!(
+                !rest.contains('}'),
+                "{}: a lone closing brace",
+                clearing.name
+            );
+        }
+    }
+
+    /// TSK-1029 review: a path is copied as it is. Braces and control
+    /// characters in it neither fill nor trip a placeholder, and a debug
+    /// build does not panic, for both registry remedies.
+    #[test]
+    fn a_brace_in_a_filled_path_is_copied_as_text() {
+        let path = "/home{label}/x{path}\u{1b}[31m{";
+        for clearing in [&super::REGISTRY_UNWRITTEN, &super::REGISTRY_ROOT_UNREADABLE] {
+            let shown = clearing.shown_for(std::path::Path::new(path));
+            assert_eq!(
+                shown.matches(path).count(),
+                clearing.text.matches("{path}").count()
+            );
+            let remedy = clearing.with(&[("path", path)]);
+            assert_eq!(
+                remedy.matches(path).count(),
+                clearing.text.matches("{path}").count()
+            );
         }
     }
 }

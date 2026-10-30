@@ -43,13 +43,11 @@ const PRESENT_SCHEMAS: &[&str] = &[
     "utility-tokens-v1.schema.json",
 ];
 
-/// Shared isolated `CODEFLOW_HOME` so the suite never writes the developer's
-/// real `~/.codeflow/registry.json` (per the `recall_remote_cli.rs` pattern).
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/outcome.rs"]
+mod outcome;
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
@@ -316,7 +314,7 @@ fn assert_update_round_trips(root: &Path) {
     // The project changes one shipped compaction key, removes the other and
     // adds its own entry; update keeps all three choices (TSK-211 AC-2).
     assert_eq!(
-        settings["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50",
+        settings["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "35",
         "init did not write the compaction default"
     );
     settings["env"] = serde_json::json!({
@@ -564,7 +562,12 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
     let codex = read(&root, ".codex/config.toml");
     assert!(!codex.contains("sandbox_mode"));
     assert!(codex.contains("approvals_reviewer = \"auto_review\""));
-    assert!(codex.contains("model_reasoning_effort = \"high\""));
+    assert!(
+        !codex
+            .lines()
+            .any(|line| line.starts_with("model_reasoning_effort")),
+        "effort is each person's setting (TSK-1028)"
+    );
     assert!(codex.contains("web_search = \"live\""));
 
     assert_engine_placeholders_rendered(&root);
@@ -645,7 +648,7 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         let err = String::from_utf8_lossy(&locked.stderr).to_string();
         assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");
         assert!(
-            err.contains("another full gate is running"),
+            err.contains("another heavy gate is running"),
             "{tier}: {err}"
         );
         drop(held);
@@ -1183,7 +1186,7 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
         "- AC-1\n",
         "- AC-1 When read, the guide shall explain setup.\n",
     );
-    std::fs::write(&task_path, task).unwrap();
+    std::fs::write(&task_path, outcome::with_outcome(&task)).unwrap();
     git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
     git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
@@ -1368,7 +1371,7 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
         "- AC-1\n",
         "- AC-1 When read, the guide shall explain setup.\n",
     );
-    std::fs::write(&task_path, task).unwrap();
+    std::fs::write(&task_path, outcome::with_outcome(&task)).unwrap();
     git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
     git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
@@ -1484,6 +1487,42 @@ fn record_as_installed(root: &Path, rel: &str, older: Option<&str>) {
     .unwrap();
 }
 
+/// The installed doctrine sentences a fresh scaffold must carry.
+const DOCTRINE_PINS: [(&str, &str); 9] = [
+    (
+        ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "Every blocker or major finding carries the smallest evidenced remedy",
+    ),
+    // TSK-452: the review cadence has one home, "Review verdicts" in
+    // the discipline rules; findings points there.
+    (
+        ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "are stated once in `.codeflow/rules/workflow-discipline.md` \"Review verdicts\"",
+    ),
+    (
+        ".codeflow/rules/workflow-discipline.md",
+        "Review runs at four stages, and only these:",
+    ),
+    (
+        ".codeflow/rules/workflow-discipline.md",
+        "Between stages the finder confirms each material fix on the delta plus the affected tests",
+    ),
+    (
+        ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "An already approved departure is reused and not asked again.",
+    ),
+    (
+        ".claude/skills/cf-develop/SKILL.md",
+        "No cycle count decides: continue while repairs produce relevant evidence",
+    ),
+    (
+        ".claude/agents/cf-reviewer.md",
+        "remedy: <blocker and major",
+    ),
+    (".codeflow/rules/writing.md", "## Copy guide"),
+    (".codeflow/rules/writing.md", "### Microcopy"),
+];
+
 #[test]
 fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
     const FINDINGS_ROW: &str = "| [Review findings and repair](quality/findings.md) | when a defect is fixed, or review findings are briefed, written or acted on |\n";
@@ -1504,30 +1543,7 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
             );
         }
         // The doctrine an agent in this project reads.
-        for (rel, sentence) in [
-            (
-                ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Every blocker or major finding carries the smallest evidenced remedy",
-            ),
-            (
-                ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Review is one holistic pass per revision",
-            ),
-            (
-                ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
-                "An already approved departure is reused and not asked again.",
-            ),
-            (
-                ".claude/skills/cf-develop/SKILL.md",
-                "No cycle count decides: continue while repairs produce relevant evidence",
-            ),
-            (
-                ".claude/agents/cf-reviewer.md",
-                "remedy: <blocker and major",
-            ),
-            (".codeflow/rules/writing.md", "## Copy guide"),
-            (".codeflow/rules/writing.md", "### Microcopy"),
-        ] {
+        for (rel, sentence) in DOCTRINE_PINS {
             let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(
                 words(&read(&root, rel)).contains(sentence),
@@ -2512,7 +2528,9 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
     git_with_binary(root, &["commit", "-q", "-m", "docs: record a legacy task"]);
     seed(root, dest, target);
 
-    // A pre-push with a ci finding at warn and the stale task.
+    // A pre-push with a ci finding at warn; the stale task is a record
+    // finding `codeflow validate --docs` names, which the push set no longer
+    // runs (TSK-449).
     git_with_binary(root, &["switch", "-q", "-c", "feat/x", &base]);
     std::fs::write(root.join("x.txt"), "x\n").unwrap();
     git_with_binary(root, &["add", "x.txt"]);
@@ -2523,15 +2541,20 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
     assert!(
         err.contains("warning — policy rule git.commit_format (warn)")
             && err.contains("reword it with `git commit --amend` as `type(scope): description`")
-            && err.contains("stale status: in_progress with no active branch carrying TSK-001")
+            && !err.contains("stale status")
             && err.contains("codeflow pre-push: push not stopped")
             && !err.contains("BLOCKED"),
         "{err}"
     );
+    let validated = output_text(&codeflow(root, &["validate", "--docs"]));
+    assert!(
+        validated.contains("stale status: in_progress with no active branch carrying TSK-001"),
+        "{validated}"
+    );
 
     // Each step, run as printed.
     git_with_binary(root, &["commit", "-q", "--amend", "-m", "feat: add x"]);
-    let step = printed_step(&err, "stale status: in_progress");
+    let step = printed_step(&validated, "stale status: in_progress");
     assert_eq!(step[..2], ["codeflow", "task"], "{step:?}");
     let args: Vec<&str> = step[1..].iter().map(String::as_str).collect();
     let status = codeflow(root, &args);
@@ -2552,9 +2575,11 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
         !err.contains("git.commit_format")
             && !err.contains("stale status")
             && !err.contains("warning")
-            && err.contains("codeflow pre-push: push not stopped"),
+            && err.contains("codeflow pre-push: push set finished"),
         "{err}"
     );
+    let validated = output_text(&codeflow(root, &["validate", "--docs"]));
+    assert!(!validated.contains("stale status"), "{validated}");
 }
 
 /// The refusals line of `codeflow report ceremony` over every date.

@@ -25,9 +25,117 @@ pub struct Criterion {
     pub text: String,
     /// `Some(ticked)` for a legacy checkbox line, `None` for a listed line.
     pub checkbox: Option<bool>,
+    /// The indented sub-bullets under the criterion, in order.
+    pub sub_items: Vec<SubItem>,
 }
 
+/// An indented sub-bullet under a criterion (`  - ...`, `  * ...` or
+/// `  + ...`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubItem {
+    /// Where the sub-bullet starts in the criterion's `text`, in bytes.
+    pub at: usize,
+    /// Its first line, whitespace-collapsed, marker included.
+    pub line: String,
+    /// An amendment note: a dash sub-bullet whose first word is exactly
+    /// `Amended` or `Moved` and whose next word is a `YYYY-MM-DD` date.
+    /// The note and its wrapped lines are left out of the criterion's own
+    /// text, where tags are read.
+    pub note: bool,
+}
+
+impl SubItem {
+    /// Read one indented line as a sub-bullet, `at` its offset in the
+    /// criterion text; `None` for a wrapped line of text.
+    fn read(at: usize, line: &str) -> Option<Self> {
+        let marker = line.chars().next()?;
+        let rest = line
+            .strip_prefix(['-', '*', '+'])
+            .filter(|rest| rest.starts_with([' ', '\t']))?;
+        let mut words = rest.split([' ', '\t']).filter(|word| !word.is_empty());
+        let first = words.next().unwrap_or_default();
+        let date = words
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches([':', ',', ';', '.']);
+        Some(Self {
+            at,
+            line: line.to_string(),
+            note: marker == '-' && matches!(first, "Amended" | "Moved") && is_date(date),
+        })
+    }
+}
+
+/// Whether `word` is a `YYYY-MM-DD` date in form.
+fn is_date(word: &str) -> bool {
+    let bytes = word.as_bytes();
+    bytes.len() == 10
+        && bytes.iter().enumerate().all(|(index, byte)| match index {
+            4 | 7 => *byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
+}
+
+/// Whether `tag` opens or closes `text` (R-50). Sentence punctuation after
+/// a closing tag (`... (journey).`) does not hide it.
+fn opens_or_closes(text: &str, tag: &str) -> bool {
+    let text = text.trim_matches([' ', '\t']);
+    let closing = text.trim_end_matches(['.', ',', ';', ':']);
+    text.starts_with(tag) || closing.ends_with(tag)
+}
+
+/// The remedy a refusal gives for a tag a sub-bullet hides
+/// ([`Criterion::tag_hidden_by`]): it names the sub-bullet (its first line,
+/// at most 60 characters), the criterion `name` and the tag `label`.
+#[must_use]
+pub fn hidden_tag_message(name: &str, label: &str, line: &str) -> String {
+    const LIMIT: usize = 60;
+    let mut quoted: String = line.chars().take(LIMIT).collect();
+    if line.chars().count() > LIMIT {
+        quoted.push_str("...");
+    }
+    format!(
+        "the note \"{quoted}\" under {name} hides its `{label}` tag; move the tag to the start of the criterion (R-50)"
+    )
+}
+
+/// The `(serves ...)` opening a criterion's serves tag.
+const SERVES: &str = "(serves ";
+
 impl Criterion {
+    /// The parts of `text`: the head, then each sub-bullet with its
+    /// wrapped lines, each with the sub-bullet it starts with.
+    fn parts(&self) -> impl Iterator<Item = (Option<&SubItem>, &str)> {
+        let head_end = self
+            .sub_items
+            .first()
+            .map_or(self.text.len(), |item| item.at);
+        let head = std::iter::once((None, &self.text[..head_end]));
+        let items = self.sub_items.iter().enumerate().map(|(index, item)| {
+            let end = self
+                .sub_items
+                .get(index + 1)
+                .map_or(self.text.len(), |next| next.at);
+            (Some(item), &self.text[item.at..end])
+        });
+        head.chain(items)
+    }
+
+    /// The criterion's own text: `text` without its amendment notes and
+    /// their wrapped lines, so a note recording a change is never read as
+    /// the criterion (R-50, issue #199). Every tag is read here.
+    #[must_use]
+    pub fn own_text(&self) -> String {
+        collapse(
+            &self
+                .parts()
+                .filter(|(item, _)| !item.is_some_and(|item| item.note))
+                .map(|(_, part)| part)
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    }
+
     /// A journey criterion ends with `(journey)` (R-50); a record may also
     /// open the criterion with it (`AC-7 (journey) On a fresh ...`).
     #[must_use]
@@ -35,12 +143,50 @@ impl Criterion {
         self.has_tag("(journey)")
     }
 
-    /// Whether `(journey)` sits inside the text without opening or closing
-    /// it, so it is not a tag (R-50); the journey refusal names such a
-    /// criterion.
+    /// Whether `(journey)` sits inside the own text without opening or
+    /// closing it, so it is not a tag (R-50); the journey refusal names
+    /// such a criterion.
     #[must_use]
     pub fn has_inner_journey(&self) -> bool {
-        !self.is_journey() && self.text.contains("(journey)")
+        !self.is_journey() && self.own_text().contains("(journey)")
+    }
+
+    /// The first line of the sub-bullet that keeps `tag` (`(journey)`,
+    /// `(after release)`, or `(serves ` for the serves tag) from counting,
+    /// when one does: a sub-bullet the tag closes the own text before, or
+    /// an amendment note that carries the tag. A refusal names it with its
+    /// remedy.
+    #[must_use]
+    pub fn tag_hidden_by(&self, tag: &str) -> Option<&str> {
+        let serves = tag == SERVES;
+        let counts = if serves {
+            self.serves().is_some()
+        } else {
+            self.has_tag(tag)
+        };
+        if counts {
+            return None;
+        }
+        let mut before = String::new();
+        for (item, part) in self.parts() {
+            if let Some(item) = item {
+                let hides = if item.note {
+                    part.contains(tag)
+                } else if serves {
+                    serves_tag(&before).is_some()
+                } else {
+                    opens_or_closes(&before, tag)
+                };
+                if hides {
+                    return Some(item.line.as_str());
+                }
+            }
+            if !item.is_some_and(|item| item.note) {
+                before.push(' ');
+                before.push_str(part);
+            }
+        }
+        None
     }
 
     /// A criterion observable only after release carries `(after release)`
@@ -51,13 +197,12 @@ impl Criterion {
         self.has_tag("(after release)")
     }
 
-    /// A tag opens or closes the criterion (R-50). Sentence punctuation
-    /// after a closing tag (`... (journey).`) does not hide it; a tag
-    /// inside the text is not a tag.
+    /// A tag opens or closes the criterion's own text (R-50). Sentence
+    /// punctuation after a closing tag (`... (journey).`) does not hide
+    /// it; a tag inside the text, or only in an amendment note, is not a
+    /// tag.
     fn has_tag(&self, tag: &str) -> bool {
-        let text = self.text.trim_matches([' ', '\t']);
-        let closing = text.trim_end_matches(['.', ',', ';', ':']);
-        text.starts_with(tag) || closing.ends_with(tag)
+        opens_or_closes(&self.own_text(), tag)
     }
 
     /// What a text correction of a completed criterion keeps (ADR-0080):
@@ -72,20 +217,32 @@ impl Criterion {
         }
     }
 
-    /// The epic criterion this one serves, from `(serves EPC-NNN AC-m)`.
+    /// The epic criterion this one serves, from a `(serves EPC-NNN AC-m)`
+    /// tag that opens or closes its own text (R-50), like the other tags.
     #[must_use]
     pub fn serves(&self) -> Option<(String, String)> {
-        let start = self.text.find("(serves ")?;
-        let rest = &self.text[start + "(serves ".len()..];
-        let end = rest.find(')')?;
-        let mut parts = rest[..end]
-            .split([' ', '\t'])
-            .filter(|part| !part.is_empty());
-        let epic = parts.next()?;
-        let criterion = parts.next()?;
-        (parts.next().is_none() && is_criterion_id(criterion))
-            .then(|| (epic.to_string(), criterion.to_string()))
+        serves_tag(&self.own_text())
     }
+}
+
+/// The epic criterion a `(serves EPC-NNN AC-m)` tag that opens or closes
+/// `text` names. Sentence punctuation after a closing tag does not hide it;
+/// a tag inside the text is not a tag.
+fn serves_tag(text: &str) -> Option<(String, String)> {
+    let text = text.trim_matches([' ', '\t']);
+    let closing = text.trim_end_matches(['.', ',', ';', ':']);
+    let inner = if let Some(rest) = text.strip_prefix(SERVES) {
+        &rest[..rest.find(')')?]
+    } else {
+        let rest = &closing[closing.rfind(SERVES)? + SERVES.len()..];
+        rest.strip_suffix(')')
+            .filter(|inner| !inner.contains(')'))?
+    };
+    let mut parts = inner.split([' ', '\t']).filter(|part| !part.is_empty());
+    let epic = parts.next()?;
+    let criterion = parts.next()?;
+    (parts.next().is_none() && is_criterion_id(criterion))
+        .then(|| (epic.to_string(), criterion.to_string()))
 }
 
 /// The tags of one criterion ([`Criterion::tags`]).
@@ -116,14 +273,61 @@ impl CriteriaList {
         self.items.iter().any(|item| item.checkbox.is_some())
     }
 
-    /// Ids and text, without the checkbox mark: ticking a legacy box is not a
-    /// change of criteria.
+    /// Ids, text and the tags the parser reads, without the checkbox mark:
+    /// ticking a legacy box is not a change of criteria, and a reflow that
+    /// keeps the text but moves a tag past an amendment note is one.
     #[must_use]
-    pub fn signature(&self) -> Vec<(String, String)> {
-        self.items
-            .iter()
-            .map(|item| (item.id.clone(), item.text.clone()))
-            .collect()
+    pub fn signature(&self) -> Vec<CriterionKey> {
+        self.items.iter().map(CriterionKey::of).collect()
+    }
+}
+
+/// One criterion as criteria equality reads it ([`CriteriaList::signature`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CriterionKey {
+    /// `AC-n`.
+    pub id: String,
+    /// The whitespace-collapsed text, amendment notes included.
+    pub text: String,
+    /// `(journey)` counts.
+    pub journey: bool,
+    /// `(after release)` counts.
+    pub after_release: bool,
+    /// The epic criterion it serves.
+    pub serves: Option<(String, String)>,
+}
+
+impl CriterionKey {
+    /// The key of one criterion.
+    #[must_use]
+    pub fn of(item: &Criterion) -> Self {
+        Self {
+            id: item.id.clone(),
+            text: item.text.clone(),
+            journey: item.is_journey(),
+            after_release: item.is_after_release(),
+            serves: item.serves(),
+        }
+    }
+
+    /// The tags this key reads, as a criteria delta prints them.
+    #[must_use]
+    pub fn tag_list(&self) -> String {
+        let mut tags = Vec::new();
+        if self.journey {
+            tags.push("(journey)".to_string());
+        }
+        if self.after_release {
+            tags.push("(after release)".to_string());
+        }
+        if let Some((epic, criterion)) = &self.serves {
+            tags.push(format!("(serves {epic} {criterion})"));
+        }
+        if tags.is_empty() {
+            "no tag".to_string()
+        } else {
+            tags.join(" ")
+        }
     }
 }
 
@@ -389,8 +593,55 @@ pub fn has_section(body: &str, heading: &str) -> bool {
 /// template's `<output>` and `<path>` tokens fill nothing.
 #[must_use]
 pub fn names_deliverables(body: &str) -> bool {
-    section_markdown(body, "## Deliverables").is_some_and(|text| has_entry(&text))
+    section_markdown(body, "## Deliverables")
+        .is_some_and(|text| has_entry(&text, Form::Deliverables))
         || section_markdown(body, "## Description").is_some_and(|text| names_path(&text))
+}
+
+/// Whether an epic names what it delivers: its `## Deliverables` section
+/// has a substantive entry, read as [`names_deliverables`] reads a task's.
+/// An epic has no Description, so a path elsewhere never counts.
+#[must_use]
+pub fn epic_names_deliverables(body: &str) -> bool {
+    section_markdown(body, "## Deliverables")
+        .is_some_and(|text| has_entry(&text, Form::Deliverables))
+}
+
+/// What a record's `## Outcome` section states (TSK-435).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutcomeLine {
+    /// A line with a word beyond the template's own tokens and words.
+    Stated,
+    /// No line, only the template's comment, or a line holding nothing but
+    /// the template's tokens and words in any formatting.
+    Unfilled,
+    /// A template token, `<who>` or `<do what>` in any case or spacing,
+    /// outside a code span. A token in an Outcome must be in a code span, so
+    /// a raw one is refused, and so is an escaped, entity-encoded or
+    /// respaced one.
+    RawToken,
+}
+
+/// What a record's `## Outcome` section states (TSK-435). Two small rules
+/// judge it, never the sentence's grammar: a template token outside a code
+/// span is [`OutcomeLine::RawToken`] wherever it stands, and a section
+/// whose every line holds nothing but the template's tokens and words
+/// (after, this, merges, can) in its visible text, formatting, quotes,
+/// punctuation and link destinations set aside, is
+/// [`OutcomeLine::Unfilled`]. Comments never count.
+#[must_use]
+pub fn outcome_line(body: &str) -> OutcomeLine {
+    let Some(text) = section_markdown(body, "## Outcome") else {
+        return OutcomeLine::Unfilled;
+    };
+    let reading = read_entries(&text, Form::Outcome);
+    if reading.raw_token {
+        OutcomeLine::RawToken
+    } else if reading.filled {
+        OutcomeLine::Stated
+    } else {
+        OutcomeLine::Unfilled
+    }
 }
 
 /// The Markdown of a section as written, with its comment lines blank;
@@ -430,19 +681,47 @@ const PLACEHOLDERS: &[&str] = &[
 /// placeholders. An inline HTML comment, delimited by `<!--` and `-->`
 /// and possibly spanning lines, never reaches the entry, so it never
 /// changes the result; other inline HTML is dropped too, except the
-/// template's `<output>` and `<path>` tokens, which empty their entry.
-fn has_entry(markdown: &str) -> bool {
+/// section template's own tokens ([`Form`]), which empty their entry.
+fn has_entry(markdown: &str, form: Form) -> bool {
+    read_entries(markdown, form).filled
+}
+
+/// A section read entry by entry.
+struct Reading {
+    /// One entry is substantive.
+    filled: bool,
+    /// An Outcome template token stands outside a code span.
+    raw_token: bool,
+}
+
+/// Reads a section's entries as [`has_entry`] describes. Only an Outcome
+/// section looks for its tokens in text ([`token_spans`]); a Deliverables
+/// code span is pushed as written and never scanned. An Outcome entry is
+/// its visible text: inline text and code joined as written, with no
+/// separator added where formatting splits a word, line breaks as spaces,
+/// and link destinations left out.
+fn read_entries(markdown: &str, form: Form) -> Reading {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
+    let outcome = matches!(form, Form::Outcome);
+    let separator = if outcome { "" } else { " " };
     let mut entry = String::new();
-    let mut filled = false;
+    let mut reading = Reading {
+        filled: false,
+        raw_token: false,
+    };
     let mut in_heading = false;
     let mut in_comment = false;
+    let mut in_code_block = false;
+    let close = |entry: &mut String| {
+        let substantive = is_entry(entry, form) && !(outcome && only_template(entry));
+        entry.clear();
+        substantive
+    };
     for event in TextMergeStream::new(Parser::new_ext(markdown, Options::empty())) {
         match event {
             Event::Start(Tag::Heading { .. }) => {
-                filled |= is_entry(&entry);
-                entry.clear();
+                reading.filled |= close(&mut entry);
                 in_heading = true;
             }
             Event::End(TagEnd::Heading(_)) => in_heading = false,
@@ -452,41 +731,148 @@ fn has_entry(markdown: &str) -> bool {
                     in_comment = !html.contains("-->");
                 } else if let Some(rest) = html.strip_prefix("<!--") {
                     in_comment = !rest.contains("-->");
-                } else if is_template_token(&html) {
+                } else if form.is_token(&html) {
+                    reading.raw_token |= outcome;
                     entry.push_str(&html);
+                    entry.push_str(separator);
+                } else if matches!(spaced(&html).as_str(), "<br>" | "<br/>" | "<br />") {
+                    // An HTML line break separates words as a newline does.
                     entry.push(' ');
                 }
             }
-            Event::Text(text) | Event::Code(text) => {
+            Event::Text(text) => {
+                if outcome && !in_code_block && !token_spans(&text).is_empty() {
+                    reading.raw_token = true;
+                }
                 entry.push_str(&text);
-                entry.push(' ');
+                entry.push_str(separator);
             }
-            Event::Start(Tag::Link { dest_url, .. }) => {
+            Event::Code(text) => {
+                entry.push_str(&text);
+                entry.push_str(separator);
+            }
+            Event::SoftBreak | Event::HardBreak => entry.push(' '),
+            Event::Start(Tag::Link { dest_url, .. }) if !outcome => {
                 entry.push_str(&dest_url);
                 entry.push(' ');
             }
+            Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
             Event::Start(Tag::Item)
             | Event::End(TagEnd::Item | TagEnd::Paragraph | TagEnd::CodeBlock) => {
-                filled |= is_entry(&entry);
-                entry.clear();
+                in_code_block = false;
+                reading.filled |= close(&mut entry);
             }
             _ => {}
         }
     }
-    filled || is_entry(&entry)
+    reading.filled |= close(&mut entry);
+    reading
 }
 
-/// Whether inline HTML is one of the template's placeholder tokens.
-fn is_template_token(html: &str) -> bool {
-    let html = html.trim_matches([' ', '\t']).to_lowercase();
-    html == "<output>" || html == "<path>"
+/// The section whose template a reading follows, and so its placeholder
+/// tokens. Deliverables keeps its rule that `<output>` or `<path>`
+/// anywhere in an entry, quoted or not, leaves it empty. Outcome's `<who>`
+/// and `<do what>` are read by [`outcome_line`]'s two rules.
+#[derive(Clone, Copy)]
+enum Form {
+    Deliverables,
+    Outcome,
 }
 
-/// Whether one entry is substantive: an entry holding the template's
-/// `<output>` or `<path>` token is not, whatever else it says.
-fn is_entry(text: &str) -> bool {
+impl Form {
+    fn tokens(self) -> &'static [&'static str] {
+        match self {
+            Self::Deliverables => &["<output>", "<path>"],
+            Self::Outcome => &["<who>", "<do what>"],
+        }
+    }
+
+    /// Whether inline HTML is one of this template's placeholder tokens.
+    fn is_token(self, html: &str) -> bool {
+        let html = match self {
+            Self::Deliverables => html.trim_matches([' ', '\t']).to_lowercase(),
+            Self::Outcome => spaced(html),
+        };
+        self.tokens().contains(&html.as_str())
+    }
+}
+
+/// `text` in lower case with each run of whitespace one space, and none
+/// just inside `<` or `>`, so `< do  what >` reads `<do what>`.
+fn spaced(text: &str) -> String {
+    let mut text = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    for (from, to) in [("< ", "<"), (" >", ">")] {
+        while text.contains(from) {
+            text = text.replace(from, to);
+        }
+    }
+    text
+}
+
+/// The template's own words, in any case.
+fn template_word(word: &str) -> bool {
+    ["after", "this", "merges", "can"]
+        .iter()
+        .any(|template| word.eq_ignore_ascii_case(template))
+}
+
+/// An Outcome's words: runs of letters and digits, split at every other
+/// character, so `after,this` reads as two words.
+fn outcome_words(text: &str) -> Vec<&str> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// The byte range of each Outcome template token in `text`, in any case or
+/// spacing, found in one forward pass. A candidate runs from the latest
+/// `<` to the next `>` through letters and whitespace only; any other
+/// character, another `<` included, ends it, so no character is read more
+/// than twice and a long run of `<` stays linear.
+fn token_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut open = None;
+    for (at, c) in text.char_indices() {
+        match c {
+            '<' => open = Some(at),
+            '>' => {
+                if let Some(start) = open.take() {
+                    if Form::Outcome.is_token(&text[start..=at]) {
+                        spans.push((start, at + 1));
+                    }
+                }
+            }
+            c if c.is_alphabetic() || c.is_whitespace() => {}
+            _ => open = None,
+        }
+    }
+    spans
+}
+
+/// Whether an Outcome entry holds nothing but the template's tokens and
+/// words once its tokens, formatting, quotes and punctuation are set aside.
+fn only_template(entry: &str) -> bool {
+    let mut words = String::with_capacity(entry.len());
+    let mut last = 0;
+    for (start, end) in token_spans(entry) {
+        words.push_str(&entry[last..start]);
+        words.push(' ');
+        last = end;
+    }
+    words.push_str(&entry[last..]);
+    outcome_words(&words).iter().all(|word| template_word(word))
+}
+
+/// Whether one entry is substantive: a Deliverables entry holding its
+/// template's token is not, whatever else it says.
+fn is_entry(text: &str, form: Form) -> bool {
     let lower = text.to_lowercase();
-    if lower.contains("<output>") || lower.contains("<path>") {
+    if matches!(form, Form::Deliverables) && form.tokens().iter().any(|token| lower.contains(token))
+    {
         return false;
     }
     let visible = text.trim_start_matches([' ', '\t']);
@@ -680,7 +1066,13 @@ pub fn parse_criteria(body: &str) -> CriteriaList {
             }
         } else if line.starts_with([' ', '\t']) {
             if let Some(criterion) = current.as_mut() {
-                criterion.text = collapse(&format!("{} {}", criterion.text, line));
+                let addition = collapse(&line);
+                if !criterion.text.is_empty() {
+                    criterion.text.push(' ');
+                }
+                let at = criterion.text.len();
+                criterion.text.push_str(&addition);
+                criterion.sub_items.extend(SubItem::read(at, &addition));
             }
         } else if let Some(done) = current.take() {
             // Prose after a list ends the item; it is not criterion text.
@@ -718,6 +1110,7 @@ fn parse_criterion_item(item: &str, position: usize) -> Result<Option<Criterion>
             id: first.to_string(),
             text: collapse(tail),
             checkbox,
+            sub_items: Vec::new(),
         }));
     }
     match checkbox {
@@ -725,11 +1118,13 @@ fn parse_criterion_item(item: &str, position: usize) -> Result<Option<Criterion>
             id: format!("AC-{position}"),
             text: String::new(),
             checkbox: Some(ticked),
+            sub_items: Vec::new(),
         })),
         Some(ticked) => Ok(Some(Criterion {
             id: format!("AC-{position}"),
             text: collapse(rest),
             checkbox: Some(ticked),
+            sub_items: Vec::new(),
         })),
         None => Err(format!(
             "list item \"- {}\" is not a criterion; write \"- AC-n <criterion>\"",
@@ -1262,8 +1657,15 @@ pub fn check_block(
                 }
                 "failed" => problems.push(format!("{} failed: {}", criterion.id, result.evidence)),
                 other => problems.push(format!(
-                    "{} has outcome `{other}`; use verified, waived or failed",
-                    criterion.id
+                    "{} has outcome `{other}`; use verified, waived or failed{}",
+                    criterion.id,
+                    criterion
+                        .tag_hidden_by("(after release)")
+                        .map(|line| format!(
+                            "; {}",
+                            hidden_tag_message(&criterion.id, "(after release)", line)
+                        ))
+                        .unwrap_or_default()
                 )),
             },
         }
@@ -1509,6 +1911,7 @@ mod tests {
             id: "AC-1".into(),
             text: text.into(),
             checkbox: None,
+            sub_items: Vec::new(),
         }
     }
 
@@ -1549,6 +1952,198 @@ their sources, or the `init_e2e` case that renders them (journey).";
             criterion("When served, the system shall serve (serves EPC-001 AC-2).").serves(),
             Some(("EPC-001".to_string(), "AC-2".to_string()))
         );
+    }
+
+    fn listed(section: &str) -> Vec<Criterion> {
+        let list = parse_criteria(&format!("## Acceptance Criteria\n\n{section}"));
+        assert!(list.errors.is_empty(), "{:?}", list.errors);
+        list.items
+    }
+
+    /// Issue #199 (TSK-382 AC-1): an indented `- Amended ...` or
+    /// `- Moved ...` note under a criterion is not criterion text, so each
+    /// tag closing the head line still counts.
+    #[test]
+    fn an_amendment_note_keeps_each_closing_tag() {
+        let items = listed(
+            "- AC-1 On a fresh project, the command shall succeed (journey)\n  \
+             - Amended 2026-10-14 (plan version 5): narrowed to Linux.\n\
+             - AC-2 The command shall run (serves EPC-001 AC-3)\n  \
+             - Moved 2026-10-13 from TSK-009 AC-2.\n\
+             - AC-3 Adopters shall report fewer failed installs (after release).\n  \
+             - Amended 2026-10-14: the window is a month.\n    \
+             It starts at publication.\n  \
+             - Moved 2026-10-15 from AC-9.\n\
+             - [ ] AC-4 On a fresh project, init shall pass (journey).\n  \
+             - Moved 2026-10-16, from AC-8.\n\
+             - AC-5 The command shall pass (journey)\n  \
+             - Amended 2026-10-18: split the proof.\n  \
+             - Print the plan first.\n",
+        );
+        assert!(items[0].is_journey(), "{:?}", items[0]);
+        assert_eq!(
+            items[1].serves(),
+            Some(("EPC-001".to_string(), "AC-3".to_string()))
+        );
+        assert!(items[2].is_after_release(), "{:?}", items[2]);
+        assert!(items[3].is_journey(), "{:?}", items[3]);
+        // A note is left out, and a later sub-bullet that is no note stays
+        // criterion text, so here it hides the tag and is named.
+        assert_eq!(
+            items[4].own_text(),
+            "The command shall pass (journey) - Print the plan first."
+        );
+        assert!(!items[4].is_journey(), "{:?}", items[4]);
+        assert_eq!(
+            items[4].tag_hidden_by("(journey)"),
+            Some("- Print the plan first.")
+        );
+        // The note stays part of the recorded text, so adding or changing
+        // it is still a criteria change.
+        assert!(
+            items[0].text.ends_with("narrowed to Linux."),
+            "{:?}",
+            items[0]
+        );
+        // A tag only inside a note is not the criterion's tag.
+        let noted = listed(
+            "- AC-1 The command shall run.\n  - Moved 2026-10-13 from (serves EPC-001 AC-2) to none.\n",
+        );
+        assert_eq!(noted[0].serves(), None);
+        assert_eq!(
+            noted[0].tag_hidden_by("(serves "),
+            Some("- Moved 2026-10-13 from (serves EPC-001 AC-2) to none.")
+        );
+    }
+
+    /// TSK-382 review round 1: a note is a dash sub-bullet whose first word
+    /// is exactly `Amended` or `Moved`, followed by a `YYYY-MM-DD` date.
+    /// Any other sub-bullet is criterion text, and a requirement written
+    /// after a note still counts.
+    #[test]
+    fn only_a_dated_dash_note_is_left_out_of_the_criterion() {
+        for (line, note) in [
+            ("- Amended 2026-10-14: reworded.", true),
+            ("- Moved 2026-10-13 from AC-4.", true),
+            ("- Amended 2026-10-12 (plan version 4): reworded.", true),
+            ("- Moved files shall stay listed in the report.", false),
+            ("- **Amended** 2026-10-14: bold word.", false),
+            ("- amended 2026-10-14: lower case.", false),
+            ("- Amended: 2026-10-14 reworded.", false),
+            ("- Amended 2026-10: no day.", false),
+            ("* Amended 2026-10-14: a star marker.", false),
+            ("+ Moved 2026-10-14: a plus marker.", false),
+        ] {
+            let items = listed(&format!(
+                "- AC-1 On a fresh project, the command shall succeed (journey)\n  {line}\n"
+            ));
+            assert_eq!(items[0].is_journey(), note, "{line}");
+            assert_eq!(items[0].sub_items[0].note, note, "{line}");
+            if !note {
+                assert_eq!(items[0].tag_hidden_by("(journey)"), Some(line), "{line}");
+            }
+        }
+        // TSK-009 of the review: the closing `(journey)` after the note
+        // counts, and the head's `(after release)` no longer closes the
+        // criterion, so a requirement written after a note still binds.
+        let items = listed(
+            "- AC-1 Look fine (after release)\n  - Amended 2026-10-18: split the proof.\n  \
+             - The command shall pass the suite before release (journey).\n",
+        );
+        assert!(items[0].is_journey(), "{:?}", items[0]);
+        assert!(!items[0].is_after_release(), "{:?}", items[0]);
+        assert_eq!(
+            items[0].tag_hidden_by("(after release)"),
+            Some("- The command shall pass the suite before release (journey).")
+        );
+        // A wrapped line of a note is part of the note.
+        let items = listed(
+            "- AC-1 The command shall pass (journey)\n  - Amended 2026-10-18: one\n    more line of the note.\n",
+        );
+        assert_eq!(items[0].own_text(), "The command shall pass (journey)");
+    }
+
+    /// TSK-382 review round 2: a serves tag counts only where it opens or
+    /// closes the criterion's own text, like the other tags.
+    #[test]
+    fn a_serves_tag_reads_where_it_opens_or_closes() {
+        let served = Some(("EPC-001".to_string(), "AC-1".to_string()));
+        for (section, counts, hidden) in [
+            (
+                "- AC-1 The installer shall run (serves EPC-001 AC-1)\n  - Amended 2026-10-14: dated note.\n  - The command shall print the plan.\n",
+                false,
+                Some("- The command shall print the plan."),
+            ),
+            ("- AC-1 The installer (serves EPC-001 AC-1) shall run.\n", false, None),
+            (
+                "- AC-1 The installer shall run (serves EPC-001 AC-1)\n  - Amended 2026-10-14: dated note.\n",
+                true,
+                None,
+            ),
+            ("- AC-1 (serves EPC-001 AC-1) The installer shall run.\n", true, None),
+            ("- AC-1 The installer shall run (serves EPC-001 AC-1).\n", true, None),
+        ] {
+            let items = listed(section);
+            assert_eq!(items[0].serves().is_some(), counts, "{section}");
+            if counts {
+                assert_eq!(items[0].serves(), served, "{section}");
+            }
+            assert_eq!(items[0].tag_hidden_by("(serves "), hidden, "{section}");
+        }
+    }
+
+    /// TSK-382 review round 1: the signature reads the tags, so a reflow
+    /// that keeps the collapsed text but moves a tag past a note is a
+    /// criteria change.
+    #[test]
+    fn a_reflow_that_moves_a_tag_changes_the_signature() {
+        for (one_line, split) in [
+            (
+                "- AC-1 The command shall pass (journey) - Amended 2026-10-14: keep the log.\n",
+                "- AC-1 The command shall pass (journey)\n  - Amended 2026-10-14: keep the log.\n",
+            ),
+            (
+                "- AC-1 Prove the metric now (after release) - Amended 2026-10-14: the rest of the sentence.\n",
+                "- AC-1 Prove the metric now (after release)\n  - Amended 2026-10-14: the rest of the sentence.\n",
+            ),
+        ] {
+            let (before, after) = (listed(one_line), listed(split));
+            assert_eq!(before[0].text, after[0].text);
+            assert_ne!(
+                parse_criteria(&format!("## Acceptance Criteria\n\n{one_line}")).signature(),
+                parse_criteria(&format!("## Acceptance Criteria\n\n{split}")).signature(),
+                "{split}"
+            );
+        }
+    }
+
+    /// TSK-382 AC-2: wrapped lines and substantive sub-bullets stay criterion
+    /// text, and a tag inside the text still does not count.
+    #[test]
+    fn a_wrapped_criterion_keeps_its_whole_text() {
+        let items = listed(
+            "- AC-1 When a fresh repository is scaffolded,\n  the command shall pass\n  \
+             and print its plan (journey).\n\
+             - AC-2 When run, the (journey) path\n  shall pass on Linux.\n\
+             - AC-3 The command shall:\n  - print its plan;\n  - pass (journey).\n\
+             - AC-4 When run, the system shall work (journey)\n  and then stop.\n",
+        );
+        assert_eq!(
+            items[0].text,
+            "When a fresh repository is scaffolded, the command shall pass and print its plan (journey)."
+        );
+        assert!(items[0].is_journey());
+        assert_eq!(
+            items[1].text,
+            "When run, the (journey) path shall pass on Linux."
+        );
+        assert!(!items[1].is_journey() && items[1].has_inner_journey());
+        assert_eq!(
+            items[2].text,
+            "The command shall: - print its plan; - pass (journey)."
+        );
+        assert!(items[2].is_journey());
+        assert!(!items[3].is_journey() && items[3].has_inner_journey());
     }
 
     #[test]
@@ -1733,7 +2328,11 @@ their sources, or the `init_e2e` case that renders them (journey).";
             "## Acceptance Criteria\n\n<!--\n- AC-9 hidden\n-->\n- AC-1 shown\n```text\n- AC-8 example\n```\n",
         );
         assert_eq!(
-            criteria.signature(),
+            criteria
+                .signature()
+                .into_iter()
+                .map(|key| (key.id, key.text))
+                .collect::<Vec<_>>(),
             vec![("AC-1".to_string(), "shown".to_string())]
         );
         assert_eq!(

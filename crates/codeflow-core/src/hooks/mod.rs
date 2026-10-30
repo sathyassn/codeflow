@@ -36,9 +36,11 @@ pub mod git_discard;
 pub mod git_guard;
 pub mod git_hook;
 mod git_target;
+pub mod guard_deadline;
 pub mod guidance;
 pub mod landed_policy;
 pub mod orient;
+pub mod path_policy;
 pub mod policy;
 pub mod policy_schema;
 pub mod ref_authority;
@@ -162,8 +164,9 @@ impl Violation {
             "codeflow {plane}: {verdict} — policy rule {rule} ({level})\n  {msg}\n  sanctioned: {remedy}\n  policy file: .codeflow/policy.json",
             rule = self.rule,
             level = self.level,
-            msg = self.message,
-            remedy = self.remedy,
+            // A message can quote a name or content a remote supplied.
+            msg = crate::git::display_message(&self.message),
+            remedy = crate::git::display_message(&self.remedy),
         )
     }
 
@@ -180,16 +183,17 @@ impl Violation {
             "codeflow {plane}: {verdict} — lifecycle invariant {rule} ({level})\n  {msg}\n  sanctioned: {remedy}\n  authority: {authority}",
             rule = self.rule,
             level = self.level,
-            msg = self.message,
-            remedy = self.remedy,
+            msg = crate::git::display_message(&self.message),
+            remedy = crate::git::display_message(&self.remedy),
         )
     }
 }
 
-/// The always-blocking `git` rules (R-80): secret scan, protected branches
-/// and hook integrity. They have no level to lower.
+/// The `git` rules whose levels enclosing planes cannot lower (R-80):
+/// secret and path scans, protected branches and hook integrity.
 const ALWAYS_BLOCKING_GIT: &[&str] = &[
     "secret_scan",
+    "path_policy",
     "commit_to_protected",
     "push_to_protected",
     "merge_to_protected",
@@ -226,6 +230,7 @@ pub const LEVEL_KEYS: &[&str] = &[
     "work_planning",
     "branch_naming",
     "secret_scan",
+    "path_policy",
     "conflict_markers",
     "test_gate_on_push",
     "security_review",
@@ -407,6 +412,7 @@ mod tests {
         // Always-blocking and non-adjustable rules keep their level.
         for rule in [
             "git.secret_scan",
+            "git.path_policy",
             "git.push_to_protected",
             "work.id_registry",
         ] {

@@ -36,11 +36,9 @@ fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
@@ -339,12 +337,10 @@ impl Adopted {
         Self { _dir: dir, root }
     }
 
-    /// Push `branch` with its tip not checked out, so the push set's tree
-    /// checks (which read the working checkout) leave it to CI and the
-    /// journey sees only the git-data checks, the release preflight among
-    /// them.
+    /// Push from the candidate's clean checkout so tree checks can run
+    /// alongside the release preflight.
     fn push(&self, branch: &str, draft: Option<&Path>) -> Output {
-        git(&self.root, &["switch", "-q", "main"]);
+        git(&self.root, &["switch", "-q", branch]);
         let mut command = Command::new("git");
         // No CODEFLOW_BIN: the hook passes itself to release.py, and the
         // draft below is read only if it does.
@@ -394,6 +390,34 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).to_string()
 }
 
+/// TSK-279: both declaration rules are warnings in the real pre-push hook.
+#[test]
+fn a_pr_draft_reports_marker_floor_and_entry_equality_without_blocking() {
+    if !python_available() {
+        return;
+    }
+    let project = Adopted::new();
+    let draft = project.root.join(".git/draft body.md");
+    write(&project.root, ".git/draft body.md", &body("patch"));
+    for (branch, marker, message) in [
+        ("feat/floor", "feat: add a tool", "below marker floor minor"),
+        (
+            "fix/equality",
+            "fix: repair the tool",
+            "must equal the impact",
+        ),
+    ] {
+        git(&project.root, &["switch", "-q", "-c", branch, "main"]);
+        write(&project.root, "src/tool.rs", "pub fn tool() {}\n");
+        commit(&project.root, marker);
+        let pushed = project.push(branch, Some(&draft));
+        let text = stderr(&pushed);
+        assert!(pushed.status.success(), "{text}");
+        assert!(text.contains(message), "{text}");
+        assert!(text.contains("this warning never blocks"), "{text}");
+    }
+}
+
 /// TSK-106 AC-4 and AC-9: a behaviour change with no pending entry warns in
 /// the real pre-push hook and is never blocked by it; the pull request job
 /// blocks it; a push that breaks the release tree is blocked locally.
@@ -423,6 +447,10 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
         "{text}"
     );
     assert!(text.contains("not checked against the host"), "{text}");
+    assert!(
+        text.contains("marker floor and entry equality not checked"),
+        "{text}"
+    );
 
     // The pull request job's full check blocks the same change.
     let no_block = project.check_pr(&head, "## Summary\n\nStart the tool.\n");

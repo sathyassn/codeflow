@@ -9,6 +9,11 @@
 //! pinned release is a wrapper around this build of `codeflow`, so `codeflow
 //! ci`, `test` and `validate` really run; a raised candidate is a stub that
 //! stands for a newer binary. Every wrapper logs its version and arguments.
+//!
+//! Every run gets a temporary directory of its own inside the fixture, with
+//! one directory already in it that the run did not create. After each run,
+//! passing, failing or interrupted, that directory is all that is left
+//! (TSK-386).
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
@@ -32,6 +37,10 @@ enum Platform {
 }
 
 const PLATFORMS: [Platform; 3] = [Platform::Generic, Platform::GitLab, Platform::Bitbucket];
+
+/// A directory the runner already had in the scripts' temporary directory.
+/// No script created it, so no script may remove it.
+const KEPT: &str = "tmp.kept-by-the-runner";
 
 /// The release triple this machine's pinned install asks for.
 fn triple() -> &'static str {
@@ -115,6 +124,9 @@ enum Binary {
     Real,
     /// A newer binary the fixture cannot build: it logs and succeeds.
     Stub,
+    /// This build of codeflow, except that `codeflow test` exits with this
+    /// status, so a run's own status can be told from the gate's.
+    GateExits(u8),
 }
 
 struct Fixture {
@@ -139,6 +151,25 @@ impl Fixture {
     fn home(&self) -> PathBuf {
         self.dir.path().join("home")
     }
+    /// The scripts' `TMPDIR`.
+    fn scratch(&self) -> PathBuf {
+        self.dir.path().join("tmp")
+    }
+
+    /// Fail unless the scripts' temporary directory holds exactly what it
+    /// held before the run: the runner's own directory, unchanged.
+    fn assert_temporary_directory_as_found(&self, out: &Output) {
+        let mut left: Vec<String> = std::fs::read_dir(self.scratch())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, [KEPT], "the run left these behind: {}", text(out));
+        assert_eq!(
+            std::fs::read_to_string(self.scratch().join(KEPT).join("note")).unwrap(),
+            "kept\n"
+        );
+    }
 
     /// Publish `version` locally: the archive holding a logging wrapper and
     /// `sha256.sum` listing it. Returns the release directory.
@@ -154,6 +185,10 @@ impl Fixture {
         let run = match binary {
             Binary::Real => format!("exec '{}' \"$@\"", env!("CARGO_BIN_EXE_codeflow")),
             Binary::Stub => "exit 0".to_string(),
+            Binary::GateExits(status) => format!(
+                "if [ \"$1\" = test ]; then exit {status}; fi\nexec '{}' \"$@\"",
+                env!("CARGO_BIN_EXE_codeflow")
+            ),
         };
         let bin = stage.join("codeflow");
         std::fs::write(
@@ -236,10 +271,12 @@ impl Fixture {
     /// Shell command in the fixture repository with a scrubbed CI environment
     /// and the local release, ready for a script or an environment probe.
     fn script_environment(&self) -> Command {
-        // Scratch space inside the fixture, so the scripts' temporary
-        // directories go away with it.
-        let scratch = self.dir.path().join("tmp");
-        std::fs::create_dir_all(&scratch).unwrap();
+        // Scratch space inside the fixture, so nothing a script leaves
+        // reaches the user's temporary directory, holding one directory the
+        // scripts did not create.
+        let scratch = self.scratch();
+        std::fs::create_dir_all(scratch.join(KEPT)).unwrap();
+        std::fs::write(scratch.join(KEPT).join("note"), "kept\n").unwrap();
         let mut command = Command::new("sh");
         command
             .current_dir(self.repo())
@@ -292,10 +329,13 @@ impl Fixture {
         command
     }
 
-    /// Run a prepared script command, logging the calls afresh.
+    /// Run a prepared script command, logging the calls afresh, and check
+    /// that it removed every temporary directory it made.
     fn output(&self, command: &mut Command) -> Output {
         let _ = std::fs::remove_file(self.log());
-        command.output().expect("sh runs")
+        let out = command.output().expect("sh runs");
+        self.assert_temporary_directory_as_found(&out);
+        out
     }
 
     /// Run `platform`'s shipped script for the change `target..head`, as that
@@ -303,11 +343,17 @@ impl Fixture {
     /// names the target branch's commit. `None` for the target leaves it
     /// unset.
     fn run(&self, platform: Platform, target: Option<&str>, head: &str) -> Output {
+        let mut command = self.run_command(platform, target, head);
+        self.output(&mut command)
+    }
+
+    /// The command `run` runs.
+    fn run_command(&self, platform: Platform, target: Option<&str>, head: &str) -> Command {
         let mut command = self.script_command(platform);
         match platform {
             Platform::Generic => {
                 if let Some(target) = target {
-                    command.arg(target).arg(head);
+                    command.arg(target).arg(head).env("GITHUB_BASE_REF", "main");
                 }
             }
             Platform::GitLab => {
@@ -318,6 +364,7 @@ impl Fixture {
                 if let Some(target) = target {
                     command
                         .env("CI_MERGE_REQUEST_EVENT_TYPE", "merged_result")
+                        .env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "main")
                         .env("CI_MERGE_REQUEST_TARGET_BRANCH_SHA", target)
                         .env("CI_MERGE_REQUEST_DIFF_BASE_SHA", target);
                 }
@@ -327,11 +374,13 @@ impl Fixture {
                     .env("BITBUCKET_COMMIT", head)
                     .env("BITBUCKET_BRANCH", "feat/x");
                 if let Some(target) = target {
-                    command.env("BITBUCKET_PR_DESTINATION_COMMIT", target);
+                    command
+                        .env("BITBUCKET_PR_DESTINATION_COMMIT", target)
+                        .env("BITBUCKET_PR_DESTINATION_BRANCH", "main");
                 }
             }
         }
-        self.output(&mut command)
+        command
     }
 
     /// The logged calls, one `<version> <args>` per line.
@@ -931,6 +980,177 @@ fn the_shared_run_sources_the_project_setup_hook_before_the_test_gate() {
             1,
             "{platform:?}: {listed}"
         );
+    }
+}
+
+/// The signals a runner sends to stop a job, with the exit status the
+/// shared run ends with when one arrives before the judge is set up.
+const INTERRUPTS: [(&str, i32); 3] = [("HUP", 129), ("INT", 130), ("TERM", 143)];
+
+/// TSK-386: a run interrupted while it installs the release, or while the
+/// project setup hook runs, removes its temporary directories and the judge
+/// worktree. An interrupt during the install ends the run with the signal's
+/// status; one after the judge is set up still fails the existing "ended
+/// before codeflow test ran" check.
+#[test]
+fn an_interrupted_run_removes_its_temporary_directories() {
+    let curl = Command::new("sh")
+        .args(["-c", "command -v curl"])
+        .output()
+        .unwrap();
+    let curl = String::from_utf8(curl.stdout).unwrap().trim().to_string();
+    for platform in PLATFORMS {
+        let fx = Fixture::new();
+        let target = fx.project("1.2.3");
+        fx.publish("1.2.3", &Binary::Real);
+        // A `curl` that signals the shell running it, then downloads: the
+        // interrupt arrives while the run is installing.
+        let interrupting = fx.dir.path().join("interrupting-bin");
+        std::fs::create_dir_all(&interrupting).unwrap();
+        std::fs::write(
+            interrupting.join("curl"),
+            format!("#!/bin/sh\nkill -\"$INTERRUPT\" \"$PPID\"\nexec '{curl}' \"$@\"\n"),
+        )
+        .unwrap();
+        Command::new("chmod")
+            .arg("755")
+            .arg(interrupting.join("curl"))
+            .status()
+            .unwrap();
+        let path = format!(
+            "{}:{}",
+            interrupting.display(),
+            std::env::var("PATH").unwrap()
+        );
+        for (signal, status) in INTERRUPTS {
+            let mut command = fx.run_command(platform, Some(&target), &target);
+            command.env("PATH", &path).env("INTERRUPT", signal);
+            let out = fx.output(&mut command);
+            assert_eq!(
+                out.status.code(),
+                Some(status),
+                "{platform:?} {signal}: {}",
+                text(&out)
+            );
+            assert!(fx.calls().is_empty(), "{platform:?}: {:?}", fx.calls());
+        }
+
+        // The project setup hook runs after the judge worktree exists. It
+        // records where the run installed codeflow: inside `TMPDIR`, which
+        // macOS's own `mktemp -d` ignores.
+        let installed = fx.dir.path().join("installed-at");
+        std::fs::write(
+            fx.repo().join(".codeflow/ci-setup.sh"),
+            format!(
+                "command -v codeflow > '{}'\nkill -\"$INTERRUPT\" $$\n",
+                installed.display()
+            ),
+        )
+        .unwrap();
+        let head = fx.commit("ci: a setup hook the runner interrupts");
+        for (signal, _) in INTERRUPTS {
+            let mut command = fx.run_command(platform, Some(&head), &head);
+            command.env("INTERRUPT", signal);
+            let out = fx.output(&mut command);
+            assert_eq!(out.status.code(), Some(1), "{platform:?} {signal}");
+            assert!(
+                text(&out).contains("the run ended before codeflow test ran"),
+                "{platform:?} {signal}: {}",
+                text(&out)
+            );
+            let at = std::fs::read_to_string(&installed).unwrap();
+            assert!(
+                Path::new(at.trim()).starts_with(fx.scratch()),
+                "{platform:?}: codeflow installed at {at}"
+            );
+            let listed = git(&fx.repo(), &["worktree", "list", "--porcelain"]);
+            assert_eq!(
+                listed.matches("worktree ").count(),
+                1,
+                "{platform:?} {signal}: {listed}"
+            );
+        }
+    }
+}
+
+/// TSK-386 review F-2: a project setup hook that sets its own exit trap and
+/// returns no longer replaces the run's cleanup, and the run still ends
+/// with the gate's own status. The hook's trap does not run; its folder,
+/// outside the run's `TMPDIR` here, is the hook's to remove.
+#[test]
+fn a_setup_hook_with_its_own_exit_trap_leaves_the_cleanup_in_place() {
+    for platform in PLATFORMS {
+        for (binary, status) in [(Binary::Real, 0), (Binary::GateExits(7), 7)] {
+            let fx = Fixture::new();
+            fx.project("1.2.3");
+            fx.publish("1.2.3", &binary);
+            let hook_temp = fx.dir.path().join("hook-temp");
+            std::fs::create_dir_all(&hook_temp).unwrap();
+            std::fs::write(
+                fx.repo().join(".codeflow/ci-setup.sh"),
+                format!(
+                    "mytmp=$(mktemp -d '{}/hook.XXXXXX')\ntrap 'rm -rf \"$mytmp\"' EXIT\n",
+                    hook_temp.display()
+                ),
+            )
+            .unwrap();
+            let head = fx.commit("ci: a setup hook with its own exit trap");
+            // `run` checks that the run's `TMPDIR` is left as found.
+            let out = fx.run(platform, Some(&head), &head);
+            assert_eq!(
+                out.status.code(),
+                Some(status),
+                "{platform:?}: {}",
+                text(&out)
+            );
+            let listed = git(&fx.repo(), &["worktree", "list", "--porcelain"]);
+            assert_eq!(listed.matches("worktree ").count(), 1, "{listed}");
+        }
+    }
+}
+
+/// TSK-386 review F-1: a folder the cleanup cannot remove does not change
+/// the run's status: a passing gate stays 0 and a gate that exits 7 stays 7.
+#[test]
+fn a_folder_the_cleanup_cannot_remove_keeps_the_gate_status() {
+    for platform in PLATFORMS {
+        for (binary, status) in [(Binary::Real, 0), (Binary::GateExits(7), 7)] {
+            let fx = Fixture::new();
+            fx.project("1.2.3");
+            fx.publish("1.2.3", &binary);
+            // The hook locks a folder inside the run's own temporary folder,
+            // which holds the installed binary's folder.
+            std::fs::write(
+                fx.repo().join(".codeflow/ci-setup.sh"),
+                "locked=\"$(dirname \"$(dirname \"$(command -v codeflow)\")\")/locked\"\nmkdir \"$locked\"\n: > \"$locked/file\"\nchmod a-w \"$locked\"\n",
+            )
+            .unwrap();
+            let head = fx.commit("ci: a setup hook that locks a folder");
+            let out = fx
+                .run_command(platform, Some(&head), &head)
+                .output()
+                .expect("sh runs");
+            // Unlock what is left, so the fixture can remove it.
+            let left: Vec<PathBuf> = std::fs::read_dir(fx.scratch())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| !path.ends_with(KEPT))
+                .collect();
+            for folder in &left {
+                Command::new("chmod")
+                    .args(["-R", "u+w"])
+                    .arg(folder)
+                    .status()
+                    .unwrap();
+            }
+            assert_eq!(
+                out.status.code(),
+                Some(status),
+                "{platform:?}: {}",
+                text(&out)
+            );
+            assert_eq!(left.len(), 1, "{platform:?}: the locked run folder stays");
+        }
     }
 }
 

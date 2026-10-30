@@ -242,8 +242,31 @@ pub(super) enum Val {
 /// unknown variable, a special parameter, `~`, a glob, or a value that word
 /// splitting or globbing could change.
 pub(super) fn expand_word(word: &str, vars: &HashMap<String, Val>) -> Result<String, String> {
-    if word.starts_with('~') {
-        return Err("`~`".to_string());
+    if let Some(rest) = word.strip_prefix('~') {
+        // Only the current user's home has a proven expansion: the HOME the
+        // line assigned, else the one the line inherits (TSK-379). Named-user
+        // homes and directory-stack forms stay unread.
+        if !(rest.is_empty() || rest.starts_with('/'))
+            || !super::git_guard::line_home::tilde_resolves()
+        {
+            return Err("`~`".to_string());
+        }
+        let home = match vars.get("HOME") {
+            Some(Val::Known(home)) => home.clone(),
+            Some(Val::Unknown(why)) => return Err(why.clone()),
+            None => super::git_guard::line_home::home()
+                .and_then(|home| home.to_str().map(str::to_string))
+                .ok_or_else(|| "`~`".to_string())?,
+        };
+        if !std::path::Path::new(&home).is_absolute() {
+            return Err("`~`".to_string());
+        }
+        let joined = if rest.is_empty() {
+            home
+        } else {
+            format!("{}{rest}", home.trim_end_matches('/'))
+        };
+        return expand_word(&joined, vars).map_err(|_| "`~`".to_string());
     }
     let chars: Vec<char> = word.chars().collect();
     let mut out = String::new();
@@ -278,7 +301,12 @@ pub(super) fn expand_word(word: &str, vars: &HashMap<String, Val>) -> Result<Str
         if !is_name(&name) {
             return Err(format!("`{word}`"));
         }
-        match vars.get(&name) {
+        // HOME is inherited by the hook and shell. A tracked write or unknown
+        // value takes precedence; never substitute an inherited value for it.
+        let inherited = (name == "HOME" && !vars.contains_key(&name))
+            .then(|| std::env::var("HOME").ok().map(Val::Known))
+            .flatten();
+        match vars.get(&name).or(inherited.as_ref()) {
             Some(Val::Known(v))
                 if !v.contains(|ch: char| {
                     super::git_guard::shell_blank(ch) || matches!(ch, '*' | '?' | '[')

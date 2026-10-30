@@ -8,11 +8,11 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/outcome.rs"]
+mod outcome;
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow_cmd(dir: &Path) -> Command {
     let path = test_path();
@@ -693,7 +693,12 @@ fn first_install_diagnoses_the_kept_template_and_warns_until_decided() {
         all.contains("recorded git.pr_section_mapping = diagnosed"),
         "{all}"
     );
-    assert!(all.contains("Summary -> Description"), "{all}");
+    // The report names a template heading by its position: the heading
+    // text is the project's and is never printed (TSK-1029).
+    assert!(all.contains("Summary -> template heading 1"), "{all}");
+    for heading in ["Description", "How has this been tested?", "Release notes"] {
+        assert!(!all.contains(heading), "{heading} printed: {all}");
+    }
     assert!(all.contains("warn (diagnosed)"), "{all}");
     // No second template: the only template is the project's.
     assert_eq!(
@@ -1130,6 +1135,7 @@ fn records_are_created_at_the_minimal_and_standard_tiers() {
             dir.path(),
             &["spec", "new", "--for", "TSK-001", "first spec"],
         ));
+        outcome::state_outcomes(dir.path());
         let out = codeflow(dir.path(), &["validate", "--docs"]);
         assert_eq!(out.status.code(), Some(0), "{tier}: {}", text(&out));
         assert!(
@@ -1165,7 +1171,9 @@ fn project_templates_are_used_when_valid_and_fall_back_when_not() {
     let record = std::fs::read_to_string(path).unwrap();
     assert!(record.contains("Team rule: link the ticket"), "{record}");
     // Rendered from the project template, the record passes the validator
-    // with the work-record rules at block.
+    // with the work-record rules at block, once its author states the
+    // Outcome (TSK-435).
+    outcome::state_outcomes(dir.path());
     let out = codeflow(dir.path(), &["validate", "--docs"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
 
@@ -1180,6 +1188,7 @@ fn project_templates_are_used_when_valid_and_fall_back_when_not() {
     assert!(all.contains("not a usable task template"), "{all}");
     let record = std::fs::read_to_string(created(&out)).unwrap();
     assert!(record.contains("## Acceptance Criteria"), "{record}");
+    outcome::state_outcomes(dir.path());
     let out = codeflow(dir.path(), &["validate", "--docs"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
 
@@ -1216,6 +1225,7 @@ fn project_templates_are_used_when_valid_and_fall_back_when_not() {
         );
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
         assert!(record.contains(&format!("id: {stem}\n")), "{record}");
+        outcome::state_outcomes(dir.path());
         let out = codeflow(dir.path(), &["validate", "--docs"]);
         assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     }

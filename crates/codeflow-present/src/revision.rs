@@ -65,7 +65,11 @@ pub(crate) fn capture(
 }
 
 fn warn_capture(error: impl std::fmt::Display) {
-    eprintln!("present: warning: revision metadata omitted: {error}");
+    // The error can name a repository path (TSK-388).
+    eprintln!(
+        "present: warning: revision metadata omitted: {}",
+        crate::output::display_message(&error.to_string())
+    );
 }
 
 fn repository_context(root: &Path) -> std::result::Result<Option<RepositoryContext>, git2::Error> {

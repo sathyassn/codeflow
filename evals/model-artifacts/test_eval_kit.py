@@ -4,6 +4,10 @@
 They exercise the kit's own code on synthetic observations. They are a
 tooling check, like `validate-suite` is a structural one: neither runs a
 model case, so neither is behavioural evidence.
+
+The gate declares codeflow-bin as a prerequisite in essential and full mode.
+Direct runs need `cargo build --locked -p codeflow-cli` first; CODEFLOW_BIN
+selects its output, otherwise CARGO_TARGET_DIR/debug/codeflow is used.
 """
 
 from __future__ import annotations
@@ -40,6 +44,59 @@ SPEC.loader.exec_module(eval_kit)
 
 def project_root() -> Path:
     return ROOT
+
+
+def codeflow_binary() -> Path:
+    """Use the gate's producer output, or the same debug build when run directly."""
+    configured = os.environ.get("CODEFLOW_BIN")
+    binary = (Path(configured) if configured else
+              Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "debug" / "codeflow")
+    binary = binary.expanduser().resolve()
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise RuntimeError(
+            f"missing codeflow-bin prerequisite: {binary}; "
+            "run `cargo build --locked -p codeflow-cli` with the same CARGO_TARGET_DIR "
+            "and set CODEFLOW_BIN to its debug/codeflow output, or run "
+            "`codeflow test --mode essential --only model-eval-kit`")
+    return binary
+
+
+class CodeflowBinaryTests(unittest.TestCase):
+    def test_explicit_binary_wins_over_the_target_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "chosen-codeflow"
+            binary.touch(mode=0o755)
+            with patch.dict(os.environ, {"CODEFLOW_BIN": str(binary), "CARGO_TARGET_DIR": temp}):
+                self.assertEqual(binary.resolve(), codeflow_binary())
+
+    def test_direct_run_uses_debug_under_the_target_directory(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ):
+            os.environ.pop("CODEFLOW_BIN", None)
+            os.environ["CARGO_TARGET_DIR"] = temp
+            binary = Path(temp) / "debug" / "codeflow"
+            binary.parent.mkdir()
+            binary.touch(mode=0o755)
+            self.assertEqual(binary.resolve(), codeflow_binary())
+            # A release binary cannot hide a missing declared debug output.
+            binary.unlink()
+            release = Path(temp) / "release" / "codeflow"
+            release.parent.mkdir()
+            release.touch(mode=0o755)
+            with self.assertRaisesRegex(RuntimeError, "missing codeflow-bin prerequisite"):
+                codeflow_binary()
+
+    def test_direct_invocation_names_the_missing_prerequisite(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env = {**os.environ, "CARGO_TARGET_DIR": temp}
+            env.pop("CODEFLOW_BIN", None)
+            result = subprocess.run(
+                [sys.executable, "-B", str(Path(__file__).resolve()),
+                 "ProcessRepairTests.test_closeout_inventory_matches_real_local_worktrees"],
+                env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missing codeflow-bin prerequisite", result.stderr)
+            self.assertIn("cargo build --locked -p codeflow-cli", result.stderr)
+            self.assertNotIn("FileNotFoundError", result.stderr)
 
 
 # Every test signs and verifies under a disposable evaluator key; GraderTests
@@ -6007,20 +6064,46 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual("sent\n", runner.herdr("pane", "send-text", "own-pane", "prompt"))
 
     def test_codex_runtime_executable_links_are_not_config_links(self):
+        for layout in ["arg0", "arg0-macos", "arg0-linux", "arg0-windows", "arg0-futureos"]:
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / ".codeflow-eval/codex"
+                helpers = root / "tmp" / layout / "codex-arg0ABC123"
+                helpers.mkdir(parents=True)
+                binary = Path(temp) / "bin/codex"
+                with patch.object(eval_kit.shutil, "which", return_value=str(binary)):
+                    for name in ["applypatch", "apply_patch", "codex-execve-wrapper"]:
+                        (helpers / name).symlink_to(binary)
+                    self.assertTrue(eval_kit.evaluator_directory(root))
+                    (helpers / "settings.json").symlink_to(binary)
+                    self.assertFalse(eval_kit.evaluator_directory(root))
+                    (helpers / "settings.json").unlink()
+                    (helpers / "apply_patch").unlink()
+                    (helpers / "apply_patch").symlink_to(Path(temp) / ".codex/config.toml")
+                    self.assertFalse(eval_kit.evaluator_directory(root))
+
+    def test_codex_runtime_links_require_the_native_location_and_executable(self):
+        for location in [
+            "tmp/arg0-/codex-arg0ABC123/apply_patch",
+            "tmp/arg0macos/codex-arg0ABC123/apply_patch",
+            "tmp/arg01/codex-arg0ABC123/apply_patch",
+            "other/arg0-macos/codex-arg0ABC123/apply_patch",
+            "tmp/arg0-macos/not-a-dispatch-directory/apply_patch",
+            "tmp/arg0-macos/codex-arg0ABC123/extra/apply_patch",
+        ]:
+            with self.subTest(location=location), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / ".codeflow-eval/codex"
+                link = root / location
+                link.parent.mkdir(parents=True)
+                binary = Path(temp) / "bin/codex"
+                link.symlink_to(binary)
+                with patch.object(eval_kit.shutil, "which", return_value=str(binary)):
+                    self.assertFalse(eval_kit.evaluator_directory(root))
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / ".codeflow-eval/codex"
-            helpers = root / "tmp/arg0/codex-arg0ABC123"
-            helpers.mkdir(parents=True)
-            binary = Path(temp) / "bin/codex"
-            with patch.object(eval_kit.shutil, "which", return_value=str(binary)):
-                for name in ["applypatch", "apply_patch", "codex-execve-wrapper"]:
-                    (helpers / name).symlink_to(binary)
-                self.assertTrue(eval_kit.evaluator_directory(root))
-                (helpers / "settings.json").symlink_to(binary)
-                self.assertFalse(eval_kit.evaluator_directory(root))
-                (helpers / "settings.json").unlink()
-                (helpers / "apply_patch").unlink()
-                (helpers / "apply_patch").symlink_to(Path(temp) / ".codex/config.toml")
+            link = root / "tmp/arg0-macos/codex-arg0ABC123/apply_patch"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(Path(temp) / "bin/codex")
+            with patch.object(eval_kit.shutil, "which", return_value=None):
                 self.assertFalse(eval_kit.evaluator_directory(root))
 
     def test_disposable_macos_home_links_only_the_real_keychains_folder(self):
@@ -8508,8 +8591,7 @@ class ProcessRepairTests(unittest.TestCase):
             (root / ".gitignore").write_text(".worktrees/\n")
             (root / "README.md").write_text("fixture\n")
             eval_kit.reset_fixture_history(root, "test/worktree-closeout", install_hooks=False)
-            codeflow = (Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).expanduser().resolve()
-                        / "release" / "codeflow")
+            codeflow = codeflow_binary()
             eval_kit.configure_closeout_inventory(root, codeflow)
             records = eval_kit.git_output(["worktree", "list", "--porcelain"], root)
             self.assertEqual("refs/remotes/origin/main", eval_kit.git_output(["symbolic-ref", "refs/remotes/origin/HEAD"], root).strip())

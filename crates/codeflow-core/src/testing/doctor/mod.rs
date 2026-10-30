@@ -434,7 +434,11 @@ mod tests {
             requires: Vec::new(),
             outputs: Vec::new(),
             narrow: Vec::new(),
+            input_class: None,
+            evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Custom,
             modes: BTreeMap::from([(
                 "full".to_string(),
