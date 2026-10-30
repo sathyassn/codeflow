@@ -1,0 +1,11 @@
+id = "TSK-1094"
+uid = "17afaee8-80a7-438c-abab-76ce0538a1ad"
+kind = "TSK"
+title = "Qualification runner accepts the shipped Claude status line"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T21:00:11Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
