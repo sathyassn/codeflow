@@ -469,8 +469,139 @@ fn schema_rejects_invalid_declarations_and_keeps_new_keys_out_of_shipped_policy(
         assert!(shipped["git"].get(key).is_none());
     }
     let note = include_str!("../../../changelog.d/TSK-322.md");
+    // A name added after TSK-322 is named by the release note that added it.
+    let later = include_str!("../../../changelog.d/TSK-1079.md");
     for name in path_policy::DEFAULT_NAMES {
-        assert!(note.contains(name), "{name}");
+        assert!(note.contains(name) || later.contains(name), "{name}");
     }
+    assert!(later.contains("`credentials.json`"));
     assert!(note.contains("except_under"));
+}
+
+/// Every gate input the exemption admits (`path_policy::exempt`).
+const GATE_INPUTS: [&str; 10] = [
+    ".gitignore",
+    "deep/.gitignore",
+    ".codeflow/policy.json",
+    ".codeflow/project.toml",
+    ".codeflow/bootstrap.sh",
+    ".codeflow/bootstrap.ps1",
+    ".codeflow/ci-setup.sh",
+    ".codeflow/git-hooks/pre-commit",
+    ".github/workflows/codeflow-policy.yml",
+    ".github/workflows/codeflow-ci.yml",
+];
+
+/// Stage one entry on an empty base and return the staged and range reports.
+fn judge_one(
+    path: &str,
+    mode: u32,
+    contents: Option<&[u8]>,
+    p: &PathPolicy,
+) -> [path_policy::Report; 2] {
+    let f = Fixture::new();
+    let base = f.commit(&[]);
+    f.head(base);
+    let gitlink = base.to_string();
+    f.stage(path, mode, contents.unwrap_or(gitlink.as_bytes()));
+    let staged = path_policy::staged(&f.repo, p).unwrap();
+    let head = f.commit(&[base]);
+    [staged, f.range(base, head, p)]
+}
+
+#[test]
+fn links_and_gitlinks_at_gate_inputs_refuse_while_files_stay_exempt() {
+    let default = Fixture::policy(json!({}));
+    let hostile = Fixture::policy(
+        json!({"blocked_names":["*"],"protected_paths":[{"prefix":"/", "allow":[]}]}),
+    );
+    // Every case is judged and every wrong verdict is listed, so a failure
+    // names each exempt path and mode it affects.
+    let mut wrong = Vec::new();
+    let mut expect = |case: String, reports: [path_policy::Report; 2], blocked: bool| {
+        for (mode, report) in ["staged", "range"].into_iter().zip(reports) {
+            if report.violations.is_empty() == blocked {
+                wrong.push(format!("{case} ({mode}): {report:?}"));
+            }
+        }
+    };
+    for path in GATE_INPUTS {
+        for (what, mode, contents) in [
+            ("absolute link", 0o120_000, Some(b"/tmp/payload".as_slice())),
+            ("drive link", 0o120_000, Some(b"C:/payload".as_slice())),
+            ("parent link", 0o120_000, Some(b"../outside".as_slice())),
+            ("invalid link", 0o120_000, Some(b"a//b".as_slice())),
+            // Resolved beside the link; a target that is itself a gate input
+            // passes, so the blocked name sits one directory down.
+            (
+                "link to a blocked name",
+                0o120_000,
+                Some(b"keys/id_rsa".as_slice()),
+            ),
+            ("gitlink", 0o160_000, None),
+        ] {
+            let reports = judge_one(path, mode, contents, &default);
+            expect(format!("{path} {what}"), reports, true);
+        }
+        for (name, p) in [("default", &default), ("hostile", &hostile)] {
+            let upper = path.to_uppercase();
+            let reports = judge_one(&upper, 0o100_644, Some(b"public"), p);
+            expect(format!("{upper} file, {name} policy"), reports, false);
+            let reports = judge_one(path, 0o100_755, Some(b"#!/bin/sh\n"), p);
+            expect(format!("{path} executable, {name} policy"), reports, false);
+        }
+        // A safe in-tree link is judged by its target, which here is ordinary.
+        let reports = judge_one(path, 0o120_000, Some(b"ordinary"), &default);
+        expect(format!("{path} safe link"), reports, false);
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} wrong:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
+#[test]
+fn removing_a_link_or_gitlink_from_a_gate_input_passes() {
+    for (mode, contents) in [(0o120_000, "/tmp/payload"), (0o160_000, "")] {
+        let f = Fixture::new();
+        let root = f.commit(&[]);
+        let contents = if contents.is_empty() {
+            root.to_string()
+        } else {
+            contents.to_string()
+        };
+        f.stage(".codeflow/bootstrap.sh", mode, contents.as_bytes());
+        let base = f.commit(&[root]);
+        f.head(base);
+        f.delete(".codeflow/bootstrap.sh");
+        f.stage(".codeflow/bootstrap.sh", 0o100_755, b"#!/bin/sh\n");
+        let p = Fixture::policy(json!({}));
+        assert!(path_policy::staged(&f.repo, &p)
+            .unwrap()
+            .violations
+            .is_empty());
+        let head = f.commit(&[base]);
+        assert!(f.range(base, head, &p).violations.is_empty());
+        f.delete(".codeflow/bootstrap.sh");
+        let gone = f.commit(&[head]);
+        assert!(f.range(head, gone, &p).violations.is_empty());
+    }
+}
+
+#[test]
+fn credentials_json_is_a_shipped_blocked_name_at_any_depth_and_case() {
+    let p = Fixture::policy(json!({}));
+    for (path, blocked) in [
+        ("credentials.json", true),
+        ("config/service/credentials.json", true),
+        ("Deploy/CREDENTIALS.JSON", true),
+        ("credentials.json.example", false),
+        ("docs/credentials.md", false),
+    ] {
+        for report in judge_one(path, 0o100_644, Some(b"{}"), &p) {
+            assert_eq!(!report.violations.is_empty(), blocked, "{path}: {report:?}");
+        }
+    }
 }

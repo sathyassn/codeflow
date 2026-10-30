@@ -233,6 +233,13 @@ fn installed_hooks_and_ci_refuse_deep_names_and_protected_symlinks() {
         ("config/prod/.env.local", 0o100_644, "public"),
         ("deploy/id_rsa", 0o100_644, "public"),
         ("link", 0o120_000, "private/data"),
+        ("credentials.json", 0o100_644, "{}"),
+        ("config/CREDENTIALS.JSON", 0o100_644, "{}"),
+        // Gate inputs stay exempt only as regular files.
+        (".codeflow/bootstrap.sh", 0o120_000, "/tmp/payload"),
+        (".codeflow/git-hooks/pre-commit", 0o120_000, "../../outside"),
+        (".gitignore", 0o160_000, ""),
+        (".github/workflows/codeflow-ci.yml", 0o160_000, ""),
     ] {
         let f = Adopter::new(&json!({"protected_paths":[{"prefix":"private", "allow":[]}]}));
         f.install_hook();
