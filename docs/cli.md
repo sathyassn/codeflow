@@ -505,18 +505,11 @@ criterion, a changed tag or checkbox form, or an added list item that is
 no criterion (ADR-0080).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It writes only rulesets it owns
-by name: "codeflow authority updates" and "codeflow authority checks" on
-`~DEFAULT_BRANCH`, "codeflow line checks" on the line pattern, and
-`codeflow protect <pattern>` for each other protected branch, which requires
-the checks in `git.required_checks` on an up-to-date branch. Any other
-ruleset, and classic branch protection, is never written. Every write sends
-the whole ruleset, and an update never lowers an approval count, removes a
-rule, changes which app produces a check or widens a bypass list. A live read
-that fails or does not parse writes nothing. The profiles, the check
-identity, the enablement order and the recovery window are in the
-[policy reference](policy-reference.md#remote-protection). `codeflow doctor
---check remote-perimeter` reads the default branch's live rules back, and
-fails while the authority or line checks list a bypass actor.
+by name, never another ruleset or classic branch protection, and never weakens
+a rule; the rulesets, profiles and recovery window are in the
+[policy reference](policy-reference.md#remote-protection). A live read that
+fails or does not parse writes nothing. `codeflow doctor --check
+remote-perimeter` reads the default branch's live rules back.
 
 ### Verify notes
 

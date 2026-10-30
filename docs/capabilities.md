@@ -276,12 +276,10 @@ epics: [EPC-001, EPC-002, EPC-003, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 ```
 
-- `codeflow remote protect` writes rulesets it owns on GitHub: on the default
-  branch, only one repository role moves it, and a pull request with strict
-  checks pinned to the identity that must produce them, no force push, no
-  deletion and no bypass; the same on the integration lines; and a ruleset
-  for each other protected branch. It never writes another ruleset or
-  weakens a rule, and reports anything the plan tier cannot apply.
+- `codeflow remote protect` writes GitHub rulesets it owns: one role moves
+  the default branch, and pull requests with strict, pinned checks guard it,
+  the integration lines and each other protected branch. It never weakens a
+  rule and reports what the plan cannot apply.
 - `codeflow doctor` runs twenty-four health checks on the repository and the
   tools around it, including the default branch's host rules.
 
