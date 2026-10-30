@@ -46,6 +46,8 @@ const COMMANDS: [&[&str]; 4] = [
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
+#[path = "support/outcome.rs"]
+mod outcome;
 
 fn with_env(command: &mut Command) -> &mut Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
@@ -117,6 +119,73 @@ fn record(template: &str, from_id: &str, to_id: &str, uid: &str, title: &str) ->
         + "\n"
 }
 
+/// A synthetic record identity: the `n`th uid of the inventory.
+fn synthetic_uid(n: u64) -> String {
+    format!("00000000-0000-4000-8000-{n:012}")
+}
+
+/// The epic and task records the CLI writes for line 1, filled in as their
+/// author does before committing them (criteria and an `## Outcome` line),
+/// then removed: every inventory record is one of these with its identity
+/// replaced. Returns `(epic, task)`.
+fn templates(root: &Path) -> (String, String) {
+    codeflow(root, &["epic", "new", "Template"]);
+    codeflow(
+        root,
+        &[
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            &line_name(1),
+            "Template",
+        ],
+    );
+    let epic_path = root.join("project-management/epics/EPC-001.md");
+    let task_path = root.join("project-management/tasks/TSK-001.md");
+    let epic = outcome::with_outcome(
+        &std::fs::read_to_string(&epic_path)
+            .unwrap()
+            .replace("- AC-1\n", "- AC-1 When run, the system shall work.\n"),
+    );
+    let task = outcome::with_outcome(
+        &std::fs::read_to_string(&task_path).unwrap().replace(
+            "- AC-1\n",
+            "- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the flow shall pass.\n",
+        ),
+    );
+    std::fs::remove_file(epic_path).unwrap();
+    std::fs::remove_file(task_path).unwrap();
+    (epic, task)
+}
+
+/// The epic record of `line`, from the epic template.
+fn epic_record(template: &str, line: usize, uid: &str) -> String {
+    record(
+        template,
+        "EPC-001",
+        &format!("EPC-{line:03}"),
+        uid,
+        &format!("Line {line}"),
+    )
+}
+
+/// The `k`th task record of `line`, from the task template: every tenth
+/// task starts a chain, and the others depend on the task before them.
+fn task_record(template: &str, line: usize, k: usize, uid: &str) -> String {
+    let id = task_id(line, k);
+    let text = record(template, "TSK-001", &id, uid, &format!("Task {id}"))
+        .replace(&line_name(1), &line_name(line))
+        .replace("EPC-001", &format!("EPC-{line:03}"));
+    if k % 10 == 1 {
+        text
+    } else {
+        let previous = task_id(line, k - 1);
+        text.replacen("depends_on: []", &format!("depends_on: [{previous}]"), 1)
+    }
+}
+
 fn data(stream: &mut Vec<u8>, bytes: &[u8]) {
     writeln!(stream, "data {}", bytes.len()).unwrap();
     stream.extend_from_slice(bytes);
@@ -182,30 +251,7 @@ fn inventory() -> (tempfile::TempDir, PathBuf) {
     let base = git(&root, &["rev-parse", "HEAD"]);
     codeflow(&root, &["ids", "seed"]);
     git(&root, &["branch", &line_name(1), &base]);
-    // The CLI writes one epic and one task; they are the templates.
-    codeflow(&root, &["epic", "new", "Template"]);
-    codeflow(
-        &root,
-        &[
-            "task",
-            "new",
-            "--epic",
-            "EPC-001",
-            "--into",
-            &line_name(1),
-            "Template",
-        ],
-    );
-    let epic = std::fs::read_to_string(root.join("project-management/epics/EPC-001.md")).unwrap();
-    let task = std::fs::read_to_string(root.join("project-management/tasks/TSK-001.md"))
-        .unwrap()
-        .replace(
-            "- AC-1\n",
-            "- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the flow shall pass.\n",
-        );
-    let epic = epic.replace("- AC-1\n", "- AC-1 When run, the system shall work.\n");
-    std::fs::remove_file(root.join("project-management/epics/EPC-001.md")).unwrap();
-    std::fs::remove_file(root.join("project-management/tasks/TSK-001.md")).unwrap();
+    let (epic, task) = templates(&root);
 
     let mut stream = Stream {
         bytes: Vec::new(),
@@ -215,31 +261,18 @@ fn inventory() -> (tempfile::TempDir, PathBuf) {
     let mut uid = 0_u64;
     let mut next_uid = || {
         uid += 1;
-        format!("00000000-0000-4000-8000-{uid:012}")
+        synthetic_uid(uid)
     };
     let mut plan_files = Vec::new();
     for line in 1..=LINES {
-        let epic_id = format!("EPC-{line:03}");
-        let text = record(
-            &epic,
-            "EPC-001",
-            &epic_id,
-            &next_uid(),
-            &format!("Line {line}"),
-        );
-        let blob = stream.blob(&text);
-        plan_files.push((format!("project-management/epics/{epic_id}.md"), blob));
+        let blob = stream.blob(&epic_record(&epic, line, &next_uid()));
+        plan_files.push((format!("project-management/epics/EPC-{line:03}.md"), blob));
         for k in 1..=TASKS_PER_LINE {
-            let id = task_id(line, k);
-            let mut text = record(&task, "TSK-001", &id, &next_uid(), &format!("Task {id}"))
-                .replace(&line_name(1), &line_name(line))
-                .replace("EPC-001", &epic_id);
-            if k % 10 != 1 {
-                let previous = task_id(line, k - 1);
-                text = text.replacen("depends_on: []", &format!("depends_on: [{previous}]"), 1);
-            }
-            let blob = stream.blob(&text);
-            plan_files.push((format!("project-management/tasks/{id}.md"), blob));
+            let blob = stream.blob(&task_record(&task, line, k, &next_uid()));
+            plan_files.push((
+                format!("project-management/tasks/{}.md", task_id(line, k)),
+                blob,
+            ));
         }
     }
     let plan = stream.commit(
@@ -360,10 +393,32 @@ fn measure(root: &Path, program: &str, args: &[&str], trace: &Path) -> Measure {
     let waited = unsafe { libc::wait4(pid, &raw mut status, 0, &raw mut usage) };
     let wall = start.elapsed();
     assert_eq!(waited, pid, "wait4");
-    assert!(
-        libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
-        "{program} {args:?} exited {status}"
-    );
+    if !(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0) {
+        // The measured run discards its output; run it again to say why.
+        // The failure reported is the measured run's; the rerun only shows
+        // its output, under its own status. On ten thousand records the
+        // output is long and its verdict comes last, so the message keeps
+        // the end.
+        let out = with_env(&mut Command::new(program))
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("command reruns");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = lines[lines.len().saturating_sub(40)..].join("\n");
+        panic!(
+            "{program} {args:?} failed with {}; a rerun to show why ended with {}, and the last {} of its {} output lines are:\n{tail}",
+            wait_status(status),
+            out.status,
+            lines.len().min(40),
+            lines.len()
+        );
+    }
     std::mem::forget(child);
     let raw = u64::try_from(usage.ru_maxrss).unwrap_or(0);
     // macOS reports bytes, Linux KiB.
@@ -381,6 +436,18 @@ fn measure(root: &Path, program: &str, args: &[&str], trace: &Path) -> Measure {
         wall,
         peak_kib,
         git_processes,
+    }
+}
+
+/// A `wait4` status in words: the exit code, or the signal that ended the
+/// process.
+fn wait_status(status: libc::c_int) -> String {
+    if libc::WIFEXITED(status) {
+        format!("exit code {}", libc::WEXITSTATUS(status))
+    } else if libc::WIFSIGNALED(status) {
+        format!("signal {}", libc::WTERMSIG(status))
+    } else {
+        format!("wait status {status}")
     }
 }
 
@@ -493,6 +560,107 @@ fn read_commands_on_ten_thousand_records_stay_within_their_budgets() {
     .expect("baseline JSON");
     let over = over_budget(&baseline, &measured);
     assert!(over.is_empty(), "over budget:\n{}", over.join("\n"));
+}
+
+/// The inventory's records pass `validate --docs`, which the benchmark times
+/// (TSK-1068). The benchmark is ignored and runs only in the release gate,
+/// so this small inventory, built from the same templates and record
+/// builders, catches a record rule the generator misses in the ordinary Unix
+/// workspace test runs. It checks that validation passes, not that the
+/// records raise no warnings.
+#[test]
+fn the_inventory_records_pass_validate_docs() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    codeflow(&root, &["init", "--yes", "--full"]);
+    let base = git(&root, &["rev-parse", "HEAD"]);
+    codeflow(&root, &["ids", "seed"]);
+    git(&root, &["branch", &line_name(1), &base]);
+    let (epic, task) = templates(&root);
+    let pm = root.join("project-management");
+    std::fs::write(
+        pm.join("epics/EPC-001.md"),
+        epic_record(&epic, 1, &synthetic_uid(1)),
+    )
+    .unwrap();
+    for k in 1..=2 {
+        std::fs::write(
+            pm.join(format!("tasks/{}.md", task_id(1, k))),
+            task_record(&task, 1, k, &synthetic_uid(1 + u64::try_from(k).unwrap())),
+        )
+        .unwrap();
+    }
+    codeflow(&root, &["validate", "--docs"]);
+}
+
+/// A measured command that fails says how, with its own output, rather
+/// than a raw wait status (TSK-1068): the measured run's status, then the
+/// rerun's status and output, each named.
+#[test]
+fn a_failed_measured_command_shows_its_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let panic = std::panic::catch_unwind(|| {
+        measure(
+            dir.path(),
+            "git",
+            &["no-such-command"],
+            &dir.path().join("trace.json"),
+        );
+    })
+    .expect_err("a failed command panics");
+    let message = panic.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(
+        message.contains("failed with exit code 1; a rerun to show why ended with exit status: 1")
+            && message.contains("is not a git command"),
+        "{message}"
+    );
+}
+
+/// When the measured run and the rerun end differently, the failure reported
+/// first is the measured run's, and the output shown is the rerun's under
+/// the rerun's own status: here the measured run exits 3 and the rerun
+/// succeeds.
+#[test]
+fn a_failure_reports_the_measured_status_not_the_rerun_s() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = "if [ -e ran ]; then echo second run; exit 0; fi; : >ran; echo first run; exit 3";
+    let panic = std::panic::catch_unwind(|| {
+        measure(
+            dir.path(),
+            "sh",
+            &["-c", script],
+            &dir.path().join("trace.json"),
+        );
+    })
+    .expect_err("a failed command panics");
+    let message = panic.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(
+        message.starts_with(&format!(
+            "sh [\"-c\", {script:?}] failed with exit code 3; a rerun to show why ended with exit status: 0"
+        )),
+        "{message}"
+    );
+    // The arguments printed above hold the script text, so only the output
+    // section after them is compared.
+    assert_eq!(
+        message
+            .split_once(" output lines are:\n")
+            .map(|(_, output)| output),
+        Some("second run"),
+        "{message}"
+    );
+}
+
+/// The measured run's own status is what a failure reports, whether the
+/// process exited or was killed.
+#[test]
+fn a_wait_status_names_its_exit_code_or_signal() {
+    // The encodings wait4 returns on Linux and macOS: the exit code in the
+    // second byte; a terminating signal in the low seven bits.
+    assert_eq!(wait_status(1 << 8), "exit code 1");
+    assert_eq!(wait_status(0), "exit code 0");
+    assert_eq!(wait_status(libc::SIGKILL), "signal 9");
 }
 
 /// The budgets a run is held to, from the recorded baseline: no more git
