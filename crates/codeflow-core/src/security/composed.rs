@@ -1161,10 +1161,9 @@ fn arith_unary(tokens: &[Arith], at: &mut usize) -> Option<i64> {
 /// construct stays text.
 fn push_glob(value: &mut Value, text: &str) {
     let chars: Vec<char> = text.chars().collect();
-    let globs = chars
-        .iter()
-        .enumerate()
-        .any(|(at, c)| *c == '*' || *c == '?' || (*c == '[' && chars[at + 1..].contains(&']')));
+    let globs = chars.iter().enumerate().any(|(at, c)| {
+        matches!(c, '*' | '?' | '^' | '#') || (*c == '[' && chars[at + 1..].contains(&']'))
+    });
     if globs {
         value.0.push(Piece::Glob(text.to_string()));
     } else {
@@ -2580,7 +2579,10 @@ impl Run<'_> {
                 Part::Lit { text, quoted } => {
                     // A glob stands for the names it matches, outside text;
                     // as an argument, how many is unknown.
-                    if fields_ctx && !*quoted && text.contains(['*', '?', '[']) {
+                    // zsh reads `^` and `#` as glob operators too, as
+                    // `has_glob` does for a plain word (TSK-1002 security
+                    // review 03, H-A: an unquoted `$HOME/.codex/^`).
+                    if fields_ctx && !*quoted && text.contains(['*', '?', '[', '^', '#']) {
                         loose |= ctx == Ctx::Fields;
                         globbed = true;
                         push_glob(&mut cur, text);

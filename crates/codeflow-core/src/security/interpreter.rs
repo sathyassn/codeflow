@@ -372,6 +372,11 @@ fn program_word_unverified(
     depth: usize,
 ) -> Option<String> {
     let program = call.args.first()?;
+    if program == outward::FD_UNREAD_COMMAND {
+        return Some(
+            "cannot verify the command `fd` runs on each path it finds: name it after `-x`".into(),
+        );
+    }
     if crate::hooks::git_guard::unresolved_word(program) || program.contains(['\u{1}', '\u{2}']) {
         let shown: String = program
             .chars()
@@ -1465,9 +1470,12 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
 /// `**/NAME` rule such as `.netrc`, a name that is the secret's name
 /// followed by `~` or by a `.` suffix (`auth.json~`, `auth.json.bak`,
 /// `.orig`, `.old`, `.1`), or an editor swap file `.NAME.sw?`. Only a rule
-/// whose last component is a plain name counts; a pattern rule already
-/// covers its own spellings, and a name that merely continues the secret's
-/// name (`.netrc-notes`) is a different file.
+/// whose last component is a plain name counts, and a name that merely
+/// continues the secret's name (`.netrc-notes`) is a different file. A
+/// backup of a file a suffix pattern names (`*.pem`, as `x.pem.bak`) is a
+/// stated limit: telling a backup suffix from a source one
+/// (`certificate.pem.txt`) would need a suffix list (the operator's choice
+/// on security review 03, H-B).
 fn secret_backup(word: &str) -> bool {
     let table = actions::table();
     let hard = table

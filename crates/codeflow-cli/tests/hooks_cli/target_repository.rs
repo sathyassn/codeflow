@@ -1662,6 +1662,14 @@ fn tsk1002_review17_fd_values_help_programs_carets_and_backups() {
         "cat ~/.netrc.bak",
         "cat copies/.netrc.bak",
         "cat copies/.netrc~",
+        // Security review 03: a home parameter before a zsh caret, and an
+        // `fd` exec that is only a launcher.
+        "cat $HOME/.codex/^",
+        "cat ${HOME}/.codex/^",
+        "cat $HOME/.codex/auth^",
+        "fd . ~/.codex --exec=env",
+        "fd . ~/.codex -x env",
+        "fd . ~/.codex -x nice",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1679,6 +1687,8 @@ fn tsk1002_review17_fd_values_help_programs_carets_and_backups() {
         "git log '^main' HEAD",
         "cat ~/.codex/config.toml",
         "cat clean/.netrc-notes",
+        "cat \"$HOME/.codex/^\"",
+        "git log HEAD^",
     ]
     .iter()
     .map(ToString::to_string)

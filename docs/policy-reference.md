@@ -216,9 +216,13 @@ A backup copy of a named secret file holds the same token, so it is
 secret too: in the secret's directory (any directory for a name rule such
 as `.netrc`), the secret's name followed by `~` or a `.` suffix
 (`~/.codex/auth.json~`, `auth.json.bak`, `.orig`, `.old`, `.1`,
-`.netrc.bak`) or an editor swap file (`.auth.json.swp`). Rules that are
-patterns already cover their own spellings, and a name that only
-continues the secret's name (`.netrc-notes`) is another file.
+`.netrc.bak`) or an editor swap file (`.auth.json.swp`). A name that
+only continues the secret's name (`.netrc-notes`) is another file. A
+pattern rule covers only the names it matches: `id_rsa*` matches
+`id_rsa.bak`, but a backup of a file named by a suffix pattern (`*.pem`,
+`*.key`, `*.p12`, `*.pfx`, as in `x.pem.bak`) is not judged a secret,
+since telling a backup suffix from a source one (`certificate.pem.txt`)
+would need a suffix list. That is a stated limit of the text guard.
 
 The shared shell resolver follows on-line assignments, directory changes,
 home parameters and supported static substitutions before judging operands.

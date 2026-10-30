@@ -1678,6 +1678,25 @@ fn argv(
         }
     };
     if let Some(inner) = inner {
+        // A launcher `fd` runs with nothing after it runs each path `fd`
+        // hands it, a program the guard cannot read: the walk stands with
+        // an unresolved command over an unread root, as an empty exec value
+        // does (TSK-1002 security review 03, L1: `fd . DIR --exec=env`).
+        if inner.is_empty() {
+            if let Some(call) = out.commands.get_mut(command_at) {
+                if let Some(Supplier::Find {
+                    starts,
+                    appends: true,
+                    ..
+                }) = call.supplier.as_mut()
+                {
+                    starts.push("$CODEFLOW_UNREAD_ROOT".to_string());
+                    call.args = vec![FD_UNREAD_COMMAND.to_string()];
+                    call.expands = None;
+                    return;
+                }
+            }
+        }
         if name != "xargs" {
             // The child receives these operands. Recording the wrapper as
             // a second file reader loses the child's input/output roles.
@@ -1904,7 +1923,7 @@ struct FdExec {
 
 /// The command word an `fd` exec option stands for when the guard cannot
 /// read one; it is unresolved, so the call refuses as unverifiable.
-const FD_UNREAD_COMMAND: &str = "$CODEFLOW_UNREAD_COMMAND";
+pub(crate) const FD_UNREAD_COMMAND: &str = "$CODEFLOW_UNREAD_COMMAND";
 
 /// The options of `fd` 10 that take a value (`fd --help`).
 const FD_VALUED_SHORT: &str = "etEdSojc";
