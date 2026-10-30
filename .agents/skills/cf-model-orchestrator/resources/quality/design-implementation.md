@@ -36,16 +36,18 @@ environment variables, database rows, user input, and another module's
 untyped output. A typed representation alone does not validate its input:
 a plain Python dataclass, a `TypedDict`, a TypeScript `interface` or a cast
 describes a shape and accepts any value at run time. Parse with the
-language's standard library: Pydantic models in Python, zod schemas in
-TypeScript and checked JavaScript, serde types in Rust, structs decoded with
-unknown fields refused plus a validator in Go, a `type` and a `validation`
-block on each OpenTofu variable, and schemas for Rego `input` and `data`.
-Where a JSON Schema exists, generate the types from it. Handle and test
-invalid, absent and unexpected values. Keep one model per shape and reuse
-it wherever that shape is read; a value already parsed into a model is
-trusted and is not validated again. Proportionality decides how much a
-boundary model holds, never whether code is typed; add no wrapper layers
-or duplicate domain models for this rule.
+typed-model library that is standard for the language, whether or not it
+ships with the language: Pydantic models in Python, zod schemas in
+TypeScript and checked JavaScript, serde types in Rust, structs decoded
+with unknown fields refused plus a validator in Go, a `type` and a
+`validation` block on each OpenTofu variable, and schemas for Rego `input`
+and `data`. Where a JSON Schema exists, generate the types from it. Handle
+and test invalid, absent and unexpected values. Keep one model per shape
+and reuse it wherever that shape is read; a value already parsed into a
+model is trusted and is not validated again. Proportionality decides how
+many fields and checks a boundary model holds, never whether boundary data
+is parsed or code is typed; add no wrapper layers or duplicate domain
+models for this rule.
 
 TypeScript is the default for new projects and new files. An existing
 JavaScript codebase is type-checked in place instead of rewritten: `tsc`

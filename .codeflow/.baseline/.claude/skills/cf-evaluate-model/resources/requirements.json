@@ -3140,7 +3140,7 @@
     {
       "id": "CF-QA-018",
       "level": "hard",
-      "statement": "New and changed code is fully typed, and every escape type or suppression carries an inline reason. Data crossing any boundary is parsed into a typed model that also validates it, with the language's standard library; a typed representation alone, such as a plain dataclass, a TypedDict, an interface or a cast, does not validate. A builder adds the project's missing type checker and typed-model library as part of the change, TypeScript is the default for new projects and files, and existing JavaScript is type-checked in place. A project opts out only by stating its reason in its own AGENTS.md. Review returns changes_requested for untyped new code, an unexplained escape type, untyped boundary data, or a hand-written validator where a standard or schema-generated model fits.",
+      "statement": "New and changed code is fully typed, and every escape type or suppression carries an inline reason. Data crossing any boundary is parsed into a typed model that also validates it, with the typed-model library that is standard for the language; a typed representation alone, such as a plain dataclass, a TypedDict, an interface or a cast, does not validate. A builder adds the project's missing type checker and typed-model library as part of the change, TypeScript is the default for new projects and files, and existing JavaScript is type-checked in place. A project opts out only by stating its reason in its own AGENTS.md. Review returns changes_requested for untyped new code, an unexplained escape type, untyped boundary data, or a hand-written validator where a standard or schema-generated model fits.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
@@ -3166,8 +3166,8 @@
         {
           "path": ".claude/agents/cf-reviewer.md",
           "markers": [
-            "Return `changes_requested`, each as a major finding at its file:line",
-            "a hand-written validator where a model from the language's standard library"
+            "Return `changes_requested`, with one major finding at its file:line for each of these",
+            "a hand-written validator where a model from the language's standard typed-model library"
           ]
         }
       ]

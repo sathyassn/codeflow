@@ -41,16 +41,16 @@ evidence" define; the brief follows
    contract's typed-code and typed-boundary-data rule
    (`.claude/skills/cf-model-orchestrator/resources/quality/design-implementation.md`),
    unless the project's `AGENTS.md` Stack standards state an opt-out with
-   its reason for that language or path. Return `changes_requested`, each
-   as a major finding at its file:line, for: new or changed code without
-   types; an escape type or suppression without an inline reason; data
-   crossing a boundary used without being parsed into a validating typed
-   model (a plain dataclass, `TypedDict`, `interface` or cast does not
-   validate); and a hand-written validator where a model from the
-   language's standard library, or one generated from an existing schema,
-   fits. Verify that invalid, absent, and unexpected values are handled and
-   tested. A value already parsed into a model needs no second validator or
-   wrapper.
+   its reason for that language or path. Return `changes_requested`, with
+   one major finding at its file:line for each of these: new or changed
+   code without types; an escape type or suppression without an inline
+   reason; data crossing a boundary used without being parsed into a
+   validating typed model (a plain dataclass, `TypedDict`, `interface` or
+   cast does not validate); and a hand-written validator where a model from
+   the language's standard typed-model library, or one generated from an
+   existing schema, fits. Verify that invalid, absent, and unexpected values
+   are handled and tested. A value already parsed into a model needs no
+   second validator or wrapper.
 3. Ask two questions of every criterion, and reject on either: is it
    supported by evidence on this source, and does the result achieve the
    outcome for the affected user? Record file:line plus one sentence; no

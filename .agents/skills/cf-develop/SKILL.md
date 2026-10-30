@@ -45,8 +45,7 @@ records the required interactive seat unavailable and the reduced assurance.
       typed model, and accepted invalid-input behavior tested. When the
       project lacks its type checker, linter or typed-model library, adding
       it is part of this change, unless the project's `AGENTS.md` states an
-      opt-out with its reason. When the change fixes
-      a defect, apply Repair in
+      opt-out with its reason. When the change fixes a defect, apply Repair in
       `cf-model-orchestrator/resources/quality/findings.md`: state the
       evidenced mechanism and add a regression test that fails before the fix
       and passes after; for a defect that resists a first glance, first run one

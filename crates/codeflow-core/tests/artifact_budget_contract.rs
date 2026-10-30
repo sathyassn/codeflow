@@ -1592,7 +1592,7 @@ fn typed_code_and_boundary_data_are_the_default() {
             ("invalid input tested", "Handle and test invalid, absent and unexpected values."),
             (
                 "proportionality scope",
-                "Proportionality decides how much a boundary model holds, never whether code is typed",
+                "Proportionality decides how many fields and checks a boundary model holds, never whether boundary data is parsed or code is typed",
             ),
             (
                 "typescript default",
@@ -1665,7 +1665,7 @@ fn typed_code_rule_is_applied_by_develop_stack_and_review() {
             ("rule pointer", "typed-code and typed-boundary-data rule"),
             (
                 "blocking",
-                "Return `changes_requested`, each as a major finding at its file:line",
+                "Return `changes_requested`, with one major finding at its file:line for each of these",
             ),
             ("untyped code", "new or changed code without types"),
             (
@@ -1678,7 +1678,7 @@ fn typed_code_rule_is_applied_by_develop_stack_and_review() {
             ),
             (
                 "hand-written validator",
-                "a hand-written validator where a model from the language's standard library",
+                "a hand-written validator where a model from the language's standard typed-model library",
             ),
         ],
     );
