@@ -1,0 +1,11 @@
+id = "TSK-1086"
+uid = "951f3d1e-e0e8-44c5-99fa-35c60439edc0"
+kind = "TSK"
+title = "The binary carries the shipped bases of every published release"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T15:21:00Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
