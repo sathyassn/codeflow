@@ -12,6 +12,10 @@ use std::process::{Command, Output, Stdio};
 #[path = "hooks_cli/checkout_identity.rs"]
 mod checkout_identity;
 
+#[path = "hooks_cli/host_isolation.rs"]
+mod host_isolation;
+use host_isolation::{git_command, isolate_clone, isolate_git};
+
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
@@ -54,16 +58,13 @@ fn codeflow() -> Command {
     isolated_codeflow(Command::new(env!("CARGO_BIN_EXE_codeflow")))
 }
 
+/// Isolate a command from the developer's environment: its Codeflow home,
+/// and every Git setting, variable and file of the host (`isolate_git`).
 fn isolated_codeflow(mut cmd: Command) -> Command {
-    // Isolate from the developer's environment.
+    isolate_git(&mut cmd);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
     cmd
 }
 
@@ -103,14 +104,9 @@ fn task_branch_ci(dir: &Path, branch: &str, valid_body: bool) -> Output {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = git_command()
         .args(args)
         .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .expect("git runs");
     assert!(
@@ -3248,14 +3244,9 @@ fn exec_guard_honours_no_system_directory_as_tmpdir() {
 
 /// Run git in `dir` with the hook environment, returning its output.
 fn git_out(dir: &Path, args: &[&str]) -> Output {
-    Command::new("git")
+    git_command()
         .args(args)
         .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
@@ -3800,7 +3791,7 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
     // Feature branch with sanctioned prefix passes (test gate note allowed).
     // The push set runs `codeflow ci` on the pushed range, so the local sha
     // must be a real commit, as it always is under git.
-    let head = std::process::Command::new("git")
+    let head = git_command()
         .args(["rev-parse", "HEAD"])
         .current_dir(dir.path())
         .output()
@@ -3896,14 +3887,9 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
     wire_reference_transaction_hook(dir.path());
 
     // ff-merge onto protected main is now refused at the git layer.
-    let ff = Command::new("git")
+    let ff = git_command()
         .args(["merge", "--ff-only", "feat/ff"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
@@ -3915,14 +3901,9 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
     assert!(String::from_utf8_lossy(&ff.stderr).contains("git.local_ref_protection"));
 
     // A human's CODEFLOW_HUMAN_OVERRIDE=1 lets the same ff-merge through.
-    let ff_human = Command::new("git")
+    let ff_human = git_command()
         .args(["merge", "--ff-only", "feat/ff"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env("CODEFLOW_HUMAN_OVERRIDE", "1")
         .output()
         .unwrap();
@@ -4028,10 +4009,12 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
 
     let workroot = tempfile::tempdir().unwrap();
     let work = workroot.path().join("repo");
-    let clone = codeflow_fixture::clone(workroot.path(), origin.path(), &work)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .output();
+    let clone = isolate_clone(codeflow_fixture::clone(
+        workroot.path(),
+        origin.path(),
+        &work,
+    ))
+    .output();
     assert!(
         clone.status.success(),
         "clone: {}",
@@ -4063,14 +4046,9 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
 
     // `git pull --ff-only`: the fetch updates refs/remotes/origin/main, then the
     // fast-forward moves refs/heads/main onto exactly that head — allowed.
-    let pull = Command::new("git")
+    let pull = git_command()
         .args(["pull", "--ff-only", "origin", "main"])
         .current_dir(&work)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
@@ -4111,14 +4089,9 @@ fn real_wired_reference_transaction_blocks_reset_hard_and_branch_delete_on_prote
     }
 
     let git_run = |args: &[&str]| {
-        Command::new("git")
+        git_command()
             .args(args)
             .current_dir(dir.path())
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
             .env_remove("CODEFLOW_INTEGRATE_TOKEN")
             .env_remove("CODEFLOW_HUMAN_OVERRIDE")
             .output()
@@ -4145,14 +4118,9 @@ fn real_wired_reference_transaction_blocks_reset_hard_and_branch_delete_on_prote
 #[test]
 fn real_wired_reference_transaction_fails_closed_when_reftable_cannot_be_evaluated() {
     let dir = tempfile::tempdir().unwrap();
-    let init = Command::new("git")
+    let init = git_command()
         .args(["init", "--ref-format=reftable", "-b", "main"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap();
     if !init.status.success() {
@@ -4174,27 +4142,17 @@ fn real_wired_reference_transaction_fails_closed_when_reftable_cannot_be_evaluat
     std::fs::write(dir.path().join("base.txt"), "base\n").unwrap();
     git(dir.path(), &["add", "."]);
     git(dir.path(), &["commit", "-m", "chore: init"]);
-    let original = Command::new("git")
+    let original = git_command()
         .args(["rev-parse", "refs/heads/main"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap();
     assert!(original.status.success());
     wire_reference_transaction_hook(dir.path());
 
-    let delete = Command::new("git")
+    let delete = git_command()
         .args(["update-ref", "-d", "refs/heads/main"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
@@ -4218,14 +4176,9 @@ fn real_wired_reference_transaction_fails_closed_when_reftable_cannot_be_evaluat
         );
     }
 
-    let retained = Command::new("git")
+    let retained = git_command()
         .args(["rev-parse", "refs/heads/main"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap();
     assert!(
@@ -4260,14 +4213,9 @@ fn real_wired_hook_blocks_commit_via_git() {
 
     std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
     git(dir.path(), &["add", "f.txt"]);
-    let out = Command::new("git")
+    let out = git_command()
         .args(["commit", "-m", "feat: should be blocked"])
         .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .output()
         .unwrap();
@@ -4344,16 +4292,11 @@ fn wired_commit(dir: &Path, args: &[&str], editor: Option<&Path>) -> Output {
 /// untranslated cut signature.
 #[cfg(unix)]
 fn run_wired_git(dir: &Path, args: &[&str], editor: Option<&Path>) -> Output {
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.args(args)
         .current_dir(dir)
         .env("LC_ALL", "C")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("CODEFLOW_HOME", isolated_home())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE");
     match editor {
@@ -4378,7 +4321,7 @@ fn assert_committed(dir: &Path, out: &Output, case: &str) -> String {
         "{case}: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let log = Command::new("git")
+    let log = git_command()
         .args(["log", "-1", "--format=%B"])
         .current_dir(dir)
         .output()
@@ -5393,7 +5336,7 @@ fn task_home_inventory_limit_blocks_ci_not_the_commit() {
 const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
 
 fn rev(dir: &Path, rev: &str) -> String {
-    let out = Command::new("git")
+    let out = git_command()
         .args(["rev-parse", rev])
         .current_dir(dir)
         .output()
@@ -5415,7 +5358,7 @@ fn answering_destination(dir: &Path, name: &str) {
 }
 
 fn push_url(dir: &Path, remote: &str) -> String {
-    Command::new("git")
+    git_command()
         .args(["remote", "get-url", "--push", remote])
         .current_dir(dir)
         .output()
@@ -6438,10 +6381,8 @@ fn push_set_fetches_nothing_in_a_partial_clone() {
     receive(bare.path(), source.path(), "main:main");
     let url = format!("file://{}", bare.path().display());
     let clone = tempfile::tempdir().unwrap();
-    codeflow_fixture::clone(clone.path(), &url, ".")
+    isolate_clone(codeflow_fixture::clone(clone.path(), &url, "."))
         .filter("blob:none")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .run();
     git(clone.path(), &["config", "user.email", "t@example.com"]);
     git(clone.path(), &["config", "user.name", "t"]);
@@ -6452,7 +6393,7 @@ fn push_set_fetches_nothing_in_a_partial_clone() {
     git(clone.path(), &["checkout", "-q", "-b", "feat/own"]);
     let head = commit_file(clone.path(), "own.txt", "own\n", "feat: add own");
     let objects = || {
-        let out = Command::new("git")
+        let out = git_command()
             .args([
                 "cat-file",
                 "--batch-all-objects",
@@ -7211,11 +7152,9 @@ fn path_with(first: &[&Path]) -> std::ffi::OsString {
 /// Run `binary` with PATH set to `path` and the test's isolation.
 #[cfg(unix)]
 fn codeflow_at(binary: &Path, dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> Output {
-    let mut cmd = Command::new(binary);
+    let mut cmd = isolated_codeflow(Command::new(binary));
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env("PATH", path)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Hooks")
         .env("GIT_AUTHOR_EMAIL", "hooks@example.test")
         .env("GIT_COMMITTER_NAME", "Hooks")
@@ -7223,9 +7162,6 @@ fn codeflow_at(binary: &Path, dir: &Path, path: &std::ffi::OsStr, args: &[&str])
         .env_remove("CODEFLOW_HOOK_BINARY")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .args(args)
         .current_dir(dir);
     cmd.output().unwrap()
@@ -7234,21 +7170,16 @@ fn codeflow_at(binary: &Path, dir: &Path, path: &std::ffi::OsStr, args: &[&str])
 /// Git with PATH set to `path`, outside any codeflow command.
 #[cfg(unix)]
 fn git_at(dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> Output {
-    Command::new("git")
+    git_command()
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
         .env("CODEFLOW_HOME", isolated_home())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Hooks")
         .env("GIT_AUTHOR_EMAIL", "hooks@example.test")
         .env("GIT_COMMITTER_NAME", "Hooks")
         .env("GIT_COMMITTER_EMAIL", "hooks@example.test")
         .env_remove("CODEFLOW_HOOK_BINARY")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap()
 }
@@ -7374,12 +7305,10 @@ fn a_hook_runs_the_calling_binary_and_never_another_codeflow() {
 
     // A poisoned inherited value names the refusing stub.
     let path = path_with(&[&other_build]);
-    let mut cmd = Command::new(exe);
+    let mut cmd = isolated_codeflow(Command::new(exe));
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env("PATH", &path)
         .env("CODEFLOW_HOOK_BINARY", refusing.join("codeflow"))
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Hooks")
         .env("GIT_AUTHOR_EMAIL", "hooks@example.test")
         .env("GIT_COMMITTER_NAME", "Hooks")
@@ -7450,14 +7379,12 @@ fn a_missing_or_non_executable_designated_binary_fails_the_hook() {
     let not_executable = dir.path().join("codeflow-not-executable");
     std::fs::write(&not_executable, "#!/bin/sh\nexit 0\n").unwrap();
     for designated in [dir.path().join("missing/codeflow"), not_executable] {
-        let out = Command::new("git")
+        let out = git_command()
             .args(["push", "-q", "origin", REGISTRY_LINE])
             .current_dir(&root)
             .env("PATH", &plain)
             .env("CODEFLOW_HOME", isolated_home())
             .env("CODEFLOW_HOOK_BINARY", &designated)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
             .unwrap();
         assert!(
@@ -7516,22 +7443,17 @@ fn with_installed_hooks(program: &str, dir: &Path, args: &[&str]) -> Output {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .unwrap();
-    Command::new(program)
+    isolated_codeflow(Command::new(program))
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
         .env("CODEFLOW_HOME", isolated_home())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.com")
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@example.com")
         .env("GIT_EDITOR", "true")
         .env_remove("CODEFLOW_HOOK_BINARY")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .env_remove("CODEFLOW_PR_BODY")
@@ -9037,7 +8959,7 @@ fn guards_preserve_discovered_checkout_when_registration_is_rewritten() {
             _ => std::fs::write(&registration, format!("{}\n", decoy.join(".git").display()))
                 .unwrap(),
         }
-        let output = Command::new("git")
+        let output = git_command()
             .current_dir(&linked)
             .args(["rev-parse", "--show-toplevel"])
             .output()
@@ -9450,13 +9372,7 @@ fn guards_read_a_search_pattern_as_text() {
 fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
     const ZERO: &str = "0000000000000000000000000000000000000000";
     let read = |dir: &Path, args: &[&str]| {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .unwrap();
+        let out = git_command().args(args).current_dir(dir).output().unwrap();
         assert!(out.status.success(), "git {args:?}");
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
@@ -9467,15 +9383,10 @@ fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
         init_repo(&seed, "master");
         let origin = tmp.path().join("origin.git");
         let clone = tmp.path().join("work");
-        codeflow_fixture::clone(tmp.path(), &seed, &origin)
+        isolate_clone(codeflow_fixture::clone(tmp.path(), &seed, &origin))
             .bare()
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .run();
-        codeflow_fixture::clone(tmp.path(), &origin, &clone)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .run();
+        isolate_clone(codeflow_fixture::clone(tmp.path(), &origin, &clone)).run();
         git(&clone, &["config", "user.email", "t@example.com"]);
         git(&clone, &["config", "user.name", "t"]);
         git(&clone, &["switch", "-q", "-c", "fix/review"]);
