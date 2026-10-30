@@ -430,9 +430,9 @@ fn rows() -> Vec<Row> {
     ]
 }
 
-/// Whether a program answers `--version` (GNU tools) on this host.
-fn answers_version(program: &str) -> bool {
-    Command::new(program)
+/// Whether this host's `xargs` is GNU's: only GNU's answers `--version`.
+fn gnu_xargs() -> bool {
+    Command::new("xargs")
         .arg("--version")
         .output()
         .is_ok_and(|out| out.status.success())
@@ -593,7 +593,7 @@ fn check(row: &Row, gnu_xargs: bool, parallel: bool) -> Result<Option<String>, S
 #[cfg(unix)]
 #[test]
 fn native_tools_remove_what_the_guard_judged() {
-    let gnu_xargs = answers_version("xargs");
+    let gnu_xargs = gnu_xargs();
     let parallel = Command::new("parallel")
         .arg("--version")
         .output()
