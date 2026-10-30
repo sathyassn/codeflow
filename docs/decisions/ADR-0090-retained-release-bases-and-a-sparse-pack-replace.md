@@ -63,12 +63,17 @@ record compares bytes with that base. `codeflow update` migrates a 3.x
 project in one run: it derives each entry's base from the old baseline copy
 and digest, writes the pack entries it needs, writes the schema 2 manifest,
 and removes `.codeflow/.baseline/` last, following no link and writing
-nothing outside `.codeflow/`. A 3.x binary cannot read the result: it fails
-closed on the missing `sha256` field (at the tag v3.1.1, `state.rs:498`,
-read at `:534`) before it writes a project file; `update` fails without
-naming the path, `doctor` fails naming it, and a repeated `init` lowers the
-pin in `project.toml` before it fails (`SPC-015` R-4). No published binary
-has a pin check; this line's `check_write_version` first ships in 4.0.0.
+nothing outside `.codeflow/`. A published 2.x or 3.x binary cannot update
+the result: at every tag from v2.0.0 to v3.1.1 its parser requires the
+`sha256` field (at v3.1.1, `state.rs:498`, read at `:534`), so `update`
+fails on the missing field before it writes a project file and without
+naming the path, and a repeated `init` lowers the pin in `project.toml`
+before it fails the same way. `doctor` differs by tag: at v3.1.0 and v3.1.1
+it fails naming the manifest; at v3.0.0 it passes, skipping the drift check
+on a manifest it cannot read (v3.0.0 `doctor/mod.rs:2383-2384`); at v2.0.0
+and v2.1.0 it passes, since it only parses `.codeflow/` files as JSON
+(`SPC-015` R-4). No published binary has a pin check; this line's
+`check_write_version` first ships in 4.0.0.
 The change ships
 as 4.0.0 with one migration step. `SPC-015` pins the formats, the outcome of
 every decision arm and the edge cases; TSK-1086 builds the retained bases,
@@ -120,7 +125,9 @@ Displaced alternatives:
   `zstd-sys`. Never 0.13: `Cargo.toml:53-62` patches that line out of the
   tree for its RUSTSEC advisories. The reader caps what it decodes before
   it allocates (`SPC-015` R-26). No other dependency is added.
-- A 3.x binary cannot read a 4.0.0 project. Adopters upgrade every checkout
+- A published 2.x or 3.x `update` or `init` cannot read a 4.0.0 project,
+  and only the v3.1.0 and v3.1.1 `doctor` fails on one; the older doctors
+  pass it (`SPC-015` R-4). Adopters upgrade every checkout
   and CI pin to 4.0.0 together, run `codeflow update` once and commit the
   manifest and the baseline removal (TSK-1087's migration text). A project
   installed by a development build keeps its bases in the pack until the
