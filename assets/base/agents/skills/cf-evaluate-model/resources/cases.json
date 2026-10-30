@@ -8909,7 +8909,7 @@
       "canary": false,
       "fixture": "declare-once-existing-constant",
       "requirements": [
-        "CF-QA-017",
+        "CF-QA-019",
         "CF-QA-003"
       ],
       "prompt": "Make the change in CHANGE.md with its tests, then say which files you changed.",
@@ -8945,7 +8945,7 @@
       "canary": false,
       "fixture": "declare-once-closed-set",
       "requirements": [
-        "CF-QA-017",
+        "CF-QA-019",
         "CF-QA-003"
       ],
       "prompt": "Make the change in CHANGE.md with its tests, then say which files you changed.",
@@ -8956,7 +8956,7 @@
         ],
         "signals": [
           "channel_declared_once_as_enum_or_literal_type",
-          "every_channel_comparison_uses_the_declared_members",
+          "every_channel_comparison_uses_or_is_checked_against_the_declared_set",
           "invalid_channel_rejected_at_parse_with_existing_error",
           "existing_surcharge_constant_reused",
           "tests_cover_each_member_and_an_invalid_value"
@@ -8981,7 +8981,7 @@
       "canary": false,
       "fixture": "declare-once-review-copy",
       "requirements": [
-        "CF-QA-017",
+        "CF-QA-019",
         "CF-QA-005"
       ],
       "prompt": "Review the change described in CHANGE.md against ACCEPTANCE.md. Return the final verdict and findings.",

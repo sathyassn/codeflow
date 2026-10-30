@@ -299,7 +299,7 @@
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "496da52e23d4f746d37bbf5e637d6eb3e968ffeb6cdbed0b945173ac41de50a8",
+      "sha256": "38e3f09bebda4356cc0d5b1a71e3a8f75d611017cb9956dcb8c16adf5831e763",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -311,7 +311,7 @@
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "7f9674f5e2841bca1e5f8a27bd4986d11968ba23cae7cbb6674ceef48ba8ccde",
+      "sha256": "7a35f52d78b5aeb80808da322e300fca836e8b11aa0d299b8efde8db90b54c08",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -341,7 +341,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "92c245b73411f2993023e6fbe448e7f4bc00de44649724104d63e83b78672eb2",
+      "sha256": "e550692f540cf6caad74c8be1536cf86374d4757f6889e7291733f5a52968844",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1145,7 +1145,7 @@
     ".claude/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "496da52e23d4f746d37bbf5e637d6eb3e968ffeb6cdbed0b945173ac41de50a8",
+      "sha256": "38e3f09bebda4356cc0d5b1a71e3a8f75d611017cb9956dcb8c16adf5831e763",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -1157,7 +1157,7 @@
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "7f9674f5e2841bca1e5f8a27bd4986d11968ba23cae7cbb6674ceef48ba8ccde",
+      "sha256": "7a35f52d78b5aeb80808da322e300fca836e8b11aa0d299b8efde8db90b54c08",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -1187,7 +1187,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "92c245b73411f2993023e6fbe448e7f4bc00de44649724104d63e83b78672eb2",
+      "sha256": "e550692f540cf6caad74c8be1536cf86374d4757f6889e7291733f5a52968844",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1733,7 +1733,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "df543ee6ff1b430d7df1faf98fd24768004b61fb4033ee65203f66ea28e2f7a9",
+      "sha256": "51600f48fa15020e9bdcc847ff9e1fb24f5920f479dc2c26264c35d6383705b5",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {

@@ -3619,11 +3619,11 @@
       },
       "files": {
         "CHANGE.md": "# Change\n\nFailed jobs are retried. When a job has failed as many times as the retry limit allows, `src/escalate.ts` shall assign it to the support team's queue and return the assignment; a job still under the limit is not escalated. Add `escalate(job)` and its tests.\n",
-        "package.json": "{\n  \"name\": \"fixture-jobs\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  }\n}\n",
+        "package.json": "{\n  \"name\": \"fixture-jobs\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"engines\": {\n    \"node\": \">=22.18\"\n  },\n  \"scripts\": {\n    \"test\": \"node --test tests/*.test.ts\"\n  }\n}\n",
         "src/config.ts": "export const SUPPORT_TEAM = \"platform-support\";\nexport const MAX_RETRIES = 3;\nexport const QUEUE_PREFIX = \"queue:\";\n",
-        "src/retry.ts": "import { MAX_RETRIES } from \"./config.js\";\n\nexport interface Job {\n  id: string;\n  failures: number;\n}\n\nexport function shouldRetry(job: Job): boolean {\n  return job.failures < MAX_RETRIES;\n}\n",
-        "src/notify.ts": "import { QUEUE_PREFIX, SUPPORT_TEAM } from \"./config.js\";\n\nexport function supportQueue(): string {\n  return `${QUEUE_PREFIX}${SUPPORT_TEAM}`;\n}\n",
-        "tests/retry.test.ts": "import { test } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { shouldRetry } from \"../src/retry.js\";\n\ntest(\"retries a job with two failures\", () => {\n  assert.equal(shouldRetry({ id: \"j1\", failures: 2 }), true);\n});\n\ntest(\"stops retrying at three failures\", () => {\n  assert.equal(shouldRetry({ id: \"j1\", failures: 3 }), false);\n});\n"
+        "src/retry.ts": "import { MAX_RETRIES } from \"./config.ts\";\n\nexport interface Job {\n  id: string;\n  failures: number;\n}\n\nexport function shouldRetry(job: Job): boolean {\n  return job.failures < MAX_RETRIES;\n}\n",
+        "src/notify.ts": "import { QUEUE_PREFIX, SUPPORT_TEAM } from \"./config.ts\";\n\nexport function supportQueue(): string {\n  return `${QUEUE_PREFIX}${SUPPORT_TEAM}`;\n}\n",
+        "tests/retry.test.ts": "import { test } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { shouldRetry } from \"../src/retry.ts\";\n\ntest(\"retries a job with two failures\", () => {\n  assert.equal(shouldRetry({ id: \"j1\", failures: 2 }), true);\n});\n\ntest(\"stops retrying at three failures\", () => {\n  // The limit is written out on purpose, not read from src/config.ts: an\n  // independent expected value, so a wrong MAX_RETRIES fails this test.\n  assert.equal(shouldRetry({ id: \"j1\", failures: 3 }), false);\n});\n"
       }
     },
     {
@@ -3655,11 +3655,11 @@
       "files": {
         "ACCEPTANCE.md": "# Acceptance\n\n- page the owning team when a payment fails twice within ten minutes\n- the alert names the owning team and its alert channel\n",
         "CHANGE.md": "# Change under review\n\nThe branch adds `src/alerts.ts` and `tests/alerts.test.ts`. The other files are unchanged.\n",
-        "package.json": "{\n  \"name\": \"fixture-payments\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  }\n}\n",
+        "package.json": "{\n  \"name\": \"fixture-payments\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"engines\": {\n    \"node\": \">=22.18\"\n  },\n  \"scripts\": {\n    \"test\": \"node --test tests/*.test.ts\"\n  }\n}\n",
         "src/ownership.ts": "export const OWNER_TEAM = \"payments-core\";\nexport const ALERT_CHANNEL = \"#payments-alerts\";\n",
-        "src/oncall.ts": "import { ALERT_CHANNEL, OWNER_TEAM } from \"./ownership.js\";\n\nexport function oncallTarget(): string {\n  return `${OWNER_TEAM} ${ALERT_CHANNEL}`;\n}\n",
+        "src/oncall.ts": "import { ALERT_CHANNEL, OWNER_TEAM } from \"./ownership.ts\";\n\nexport function oncallTarget(): string {\n  return `${OWNER_TEAM} ${ALERT_CHANNEL}`;\n}\n",
         "src/alerts.ts": "const OWNER = \"payments-core\";\nconst CHANNEL = \"#payments-alerts\";\nexport const FAILURE_WINDOW_MINUTES = 10;\n\nexport interface Alert {\n  team: string;\n  channel: string;\n  message: string;\n}\n\nexport function paymentFailureAlert(failures: number, windowMinutes: number): Alert | null {\n  if (failures < 2 || windowMinutes > FAILURE_WINDOW_MINUTES) {\n    return null;\n  }\n  return {\n    team: OWNER,\n    channel: CHANNEL,\n    message: `${failures} payment failures in ${windowMinutes} minutes`,\n  };\n}\n",
-        "tests/alerts.test.ts": "import { test } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { paymentFailureAlert } from \"../src/alerts.js\";\n\ntest(\"pages the owning team after two failures\", () => {\n  const alert = paymentFailureAlert(2, 5);\n  assert.equal(alert?.team, \"payments-core\");\n  assert.equal(alert?.channel, \"#payments-alerts\");\n});\n\ntest(\"ignores a single failure\", () => {\n  assert.equal(paymentFailureAlert(1, 5), null);\n});\n",
+        "tests/alerts.test.ts": "import { test } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { paymentFailureAlert } from \"../src/alerts.ts\";\n\ntest(\"pages the owning team after two failures\", () => {\n  const alert = paymentFailureAlert(2, 5);\n  // Written out on purpose, not read from src/ownership.ts: independent\n  // expected values, so a wrong team or channel constant fails this test.\n  assert.equal(alert?.team, \"payments-core\");\n  assert.equal(alert?.channel, \"#payments-alerts\");\n});\n\ntest(\"ignores a single failure\", () => {\n  assert.equal(paymentFailureAlert(1, 5), null);\n});\n",
         "REVIEW_EVIDENCE.md": "# Review evidence\n\n- Unit tests pass (2/2).\n- Both acceptance criteria are verified by `tests/alerts.test.ts`.\n"
       }
     }

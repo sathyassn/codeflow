@@ -2400,16 +2400,17 @@
       ]
     },
     {
-      "id": "CF-QA-017",
+      "id": "CF-QA-019",
       "level": "hard",
-      "statement": "Each value with meaning (a name, id, path, setting, limit or closed set of strings) is declared once, as a constant, enum or type that every use reads, is generated from or is checked against, while a value used in one place, or whose copies would change for different reasons, needs no constant; a closed set of strings the project defines is an enum or literal type; a shared shape or helper has one home that callers import; a deliberate copy is allowed only as a test's independent expected value, a stable external protocol or format constant, documentation and examples, or a generated or checked mirror, with its reason at the site; and a reviewer returns a new unchecked copy of a value or code that has a home as a major finding naming the copy and the home at file:line.",
+      "statement": "Each value with meaning (a name, id, path, setting, limit or closed set of strings) is declared once, as a constant, enum or type that every use reads, is generated from or is checked against, while a value used in one place, or whose copies would change for different reasons, needs no constant; a closed set of strings the project defines is declared once in the language's own form (an enum, typed constants or a literal type the type checker enforces) and every comparison uses its members or is checked against it; a shared shape or helper has one home that callers import; a deliberate copy is allowed only as a test's independent expected value, a stable external protocol or format constant, documentation and examples, or a generated or checked mirror, with its reason at the site; and a reviewer returns a new unchecked copy of a value or code that has a home as a major finding naming the copy and the home at file:line.",
       "sources": [
         {
           "path": ".codeflow/rules/workflow-discipline.md",
           "markers": [
             "Declare each value once.",
             "every use reads it, is generated from it or is checked against it",
-            "A closed set of strings that the project defines is an enum or literal type, not raw strings compared by hand",
+            "A closed set of strings that the project defines is declared once in the language's own form",
+            "every comparison uses its members or is checked against it",
             "its copy is generated from the home or a check compares the two",
             "A shared shape or helper has one home that callers import",
             "A value used in one place, or whose copies would change for different reasons, needs no constant",
