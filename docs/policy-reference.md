@@ -251,6 +251,14 @@ cannot reproduce every ignore file, configuration source or same-line edit.
 Unknown recursive or archive syntax retains all candidate roots; inputs whose
 roots cannot be established refuse. A recursive root or descendant that may
 traverse a link declared earlier on the line refuses as cannot-verify.
+A `find` that hands what it visits to a command (`-exec`, `-execdir`,
+`-ok`, `-okdir`) is a recursive reader of its starting points, narrowed by
+a `-name` test in a plain conjunction: `find ~/.codex -type f -exec cat {}
++` refuses, while `find src -name '*.rs' -exec grep -l x {} +` stays
+available; with `-L` or `-follow` it refuses as cannot-verify. `find`
+piped into `xargs` gives the command input the guard does not read, so
+`find src | xargs cat` refuses as cannot-verify, as `ls | xargs cat`
+does; use `find ... -exec ... {} +`.
 Listings and metadata operands do not inherit the ancestor rule for content
 readers; explicit secret-store operands retain their own protection.
 
@@ -267,11 +275,16 @@ part standing for any text: `cat ~/.codex/$(echo auth).json` refuses as
 cannot-verify because it may name `~/.codex/auth.json`, while `cat
 src/$(echo main).rs` stays available. A command word the shell fills in
 at run time (`$P`, `"$P"`, `${P}`, after a launcher too) refuses as
-cannot-verify unless the line assigns it a value the guard resolves; a
-resolved value with blanks (`P='cat ~/.ssh/id_rsa'; $P`) is judged as the
-command line the shell splits it into, and `P=ls; $P` stays available. A
-secret store is reachable from any directory, so this refusal does not
-depend on where the line runs. A source glob that expands
+cannot-verify unless the line assigns it a one-word value the guard
+resolves: `P=ls; $P` stays available, while a value with blanks
+(`P='cat README.md'; $P`), which the shell splits at run time, refuses as
+cannot-verify. So does a program word the line does not set: an inherited
+`$EDITOR`, `$PAGER` or `$SHELL`, and a forwarded `"$@"` (`f() { "$@"; };
+f printf x`). Name the program literally instead. A program value Git
+runs is a different construct: Git hands it to a shell as a command line,
+so it is judged as one (see the Git rules below). A secret store is
+reachable from any directory, so this refusal does not depend on where
+the line runs. A source glob that expands
 completely without secret matches remains available; the same glob refuses
 after `id_rsa.rs` is planted among its matches. A quoted shell wildcard
 remains literal, including `cat < 'id_rs?'`. Lines naming dotglob,
@@ -369,6 +382,16 @@ auth.json`) are judged in an unknown directory; other programs' operands
 there, and the runner's real child directory, are outside the promise.
 Turning a physical option off (`unsetopt chaselinks`) does not clear the
 physical reading, so later changes through a link stay unknown.
+A `CDPATH` in effect for a change, set on the line as a separate
+assignment or command-local (`CDPATH=~ cd .codex`) or inherited, sends a
+relative `cd` or `pushd` operand that does not start with `.` or `..` to
+a directory the guard does not read, so the directory becomes unknown.
+bash's `cdable_vars` (`shopt -s`, `bash -O`) and zsh's `CDABLE_VARS` make
+later changes physical, so an operand that is not a directory leaves it
+unknown. A relative operand of a Git call is read from the directory its
+`-C` options move it to, each taken from the one before, as Git does
+(`git -C ~ diff --no-index /dev/null .codex/auth.json` refuses); a `-C`
+value the guard cannot resolve leaves the directory unknown.
 A directory that a launcher or interpreter option moves to and the guard
 cannot establish refuses as cannot-verify. A directory change inside a
 command substitution leaves what a later `pwd` there prints unknown, and a
@@ -436,18 +459,25 @@ the form refuses:
   pathspec modes `GIT_GLOB_PATHSPECS`, `GIT_NOGLOB_PATHSPECS` and
   `GIT_LITERAL_PATHSPECS`, and `GIT_DIR` under the repository rule below.
   A variable whose value is a program Git runs is allowed, and its value
-  is judged as a command on the line (`GIT_EXTERNAL_DIFF='cat
-  ~/.ssh/id_rsa'` refuses as that `cat` would): `GIT_PAGER`, `GIT_EDITOR`,
+  is judged as a command (`GIT_EXTERNAL_DIFF='cat ~/.ssh/id_rsa'` refuses
+  as that `cat` would): `GIT_PAGER`, `GIT_EDITOR`,
   `GIT_SEQUENCE_EDITOR`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`,
   `GIT_EXTERNAL_DIFF`, the names Git falls back to (`VISUAL`, `EDITOR`,
-  `PAGER`, `SSH_ASKPASS`) and the pager's `LESSOPEN` and `LESSCLOSE`. A
-  value built from the line's own variables is judged by what it holds;
-  one the guard cannot resolve (text from outside the line, a construct
-  it does not model, an export with no value shown, or a name set by
-  `read`, `printf -v`, `${NAME:=x}` or a `declare -n` reference) refuses
-  as cannot-verify. This covers the environment spelling only: the
-  `-c core.pager=`, `--config-env` and `git config` spellings of the same
-  programs are TSK-1065's residual. A deploy key named in
+  `PAGER`, `SSH_ASKPASS`) and the pager's `LESSOPEN` and `LESSCLOSE`. Such
+  a value, assigned on the line or exported earlier in it, is judged
+  before every program the line runs, Git or any program that may run Git
+  (`GIT_EXTERNAL_DIFF='cat ~/.codex/auth.json' cargo test` refuses), in
+  the directory each program runs in: the shell's after its `cd` steps,
+  a Git call's `-C` directory, and that repository's top, where Git starts
+  a pager, editor or diff program. A link the line declares before the
+  call, or a directory the guard cannot establish, refuses as
+  cannot-verify. A value built from the line's own variables is judged by
+  the command line it holds (`E='cat x'; GIT_EDITOR="$E"` is judged as
+  `cat x`, since Git runs it through a shell); one the guard cannot
+  resolve (text from outside the line, a construct it does not model, an
+  export with no value shown, or a name set by `read`, `printf -v`,
+  `mapfile`, a `for` loop, an alias of one, `${NAME:=x}` or a `declare -n`
+  reference) refuses as cannot-verify. A deploy key named in
   `GIT_SSH_COMMAND='ssh -i ~/.ssh/<key>'` refuses as a secret read, as
   `ssh -i` does at the top level; name the key as an `IdentityFile` in
   `~/.ssh/config` instead. The others move what Git reads or writes and
@@ -457,9 +487,39 @@ the form refuses:
   `GIT_CONFIG*`, the `GIT_TRACE*` family, any name not listed, and a
   name a declaring builtin builds (`export "$N=x"`). Only a word in an
   assignment position assigns: before a command's program word, among
-  its `env` launchers, or as a declaring builtin's operand. Text in a
-  commit message or a search, such as `git commit -m 'GIT_WORK_TREE=/x'`
-  or `git grep GIT_WORK_TREE`, is not judged.
+  its `env` launchers, or as a declaring builtin's operand. A word that
+  names a program variable is read as a possible setter only where a
+  builtin, keyword or alias may set it; an external program cannot set a
+  variable of the shell that runs it, so its operands are text: `git
+  commit -m 'GIT_WORK_TREE=/x'`, `git grep GIT_WORK_TREE`, `echo EDITOR;
+  git status` and `printf '%s\n' 'PAGER=less'` are not judged.
+- Operator decision 2026-10-29: Git operand commands are judged as
+  commands. Every command a Git call runs itself is read by the Git
+  runner reader below, with the directory Git runs it in, and exec-guard
+  judges each one by every rule it applies to a command line, secret reads
+  included, as git-guard already did: `git rebase -x`/`--exec`, `git
+  bisect run`, `git submodule foreach` (in each checked-out submodule),
+  `git filter-branch --*-filter` and `--setup`, `git difftool
+  -x`/`--extcmd`, the configured tool command of `git difftool` and `git
+  mergetool`, the `git send-email` hooks, `git grep -O`, the transport
+  programs, a `-c` setting or configured command the subcommand uses (`-c
+  core.pager=` for a command that pages, `core.editor` for one that edits,
+  `!` aliases), and a program variable the call inherits. A `git config`
+  write whose key the setting classification below does not know to run
+  nothing (`core.pager`, `core.editor`, `diff.external`, `*.cmd`, `!`
+  aliases) is judged as a command too, in the call's directory. A
+  `submodule foreach` or `for-each-repo` after another command that may
+  change which checkouts exist (any Git call, a write, or a program other
+  than a directory change, an assignment or a builtin that prints or
+  tests) refuses, since the guard reads the checkouts before the line
+  runs. A command the guard cannot read, such as an `ext::` remote or an
+  unread `--config-env` value, refuses as cannot-verify.
+- A Git call that stages working-tree files it does not name (`git add
+  .`, `-A`, `-u`, a directory, `git commit -a` or a commit pathspec, `git
+  stash` with or without `-u` or `-a`) is judged by the files Git would
+  stage, which Git itself lists: a secret-named file among them refuses as
+  `git add id_rsa` does, and a list the guard cannot read refuses as
+  cannot-verify.
 - A Git directory or work tree a line sets (`--git-dir`, `--work-tree`,
   `GIT_DIR`) refuses unless it names exactly the Git directory and work
   tree Git finds without it from the directory the call runs in; with a
@@ -1254,6 +1314,21 @@ operands.
   targets remain allowed. Add-then-status is allowed when the source
   configuration proves it needs no callback that the guard cannot judge
   before the new checkout exists.
+- git-guard also judges the files a program writes through an output
+  option or in place (TSK-1002 Fable review 15): the value of `-o`,
+  `--output`, `--outfile`, `--output-file` or `-out` for any program
+  whose `-o` is not a flag (`sort -o`, `shuf -o`, `iconv -o`); the
+  operands of `awk -i inplace`, `sponge`, `dos2unix` and its siblings,
+  `sd`, `yq -i`, `ruby -i` and a compressor that replaces its operand
+  (`gzip`, `xz`, `zstd --rm`); the output operand of `uniq` and `xxd`; the
+  prefix `split` and `csplit` write under; and Git's own overwrites: `git
+  checkout [REV] -- PATH`, `git restore PATH` (not `--staged` alone),
+  `git checkout-index` and `git apply --directory=DIR`. `git worktree
+  remove` without `--force` removes only a clean worktree, whose files are
+  all committed: it is the sanctioned cleanup after a landing and stays
+  allowed. The writer list stays a filter that only refuses; the
+  installed sandbox's write denies remain the backstop for a writer it
+  does not name.
 
 ### Git settings that can run a program
 
@@ -1285,7 +1360,10 @@ number git's base-0 reading takes whole with at most one `k`, `m` or `g`.
 Any other value is a program git runs, so `core.fsmonitor 08` refuses
 (`08` is no octal number) while `true` and `0x10` pass (review round 13);
 keys match by exact name. Repository-scope settings, unsets and
-reads pass this program-setting check; the discovery settings and hook-path
+reads pass this program-setting check, though a repository-scope write or
+a `-c` setting of such a key is judged by the command its value holds, by
+the same classification (operator decision 2026-10-29: Git operand
+commands are judged as commands); the discovery settings and hook-path
 settings have the separate integrity checks described above. git has many keys that run a program and adds more, so a list
 of them always missed one (review round ten); an unknown key costs a
 refusal the operator can clear by setting it by hand.
