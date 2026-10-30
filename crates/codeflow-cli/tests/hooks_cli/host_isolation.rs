@@ -8,38 +8,13 @@
 //! it and shows that the verdicts of a fixed set of `git log` lines do not
 //! move.
 use super::{guard_payload, init_repo, isolated_codeflow, isolated_home, run_with_stdin};
-use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// Variables that do not start with `GIT_` but still decide what a Git call
-/// or the guard reads: the pager, editor and askpass programs the guard's
-/// catalog judges, and the directory Git reads a per-user file from.
-const HOST_VARIABLES: [&str; 5] = [
-    "PAGER",
-    "EDITOR",
-    "VISUAL",
-    "SSH_ASKPASS",
-    "XDG_CONFIG_HOME",
-];
-
-/// The settings `.cargo/config.toml` forces into every test process, which
-/// switch automatic Git maintenance off (TSK-245). They belong to this
-/// repository and are the same on every host, so the isolation keeps them.
-fn forced_by_cargo(name: &str) -> bool {
-    name == "GIT_CONFIG_COUNT"
-        || name == "GIT_CONFIG_PARAMETERS"
-        || name.starts_with("GIT_CONFIG_KEY_")
-        || name.starts_with("GIT_CONFIG_VALUE_")
-}
-
-/// Whether a variable carries host state: a Git variable that the repository
-/// does not force, or one of [`HOST_VARIABLES`].
-fn names_host_state(name: &OsStr) -> bool {
-    let name = name.to_string_lossy().to_ascii_uppercase();
-    (name.starts_with("GIT_") && !forced_by_cargo(&name)) || HOST_VARIABLES.contains(&name.as_str())
-}
+#[path = "../support/git_isolation.rs"]
+mod git_isolation;
+use git_isolation::{names_host_state, strip_host_git_state};
 
 /// An empty home shared by the tests of this process, so a run never reads
 /// the developer's `~/.gitconfig` or `~/.config/git/config`.
@@ -53,33 +28,36 @@ fn empty_home() -> &'static Path {
 }
 
 /// Cut a command off from the host's Git state, once for every `hooks_cli`
-/// run. It removes every inherited `GIT_*` variable except the maintenance
-/// settings the repository forces (`GIT_PAGER`, the author and editor
-/// settings and the rest) and the non-`GIT_` variables in [`HOST_VARIABLES`],
-/// points the system and global files at `/dev/null`, and gives the run an
-/// empty home. A test that needs a value sets it after this call.
+/// run: [`strip_host_git_state`] (every inherited host variable removed, the
+/// system and global files at `/dev/null`) and an empty home. A test that
+/// needs a value sets it after this call.
 pub(super) fn isolate_git(cmd: &mut Command) -> &mut Command {
-    let host: Vec<OsString> = std::env::vars_os()
-        .map(|(name, _)| name)
-        .chain(cmd.get_envs().map(|(name, _)| name.to_os_string()))
-        .filter(|name| names_host_state(name))
-        .collect();
-    for name in host {
-        cmd.env_remove(name);
-    }
-    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    strip_host_git_state(cmd)
         .env("HOME", empty_home())
         .env("USERPROFILE", empty_home())
 }
 
+/// An empty directory for `GIT_TEMPLATE_DIR`, so `git init` and `git clone`
+/// copy no hooks or files from a host template.
+fn empty_templates() -> &'static Path {
+    static TEMPLATES: OnceLock<PathBuf> = OnceLock::new();
+    TEMPLATES.get_or_init(|| {
+        let templates = empty_home().join("no-templates");
+        std::fs::create_dir_all(&templates).unwrap();
+        templates
+    })
+}
+
 /// The same isolation for a fixture clone. Its builder can set a variable
-/// but not remove one, and a clone reads only the files and the home, so it
-/// sets those.
+/// but not remove one (`crates/codeflow-fixture/src/lib.rs` removes only
+/// the three Git location variables), so this sets what a clone reads: the
+/// two configuration files, the home and the template directory, the host
+/// variable `git clone` copies into the new repository.
 pub(super) fn isolate_clone(clone: codeflow_fixture::Clone) -> codeflow_fixture::Clone {
     clone
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_TEMPLATE_DIR", empty_templates())
         .env("HOME", empty_home())
         .env("USERPROFILE", empty_home())
 }
@@ -192,6 +170,7 @@ fn isolation_leaves_no_host_variable_for_the_child() {
     let mut cmd = Command::new("git");
     cmd.env("GIT_CONFIG_COUNT", "1")
         .env("GIT_AUTHOR_NAME", "host")
+        .env("GIT_TEMPLATE_DIR", "/host/templates")
         .env("PAGER", "x")
         .env("EDITOR", "x")
         .env("XDG_CONFIG_HOME", "/host/xdg");
@@ -203,7 +182,13 @@ fn isolation_leaves_no_host_variable_for_the_child() {
     let inherited = std::env::vars_os()
         .map(|(name, _)| name)
         .filter(|name| names_host_state(name));
-    let planted = ["GIT_AUTHOR_NAME", "PAGER", "EDITOR", "XDG_CONFIG_HOME"];
+    let planted = [
+        "GIT_AUTHOR_NAME",
+        "GIT_TEMPLATE_DIR",
+        "PAGER",
+        "EDITOR",
+        "XDG_CONFIG_HOME",
+    ];
     for name in inherited.chain(planted.map(Into::into)) {
         let name = name.to_string_lossy().to_string();
         match envs.get(&name) {
@@ -222,4 +207,33 @@ fn isolation_leaves_no_host_variable_for_the_child() {
         Some(Path::new("1")),
         "the forced maintenance settings are kept"
     );
+}
+
+/// A host template directory reaches a plain fixture clone as a hook, and
+/// does not reach one made through `isolate_clone`.
+#[test]
+fn a_host_template_does_not_reach_a_fixture_clone() {
+    let temp = tempfile::tempdir().unwrap();
+    let seed = temp.path().join("seed");
+    std::fs::create_dir(&seed).unwrap();
+    init_repo(&seed, "feat/canary");
+    let template = temp.path().join("template");
+    std::fs::create_dir_all(template.join("hooks")).unwrap();
+    std::fs::write(template.join("hooks/pre-commit"), "#!/bin/sh\nexit 1\n").unwrap();
+
+    let plain = temp.path().join("plain");
+    codeflow_fixture::clone(temp.path(), &seed, &plain)
+        .env("GIT_TEMPLATE_DIR", &template)
+        .run();
+    assert!(
+        plain.join(".git/hooks/pre-commit").exists(),
+        "the control clone should copy the template hook"
+    );
+
+    let isolated = temp.path().join("isolated");
+    isolate_clone(
+        codeflow_fixture::clone(temp.path(), &seed, &isolated).env("GIT_TEMPLATE_DIR", &template),
+    )
+    .run();
+    assert!(!isolated.join(".git/hooks/pre-commit").exists());
 }

@@ -6477,7 +6477,7 @@ fn hook_shims_refuse_when_the_binary_is_older() {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/git-hooks");
     for stage in ["pre-commit", "commit-msg", "pre-push", "pre-merge-commit"] {
         let run = |bin: &Path| {
-            Command::new("sh")
+            isolated_codeflow(Command::new("sh"))
                 .arg(shims.join(stage))
                 .arg("ARG")
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
@@ -7782,7 +7782,7 @@ fn installed_hook_refuses_a_secret_in_the_index_git_commits() {
 
 /// Run `codeflow <args>` purely for its help output, with no repo context.
 fn help_text(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+    let output = codeflow()
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run codeflow {args:?}: {e}"));
