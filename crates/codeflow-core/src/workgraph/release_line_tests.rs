@@ -1034,3 +1034,216 @@ fn a_release_judgement_names_the_default_branch_escaped() {
         );
     }
 }
+
+/// A working repository whose `main` holds one initial commit with a README
+/// and no `CodeFlow` files, as a new hosted repository starts (TSK-338).
+fn adoption_repo() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    git_in(&root, &["init", "-q", "-b", "main"]);
+    adoption_commit(&root, "README.md", Some("# project\n"), "Initial commit");
+    (dir, root)
+}
+
+/// Write `content` to `file` (or remove it, for `None`) and commit on the
+/// checked-out branch; returns the commit.
+fn adoption_commit(root: &Path, file: &str, content: Option<&str>, message: &str) -> Oid {
+    let full = root.join(file);
+    match content {
+        Some(content) => {
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+        }
+        None => std::fs::remove_file(full).unwrap(),
+    }
+    git_in(root, &["add", "-A"]);
+    git_in(root, &["commit", "-q", "-m", message]);
+    Oid::from_str(&git_in(root, &["rev-parse", "HEAD"])).unwrap()
+}
+
+/// The scope of `head` under a destination whose default `main` is at `tip`.
+fn adoption_scope(root: &Path, tip: Oid, head: &str) -> Result<Scope, String> {
+    scope(root, &named_default("main", tip), head, None)
+}
+
+const ADOPTED_POLICY: &str = "{\"schema_version\": 1}\n";
+
+#[test]
+fn a_default_target_that_never_carried_a_policy_is_an_initial_adoption() {
+    let (_dir, root) = adoption_repo();
+    // A `.codeflow` folder without a policy is still no policy.
+    let tip = adoption_commit(
+        &root,
+        ".codeflow/project.toml",
+        Some("schema_version = 1\n"),
+        "chore: notes",
+    );
+    let scope = adoption_scope(&root, tip, "task/TSK-001-adopt").unwrap();
+    assert!(!scope.release(), "{scope:?}");
+    assert_eq!(scope.pattern, BUILTIN_PATTERN);
+    assert_eq!(
+        scope.source,
+        format!(
+            "built in (initial adoption: no commit of main up to {} has carried .codeflow/policy.json)",
+            short(tip)
+        )
+    );
+    // The built-in pattern still names release branches.
+    assert!(
+        adoption_scope(&root, tip, "integration/release-2")
+            .unwrap()
+            .head
+    );
+}
+
+#[test]
+fn a_removed_default_target_policy_still_refuses() {
+    let (_dir, root) = adoption_repo();
+    let carried = adoption_commit(
+        &root,
+        ".codeflow/policy.json",
+        Some(ADOPTED_POLICY),
+        "chore: adopt",
+    );
+    let tip = adoption_commit(&root, ".codeflow/policy.json", None, "chore: drop it");
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(&format!(
+            ".codeflow/policy.json is missing, and {} in its history carried one, so the policy was removed",
+            short(carried)
+        )),
+        "{error}"
+    );
+}
+
+/// A policy that reached the default target only through a merge's second
+/// parent was still held there: the whole ancestry is read.
+#[test]
+fn a_policy_carried_only_by_a_merged_branch_still_refuses() {
+    let (_dir, root) = adoption_repo();
+    git_in(&root, &["switch", "-q", "-c", "side"]);
+    let carried = adoption_commit(
+        &root,
+        ".codeflow/policy.json",
+        Some(ADOPTED_POLICY),
+        "chore: adopt on a side branch",
+    );
+    git_in(&root, &["switch", "-q", "main"]);
+    git_in(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "-s",
+            "ours",
+            "-m",
+            "merge: keep main",
+            "side",
+        ],
+    );
+    let tip = Oid::from_str(&git_in(&root, &["rev-parse", "HEAD"])).unwrap();
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(&format!("{} in its history carried one", short(carried))),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_unprovable_history_is_not_an_initial_adoption() {
+    let not_proven = "whether its history ever carried one cannot be proven";
+    // A shallow clone: the walk reaches its boundary.
+    let (dir, root) = adoption_repo();
+    adoption_commit(&root, "src/lib.rs", Some("// one\n"), "feat: one");
+    let shallow = dir.path().join("shallow");
+    git_in(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            &format!("file://{}", root.display()),
+            shallow.to_str().unwrap(),
+        ],
+    );
+    let tip = Oid::from_str(&git_in(&shallow, &["rev-parse", "HEAD"])).unwrap();
+    let error = adoption_scope(&shallow, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(not_proven) && error.contains("shallow"),
+        "{error}"
+    );
+
+    // A replace ref overlays the recorded history.
+    let first = git_in(&root, &["rev-parse", "HEAD~1"]);
+    git_in(
+        &root,
+        &["update-ref", &format!("refs/replace/{first}"), &first],
+    );
+    let tip = Oid::from_str(&git_in(&root, &["rev-parse", "HEAD"])).unwrap();
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(not_proven) && error.contains("replace ref"),
+        "{error}"
+    );
+    git_in(
+        &root,
+        &["update-ref", "-d", &format!("refs/replace/{first}")],
+    );
+    assert!(adoption_scope(&root, tip, "task/TSK-001-x").is_ok());
+
+    // A parent this clone lacks.
+    let repo = Repository::open(&root).unwrap();
+    let tree = repo.find_commit(tip).unwrap().tree_id();
+    let raw = format!(
+        "tree {tree}\nparent {}\nauthor t <t@example.com> 0 +0000\ncommitter t <t@example.com> 0 +0000\n\norphaned\n",
+        "a".repeat(40)
+    );
+    let orphan = repo
+        .odb()
+        .unwrap()
+        .write(git2::ObjectType::Commit, raw.as_bytes())
+        .unwrap();
+    let error = adoption_scope(&root, orphan, "task/TSK-001-x").unwrap_err();
+    assert!(error.contains(not_proven), "{error}");
+}
+
+/// An ancestor's `.codeflow` tree that this clone lacks cannot prove the
+/// policy absent there.
+#[test]
+fn an_unreadable_ancestor_tree_is_not_an_initial_adoption() {
+    let (_dir, root) = adoption_repo();
+    adoption_commit(
+        &root,
+        ".codeflow/project.toml",
+        Some("schema_version = 7\n"),
+        "chore: notes",
+    );
+    let repo = Repository::open(&root).unwrap();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    let folder = head.tree().unwrap().get_name(".codeflow").unwrap().id();
+    let tip = adoption_commit(&root, ".codeflow/project.toml", None, "chore: drop notes");
+    let hex = folder.to_string();
+    std::fs::remove_file(root.join(".git/objects").join(&hex[..2]).join(&hex[2..])).unwrap();
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains("cannot be proven")
+            && error.contains(&format!(
+                "the .codeflow tree of {} cannot be read",
+                short(head.id())
+            )),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_invalid_default_target_policy_is_not_an_initial_adoption() {
+    let (_dir, root) = adoption_repo();
+    let tip = adoption_commit(&root, ".codeflow/policy.json", Some("{\n"), "chore: bad");
+    let error = adoption_scope(&root, tip, "task/TSK-001-x").unwrap_err();
+    assert!(
+        error.contains(".codeflow/policy.json is not valid JSON"),
+        "{error}"
+    );
+}
