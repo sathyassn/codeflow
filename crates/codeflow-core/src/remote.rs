@@ -463,6 +463,7 @@ impl BranchRule {
                 self.required_checks
                     .iter()
                     .map(|name| (name.clone(), GITHUB_ACTIONS_APP_ID)),
+                true,
             ));
         }
         if self.block_force_push {
@@ -709,12 +710,15 @@ fn pull_request_rule(approvals: u64, independent: bool) -> Value {
 }
 
 /// A strict `required_status_checks` rule, each name pinned to its app.
-fn status_checks_rule(checks: impl IntoIterator<Item = (String, u64)>) -> Value {
+/// With `on_create` false the checks are not required when the branch is
+/// created: the host otherwise refuses a new ref whose commit has no
+/// passing run of every name (scratch repository, 2026-10-30).
+fn status_checks_rule(checks: impl IntoIterator<Item = (String, u64)>, on_create: bool) -> Value {
     json!({
         "type": "required_status_checks",
         "parameters": {
             "strict_required_status_checks_policy": true,
-            "do_not_enforce_on_create": false,
+            "do_not_enforce_on_create": !on_create,
             "required_status_checks": checks
                 .into_iter()
                 .map(|(context, app)| json!({ "context": context, "integration_id": app }))
@@ -1282,7 +1286,7 @@ fn owned_rulesets(
                     include: default,
                     rules: vec![
                         pull_request_rule(authority.profile.approvals(), independent),
-                        status_checks_rule(checks),
+                        status_checks_rule(checks, true),
                         json!({ "type": "non_fast_forward" }),
                         json!({ "type": "deletion" }),
                     ],
@@ -1300,7 +1304,9 @@ fn owned_rulesets(
                     include: vec![line.clone()],
                     rules: vec![
                         pull_request_rule(0, false),
-                        status_checks_rule(checks),
+                        // Cutting a line stays allowed (operator,
+                        // 2026-10-27): its checks bind every later update.
+                        status_checks_rule(checks, false),
                         json!({ "type": "non_fast_forward" }),
                         json!({ "type": "deletion" }),
                     ],
@@ -3325,6 +3331,22 @@ jobs:
             host.body(RULESET_LINE_CHECKS)["conditions"]["ref_name"]["include"],
             json!(["refs/heads/release/**"])
         );
+    }
+
+    /// Cutting a line stays allowed: C's checks are not required when a
+    /// line is created (the host refused a new line ref on 2026-10-30 while
+    /// they were), and B's still are on the default branch.
+    #[test]
+    fn a_new_line_is_not_held_to_c_checks() {
+        let host = Fake::standard(&[]);
+        apply_authority(&host, solo());
+        let on_create = |name: &str| {
+            rule_of(&host.body(name), "required_status_checks")["parameters"]
+                ["do_not_enforce_on_create"]
+                .clone()
+        };
+        assert_eq!(on_create(RULESET_LINE_CHECKS), true);
+        assert_eq!(on_create(RULESET_AUTHORITY_CHECKS), false);
     }
 }
 

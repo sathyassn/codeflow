@@ -881,7 +881,8 @@ The rulesets:
   must produce it; no force push; no deletion; no bypass.
 - **C, "codeflow line checks"**, on the line pattern: a pull request with no
   approval; strict checks pinned to GitHub Actions; no force push; no
-  deletion; no bypass; no creation rule, so a new line can still be cut.
+  deletion; no bypass; no creation rule, and the checks are not required
+  when a line is created, so a new line can still be cut.
 
 The flags:
 
