@@ -1,0 +1,11 @@
+id = "ADR-0090"
+uid = "f7e927fa-bfdb-42ca-ae24-da0d2d02dc5c"
+kind = "ADR"
+title = "Retained release bases and a sparse pack replace the baseline tree and the manifest digest"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T17:13:17Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
