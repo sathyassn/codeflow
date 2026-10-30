@@ -5,16 +5,19 @@
 //! the default and applies to every call unless the operator chose
 //! otherwise. **Relaxed** is the line's rule. It applies only when every
 //! policy source the hook reads sets `security.text_guard` to `relaxed`,
-//! read from the protected remote-tracking refs: the call's repository and,
-//! for a Claude Code call, the session's project. A working copy, a branch
-//! and a repository without a remote never relax the rule.
+//! read from the remote-tracking refs as last fetched: the call's
+//! repository and, for a Claude Code call, the session's project. A working
+//! copy, a local branch or tag, a remote `HEAD` outside the remote, a ref
+//! file that is a symbolic link and a repository without a remote never
+//! relax the rule. The refs are local state, not authenticated: a process
+//! that can write `.git` can set them (TSK-1057).
 //!
 //! Relaxed is the operator's choice, not something the guard verifies. An
 //! earlier revision chose it by attesting each harness's sandbox
 //! configuration; every review round found another layer or key it did not
 //! read, so that attestation was removed (operator, 2026-10-29). Under
 //! relaxed, two facts the guard does read still select the strict rule: a
-//! call marked `dangerouslyDisableSandbox`, and native Windows, where Claude
+//! recognized marked retry (`dangerouslyDisableSandbox`), and native Windows, where Claude
 //! Code and Grok Build have no sandbox. The strict outcome keeps every
 //! finding of the relaxed one.
 //!
@@ -142,8 +145,8 @@ impl Outcome {
 }
 
 /// Why one policy source keeps the strict rule: it does not set
-/// `security.text_guard` to `relaxed`, or it was not read from the
-/// protected remote-tracking refs. `None` when it chooses relaxed. `whose`
+/// `security.text_guard` to `relaxed`, or it was not read from plain
+/// remote-tracking refs of its remote. `None` when it chooses relaxed. `whose`
 /// names the source in the reason, such as "the project policy".
 #[must_use]
 pub fn policy_reason(authority: &LandedPolicy, whose: &str) -> Option<String> {
@@ -153,9 +156,14 @@ pub fn policy_reason(authority: &LandedPolicy, whose: &str) -> Option<String> {
             authority.source
         ));
     }
+    if let Some(doubt) = &authority.tracking_doubt {
+        return Some(format!(
+            "{whose} sets `security.text_guard: relaxed`, but {doubt}, so it is not honoured"
+        ));
+    }
     if !authority.remote_tracked {
         return Some(format!(
-            "{whose} sets `security.text_guard: relaxed`, but it is read from {}, not from a protected remote-tracking ref, so it is not honoured",
+            "{whose} sets `security.text_guard: relaxed`, but it is read from {}, not from a remote-tracking ref, so it is not honoured",
             authority.source
         ));
     }

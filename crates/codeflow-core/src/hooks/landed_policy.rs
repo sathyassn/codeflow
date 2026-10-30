@@ -1,4 +1,6 @@
-//! Agent policy authority comes from protected remote-tracking refs, not local edits.
+//! Agent policy authority comes from the remote-tracking refs as last
+//! fetched, not local edits. Those refs are local state: a process that can
+//! write `.git` can set them, and authenticating them is TSK-1057's work.
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -14,11 +16,17 @@ pub struct LandedPolicy {
     /// Where the policy was read, as messages show it.
     pub source: String,
     pub local_differs: bool,
-    /// Whether the policy was read from the remote's protected
-    /// remote-tracking refs. `false` for `HEAD` or the working copy, which
-    /// a local commit or edit can change; `security.text_guard: relaxed`
-    /// is honoured only when this is `true` (TSK-397).
+    /// Whether the policy was read from plain remote-tracking refs of the
+    /// selected remote, as last fetched. `false` for `HEAD` or the working
+    /// copy, and for a source the remote-tracking checks question;
+    /// `security.text_guard: relaxed` is honoured only when this is `true`
+    /// (TSK-397). These refs are local state: a process that can write the
+    /// repository's `.git` directory can set them, which TSK-1057 owns.
     pub remote_tracked: bool,
+    /// Why a remote-tracking source is not taken as the remote's state,
+    /// when the remote-tracking checks found a reason (TSK-397 security review
+    /// SEC01-2).
+    pub tracking_doubt: Option<String>,
     remote_head_advice: Option<String>,
 }
 
@@ -119,6 +127,7 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
     // The first declared line supplies path exceptions, as `codeflow ci`
     // reads them from the target; the default branch adds only denials.
     let mut beneath = true;
+    let mut read = defaults.clone();
     for target in targets {
         let target_ref = format!("refs/remotes/{remote}/{target}");
         if !defaults.contains(&target_ref) {
@@ -131,6 +140,7 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
             };
             beneath = false;
             project = line_project.or(project);
+            read.push(target_ref.clone());
             let _ = write!(
                 sources,
                 " + {} (stricter policy levels)",
@@ -138,7 +148,9 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
             );
         }
     }
-    let mut authority = finish(root, policy, project, sources, true)?;
+    let doubt = tracking_doubt(&repo, remote, &read);
+    let mut authority = finish(root, policy, project, sources, doubt.is_none())?;
+    authority.tracking_doubt = doubt;
     if fallback {
         authority.remote_head_advice = Some(format!(
             "operator advice: git remote set-head {remote} --auto; without remote HEAD the default is assumed to be main or master; custom defaults need set-head"
@@ -187,6 +199,128 @@ fn default_sources(repo: &Repository, remote: &str) -> Result<(Vec<String>, bool
     }
 }
 
+/// Why the policy sources `read` are not plain remote-tracking refs of
+/// `remote`, or `None` (TSK-397 security review SEC01-2). The remote's
+/// `HEAD` may only point, through every step, at a name under
+/// `refs/remotes/<remote>/`; each source must be such a name and a direct
+/// ref; and no loose ref file, or directory on its way, may be a symbolic
+/// link. A packed ref is ordinary git state and is read as it is. These
+/// checks narrow what a local edit can pass off as the remote's state; they
+/// do not authenticate it: whoever can write `.git` can still forge a plain
+/// ref (TSK-1057).
+fn tracking_doubt(repo: &Repository, remote: &str, read: &[String]) -> Option<String> {
+    let prefix = format!("refs/remotes/{remote}/");
+    let head = format!("{prefix}HEAD");
+    let base = repo.commondir().to_path_buf();
+    let outside = |name: &str| {
+        format!(
+            "the policy source {} is not a remote-tracking ref of {remote}",
+            crate::git::display_text(name)
+        )
+    };
+    let found = match repo.find_reference(&head) {
+        Ok(reference) => Some(reference),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+        Err(error) => return Some(format!("cannot read {head}: {}", error.message())),
+    };
+    if let Some(mut reference) = found {
+        if let Some(doubt) = linked_ref_file(&base, &head) {
+            return Some(doubt);
+        }
+        for _ in 0..8 {
+            let Some(target) = crate::git::name::symbolic_target(&reference) else {
+                break;
+            };
+            let Ok(text) = target.rule_text() else {
+                return Some(format!("{head} names a target that is not UTF-8"));
+            };
+            if !text.starts_with(&prefix) || text == head {
+                return Some(format!(
+                    "{head} points at {}, outside {prefix}",
+                    target.display()
+                ));
+            }
+            if let Some(doubt) = linked_ref_file(&base, text) {
+                return Some(doubt);
+            }
+            match repo.find_reference(text) {
+                Ok(next) => reference = next,
+                Err(error) => {
+                    return Some(format!(
+                        "cannot read {}: {}",
+                        target.display(),
+                        error.message()
+                    ))
+                }
+            }
+        }
+        if reference.kind() != Some(git2::ReferenceType::Direct) {
+            return Some(format!("{head} does not end at a direct ref"));
+        }
+    }
+    for name in read {
+        if !name.starts_with(&prefix) || *name == head {
+            return Some(outside(name));
+        }
+        match repo.find_reference(name) {
+            Ok(reference) if reference.kind() == Some(git2::ReferenceType::Direct) => {}
+            Ok(_) => {
+                return Some(format!(
+                    "the policy source {} is a symbolic ref",
+                    crate::git::display_text(name)
+                ))
+            }
+            Err(error) => {
+                return Some(format!(
+                    "cannot read {}: {}",
+                    crate::git::display_text(name),
+                    error.message()
+                ))
+            }
+        }
+        if let Some(doubt) = linked_ref_file(&base, name) {
+            return Some(doubt);
+        }
+    }
+    None
+}
+
+/// A reason when the loose file for ref `name` under `base`, or a
+/// directory on its way, is a symbolic link, or the file is not a regular
+/// file. An absent path is a packed ref, which is not questioned.
+fn linked_ref_file(base: &Path, name: &str) -> Option<String> {
+    let mut path = base.to_path_buf();
+    let parts: Vec<&str> = name.split('/').collect();
+    for (index, part) in parts.iter().enumerate() {
+        path.push(part);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Some(format!(
+                    "the ref file for {} passes through a symbolic link at {}",
+                    crate::git::display_text(name),
+                    path.display()
+                ))
+            }
+            Ok(meta) if index + 1 == parts.len() && !meta.is_file() => {
+                return Some(format!(
+                    "the ref file for {} is not a regular file",
+                    crate::git::display_text(name)
+                ))
+            }
+            Ok(_) => {}
+            // A loose ref file that does not exist is a packed ref.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => {
+                return Some(format!(
+                    "the ref file for {} cannot be inspected: {error}",
+                    crate::git::display_text(name)
+                ))
+            }
+        }
+    }
+    None
+}
+
 fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
     Ok(LandedPolicy {
         policy: Policy::load_effective(root)?.0,
@@ -194,6 +328,7 @@ fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
         source: source.into(),
         local_differs: false,
         remote_tracked: false,
+        tracking_doubt: None,
         remote_head_advice: None,
     })
 }
@@ -213,6 +348,7 @@ fn finish(
         source,
         local_differs,
         remote_tracked,
+        tracking_doubt: None,
         remote_head_advice: None,
     })
 }
@@ -269,6 +405,30 @@ fn read_at(repo: &Repository, reference: &str, path: &str) -> Result<Option<Stri
         })?;
     match tree.get_path(Path::new(path)) {
         Ok(entry) => {
+            let at = || format!("{path} at {}", crate::git::display_text(reference));
+            // Only a regular file's blob is a settings document: a link's
+            // blob holds its target's name, and a submodule or tree is no
+            // file (TSK-397 security review SEC01-4).
+            if !matches!(entry.filemode(), 0o100_644 | 0o100_755) {
+                return Err(format!(
+                    "cannot read {}: entry mode {:o} is not a regular file",
+                    at(),
+                    entry.filemode()
+                ));
+            }
+            // The size is read from the object header before the object is
+            // loaded, so an oversized blob is never copied (SEC01-3).
+            let (size, _) = repo
+                .odb()
+                .and_then(|odb| odb.read_header(entry.id()))
+                .map_err(|e| format!("cannot read {}: {e}", at()))?;
+            if size as u64 > super::policy::SETTINGS_READ_LIMIT {
+                return Err(format!(
+                    "cannot read {}: larger than {} bytes",
+                    at(),
+                    super::policy::SETTINGS_READ_LIMIT
+                ));
+            }
             let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
             String::from_utf8(blob.content().to_vec())
                 .map(Some)
