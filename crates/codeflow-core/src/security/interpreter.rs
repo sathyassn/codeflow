@@ -454,13 +454,18 @@ fn secret_reads_at(
             }
             if let Some(result) = find_given_paths(&unwrapped, home) {
                 if result.as_ref().map_or(true, |secret| *secret) {
+                    // `fd` is the walker that appends its paths.
+                    let walker = match &unwrapped.supplier {
+                        Some(outward::Supplier::Find { appends: true, .. }) => "fd",
+                        _ => "find",
+                    };
                     violations.push(Violation::new(
                         "security.secret_reads",
                         levels.secret_reads,
                         match result {
-                            Ok(_) => "`find` gives a command a secret file or store".into(),
+                            Ok(_) => format!("`{walker}` gives a command a secret file or store"),
                             Err(why) => {
-                                format!("cannot verify the paths `find` gives a command: {why}")
+                                format!("cannot verify the paths `{walker}` gives a command: {why}")
                             }
                         },
                         crate::remedy::SECRET_SELECTION.remedy(),
@@ -549,6 +554,11 @@ fn secret_reads_at(
                                 Some(written) => format!("cannot verify `{written}`: {why}"),
                                 None => format!("cannot verify file operand `{value}`: {why}"),
                             },
+                            Ok(_) if caret_pattern(&unwrapped, at, value) => format!(
+                                "the unquoted `{value}` is a zsh `^` negation glob that \
+                                 matches a secret file or store; quote it when it is a \
+                                 revision or a search pattern"
+                            ),
                             Ok(_) => format!("file operand names a secret file or store `{value}`"),
                         },
                         if secret.is_err() {
@@ -1446,6 +1456,50 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
                         || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
                 })
         })
+        || secret_backup(word)
+}
+
+/// Whether `word` (lowercase, home-relative as `~/...`) is a backup copy of
+/// a named secret file under the home directory, which holds the same
+/// token (TSK-1002 Fable review 17): a name in the same directory that
+/// starts with the secret's name (`auth.json~`, `auth.json.bak`,
+/// `.orig`, `.old`, `.1`) or an editor swap file `.NAME.sw?`. Only a rule
+/// whose last component is a plain name counts; a pattern rule already
+/// covers its own spellings.
+fn secret_backup(word: &str) -> bool {
+    let table = actions::table();
+    let hard = table
+        .claude_read_groups
+        .iter()
+        .filter(|group| group.carveouts.is_empty())
+        .flat_map(|group| group.denies.iter())
+        .filter_map(|rule| rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')));
+    let named = table.sandbox_read_denies.iter().map(String::as_str);
+    hard.chain(named).any(|rule| {
+        let Some((directory, leaf)) = rule.rsplit_once('/') else {
+            return false;
+        };
+        if !rule.starts_with("~/")
+            || leaf.is_empty()
+            || leaf.contains(['*', '?', '['])
+            || directory.contains(['*', '?', '['])
+        {
+            return false;
+        }
+        let leaf = leaf.to_ascii_lowercase();
+        let Some(name) = word
+            .strip_prefix(directory.to_ascii_lowercase().as_str())
+            .and_then(|tail| tail.strip_prefix('/'))
+            .filter(|name| !name.contains('/'))
+        else {
+            return false;
+        };
+        (name.len() > leaf.len() && name.starts_with(&leaf))
+            || name
+                .strip_prefix('.')
+                .and_then(|rest| rest.strip_prefix(leaf.as_str()))
+                .is_some_and(|rest| rest.starts_with(".sw"))
+    })
 }
 
 /// Expand shell words without substituting a directory for an incomplete
@@ -1787,7 +1841,7 @@ fn find_given_paths(
         .iter()
         .any(|word| matches!(word.as_str(), "-L" | "-follow"))
     {
-        return Some(Err("`find` follows links to paths the guard cannot list"));
+        return Some(Err("the walk follows links to paths the guard cannot list"));
     }
     let selector = match crate::hooks::git_guard::find_name_filter(before) {
         Some(names) if names.iter().all(|(_, insensitive)| !insensitive) => names
@@ -1798,7 +1852,7 @@ fn find_given_paths(
     let mut read = 0;
     for start in starts {
         if crate::hooks::git_guard::unresolved_word(start) {
-            return Some(Err("cannot establish a `find` starting point"));
+            return Some(Err("cannot establish a root of the walk"));
         }
         let (base, tail) = match start.strip_prefix('~') {
             Some("") => match home {
@@ -1807,12 +1861,12 @@ fn find_given_paths(
             },
             Some(rest) => match (rest.strip_prefix(['/', '\\']), home) {
                 (Some(rest), Some(home)) => (home.to_path_buf(), rest),
-                _ => return Some(Err("cannot establish a `find` starting point")),
+                _ => return Some(Err("cannot establish a root of the walk")),
             },
             None if Path::new(start).is_absolute() => (PathBuf::new(), start.as_str()),
             None => match cwd {
                 Some(cwd) => (cwd.clone(), start.as_str()),
-                None => return Some(Err("cannot establish the directory `find` runs in")),
+                None => return Some(Err("cannot establish the directory the walk starts in")),
             },
         };
         if let Err(why) = unmapped_share_root(&base, tail) {
@@ -1958,6 +2012,11 @@ fn conservative_read_roots(
             | "["
             | "du"
             | "find"
+            // `fd` lists names; the command its `-x`/`-X` runs is judged
+            // with the paths it hands over (`Supplier::Find`), so its
+            // option letters are not archive syntax (TSK-1002 review 17).
+            | "fd"
+            | "fdfind"
             | "rm"
             | "rmdir"
             | "unlink"
@@ -2489,6 +2548,18 @@ fn file_operands<'a>(
         .collect();
     paths.extend(global_files);
     paths
+}
+
+/// Whether the operand at `at` is an unquoted word whose `^` the shell
+/// may read as a zsh negation glob (TSK-1002 Fable review 17), so a
+/// refusal can tell the agent to quote a revision or a search pattern.
+fn caret_pattern(call: &outward::Unwrapped, at: usize, value: &str) -> bool {
+    value.contains('^')
+        && crate::hooks::git_guard::has_glob(value)
+        && call
+            .expands
+            .as_deref()
+            .is_none_or(|flags| flags.get(at).copied().unwrap_or(true))
 }
 
 /// Transfer file syntax has its own filename quoting and field delimiters.
@@ -3771,7 +3842,8 @@ mod tests {
             "private.key.rs",
             ".netrc-notes",
             "~/.ssh-notes/file",
-            "~/.codex/auth.json.old",
+            "~/.codex/auth.yaml",
+            "~/.codex/old.auth.json",
             "~/.password-store-notes/item",
             ".env",
             ".env.production",
@@ -3790,6 +3862,33 @@ mod tests {
                     .any(|v| v.rule == "security.secret_reads"),
                 "{name}"
             );
+        }
+    }
+
+    /// TSK-1002 Fable review 17: a backup copy of a named home secret
+    /// holds the same token, so it is secret; a pattern rule and a name
+    /// that only contains the secret's name are not widened.
+    #[test]
+    fn backup_copies_of_named_home_secrets_are_secret() {
+        for word in [
+            "~/.codex/auth.json~",
+            "~/.codex/auth.json.bak",
+            "~/.codex/auth.json.old",
+            "~/.codex/.auth.json.swp",
+            "~/.claude/.credentials.json.1",
+            "~/.pypirc.orig",
+        ] {
+            assert!(secret_backup(word), "{word}");
+        }
+        for word in [
+            "~/.codex/auth.json",
+            "~/.codex/auth.yaml",
+            "~/.codex/old.auth.json",
+            "~/.codex/auth.json.d/notes",
+            "~/.ssh-notes/file",
+            "~/notes/auth.json.bak",
+        ] {
+            assert!(!secret_backup(word), "{word}");
         }
     }
 
@@ -3916,7 +4015,7 @@ mod tests {
             "cat *.md",
             "cat src/{a,b}.rs",
             "cat ~/.codex-notes/*",
-            "cat ~/.codex/auth.json.old",
+            "cat ~/.codex/auth.yaml",
             "cat < README.md",
             "echo '< ~/.codex/auth.json'",
             "cat <<'~/.codex/auth.json'",

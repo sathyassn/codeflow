@@ -182,13 +182,22 @@ fn patterns(
         return grep_syntax(rest, segment);
     }
     let command_values = commands(args)?;
-    if words.iter().zip(patterns).any(|(word, pattern)| {
-        *pattern
+    let expanded = words.iter().zip(patterns).find(|(word, pattern)| {
+        **pattern
             && ((!revision_operand(word) && !home_operand(word)) || command_values.contains(word))
-    }) {
-        return Err("a Git runner word requires brace or filename expansion".into());
+    });
+    // A leading `^` is a zsh negation glob that may expand to any name in
+    // the directory, an option-like name included, so it stays refused;
+    // the message says to quote a `^REV` exclusion (TSK-1002 Fable review
+    // 17).
+    match expanded {
+        Some((word, _)) if word.starts_with('^') => Err(format!(
+            "a Git runner word requires filename expansion: zsh may read `{word}` as a \
+             negation glob; quote it when it is a revision (`'{word}'`)"
+        )),
+        Some(_) => Err("a Git runner word requires brace or filename expansion".into()),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// This table is also used by the branch reader. Its value arities identify

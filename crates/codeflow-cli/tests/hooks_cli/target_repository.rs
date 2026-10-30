@@ -1572,7 +1572,7 @@ fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
     std::fs::write(f.linked.join("copies/id_rsa"), "inert fixture\n").unwrap();
     let refused: Vec<String> = [
         "cat copies/id^",
-        "cat ^README.md",
+        "cat copies/^README.md",
         "fd auth ~/.codex -x cat",
         "fd . ~/.codex -x cat",
         "fd -t f . ~/.codex --exec cat",
@@ -1624,6 +1624,72 @@ fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
     .map(ToString::to_string)
     .collect();
     assert_pair(&f, &refused, &allowed);
+}
+
+/// TSK-1002 Fable review 17 and Grok security review 02: a value attached
+/// to an `fd` exec option is the command it runs; `BROWSER` and
+/// `MANPAGER` are program variables; a leading `^` matches the names of
+/// its one directory; and a backup copy of a named home secret is secret.
+#[test]
+fn tsk1002_review17_fd_values_help_programs_carets_and_backups() {
+    let f = Fixture::new();
+    let home = f.root.parent().unwrap().to_path_buf();
+    let codex = home.join(".codex");
+    std::fs::create_dir_all(&codex).unwrap();
+    std::fs::write(codex.join("auth.json"), "{}\n").unwrap();
+    std::fs::create_dir_all(f.linked.join("clean")).unwrap();
+    std::fs::write(f.linked.join("clean/notes.md"), "a\n").unwrap();
+    let refused: Vec<String> = [
+        "fd . ~/.codex --exec=cat",
+        "fd --exec=cat . ~/.codex",
+        "fd . ~/.codex --exec-batch=cat",
+        "fd . ~/.codex -x=cat",
+        "fd . ~/.codex -xless",
+        "fd . ~/.codex -xjq",
+        "fdfind . ~/.codex --exec=cat",
+        "fd auth ~/.codex --exec=cat",
+        "fd . ~/.codex --exec=",
+        "BROWSER='cat ~/.codex/auth.json' git help --web",
+        "BROWSER='cat ~/.codex/auth.json' git web--browse https://example.test",
+        "MANPAGER='cat ~/.codex/auth.json' git help",
+        "MANPAGER='cat ~/.codex/auth.json' man git",
+        "cd ~/.codex && cat ^x",
+        "cat ~/.codex/auth.json~",
+        "cat ~/.codex/auth.json.bak",
+        "cat ~/.codex/.auth.json.swp",
+        "cd ~/.codex && cat auth.json.orig",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let allowed: Vec<String> = [
+        "fd . clean -x cat",
+        "fd . clean --exec=cat",
+        "fd -e md . clean -xwc",
+        "MANPAGER=less git help",
+        "BROWSER=open git help --web",
+        "cd clean && git rev-list ^main HEAD",
+        "cd clean && git rev-list ^main",
+        "cd clean && grep -n ^foo notes.md",
+        "cat clean/^x",
+        "git log '^main' HEAD",
+        "cat ~/.codex/config.toml",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    assert_pair(&f, &refused, &allowed);
+    let out = f.command(&f.linked, "exec-guard", "fd . ~/.codex --exec=cat");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("`fd` gives a command"), "{err}");
+    // A leading `^` handed to a Git runner may expand to an option-like
+    // name, so it stays refused, with a message to quote it.
+    let out = f.command(&f.linked, "git-guard", "cd clean && git log ^main HEAD");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.code() == Some(2) && err.contains("quote it when it is a revision"),
+        "{err}"
+    );
 }
 
 /// TSK-1002 Codex review 07: a Git alias is judged by its expansion, the

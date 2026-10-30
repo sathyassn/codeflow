@@ -1632,7 +1632,10 @@ fn argv(
         }
         "fd" | "fdfind" => {
             if let Some(exec) = fd_exec(rest) {
-                let tail = &rest[exec.command.start..];
+                let mut tail = rest[exec.command.start..].to_vec();
+                if let Some(first) = exec.first {
+                    tail[0] = first;
+                }
                 let len = exec.command.len();
                 let supplier = Supplier::Find {
                     starts: exec.roots,
@@ -1880,8 +1883,6 @@ fn holds_a_command_line(word: &str) -> bool {
     word.contains([' ', '\t', '\n', ';', '&', '|'])
 }
 
-/// The starting points of a `find` call: the words before its expression,
-/// after the `-H`, `-L` and `-P` options, or `.` when there are none.
 /// What `fd` (`fdfind`) hands a command with `-x`/`--exec` or
 /// `-X`/`--exec-batch`.
 struct FdExec {
@@ -1894,7 +1895,16 @@ struct FdExec {
     moved: bool,
     /// The command's words in the arguments.
     command: std::ops::Range<usize>,
+    /// The first word in place of `command`'s first: the value attached
+    /// to the option (`--exec=cat`, `-xcat`), whose range is that option
+    /// word alone, or [`FD_UNREAD_COMMAND`] when no command word can be
+    /// read.
+    first: Option<String>,
 }
+
+/// The command word an `fd` exec option stands for when the guard cannot
+/// read one; it is unresolved, so the call refuses as unverifiable.
+const FD_UNREAD_COMMAND: &str = "$CODEFLOW_UNREAD_COMMAND";
 
 /// The options of `fd` 10 that take a value (`fd --help`).
 const FD_VALUED_SHORT: &str = "etEdSojc";
@@ -1961,9 +1971,12 @@ const FD_FLAGS_LONG: &[&str] = &[
 /// The command an `fd` call runs on each path it finds, with the roots it
 /// walks (TSK-1002 Fable review 16), read by `fd`'s own grammar: options,
 /// a pattern, then roots, `--search-path` roots included; `-x`, `--exec`,
-/// `-X` or `--exec-batch` takes every word after it up to a `;`. An
-/// option it does not know stands as a root it cannot establish. `None`
-/// when `fd` runs no command.
+/// `-X` or `--exec-batch` takes every word after it up to a `;`, and a
+/// value attached to one (`--exec=cat`, `-x=cat`, `-xcat`) is the whole
+/// command, as clap reads it; the words after it are `fd`'s again. An
+/// option it does not know stands as a root it cannot establish, and an
+/// exec option whose command it cannot read runs an unresolved command.
+/// `None` when `fd` runs no command.
 #[allow(clippy::too_many_lines)] // One pass of fd's option grammar, long and short forms.
 fn fd_exec(args: &[String]) -> Option<FdExec> {
     const UNREAD: &str = "$CODEFLOW_UNREAD_ROOT";
@@ -1972,6 +1985,7 @@ fn fd_exec(args: &[String]) -> Option<FdExec> {
     let mut before = Vec::new();
     let mut moved = false;
     let mut command = None;
+    let mut first = None;
     let mut unread = false;
     let mut at = 0;
     let mut options = true;
@@ -2001,13 +2015,15 @@ fn fd_exec(args: &[String]) -> Option<FdExec> {
             };
             match name.as_str() {
                 "--exec" | "--exec-batch" => {
-                    if value.is_some() {
-                        unread = true;
+                    if let Some(value) = value {
+                        command = Some(at..at + 1);
+                        first = Some(value);
                         at += 1;
                         continue;
                     }
                     let range = start_command(at + 1);
                     at = range.end + 1;
+                    first = None;
                     command = Some(range);
                     continue;
                 }
@@ -2041,11 +2057,15 @@ fn fd_exec(args: &[String]) -> Option<FdExec> {
             let attached = letters[index + 1..].iter().collect::<String>();
             if matches!(letter, 'x' | 'X') {
                 if !attached.is_empty() {
-                    unread = true;
+                    // clap drops one `=` before an attached short value.
+                    let value = attached.strip_prefix('=').unwrap_or(&attached);
+                    command = Some(at..at + 1);
+                    first = Some(value.to_string());
                     break;
                 }
                 let range = start_command(at + 1);
                 at = range.end;
+                first = None;
                 command = Some(range);
                 break;
             }
@@ -2065,7 +2085,18 @@ fn fd_exec(args: &[String]) -> Option<FdExec> {
         }
         at += 1;
     }
-    let command = command?;
+    let mut command = command?;
+    // An exec option with no command word, or an empty attached value,
+    // runs a command the guard cannot read: it stands as an unresolved
+    // word in the option's place, and the walk is judged with it.
+    if command.is_empty() || first.as_deref().is_some_and(|word| word.trim().is_empty()) {
+        let option = command.start.saturating_sub(1).min(args.len() - 1);
+        if command.is_empty() {
+            command = option..option + 1;
+        }
+        first = Some(FD_UNREAD_COMMAND.to_string());
+        unread = true;
+    }
     roots.extend(positionals.into_iter().skip(1));
     if roots.is_empty() {
         roots.push(".".to_string());
@@ -2078,6 +2109,7 @@ fn fd_exec(args: &[String]) -> Option<FdExec> {
         before,
         moved,
         command,
+        first,
     })
 }
 
@@ -3500,12 +3532,11 @@ mod tests {
         let read = |line: &str| {
             let words: Vec<String> = line.split_whitespace().map(str::to_string).collect();
             fd_exec(&words).map(|exec| {
-                (
-                    exec.roots,
-                    exec.before,
-                    exec.moved,
-                    words[exec.command].join(" "),
-                )
+                let mut command = words[exec.command].to_vec();
+                if let Some(first) = exec.first {
+                    command[0] = first;
+                }
+                (exec.roots, exec.before, exec.moved, command.join(" "))
             })
         };
         let roots = |roots: &[&str]| roots.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -3532,6 +3563,37 @@ mod tests {
             roots(&["src", "$CODEFLOW_UNREAD_ROOT"])
         );
         assert_eq!(read("-e md . src -x wc -l").unwrap().0, roots(&["src"]));
+        // Fable review 17: an attached value is the whole command, and the
+        // words after it are fd's own again.
+        for (line, command) in [
+            (". ~/.codex --exec=cat", "cat"),
+            ("--exec=cat . ~/.codex", "cat"),
+            (". ~/.codex --exec-batch=cat", "cat"),
+            (". ~/.codex -x=cat", "cat"),
+            (". ~/.codex -xless", "less"),
+            (". ~/.codex -Hxjq", "jq"),
+            (". ~/.codex -X=wc", "wc"),
+        ] {
+            let (found, _, _, read_command) = read(line).unwrap();
+            assert_eq!(
+                (found, read_command.as_str()),
+                (roots(&["~/.codex"]), command),
+                "{line}"
+            );
+        }
+        // An exec option with no readable command runs an unresolved one
+        // over an unread root.
+        for line in [". src --exec=", ". src -x", ". src -x ;", ". src -x="] {
+            let (found, _, _, command) = read(line).unwrap();
+            assert_eq!(
+                (found, command.as_str()),
+                (
+                    roots(&["src", "$CODEFLOW_UNREAD_ROOT"]),
+                    "$CODEFLOW_UNREAD_COMMAND"
+                ),
+                "{line}"
+            );
+        }
     }
 
     /// TSK-1002 review 02, B4: a directory option's `..` after a link is

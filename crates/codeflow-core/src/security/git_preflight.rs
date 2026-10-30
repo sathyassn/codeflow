@@ -61,23 +61,33 @@ const CLASSIFIED_ENVIRONMENT: &[&str] = &[
     "GIT_TERMINAL_PROMPT",
 ];
 
-/// The environment variables whose value is a program Git runs, judged as
-/// a command before every program the line runs (Fable reviews 13 and 14):
-/// every `Environment` source of git-guard's runner catalog, so the two
-/// lists cannot drift (Grok security review 01 M1 found
-/// `GIT_PROXY_COMMAND` and `GIT_DIFFTOOL_EXTCMD` missing here), and
-/// `LESSOPEN` and `LESSCLOSE`, which `less(1)`, Git's default pager, runs
-/// ("Input preprocessor"). The catalog follows `git help git`, "Environment
-/// Variables", `git help var` (the `VISUAL`, `EDITOR` and `PAGER`
-/// fallbacks), `git help credential` (`SSH_ASKPASS`) and `git help
-/// difftool` (`GIT_DIFFTOOL_EXTCMD`).
+/// The program variables the guards judge: a closed list, stated in
+/// `docs/policy-reference.md` under "Program variables the guards judge"
+/// and held equal to it by test (TSK-1002 Grok security review 02, M2). A
+/// variable outside it is outside the text guard's promise; the qualified
+/// shell parser (TSK-1073) owns that residual.
+///
+/// Each value is judged as a command before every program the line runs
+/// (Fable reviews 13 and 14). The list is every `Environment` source of
+/// git-guard's runner catalog, so the two cannot drift (Grok security
+/// review 01, M1), and [`PROGRAMS_GIT_STARTS`]. The catalog follows `git
+/// help git`, "Environment Variables", `git help var` (the `VISUAL`,
+/// `EDITOR` and `PAGER` fallbacks), `git help credential` (`SSH_ASKPASS`)
+/// and `git help difftool` (`GIT_DIFFTOOL_EXTCMD`).
 ///
 /// A Git call's `-c` and `--config-env` spellings of the same programs are
 /// read by git-guard's runner reader, and a `git config` write of one by
 /// [`super::git_config_writes`].
 fn program_environment() -> impl Iterator<Item = &'static str> {
-    crate::hooks::git_guard::git_program_environment().chain(["LESSCLOSE", "LESSOPEN"])
+    crate::hooks::git_guard::git_program_environment().chain(PROGRAMS_GIT_STARTS.iter().copied())
 }
+
+/// Program variables read by the programs Git starts rather than by Git:
+/// `LESSOPEN` and `LESSCLOSE`, which `less(1)`, Git's default pager, runs
+/// ("Input preprocessor"); `MANPAGER`, which `man(1)` runs ahead of
+/// `PAGER` for `git help`; and `BROWSER`, which `git web--browse` runs for
+/// `git help --web` (`git help web--browse`).
+const PROGRAMS_GIT_STARTS: &[&str] = &["BROWSER", "LESSCLOSE", "LESSOPEN", "MANPAGER"];
 
 /// Whether `name` is one of [`program_environment`].
 fn is_program_environment(name: &str) -> bool {
@@ -767,6 +777,24 @@ mod tests {
             program_values("GIT_PROXY_COMMAND='cat x' cargo test").unwrap(),
             vec!["cat x".to_string()]
         );
+    }
+
+    /// TSK-1002 Grok security review 02, M2: the policy reference states
+    /// the program variables as a closed list, equal to the code's.
+    #[test]
+    fn the_policy_reference_lists_the_program_variables() {
+        let mut listed = crate::security::launchers::policy_reference_list(
+            "### Program variables the guards judge",
+            "Program variables",
+        );
+        listed.sort_unstable();
+        let mut judged: Vec<&str> = program_environment().collect();
+        judged.sort_unstable();
+        judged.dedup();
+        assert_eq!(listed, judged);
+        for name in ["BROWSER", "MANPAGER"] {
+            assert!(is_program_environment(name), "{name}");
+        }
     }
 
     /// TSK-1002 Codex review 13: a word that names a program variable is

@@ -212,6 +212,11 @@ workspace. The `**/` rule includes zero directories, so `id_rsa`,
 same applies to `id_ed25519`, `.pem`, `.key`, `.p12`, `.pfx` and `.netrc`
 patterns. A newline inside a directory name does not hide its secret leaf.
 Comparisons fold ASCII case, including on case-sensitive volumes.
+A backup copy of a named secret file under the home directory holds the
+same token, so it is secret too: a name in the same directory that starts
+with the secret file's name (`~/.codex/auth.json~`, `auth.json.bak`,
+`.orig`, `.old`, `.1`) or an editor swap file (`.auth.json.swp`). Rules
+that are patterns already cover their own spellings.
 
 The shared shell resolver follows on-line assignments, directory changes,
 home parameters and supported static substitutions before judging operands.
@@ -262,9 +267,11 @@ does; use `find ... -exec ... {} +`. `fd` and `fdfind` with `-x`,
 `--exec`, `-X` or `--exec-batch` read their roots (the operands after the
 pattern, `--search-path` values, or the current directory) the same way,
 without narrowing by the pattern: `fd . ~/.codex -x cat` refuses, while
-`fd . src -x cat` stays available. `-L`, `--follow`, an option the guard
-does not know and a `--base-directory` the guard cannot follow refuse as
-cannot-verify.
+`fd . src -x cat` stays available. A value attached to the option
+(`--exec=cat`, `-x=cat`, `-xcat`) is the whole command, as `fd` reads it.
+`-L`, `--follow`, an option the guard does not know, an exec option whose
+command it cannot read and a `--base-directory` the guard cannot follow
+refuse as cannot-verify.
 Listings and metadata operands do not inherit the ancestor rule for content
 readers; explicit secret-store operands retain their own protection.
 
@@ -296,7 +303,13 @@ the line runs. A source glob that expands
 completely without secret matches remains available; the same glob refuses
 after `id_rsa.rs` is planted among its matches. A quoted shell wildcard
 remains literal, including `cat < 'id_rs?'`. A zsh `^` negation that opens
-a path component (`^README.md`) may match any name there; one after a
+a path component (`^main`, `^README.md`) may match any name in that one
+directory, so it is judged as `*` there: `git log ^main` and `grep -n ^foo
+README.md` stay available where the directory holds no secret name, and
+refuse with a message to quote the word where it does. A Git call that
+runs a program the guard reads (a configured pager, diff or tool) refuses
+such a word, since it may expand to a name that reads as an option; quote
+the exclusion (`git log '^main'`). One after a
 literal part of its component (`HEAD^`, `main^2`) matches only names that
 start with that part, so caret revisions stay available and `cat
 copies/id^` refuses when `copies/id_rsa` exists. Lines naming dotglob,
@@ -470,16 +483,10 @@ the form refuses:
   `GIT_HTTP_USER_AGENT`, `GIT_SSH_VARIANT`, `GIT_LFS_SKIP_SMUDGE`), the
   pathspec modes `GIT_GLOB_PATHSPECS`, `GIT_NOGLOB_PATHSPECS` and
   `GIT_LITERAL_PATHSPECS`, and `GIT_DIR` under the repository rule below.
-  A variable whose value is a program Git runs is allowed, and its value
-  is judged as a command (`GIT_EXTERNAL_DIFF='cat ~/.ssh/id_rsa'` refuses
-  as that `cat` would): `GIT_PAGER`, `GIT_EDITOR`,
-  `GIT_SEQUENCE_EDITOR`, `GIT_SSH`, `GIT_SSH_COMMAND`,
-  `GIT_PROXY_COMMAND`, `GIT_ASKPASS`, `GIT_EXTERNAL_DIFF`,
-  `GIT_DIFFTOOL_EXTCMD`, the names Git falls back to (`VISUAL`, `EDITOR`,
-  `PAGER`, `SSH_ASKPASS`) and the pager's `LESSOPEN` and `LESSCLOSE`. The
-  guards take this list from git-guard's runner catalog, so the two cannot
-  differ. Such
-  a value, assigned on the line or exported earlier in it, is judged
+  A program variable on the closed list under "Program variables the
+  guards judge" below is allowed, and its value is judged as a command
+  (`GIT_EXTERNAL_DIFF='cat ~/.ssh/id_rsa'` refuses as that `cat` would).
+  Such a value, assigned on the line or exported earlier in it, is judged
   before every program the line runs, Git or any program that may run Git
   (`GIT_EXTERNAL_DIFF='cat ~/.codex/auth.json' cargo test` refuses), in
   the directory each program runs in: the shell's after its `cd` steps,
@@ -689,6 +696,29 @@ equal.
 A program outside this list that moves the command it runs to another
 directory, or hands it paths it finds, is outside the text guard's
 promise; the qualified shell parser (TSK-1073, 4.0.0) owns that residual.
+
+### Program variables the guards judge
+
+A variable whose value is a program is judged as a command before every
+program the line runs, as the Git operands rule above states, only for
+this closed list: the program variables in git-guard's runner catalog,
+which follows `git help git` ("Environment Variables"), `git help var`,
+`git help credential` and `git help difftool`, and the ones the programs
+Git starts read (`less` runs `LESSOPEN` and `LESSCLOSE`, `man` runs
+`MANPAGER` for `git help`, and `git web--browse` runs `BROWSER`). The
+code takes the list from the same catalog (`security/git_preflight.rs`),
+and a test keeps it equal to this one.
+
+- Program variables: `BROWSER`, `EDITOR`, `GIT_ASKPASS`,
+  `GIT_DIFFTOOL_EXTCMD`, `GIT_EDITOR`, `GIT_EXTERNAL_DIFF`, `GIT_PAGER`,
+  `GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `GIT_SSH`,
+  `GIT_SSH_COMMAND`, `LESSCLOSE`, `LESSOPEN`, `MANPAGER`, `PAGER`,
+  `SSH_ASKPASS`, `VISUAL`.
+
+Another `GIT_*` name refuses on a line that runs Git unless the guard
+classifies it. A variable outside this list whose value some other
+program runs is outside the text guard's promise; the qualified shell
+parser (TSK-1073, 4.0.0) owns that residual.
 
 ## Planning amendment paths
 

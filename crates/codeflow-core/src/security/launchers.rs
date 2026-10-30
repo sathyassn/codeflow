@@ -89,6 +89,32 @@ pub(crate) const INTERPRETERS: &[&str] = &[
     "ruby",
 ];
 
+/// The names in backticks on the `- {label}:` bullet, continuation lines
+/// included, of the `docs/policy-reference.md` section that starts with
+/// `heading`: the closed lists the text guards promise.
+#[cfg(test)]
+pub(crate) fn policy_reference_list(heading: &str, label: &str) -> Vec<&'static str> {
+    let page: &'static str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/policy-reference.md"
+    ));
+    let start = page.find(heading).unwrap_or_else(|| panic!("{heading}"));
+    let section = &page[start + 3..];
+    let section = &section[..section.find("\n#").unwrap_or(section.len())];
+    let bullet: Vec<&'static str> = section
+        .lines()
+        .skip_while(|line| !line.starts_with(&format!("- {label}:")))
+        .enumerate()
+        .take_while(|(at, line)| *at == 0 || line.starts_with("  "))
+        .map(|(_, line)| line)
+        .collect();
+    assert!(!bullet.is_empty(), "the {label} line");
+    bullet
+        .iter()
+        .flat_map(|line| line.split('`').skip(1).step_by(2))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,16 +161,6 @@ mod tests {
     /// states the promise.
     #[test]
     fn the_policy_reference_lists_the_closed_list() {
-        let page = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../docs/policy-reference.md"
-        ));
-        let start = page
-            .find("### Command launchers the guards model")
-            .expect("the launcher section");
-        let section = &page[start..];
-        let section = &section[3..];
-        let section = &section[..section.find("\n#").unwrap_or(section.len())];
         for (label, names) in [
             ("Launchers", LAUNCHERS),
             ("Suppliers", SUPPLIERS),
@@ -152,17 +168,7 @@ mod tests {
             ("Shells", SHELLS),
             ("Interpreters", INTERPRETERS),
         ] {
-            // The bullet and its indented continuation lines.
-            let bullet: String = section
-                .lines()
-                .skip_while(|line| !line.starts_with(&format!("- {label}:")))
-                .enumerate()
-                .take_while(|(at, line)| *at == 0 || line.starts_with("  "))
-                .map(|(_, line)| line)
-                .collect::<Vec<_>>()
-                .join(" ");
-            assert!(!bullet.is_empty(), "the {label} line");
-            let mut listed: Vec<&str> = bullet.split('`').skip(1).step_by(2).collect();
+            let mut listed = policy_reference_list("### Command launchers the guards model", label);
             listed.sort_unstable();
             let mut expected = names.to_vec();
             expected.sort_unstable();

@@ -2582,7 +2582,8 @@ fn windows_pattern_body(word: &str) -> &str {
 /// 17): `(` or `)` (extglob groups, zsh groups, alternation and glob
 /// qualifiers, which can admit names that start with `.` and apply to
 /// every component, as `*/policy.json(D)` does), `^` and `#` (zsh extended
-/// globs), a zsh numeric range `<n-m>` (zsh reads any other `<` or `>` as a
+/// globs; a `^` is read per component by [`shell_pattern`] instead), a
+/// zsh numeric range `<n-m>` (zsh reads any other `<` or `>` as a
 /// redirection, which ends the word), and `**` (any depth). Such a word
 /// matches every path below its longest literal directory prefix, at
 /// every depth, names that start with `.` included ([`WordGlob`]). zsh's
@@ -2591,19 +2592,7 @@ fn windows_pattern_body(word: &str) -> &str {
 /// ([`word_readings`]); a Windows short name such as `RUNNER~1` stays a
 /// plain name (TSK-216 round 18).
 fn conservative_glob(word: &str) -> bool {
-    word.contains(['(', ')', '#'])
-        || leading_caret(word)
-        || word.contains("**")
-        || numeric_range(word)
-}
-
-/// Whether a zsh `^` negation opens a path component of `word`, where it
-/// may match any name. A `^` after a literal part of its component
-/// (`HEAD^`, `main^2`) matches only names that start with that part, read
-/// by [`shell_pattern`] as that part followed by any text (TSK-1002 Fable
-/// review 16).
-fn leading_caret(word: &str) -> bool {
-    word.split('/').any(|component| component.starts_with('^'))
+    word.contains(['(', ')', '#']) || word.contains("**") || numeric_range(word)
 }
 
 /// Whether a word holds a zsh numeric range glob: `<`, optional digits,
@@ -2997,9 +2986,19 @@ fn shell_pattern(text: &str) -> glob::Pattern {
                     i += 1;
                 }
             }
+            // A zsh `^` negation that opens a component matches any name in
+            // that one directory, as `*` does (`^` binds tighter than `/`,
+            // zshexpn "Glob Operators"), so `git log ^main` reads the
+            // directory's own entries (TSK-1002 Fable review 17).
+            '^' => {
+                out.push('*');
+                while chars.get(i + 1).is_some_and(|next| *next != '/') {
+                    i += 1;
+                }
+            }
             // Extended pattern syntax (extglob groups, zsh alternation,
-            // qualifiers, a leading `^`, `#` and `~`) matches every name.
-            '(' | ')' | '|' | '^' | '#' | '~' => return every_name(),
+            // qualifiers, `#` and a leading `~`) matches every name.
+            '(' | ')' | '|' | '#' | '~' => return every_name(),
             c => out.push(c),
         }
         i += 1;
@@ -14501,8 +14500,11 @@ mod tests {
     fn a_caret_after_a_literal_part_reads_that_part_as_a_prefix() {
         assert!(!conservative_glob("HEAD^"));
         assert!(!conservative_glob("main^2"));
-        assert!(conservative_glob("^README.md"));
-        assert!(conservative_glob("docs/^x"));
+        // Fable review 17: a leading `^` is any name in its one directory.
+        assert!(!conservative_glob("^README.md"));
+        assert!(!conservative_glob("docs/^x"));
+        assert!(has_glob("^main"));
+        assert!(shell_pattern("^main").matches("README.md"));
         assert!(has_glob("HEAD^"));
         assert!(shell_pattern("id^").matches("id_rsa"));
         assert!(!shell_pattern("HEAD^").matches("id_rsa"));
