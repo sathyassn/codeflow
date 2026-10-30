@@ -234,7 +234,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
-| `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
+| `codeflow work next` | | List ready tasks first, then landed, waiting and blocked ones with their reasons, from the refs as last fetched. A landed task has an open record but a branch carrying its id has merged into its target with work beyond the record; it is listed with the `codeflow task status` command that settles it, and `work claim` refuses it. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
 | | `--json` | Print the same facts as JSON. |
 | `codeflow work claim <TASK_ID>` | | Fetch, check the task is ready and unclaimed on its target tip, then create and push `task/<id>-<slug>` from that tip. The pushed branch is an advisory mark others can see |

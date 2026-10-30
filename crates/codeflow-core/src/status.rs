@@ -778,6 +778,16 @@ fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
             crate::git::display_message(&entry.title)
         );
     }
+    for entry in backlog.in_state(State::Landed) {
+        let _ = writeln!(
+            out,
+            "  landed: {} {} ({}; run `{}`)",
+            entry.task_id,
+            crate::git::display_message(&entry.title),
+            shown_branches(&entry.landed_branches),
+            readiness::landed_status_command(&entry.task_id)
+        );
+    }
     // A Blocker or an invalid record outranks a claim; the branch stays shown.
     for state in [State::Blocked, State::Invalid] {
         for entry in backlog
