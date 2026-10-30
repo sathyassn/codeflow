@@ -23,8 +23,11 @@ pub struct WorkArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum WorkCommand {
-    /// List ready tasks first, then waiting and blocked ones with their
-    /// reasons, from the refs as last fetched. Checks review evidence for stack hints.
+    /// List ready tasks first, then landed, waiting and blocked ones with their
+    /// reasons, from the refs as last fetched. A landed task has an open record
+    /// but its work has merged into its target; the listing gives the
+    /// `codeflow task status` command that settles it, and `work claim` refuses
+    /// it. Checks review evidence for stack hints.
     Next {
         /// Only tasks of this epic.
         #[arg(long, value_name = "EPC-NNN")]
