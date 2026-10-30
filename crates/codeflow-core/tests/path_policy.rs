@@ -179,7 +179,10 @@ fn symlinks_are_judged_by_objects_without_following_them() {
         ("ordinary", "private/data", true),
         ("id_rsa", "ordinary", true),
         ("ordinary", "missing-public-file", false),
-        ("ordinary", "x:public", false),
+        // A letter and a colon start a Windows drive-relative path.
+        ("ordinary", "x:public", true),
+        ("links/ordinary", "C:Windows/Temp/payload", true),
+        ("ordinary", "ab:public", false),
         ("links/ordinary", "public", false),
         ("ordinary", "./docs", false),
         ("ordinary", "docs/", false),
@@ -194,6 +197,15 @@ fn symlinks_are_judged_by_objects_without_following_them() {
         let head = f.commit(&[base]);
         assert_eq!(!staged.violations.is_empty(), blocked, "{name} -> {target}");
         assert_eq!(!f.range(base, head, &p).violations.is_empty(), blocked);
+    }
+    // The drive rule reads link targets only; a file with that name passes.
+    for report in judge_one(
+        "x:public",
+        0o100_644,
+        Some(b"public"),
+        &Fixture::policy(json!({})),
+    ) {
+        assert!(report.violations.is_empty(), "{report:?}");
     }
 }
 
@@ -530,6 +542,11 @@ fn links_and_gitlinks_at_gate_inputs_refuse_while_files_stay_exempt() {
         for (what, mode, contents) in [
             ("absolute link", 0o120_000, Some(b"/tmp/payload".as_slice())),
             ("drive link", 0o120_000, Some(b"C:/payload".as_slice())),
+            (
+                "drive-relative link",
+                0o120_000,
+                Some(b"C:Windows/Temp/payload".as_slice()),
+            ),
             ("parent link", 0o120_000, Some(b"../outside".as_slice())),
             ("invalid link", 0o120_000, Some(b"a//b".as_slice())),
             // Resolved beside the link; a target that is itself a gate input

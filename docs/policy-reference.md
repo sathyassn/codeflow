@@ -156,8 +156,9 @@ A public certificate fixture can use this declaration in the target's
 Blocked names refuse additions, content changes, type changes and renames
 into a matching path. Deletions pass with a history note. Protected prefixes
 refuse every change, deletions included. Gitlinks are judged at their path;
-symlinks are judged at their path and their normalized target. Absolute or
-parent-traversing targets refuse. Neither kind of link is followed.
+symlinks are judged at their path and their normalized target. Absolute
+targets, including a Windows drive target such as `C:/x` or the
+drive-relative `C:x`, and parent-traversing targets refuse. Neither kind of link is followed.
 
 CI reads each ordinary commit against its parent and each two-parent merge
 against the automatic remerge of its parents. Unchanged inherited content

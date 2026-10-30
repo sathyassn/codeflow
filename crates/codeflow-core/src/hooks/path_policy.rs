@@ -321,10 +321,12 @@ fn check_entry(
         let content = blob.content();
         let content = content.strip_prefix(b"./").unwrap_or(content);
         let target = normalize(content.strip_suffix(b"/").unwrap_or(content));
+        // A letter then a colon is a Windows drive path, rooted ("C:/x") or
+        // drive-relative ("C:x"); either can leave the tree.
+        let drive =
+            |t: &str| matches!(t.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
         match target {
-            Ok(target)
-                if !(target.starts_with('/') || target.as_bytes().get(1..3) == Some(b":/")) =>
-            {
+            Ok(target) if !(target.starts_with('/') || drive(&target)) => {
                 let resolved = path.rsplit_once('/').map_or_else(
                     || target.clone(),
                     |(parent, _)| format!("{parent}/{target}"),
