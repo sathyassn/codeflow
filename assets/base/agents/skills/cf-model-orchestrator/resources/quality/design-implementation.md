@@ -47,13 +47,13 @@ with unknown fields refused plus a validator in Go, and a `type` and a
 `input` with `json.match_schema` and refuses on its errors, or the caller
 validates the document before the query; a schema given through
 `--schema` or a METADATA annotation checks the policy's references
-statically and validates nothing at run time. Where a JSON Schema exists, generate the types from it. Handle
-and test invalid, absent and unexpected values. Keep one model per shape
-and reuse it wherever that shape is read; a value already parsed into a
-model is trusted and is not validated again. Proportionality decides how
-many fields and checks a boundary model holds, never whether boundary data
-is parsed or code is typed; add no wrapper layers or duplicate domain
-models for this rule.
+statically and validates nothing at run time. Where a JSON Schema
+exists, generate the types from it. Handle and test invalid, absent and
+unexpected values. Keep one model per shape and reuse it wherever that
+shape is read; a value already parsed into a model is trusted and is not
+validated again. Proportionality decides how many fields and checks a
+boundary model holds, never whether boundary data is parsed or code is
+typed; add no wrapper layers or duplicate domain models for this rule.
 
 A new project or new file that would otherwise be JavaScript is
 TypeScript. An existing JavaScript codebase is type-checked in place

@@ -37,8 +37,9 @@ and decide; `codeflow` verifies the result deterministically.
    data at boundaries (for example Pydantic, zod, serde). For shell, wire
    ShellCheck. A new project or new file that would otherwise be
    JavaScript is TypeScript; an existing JavaScript codebase is checked in
-   place with `checkJs` and JSDoc types, not rewritten. A project that opts out states its reason in its Stack
-   standards (step 6). Add no redundant tooling.
+   place with `checkJs` and JSDoc types, not rewritten. A project that
+   opts out states its reason in its Stack standards (step 6). Add no
+   redundant tooling.
 4. Read the orchestrator's `resources/verification-selection.md`. Configure a
    project-owned property/generative, mutation, or architecture fitness command
    only when repository evidence activates its trigger. Put routine checks in
