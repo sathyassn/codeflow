@@ -475,6 +475,7 @@ fn schema_rejects_invalid_declarations_and_keeps_new_keys_out_of_shipped_policy(
         assert!(note.contains(name) || later.contains(name), "{name}");
     }
     assert!(later.contains("`credentials.json`"));
+    assert!(later.contains("`.credentials.json`"));
     assert!(note.contains("except_under"));
 }
 
@@ -597,6 +598,9 @@ fn credentials_json_is_a_shipped_blocked_name_at_any_depth_and_case() {
         ("credentials.json", true),
         ("config/service/credentials.json", true),
         ("Deploy/CREDENTIALS.JSON", true),
+        (".credentials.json", true),
+        ("home/.claude/.credentials.json", true),
+        ("Backup/.CREDENTIALS.JSON", true),
         ("credentials.json.example", false),
         ("docs/credentials.md", false),
     ] {

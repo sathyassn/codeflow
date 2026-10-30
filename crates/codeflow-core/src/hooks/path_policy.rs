@@ -36,6 +36,7 @@ pub const DEFAULT_NAMES: &[&str] = &[
     ".aws/credentials",
     "application_default_credentials.json",
     "credentials.json",
+    ".credentials.json",
 ];
 
 /// A final-component glob, or a sequence of component globs at any depth.
@@ -606,7 +607,8 @@ mod tests {
                 ".kube/config",
                 ".aws/credentials",
                 "application_default_credentials.json",
-                "credentials.json"
+                "credentials.json",
+                ".credentials.json"
             ]
         );
         assert_eq!(GitPolicy::default().blocked_names, default_names());

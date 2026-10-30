@@ -235,6 +235,7 @@ fn installed_hooks_and_ci_refuse_deep_names_and_protected_symlinks() {
         ("link", 0o120_000, "private/data"),
         ("credentials.json", 0o100_644, "{}"),
         ("config/CREDENTIALS.JSON", 0o100_644, "{}"),
+        ("home/.claude/.credentials.json", 0o100_644, "{}"),
         // Gate inputs stay exempt only as regular files.
         (".codeflow/bootstrap.sh", 0o120_000, "/tmp/payload"),
         (".codeflow/git-hooks/pre-commit", 0o120_000, "../../outside"),
