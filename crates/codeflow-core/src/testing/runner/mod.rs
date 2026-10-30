@@ -1910,7 +1910,12 @@ mod tests {
             "long",
             "powershell -NoProfile -NonInteractive -Command \"Set-Content -Path pid.txt -Value $PID; Start-Sleep -Seconds 120\"",
         );
-        let _ = run_target(&target, "full", Path::new(&dir));
+        // A start that fails, or a target that ends by itself with an error,
+        // fails this helper, so its exit and its output name the cause.
+        match run_target(&target, "full", Path::new(&dir)) {
+            Err(error) => panic!("the gate could not run its target: {error}"),
+            Ok(done) => assert_eq!(done.exit_code, 0, "the target ended early: {}", done.stderr),
+        }
     }
 
     #[cfg(windows)]
@@ -1926,42 +1931,327 @@ mod tests {
         assert_eq!(result.stdout.trim(), "2");
     }
 
+    /// How long [`wait_for_target_pid`] waits for the target to record its pid
+    /// in the killed-gate test. It is a backstop: the wait ends sooner when the
+    /// helper exits, and the failure at the bound says what was not observed.
+    #[cfg(windows)]
+    const TARGET_PID_BOUND: Duration = Duration::from_secs(60);
+
+    /// A gate process the test ends on every exit path, a panic included.
+    struct GateGuard {
+        gate: Option<std::process::Child>,
+    }
+
+    impl GateGuard {
+        fn new(gate: std::process::Child) -> Self {
+            Self { gate: Some(gate) }
+        }
+
+        fn child(&mut self) -> &mut std::process::Child {
+            self.gate.as_mut().expect("the gate was not yet killed")
+        }
+
+        fn id(&self) -> u32 {
+            self.gate
+                .as_ref()
+                .expect("the gate was not yet killed")
+                .id()
+        }
+
+        /// Kill the gate and wait for it, leaving the end of its target tree
+        /// to whatever the test checks.
+        #[cfg(windows)]
+        fn kill_gate(&mut self) {
+            if let Some(mut gate) = self.gate.take() {
+                gate.kill().unwrap();
+                gate.wait().unwrap();
+            }
+        }
+    }
+
+    impl Drop for GateGuard {
+        fn drop(&mut self) {
+            if let Some(mut gate) = self.gate.take() {
+                // The gate is still alive here, so the test ended early: end
+                // its whole tree, not only the gate.
+                #[cfg(windows)]
+                {
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", &gate.id().to_string(), "/T", "/F"])
+                        .output();
+                }
+                let _ = gate.kill();
+                let _ = gate.wait();
+            }
+        }
+    }
+
+    /// Ends the recorded target process and its descendants when a test
+    /// fails after the pid was read, unless the test saw the tree end.
+    #[cfg(windows)]
+    struct TargetGuard(Option<u32>);
+
+    #[cfg(windows)]
+    impl Drop for TargetGuard {
+        fn drop(&mut self) {
+            if let Some(pid) = self.0.take() {
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .output();
+            }
+        }
+    }
+
+    /// What the gate helper wrote to the two output files in `out`.
+    fn gate_output(out: &Path) -> String {
+        ["gate.stdout", "gate.stderr"]
+            .iter()
+            .map(|name| {
+                let text = std::fs::read_to_string(out.join(name)).unwrap_or_default();
+                format!("{name}: {}", text.trim())
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Wait for the target the `gate` helper runs to record its pid in
+    /// `pid_file`. Returns the pid and how long the wait took. It fails at
+    /// once, with the helper's status and output, when the helper exits first,
+    /// and at `bound` with what was and was not observed.
+    fn wait_for_target_pid(
+        gate: &mut std::process::Child,
+        pid_file: &Path,
+        out: &Path,
+        bound: Duration,
+    ) -> Result<(u32, Duration), String> {
+        let start = Instant::now();
+        loop {
+            // The exit is read first, so the pid file read after it is final.
+            let exited = gate.try_wait().map_err(|error| error.to_string())?;
+            let held = std::fs::read_to_string(pid_file);
+            let state = match &held {
+                Ok(text) if text.trim().is_empty() => "was empty".to_string(),
+                Ok(text) => format!("held {text:?}"),
+                Err(error) => format!("could not be read ({error})"),
+            };
+            let pid = held.ok().and_then(|text| text.trim().parse::<u32>().ok());
+            if let Some(status) = exited {
+                let recorded = pid.map_or_else(
+                    || "before its target recorded a pid".to_string(),
+                    |pid| format!("after its target recorded pid {pid}"),
+                );
+                return Err(format!(
+                    "the gate helper ended ({status}) after {:?}, {recorded}; pid.txt {state}\n{}",
+                    start.elapsed(),
+                    gate_output(out)
+                ));
+            }
+            if let Some(pid) = pid {
+                return Ok((pid, start.elapsed()));
+            }
+            if start.elapsed() >= bound {
+                return Err(format!(
+                    "no pid after {bound:?} and the gate helper (process {}) was still running; pid.txt {state}\n{}\nnot observed: whether the helper's start, the target's start or PowerShell's start was the slow step",
+                    gate.id(),
+                    gate_output(out)
+                ));
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    /// A `gate` standing in for the helper: `script` is run by the platform
+    /// shell with its output in `out`.
+    fn scripted_gate(unix: &str, windows: &str, dir: &Path, out: &Path) -> GateGuard {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/D", "/C", windows]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", unix]);
+            command
+        };
+        let gate = command
+            .current_dir(dir)
+            .stdout(std::fs::File::create(out.join("gate.stdout")).unwrap())
+            .stderr(std::fs::File::create(out.join("gate.stderr")).unwrap())
+            .spawn()
+            .unwrap();
+        GateGuard::new(gate)
+    }
+
+    /// A gate that is one long-running process of its own, with no child, so
+    /// its pid stands for everything the test started.
+    fn sleeping_gate(out: &Path) -> GateGuard {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("ping");
+            command.args(["-n", "31", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        let gate = command
+            .stdout(std::fs::File::create(out.join("gate.stdout")).unwrap())
+            .stderr(std::fs::File::create(out.join("gate.stderr")).unwrap())
+            .spawn()
+            .unwrap();
+        GateGuard::new(gate)
+    }
+
+    /// Whether the process `pid` still runs.
+    fn process_runs(pid: u32) -> bool {
+        #[cfg(windows)]
+        {
+            process_alive(pid)
+        }
+        #[cfg(not(windows))]
+        {
+            Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        }
+    }
+
+    /// TSK-1062 AC-2: a helper that fails early ends the wait at once with
+    /// its status and its own message, never with a timeout.
+    #[test]
+    fn a_helper_that_exits_early_fails_the_wait_with_its_status_and_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let mut gate = scripted_gate(
+            "echo helper-said-boom >&2; exit 3",
+            "echo helper-said-boom 1>&2 & exit 3",
+            dir.path(),
+            out.path(),
+        );
+        let message = wait_for_target_pid(
+            gate.child(),
+            &dir.path().join("pid.txt"),
+            out.path(),
+            Duration::from_secs(120),
+        )
+        .unwrap_err();
+        assert!(message.contains("the gate helper ended"), "{message}");
+        assert!(
+            message.contains("exit status: 3") || message.contains("exit code: 3"),
+            "the status: {message}"
+        );
+        assert!(message.contains("helper-said-boom"), "{message}");
+        assert!(message.contains("pid.txt could not be read"), "{message}");
+        assert!(!message.contains("still running"), "{message}");
+    }
+
+    /// A helper that records its pid and then exits is reported as having
+    /// recorded it, with the pid file's text and the helper's output.
+    #[test]
+    fn a_helper_that_exits_after_its_pid_reports_the_pid_and_its_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let mut gate = scripted_gate(
+            "echo 4242 > pid.txt; echo helper-said-boom >&2; exit 3",
+            "echo 4242 > pid.txt & echo helper-said-boom 1>&2 & exit 3",
+            dir.path(),
+            out.path(),
+        );
+        let message = wait_for_target_pid(
+            gate.child(),
+            &dir.path().join("pid.txt"),
+            out.path(),
+            Duration::from_secs(120),
+        )
+        .unwrap_err();
+        assert!(
+            message.contains("after its target recorded pid 4242"),
+            "{message}"
+        );
+        assert!(!message.contains("before its target"), "{message}");
+        assert!(message.contains("4242"), "the pid file text: {message}");
+        assert!(message.contains("helper-said-boom"), "{message}");
+    }
+
+    /// The wait returns a pid the target has recorded while its helper runs.
+    #[test]
+    fn the_wait_returns_a_recorded_pid_while_the_helper_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pid.txt"), "4242 \r\n").unwrap();
+        let mut gate = sleeping_gate(out.path());
+        let (pid, _) = wait_for_target_pid(
+            gate.child(),
+            &dir.path().join("pid.txt"),
+            out.path(),
+            Duration::from_secs(120),
+        )
+        .unwrap();
+        assert_eq!(pid, 4242);
+    }
+
+    /// TSK-1062 AC-3: at its bound the wait names what it saw and what it
+    /// could not tell.
+    #[test]
+    fn the_wait_at_its_bound_names_what_was_not_observed() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let mut gate = sleeping_gate(out.path());
+        let message = wait_for_target_pid(
+            gate.child(),
+            &dir.path().join("pid.txt"),
+            out.path(),
+            Duration::from_millis(300),
+        )
+        .unwrap_err();
+        assert!(message.contains("still running"), "{message}");
+        assert!(message.contains("pid.txt could not be read"), "{message}");
+        assert!(message.contains("not observed"), "{message}");
+    }
+
+    /// TSK-1062 AC-4: a panic in a test that holds the gate still ends the
+    /// gate.
+    #[test]
+    fn a_panic_while_the_gate_runs_still_ends_the_gate() {
+        let out = tempfile::tempdir().unwrap();
+        let mut gate_pid = 0;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let gate = sleeping_gate(out.path());
+            gate_pid = gate.id();
+            assert!(process_runs(gate_pid), "the gate runs");
+            panic!("the test failed while its gate ran");
+        }));
+        assert!(outcome.is_err());
+        assert!(!process_runs(gate_pid), "the panic left the gate running");
+    }
+
     /// TSK-142 AC-3: when a gate is killed on Windows, its running target's
     /// whole tree ends with it, so the OS never frees the gate lock while a
     /// target of that gate still runs. The gate is this test binary run as
     /// [`windows_gate_helper`]; the recorded pid is the target's grandchild
     /// (`cmd.exe` runs `powershell`), so the check covers the tree.
+    ///
+    /// TSK-1062: the wait for the pid watches the helper, shows the helper's
+    /// output when it fails, and the gate and target end on every exit path.
     #[cfg(windows)]
     #[test]
     fn a_killed_gate_ends_its_target_tree_on_windows() {
         let dir = tempfile::tempdir().unwrap();
-        let mut gate = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "testing::runner::tests::windows_gate_helper",
-                "--test-threads",
-                "1",
-            ])
-            .env(GATE_HELPER_DIR, dir.path())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let pid_file = dir.path().join("pid.txt");
-        let pid = (0..1200)
-            .find_map(|_| {
-                let text = std::fs::read_to_string(&pid_file).unwrap_or_default();
-                let parsed = text.trim().parse::<u32>().ok();
-                if parsed.is_none() {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                parsed
-            })
-            .expect("the target recorded its pid");
+        let out = tempfile::tempdir().unwrap();
+        let mut gate = start_gate_helper(dir.path(), out.path());
+        let (pid, waited) = wait_for_target_pid(
+            gate.child(),
+            &dir.path().join("pid.txt"),
+            out.path(),
+            TARGET_PID_BOUND,
+        )
+        .unwrap_or_else(|message| panic!("{message}"));
+        let mut target = TargetGuard(Some(pid));
+        eprintln!("the target recorded its pid {waited:?} after the gate started");
         assert!(process_alive(pid), "the target runs under its gate");
 
-        gate.kill().unwrap();
-        gate.wait().unwrap();
+        gate.kill_gate();
         let gone = (0..200).any(|_| {
             let alive = process_alive(pid);
             if alive {
@@ -1969,7 +2259,52 @@ mod tests {
             }
             !alive
         });
-        assert!(gone, "the target tree ended with its killed gate");
+        assert!(
+            gone,
+            "process {pid} still ran 10 s after its gate was killed, so the gate's job did not end its tree"
+        );
+        target.0 = None;
+    }
+
+    /// TSK-1062 AC-2: the real helper, given a folder it cannot run in, ends
+    /// at once and the wait reports the helper's own message.
+    #[cfg(windows)]
+    #[test]
+    fn a_gate_helper_that_cannot_run_its_target_fails_the_wait_with_its_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no-such-folder");
+        let mut gate = start_gate_helper(&missing, out.path());
+        let message = wait_for_target_pid(
+            gate.child(),
+            &dir.path().join("pid.txt"),
+            out.path(),
+            Duration::from_secs(120),
+        )
+        .unwrap_err();
+        assert!(message.contains("the gate helper ended"), "{message}");
+        assert!(message.contains("panicked"), "{message}");
+        assert!(!message.contains("still running"), "{message}");
+    }
+
+    /// Start this test binary as [`windows_gate_helper`] with its target
+    /// running in `dir`, its output in `out`.
+    #[cfg(windows)]
+    fn start_gate_helper(dir: &Path, out: &Path) -> GateGuard {
+        let gate = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "testing::runner::tests::windows_gate_helper",
+                "--test-threads",
+                "1",
+                "--nocapture",
+            ])
+            .env(GATE_HELPER_DIR, dir)
+            .stdout(std::fs::File::create(out.join("gate.stdout")).unwrap())
+            .stderr(std::fs::File::create(out.join("gate.stderr")).unwrap())
+            .spawn()
+            .unwrap();
+        GateGuard::new(gate)
     }
 
     #[cfg(windows)]
