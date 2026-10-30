@@ -104,13 +104,13 @@ fn needing(mut row: Row, needs: Needs) -> Row {
 
 const TREE: &[&str] = &["sub/", "sub/x/", "sub/x/f", "sub/y", "sub/z/", "keep"];
 const SPACED: &[&str] = &["a", "b c", "d", "keep"];
+/// A link below the start that leads out of it.
+const LINKED: &[&str] = &["sub/", "sub/link -> ../out", "out/", "out/x", "keep"];
 
 #[allow(clippy::too_many_lines)]
 fn rows() -> Vec<Row> {
     use Expect::{Exact, Unproven, Within};
-    let long: String = (0..100)
-        .map(|n| format!("name-with-some-length-{n:03}\n"))
-        .collect();
+    let long = "name-with-some-length\n".repeat(110);
     vec![
         // xargs framing and invocation.
         row(
@@ -356,6 +356,24 @@ fn rows() -> Vec<Row> {
             "find-exec-positionals",
             TREE,
             r#"find sub -exec sh -c 'rm -rf "$2"' _ {} +"#,
+            Unproven,
+        ),
+        row(
+            "find-path-building",
+            LINKED,
+            r"find sub -name link -exec rm -rf {}/x \;",
+            Unproven,
+        ),
+        row(
+            "find-path-building",
+            LINKED,
+            r#"find sub -name link -exec sh -c 'rm -rf "$1"/x' _ {} \;"#,
+            Unproven,
+        ),
+        row(
+            "find-path-building",
+            LINKED,
+            r#"find sub -print0 | xargs -0 sh -c 'for f; do rm -rf "$f"/x; done' _"#,
             Unproven,
         ),
         row(

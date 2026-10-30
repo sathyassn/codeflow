@@ -714,7 +714,8 @@ the unproven forms: `xargs` input the guard cannot read (a file, or a
 producer it does not run), input longer than one 2048-byte command line,
 `xargs -L`, `-n`, `-E` and `-a`, `find` output framed by blanks or
 newlines (use `-print0` with `xargs -0`), `find -L`, a `find -execdir`
-command naming a relative path other than `{}`, and `parallel`
+command naming a relative path other than `{}`, a command that builds a
+path on a path `find` gives it (`{}/x`, `"$1"/..`), and `parallel`
 replacement strings other than a whole `{}` word or more than one `:::`
 list.
 

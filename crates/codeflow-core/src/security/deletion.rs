@@ -157,6 +157,7 @@
 //! | `find-delete` | `-delete`: the start's tree | modelled |
 //! | `find-exec` | `-exec`, `-ok` with `;` or `+`: the command with `{}` as each start | modelled |
 //! | `find-exec-positionals` | a shell given batched paths (`{} +`) that reads `$2` or later, `$#`, `$*` or `shift` | unproven |
+//! | `find-path-building` | `{}` inside a longer word (`{}/x`, `{}/`), or a shell that builds a path on the paths it is given (`..`, `"$1"/x`), which resolves through a link below the start | unproven |
 //! | `find-execdir` | `-execdir`, `-okdir`: `{}` as the start's absolute path | modelled |
 //! | `find-execdir-relative` | any other relative path in an `-execdir` command, which runs in each match's directory | unproven |
 //! | `find-follow` | `-L`, `-follow`: the walk leaves its starts through links | unproven |
@@ -1946,6 +1947,10 @@ mod why {
     pub const EXECDIR: &str = "a `find -execdir` command run in each match's directory";
     pub const POSITIONALS: &str =
         "a shell given `find`'s batched paths that reads positional parameters past `$1`";
+    pub const FIND_PARTIAL: &str =
+        "`{}` inside a longer word of a command `find` runs, which builds a path on a match";
+    pub const FIND_SHELL: &str =
+        "a shell that builds a path (`..`, or `/` after a parameter) on the paths `find` gives it";
     pub const PARALLEL_SOURCES: &str =
         "a `parallel` input source other than one `:::` list or the standard input";
     pub const PARALLEL_REPLACEMENT: &str =
@@ -4506,10 +4511,10 @@ impl Reader<'_> {
             }
         }
         for body in bodies {
-            if body.batched && runs_remover(&body.words, 0) && batched_shell(&body.words) {
+            if let Some(reason) = find_body_unproven(&body) {
                 self.report(
                     Judged::Unproven(Unproven {
-                        reason: why::POSITIONALS.into(),
+                        reason: reason.into(),
                         cwd: false,
                     }),
                     ambiguous,
@@ -4556,6 +4561,15 @@ impl Reader<'_> {
         let inner = options.command;
         self.exec(inner, st, None, false, ambiguous);
         let entries = input_entries(input, options.delimiter);
+        if entries.iter().any(|item| item.tree) && shell_builds_paths(inner) {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: why::FIND_SHELL.into(),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+        }
         match &options.replace {
             Some(token) => {
                 for item in entries {
@@ -4692,6 +4706,15 @@ impl Reader<'_> {
                 })
                 .collect()
         };
+        if entries.iter().any(|item| item.tree) && builds_on_expansions(&command.join(" ")) {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: why::FIND_SHELL.into(),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+        }
         // GNU `parallel` joins the command's words with blanks and runs the
         // line in a shell, with each value quoted in place of `{}` or after
         // the line; without `-q` the command's own words are shell text.
@@ -7164,24 +7187,6 @@ const FIND_OTHER_OUTPUT: &[&str] = &[
     "-ls",
 ];
 
-/// Whether a `find -exec … {} +` command is a shell (or `eval`) whose
-/// script reads positional parameters past `$1`.
-fn batched_shell(words: &[String]) -> bool {
-    let Some(run) = unwrap(words) else {
-        return false;
-    };
-    let Some(first) = run.argv.first() else {
-        return false;
-    };
-    let name = program_name(first);
-    if name == "eval" {
-        return true;
-    }
-    crate::hooks::git_guard::is_shell(&name)
-        && shell_script(&run.argv[1..])
-            .is_none_or(|(script, _)| reads_later_positionals(script))
-}
-
 /// Whether a shell script reads a positional parameter past `$1`, their
 /// count, or shifts them: what it does then depends on how many paths a
 /// batched `find -exec … {} +` passes it.
@@ -7194,12 +7199,10 @@ fn reads_later_positionals(script: &str) -> bool {
         let next = chars.get(at + 1).copied();
         let after = chars.get(at + 2).copied();
         match next {
-            Some('#' | '*') => true,
-            Some('2'..='9') => true,
+            Some('#' | '*' | '2'..='9') => true,
             Some('{') => match after {
-                Some('#' | '*') => true,
+                Some('#' | '*' | '@' | '2'..='9') => true,
                 Some('1') => chars.get(at + 3).is_some_and(char::is_ascii_digit),
-                Some('2'..='9') => true,
                 _ => false,
             },
             _ => false,
@@ -7207,6 +7210,95 @@ fn reads_later_positionals(script: &str) -> bool {
     }) || script
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .any(|word| word == "shift")
+}
+
+/// Whether a shell script builds a path from an expansion: `..` anywhere,
+/// or a `/` right after a parameter (`"$1"/x`, `${f}/`, `$f/..`). A path
+/// `find` hands on may be a link below the start, and a path built on it
+/// is resolved through the link, so it can land outside the start.
+fn builds_on_expansions(script: &str) -> bool {
+    if script.contains("..") {
+        return true;
+    }
+    let chars: Vec<char> = script.chars().collect();
+    let mut at = 0;
+    while at < chars.len() {
+        if chars[at] != '$' {
+            at += 1;
+            continue;
+        }
+        at += 1;
+        if chars.get(at) == Some(&'{') {
+            while at < chars.len() && chars[at] != '}' {
+                at += 1;
+            }
+            at += 1;
+        } else {
+            while at < chars.len() && (chars[at].is_ascii_alphanumeric() || chars[at] == '_') {
+                at += 1;
+            }
+            if at < chars.len() && matches!(chars[at], '@' | '*') {
+                at += 1;
+            }
+        }
+        if chars.get(at) == Some(&'"') {
+            at += 1;
+        }
+        if chars.get(at) == Some(&'/') {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a command is a shell running a remover whose script builds a
+/// path on its arguments ([`builds_on_expansions`]), or `eval`.
+fn shell_builds_paths(words: &[String]) -> bool {
+    if !runs_remover(words, 0) {
+        return false;
+    }
+    let Some(run) = unwrap(words) else {
+        return false;
+    };
+    let Some(first) = run.argv.first() else {
+        return false;
+    };
+    let name = program_name(first);
+    name == "eval"
+        || (crate::hooks::git_guard::is_shell(&name)
+            && shell_script(&run.argv[1..]).is_none_or(|(script, _)| builds_on_expansions(script)))
+}
+
+/// Why a command `find` runs on its matches is unproven, if it is: `{}`
+/// inside a longer word (`{}/../x`, `{}/`), or a shell whose script builds
+/// a path from the matches it is given, or, given many at once, reads
+/// past `$1`.
+fn find_body_unproven(body: &ExecBody) -> Option<&'static str> {
+    if !runs_remover(&body.words, 0) {
+        return None;
+    }
+    if body.words.iter().any(|w| w.contains("{}") && w != "{}") {
+        return Some(why::FIND_PARTIAL);
+    }
+    let run = unwrap(&body.words)?;
+    let first = run.argv.first()?;
+    let name = program_name(first);
+    if name == "eval" {
+        return Some(why::FIND_SHELL);
+    }
+    if !crate::hooks::git_guard::is_shell(&name) {
+        return None;
+    }
+    let Some((script, _)) = shell_script(&run.argv[1..]) else {
+        return Some(why::FIND_SHELL);
+    };
+    if builds_on_expansions(script) {
+        Some(why::FIND_SHELL)
+    } else if body.batched && reads_later_positionals(script) {
+        Some(why::POSITIONALS)
+    } else {
+        None
+    }
 }
 
 /// Whether a command removes files: a remover, possibly behind launchers,
