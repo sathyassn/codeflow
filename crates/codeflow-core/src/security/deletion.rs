@@ -7317,9 +7317,20 @@ fn protected_below(dir: &str) -> Option<&'static str> {
             candidates.push((home.to_string(), "home directory"));
         }
     }
-    if let Some(tmpdir) = std::env::var_os("TMPDIR").and_then(|t| t.into_string().ok()) {
-        if let Some(target) = dangerous_rm_target(&tmpdir) {
-            candidates.push((tmpdir, target));
+    if let Some(tmpdir) = std::env::var_os("TMPDIR").map(std::path::PathBuf::from) {
+        match tmpdir.to_str() {
+            Some(text) => {
+                if let Some(target) = dangerous_rm_target(text) {
+                    candidates.push((text.to_string(), target));
+                }
+            }
+            // A temp directory whose name is not UTF-8 cannot be judged by
+            // name, so one below `dir` fails closed.
+            None => {
+                if tmpdir.starts_with(dir) && tmpdir.as_path() != std::path::Path::new(dir) {
+                    return Some("temp root");
+                }
+            }
         }
     }
     #[cfg(test)]
