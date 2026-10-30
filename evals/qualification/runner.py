@@ -147,16 +147,51 @@ def compare(before: dict, after: dict) -> dict:
 
 
 # Whole-frame grammar from release-qualification/lib.sh at 97f714b61,
-# plus the observed branch/effort row only for the registered fixture branch
+# plus the observed branch/effort row only for the registered fixture branch,
+# CodeFlow's shipped status line row for this fixture (`status_row`)
 # and the auto-mode footer (`--permission-mode auto`, the evaluation runs' mode).
 # Empty is accepted only before pasting. It is never proof for a second Enter.
 FOOTER = re.compile(r"  (?:⏸ manual mode on|⏵⏵ (?:bypass permissions|auto mode) on \(shift\+tab to cycle\)|paste again to expand)(?: · (?:\? for shortcuts|← for agents))*")
 FOLD = re.compile(r"\[Pasted text #\d+ \+\d+ lines\]")
 DIRECTIVE = "Carry out the pasted instructions."
 PLACEHOLDER = re.compile(r'Try "[^"\n]+"')
+# The tail of CodeFlow's shipped status line after the branch, as tokens, so a
+# row Claude Code truncated with "…" can be checked as a prefix of it.
+STATUS_TAIL = [" ", r"\|", " ", "c", "t", "x", ":", r"\d+", "k", "/", r"\d+", "k", " ", r"\(", r"\d+", "%", r"\)"]
 
 
-def editor(screen: str, branch: str | None = None) -> str | None:
+def status_row(line: str, branch: str | None, status: dict | None) -> bool:
+    """CodeFlow's shipped Claude status line, for this fixture only.
+
+    The row is `<name> (<model id>) | v<version> | <style> | <folder>
+    (<branch>) | ctx:<used>k/<window>k (<percent>%)`, as the `statusLine`
+    command in assets/base/settings/*.json prints it. The model id must equal
+    the requested `--model`, the folder this fixture's repository and the
+    branch the fixture record's branch. Claude Code cuts a row wider than the
+    pane and ends it with "…"; a cut row is accepted only when the cut falls
+    after the branch. Anything else refuses.
+    """
+    if branch is None or not status or not status.get("model") or not status.get("folder"):
+        return False
+    head = (r"  [^|\s](?:[^|]*[^|\s])? \(" + re.escape(status["model"]) + r"\) \| v\d+(?:\.\d+){1,3}"
+            r" \| [A-Za-z0-9][A-Za-z0-9 ._-]* \| " + re.escape(status["folder"])
+            + r" \(" + re.escape(branch) + r"\)")
+    if re.fullmatch(head + "".join(STATUS_TAIL), line):
+        return True
+    if not line.endswith("…"):
+        return False
+    prefixes = ""
+    for token in reversed(STATUS_TAIL):
+        prefixes = f"(?:{token}{prefixes})?"
+    return re.fullmatch(head + prefixes, line[:-1]) is not None
+
+
+def editor(screen: str, branch: str | None = None, status: dict | None = None) -> str | None:
+    """The text in a verified Claude editor frame, or None for any other frame.
+
+    `status` names the requested model and the fixture folder, for the
+    shipped status line row (see `status_row`).
+    """
     raw = screen.splitlines()
     lines = [line.rstrip() for line in raw]
     rules = [i for i, line in enumerate(lines) if re.fullmatch(r"\s*─+\s*", line)]
@@ -165,7 +200,7 @@ def editor(screen: str, branch: str | None = None) -> str | None:
     top, bottom = rules[-2:]
     body = lines[top + 1:bottom]
     footer = [line for line in lines[bottom + 1:] if line]
-    if len(footer) == 2 and (footer[0] == "  codeflow-qualify" or (
+    if len(footer) == 2 and (footer[0] == "  codeflow-qualify" or status_row(footer[0], branch, status) or (
             branch is not None and re.fullmatch(r"  " + re.escape(branch) + r"(?: +(?:● (?:low|medium|high|xhigh|max) · /effort|ctrl\+g to edit in Nvim))?", footer[0]))):
         footer = footer[1:]
     if len(footer) != 1 or not FOOTER.fullmatch(footer[0]) or not body:
@@ -189,11 +224,12 @@ def editor(screen: str, branch: str | None = None) -> str | None:
     return "\n".join([first, *rest]).strip()
 
 
-def visible(pane: str, branch: str | None = None, evidence: Path | None = None) -> str | None:
+def visible(pane: str, branch: str | None = None, evidence: Path | None = None,
+            status: dict | None = None) -> str | None:
     screen = herdr("pane", "read", pane, "--source", "visible", text=True)
     if evidence is not None:
         evidence.write_text(screen, encoding="utf-8")
-    return editor(screen, branch)
+    return editor(screen, branch, status)
 
 
 def state(pane: str) -> dict:
@@ -449,7 +485,8 @@ def frame_event(harness: str, stage: str, screen: str) -> dict:
 def wait_ready(pane: str, seconds: float, harness: str | None = None,
                repository: Path | None = None, acceptances: list | None = None,
                display_choices: list | None = None, branch: str | None = None,
-               codex: dict | None = None, frames: list | None = None) -> dict:
+               codex: dict | None = None, frames: list | None = None,
+               claude: dict | None = None) -> dict:
     end = time.monotonic() + seconds
     acceptances = acceptances if acceptances is not None else []
     display_choices = display_choices if display_choices is not None else []
@@ -459,7 +496,7 @@ def wait_ready(pane: str, seconds: float, harness: str | None = None,
             screen = herdr("pane", "read", pane, "--source", "visible", text=True)
             trust_pending = handle_startup(pane, harness, repository, screen, acceptances, display_choices)
             if harness == "claude":
-                body = editor(screen, branch)
+                body = editor(screen, branch, claude)
                 if body is None or (body != "" and not PLACEHOLDER.fullmatch(body)):
                     trust_pending = True
             if harness == "grok" and not grok_authenticated_editor(screen):
@@ -502,11 +539,12 @@ def holds(text: str | None, prompt: str) -> bool:
 
 
 def deliver_claude(pane: str, prompt: str, initial: dict, seconds: float,
-                   branch: str | None = None, evidence: Path | None = None) -> int:
+                   branch: str | None = None, evidence: Path | None = None,
+                   status: dict | None = None) -> int:
     if not prompt.strip() or len(prompt.encode("utf-8")) > 256 * 1024:
         raise Refused("prompt must be nonempty and at most 256 KiB; nothing sent")
     def capture(name: str) -> str | None:
-        return visible(pane, branch, evidence / name if evidence is not None else None)
+        return visible(pane, branch, evidence / name if evidence is not None else None, status)
 
     initial_text = capture("editor-before.txt")
     if initial_text is None or (initial_text != "" and not PLACEHOLDER.fullmatch(initial_text)):
@@ -1660,6 +1698,8 @@ def launch(args) -> None:
         permissions = permission_flags(args.harness, native, repository, environment=environment,
                                        codex_hook_trust=args.codex_hook_trust)
         codex = codex_expectation(native, repository) if args.harness == "codex" else None
+        # What the fixture's shipped status line must show, when it shows one.
+        claude = {"model": permissions.get("--model"), "folder": repository.name} if args.harness == "claude" else None
         # On any harness the option also covers Codex peers the subject opens;
         # only a Codex seat itself gets the native flag at launch.
         if args.codex_hook_trust == "bypass":
@@ -1740,7 +1780,8 @@ def launch(args) -> None:
             run["launch_response"] = recover_registration(
                 run["pane"], f"eval-{trial.name}", args.harness, repository, start_args)
         initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"],
-                             run["display_choices"], record.get("branch"), codex=codex, frames=run["verified_frames"])
+                             run["display_choices"], record.get("branch"), codex=codex, frames=run["verified_frames"],
+                             claude=claude)
         if args.harness == "grok":
             screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
             if not grok_authenticated_editor(screen):
@@ -1779,7 +1820,8 @@ def launch(args) -> None:
         write(args.output / "launch.json", run)
         prompt = (repository / "TASK.md").read_text(encoding="utf-8")
         if args.harness == "claude":
-            run["enters"] = deliver_claude(run["pane"], prompt, initial, args.start_timeout, record.get("branch"), args.output)
+            run["enters"] = deliver_claude(run["pane"], prompt, initial, args.start_timeout, record.get("branch"),
+                                         args.output, claude)
         elif args.harness == "codex":
             run["enters"] = deliver_codex(run["pane"], prompt, initial, args.start_timeout, codex,
                                           run["verified_frames"], args.output)

@@ -315,7 +315,20 @@ readiness, no baseline exists and `finish` flags incomplete observation.
 Claude delivery recognizes only the complete editor frame
 proven by the release harness, plus the observed branch status row only
 when its branch equals the signed fixture record. That row may show the
-known effort label or `ctrl+g to edit in Nvim` hint. Editor captures retain
+known effort label or `ctrl+g to edit in Nvim` hint. A fixture whose
+`.claude/settings.json` carries CodeFlow's shipped status line shows that
+line in the same place instead:
+`<name> (<model id>) | v<version> | <style> | <folder> (<branch>) |
+ctx:<used>k/<window>k (<percent>%)`. The runner accepts that row only when
+the model id equals the requested `--model` exactly, the folder is the
+fixture's repository folder and the branch equals the signed fixture
+record's branch. Pass the full model id, such as `claude-opus-5-5`: an alias
+such as `opus` does not match the id the line prints. In a narrow pane
+Claude Code cuts the row and ends it with `…`; a cut row is accepted only
+when the cut falls after the branch, so a pane too narrow to show the whole
+branch refuses. A row naming another branch, model or folder, the line's
+`jq not found` form and any other row under the editor refuse, and no key is
+sent. Editor captures retain
 the actual before-paste and pending-input screens in the evidence folder.
 It sends at most two Enters, the second only when that frame still holds
 this trial's unsent prompt. An empty editor is never evidence of pending

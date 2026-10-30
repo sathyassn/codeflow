@@ -5916,6 +5916,61 @@ class ProcessRepairTests(unittest.TestCase):
         pending = screen.replace('Try "fix lint errors"', "trial prompt")
         self.assertTrue(runner.holds(runner.editor(pending, "test/cache-plan"), "trial prompt"))
 
+    def test_claude_shipped_status_line_row_names_this_fixture(self):
+        runner = self.runner()
+        # Captured from a refused trial on 2026-10-30: a fixture scaffolded from
+        # the 3.2.0 line, whose .claude/settings.json ships the status line.
+        screen = (ROOT / "evals/qualification/screens/claude-shipped-status-line.txt").read_text(encoding="utf-8")
+        branch = "task/TSK-031-retry-settings-from-config"
+        status = {"model": "claude-opus-5-5", "folder": "repository"}
+        self.assertEqual('Try "fix typecheck errors"', runner.editor(screen, branch, status))
+        row = "  Opus 5.5 (claude-opus-5-5) | v2.1.314 | default | repository (task/TSK-031-retry-settings-from-config) | ctx:0k/1000k (0%)"
+        self.assertIn(row + "\n", screen)
+        # Without the status expectation, or with another fixture's identity, it refuses.
+        for bad_branch, bad_status in [(branch, None), (None, status), ("task/TSK-032-other", status),
+                                       (branch, {**status, "model": "claude-fable-5-1"}),
+                                       (branch, {**status, "model": "opus"}),
+                                       (branch, {**status, "model": None}),
+                                       (branch, {**status, "folder": "other"})]:
+            self.assertIsNone(runner.editor(screen, bad_branch, bad_status), (bad_branch, bad_status))
+        # Rows that differ from the shipped grammar refuse.
+        for bad in [row.replace("(task/TSK-031-retry-settings-from-config)", "(task/TSK-031-retry-settings-from-config-2)"),
+                    row.replace("(claude-opus-5-5)", "(claude-opus-5-5-x)"),
+                    row.replace("Opus 5.5", "Opus | 5.5"),
+                    row.replace(" | default |", " | |"),
+                    row.replace(" | v2.1.314", " | 2.1.314"),
+                    row + " | extra",
+                    row.replace("ctx:0k/1000k (0%)", "ctx:0k/1000k"),
+                    "  repository (task/TSK-031-retry-settings-from-config) | jq not found",
+                    "  allow import (task/TSK-031-retry-settings-from-config)",
+                    row.replace("  Opus", "Opus")]:
+            self.assertIsNone(runner.editor(screen.replace(row, bad), branch, status), bad)
+        # Claude Code cuts a row wider than the pane and ends it with "…".
+        head = "  Opus 5.5 (claude-opus-5-5) | v2.1.314 | default | repository (task/TSK-031-retry-settings-from-config)"
+        for cut in [head + "…", head + " |…", head + " | c…", head + " | ctx:0k/10…", head + " | ctx:0k/1000k (0…"]:
+            self.assertEqual('Try "fix typecheck errors"', runner.editor(screen.replace(row, cut), branch, status), cut)
+        for cut in [head[:-1] + "…", head[:40] + "…", head + " | x…", head + " | ctx:0k/1000k (0%) extra…",
+                    head + " | c", row[:-1]]:
+            self.assertIsNone(runner.editor(screen.replace(row, cut), branch, status), cut)
+        # The status row replaces Claude Code's own branch row; both together refuse.
+        both = screen.replace(row, row + "\n  " + branch)
+        self.assertIsNone(runner.editor(both, branch, status))
+        # Readiness and delivery pass the expectation through.
+        with patch.object(runner, "herdr", return_value=screen), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
+            self.assertEqual("idle", runner.wait_ready("owned", 1, "claude", Path("/subject/repository"), [], [],
+                                                       branch, claude=status)["agent_status"])
+        with patch.object(runner, "herdr", return_value=screen), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), \
+             patch.object(runner.time, "monotonic", side_effect=[0, 2]), patch.object(runner.time, "sleep"), \
+             self.assertRaisesRegex(runner.Refused, "seat did not become ready"):
+            runner.wait_ready("owned", 1, "claude", Path("/subject/repository"), [], [], branch)
+        pending = screen.replace('Try "fix typecheck errors"', "trial prompt")
+        with patch.object(runner, "herdr", side_effect=[screen, "sent", pending, "sent"]) as transport, \
+             patch.object(runner, "started", return_value=True), patch.object(runner.time, "sleep"):
+            self.assertEqual(1, runner.deliver_claude("owned", "trial prompt", {}, 1, branch, None, status))
+        self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+
     def test_claude_readiness_waits_for_renderer_then_verified_editor(self):
         runner = self.runner(); events = []; displays = []
         screen = self.renderer_screen(); selected = self.renderer_screen(True)
