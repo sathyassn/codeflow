@@ -882,7 +882,9 @@ The rulesets:
 - **C, "codeflow line checks"**, on the line pattern: a pull request with no
   approval; strict checks pinned to GitHub Actions; no force push; no
   deletion; no bypass; no creation rule, and the checks are not required
-  when a line is created, so a new line can still be cut.
+  when a line is created, so a new line can still be cut. Every later
+  update of the line stays under C, and the default branch takes the
+  line's content only through B.
 
 The flags:
 
