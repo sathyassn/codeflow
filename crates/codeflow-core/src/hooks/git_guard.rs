@@ -7537,6 +7537,12 @@ pub(crate) fn git_runner_bodies(
         .collect())
 }
 
+/// The environment variables whose value is a program Git runs, as the
+/// runner catalog lists them.
+pub(crate) fn git_program_environment() -> impl Iterator<Item = &'static str> {
+    runners::program_environment_names()
+}
+
 /// The refusal for a Git runner the guard cannot read.
 pub(crate) fn git_runner_unread(why: &str) -> Violation {
     runners::unread(why)

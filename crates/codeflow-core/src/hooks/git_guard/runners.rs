@@ -53,6 +53,12 @@ impl Inputs {
     }
 }
 
+/// The environment variables whose value is a program Git runs, from the
+/// runner catalog.
+pub(super) fn program_environment_names() -> impl Iterator<Item = &'static str> {
+    catalog::environment_names()
+}
+
 pub(super) fn unread(reason: &str) -> Violation {
     Violation::always_blocking(
         "git.hook_integrity",

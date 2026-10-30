@@ -986,12 +986,13 @@ fn tsk1002_codex08_git_selection_and_stdin_classes() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
-/// TSK-1002 Codex review 08 B3: pathspec magic never clears a file-name
-/// operand. `hash-object` opens `:(exclude)link` as a file, which a link
-/// into a store makes a secret read.
+/// TSK-1002 Codex review 08 B3: a word spelled as pathspec magic refuses
+/// in any role, a file-name operand included. `hash-object` opens
+/// `:(exclude)link` as a file, which a link into a store makes a secret
+/// read (renamed after Grok security review 01 N1).
 #[cfg(unix)]
 #[test]
-fn tsk1002_codex08_magic_never_clears_a_file_operand() {
+fn tsk1002_codex08_pathspec_magic_refuses_in_every_role() {
     let f = Fixture::new();
     let store = f.temp.path().join(".codex");
     std::fs::create_dir_all(&store).unwrap();
@@ -1555,7 +1556,9 @@ fn tsk1002_review13_programs_run_where_git_runs_them() {
 /// TSK-1002 Fable review 16: a caret revision is a revision, not a glob
 /// that may name a secret; `fd` hands every path under its roots to the
 /// command it runs, as `find -exec` does; and a zsh array prefix on `cd`
-/// may set `cdpath`, as a `CDPATH=` prefix does.
+/// may set `cdpath`, as a `CDPATH=` prefix does. Grok security review 01
+/// M1: `GIT_PROXY_COMMAND` and `GIT_DIFFTOOL_EXTCMD` are judged as
+/// commands before any program, like the other catalog variables.
 #[test]
 fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
     let f = Fixture::new();
@@ -1583,6 +1586,12 @@ fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
         "cdpath=($HOME) cd .codex; cat auth.json",
         "cdpath=(~ /tmp) cd .codex; cat auth.json",
         "cdpath=(~) pushd .codex; cat auth.json",
+        // Grok security review 01 M1: every program variable the runner
+        // catalog lists is judged before any program.
+        "GIT_PROXY_COMMAND='cat ~/.codex/auth.json' lazygit",
+        "GIT_PROXY_COMMAND='cat ~/.codex/auth.json' cargo test",
+        "GIT_DIFFTOOL_EXTCMD='cat ~/.codex/auth.json' lazygit",
+        "export GIT_PROXY_COMMAND='cat ~/.codex/auth.json'; cargo test",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1608,6 +1617,8 @@ fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
         "fd -e md . clean -x wc -l",
         "fd notes",
         "cd clean; cat notes.md",
+        "GIT_PROXY_COMMAND=connect cargo test",
+        "GIT_DIFFTOOL_EXTCMD='diff -u' git difftool -y",
     ]
     .iter()
     .map(ToString::to_string)

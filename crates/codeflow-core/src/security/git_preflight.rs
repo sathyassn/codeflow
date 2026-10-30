@@ -24,7 +24,7 @@
 ///   which the pattern rule over-refuses at worst;
 /// - `GIT_DIR`, accepted only where it names the repository Git would use
 ///   without it (`interpreter::git_repository`);
-/// - the programs Git runs, [`PROGRAM_ENVIRONMENT`], whose values are
+/// - the programs Git runs, [`program_environment`], whose values are
 ///   judged as commands.
 ///
 /// Every other `GIT_*` variable refuses on a line that runs Git, among them
@@ -62,36 +62,27 @@ const CLASSIFIED_ENVIRONMENT: &[&str] = &[
 ];
 
 /// The environment variables whose value is a program Git runs, judged as
-/// a command on a line that runs Git (Fable reviews 13 and 14). Sources:
-///
-/// - `git help git`, "Environment Variables": `GIT_EDITOR`, `GIT_PAGER`,
-///   `GIT_EXTERNAL_DIFF`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, and
-///   `GIT_SEQUENCE_EDITOR` (`git help rebase`);
-/// - `git help var`, `GIT_EDITOR` and `GIT_PAGER`: Git falls back to
-///   `VISUAL`, then `EDITOR`, for the editor and to `PAGER` for the pager;
-/// - `git help credential`, "Requesting credentials": `SSH_ASKPASS` after
-///   `GIT_ASKPASS` and `core.askPass`;
-/// - `less(1)`, "Input preprocessor": `LESSOPEN` and `LESSCLOSE`, programs
-///   Git's default pager runs.
+/// a command before every program the line runs (Fable reviews 13 and 14):
+/// every `Environment` source of git-guard's runner catalog, so the two
+/// lists cannot drift (Grok security review 01 M1 found
+/// `GIT_PROXY_COMMAND` and `GIT_DIFFTOOL_EXTCMD` missing here), and
+/// `LESSOPEN` and `LESSCLOSE`, which `less(1)`, Git's default pager, runs
+/// ("Input preprocessor"). The catalog follows `git help git`, "Environment
+/// Variables", `git help var` (the `VISUAL`, `EDITOR` and `PAGER`
+/// fallbacks), `git help credential` (`SSH_ASKPASS`) and `git help
+/// difftool` (`GIT_DIFFTOOL_EXTCMD`).
 ///
 /// A Git call's `-c` and `--config-env` spellings of the same programs are
 /// read by git-guard's runner reader, and a `git config` write of one by
 /// [`super::git_config_writes`].
-const PROGRAM_ENVIRONMENT: &[&str] = &[
-    "EDITOR",
-    "GIT_ASKPASS",
-    "GIT_EDITOR",
-    "GIT_EXTERNAL_DIFF",
-    "GIT_PAGER",
-    "GIT_SEQUENCE_EDITOR",
-    "GIT_SSH",
-    "GIT_SSH_COMMAND",
-    "LESSCLOSE",
-    "LESSOPEN",
-    "PAGER",
-    "SSH_ASKPASS",
-    "VISUAL",
-];
+fn program_environment() -> impl Iterator<Item = &'static str> {
+    crate::hooks::git_guard::git_program_environment().chain(["LESSCLOSE", "LESSOPEN"])
+}
+
+/// Whether `name` is one of [`program_environment`].
+fn is_program_environment(name: &str) -> bool {
+    program_environment().any(|known| known == name)
+}
 
 /// Shell builtins whose operands set, export or clear variables.
 const DECLARERS: &[&str] = &["declare", "export", "local", "readonly", "typeset", "unset"];
@@ -185,7 +176,7 @@ fn identifier(name: &str) -> bool {
 /// (`${PAGER:=x}`, `${PAGER=x}`, zsh `${PAGER::=x}`), which sets it
 /// wherever the word appears.
 fn assigns_program_variable(word: &str) -> bool {
-    PROGRAM_ENVIRONMENT.iter().any(|name| {
+    program_environment().any(|name: &str| {
         word.match_indices(&format!("${{{name}"))
             .any(|(at, marker)| {
                 let rest = &word[at + marker.len()..];
@@ -205,7 +196,7 @@ fn names_program_variable(word: &str) -> bool {
             .get(at)
             .is_none_or(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_'))
     };
-    PROGRAM_ENVIRONMENT.iter().any(|name| {
+    program_environment().any(|name: &str| {
         word.match_indices(name).any(|(at, _)| {
             let end = at + name.len();
             if (at > 0 && !boundary(at - 1)) || !boundary(end) {
@@ -283,7 +274,7 @@ fn scan(command: &str) -> Scan {
                 value: value.map(str::to_string),
                 unset,
             });
-            PROGRAM_ENVIRONMENT.contains(&name)
+            is_program_environment(name)
         };
         let mut unset_operand = false;
         for (at, word) in words.iter().enumerate() {
@@ -382,7 +373,7 @@ pub(crate) fn namespace_violation(command: &str) -> Option<crate::hooks::Violati
 
 /// The first variable a line that runs Git sets or declares that the guard
 /// cannot classify: a `GIT_*` name [`CLASSIFIED_ENVIRONMENT`] and
-/// [`PROGRAM_ENVIRONMENT`] do not list, or a declared name the shell builds
+/// [`program_environment`] do not list, or a declared name the shell builds
 /// (`export "$N=x"`). A name in text, such as a commit message, is not an
 /// assignment (Fable review 13).
 #[must_use]
@@ -402,12 +393,12 @@ pub(crate) fn unclassified_environment(command: &str) -> Option<String> {
             }
             name.starts_with("GIT_")
                 && !CLASSIFIED_ENVIRONMENT.contains(&name.as_str())
-                && !PROGRAM_ENVIRONMENT.contains(&name.as_str())
+                && !is_program_environment(name)
         })
 }
 
 /// The commands a line that runs Git gives the variables naming a program
-/// Git runs ([`PROGRAM_ENVIRONMENT`]), to be judged as commands, or why one
+/// Git runs ([`program_environment`]), to be judged as commands, or why one
 /// cannot be established (TSK-1002 Codex review 12, Fable review 14).
 ///
 /// One rule covers a program value and a command word: its text must
@@ -428,7 +419,7 @@ pub(crate) fn program_values(command: &str) -> Result<Vec<String>, String> {
             "`{word}` may set a program Git runs in a way the guard does not read"
         ));
     }
-    let program = |name: &str| PROGRAM_ENVIRONMENT.contains(&name);
+    let program = |name: &str| is_program_environment(name);
     if !scan
         .assignments
         .iter()
@@ -755,6 +746,27 @@ mod tests {
         ] {
             assert!(program_values(line).is_err(), "{line}");
         }
+    }
+
+    /// Grok security review 01 M1: the program variables are the runner
+    /// catalog's, so a name Git runs cannot be missing here.
+    #[test]
+    fn program_variables_come_from_the_runner_catalog() {
+        for name in [
+            "GIT_PROXY_COMMAND",
+            "GIT_DIFFTOOL_EXTCMD",
+            "GIT_SSH_COMMAND",
+            "GIT_PAGER",
+            "EDITOR",
+            "LESSOPEN",
+        ] {
+            assert!(is_program_environment(name), "{name}");
+        }
+        assert!(!is_program_environment("GIT_WORK_TREE"));
+        assert_eq!(
+            program_values("GIT_PROXY_COMMAND='cat x' cargo test").unwrap(),
+            vec!["cat x".to_string()]
+        );
     }
 
     /// TSK-1002 Codex review 13: a word that names a program variable is

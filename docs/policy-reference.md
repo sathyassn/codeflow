@@ -473,9 +473,12 @@ the form refuses:
   A variable whose value is a program Git runs is allowed, and its value
   is judged as a command (`GIT_EXTERNAL_DIFF='cat ~/.ssh/id_rsa'` refuses
   as that `cat` would): `GIT_PAGER`, `GIT_EDITOR`,
-  `GIT_SEQUENCE_EDITOR`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`,
-  `GIT_EXTERNAL_DIFF`, the names Git falls back to (`VISUAL`, `EDITOR`,
-  `PAGER`, `SSH_ASKPASS`) and the pager's `LESSOPEN` and `LESSCLOSE`. Such
+  `GIT_SEQUENCE_EDITOR`, `GIT_SSH`, `GIT_SSH_COMMAND`,
+  `GIT_PROXY_COMMAND`, `GIT_ASKPASS`, `GIT_EXTERNAL_DIFF`,
+  `GIT_DIFFTOOL_EXTCMD`, the names Git falls back to (`VISUAL`, `EDITOR`,
+  `PAGER`, `SSH_ASKPASS`) and the pager's `LESSOPEN` and `LESSCLOSE`. The
+  guards take this list from git-guard's runner catalog, so the two cannot
+  differ. Such
   a value, assigned on the line or exported earlier in it, is judged
   before every program the line runs, Git or any program that may run Git
   (`GIT_EXTERNAL_DIFF='cat ~/.codex/auth.json' cargo test` refuses), in
