@@ -698,7 +698,7 @@ fn authority_environment(
                     .map(|p| {
                         (
                             p["name"].as_str().unwrap_or("?").to_string(),
-                            p["type"].as_str().unwrap_or("branch").to_string(),
+                            p["type"].as_str().unwrap_or("?").to_string(),
                         )
                     })
                     .collect();

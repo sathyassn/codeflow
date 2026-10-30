@@ -280,9 +280,16 @@ impl AuthorityPlan {
             }
             _ => {}
         }
-        let lines = lines.trim();
-        if lines.is_empty() {
-            return Err("--lines must name a branch pattern such as integration/**".into());
+        // Git refuses a space or a control character in a ref name, so a
+        // pattern holding one is refused, never trimmed into another.
+        if lines.is_empty()
+            || lines
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        {
+            return Err(
+                "--lines must name a branch pattern such as integration/**, without spaces".into(),
+            );
         }
         if lines.starts_with("refs/") || lines.starts_with('~') {
             return Err(format!(
@@ -2243,6 +2250,7 @@ printf '{}'
             (Some(0), DEFAULT_LINES, "not 0"),
             (Some(GITHUB_ACTIONS_APP_ID), DEFAULT_LINES, "GitHub Actions"),
             (None, " ", "must name a branch pattern"),
+            (None, "integration/** ", "without spaces"),
             (None, "refs/heads/integration/**", "below refs/heads/"),
             (None, "~ALL", "below refs/heads/"),
             (None, "release/[ma", "release/[ma"),
