@@ -82,16 +82,67 @@ const AUTHORITY_ROUTE: &str =
 
 /// What an argument reaches: authority metadata, which always refuses, or
 /// an enforcement path, which refuses at the integrity level.
+#[derive(PartialEq, Eq)]
 enum Reach {
     Authority(String),
     Enforcement(String),
 }
+
+impl Reach {
+    /// The baseline rule's finding: authority at its fixed level, an
+    /// enforcement path at `integrity` (none when it is `off`).
+    fn violation(&self, integrity: PolicyLevel) -> Option<Violation> {
+        match self {
+            Self::Authority(message) => Some(Violation::always_blocking(
+                "git.hook_integrity",
+                message.clone(),
+                AUTHORITY_ROUTE,
+            )),
+            Self::Enforcement(message) => integrity.is_active().then(|| {
+                Violation::new(
+                    "git.hook_integrity",
+                    integrity,
+                    message.clone(),
+                    crate::remedy::INTERPRETER_ARGUMENT.remedy(),
+                )
+            }),
+        }
+    }
+
+    /// A finding only the strict branch makes: it always blocks, under
+    /// `security.text_guard`, and says which trigger selected the rule.
+    fn strict_violation(&self, trigger: &str) -> Violation {
+        let message = match self {
+            Self::Authority(message) | Self::Enforcement(message) => format!(
+                "{message}; this is outside the guard's model, and the strict rule applies because {trigger}"
+            ),
+        };
+        let route = match self {
+            Self::Authority(_) => crate::remedy::Remedy::sanctioned(AUTHORITY_ROUTE),
+            Self::Enforcement(_) => crate::remedy::INTERPRETER_ARGUMENT.remedy(),
+        };
+        Violation {
+            level_fixed: true,
+            ..Violation::new(STRICT_RULE, PolicyLevel::Block, message, route)
+        }
+    }
+}
+
+/// The rule a strict-only finding names: the key that selected the strict
+/// rule, whose findings no other level lowers.
+pub(crate) const STRICT_RULE: &str = "security.text_guard";
 
 /// Judge the line's interpreter arguments. The baseline rule always runs.
 /// `strict` is `Some(trigger)` in the tightened outcome of TSK-397 design
 /// D: the strict branch then runs as well, and each refusal it adds says
 /// which trigger selected it. The tightened outcome keeps every baseline
 /// finding, so it never allows what the baseline refuses.
+///
+/// A baseline finding takes `git.hook_integrity`'s level. A finding only
+/// the strict branch makes is ruled by `security.text_guard`, the key that
+/// selected it: it always blocks, whatever `git.hook_integrity` says, so a
+/// legacy `warn` or `off` never turns the strict rule into advice (TSK-397
+/// security review SEC01-1).
 pub(crate) fn evaluate(
     line: &str,
     integrity: PolicyLevel,
@@ -100,20 +151,17 @@ pub(crate) fn evaluate(
     home: Option<&Path>,
     strict: Option<&str>,
 ) -> Vec<Violation> {
-    let mut found = evaluate_rule(line, integrity, payload_cwd, root, home, false);
+    let baseline = evaluate_rule(line, payload_cwd, root, home, false);
+    let mut found: Vec<Violation> = baseline
+        .iter()
+        .filter_map(|reach| reach.violation(integrity))
+        .collect();
     if let Some(trigger) = strict {
-        for mut violation in evaluate_rule(line, integrity, payload_cwd, root, home, true) {
-            if found
-                .iter()
-                .any(|v| v.rule == violation.rule && v.message == violation.message)
-            {
+        for reach in evaluate_rule(line, payload_cwd, root, home, true) {
+            if baseline.contains(&reach) {
                 continue;
             }
-            violation.message = format!(
-                "{}; this is outside the guard's model, and the strict rule applies because {trigger}",
-                violation.message
-            );
-            found.push(violation);
+            found.push(reach.strict_violation(trigger));
         }
     }
     found
@@ -123,12 +171,11 @@ pub(crate) fn evaluate(
 /// branch when it is true.
 fn evaluate_rule(
     line: &str,
-    integrity: PolicyLevel,
     payload_cwd: &Path,
     root: &Path,
     home: Option<&Path>,
     strict: bool,
-) -> Vec<Violation> {
+) -> Vec<Reach> {
     let _scope = edit_guard::RepoFactsScope::enter();
     let calls = outward::interpreter_calls_with_home(line, payload_cwd, home);
     let (opaque, runs) = outward::code_sources(line);
@@ -241,26 +288,7 @@ fn evaluate_rule(
             }
         }
     }
-    let mut found = Vec::new();
-    for reach in reaches {
-        let violation = match reach {
-            Reach::Authority(message) => Some(Violation::always_blocking(
-                "git.hook_integrity",
-                message,
-                AUTHORITY_ROUTE,
-            )),
-            Reach::Enforcement(message) => integrity.is_active().then(|| {
-                Violation::new(
-                    "git.hook_integrity",
-                    integrity,
-                    message,
-                    crate::remedy::INTERPRETER_ARGUMENT.remedy(),
-                )
-            }),
-        };
-        found.extend(violation);
-    }
-    found
+    reaches
 }
 
 /// What one evaluation reads once and reuses for every call on the line

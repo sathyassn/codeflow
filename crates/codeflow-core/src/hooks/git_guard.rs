@@ -304,8 +304,9 @@ pub struct ToolInput {
 }
 
 impl ToolInput {
-    /// Whether the call asks to run outside the sandbox: the flag is
-    /// present with any value but `false`, so a value of another type
+    /// Whether the call asks to run outside the sandbox. An absent field,
+    /// `null` and `false` do not ask; any other value does (`true`, a
+    /// number, a string, an object or an array), so a value of another type
     /// tightens rather than passes.
     #[must_use]
     pub fn sandbox_retry(&self) -> bool {

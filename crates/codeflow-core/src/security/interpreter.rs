@@ -724,6 +724,26 @@ mod tests {
         findings.iter().find(|v| v.rule == "git.hook_integrity")
     }
 
+    /// A refusal in the tightened outcome: the line's `git.hook_integrity`
+    /// finding, or one only the strict branch makes, which takes
+    /// `security.text_guard` (TSK-397 security review SEC01-1).
+    fn tightened_refusal(findings: &[Violation]) -> Option<&Violation> {
+        findings.iter().find(|v| {
+            v.rule == "git.hook_integrity"
+                || (v.rule == super::super::arguments::STRICT_RULE
+                    && v.level == PolicyLevel::Block
+                    && v.level_fixed)
+        })
+    }
+
+    fn tightened_argument_refusal(findings: &[Violation]) -> bool {
+        tightened_refusal(findings).is_some_and(|v| {
+            (v.message.contains("interpreter")
+                || v.message.contains("cannot verify the run-time argument"))
+                && !v.message.contains("interpreter code")
+        })
+    }
+
     fn argument_refusal(findings: &[Violation]) -> bool {
         integrity_refusal(findings).is_some_and(|v| {
             (v.message.contains("interpreter")
@@ -760,7 +780,7 @@ mod tests {
                 PolicyLevel::Block,
                 Some(TEST_TRIGGER),
             );
-            if !argument_refusal(&findings) {
+            if !tightened_argument_refusal(&findings) {
                 wrong.push(format!(
                     "should refuse when tightened: {command}: {findings:?}"
                 ));
@@ -3592,6 +3612,34 @@ mod tests {
             PolicyLevel::Block,
             Some(TEST_TRIGGER),
         );
-        assert!(integrity_refusal(&findings).is_some(), "{findings:?}");
+        assert!(tightened_refusal(&findings).is_some(), "{findings:?}");
+    }
+
+    /// SEC01-1: a finding only the strict branch makes blocks at every
+    /// `git.hook_integrity` level; the line's own findings keep that level.
+    #[test]
+    fn strict_only_findings_block_at_every_integrity_level() {
+        let repo = repo();
+        let command = "cd src && python3 tool.py settings.json";
+        for level in [PolicyLevel::Block, PolicyLevel::Warn, PolicyLevel::Off] {
+            let baseline = judge_with(&repo, &repo.root, &repo.root, command, level, None);
+            assert!(baseline.is_empty(), "{level:?}: {baseline:?}");
+            let strict = judge_with(
+                &repo,
+                &repo.root,
+                &repo.root,
+                command,
+                level,
+                Some(TEST_TRIGGER),
+            );
+            assert!(
+                strict
+                    .iter()
+                    .any(|v| v.rule == super::super::arguments::STRICT_RULE
+                        && v.level == PolicyLevel::Block
+                        && v.level_fixed),
+                "{level:?}: {strict:?}"
+            );
+        }
     }
 }

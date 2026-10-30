@@ -65,25 +65,32 @@ pub(crate) fn report(
                     .into_iter()
                     .collect();
             let reasons = sandbox_state::reasons(host, false, &policy);
+            let integrity = authority.policy.git.hook_integrity;
             if reasons.is_empty() {
                 lines.push(format!(
-                    "text rule: relaxed by operator choice, not verified (`security.text_guard: relaxed` read from {})",
+                    "text rule: relaxed by operator choice, not verified (`security.text_guard: relaxed` read from {}, the remote-tracking refs as last fetched; a process that can write the repository's `.git` can set those refs, and the OS sandbox is not checked)",
                     authority.source
+                ));
+                lines.push(format!(
+                    "  the line's interpreter-argument findings take `git.hook_integrity: {integrity}`"
                 ));
             } else {
                 lines.push("text rule: strict".to_string());
                 lines.extend(reasons.iter().map(|why| format!("  because {why}")));
+                lines.push(format!(
+                    "  the strict rule's own refusals always block; the line's interpreter-argument findings take `git.hook_integrity: {integrity}`"
+                ));
             }
         }
         Err(error) => {
             failed = true;
             lines.push(format!(
-                "policy: cannot be read ({error}); the exec guard refuses every shell call until it can"
+                "policy: cannot be read ({error}); the exec guard refuses every shell call until it can, except one plain `git fetch` of a configured remote, and the literal worktree recovery commands when the repository itself cannot be read"
             ));
         }
     }
     lines.push(
-        "  a call marked `dangerouslyDisableSandbox` (verified on Claude Code 2.1.312) always takes the strict rule; a Claude Code call also needs `relaxed` in its session project's policy"
+        "  a recognized marked retry (`dangerouslyDisableSandbox`, verified on Claude Code 2.1.312) always takes the strict rule; a harness that sends no such field is judged by the rule above; a Claude Code call also needs `relaxed` in its session project's policy"
             .to_string(),
     );
     if let Some(home) = codeflow_home {

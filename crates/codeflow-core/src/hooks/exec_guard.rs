@@ -494,7 +494,10 @@ mod tests {
                     &tightened,
                 );
                 assert!(
-                    !found.is_empty() && found.iter().all(|v| v.rule == "git.hook_integrity"),
+                    !found.is_empty()
+                        && found
+                            .iter()
+                            .all(|v| v.rule == "security.text_guard" && v.level_fixed),
                     "{nested}: {found:?}"
                 );
             }
