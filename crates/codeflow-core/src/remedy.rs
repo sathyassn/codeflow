@@ -688,6 +688,12 @@ catalog! {
     /// manages.
     DOCTOR_GROK_MISSING_GUARD = Step::Edit("{path}"),
         "`codeflow update` does not restore the shell guard in {path}: in it, add the shipped guard group this finding quotes to the `PreToolUse` list under `hooks`, exactly as quoted, creating the file with that list if it does not exist; then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
+    /// A `CodeFlow` guard hook entry a harness reads without the shipped
+    /// `timeout`, or a Claude one without `"onFailure": "block"`, so a
+    /// guard that does not answer in time can let the tool call through
+    /// (TSK-1082).
+    DOCTOR_GUARD_TIMEOUTS = Step::Codeflow("codeflow update"),
+        "run `codeflow update`, which gives the CodeFlow guard entries in `.claude/settings.json` the shipped fields and moves `.grok/hooks/codeflow.json` and `.codex/hooks.json` to them by a 3-way merge (where your edit overlaps, it writes a `.new` file beside the file: resolve it in favour of the shipped fields and delete it). In a file update does not manage, such as `.claude/settings.local.json`, set each named entry's `timeout` to {timeout}, and in Claude settings its `onFailure` to `block`, by hand. Codex asks you to approve a changed hook again in `/hooks`. Then `codeflow doctor --check guard-timeouts` confirms it";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";
@@ -817,6 +823,10 @@ catalog! {
     /// does not pass the payload through unchanged.
     GUARD_PAYLOAD_MALFORMED = Step::Edit("{path}"),
         "make the hook entry that runs `codeflow hook {guard}` pass the harness payload on stdin unchanged, in {path}; the next tool call is then read";
+    /// A session guard that reached no decision before its own deadline,
+    /// so it refused rather than let the harness time it out (TSK-1082).
+    GUARD_DEADLINE = Step::Codeflow("codeflow doctor"),
+        "retry the command; if the guard stalls again, something it reads blocks, such as a FIFO or device a git configuration include names, or a hung filesystem: `codeflow doctor --check git-config-includes` names the include files, and the operator repairs or removes the one that blocks";
     /// A session summary that could not be written.
     SESSION_SUMMARY_UNWRITTEN = Step::Edit("{path}"),
         "{repair}: {path}; the session ledger lives under git's common directory, and the next session end writes it";

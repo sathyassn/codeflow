@@ -1546,10 +1546,36 @@ set inside sourced files; this remains a tracked follow-up.
 Exec-guard alone also does not follow same-line configuration writes before an
 alias; git-guard's ordered configuration-write facts remain a tracked follow-up.
 Repository discovery uses libgit2 before the bounded reader runs. A FIFO or
-device named by an include can block that discovery; bounding this earlier
-stage remains a follow-up for the EPC-022 closeout review, including whether
-each harness refuses or proceeds after a hook timeout. The reader's deadline
-does not bound the whole hook invocation.
+device named by an include can block that discovery, and the reader's
+deadline does not bound the whole hook invocation. The guard's own deadline
+does (TSK-1082):
+
+- A guard that has reached no decision 20 seconds after it starts refuses
+  with exit 2 and the reason on stderr, naming `codeflow doctor --check
+  git-config-includes`. Exit 2 with a reason blocks in Claude Code, Codex
+  and Grok.
+- Every shipped guard hook entry carries `"timeout": 30` (seconds, in all
+  three harnesses), so the refusal arrives before the harness gives up.
+- Claude's guard entries also carry `"onFailure": "block"` (Claude Code
+  2.1.295 or later; an older version ignores the key), so a Claude timeout,
+  crash or start failure blocks the tool call.
+- Codex (0.166.0, `hooks/src/events/pre_tool_use.rs`) and Grok (1.0.70,
+  its hooks guide) let a call through when a hook times out, crashes or exits
+  with a code other than 0 or 2, and neither has a setting to change that. A
+  guard process that cannot reach its own deadline, because it does not start
+  or is starved past 30 seconds, therefore still fails open in Codex and
+  Grok. `codeflow doctor --check guard-timeouts` states this and warns about
+  any guard entry without the shipped fields.
+- Codex hashes each hook's timeout into its trust record, so after
+  `codeflow update` moves the guard entries to 30 seconds, Codex does not
+  run them until they are approved again in `/hooks`; `codeflow doctor
+  --check codex` warns until then.
+- Grok also loads user-level hook files: `~/.grok/hooks/*.json`,
+  `~/.claude/settings.json`, `~/.claude/settings.local.json` and
+  `~/.cursor/hooks.json`. CodeFlow neither reads nor installs them, and
+  `guard-timeouts` reads project files only. A copy of a guard command there
+  can set the timeout Grok actually runs, such as Grok's 5 second default,
+  which ends the guard before its own deadline.
 
 `codeflow doctor --check git-config-includes` names include files that may
 be writable, distinguishes missing files, and reports when discovery cannot be
