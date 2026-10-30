@@ -1,0 +1,11 @@
+id = "TSK-1084"
+uid = "2f110cca-4892-443d-a4fb-048156e0825c"
+kind = "TSK"
+title = "The guard test fixtures ignore the host's Git configuration"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T12:23:17Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
