@@ -35,6 +35,18 @@ thread_local! {
     static JUDGED: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
 }
 
+thread_local! {
+    /// The directory a fixture row treats as protected, as a temp root or
+    /// a home is; `None` outside such a row.
+    static STAND_IN: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// The protected stand-in of the row being read, if it has one: the
+/// row's `guarded/` directory.
+pub(super) fn stand_in() -> Option<String> {
+    STAND_IN.with(|stand_in| stand_in.borrow().clone())
+}
+
 /// Keep `path` as one the reader judged for a deletion.
 pub(super) fn record(path: &str) {
     JUDGED.with(|judged| {
@@ -46,9 +58,15 @@ pub(super) fn record(path: &str) {
 
 /// The guard's verdict on `command` started in `base`, and every path it
 /// judged for a deletion.
-fn judge(command: &str, base: &Path) -> (Option<super::Found>, Vec<String>) {
+fn judge(
+    command: &str,
+    base: &Path,
+    stand_in: Option<&Path>,
+) -> (Option<super::Found>, Vec<String>) {
     JUDGED.with(|judged| *judged.borrow_mut() = Some(Vec::new()));
+    STAND_IN.with(|cell| *cell.borrow_mut() = stand_in.map(|p| p.display().to_string()));
     let found = super::read_deletion(command, Some(base), false);
+    STAND_IN.with(|cell| *cell.borrow_mut() = None);
     let paths = JUDGED.with(|judged| judged.borrow_mut().take().unwrap_or_default());
     (found, paths)
 }
@@ -58,6 +76,9 @@ enum Expect {
     Exact,
     Within,
     Unproven,
+    /// The guard refuses it as a protected deletion: a match may be the
+    /// protected stand-in. The tool still runs and removes the stand-in.
+    Refused,
 }
 
 /// Which native tool a row needs; a row whose tool is absent is listed as
@@ -106,10 +127,21 @@ const TREE: &[&str] = &["sub/", "sub/x/", "sub/x/f", "sub/y", "sub/z/", "keep"];
 const SPACED: &[&str] = &["a", "b c", "d", "keep"];
 /// A link below the start that leads out of it.
 const LINKED: &[&str] = &["sub/", "sub/link -> ../out", "out/", "out/x", "keep"];
+/// The protected stand-in below the start, where a match can name it.
+const GUARDED_BELOW: &[&str] = &["sub/", "sub/guarded/", "sub/guarded/f", "sub/y", "keep"];
+/// The protected stand-in outside the start, reached through a link below
+/// it.
+const GUARDED_LINK: &[&str] = &[
+    "sub/",
+    "sub/link -> ../guarded",
+    "guarded/",
+    "guarded/f",
+    "keep",
+];
 
 #[allow(clippy::too_many_lines)]
 fn rows() -> Vec<Row> {
-    use Expect::{Exact, Unproven, Within};
+    use Expect::{Exact, Refused, Unproven, Within};
     let long = "name-with-some-length\n".repeat(110);
     vec![
         // xargs framing and invocation.
@@ -313,7 +345,8 @@ fn rows() -> Vec<Row> {
             ),
             Needs::Parallel,
         ),
-        // find.
+        // find. `guarded/` stands in for a protected directory (see
+        // [`stand_in`]): a match may be it, or a link may lead to it.
         row(
             "find-print0",
             TREE,
@@ -327,6 +360,24 @@ fn rows() -> Vec<Row> {
             Exact,
         ),
         row(
+            "find-print0",
+            GUARDED_BELOW,
+            "find sub -name guarded -print0 | xargs -0 rm -rf",
+            Refused,
+        ),
+        row(
+            "find-print0-consumer",
+            LINKED,
+            r#"find sub -print0 | xargs -0 sh -c 'for f; do rm -rf "$f"/x; done' _"#,
+            Unproven,
+        ),
+        row(
+            "find-print0-consumer",
+            GUARDED_LINK,
+            r#"find sub -name link -print0 | xargs -0 sh -c 'cd -P "$1" && rm -rf "$PWD"' _"#,
+            Unproven,
+        ),
+        row(
             "find-print-blanks",
             &["sub/", "sub/x y", "y", "keep"],
             "find sub | xargs rm -rf",
@@ -334,6 +385,12 @@ fn rows() -> Vec<Row> {
         ),
         row("find-delete", TREE, "find sub -name y -delete", Within),
         row("find-delete", TREE, "find sub -delete", Exact),
+        row(
+            "find-delete",
+            GUARDED_BELOW,
+            "find sub -path '*guarded*' -delete",
+            Refused,
+        ),
         row(
             "find-exec",
             TREE,
@@ -348,33 +405,15 @@ fn rows() -> Vec<Row> {
         ),
         row(
             "find-exec",
-            TREE,
-            r#"find sub -name x -exec sh -c 'for f; do rm -rf "$f"; done' _ {} +"#,
-            Within,
+            GUARDED_BELOW,
+            r"find sub -name guarded -exec rm -rf {} \;",
+            Refused,
         ),
         row(
-            "find-exec-positionals",
-            TREE,
-            r#"find sub -exec sh -c 'rm -rf "$2"' _ {} +"#,
-            Unproven,
-        ),
-        row(
-            "find-path-building",
-            LINKED,
-            r"find sub -name link -exec rm -rf {}/x \;",
-            Unproven,
-        ),
-        row(
-            "find-path-building",
-            LINKED,
-            r#"find sub -name link -exec sh -c 'rm -rf "$1"/x' _ {} \;"#,
-            Unproven,
-        ),
-        row(
-            "find-path-building",
-            LINKED,
-            r#"find sub -print0 | xargs -0 sh -c 'for f; do rm -rf "$f"/x; done' _"#,
-            Unproven,
+            "find-exec",
+            GUARDED_BELOW,
+            "find sub -name guarded -exec rm -rf {} +",
+            Refused,
         ),
         row(
             "find-execdir",
@@ -383,7 +422,55 @@ fn rows() -> Vec<Row> {
             Within,
         ),
         row(
-            "find-execdir-relative",
+            "find-execdir",
+            GUARDED_BELOW,
+            r"find sub -name guarded -execdir rm -rf {} \;",
+            Refused,
+        ),
+        row(
+            "find-exec-other",
+            TREE,
+            r#"find sub -name x -exec sh -c 'for f; do rm -rf "$f"; done' _ {} +"#,
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
+            TREE,
+            r#"find sub -exec sh -c 'rm -rf "$2"' _ {} +"#,
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
+            LINKED,
+            r"find sub -name link -exec rm -rf {}/x \;",
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
+            GUARDED_LINK,
+            r#"find sub -name link -exec sh -c 'rm -rf "$1""/"' _ {} \;"#,
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
+            GUARDED_LINK,
+            r#"find sub -name link -exec sh -c 'cd -P "$1" && rm -rf "$PWD"' _ {} \;"#,
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
+            GUARDED_LINK,
+            r#"find sub -name link -execdir sh -c 'cd -P "$1" && rm -rf "$PWD"' _ {} \;"#,
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
+            GUARDED_LINK,
+            r"find sub -name link -exec rm -rf + guarded \;",
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
             TREE,
             r"find sub -name z -execdir rm -rf x \;",
             Unproven,
@@ -550,10 +637,21 @@ fn check(row: &Row, gnu_xargs: bool, parallel: bool) -> Result<Option<String>, S
     let base = dir.path().canonicalize().unwrap();
     build(&base, row.setup);
     let before = listing(&base);
-    let (found, judged) = judge(&row.command, &base);
+    let stand_in = row.setup.iter().find_map(|entry| {
+        entry
+            .strip_suffix("guarded/")
+            .map(|parent| format!("{parent}guarded"))
+    });
+    let (found, judged) = judge(
+        &row.command,
+        &base,
+        stand_in.as_ref().map(|path| base.join(path)).as_deref(),
+    );
     match (row.expect, &found) {
         (Expect::Unproven, Some(found)) if found.unproven.is_some() => {}
         (Expect::Unproven, _) => return Err(format!("expected unproven, guard gave {found:?}")),
+        (Expect::Refused, Some(found)) if found.unproven.is_none() => {}
+        (Expect::Refused, _) => return Err(format!("expected refused, guard gave {found:?}")),
         (_, Some(found)) => return Err(format!("expected allowed, guard refused: {found:?}")),
         (_, None) => {}
     }
@@ -568,7 +666,17 @@ fn check(row: &Row, gnu_xargs: bool, parallel: bool) -> Result<Option<String>, S
     let output = run_native(&base, &row.command);
     let after = listing(&base);
     let removed: BTreeSet<PathBuf> = before.difference(&after).cloned().collect();
-    if row.expect == Expect::Unproven {
+    if let Some(stand_in) = &stand_in {
+        // A refused form with a stand-in is shown to reach it natively.
+        if !removed.iter().any(|path| path.starts_with(stand_in)) {
+            return Err(format!(
+                "the native run did not reach the stand-in {stand_in}: removed {removed:?}; \
+                 stderr {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+    if matches!(row.expect, Expect::Unproven | Expect::Refused) {
         return Ok(None);
     }
     let predicted = predicted(&base, &judged, &before);

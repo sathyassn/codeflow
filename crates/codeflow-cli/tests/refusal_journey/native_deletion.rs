@@ -225,6 +225,47 @@ const BYPASSES: &[(&str, &[&str], bool)] = &[
     ("parallel 'rm -rf {dir}/sentinel' ::: x", &[], true),
     ("parallel rm -rf {.} ::: {dir}/sentinel.x", &[], true),
     ("parallel rm -rf {1}{2} ::: {dir}/senti ::: nel", &[], true),
+    // Review 01 of PR 425: a match that is the protected directory, a path
+    // built on a match through a link, and a `+` that is an argument; then
+    // the same through `xargs`.
+    (r"find {dir} -name sentinel -exec rm -rf {} \;", &[], false),
+    ("find {dir} -name sentinel -exec rm -rf {} +", &[], false),
+    (
+        r"find {dir} -name sentinel -execdir rm -rf {} \;",
+        &[],
+        false,
+    ),
+    ("find {dir} -path '*sentinel*' -delete", &[], false),
+    (
+        r#"find {dir}/sub -name link -exec sh -c 'rm -rf "$1""/"' _ {} \;"#,
+        &["sub/", "sub/link -> ../sentinel"],
+        false,
+    ),
+    (
+        r#"find {dir}/sub -name link -exec sh -c 'cd -P "$1" && rm -rf "$PWD"' _ {} \;"#,
+        &["sub/", "sub/link -> ../sentinel"],
+        false,
+    ),
+    (
+        r#"find {dir}/sub -name link -execdir sh -c 'cd -P "$1" && rm -rf "$PWD"' _ {} \;"#,
+        &["sub/", "sub/link -> ../sentinel"],
+        false,
+    ),
+    (
+        r"find {dir}/a -exec rm -rf + {dir}/sentinel \;",
+        &["a/"],
+        false,
+    ),
+    (
+        "find {dir} -name sentinel -print0 | xargs -0 rm -rf",
+        &[],
+        false,
+    ),
+    (
+        r#"find {dir}/sub -name link -print0 | xargs -0 sh -c 'cd -P "$1" && rm -rf "$PWD"' _"#,
+        &["sub/", "sub/link -> ../sentinel"],
+        false,
+    ),
 ];
 
 /// Each allowed form, the entries it needs, and exactly what it removes.
@@ -295,7 +336,9 @@ fn installed_hooks_refuse_each_bypass_and_allowed_forms_delete_what_native_tools
             continue;
         }
         let removed = run_native(&dir, &command);
-        if !removed.contains("sentinel") {
+        // A form may empty the sentinel rather than remove it (GNU `rm` on
+        // `link/`); either reaches the protected directory.
+        if !removed.iter().any(|path| path.starts_with("sentinel")) {
             wrong.push(format!(
                 "native run did not reach the sentinel: {command}: {removed:?}"
             ));

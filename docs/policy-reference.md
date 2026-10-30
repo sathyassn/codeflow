@@ -709,15 +709,20 @@ tool's grammar. Each grammar is modelled, refused as unproven, or untested,
 in the grammar table in the module documentation of
 `crates/codeflow-core/src/security/deletion.rs`. A native differential
 fixture runs the real tools on disposable files and checks that each
-modelled form removes what the guard judged (TSK-286, issue 102). Among
-the unproven forms: `xargs` input the guard cannot read (a file, or a
-producer it does not run), input longer than one 2048-byte command line,
-`xargs -L`, `-n`, `-E` and `-a`, `find` output framed by blanks or
-newlines (use `-print0` with `xargs -0`), `find -L`, a `find -execdir`
-command naming a relative path other than `{}`, a command that builds a
-path on a path `find` gives it (`{}/x`, `"$1"/..`), and `parallel`
-replacement strings other than a whole `{}` word or more than one `:::`
-list.
+modelled form removes what the guard judged (TSK-286, issue 102). A
+`find` match is any path below a start, so a deletion through `find`
+(`-delete`, a removing `-exec`, or a `-print0` list piped to a remover) is
+refused when a protected directory, such as a home or the temp root, lies
+below a start. The only removing command `find` may run, or pass its list
+to, is `rm`, `rmdir`, `unlink`, `shred` or `srm` with options and `{}` (or
+the listed paths) as its only operands. Among the unproven forms: any
+other removing command there (a shell, `eval`, a `cd` chain, `{}/x`,
+another operand, or a `+` that does not follow `{}`), `xargs` input the
+guard cannot read (a file, or a producer it does not run), input longer
+than one 2048-byte command line, `xargs -L`, `-n`, `-E` and `-a`, `find`
+output framed by blanks or newlines (use `-print0` with `xargs -0`),
+`find -L`, and `parallel` replacement strings other than a whole `{}` word
+or more than one `:::` list.
 
 ### Program variables the guards judge
 

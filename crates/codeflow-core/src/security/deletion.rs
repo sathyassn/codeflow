@@ -152,14 +152,13 @@
 //! | `parallel-replacement-strings` | `{.}`, `{/}`, `{//}`, `{#}`, `{1}`, `{= … =}` and every other brace form | unproven |
 //! | `parallel-sources` | a second `:::` list, `::::` files and `:::+` linked lists | unproven |
 //! | `parallel-options` | every option other than `-0`, `--null`, `-d`, `-I`, `-j`, `-P`, `-r`, `-t` | unproven |
-//! | `find-print0` | `find -print0` into `xargs -0`: each value is a start or a path below it | modelled |
+//! | `find-print0` | `find -print0` into a plain remover by `xargs -0` or `parallel -0`: each value is a start or a path below it, and a protected directory below a start is refused | modelled |
+//! | `find-print0-consumer` | a `find` list given to anything but a plain remover whose operands are the values: a shell, `eval` or other operands | unproven |
 //! | `find-print-blanks` | `find` output framed by blanks, quotes or newlines, which a name below the start may hold | unproven |
-//! | `find-delete` | `-delete`: the start's tree | modelled |
-//! | `find-exec` | `-exec`, `-ok` with `;` or `+`: the command with `{}` as each start | modelled |
-//! | `find-exec-positionals` | a shell given batched paths (`{} +`) that reads `$2` or later, `$#`, `$*` or `shift` | unproven |
-//! | `find-path-building` | `{}` inside a longer word (`{}/x`, `{}/`), or a shell that builds a path on the paths it is given (`..`, `"$1"/x`), which resolves through a link below the start | unproven |
-//! | `find-execdir` | `-execdir`, `-okdir`: `{}` as the start's absolute path | modelled |
-//! | `find-execdir-relative` | any other relative path in an `-execdir` command, which runs in each match's directory | unproven |
+//! | `find-delete` | `-delete`: the start's tree, and a protected directory below a start is refused | modelled |
+//! | `find-exec` | `-exec`, `-ok` with `;` or `{} +` running a plain remover whose operands are only `{}`: each match is judged as the start's tree, and a protected directory below a start is refused | modelled |
+//! | `find-exec-other` | any other command `find` runs that removes: a shell, `eval`, `cd` chains, `{}` inside a longer word, another operand, or a `+` that does not follow `{}` | unproven |
+//! | `find-execdir` | `-execdir`, `-okdir` running a plain remover whose operands are only `{}`, judged as `find-exec` | modelled |
 //! | `find-follow` | `-L`, `-follow`: the walk leaves its starts through links | unproven |
 //! | `find-other-output` | `-printf`, `-fprint`, `-ls`, `-exec` and the like piped on: output that is not the walk | unproven |
 //! | `ls-names` | `ls DIR` piped on: bare names read from the consumer's directory, judged with `DIR`'s entries | modelled |
@@ -1945,12 +1944,11 @@ mod why {
     pub const BATCH: &str = "more `xargs` input than one invocation is proven to hold";
     pub const FOLLOW: &str = "a `find` walk that follows links out of its start";
     pub const EXECDIR: &str = "a `find -execdir` command run in each match's directory";
-    pub const POSITIONALS: &str =
-        "a shell given `find`'s batched paths that reads positional parameters past `$1`";
-    pub const FIND_PARTIAL: &str =
-        "`{}` inside a longer word of a command `find` runs, which builds a path on a match";
-    pub const FIND_SHELL: &str =
-        "a shell that builds a path (`..`, or `/` after a parameter) on the paths `find` gives it";
+    pub const FIND_BODY: &str = "a command `find` runs that removes something other than \
+        its matches alone: only `rm`, `rmdir`, `unlink`, `shred` or `srm` with options and `{}` \
+        operands is modelled";
+    pub const FIND_CONSUMER: &str = "a `find` list given to a command other than a plain \
+        remover whose operands are the listed paths";
     pub const PARALLEL_SOURCES: &str =
         "a `parallel` input source other than one `:::` list or the standard input";
     pub const PARALLEL_REPLACEMENT: &str =
@@ -4465,14 +4463,19 @@ impl Reader<'_> {
 
     /// `find`: a deletion over a protected start is refused whatever its
     /// tests (`-name` selects within the tree, it never proves the tree
-    /// safe), and each command it runs is judged on its own with `{}` as
-    /// each start.
+    /// safe). A match is any path below a start, so a deletion is also
+    /// refused when a protected directory lies below a start
+    /// ([`protected_below`]): a test may select exactly that directory.
     ///
-    /// A walk that follows links (`-L`, `-follow`) reaches paths outside
-    /// its starts, so a deletion in it is unproven. An `-execdir` or
-    /// `-okdir` command runs in each match's directory, which the reader
-    /// does not know: `{}` is the start's absolute path there, and any
-    /// other relative path it names is unproven.
+    /// The only removing command modelled is a plain remover whose operands
+    /// are `{}` ([`plain_remover`]); any other (a shell, `eval`, a `cd`
+    /// chain, `{}/x`, another operand) is unproven, since its path is
+    /// built from a match the reader does not list. A walk that follows
+    /// links (`-L`, `-follow`) reaches paths outside its starts, so a
+    /// deletion in it is unproven. Each command is also read on its own
+    /// with `{}` as each start; an `-execdir` or `-okdir` command runs in
+    /// each match's directory, which the reader does not know, so there
+    /// `{}` is the start's absolute path and the directory is unknown.
     fn judge_find(&mut self, args: &[String], st: &State, ambiguous: bool) {
         let mut at = 0;
         while let Some(arg) = args.get(at) {
@@ -4497,6 +4500,7 @@ impl Reader<'_> {
             || bodies.iter().any(|body| runs_remover(&body.words, 0));
         if deletes {
             self.judge_paths(starts.iter().map(String::as_str), st, ambiguous);
+            self.judge_below(starts.iter().map(String::as_str), st);
             if self.done() {
                 return;
             }
@@ -4511,10 +4515,10 @@ impl Reader<'_> {
             }
         }
         for body in bodies {
-            if let Some(reason) = find_body_unproven(&body) {
+            if runs_remover(&body.words, 0) && !plain_remover(&body.words, Some("{}")) {
                 self.report(
                     Judged::Unproven(Unproven {
-                        reason: reason.into(),
+                        reason: why::FIND_BODY.into(),
                         cwd: false,
                     }),
                     ambiguous,
@@ -4549,6 +4553,63 @@ impl Reader<'_> {
         }
     }
 
+    /// Refuse a deletion whose starts hold a protected directory below
+    /// them: a match may be that directory. Each start is read where the
+    /// line places it and where it really lands.
+    fn judge_below<'p>(&mut self, starts: impl IntoIterator<Item = &'p str>, st: &State) {
+        for start in starts {
+            for cwd in &st.cwd {
+                let Ok(path) = resolve(cwd, start) else {
+                    continue;
+                };
+                if unproven(&path).is_some() {
+                    continue;
+                }
+                let absolute = if path.starts_with('/') {
+                    Some(path.clone())
+                } else {
+                    self.absolute(&path)
+                        .and_then(|path| path.to_str().map(str::to_string))
+                };
+                let Some(absolute) = absolute else {
+                    continue;
+                };
+                let real = self.real_path(&absolute);
+                let found = protected_below(&absolute)
+                    .or_else(|| real.as_deref().and_then(protected_below));
+                if let Some(target) = found {
+                    self.report(Judged::Protected(target), true);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Values from a `find` walk name its starts and every path below
+    /// them: refuse a protected directory below a start, and a consumer
+    /// other than a plain remover of those values (`other_consumer`).
+    fn judge_tree_starts(
+        &mut self,
+        starts: &[String],
+        st: &State,
+        ambiguous: bool,
+        other_consumer: impl FnOnce() -> bool,
+    ) {
+        if starts.is_empty() {
+            return;
+        }
+        self.judge_below(starts.iter().map(String::as_str), st);
+        if other_consumer() {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: why::FIND_CONSUMER.into(),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+        }
+    }
+
     /// `xargs CMD`: the command alone, then the command with every input
     /// value appended in one invocation, as GNU and BSD `xargs` run input
     /// that fits one command line; with `-I`, once per line with the line
@@ -4561,16 +4622,26 @@ impl Reader<'_> {
         let inner = options.command;
         self.exec(inner, st, None, false, ambiguous);
         let entries = input_entries(input, options.delimiter);
-        if entries.iter().any(|item| item.tree) && shell_builds_paths(inner) {
-            self.report(
-                Judged::Unproven(Unproven {
-                    reason: why::FIND_SHELL.into(),
-                    cwd: false,
-                }),
-                ambiguous,
-            );
-        }
-        match &options.replace {
+        let starts = tree_starts(&entries);
+        self.judge_xargs_entries(inner, options.replace.as_deref(), entries, st, ambiguous);
+        // After the values themselves, so a protected start is named as
+        // the `rm` check names it.
+        self.judge_tree_starts(&starts, st, ambiguous, || {
+            runs_remover(inner, 0) && !plain_remover(inner, options.replace.as_deref())
+        });
+    }
+
+    /// Run `xargs`'s command on its values: once per line with `-I`, else
+    /// all at once.
+    fn judge_xargs_entries(
+        &mut self,
+        inner: &[String],
+        replace: Option<&str>,
+        entries: Vec<Input>,
+        st: &State,
+        ambiguous: bool,
+    ) {
+        match replace {
             Some(token) => {
                 for item in entries {
                     let line: Vec<String> = inner
@@ -4706,15 +4777,7 @@ impl Reader<'_> {
                 })
                 .collect()
         };
-        if entries.iter().any(|item| item.tree) && builds_on_expansions(&command.join(" ")) {
-            self.report(
-                Judged::Unproven(Unproven {
-                    reason: why::FIND_SHELL.into(),
-                    cwd: false,
-                }),
-                ambiguous,
-            );
-        }
+        let starts = tree_starts(&entries);
         // GNU `parallel` joins the command's words with blanks and runs the
         // line in a shell, with each value quoted in place of `{}` or after
         // the line; without `-q` the command's own words are shell text.
@@ -4747,6 +4810,11 @@ impl Reader<'_> {
             }
         }
         self.depth -= 1;
+        self.judge_tree_starts(&starts, st, ambiguous, || {
+            let text = ["sh".to_string(), "-c".to_string(), command.join(" ")];
+            !plain_remover(command, Some(token))
+                && (runs_remover(command, 0) || runs_remover(&text, 0))
+        });
     }
 
     /// `rsync --delete…` deletes in its destination, and
@@ -7137,8 +7205,6 @@ struct ExecBody {
     words: Vec<String>,
     /// `-execdir` or `-okdir`: it runs in the directory of each match.
     in_match_dir: bool,
-    /// Ended by `+`: it gets many matches at once.
-    batched: bool,
 }
 
 /// The commands a `find` expression runs with `-exec`, `-execdir`, `-ok`
@@ -7150,14 +7216,16 @@ fn exec_bodies(expression: &[String]) -> Vec<ExecBody> {
         let primary = expression[at].as_str();
         if matches!(primary, "-exec" | "-execdir" | "-ok" | "-okdir") {
             let body = &expression[at + 1..];
+            // `;` ends the command; `+` ends it only right after `{}`, and
+            // anywhere else it is an argument.
             let end = body
                 .iter()
-                .position(|a| a == ";" || a == "+")
+                .enumerate()
+                .position(|(i, a)| a == ";" || (a == "+" && i > 0 && body[i - 1] == "{}"))
                 .unwrap_or(body.len());
             bodies.push(ExecBody {
                 words: body[..end].to_vec(),
                 in_match_dir: primary.ends_with("dir"),
-                batched: body.get(end).is_some_and(|a| a == "+"),
             });
             at += end + 2;
         } else {
@@ -7187,118 +7255,94 @@ const FIND_OTHER_OUTPUT: &[&str] = &[
     "-ls",
 ];
 
-/// Whether a shell script reads a positional parameter past `$1`, their
-/// count, or shifts them: what it does then depends on how many paths a
-/// batched `find -exec … {} +` passes it.
-fn reads_later_positionals(script: &str) -> bool {
-    let chars: Vec<char> = script.chars().collect();
-    chars.iter().enumerate().any(|(at, &c)| {
-        if c != '$' {
-            return false;
-        }
-        let next = chars.get(at + 1).copied();
-        let after = chars.get(at + 2).copied();
-        match next {
-            Some('#' | '*' | '2'..='9') => true,
-            Some('{') => match after {
-                Some('#' | '*' | '@' | '2'..='9') => true,
-                Some('1') => chars.get(at + 3).is_some_and(char::is_ascii_digit),
-                _ => false,
-            },
-            _ => false,
-        }
-    }) || script
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .any(|word| word == "shift")
+/// The `find` starts among `xargs` or `parallel` values.
+fn tree_starts(entries: &[Input]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|item| item.tree)
+        .map(|item| item.value.clone())
+        .collect()
 }
 
-/// Whether a shell script builds a path from an expansion: `..` anywhere,
-/// or a `/` right after a parameter (`"$1"/x`, `${f}/`, `$f/..`). A path
-/// `find` hands on may be a link below the start, and a path built on it
-/// is resolved through the link, so it can land outside the start.
-fn builds_on_expansions(script: &str) -> bool {
-    if script.contains("..") {
-        return true;
-    }
-    let chars: Vec<char> = script.chars().collect();
-    let mut at = 0;
-    while at < chars.len() {
-        if chars[at] != '$' {
-            at += 1;
-            continue;
-        }
-        at += 1;
-        if chars.get(at) == Some(&'{') {
-            while at < chars.len() && chars[at] != '}' {
-                at += 1;
-            }
-            at += 1;
-        } else {
-            while at < chars.len() && (chars[at].is_ascii_alphanumeric() || chars[at] == '_') {
-                at += 1;
-            }
-            if at < chars.len() && matches!(chars[at], '@' | '*') {
-                at += 1;
-            }
-        }
-        if chars.get(at) == Some(&'"') {
-            at += 1;
-        }
-        if chars.get(at) == Some(&'/') {
-            return true;
-        }
-    }
-    false
-}
-
-/// Whether a command is a shell running a remover whose script builds a
-/// path on its arguments ([`builds_on_expansions`]), or `eval`.
-fn shell_builds_paths(words: &[String]) -> bool {
-    if !runs_remover(words, 0) {
-        return false;
-    }
+/// Whether a command is a plain remover: `rm`, `rmdir`, `unlink`,
+/// `shred` or `srm` behind launchers, whose other words are options, `--`
+/// or `token` itself; with no token (`xargs` appending its values), no
+/// operand at all. Only these remove exactly the paths they are given.
+fn plain_remover(words: &[String], token: Option<&str>) -> bool {
     let Some(run) = unwrap(words) else {
         return false;
     };
-    let Some(first) = run.argv.first() else {
+    let Some((first, rest)) = run.argv.split_first() else {
         return false;
     };
-    let name = program_name(first);
-    name == "eval"
-        || (crate::hooks::git_guard::is_shell(&name)
-            && shell_script(&run.argv[1..]).is_none_or(|(script, _)| builds_on_expansions(script)))
+    if !matches!(
+        program_name(first).as_str(),
+        "rm" | "rmdir" | "unlink" | "shred" | "srm"
+    ) {
+        return false;
+    }
+    let mut options = true;
+    rest.iter().all(|word| {
+        if options && word == "--" {
+            options = false;
+            return true;
+        }
+        if options && word.starts_with('-') && word != "-" {
+            return true;
+        }
+        token.is_some_and(|token| word == token)
+    })
 }
 
-/// Why a command `find` runs on its matches is unproven, if it is: `{}`
-/// inside a longer word (`{}/../x`, `{}/`), or a shell whose script builds
-/// a path from the matches it is given, or, given many at once, reads
-/// past `$1`.
-fn find_body_unproven(body: &ExecBody) -> Option<&'static str> {
-    if !runs_remover(&body.words, 0) {
-        return None;
-    }
-    if body.words.iter().any(|w| w.contains("{}") && w != "{}") {
-        return Some(why::FIND_PARTIAL);
-    }
-    let run = unwrap(&body.words)?;
-    let first = run.argv.first()?;
-    let name = program_name(first);
-    if name == "eval" {
-        return Some(why::FIND_SHELL);
-    }
-    if !crate::hooks::git_guard::is_shell(&name) {
-        return None;
-    }
-    let Some((script, _)) = shell_script(&run.argv[1..]) else {
-        return Some(why::FIND_SHELL);
+/// Whether a protected directory lies strictly below `dir`: a system
+/// directory, a top-level collection, a home directory or a temp root.
+/// A `find` match below `dir` may be exactly that directory.
+fn protected_below(dir: &str) -> Option<&'static str> {
+    let dir = normalize_path(dir);
+    let dir = dir.trim_end_matches('/');
+    let below = |path: &str| {
+        let path = path.trim_end_matches('/');
+        path.len() > dir.len() && path.starts_with(dir) && path.as_bytes()[dir.len()] == b'/'
     };
-    if builds_on_expansions(script) {
-        Some(why::FIND_SHELL)
-    } else if body.batched && reads_later_positionals(script) {
-        Some(why::POSITIONALS)
-    } else {
-        None
+    let mut candidates: Vec<(String, &'static str)> = Vec::new();
+    for parent in ["/", "/private", "/var", "/private/var"] {
+        for name in protected_names(parent) {
+            let path = format!("{}/{name}", parent.trim_end_matches('/'));
+            let target = dangerous_rm_target(&path).unwrap_or("system directory");
+            candidates.push((path, target));
+        }
     }
+    for home in crate::portable_path::user_homes() {
+        if let Some(home) = home.to_str() {
+            candidates.push((home.to_string(), "home directory"));
+        }
+    }
+    if let Some(tmpdir) = std::env::var_os("TMPDIR").and_then(|t| t.into_string().ok()) {
+        if let Some(target) = dangerous_rm_target(&tmpdir) {
+            candidates.push((tmpdir, target));
+        }
+    }
+    #[cfg(test)]
+    if let Some(stand_in) = native::stand_in() {
+        candidates.push((stand_in, "protected stand-in"));
+    }
+    for (path, target) in &candidates {
+        let real = std::fs::canonicalize(path)
+            .ok()
+            .and_then(|real| real.to_str().map(str::to_string));
+        if below(path) || real.as_deref().is_some_and(below) {
+            return Some(target);
+        }
+    }
+    // macOS per-user temp roots, `/private/var/folders/<xx>/<id>/T`.
+    for folders in ["/var/folders", "/private/var/folders"] {
+        if let Some(rest) = format!("{dir}/").strip_prefix(&format!("{folders}/")) {
+            if rest.split('/').filter(|part| !part.is_empty()).count() < 3 {
+                return Some("temp root");
+            }
+        }
+    }
+    None
 }
 
 /// Whether a command removes files: a remover, possibly behind launchers,
