@@ -1046,6 +1046,16 @@ does (TSK-1082):
   or is starved past 30 seconds, therefore still fails open in Codex and
   Grok. `codeflow doctor --check guard-timeouts` states this and warns about
   any guard entry without the shipped fields.
+- Codex hashes each hook's timeout into its trust record, so after
+  `codeflow update` moves the guard entries to 30 seconds, Codex does not
+  run them until they are approved again in `/hooks`; `codeflow doctor
+  --check codex` warns until then.
+- Grok also loads user-level hook files: `~/.grok/hooks/*.json`,
+  `~/.claude/settings.json`, `~/.claude/settings.local.json` and
+  `~/.cursor/hooks.json`. CodeFlow neither reads nor installs them, and
+  `guard-timeouts` reads project files only. A copy of a guard command there
+  can set the timeout Grok actually runs, such as Grok's 5 second default,
+  which ends the guard before its own deadline.
 
 `codeflow doctor --check git-config-includes` names include files that may
 be writable, distinguishes missing files, and reports when discovery cannot be

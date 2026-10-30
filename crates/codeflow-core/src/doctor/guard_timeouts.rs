@@ -133,9 +133,12 @@ fn findings(root: &Path) -> Result<(Vec<String>, Vec<Format>), String> {
     let mut found = Vec::new();
     let mut formats = Vec::new();
     for (path, format) in hook_files(root)? {
-        let text = std::fs::read_to_string(&path)
+        // The guards' own read: a regular file under a byte limit, never a
+        // link, a FIFO or a device, so a planted FIFO fails the check
+        // instead of hanging it.
+        let bytes = crate::bounded_file::read_bounded_regular(&path, super::MAX_SETTINGS_BYTES)
             .map_err(|error| format!("cannot read {}: {error}", crate::git::display_path(&path)))?;
-        let value: Value = serde_json::from_str(&text).map_err(|error| {
+        let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
             format!("cannot parse {}: {error}", crate::git::display_path(&path))
         })?;
         let mut handlers = Vec::new();
@@ -167,11 +170,21 @@ fn residual(formats: &[Format]) -> String {
     if open.is_empty() {
         return String::new();
     }
-    format!(
-        "; {} have no fail-closed setting: the guard refuses on its own after {GUARD_DEADLINE_SECS} seconds, but one that cannot reach that deadline (it does not start, or is starved) fails open there after the {GUARD_HOOK_TIMEOUT_SECS} second timeout",
+    let verb = if open.len() == 1 { "has" } else { "have" };
+    let mut text = format!(
+        "; {} {verb} no fail-closed setting: the guard refuses on its own after {GUARD_DEADLINE_SECS} seconds, but one that cannot reach that deadline (it does not start, or is starved) fails open there after the {GUARD_HOOK_TIMEOUT_SECS} second timeout",
         open.join(" and ")
-    )
+    );
+    if formats.contains(&Format::Grok) {
+        text.push_str(USER_LEVEL_GROK);
+    }
+    text
 }
+
+/// The hook files outside the project that Grok also loads, which this
+/// check does not read and `CodeFlow` does not install (TSK-1082 review
+/// nit 5).
+const USER_LEVEL_GROK: &str = "; Grok also loads user-level hook files (`~/.grok/hooks/*.json`, `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.cursor/hooks.json`), which CodeFlow neither reads nor installs: a copy of a guard command there can set the timeout Grok runs";
 
 /// The `guard-timeouts` doctor check.
 pub(super) fn check(opts: &Options) -> CheckResult {
@@ -304,6 +317,23 @@ mod tests {
             result
                 .message
                 .contains("Grok and Codex have no fail-closed setting"),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("Grok also loads user-level hook files"),
+            "{}",
+            result.message
+        );
+        let dir = project(&[(".codex/hooks.json", CODEX)]);
+        let result = run(&dir);
+        assert!(
+            result
+                .message
+                .contains("; Codex has no fail-closed setting")
+                && !result.message.contains("user-level"),
             "{}",
             result.message
         );
@@ -447,6 +477,39 @@ mod tests {
         assert_eq!(result.status, Status::Fail, "{}", result.message);
         assert!(
             result.message.contains("cannot parse"),
+            "{}",
+            result.message
+        );
+    }
+
+    /// TSK-1082 review nit 4: a FIFO planted where a harness reads hooks
+    /// fails the check at once; doctor never opens it to wait for a writer.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_planted_as_a_hook_file_fails_without_hanging() {
+        let dir = project(&[(".claude/settings.json", CLAUDE_DEFAULT)]);
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        let fifo = dir.path().join(".codex/hooks.json");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let root = dir.path().to_string_lossy().into_owned();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = check(&Options {
+                project_dir: root,
+                ..Options::default()
+            });
+            let _ = done.send(result);
+        });
+        let result = finished
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the check returns instead of waiting on the FIFO");
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+        assert!(
+            result.message.contains("cannot read") && result.message.contains(".codex/hooks.json"),
             "{}",
             result.message
         );
