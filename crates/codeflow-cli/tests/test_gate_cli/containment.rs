@@ -233,3 +233,67 @@ fn a_report_under_a_linked_folder_is_never_copied() {
         );
     }
 }
+
+/// Grok review 2: before a nextest target runs, the gate removes its stale
+/// report. A link planted above that report, or at it, is refused, and the
+/// outside file of the same name is never deleted.
+#[test]
+fn a_stale_nextest_report_under_a_link_is_never_deleted() {
+    for leaf in [false, true] {
+        let (outside, _) = outside();
+        let report = outside.path().join("junit.xml");
+        std::fs::write(&report, "outside-secret-7f3").unwrap();
+        let dir = repository("true");
+        let path = dir.path().join(".codeflow/test-config.json");
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["targets"][1]["modes"]["full"]["command"] = serde_json::json!("echo nextest");
+        config["targets"][1]["report"] =
+            serde_json::json!({"format": "junit", "path": "reports/junit.xml"});
+        std::fs::write(&path, config.to_string()).unwrap();
+        let reports = dir.path().join("reports");
+        if leaf {
+            std::fs::create_dir(&reports).unwrap();
+            std::os::unix::fs::symlink(&report, reports.join("junit.xml")).unwrap();
+        } else {
+            std::os::unix::fs::symlink(outside.path(), &reports).unwrap();
+        }
+        let home = tempfile::tempdir().unwrap();
+        let output = run(dir.path(), home.path(), &["test", "--mode", "full"]);
+        let text = stderr(&output);
+        assert_eq!(
+            std::fs::read(&report).ok().as_deref(),
+            Some(b"outside-secret-7f3".as_slice()),
+            "leaf {leaf}: the outside report was deleted"
+        );
+        assert!(!output.status.success(), "leaf {leaf}: {text}");
+        assert!(text.contains("stale report"), "leaf {leaf}: {text}");
+    }
+}
+
+/// Grok review 2: a producer output reached only through a link planted
+/// above it is refused, never counted as present.
+#[test]
+fn a_producer_output_under_a_link_is_never_present() {
+    let (outside, _) = outside();
+    std::fs::write(outside.path().join("product"), "outside").unwrap();
+    let dir = repository("true");
+    let path = dir.path().join(".codeflow/test-config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["targets"][0]["outputs"] = serde_json::json!(["out/product"]);
+    std::fs::write(&path, config.to_string()).unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "target/\nout\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: declared output"]);
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "full"]);
+    let text = stderr(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("producer output refused:")
+            && text.contains("out/product: out is a symbolic link"),
+        "{text}"
+    );
+}

@@ -41,19 +41,94 @@ pub fn invalid(root: &Path, message: impl Into<String>) -> TestingError {
     }
 }
 
-/// A refused gate evidence read or write, naming the full path.
+/// A refused gate evidence read or write, naming the full path. When the
+/// link is the build-output folder or the `CodeFlow` home itself, the
+/// message names the recovery.
 pub(super) fn evidence_refused(
     root: &Path,
     relative: &str,
     error: &std::io::Error,
 ) -> TestingError {
+    let recovery = if configured_folder_is_link(root, relative) {
+        " The build-output folder or the CodeFlow home is itself a link: set \
+         CARGO_TARGET_DIR or CODEFLOW_HOME to the real folder it names."
+    } else {
+        ""
+    };
     TestingError::Io(std::io::Error::new(
         error.kind(),
         format!(
-            "gate evidence refused at {}: {error}; nothing was written through it",
+            "gate evidence refused at {}: {error}; nothing was written through it.{recovery}",
             root.join(relative).display()
         ),
     ))
+}
+
+/// Whether the link that refused `relative` lies in the folder the operator
+/// configured (the build-output folder or the home): the part of `relative`
+/// before the gate's own `codeflow-gate` or `gate-runs` folder.
+fn configured_folder_is_link(root: &Path, relative: &str) -> bool {
+    let Some(link) = crate::contained::linked_component(root, relative) else {
+        return false;
+    };
+    let configured: Vec<&str> = relative
+        .split('/')
+        .take_while(|part| !matches!(*part, "codeflow-gate" | "gate-runs"))
+        .collect();
+    link.split('/').count() <= configured.len()
+}
+
+/// Where a path a target names lies, for the anchored walk: beneath the
+/// build-output folder `target` of the evidence anchor `anchor`, else
+/// beneath the project `root`, as the tree to walk and the `/`-separated
+/// path inside it (TSK-1044). Every read, presence check or removal of such
+/// a path goes through the returned tree, so a link or junction at any
+/// component is refused. A path outside both folders is refused.
+///
+/// # Errors
+///
+/// When the path lies outside both folders or a root cannot be opened.
+pub(super) fn locate(
+    root: &Path,
+    anchor: &Path,
+    target: &str,
+    path: &Path,
+) -> std::io::Result<(crate::contained::Tree, String)> {
+    let path: PathBuf = path
+        .components()
+        .filter(|part| !matches!(part, std::path::Component::CurDir))
+        .collect();
+    let beneath = |base: &Path| {
+        crate::contained::relative_to(base, &path)
+            .ok()
+            .filter(|relative| {
+                relative == target
+                    || relative
+                        .strip_prefix(target)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+    };
+    if let Some(relative) = beneath(anchor) {
+        return Ok((crate::contained::Tree::open(anchor)?, relative));
+    }
+    if let Ok(output) = crate::contained::Tree::open(anchor) {
+        if let Some(relative) = beneath(output.path()) {
+            return Ok((output, relative));
+        }
+    }
+    let project = crate::contained::Tree::open(root)?;
+    let relative = crate::contained::relative_to(root, &path)
+        .or_else(|_| crate::contained::relative_to(project.path(), &path))
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "{} lies outside the project and its build-output folder",
+                    path.display()
+                ),
+            )
+        })?;
+    Ok((project, relative))
 }
 
 pub fn digest(bytes: &[u8]) -> String {
@@ -179,6 +254,7 @@ fn tracked_repository(
         ));
     }
     let mut result = BTreeMap::new();
+    let mut folders = BTreeMap::new();
     for entry in repo
         .index()
         .map_err(|e| invalid(root, e.to_string()))?
@@ -199,6 +275,12 @@ fn tracked_repository(
         let unreadable = |error: std::io::Error| {
             TestingError::Io(std::io::Error::new(error.kind(), format!("cannot snapshot {}: {error}; restore a readable tracked path before rerunning the gate", path.display())))
         };
+        // A link or junction that replaced a tracked folder is a change,
+        // never read through to the same bytes elsewhere (TSK-1044).
+        if beneath_link(root, &path, &mut folders).map_err(unreadable)? {
+            result.insert(name, digest(b"<beneath a link>"));
+            continue;
+        }
         let metadata = if crate::absence::proven_absent(&path).map_err(unreadable)? {
             None
         } else {
@@ -230,6 +312,33 @@ fn tracked_repository(
     }
     visiting.remove(&identity);
     Ok(result)
+}
+
+/// Whether a folder between `root` and the tracked `path` is a link or
+/// junction, read without following; `folders` caches each folder's answer.
+fn beneath_link(
+    root: &Path,
+    path: &Path,
+    folders: &mut BTreeMap<PathBuf, bool>,
+) -> std::io::Result<bool> {
+    let mut folder = path.parent();
+    while let Some(current) = folder {
+        if current == root || !current.starts_with(root) {
+            return Ok(false);
+        }
+        let linked = if let Some(linked) = folders.get(current) {
+            *linked
+        } else {
+            let linked = crate::contained::is_link_at(current)?;
+            folders.insert(current.to_path_buf(), linked);
+            linked
+        };
+        if linked {
+            return Ok(true);
+        }
+        folder = current.parent();
+    }
+    Ok(false)
 }
 
 /// A gitlink is a repository, not a file. Include both its checked-out
@@ -637,6 +746,85 @@ mod tests {
         assert_eq!(snapshot, tracked(dir.path()).unwrap());
     }
 
+    /// Grok review 2: a path a target names resolves beneath the
+    /// build-output folder or the project only. A path beside the
+    /// build-output folder under an absolute anchor, or outside both, is
+    /// refused.
+    #[test]
+    fn locate_keeps_a_path_beneath_the_build_output_folder_or_the_project() {
+        let project = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(parent.path().join("out")).unwrap();
+        let (tree, relative) = locate(
+            project.path(),
+            parent.path(),
+            "out",
+            &parent.path().join("out/r.xml"),
+        )
+        .unwrap();
+        assert_eq!(relative, "out/r.xml");
+        assert_eq!(tree.path(), parent.path().canonicalize().unwrap());
+        let (tree, relative) = locate(
+            project.path(),
+            parent.path(),
+            "out",
+            &project.path().join("./reports/r.xml"),
+        )
+        .unwrap();
+        assert_eq!(relative, "reports/r.xml");
+        assert_eq!(tree.path(), project.path().canonicalize().unwrap());
+        for beside in ["outer/r.xml", "other/r.xml"] {
+            let error = locate(
+                project.path(),
+                parent.path(),
+                "out",
+                &parent.path().join(beside),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{beside}");
+        }
+    }
+
+    /// Grok review 2: the refusal names `CARGO_TARGET_DIR` and
+    /// `CODEFLOW_HOME` only when the link is the folder they configure.
+    #[cfg(unix)]
+    #[test]
+    fn the_refusal_names_the_recovery_for_a_linked_configured_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("target")).unwrap();
+        std::fs::create_dir_all(root.path().join("home/gate-runs/run")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("home/gate-runs/run/x"))
+            .unwrap();
+        let error = std::io::Error::other("refused");
+        let text = evidence_refused(root.path(), "target/codeflow-gate/run", &error).to_string();
+        assert!(text.contains("CARGO_TARGET_DIR or CODEFLOW_HOME"), "{text}");
+        let text = evidence_refused(root.path(), "home/gate-runs/run/x/y", &error).to_string();
+        assert!(!text.contains("CARGO_TARGET_DIR"), "{text}");
+    }
+
+    /// Grok review 2 sweep: a tracked folder replaced by a link is a change
+    /// in the snapshot, never read through to the same bytes elsewhere.
+    #[cfg(unix)]
+    #[test]
+    fn a_tracked_folder_replaced_by_a_link_changes_the_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "same").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("src/lib.rs")).unwrap();
+        index.write().unwrap();
+        let before = tracked(dir.path()).unwrap();
+        let copy = tempfile::tempdir().unwrap();
+        std::fs::write(copy.path().join("lib.rs"), "same").unwrap();
+        std::fs::remove_dir_all(dir.path().join("src")).unwrap();
+        std::os::unix::fs::symlink(copy.path(), dir.path().join("src")).unwrap();
+        let after = tracked(dir.path()).unwrap();
+        assert_ne!(before.get("src/lib.rs"), after.get("src/lib.rs"));
+    }
+
     #[test]
     fn two_names_that_differ_only_in_invalid_bytes_keep_distinct_keys() {
         let root = Path::new("/repo");
@@ -757,6 +945,7 @@ mod r22_regressions {
     }
     #[test]
     fn r22_tracked_refuses_stat_failure_but_records_deletion() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
@@ -765,9 +954,19 @@ mod r22_regressions {
         index.add_path(Path::new("sub/file")).unwrap();
         index.write().unwrap();
         std::fs::remove_file(dir.path().join("sub/file")).unwrap();
-        assert_eq!(tracked(dir.path()).unwrap().len(), 1);
-        std::fs::remove_dir(dir.path().join("sub")).unwrap();
-        std::os::unix::fs::symlink("sub", dir.path().join("sub")).unwrap();
-        assert!(tracked(dir.path()).is_err());
+        let deleted = tracked(dir.path()).unwrap();
+        assert_eq!(deleted.len(), 1);
+        // A folder that cannot be read is refused, never read as deleted.
+        let sub = dir.path().join("sub");
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = tracked(dir.path());
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(unreadable.is_err());
+        // A looping link in place of the folder is a change, never a
+        // deletion (TSK-1044).
+        std::fs::remove_dir(&sub).unwrap();
+        std::os::unix::fs::symlink("sub", &sub).unwrap();
+        let linked = tracked(dir.path()).unwrap();
+        assert_ne!(linked, deleted);
     }
 }

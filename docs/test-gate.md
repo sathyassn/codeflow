@@ -51,9 +51,11 @@ report copies are replaced atomically, never written through a link. The
 copy refuses a link, a pipe or other special file, and a file with more
 than one name inside the run folder. A target's report is opened through
 the same walk from the project or the build-output folder and must be a
-regular file with one name; a report outside both is refused. A refusal
-names the path and fails the gate; nothing is written outside the
-evidence folders.
+regular file with one name; a report outside both is refused. The same
+walk removes a nextest target's stale report before it runs and checks
+that each declared producer output exists, so a link above either is
+refused instead of followed. A refusal names the path and fails the gate;
+nothing is written or removed outside the evidence folders.
 
 The default full gate and both `codeflow integrate` modes execute every
 target, as every run now does.
