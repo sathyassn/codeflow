@@ -991,7 +991,7 @@ fn tsk1002_codex08_git_selection_and_stdin_classes() {
 /// into a store makes a secret read.
 #[cfg(unix)]
 #[test]
-fn tsk1002_codex08_magic_is_read_only_on_pathspec_operands() {
+fn tsk1002_codex08_magic_never_clears_a_file_operand() {
     let f = Fixture::new();
     let store = f.temp.path().join(".codex");
     std::fs::create_dir_all(&store).unwrap();
@@ -1341,6 +1341,212 @@ fn tsk1002_committed_content_is_outside_the_promise() {
     ] {
         if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
             wrong.push(format!("allowed: {line}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// Each refusal holds on the guard whose rule it is (secret reads on
+/// exec-guard, enforcement writes on git-guard), so the pair of guards
+/// refuses; each control passes on both.
+fn assert_pair(f: &Fixture, refused: &[String], allowed: &[String]) {
+    let mut wrong = Vec::new();
+    for line in refused {
+        let outs: Vec<Output> = ["git-guard", "exec-guard"]
+            .iter()
+            .map(|hook| f.command(&f.linked, hook, line))
+            .collect();
+        if outs.iter().all(|out| out.status.code() != Some(2)) {
+            wrong.push(format!("both guards allowed: {line}"));
+        }
+        if outs
+            .iter()
+            .any(|out| !matches!(out.status.code(), Some(0 | 2)))
+        {
+            wrong.push(format!("a guard failed open or crashed: {line}: {outs:?}"));
+        }
+    }
+    for line in allowed {
+        for hook in ["git-guard", "exec-guard"] {
+            let out = f.command(&f.linked, hook, line);
+            if out.status.code() != Some(0) {
+                let err = String::from_utf8_lossy(&out.stderr);
+                wrong.push(format!("{hook} refused: {line}: {err}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-1002 Codex review 13 and Fable review 15: a program value, or a
+/// command Git takes as an operand, is judged in the directory the program
+/// runs in, with the line's links; a relative operand of `git -C DIR` is
+/// read from DIR; `find` gives its command every path under its starts; a
+/// command-local `CDPATH` moves `cd`; a Git call that stages files it does
+/// not name is judged by them; and words that only name a program variable
+/// as data are text.
+#[test]
+#[allow(clippy::too_many_lines)] // One case list per class of the review round.
+fn tsk1002_review13_programs_run_where_git_runs_them() {
+    let f = Fixture::new();
+    let home = f.root.parent().unwrap().to_path_buf();
+    let codex = home.join(".codex");
+    std::fs::create_dir_all(&codex).unwrap();
+    std::fs::write(codex.join("auth.json"), "{}\n").unwrap();
+    let home = shell_path(&home);
+    let refused: Vec<String> = [
+        // A program value in the Git call's directory and link state.
+        "GIT_EXTERNAL_DIFF='cat ../.codex/auth.json' git -C ../.. diff HEAD",
+        "cd ../.. && GIT_EXTERNAL_DIFF='cat ../.codex/auth.json' git diff HEAD",
+        "export GIT_EXTERNAL_DIFF='cat ../.codex/auth.json'; cd ../..; git diff HEAD",
+        "GIT_PAGER='cat ../.codex/auth.json' git -C ../.. log -1",
+        "GIT_PAGER='cat .codex/auth.json' git -C \"$UNSET_FIXTURE_DIR\" log -1",
+        // A program value before any program, which may run Git.
+        "GIT_EXTERNAL_DIFF='cat ~/.codex/auth.json' cargo test",
+        "GIT_EXTERNAL_DIFF='cat ~/.codex/auth.json' lazygit",
+        "env GIT_SSH_COMMAND='cat ~/.codex/auth.json' make",
+        "read -r EDITOR; cargo test",
+        "echo \"${PAGER:=cat ~/.codex/auth.json}\"; man ls",
+        // A relative operand after `git -C`.
+        "git -C ~ diff --no-index /dev/null .codex/auth.json",
+        "git -C ~ add -f .codex/auth.json",
+        "git -C ~/.codex hash-object auth.json",
+        // A `find` walker rooted in a store.
+        "find ~/.codex -type f -exec cat {} +",
+        "find ~/.codex -type f -exec cat {} \\;",
+        "find ~/.codex -type f -execdir cat {} +",
+        "find ~/.codex -type f | xargs cat",
+        // A command-local CDPATH.
+        "CDPATH=~ cd .codex; cat auth.json",
+        "CDPATH=~ pushd .codex; cat auth.json",
+        "shopt -s cdable_vars; X=~/.codex; cd X; cat auth.json",
+        // Staging a secret-named file without naming it.
+        "git add copies",
+        "git add .",
+        "git add -A",
+        "git stash -u",
+        // Enforcement-file writers.
+        "git checkout main -- .claude/settings.json",
+        "git restore --source=HEAD~ .claude/settings.json",
+        "git apply --directory=.claude fixture.patch",
+        "sort -o .claude/settings.json /dev/null",
+        "sort --output=.claude/settings.json /dev/null",
+        "shuf -o .claude/settings.json /dev/null",
+        "awk -i inplace 1 .claude/settings.json",
+        "echo x | sponge .claude/settings.json",
+        "dos2unix .claude/settings.json",
+        "gzip .claude/settings.json",
+        "uniq README.md .claude/settings.json",
+        "split -b1 /dev/null .claude/",
+        // Git operand commands (operator decision 2026-10-29).
+        "git rebase -x 'cat ~/.codex/auth.json' HEAD~1",
+        "git rebase --exec='cat ~/.codex/auth.json' HEAD~1",
+        "git bisect run cat ~/.codex/auth.json",
+        "git bisect run sh -c 'cat ~/.codex/auth.json'",
+        "git filter-branch --tree-filter 'cat ~/.codex/auth.json' HEAD",
+        "git filter-branch --msg-filter='cat ~/.codex/auth.json' HEAD",
+        "git difftool -y -x 'cat ~/.codex/auth.json'",
+        "git difftool --extcmd='cat ~/.codex/auth.json'",
+        "git -c mergetool.fx.cmd='cat ~/.codex/auth.json' mergetool -t fx",
+        "git mergetool -t configured",
+        "git -c core.pager='cat ~/.codex/auth.json' log -1",
+        "git -c core.editor='cat ~/.codex/auth.json' commit",
+        "git -c diff.external='cat ~/.codex/auth.json' diff",
+        "git -c 'alias.y=!cat ~/.codex/auth.json' y",
+        "git --config-env=core.pager=FIXTURE_PAGER log -1",
+        "git send-email --to-cmd='cat ~/.codex/auth.json' x.patch",
+        "git config core.pager 'cat ~/.codex/auth.json'; git log -1",
+        "git config filter.x.smudge 'cat ~/.codex/auth.json'",
+        "git clone -u 'cat ~/.codex/auth.json' ../.. copy",
+        "git grep -O'cat ~/.codex/auth.json' needle",
+        "git clone 'ext::sh -c cat% ~/.codex/auth.json' copy",
+        "git -c core.pager='rm -rf .git/hooks' log -1",
+        "git rebase -x \"$UNSET_FIXTURE_COMMAND\" HEAD~1",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .chain([
+        format!("ln -s {home}/.codex fixture-link; GIT_EXTERNAL_DIFF='cat fixture-link/auth.json' git diff HEAD"),
+        format!("git -C {home} hash-object .codex/auth.json"),
+    ])
+    .collect();
+    let allowed: Vec<String> = [
+        "GIT_PAGER=cat git log -1",
+        "GIT_PAGER='less -R' git -C ../.. log -1",
+        "GIT_EXTERNAL_DIFF='cat README.md' git diff HEAD",
+        "GIT_PAGER=cat cargo test",
+        "EDITOR=vim cargo test",
+        "git -C .. log -1 -- README.md",
+        "find clean -type f -exec cat {} +",
+        "find clean -name '*.md' -exec grep -l a {} +",
+        "cd clean; cat notes.md",
+        "git add clean",
+        "git add -u",
+        "git checkout main -- README.md",
+        "git restore README.md",
+        "sort -o out.txt README.md",
+        "awk 1 .claude/settings.json",
+        "git rebase -x 'cargo test' HEAD~1",
+        "git bisect run cargo test",
+        "git submodule foreach 'echo $name'",
+        "git difftool -y -x 'diff -u'",
+        "git -c core.pager=cat log -1",
+        "git -c color.ui=false log -1",
+        "git config core.pager 'less -R'",
+        "git config user.name 'A Person'",
+        "git config --get core.pager",
+        "echo EDITOR; git status",
+        "printf '%s\\n' 'EDITOR=vim'; git status",
+        "echo GIT_PAGER; git status",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    std::fs::create_dir_all(f.linked.join("copies")).unwrap();
+    std::fs::write(f.linked.join("copies/id_rsa"), "inert fixture\n").unwrap();
+    std::fs::create_dir_all(f.linked.join("clean")).unwrap();
+    std::fs::write(f.linked.join("clean/notes.md"), "a\n").unwrap();
+    git(
+        &f.root,
+        &[
+            "config",
+            "mergetool.configured.cmd",
+            &format!("cat {home}/.codex/auth.json"),
+        ],
+    );
+    assert_pair(&f, &refused, &allowed);
+    // `submodule foreach` runs its command in each checked-out submodule,
+    // judged there, and refuses when an earlier command on the line may
+    // change which submodules are checked out.
+    target_journey_in(&f, "submodule", "native");
+    let mut wrong = Vec::new();
+    for line in [
+        "git submodule foreach 'cat ~/.codex/auth.json'",
+        // From the submodule `sub`, two levels up is the home.
+        "git submodule foreach 'cat ../../.codex/auth.json'",
+        "git submodule foreach --recursive 'cat ~/.codex/auth.json'",
+        "git submodule update --init && git submodule foreach 'echo $name'",
+        "make setup; git submodule foreach 'echo $name'",
+        "printf x > .gitmodules && git submodule foreach 'echo $name'",
+    ] {
+        let outs: Vec<Output> = ["git-guard", "exec-guard"]
+            .iter()
+            .map(|hook| f.command(&f.root, hook, line))
+            .collect();
+        if outs.iter().all(|out| out.status.code() != Some(2)) {
+            wrong.push(format!("both guards allowed: {line}"));
+        }
+    }
+    for line in [
+        "git submodule foreach 'echo $name'",
+        "cd sub && git submodule foreach 'git status --short'",
+    ] {
+        for hook in ["git-guard", "exec-guard"] {
+            let out = f.command(&f.root, hook, line);
+            if out.status.code() != Some(0) {
+                let err = String::from_utf8_lossy(&out.stderr);
+                wrong.push(format!("{hook} refused: {line}: {err}"));
+            }
         }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));

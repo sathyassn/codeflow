@@ -167,7 +167,10 @@ pub const PROJECT_DELETIONS: &[&str] = &[
     "git clean -fdx -- build/",
     "rsync -a --delete ./src/ ./build/",
     "rsync -a --delete ./dist/ host:/srv/app/",
-    "find / -name '*.log' | xargs ls",
+    // A `find` pipeline reaches `xargs` like any producer since TSK-1002
+    // Fable review 15, and `xargs ls` then lists input the guard does not
+    // read, so this control counts the matches instead.
+    "find / -name '*.log' | wc -l",
 ];
 
 /// Every command of the Codex round 1 deletion probe

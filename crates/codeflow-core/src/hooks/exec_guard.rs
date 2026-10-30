@@ -19,6 +19,27 @@ use crate::security::{CheckContext, SecurityModule, SecurityPolicy, Verdict};
 use super::policy::{PolicyLevel, SecuritySection};
 use super::Violation;
 
+thread_local! {
+    /// Set while a Git runner body is judged: the runner reader already
+    /// read every nested body, so a body's own runners are not read again.
+    static RUNNER_BODY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks the judging of a Git runner body until dropped.
+struct RunnerBody(bool);
+
+impl RunnerBody {
+    fn enter() -> Self {
+        Self(RUNNER_BODY.replace(true))
+    }
+}
+
+impl Drop for RunnerBody {
+    fn drop(&mut self) {
+        RUNNER_BODY.set(self.0);
+    }
+}
+
 /// Evaluate a Bash command against the `security` policy section.
 ///
 /// Returns all violations found (at most one per module); the caller maps
@@ -134,22 +155,6 @@ pub fn evaluate_in(
         violations.push(finding);
         return violations;
     }
-    // A program Git runs from an environment variable is judged as a
-    // command of its own, or refuses when its value cannot be established
-    // (TSK-1002 Fable reviews 13 and 14, Codex review 12).
-    match crate::security::git_preflight::program_values(command) {
-        Ok(programs) => {
-            for program in programs {
-                violations.extend(evaluate_in(&program, posix, levels, integrity, cwd, root));
-            }
-        }
-        Err(why) => violations.push(Violation::new(
-            "security.secret_reads",
-            levels.secret_reads,
-            format!("cannot verify the program Git runs: {why}"),
-            crate::remedy::SECRET_SELECTION.remedy(),
-        )),
-    }
     // `~` and `$HOME` name the home the line assigns before them (TSK-379).
     let line_home = super::git_guard::line_home::read(command);
     let _home = super::git_guard::line_home::Scope::enter(command, &line_home);
@@ -174,12 +179,22 @@ pub fn evaluate_in(
             violations.push(finding);
         }
     }
-    if violations.is_empty() {
-        if let Some(finding) = super::git_guard::git_runner_write_violation(command, cwd, integrity)
-        {
-            violations.push(finding);
-        }
-    }
+    // Programs the line's Git calls and program values run are judged as
+    // commands of their own after the line's own findings, so a
+    // hook-integrity refusal of the line itself still names that rule.
+    let runs = runner_violations(
+        command,
+        posix,
+        levels,
+        integrity,
+        cwd,
+        root,
+        &mut violations,
+    );
+    violations.extend(program_violations(
+        command, posix, levels, integrity, cwd, root,
+    ));
+    violations.extend(runs);
     if !prose && levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
@@ -223,6 +238,87 @@ pub fn evaluate_in(
 /// Keep one finding per rule, the strongest: a fixed level outranks a
 /// configurable one, and a block outranks a warning, so a weaker finding
 /// met first never hides an always-blocking one (TSK-302 review round 2).
+/// A program Git runs from an environment variable, or a command-valued
+/// `git config` write, judged as a command of its own in each directory it
+/// may run in, or refused when its value or that directory cannot be
+/// established (TSK-1002 Fable reviews 13 and 14, Codex reviews 12 and 13).
+fn program_violations(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+) -> Vec<Violation> {
+    match crate::security::git_preflight::program_runs(command, cwd) {
+        Ok(runs) => runs
+            .iter()
+            .flat_map(|(program, directory)| {
+                evaluate_in(program, posix, levels, integrity, directory, root)
+            })
+            .collect(),
+        Err(why) => vec![Violation::new(
+            "security.secret_reads",
+            levels.secret_reads,
+            format!("cannot verify the program Git runs: {why}"),
+            crate::remedy::SECRET_SELECTION.remedy(),
+        )],
+    }
+}
+
+/// Every command a Git call on the line runs itself, read with its
+/// directory by git-guard's runner reader through every nesting level and
+/// judged as a command of its own (operator decision 2026-10-29: Git
+/// operand commands are judged as commands). A body is judged without
+/// reading its runners again. The first hook-integrity write among the
+/// bodies joins `line` when it has no finding yet. A runner the guard
+/// cannot read refuses, under hook integrity when that rule is on and as
+/// an unverified secret read otherwise.
+fn runner_violations(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+    line: &mut Vec<Violation>,
+) -> Vec<Violation> {
+    if RUNNER_BODY.get() {
+        return Vec::new();
+    }
+    match super::git_guard::git_runner_bodies(command, cwd) {
+        Ok(bodies) => {
+            if line.is_empty() {
+                line.extend(super::git_guard::git_runner_write_violation_in(
+                    &bodies, cwd, integrity,
+                ));
+            }
+            let _body = RunnerBody::enter();
+            bodies
+                .iter()
+                .flat_map(|(body, directory)| {
+                    evaluate_in(body, posix, levels, integrity, directory, root)
+                })
+                .collect()
+        }
+        Err(why) if integrity.is_active() => {
+            if !line
+                .iter()
+                .any(|finding| finding.rule == "git.hook_integrity")
+            {
+                line.push(super::git_guard::git_runner_unread(&why));
+            }
+            Vec::new()
+        }
+        Err(why) => vec![Violation::new(
+            "security.secret_reads",
+            levels.secret_reads,
+            format!("cannot verify the program Git runs: {why}"),
+            crate::remedy::SECRET_SELECTION.remedy(),
+        )],
+    }
+}
+
 fn merge_strongest(violations: &mut Vec<Violation>, finding: Violation) {
     let strength = |v: &Violation| (v.level_fixed, v.level == PolicyLevel::Block);
     match violations.iter_mut().find(|v| v.rule == finding.rule) {

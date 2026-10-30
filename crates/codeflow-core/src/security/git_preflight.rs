@@ -6,7 +6,8 @@
 //! `GIT_*` environment variable the guard has not classified refuses as
 //! cannot-verify: unlisted means unknown. A variable whose value is a
 //! program Git runs is judged by running that value through the guards as
-//! a command of its own (review 11).
+//! a command of its own (review 11), before every program the line runs and
+//! in each directory it runs in (Codex review 13).
 
 /// The `GIT_*` variables a line may set beside a Git call. Each is listed
 /// from Git's own documentation (`git help git`, "Environment Variables",
@@ -73,8 +74,9 @@ const CLASSIFIED_ENVIRONMENT: &[&str] = &[
 /// - `less(1)`, "Input preprocessor": `LESSOPEN` and `LESSCLOSE`, programs
 ///   Git's default pager runs.
 ///
-/// The `-c`, `--config-env` and `git config` spellings of the same programs
-/// are TSK-1065's residual, not judged here.
+/// A Git call's `-c` and `--config-env` spellings of the same programs are
+/// read by git-guard's runner reader, and a `git config` write of one by
+/// [`super::git_config_writes`].
 const PROGRAM_ENVIRONMENT: &[&str] = &[
     "EDITOR",
     "GIT_ASKPASS",
@@ -93,6 +95,28 @@ const PROGRAM_ENVIRONMENT: &[&str] = &[
 
 /// Shell builtins whose operands set, export or clear variables.
 const DECLARERS: &[&str] = &["declare", "export", "local", "readonly", "typeset", "unset"];
+
+/// Shell builtins and keywords that set a variable their operands name in
+/// a way [`scan`] does not read as an assignment: `read GIT_PAGER`,
+/// `printf -v PAGER`, `for EDITOR in`. An external program cannot set a
+/// variable of the shell that runs it, so its operands are text.
+const SETTERS: &[&str] = &[
+    "float",
+    "for",
+    "getopts",
+    "integer",
+    "let",
+    "mapfile",
+    "print",
+    "printf",
+    "private",
+    "read",
+    "readarray",
+    "select",
+    "vared",
+    "wait",
+    "zparseopts",
+];
 
 /// Spellings that are verbatim or device paths wherever they appear.
 const NAMESPACE_MARKERS: &[&str] = &["\\\\?\\", "\\\\.\\", "\\??\\", "//?/", "//./", "/??/"];
@@ -157,6 +181,19 @@ fn identifier(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// Whether `word` holds an assigning expansion of a program variable
+/// (`${PAGER:=x}`, `${PAGER=x}`, zsh `${PAGER::=x}`), which sets it
+/// wherever the word appears.
+fn assigns_program_variable(word: &str) -> bool {
+    PROGRAM_ENVIRONMENT.iter().any(|name| {
+        word.match_indices(&format!("${{{name}"))
+            .any(|(at, marker)| {
+                let rest = &word[at + marker.len()..];
+                rest.starts_with('=') || rest.starts_with(":=") || rest.starts_with("::=")
+            })
+    })
+}
+
 /// Whether `word` names a program variable other than by reading it
 /// (`$NAME`, `${NAME}`, `${NAME:-x}`): a bare name such as a `read` or
 /// `printf -v` target or a `declare -n` value, or an assigning expansion
@@ -194,10 +231,20 @@ fn names_program_variable(word: &str) -> bool {
 fn scan(command: &str) -> Scan {
     let mut found = Vec::new();
     let mut loose = None;
-    if !runs_git(command) {
-        return Scan::default();
-    }
-    for segment in crate::hooks::git_guard::expand_commands(command) {
+    let segments = crate::hooks::git_guard::expand_commands(command);
+    // A name the line defines as an alias may stand for a setter.
+    let aliases: Vec<String> = segments
+        .iter()
+        .map(|segment| crate::hooks::git_guard::command_argv(segment))
+        .filter(|words| words.first().is_some_and(|word| word == "alias"))
+        .flat_map(|words| {
+            words[1..]
+                .iter()
+                .filter_map(|word| word.split_once('=').map(|(name, _)| name.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for segment in segments {
         let words = crate::hooks::git_guard::command_argv(&segment);
         let leading = words
             .iter()
@@ -212,11 +259,24 @@ fn scan(command: &str) -> Scan {
             Some((program, rest)) => (words.len() - rest.len() - 1, Some(program)),
             None => (leading, None),
         };
-        let git = program.is_some_and(|program| {
-            let rest = &words[program_at + 1..];
-            crate::hooks::git_guard::git_arguments(program, rest).is_some()
-        });
         let builtin = program.filter(|program| DECLARERS.contains(program));
+        // The operands of a program that may set a variable they name.
+        let setter = program.is_some_and(|program| {
+            let rest = &words[program_at + 1..];
+            let option = |letter: &str| {
+                rest.iter().any(|word| {
+                    word.starts_with('-') && !word.starts_with("--") && word.contains(letter)
+                })
+            };
+            crate::hooks::git_guard::unresolved_word(program)
+                || DECLARERS.contains(&program)
+                || aliases.iter().any(|alias| alias == program)
+                || match program {
+                    "printf" | "print" => option("v"),
+                    "wait" => option("p"),
+                    _ => SETTERS.contains(&program),
+                }
+        });
         let mut set = |name: &str, value: Option<&str>, unset: bool| {
             found.push(Assignment {
                 name: name.to_string(),
@@ -250,10 +310,16 @@ fn scan(command: &str) -> Scan {
             } else {
                 false
             };
-            // Git's own arguments are text; anywhere else, a word naming a
-            // program variable may set it in a way the guard does not read.
-            let own = git && at >= program_at;
-            if !assigned && !own && loose.is_none() && names_program_variable(word) {
+            // A word naming a program variable may set it in a way the
+            // guard does not read in a setter's operands, the launcher
+            // region and the program word; any other program's operands
+            // are text (TSK-1002 Codex review 13). An assigning expansion
+            // sets it wherever it appears.
+            let role = at <= program_at || setter;
+            if loose.is_none()
+                && (!assigned && role && names_program_variable(word)
+                    || assigns_program_variable(word))
+            {
                 loose = Some(word.clone());
             }
         }
@@ -264,8 +330,11 @@ fn scan(command: &str) -> Scan {
     }
 }
 
-/// The `(name, value)` pairs [`scan`] reads.
+/// The `(name, value)` pairs [`scan`] reads on a line that runs Git.
 fn assignments(command: &str) -> Vec<(String, Option<String>)> {
+    if !runs_git(command) {
+        return Vec::new();
+    }
     scan(command)
         .assignments
         .into_iter()
@@ -360,6 +429,13 @@ pub(crate) fn program_values(command: &str) -> Result<Vec<String>, String> {
         ));
     }
     let program = |name: &str| PROGRAM_ENVIRONMENT.contains(&name);
+    if !scan
+        .assignments
+        .iter()
+        .any(|assignment| program(&assignment.name))
+    {
+        return Ok(Vec::new());
+    }
     // `LESSOPEN` and `LESSCLOSE` start with `|`, `||` or `-` markers.
     let command_text = |name: &str, value: &str| {
         if name.starts_with("LESS") {
@@ -413,6 +489,109 @@ pub(crate) fn program_values(command: &str) -> Result<Vec<String>, String> {
     out.sort();
     out.dedup();
     Ok(out)
+}
+
+/// Every command the line's programs may run from a program value, or
+/// store with a `git config` write, with each directory it may run in, to
+/// be judged as a command of its own (TSK-1002 Codex review 13, Fable
+/// review 15; operator decision 2026-10-29: Git operand commands are judged
+/// as commands).
+///
+/// - A program value ([`program_values`]) assigned on the line, or exported
+///   earlier in it, reaches every program the line runs, Git or any
+///   program that may run Git (`cargo test`, `lazygit`), so it is judged
+///   in each of their directories.
+/// - A command-valued key a `git config` write stores
+///   ([`super::git_config_writes`]) is judged in that call's directory.
+///
+/// Every command a Git call runs itself, from an option, an operand, a
+/// setting or its environment, is read with its directory by git-guard's
+/// runner reader ([`crate::hooks::git_guard::git_runner_bodies`]), and both
+/// guards judge each one.
+///
+/// A program runs in the directory its call runs in: the shell's, after
+/// its `cd` steps, moved by a Git call's `-C` options, and its repository's
+/// top, where Git moves before it starts a pager, an editor or a diff
+/// program. A directory the guard cannot establish, a command it cannot
+/// read, or a link the line declares before the call, which changes what a
+/// path names before it exists, refuses as cannot-verify.
+///
+/// # Errors
+///
+/// Why a command or the directory it runs in cannot be established.
+pub(crate) fn program_runs(
+    command: &str,
+    cwd: &std::path::Path,
+) -> Result<Vec<(String, std::path::PathBuf)>, String> {
+    let values = program_values(command)?;
+    let homes = std::iter::once(crate::portable_path::user_home())
+        .chain(crate::hooks::git_guard::line_home::assigned().map(Some));
+    let mut runs = Vec::new();
+    let mut reached = false;
+    for home in homes {
+        for call in super::outward::unwrapped_commands(command, cwd, home.as_deref()) {
+            let Some((program, rest)) = call.args.split_first() else {
+                continue;
+            };
+            let git = crate::hooks::git_guard::unresolved_word(program)
+                || crate::hooks::git_guard::git_arguments(program, rest).is_some();
+            let call = if git {
+                super::interpreter::git_alias_expanded(call, command)
+                    .map_err(|why| format!("cannot read the Git call: {why}"))?
+            } else {
+                call
+            };
+            let operands = if git {
+                super::git_config_writes::commands(&call)?
+            } else {
+                Vec::new()
+            };
+            if values.is_empty() && operands.is_empty() {
+                continue;
+            }
+            reached = true;
+            if !call.links.is_empty() {
+                return Err(
+                    "a link the line declares changes what the command's paths name".to_string(),
+                );
+            }
+            let directory = match git
+                .then(|| super::interpreter::git_repository::call_directory(&call, home.as_deref()))
+                .flatten()
+            {
+                Some(directory) => directory,
+                None => call.cwd.clone(),
+            }
+            .ok_or("cannot establish the directory the command runs in")?;
+            let mut directories = vec![directory.clone()];
+            if let Some((_, top)) = super::git_config::repository_of(&directory, &[])? {
+                directories.push(top);
+            }
+            for directory in directories {
+                runs.extend(
+                    values
+                        .iter()
+                        .map(|value| (value.clone(), directory.clone())),
+                );
+                runs.extend(
+                    operands
+                        .iter()
+                        .map(|operand| (operand.clone(), directory.clone())),
+                );
+            }
+        }
+    }
+    // A value no program on the line reaches is judged where the line runs.
+    if !reached {
+        runs.extend(
+            values
+                .iter()
+                .map(|value| (value.clone(), cwd.to_path_buf())),
+        );
+    }
+    runs.sort();
+    runs.dedup();
+    Ok(runs)
 }
 
 /// Whether a Git call on the line sets `--exec-path=DIR`, where Git finds
@@ -576,6 +755,39 @@ mod tests {
         ] {
             assert!(program_values(line).is_err(), "{line}");
         }
+    }
+
+    /// TSK-1002 Codex review 13: a word that names a program variable is
+    /// text in an ordinary program's operands, and a setter wherever a
+    /// builtin, keyword, alias or assigning expansion may set it. A program
+    /// value is judged before any program, Git or not (Grok, PR 405).
+    #[test]
+    fn data_words_are_text_and_setters_refuse() {
+        let ok = |line: &str| program_values(line).unwrap_or_else(|why| panic!("{line}: {why}"));
+        for line in [
+            "echo EDITOR; git status",
+            "printf '%s\\n' 'EDITOR=vim'; git status",
+            "printf '%s\\n' 'PAGER=less'; git status",
+            "echo GIT_PAGER; git status",
+            "grep -n EDITOR README.md",
+            "echo \"$EDITOR\"",
+        ] {
+            assert_eq!(ok(line), Vec::<String>::new(), "{line}");
+        }
+        for line in [
+            "read -r EDITOR; cargo test",
+            "printf -v PAGER %s 'cat x'; man ls",
+            "echo \"${PAGER:=cat x}\"; man ls",
+            "echo \"${GIT_PAGER=cat x}\"",
+            "mapfile -t VISUAL < x; git log",
+            "alias r='read -r'; r EDITOR; git log",
+            "for GIT_PAGER in 'cat x'; do git log; done",
+        ] {
+            assert!(program_values(line).is_err(), "{line}");
+        }
+        assert_eq!(ok("GIT_EXTERNAL_DIFF='cat x' cargo test"), ["cat x"]);
+        assert_eq!(ok("export PAGER='cat x'; man ls"), ["cat x"]);
+        assert_eq!(ok("env GIT_SSH_COMMAND='cat x' make"), ["cat x"]);
     }
 
     #[test]

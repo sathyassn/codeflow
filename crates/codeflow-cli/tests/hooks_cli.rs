@@ -2234,7 +2234,10 @@ fn configuration_operands_and_missing_includes_allow_ordinary_git_commands() {
         for command in [
             "git commit -m 'docs: explain gitconfig includes'",
             "git commit -m 'move to HOME page'",
-            "git checkout -- .git/config-notes.md",
+            // Git restores no path under `.git`, and a checkout operand is
+            // a write, so the control names a configuration note elsewhere
+            // (TSK-1002 Fable review 15).
+            "git checkout -- docs/gitconfig-notes.md",
             "git log -1 -- docs/gitconfig.md && git push origin feat/x",
             "git push origin task/x",
             "git st",
@@ -2409,9 +2412,8 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
         "cd \"$HOME/src/x\" && git push origin task/x",
         "git commit -m \"set HOME\"",
         "printf '%s' \"${HOME}\"; git push origin task/x",
-        // A `GIT_*` name the guard has not classified refuses on a Git line
-        // in any role since TSK-1002 review 10, so this control names a
-        // classified one.
+        // A `GIT_*` name in a Git operand is text (TSK-1002 Codex reviews
+        // 12 and 13); this control names a classified one all the same.
         "git log -- HOME GIT_DIR; git push origin task/x",
         "getln HOME; git status",
         "export PATH=$PATH:/x",

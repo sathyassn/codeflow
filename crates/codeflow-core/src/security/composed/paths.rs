@@ -2122,7 +2122,14 @@ fn simple(
         }
         match program {
             "cd" | "chdir" | "pushd" => {
-                change_directory(&mut position, program, args);
+                // A command-local `CDPATH=` is in effect for this change
+                // (`CDPATH=~ cd .codex`), as a separate assignment is
+                // (TSK-1002 Fable review 15).
+                let mut local = position.clone();
+                apply_prefix_environment(&mut local, &words[..words.len() - args.len() - 1]);
+                let cdpath = local.state.vars.contains_key("CDPATH")
+                    || local.state.vars.contains_key("cdpath");
+                change_directory(&mut position, program, args, cdpath);
                 if let Some(real) = physical_destination {
                     if position.state.directory.is_some() {
                         position.state.directory = Some(real);
@@ -2355,8 +2362,34 @@ fn sets_physical(program: &str, args: &[String]) -> bool {
             }
             false
         }
+        // bash `shopt -s cdable_vars` lets `cd NAME` go to the directory a
+        // variable holds when NAME is not one; read physically, a NAME the
+        // guard cannot resolve on disk leaves the directory unknown
+        // (TSK-1002 Fable review 15). `shopt -o` sets a `set -o` option.
+        "shopt" => {
+            let setting = args
+                .iter()
+                .any(|word| word.starts_with('-') && word.contains('s'));
+            let set_option = args
+                .iter()
+                .any(|word| word.starts_with('-') && word.contains('o'));
+            setting
+                && args
+                    .iter()
+                    .filter(|word| !word.starts_with('-'))
+                    .any(|name| cdable_vars(name) || set_option && option_physical(name, true))
+        }
         _ => false,
     }
+}
+
+/// Whether a shell option name is bash's `cdable_vars` or zsh's
+/// `CDABLE_VARS`, in any case and with or without underscores.
+fn cdable_vars(name: &str) -> bool {
+    name.chars()
+        .filter(|ch| !matches!(ch, '_' | '-'))
+        .flat_map(char::to_lowercase)
+        .eq("cdablevars".chars())
 }
 
 /// bash long invocation options that leave directory changes logical.
@@ -2440,8 +2473,11 @@ fn shell_invocation_physical(args: &[String]) -> bool {
                     } else {
                         Some(attached)
                     };
-                    // `-O` names a bash shopt option, none of which is physical.
-                    if letter == 'o' && name.is_none_or(|name| option_physical(name, on)) {
+                    // `-O` names a bash shopt option; only `cdable_vars`
+                    // moves a directory change, read as a physical one.
+                    if letter == 'o' && name.is_none_or(|name| option_physical(name, on))
+                        || letter == 'O' && on && name.is_none_or(cdable_vars)
+                    {
                         return true;
                     }
                     break;
@@ -2560,7 +2596,10 @@ fn physical_operand(position: &Position, program: &str, args: &[String]) -> Opti
     }
 }
 
-fn change_directory(position: &mut Position, program: &str, args: &[String]) {
+/// `cdpath` says whether `CDPATH` (or zsh's `cdpath`) is set for this
+/// change, where a relative operand that does not start with `.` or `..`
+/// may go to a directory the guard does not read.
+fn change_directory(position: &mut Position, program: &str, args: &[String], cdpath: bool) {
     if program == "pushd" && args.iter().any(|arg| arg == "-n") {
         // Bash keeps this entry relative until a later rotation uses it.
         if let Some(target) = args.iter().find(|arg| !arg.starts_with('-')) {
@@ -2614,7 +2653,7 @@ fn change_directory(position: &mut Position, program: &str, args: &[String]) {
     for change in changes {
         position.state.directory = match (&position.state.directory, change) {
             (Some(dir), crate::security::outward::DirChange::To(target)) => {
-                if position.state.vars.contains_key("CDPATH")
+                if cdpath
                     && !target.is_absolute()
                     && !target.starts_with(".")
                     && !target.starts_with("..")
@@ -3182,6 +3221,9 @@ mod tests {
         for line in [
             "cd $UNSET && probe $PWD",
             "CDPATH=/elsewhere; cd docs && probe $PWD",
+            // A command-local CDPATH (TSK-1002 Fable review 15).
+            "CDPATH=/elsewhere cd docs && probe $PWD",
+            "CDPATH=/elsewhere pushd docs && probe $PWD",
         ] {
             assert!(
                 probes(line)

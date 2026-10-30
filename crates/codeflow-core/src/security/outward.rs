@@ -210,6 +210,7 @@ pub(crate) enum Supplier {
 }
 
 /// A simple command the line runs, as [`unwrapped_commands`] reaches it.
+#[derive(Clone)]
 pub(crate) struct Unwrapped {
     pub(crate) args: Vec<String>,
     /// Literal stdin from this command position, before any file-list parsing.
@@ -780,12 +781,11 @@ fn visit_segments(command: &str, positioned: bool) -> Vec<String> {
     if !positioned {
         return expand_commands(command);
     }
-    let words = command_argv(command);
-    if strip_launchers(&words).is_some_and(|(program, _)| program == "find") {
-        return vec![command.to_owned()];
-    }
     // visit/argv read carried bodies at their own command positions.
-    // Expanding them here again loses their pipeline stdin evidence.
+    // Expanding them here again loses their pipeline stdin evidence. A
+    // `find` keeps its `-exec` command in its own segment, and a pipeline
+    // after it is split like any other, so `find X | xargs cat` hands
+    // `cat` input the guard does not read (TSK-1002 Fable review 15).
     crate::hooks::git_guard::command_segments(command)
 }
 

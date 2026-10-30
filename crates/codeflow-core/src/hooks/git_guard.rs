@@ -901,12 +901,13 @@ fn evaluate_report_with_runners(
     let _home = line_home::Scope::enter(command, &home);
     let mut report = Evaluation::default();
     // A program Git runs from an environment variable is judged as a
-    // command of its own, or refuses when its value cannot be established
-    // (TSK-1002 Fable reviews 13 and 14, Codex review 12).
-    match crate::security::git_preflight::program_values(command) {
-        Ok(programs) => {
-            for program in programs {
-                let nested = evaluate_report_with_runners(&program, ctx, cwd, read_runners);
+    // command of its own in each directory Git may run it in, or refuses
+    // when its value or that directory cannot be established (TSK-1002
+    // Fable reviews 13 and 14, Codex reviews 12 and 13).
+    match crate::security::git_preflight::program_runs(command, cwd) {
+        Ok(runs) => {
+            for (program, directory) in runs {
+                let nested = evaluate_report_with_runners(&program, ctx, &directory, read_runners);
                 report.violations.extend(nested.violations);
             }
         }
@@ -6540,6 +6541,133 @@ fn git_init_paths(args: &[String]) -> Vec<String> {
     paths
 }
 
+/// Programs whose `-o` is a flag or takes a value that is not a file the
+/// program writes (`ls -o`, `find -o`, `grep -o`, `unzip -o`, `set -o`).
+const FLAG_O_PROGRAMS: &[&str] = &[
+    "ag", "bash", "cut", "df", "du", "egrep", "fgrep", "find", "git", "grep", "join", "ls", "lsof",
+    "mount", "pgrep", "pkill", "ps", "rg", "sed", "set", "sh", "ssh", "tar", "test", "unzip",
+    "xargs", "zsh", "[",
+];
+
+/// The files a program writes through an output option or in place, which
+/// the writer table does not list (TSK-1002 Fable review 15): the value of
+/// `-o`, `--output`, `--outfile`, `--output-file` or `-out` for any
+/// program whose `-o` is not a flag ([`FLAG_O_PROGRAMS`]); the operands of
+/// an in-place editor (`awk -i inplace`, `sponge`, `dos2unix` and its
+/// siblings, `sd`, `yq -i`, `ruby -i`) or a compressor that replaces its
+/// operand (`gzip`, `xz`, `zstd --rm` and the like, unless `-c`, `-k`,
+/// `-t` or `-l`); the output operand of `uniq IN OUT` and `xxd IN OUT`;
+/// and the prefix `split` or `csplit` writes its pieces under. `None` when
+/// the program writes none of these.
+#[allow(clippy::too_many_lines)] // One reading per writer family, each from its own manual.
+fn output_writer_paths(cmd: &str, args: &[String]) -> Option<Vec<String>> {
+    let mut paths = Vec::new();
+    let mut words = args.iter().peekable();
+    while let Some(word) = words.next() {
+        let separate = matches!(
+            word.as_str(),
+            "--output" | "--outfile" | "--output-file" | "--out-file" | "-out"
+        ) || word == "-o" && !FLAG_O_PROGRAMS.contains(&cmd);
+        if separate {
+            paths.extend(words.next().cloned());
+            continue;
+        }
+        if let Some((option, value)) = word.split_once('=') {
+            if matches!(
+                option,
+                "--output" | "--outfile" | "--output-file" | "--out-file" | "-out"
+            ) {
+                paths.push(value.to_string());
+            }
+        } else if let Some(value) = word.strip_prefix("-o").filter(|value| {
+            !value.is_empty() && matches!(cmd, "sort" | "shuf" | "iconv" | "gsort" | "gshuf")
+        }) {
+            paths.push(value.to_string());
+        }
+    }
+    let operands = || -> Vec<String> {
+        args.iter()
+            .filter(|word| !word.starts_with('-') || word.as_str() == "-")
+            .cloned()
+            .collect()
+    };
+    let has = |flags: &[&str]| args.iter().any(|word| flags.contains(&word.as_str()));
+    match cmd {
+        "awk" | "gawk"
+            if args
+                .windows(2)
+                .any(|pair| pair[0] == "-i" && pair[1].starts_with("inplace"))
+                || args.iter().any(|word| {
+                    word.starts_with("-iinplace") || word.starts_with("--include=inplace")
+                }) =>
+        {
+            paths.extend(operands());
+        }
+        "sponge" | "dos2unix" | "unix2dos" | "mac2unix" | "unix2mac" | "sd" => {
+            paths.extend(operands());
+        }
+        "yq" if has(&["-i", "--inplace"]) => paths.extend(operands()),
+        "ruby" if args.iter().any(|word| word.starts_with("-i")) => paths.extend(operands()),
+        "gzip" | "gunzip" | "bzip2" | "bunzip2" | "xz" | "unxz" | "lzma" | "unlzma" | "lz4"
+        | "compress" | "uncompress" | "zstd" | "unzstd"
+            if !has(&[
+                "-c",
+                "--stdout",
+                "--to-stdout",
+                "-k",
+                "--keep",
+                "-t",
+                "--test",
+                "-l",
+                "--list",
+            ]) && (!matches!(cmd, "zstd" | "unzstd") || has(&["--rm"])) =>
+        {
+            paths.extend(operands());
+        }
+        "uniq" | "xxd" => paths.extend(operands().into_iter().nth(1)),
+        "split" | "gsplit" => {
+            let valued = [
+                "-b",
+                "-l",
+                "-n",
+                "-a",
+                "-C",
+                "-t",
+                "--additional-suffix",
+                "--filter",
+            ];
+            let mut rest = Vec::new();
+            let mut words = args.iter();
+            while let Some(word) = words.next() {
+                if valued.contains(&word.as_str()) {
+                    words.next();
+                } else if !word.starts_with('-') || word == "-" {
+                    rest.push(word.clone());
+                }
+            }
+            if let Some(prefix) = rest.get(1) {
+                paths.push(format!("{prefix}aa"));
+                paths.push(prefix.clone());
+            }
+        }
+        "csplit" | "gcsplit" => {
+            let mut words = args.iter();
+            while let Some(word) = words.next() {
+                let prefix = match word.as_str() {
+                    "-f" | "--prefix" => words.next().cloned(),
+                    _ => word.strip_prefix("--prefix=").map(str::to_string),
+                };
+                if let Some(prefix) = prefix {
+                    paths.push(format!("{prefix}00"));
+                    paths.push(prefix);
+                }
+            }
+        }
+        _ => {}
+    }
+    (!paths.is_empty()).then_some(paths)
+}
+
 /// The writes 3.0.0 judged directly: a mutating command's own path
 /// arguments, `dd of=`, `sed -i` files and script writes, the destination
 /// of `cp`, `ln` and `rsync`, and `git rm` or `git mv`.
@@ -6599,6 +6727,14 @@ fn direct_write_violation(
         return Some(hook_integrity_violation(
             level,
             format!("`{cmd}` targets the integrity path `{p}`"),
+        ));
+    }
+    if let Some(p) = output_writer_paths(cmd, args)
+        .and_then(|paths| arg_integrity_path(&paths, cwd, payload_cwd))
+    {
+        return Some(hook_integrity_violation(
+            level,
+            format!("`{cmd}` writes the integrity path `{p}`"),
         ));
     }
     if cmd == "dd" {
@@ -7358,40 +7494,59 @@ pub(crate) fn launched_script(words: &[String], script: &str) -> String {
     text
 }
 
-/// Exec-guard judges the same runner bodies and directories as git-guard.
-pub(crate) fn git_runner_write_violation(
+/// Every command a Git call on the line runs itself, with the directory
+/// Git runs it in: an option or operand command (`rebase -x`, `bisect
+/// run`, `submodule foreach`, filter-branch filters, `difftool -x`,
+/// send-email hooks, transport programs), a configured or `-c` command the
+/// subcommand uses, a program from its environment, and an alias body,
+/// read through every nesting level. Exec-guard judges each one as a
+/// command of its own (TSK-1002 Fable review 15).
+///
+/// # Errors
+///
+/// Why a runner, its command or its directory cannot be read.
+pub(crate) fn git_runner_bodies(
     command: &str,
+    cwd: &Path,
+) -> Result<Vec<(String, PathBuf)>, String> {
+    Ok(runners::read(command, cwd)?
+        .into_iter()
+        .map(|body| (body.command, body.directory))
+        .collect())
+}
+
+/// The refusal for a Git runner the guard cannot read.
+pub(crate) fn git_runner_unread(why: &str) -> Violation {
+    runners::unread(why)
+}
+
+/// The first hook-integrity write among the Git runner bodies
+/// [`git_runner_bodies`] read: exec-guard judges the same runner bodies and
+/// directories as git-guard.
+pub(crate) fn git_runner_write_violation_in(
+    bodies: &[(String, PathBuf)],
     cwd: &Path,
     level: PolicyLevel,
 ) -> Option<Violation> {
     if !level.is_active() {
         return None;
     }
-    let bodies = match runners::read(command, cwd) {
-        Ok(bodies) => bodies,
-        Err(why) => return Some(runners::unread(&why)),
-    };
-    for body in bodies {
-        let expanded = expand_shell_commands(&body.command);
-        let run = run_dirs(&expanded.segments, &body.directory);
+    for (command, directory) in bodies {
+        let expanded = expand_shell_commands(command);
+        let run = run_dirs(&expanded.segments, directory);
         for segment in &expanded.segments {
             let mut words = shell_tokens(segment);
             strip_reserved_words(&mut words);
-            if let Some(finding) = integrity_write_in_run(
-                &words,
-                &redirect_writes(segment),
-                level,
-                &run,
-                cwd,
-                &body.command,
-            ) {
+            if let Some(finding) =
+                integrity_write_in_run(&words, &redirect_writes(segment), level, &run, cwd, command)
+            {
                 return Some(finding);
             }
         }
         if let Some(finding) = crate::security::startup::evaluate_with(
-            &body.command,
-            &body.directory,
-            &crate::security::startup::StartupEnv::from_process_at(&body.directory),
+            command,
+            directory,
+            &crate::security::startup::StartupEnv::from_process_at(directory),
             level,
         )
         .into_iter()
@@ -15041,7 +15196,9 @@ mod tests {
         for command in [
             "git commit -m 'docs: explain gitconfig includes'",
             "git commit -m 'move to HOME page'",
-            "git checkout -- .git/config-notes.md",
+            // A checkout path is a write target (TSK-1002 Fable review 15),
+            // so this control names one outside the Git directory.
+            "git checkout -- docs/gitconfig-notes.md",
             "git log -1 -- docs/gitconfig.md && git push origin feat/x",
         ] {
             let result = report(command, "task/work");
@@ -21739,10 +21896,12 @@ mod discard_integration_tests {
             "git reset \"$(printf -- --hard)\"",
             "git restore \"$UNKNOWN\"",
             "git clean --exclude=keep -fd",
-            "git restore --pathspec-from-file=paths",
         ] {
             assert!(!discard_only(command, &ctx).is_empty(), "{command}");
         }
+        // The paths a restore reads from a file may be enforcement files, so
+        // the write check refuses it first (TSK-1002 Fable review 15).
+        assert!(!evaluate("git restore --pathspec-from-file=paths", &ctx).is_empty());
     }
     #[test]
     fn configured_relief_keeps_warn_and_off_semantics() {

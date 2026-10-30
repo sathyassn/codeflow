@@ -73,3 +73,5 @@ crates/codeflow-core/src/hooks/git_guard/line_home.rs	"builtin export HOME=/r; g
 crates/codeflow-core/src/hooks/git_guard/line_home.rs	"command -v git && git clone u ~/scratch/y"	1	Inert line-home unit input read as text; no Git clone executes.
 crates/codeflow-core/src/security/git_preflight.rs	"git clone https://example.test/x/y.git"	1	TSK-1002 review 10 unit test control: a Git line with no namespace spelling; classified as text, never executed.
 crates/codeflow-core/src/security/git_preflight.rs	unclassified_environment("GIT_LFS_SKIP_SMUDGE=1 git clone https://x.test/y")	1	TSK-1002 review 11 unit test control: a classified variable beside a clone; classified as text, never executed.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone 'ext::sh -c cat% ~/.codex/auth.json' copy"	1	Inert ext:: transport payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -u 'cat ~/.codex/auth.json' ../.. copy"	1	Inert upload-pack command payload judged by the built hook; no Git clone executes.

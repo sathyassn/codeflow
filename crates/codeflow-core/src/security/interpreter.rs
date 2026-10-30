@@ -6,7 +6,8 @@ use crate::hooks::{PolicyLevel, SecuritySection, Violation};
 use std::path::{Path, PathBuf};
 
 mod git_reads;
-mod git_repository;
+pub(crate) mod git_repository;
+mod git_staging;
 
 pub(crate) fn evaluate(
     command: &str,
@@ -312,6 +313,18 @@ fn expanded_alias(
     Ok(expanded)
 }
 
+/// `call` with a Git alias expanded, for a check outside this module.
+///
+/// # Errors
+///
+/// Why the alias or its expansion cannot be read.
+pub(crate) fn git_alias_expanded(
+    call: outward::Unwrapped,
+    command: &str,
+) -> Result<outward::Unwrapped, &'static str> {
+    expanded_alias(call, command)
+}
+
 /// A `GIT_*` variable the guard has not classified may move what Git reads
 /// (TSK-1002 Codex review 10): unlisted means unknown.
 fn git_environment_violation(command: &str, levels: &SecuritySection) -> Option<Violation> {
@@ -341,12 +354,16 @@ fn secret_reads(
 
 /// Why a call's program word cannot be judged, if it cannot: one the shell
 /// fills in at run time that the guard does not resolve (`$P`, `"$P"`,
-/// `${P}`, after any launcher), refused as cannot-verify, and one resolved
-/// to a value with blanks (`P='cat x'; $P`), which the shell splits into a
-/// command and its operands, judged as that command line. The same rule
-/// covers a program value Git runs ([`super::git_preflight::program_values`];
-/// TSK-1002 Fable review 14, Codex review 12). A secret store is reachable
-/// from any directory, so the refusal does not depend on where the line runs.
+/// `${P}`, after any launcher), refused as cannot-verify. A variable whose
+/// value holds blanks (`P='cat x'; $P`) stays unresolved, since the shell
+/// splits it at run time, so it refuses the same way (TSK-1002 Fable review
+/// 15). A program word that still holds blanks here, such as a quoted
+/// literal path, is judged as the command line its words would split
+/// into, at most twice nested. A program value Git runs is a command line
+/// Git hands to a shell, judged as one
+/// ([`super::git_preflight::program_runs`]). A secret store is reachable
+/// from any directory, so the refusal does not depend on where the line
+/// runs.
 fn program_word_unverified(
     call: &outward::Unwrapped,
     cwd: &Path,
@@ -413,13 +430,18 @@ fn secret_reads_at(
         violations.extend(git_environment_violation(command, levels));
         let calls = outward::unwrapped_commands(command, cwd, home);
         for unwrapped in calls {
-            let unwrapped = match expanded_alias(unwrapped, command) {
+            let mut unwrapped = match expanded_alias(unwrapped, command) {
                 Ok(unwrapped) => unwrapped,
                 Err(why) => {
                     violations.extend(git_input_violation(levels, Err(why)));
                     continue;
                 }
             };
+            // A Git call reads its relative operands from the directory its
+            // `-C` options move it to (TSK-1002 Fable review 15).
+            if let Some(directory) = git_repository::call_directory(&unwrapped, home) {
+                unwrapped.cwd = directory;
+            }
             let args = &unwrapped.args;
             if let Some(why) = program_word_unverified(&unwrapped, cwd, home, levels, depth) {
                 violations.push(Violation::new(
@@ -429,6 +451,22 @@ fn secret_reads_at(
                     crate::remedy::SECRET_SELECTION.remedy(),
                 ));
                 continue;
+            }
+            if let Some(result) = find_given_paths(&unwrapped, home) {
+                if result.as_ref().map_or(true, |secret| *secret) {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        match result {
+                            Ok(_) => "`find` gives a command a secret file or store".into(),
+                            Err(why) => {
+                                format!("cannot verify the paths `find` gives a command: {why}")
+                            }
+                        },
+                        crate::remedy::SECRET_SELECTION.remedy(),
+                    ));
+                    continue;
+                }
             }
             let name = args
                 .first()
@@ -474,6 +512,24 @@ fn secret_reads_at(
             if let Some(why) = git_repository::moved_repository(&unwrapped, command) {
                 violations.extend(git_input_violation(levels, Err(why)));
                 continue;
+            }
+            // A Git call that stages files it does not name is judged by
+            // the files Git would stage (TSK-1002 Fable review 15).
+            if let Some(result) = git_staging::staged_secret(&unwrapped, home, &judge) {
+                if result.as_ref().map_or(true, |secret| *secret) {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        match result {
+                            Ok(_) => "the Git call stages a secret file it does not name".into(),
+                            Err(why) => {
+                                format!("cannot verify the files the Git call stages: {why}")
+                            }
+                        },
+                        crate::remedy::SECRET_SELECTION.remedy(),
+                    ));
+                    continue;
+                }
             }
             for (at, value, glob) in
                 file_operands(name, args, unwrapped.expands.as_deref(), &line, reader_cwd)
@@ -950,15 +1006,18 @@ fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Pa
     {
         return false;
     }
-    // Git checks the word against the directory it runs in and, with a
-    // work tree option, against that tree's top. The word must name nothing
-    // in either; `--git-dir` alone moves neither.
-    let mut directory = cwd.to_path_buf();
+    // Git checks the word against the directory it runs in, which `cwd`
+    // already holds with the call's `-C` options, and, with a work tree
+    // option, against that tree's top. The word must name nothing in
+    // either; `--git-dir` alone moves neither.
+    let directory = cwd.to_path_buf();
     let mut trees = Vec::new();
     let globals = &git[..git.len() - tail.len() - 1];
     let mut words = globals.iter();
     while let Some(word) = words.next() {
         let (tree, location) = match word.as_str() {
+            // Joined into `cwd` already; one the guard cannot read leaves
+            // the word a possible file.
             "-C" => (false, words.next().map(String::as_str)),
             "--work-tree" => (true, words.next().map(String::as_str)),
             "-c" => match words.next().and_then(|setting| setting.split_once('=')) {
@@ -969,7 +1028,7 @@ fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Pa
             },
             _ => match word.strip_prefix("--work-tree=") {
                 Some(value) => (true, Some(value)),
-                None => (false, word.strip_prefix("-C")),
+                None => continue,
             },
         };
         let Some(location) = location else {
@@ -981,11 +1040,8 @@ fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Pa
         {
             return false;
         }
-        let joined = outward::lexical_join(&directory, Path::new(location));
         if tree {
-            trees.push(joined);
-        } else {
-            directory = joined;
+            trees.push(outward::lexical_join(&directory, Path::new(location)));
         }
     }
     std::iter::once(directory).chain(trees).all(|base| {
@@ -1692,6 +1748,80 @@ fn recursive_read(
         )
     };
     Some(inspect_recursive_roots(&roots, literal, cwd, home, links))
+}
+
+/// Whether a command `find -exec`, `-execdir`, `-ok` or `-okdir` runs may
+/// be given a secret file or store: `None` for a command `find` does not
+/// supply. The command reads what it is given, so the starting points are
+/// recursive-reader roots, as `grep -r` roots are, narrowed by a `-name`
+/// test when the expression is a plain conjunction (TSK-1002 Fable review
+/// 15). A start the guard cannot read, a relative start in an unknown
+/// directory, or a `find` that follows links cannot be verified.
+fn find_given_paths(
+    call: &outward::Unwrapped,
+    home: Option<&Path>,
+) -> Option<Result<bool, &'static str>> {
+    let Some(outward::Supplier::Find {
+        starts,
+        before,
+        cwd,
+        ..
+    }) = &call.supplier
+    else {
+        return None;
+    };
+    // `find` hands its paths over as `{}`, or to a shell `-c` string that
+    // passes them on as its positional parameters.
+    if !call
+        .args
+        .iter()
+        .skip(1)
+        .any(|word| word.contains("{}") || crate::hooks::git_guard::unresolved_word(word))
+    {
+        return None;
+    }
+    if before
+        .iter()
+        .any(|word| matches!(word.as_str(), "-L" | "-follow"))
+    {
+        return Some(Err("`find` follows links to paths the guard cannot list"));
+    }
+    let selector = match crate::hooks::git_guard::find_name_filter(before) {
+        Some(names) if names.iter().all(|(_, insensitive)| !insensitive) => names
+            .first()
+            .map_or_else(|| "*".to_string(), |(name, _)| name.clone()),
+        _ => "*".to_string(),
+    };
+    let mut read = 0;
+    for start in starts {
+        if crate::hooks::git_guard::unresolved_word(start) {
+            return Some(Err("cannot establish a `find` starting point"));
+        }
+        let (base, tail) = match start.strip_prefix('~') {
+            Some("") => match home {
+                Some(home) => (home.to_path_buf(), "."),
+                None => return Some(Err("cannot establish the home directory")),
+            },
+            Some(rest) => match (rest.strip_prefix(['/', '\\']), home) {
+                (Some(rest), Some(home)) => (home.to_path_buf(), rest),
+                _ => return Some(Err("cannot establish a `find` starting point")),
+            },
+            None if Path::new(start).is_absolute() => (PathBuf::new(), start.as_str()),
+            None => match cwd {
+                Some(cwd) => (cwd.clone(), start.as_str()),
+                None => return Some(Err("cannot establish the directory `find` runs in")),
+            },
+        };
+        if let Err(why) = unmapped_share_root(&base, tail) {
+            return Some(Err(why));
+        }
+        let root = base.join(tail);
+        match search_root_matches(&selector, &root, Some(start), home, &call.links, &mut read) {
+            Ok(false) => {}
+            result => return Some(result),
+        }
+    }
+    Some(Ok(false))
 }
 
 fn inspect_recursive_roots(
@@ -2689,7 +2819,14 @@ mod tests {
                 .iter()
                 .position(|arg| arg.contains(value))
                 .unwrap();
-            git_revision_word(call, at, value, &cwd)
+            // The call's directory holds its `-C` options, as in
+            // `secret_reads_at`.
+            let mut call = call.clone();
+            if let Some(directory) = git_repository::call_directory(&call, None) {
+                call.cwd = directory;
+            }
+            let dir = call.cwd.clone().unwrap_or_else(|| cwd.clone());
+            git_revision_word(&call, at, value, &dir)
         };
         for command in [
             "git format-patch -o patches/ HEAD~1",

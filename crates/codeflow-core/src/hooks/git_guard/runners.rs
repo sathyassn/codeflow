@@ -303,6 +303,7 @@ fn option_spec(verb: &str) -> Option<&'static OptionSpec> {
 /// -o`, `mailsplit -o`, fast-export and fast-import marks, and the file a
 /// `config --file` write changes. An option the table does not know, where
 /// its value could be the output, refuses.
+#[allow(clippy::too_many_lines)] // One reading per Git verb that writes a named file.
 pub(super) fn output_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, String> {
     let mut paths: Vec<String> = parse_options(rest, &catalog::DIFF_OUTPUT_OPTIONS)
         .values_of('\0', "--output")
@@ -354,14 +355,36 @@ pub(super) fn output_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, S
         ),
         "index-pack" => paths.extend(read(&catalog::INDEX_PACK_OPTIONS, false, &[('o', "")])?.1),
         "mailsplit" => paths.extend(read(&catalog::MAILSPLIT_OPTIONS, false, &[('o', "")])?.1),
-        "checkout-index" => paths.extend(
-            read(
+        "checkout-index" => {
+            let (parsed, prefix) = read(
                 &catalog::CHECKOUT_INDEX_OPTIONS,
                 false,
                 &[('\0', "--prefix")],
-            )?
-            .1,
-        ),
+            )?;
+            paths.extend(prefix);
+            // The files it checks out are written in the work tree
+            // (TSK-1002 Fable review 15); `-a` writes every one.
+            paths.extend(parsed.operands.iter().map(|word| (*word).to_string()));
+            if parsed.has_short(&['a']) || parsed.has_long("--all") {
+                paths.push(".".to_string());
+            }
+        }
+        // The work-tree files a checkout or restore of paths overwrites,
+        // and the directory `git apply --directory` writes under (TSK-1002
+        // Fable review 15). `git worktree remove` without `--force` removes
+        // only a clean worktree, whose files are all committed: it is the
+        // sanctioned cleanup after a landing and stays allowed.
+        "checkout" | "restore" => paths.extend(restored_paths(verb, rest)?),
+        "apply" => {
+            let mut words = rest.iter();
+            while let Some(word) = words.next() {
+                if word == "--directory" {
+                    paths.extend(words.next().cloned());
+                } else if let Some(directory) = word.strip_prefix("--directory=") {
+                    paths.push(directory.to_string());
+                }
+            }
+        }
         "fast-export" | "fast-import" => {
             paths.extend(read(&catalog::MARKS_OPTIONS, false, &[('\0', "--export-marks")])?.1);
         }
@@ -398,6 +421,57 @@ pub(super) fn output_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, S
             );
         }
         _ => {}
+    }
+    Ok(paths)
+}
+
+/// The paths `git checkout` or `git restore` writes in the work tree: every
+/// operand after `--`, and every operand before it that is not an option
+/// value (a branch name too, judged as a path, which names no enforcement
+/// file). A restore of the index alone (`--staged` without `--worktree`)
+/// writes none. Paths read from a file cannot be established.
+fn restored_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, String> {
+    let valued: &[&str] = if verb == "checkout" {
+        &["-b", "-B", "--orphan", "--conflict"]
+    } else {
+        &["-s", "--source", "--conflict"]
+    };
+    let mut paths = Vec::new();
+    let mut staged = false;
+    let mut worktree = false;
+    let mut words = rest.iter();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            paths.extend(words.by_ref().cloned());
+            break;
+        }
+        if word.starts_with("--pathspec-from-file") {
+            return Err(format!(
+                "cannot establish the paths `git {verb}` writes from a file"
+            ));
+        }
+        if valued.contains(&word.as_str()) {
+            words.next();
+            continue;
+        }
+        if let Some(letters) = word.strip_prefix('-') {
+            match word.as_str() {
+                "--staged" => staged = true,
+                "--worktree" => worktree = true,
+                _ if verb == "restore" && !letters.starts_with('-') => {
+                    // A short bundle ends at `s`, whose value follows.
+                    let letters = letters.split('s').next().unwrap_or("");
+                    staged |= letters.contains('S');
+                    worktree |= letters.contains('W');
+                }
+                _ => {}
+            }
+            continue;
+        }
+        paths.push(word.clone());
+    }
+    if verb == "restore" && staged && !worktree {
+        return Ok(Vec::new());
     }
     Ok(paths)
 }
@@ -2020,6 +2094,7 @@ fn segment_directories(
         .collect()
 }
 
+#[allow(clippy::too_many_lines)] // One ordered walk of the line's segments shares the earlier-command state.
 fn collect(
     command: &str,
     cwd: &Path,
@@ -2046,6 +2121,9 @@ fn collect(
     let mut literals = Literals::default();
     let mut changed_sources = false;
     let mut changed_aliases = false;
+    // Whether an earlier command may have changed which checkouts a
+    // `submodule foreach` or `for-each-repo` runs in.
+    let mut changed_checkouts = false;
     let mut earlier = Vec::new();
     let mut landings = Vec::new();
     for (index, segment) in segments.into_iter().enumerate() {
@@ -2059,6 +2137,7 @@ fn collect(
             continue;
         };
         let Some(args) = arguments(program, args) else {
+            let (writes, lands) = (earlier.len(), landings.len());
             note_segment(
                 &filled,
                 &tokens,
@@ -2068,6 +2147,9 @@ fn collect(
                 &mut earlier,
                 &mut landings,
             );
+            changed_checkouts |= earlier.len() != writes
+                || landings.len() != lands
+                || !keeps_checkouts(program, args);
             continue;
         };
         let args = home_globals(args);
@@ -2121,9 +2203,52 @@ fn collect(
             if let Some(reason) = run.unknown.as_ref().or(uncertain.as_ref()) {
                 return Err(reason.clone());
             }
+            if changed_checkouts && !commands.is_empty() && runs_in_checkouts(&args) {
+                return Err("an earlier command may change the checkouts a Git runner runs its command in; run the commands separately".into());
+            }
             descend(&runner, &args, [&commands, &configured], bodies)?;
         }
         landings.extend(pending);
+        changed_checkouts = true;
     }
     Ok(())
+}
+
+/// Whether a Git call runs its command in a set of checkouts it reads when
+/// it starts: each submodule (`submodule foreach`) or each configured
+/// repository (`for-each-repo`).
+fn runs_in_checkouts(args: &[String]) -> bool {
+    matches!(
+        git_subcommand(args),
+        Some(("submodule" | "submodule--helper" | "for-each-repo", _))
+    )
+}
+
+/// Whether a command other than Git is known to leave every checkout as it
+/// was: a directory change, an assignment, or a builtin that only prints or
+/// tests. Its writes are counted separately.
+fn keeps_checkouts(program: &str, args: &[String]) -> bool {
+    let words: Vec<String> = std::iter::once(program.to_string())
+        .chain(args.iter().cloned())
+        .collect();
+    matches!(
+        super::builtin_words(&words).first().map(String::as_str),
+        Some(
+            "cd" | "pushd"
+                | "popd"
+                | "echo"
+                | "printf"
+                | "true"
+                | "false"
+                | ":"
+                | "test"
+                | "["
+                | "export"
+                | "declare"
+                | "typeset"
+                | "local"
+                | "readonly"
+                | "pwd"
+        )
+    )
 }
