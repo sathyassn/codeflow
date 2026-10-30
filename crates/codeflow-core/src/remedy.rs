@@ -845,6 +845,10 @@ catalog! {
     OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),
         "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
 
+    /// A recursive read or glob whose complete selected paths cannot be inspected.
+    SECRET_SELECTION = Step::Edit(".codeflow/policy.json"),
+        "narrow the search roots or file selection to paths the guard can inspect within its metadata budget, without including secret stores; the operator runs an intended secret read personally in a separate terminal; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+
     /// A branch push that would include tags because of effective Git config.
     PUSH_WITHOUT_FOLLOW_TAGS = Step::Git("git push"),
         "push only the intended branch with `git push --no-follow-tags <remote> <branch>`; tag publication remains operator-owned";
@@ -862,6 +866,7 @@ mod tests {
             &super::PROTECTED_DELETE,
             &super::PR_MERGE_PROTECTED,
             &super::OUTWARD_ACTION,
+            &super::SECRET_SELECTION,
             &super::PRIVILEGE_ESCALATION,
         ] {
             assert!(

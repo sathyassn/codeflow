@@ -509,7 +509,9 @@ pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditErro
 }
 
 fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
-    let path = crate::portable_path::without_verbatim(path.to_path_buf());
+    let path = crate::portable_path::without_verbatim(
+        crate::portable_path::guard_path(path).map_err(EditError)?,
+    );
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
@@ -520,6 +522,17 @@ fn normalize_uncached(path: &Path, resolve: bool) -> Result<PathBuf, EditError> 
                 result.pop();
             }
             Component::Normal(part) => {
+                let name = crate::git::GitName::from_os_str(part);
+                let spelling = if cfg!(windows) {
+                    Some(crate::portable_path::filesystem_spelling(
+                        name.rule_text().map_err(|_| {
+                            EditError("cannot normalize a Windows path component as text".into())
+                        })?,
+                    ))
+                } else {
+                    None
+                };
+                let part = spelling.as_deref().map_or(part, std::ffi::OsStr::new);
                 // A normal component can look like a drive prefix when read
                 // alone (`quoted/C:/tail` on Windows). Pushing it directly
                 // would discard the preceding path. Keep it relative, even
@@ -888,6 +901,10 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         ("packed-refs", false),
         ("config", false),
         ("config.worktree", false),
+        // An alternate object store adds objects Git reads as its own, so a
+        // written list can make any content reachable (TSK-1002 Fable 13).
+        ("objects/info/alternates", false),
+        ("objects/info/http-alternates", false),
     ] {
         protected.push((
             repo.commondir().join(name),

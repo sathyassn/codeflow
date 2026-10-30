@@ -1945,6 +1945,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // TSK-1002: a quoted Git path on stdin whose octal escapes are not UTF-8 makes unquote return None, and reads refuses the command as one it cannot decode.
+    (
+        "crates/codeflow-core/src/security/interpreter/git_reads.rs",
+        "unquote",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     // Octal escape digits that are not UTF-8 make unquote_git_path return unproven None; diff_path turns None into a cannot-read Err, so evaluate_commit_range marks added-lines skipped (ci exits 2) and conflict_markers::dispatch reports an incomplete finding at its level.
     (
         "crates/codeflow-cli/src/cmd/ci.rs",
@@ -6751,6 +6759,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "ErrorKind::NotFound", 2, "The record home is absent only when both the followed and the unfollowed stat of the leaf under the discovered repository root find no name; a dangling link is reported as unreadable and fails validation."),
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "is_file", 1, "Type check on metadata whose errors other than NotFound fail the check; a directory goes to collect_record_files, which propagates its errors."),
     ("crates/codeflow-cli/src/embedded.rs", "EmbeddedAssets::read", "ErrorKind::NotFound", 1, "Debug builds only (cfg(debug_assertions)) read the source tree's assets directory, mirroring the release Raw::get Option contract; release binaries never take this path."),
+    ("crates/codeflow-core/src/absence.rs", "entry", "ErrorKind::NotFound", 1, "Serves the Windows short-name mapper: a leaf that is not found is Creatable only when missing_leaf finds a resolving directory above it, which the mapper refuses, and Impossible only beneath a non-directory or a refused name; a dangling or unreadable ancestor and every other error propagate, so the mapper fails closed."),
     ("crates/codeflow-core/src/absence.rs", "failure_proves_no_entry", "ErrorKind::NotFound", 1, "Serves cannot_exist and existing_metadata for the guards: a leaf that is not found names nothing when missing_leaf settles its ancestors (beneath a directory, beneath a non-directory, or under a refused name), or when the path is relative and every ancestor, including the empty one, is not found; an absolute path in that state, a dangling ancestor or an unreadable ancestor is an error, so the guard fails closed."),
     ("crates/codeflow-core/src/absence.rs", "missing_leaf", "ErrorKind::NotFound", 2, "The ancestor walk behind proven absence: an ancestor that is not found only continues the walk to the first existing one, and a dangling ancestor link becomes an error."),
     ("crates/codeflow-core/src/absence.rs", "missing_leaf", "is_dir", 1, "Type check on ancestor metadata obtained with errors propagated; a non-directory ancestor is reported as such, which proven_absent turns into an error, never absence."),
@@ -6805,7 +6814,6 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/edit_guard.rs", "enforcement_patterns", "is_file", 1, "Git marker absence is proven; metadata errors propagate before classifying an existing linked-worktree gitfile."),
     ("crates/codeflow-core/src/hooks/edit_guard.rs", "find_candidates", "is_dir", 1, "Directory entry file_type errors propagate before testing the obtained type."),
     ("crates/codeflow-core/src/hooks/git_discard.rs", "restore_paths", "is_dir", 1, "Missing paths are proven absent; existing symlink metadata errors propagate before directory classification."),
-    ("crates/codeflow-core/src/hooks/git_guard.rs", "every_path_below", "is_dir", 1, "Obtained path metadata; failures produce GlobStop::Unreadable and refuse the glob judgment."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "expand_components", "is_dir", 1, "Obtained entry FileType; failures produce GlobStop::Unreadable rather than omitting recursion."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_directory", "is_dir", 1, "After proven absence handling, metadata errors are unproven; a known non-directory has no glob children."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "read_sed_script", "is_file", 2, "Both path and opened-file metadata are fallibly obtained; errors already yield SedRead::Unreadable."),
