@@ -1,0 +1,11 @@
+id = "SPC-015"
+uid = "9c132990-57fb-476c-9bc7-c686358e3b77"
+kind = "SPC"
+title = "The replacement baseline: manifest schema, retained release bases and the sparse pack"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T15:24:42Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
