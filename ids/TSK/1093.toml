@@ -1,0 +1,11 @@
+id = "TSK-1093"
+uid = "7bded045-a304-41cc-9931-08c99791b90b"
+kind = "TSK"
+title = "Work claim adopts the agent's own checked-out task branch and publishes it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T20:48:11Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
