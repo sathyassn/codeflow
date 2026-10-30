@@ -1460,12 +1460,14 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
 }
 
 /// Whether `word` (lowercase, home-relative as `~/...`) is a backup copy of
-/// a named secret file under the home directory, which holds the same
-/// token (TSK-1002 Fable review 17): a name in the same directory that
-/// starts with the secret's name (`auth.json~`, `auth.json.bak`,
-/// `.orig`, `.old`, `.1`) or an editor swap file `.NAME.sw?`. Only a rule
+/// a named secret file, which holds the same token (TSK-1002 Fable reviews
+/// 17 and 18): in the secret's directory, or in any directory for a
+/// `**/NAME` rule such as `.netrc`, a name that is the secret's name
+/// followed by `~` or by a `.` suffix (`auth.json~`, `auth.json.bak`,
+/// `.orig`, `.old`, `.1`), or an editor swap file `.NAME.sw?`. Only a rule
 /// whose last component is a plain name counts; a pattern rule already
-/// covers its own spellings.
+/// covers its own spellings, and a name that merely continues the secret's
+/// name (`.netrc-notes`) is a different file.
 fn secret_backup(word: &str) -> bool {
     let table = actions::table();
     let hard = table
@@ -1475,26 +1477,31 @@ fn secret_backup(word: &str) -> bool {
         .flat_map(|group| group.denies.iter())
         .filter_map(|rule| rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')));
     let named = table.sandbox_read_denies.iter().map(String::as_str);
+    let plain = |part: &str| !part.contains(['*', '?', '[']);
     hard.chain(named).any(|rule| {
         let Some((directory, leaf)) = rule.rsplit_once('/') else {
             return false;
         };
-        if !rule.starts_with("~/")
-            || leaf.is_empty()
-            || leaf.contains(['*', '?', '['])
-            || directory.contains(['*', '?', '['])
-        {
+        if leaf.is_empty() || !plain(leaf) {
             return false;
         }
-        let leaf = leaf.to_ascii_lowercase();
-        let Some(name) = word
-            .strip_prefix(directory.to_ascii_lowercase().as_str())
-            .and_then(|tail| tail.strip_prefix('/'))
-            .filter(|name| !name.contains('/'))
-        else {
+        let name = if directory == "**" {
+            word.rsplit('/').next().unwrap_or(word)
+        } else if rule.starts_with("~/") && plain(directory) {
+            let Some(name) = word
+                .strip_prefix(directory.to_ascii_lowercase().as_str())
+                .and_then(|tail| tail.strip_prefix('/'))
+                .filter(|name| !name.contains('/'))
+            else {
+                return false;
+            };
+            name
+        } else {
             return false;
         };
-        (name.len() > leaf.len() && name.starts_with(&leaf))
+        let leaf = leaf.to_ascii_lowercase();
+        name.strip_prefix(leaf.as_str())
+            .is_some_and(|rest| rest.starts_with(['~', '.']))
             || name
                 .strip_prefix('.')
                 .and_then(|rest| rest.strip_prefix(leaf.as_str()))
@@ -3877,6 +3884,10 @@ mod tests {
             "~/.codex/.auth.json.swp",
             "~/.claude/.credentials.json.1",
             "~/.pypirc.orig",
+            // Fable review 18: an any-depth plain rule (`**/.netrc`).
+            "~/.netrc.bak",
+            "/repo/copies/.netrc~",
+            "copies/..netrc.swp",
         ] {
             assert!(secret_backup(word), "{word}");
         }
@@ -3887,6 +3898,9 @@ mod tests {
             "~/.codex/auth.json.d/notes",
             "~/.ssh-notes/file",
             "~/notes/auth.json.bak",
+            "~/.codex/auth.json-notes",
+            ".netrc-notes",
+            "copies/my.netrc.bak",
         ] {
             assert!(!secret_backup(word), "{word}");
         }

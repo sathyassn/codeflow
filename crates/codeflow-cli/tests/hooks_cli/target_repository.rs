@@ -1658,6 +1658,10 @@ fn tsk1002_review17_fd_values_help_programs_carets_and_backups() {
         "cat ~/.codex/auth.json.bak",
         "cat ~/.codex/.auth.json.swp",
         "cd ~/.codex && cat auth.json.orig",
+        // Fable review 18: a backup of an any-depth name rule (`**/.netrc`).
+        "cat ~/.netrc.bak",
+        "cat copies/.netrc.bak",
+        "cat copies/.netrc~",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1674,6 +1678,7 @@ fn tsk1002_review17_fd_values_help_programs_carets_and_backups() {
         "cat clean/^x",
         "git log '^main' HEAD",
         "cat ~/.codex/config.toml",
+        "cat clean/.netrc-notes",
     ]
     .iter()
     .map(ToString::to_string)
@@ -1682,8 +1687,13 @@ fn tsk1002_review17_fd_values_help_programs_carets_and_backups() {
     let out = f.command(&f.linked, "exec-guard", "fd . ~/.codex --exec=cat");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("`fd` gives a command"), "{err}");
-    // A leading `^` handed to a Git runner may expand to an option-like
-    // name, so it stays refused, with a message to quote it.
+    // A leading `^` handed to a Git call that runs a configured program
+    // may expand to an option-like name, so it stays refused, with a
+    // message to quote it. The fixture configures that program itself:
+    // without one the runner reader has nothing to judge, and whether the
+    // host's system config names one (macOS Git sets `credential.helper`)
+    // must not decide the verdict (hosted run 41026268442).
+    git(&f.root, &["config", "core.pager", "less"]);
     let out = f.command(&f.linked, "git-guard", "cd clean && git log ^main HEAD");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(

@@ -212,11 +212,13 @@ workspace. The `**/` rule includes zero directories, so `id_rsa`,
 same applies to `id_ed25519`, `.pem`, `.key`, `.p12`, `.pfx` and `.netrc`
 patterns. A newline inside a directory name does not hide its secret leaf.
 Comparisons fold ASCII case, including on case-sensitive volumes.
-A backup copy of a named secret file under the home directory holds the
-same token, so it is secret too: a name in the same directory that starts
-with the secret file's name (`~/.codex/auth.json~`, `auth.json.bak`,
-`.orig`, `.old`, `.1`) or an editor swap file (`.auth.json.swp`). Rules
-that are patterns already cover their own spellings.
+A backup copy of a named secret file holds the same token, so it is
+secret too: in the secret's directory (any directory for a name rule such
+as `.netrc`), the secret's name followed by `~` or a `.` suffix
+(`~/.codex/auth.json~`, `auth.json.bak`, `.orig`, `.old`, `.1`,
+`.netrc.bak`) or an editor swap file (`.auth.json.swp`). Rules that are
+patterns already cover their own spellings, and a name that only
+continues the secret's name (`.netrc-notes`) is another file.
 
 The shared shell resolver follows on-line assignments, directory changes,
 home parameters and supported static substitutions before judging operands.
