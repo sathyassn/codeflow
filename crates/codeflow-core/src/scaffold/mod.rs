@@ -87,6 +87,35 @@ fn should_skip_initial_stack_adr(
     Ok(false)
 }
 
+/// Reserve the starter ADR's number for the `uid` it carries, on the local
+/// registry: pending until the next push publishes it, so `init` stays
+/// offline (TSK-338). Returns the report note, `None` when the registry
+/// here already binds it. A failure never fails `init`; its note names the
+/// sanctioned way to reserve the number by hand.
+fn reserve_initial_stack_adr(root: &std::path::Path) -> Option<Shown> {
+    let fallback = Shown::fixed(
+        "the starter ADR's number could not be reserved in the id registry here; reserve it with `codeflow ids admit docs/decisions/ADR-0001-stack-choice.md` before pushing it",
+    );
+    let Ok(text) = std::fs::read_to_string(root.join(INITIAL_STACK_ADR)) else {
+        return Some(fallback);
+    };
+    let (Some(uid), Some(id)) = (
+        crate::ids::entry::frontmatter_value(&text, "uid").filter(|uid| crate::ids::is_uid(uid)),
+        crate::ids::record_id_from_path(INITIAL_STACK_ADR),
+    ) else {
+        return Some(fallback);
+    };
+    let title = crate::ids::entry::frontmatter_value(&text, "title").unwrap_or_default();
+    match crate::ids::issue::reserve_exact_offline(root, &id, &uid, &title) {
+        Ok(None) => None,
+        Ok(Some(standing)) => Some(crate::shown!(
+            "id registry: starter ADR-0001 {}",
+            Shown::fixed(standing.describe())
+        )),
+        Err(_) => Some(fallback),
+    }
+}
+
 fn is_adr_name(name: &std::ffi::OsStr) -> bool {
     crate::git::GitName::from_os_str(name).starts_with(b"ADR-")
         && std::path::Path::new(name)
@@ -268,6 +297,72 @@ impl std::fmt::Debug for ScaffoldError {
     /// a derived form would print each field's own `Debug`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ScaffoldError({self})")
+    }
+}
+
+#[cfg(test)]
+mod starter_adr_tests {
+    use super::*;
+
+    fn starter(root: &std::path::Path, uid: &str) {
+        let decisions = root.join("docs/decisions");
+        std::fs::create_dir_all(&decisions).unwrap();
+        std::fs::write(
+            root.join(INITIAL_STACK_ADR),
+            format!("---\nid: ADR-0001\nuid: {uid}\ntitle: stack choice for rust\n---\n"),
+        )
+        .unwrap();
+    }
+
+    /// TSK-338: an existing repository's starter ADR is reserved for its
+    /// uid once, in the local registry, without asking any remote.
+    #[test]
+    fn the_starter_adr_is_reserved_once_for_its_uid() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"# project\n")]);
+        let uid = crate::ids::new_uid();
+        starter(dir.path(), &uid);
+        let note = reserve_initial_stack_adr(dir.path()).unwrap();
+        assert!(
+            note.as_str()
+                .contains("ADR-0001 reserved in the local registry"),
+            "{}",
+            note.as_str()
+        );
+        let git = crate::ids::Git::new(dir.path());
+        let ledger = crate::ids::Ledger::read(&git, crate::ids::REGISTRY_REF).unwrap();
+        assert_eq!(
+            ledger.ids_for_uid(&uid),
+            vec![crate::ids::RegId::parse("ADR-0001").unwrap()]
+        );
+        // A second run writes nothing.
+        assert!(reserve_initial_stack_adr(dir.path()).is_none());
+        // Another record's uid for the same number is refused, never renumbered.
+        starter(dir.path(), &crate::ids::new_uid());
+        let note = reserve_initial_stack_adr(dir.path()).unwrap();
+        assert!(
+            note.as_str().contains("codeflow ids admit"),
+            "{}",
+            note.as_str()
+        );
+    }
+
+    #[test]
+    fn a_starter_adr_without_a_uid_names_the_admit_step() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"# project\n")]);
+        std::fs::create_dir_all(dir.path().join("docs/decisions")).unwrap();
+        std::fs::write(
+            dir.path().join(INITIAL_STACK_ADR),
+            "---\nid: ADR-0001\n---\n",
+        )
+        .unwrap();
+        let note = reserve_initial_stack_adr(dir.path()).unwrap();
+        assert!(
+            note.as_str().contains("codeflow ids admit"),
+            "{}",
+            note.as_str()
+        );
     }
 }
 

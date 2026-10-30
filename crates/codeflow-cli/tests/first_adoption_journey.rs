@@ -136,10 +136,19 @@ fn adopt(dir: &Path, origin: &Path) -> PathBuf {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .run();
-    ok(
+    let said = ok(
         &codeflow(&root, &["init", "--yes", "--full"]),
         "init --full",
     );
+    // The starter ADR carries a uid and its number is reserved offline, so
+    // the adoption range adds a record the registry binds, with no
+    // `codeflow ids admit` step (TSK-338).
+    assert!(
+        said.contains("id registry: starter ADR-0001 pending"),
+        "{said}"
+    );
+    let adr = std::fs::read_to_string(root.join(ADR)).unwrap();
+    assert!(adr.starts_with("---\nid: ADR-0001\nuid: "), "{adr}");
     assert_eq!(
         git(&root, &["config", "core.hooksPath"]),
         ".codeflow/git-hooks"
@@ -167,22 +176,6 @@ fn adopt(dir: &Path, origin: &Path) -> PathBuf {
         "## Outcome\n\n",
         "## Outcome\n\nAfter this merges, the team can run the CodeFlow gates.\n\n",
     );
-    // The scaffold's first ADR is a new record without a uid; the registry
-    // admits it as its own refusal says (`codeflow ids admit`).
-    let refused = text(&codeflow(&root, &["ids", "admit", ADR]));
-    let uid = refused
-        .split("`uid: ")
-        .nth(1)
-        .and_then(|rest| rest.split('`').next())
-        .unwrap_or_else(|| panic!("no uid offered:\n{refused}"))
-        .to_string();
-    edit(
-        &root,
-        ADR,
-        "id: ADR-0001\n",
-        &format!("id: ADR-0001\nuid: {uid}\n"),
-    );
-    ok(&codeflow(&root, &["ids", "admit", ADR]), "ids admit");
     commit(&root, "chore: adopt codeflow");
     ok(
         &codeflow(&root, &["work", "start", "TSK-001"]),
