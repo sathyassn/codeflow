@@ -1,0 +1,11 @@
+id = "TSK-1090"
+uid = "ddc02835-b026-40ca-a97e-972e4ccbffa5"
+kind = "TSK"
+title = "Every Windows test partition stays inside its margin on consecutive line runs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T20:00:57Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
