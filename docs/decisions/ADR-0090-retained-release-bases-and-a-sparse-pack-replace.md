@@ -64,9 +64,12 @@ project in one run: it derives each entry's base from the old baseline copy
 and digest, writes the pack entries it needs, writes the schema 2 manifest,
 and removes `.codeflow/.baseline/` last, following no link and writing
 nothing outside `.codeflow/`. A 3.x binary cannot read the result: it fails
-closed on the missing `sha256` field (`state.rs:512`, read at `:548-550`),
-or earlier on the raised `scaffold_version` pin for `update` and `init`
-(`crates/codeflow-core/src/scaffold/version.rs:108-121`). The change ships
+closed on the missing `sha256` field (at the tag v3.1.1, `state.rs:498`,
+read at `:534`) before it writes a project file; `update` fails without
+naming the path, `doctor` fails naming it, and a repeated `init` lowers the
+pin in `project.toml` before it fails (`SPC-015` R-4). No published binary
+has a pin check; this line's `check_write_version` first ships in 4.0.0.
+The change ships
 as 4.0.0 with one migration step. `SPC-015` pins the formats, the outcome of
 every decision arm and the edge cases; TSK-1086 builds the retained bases,
 TSK-1087 the switch and the migration, TSK-247 the read-only preview.
@@ -83,7 +86,7 @@ Displaced alternatives:
 - A content-addressed pack with one compressed blob per file: write-once and
   simple to extend, but 1.35 MB today against the 2 MB budget (measured in
   `SPC-015`), so the budget would be crossed within a release or two; the
-  solid stream is 0.60 MB.
+  solid stream is 0.59 MB.
 - Keeping the bases of the current release only: a project that skipped a
   release, or that kept a file at an older base after a conflict, would have
   no base to merge from; the operator chose every published release.
@@ -106,13 +109,17 @@ Displaced alternatives:
   an agent session, where a committed baseline copy could be. The pack and
   the pending resolution records stay protected paths, as the baseline was
   (`crates/codeflow-core/src/security/policy.rs:48`).
-- The binary grows by the compressed pack, 0.60 MB today, and by at most the
+- The binary grows by the compressed pack, 0.59 MB today, and by at most the
   changed assets of each future release. The advisory budget is 2 MB; the
   build or release check warns, never fails, when it is passed, and the
   crossing is a review, not a refusal.
-- `zstd`, already linked through rust-embed's `compression` feature
-  (`Cargo.toml:38`, `:53-62`), becomes a direct dependency of the engine for
-  decoding the stream. No other dependency is added.
+- `zstd` on its 0.14 line, the one the lockfile already resolves through
+  rust-embed's `compression` feature (`Cargo.toml:38`; `zstd` 0.14.3 at
+  `Cargo.lock:2183-2202`), becomes a direct dependency of the engine for
+  decoding the stream, and `cargo test -p codeflow-core` then builds
+  `zstd-sys`. Never 0.13: `Cargo.toml:53-62` patches that line out of the
+  tree for its RUSTSEC advisories. The reader caps what it decodes before
+  it allocates (`SPC-015` R-26). No other dependency is added.
 - A 3.x binary cannot read a 4.0.0 project. Adopters upgrade every checkout
   and CI pin to 4.0.0 together, run `codeflow update` once and commit the
   manifest and the baseline removal (TSK-1087's migration text). A project
