@@ -55,19 +55,25 @@ pub fn branch_name<'r>(refname: &'r str, remotes: &[String]) -> &'r str {
         .unwrap_or(refname)
 }
 
-/// The configured remote names, as `git remote` lists them.
+/// The configured remote names: every `remote.<name>.<key>` in git's
+/// configuration, read NUL-framed so a name keeps its exact text. A key
+/// name holds no dot, so the name runs to the last one.
 ///
 /// # Errors
 ///
 /// Returns an error when git fails.
 pub fn remote_names(git: &Git) -> Result<Vec<String>, IdsError> {
-    Ok(git
-        .run(&["remote"])?
-        .lines()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .collect())
+    let keys = git.run_bytes(&["config", "-z", "--name-only", "--list"])?;
+    let mut names: Vec<String> = z_fields(&keys)
+        .into_iter()
+        .filter_map(|key| {
+            let (name, _) = key.strip_prefix("remote.")?.rsplit_once('.')?;
+            Some(name.to_string())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 /// Whether a branch is a landing line: `main`, `master` or `integration/*`.
