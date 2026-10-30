@@ -234,7 +234,8 @@
         "presentation-review",
         "documentation-portal",
         "git-delivery",
-        "release-policy"
+        "release-policy",
+        "typed-code"
       ],
       "cases": []
     },
@@ -448,6 +449,19 @@
       "includes": [],
       "cases": [
         "release-strings-say-what-they-do"
+      ]
+    },
+    {
+      "id": "typed-code",
+      "description": "Focused diagnostics for typed code and typed boundary data: the four review findings and the builder's checker, validating model and reasoned escapes.",
+      "includes": [],
+      "cases": [
+        "review-flags-untyped-new-code",
+        "review-flags-unexplained-escape-type",
+        "review-flags-unvalidated-boundary-data",
+        "review-flags-hand-written-validator",
+        "builder-adds-type-checker-and-config-model",
+        "builder-narrows-unknown-without-any"
       ]
     }
   ]
