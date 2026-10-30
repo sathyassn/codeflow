@@ -654,63 +654,137 @@ class GateContracts(unittest.TestCase):
             self.assertNotEqual(done.returncode, 0, text)
             self.assertEqual(log.read_text(), '')
             (driver / 'codeflow').write_text(f'#!/bin/sh\necho "$*" >> "{log}"\n')
-            # A pull request that changes codeflow-ci.yml is not judged by the
-            # base's parity rules (admission sends it to a person); the
-            # journeys and the validation still run.
-            done, text = pull_request('workflow', {**hollow, '.codeflow/test-config.json': '{"consistent": false}\n',
-                                                   '.github/workflows/codeflow-ci.yml': 'name: changed\n'})
-            self.assertEqual(done.returncode, 0, text)
-            self.assertIn('changes .github/workflows/codeflow-ci.yml', text)
+            # Review 6 finding 1: no change to codeflow-ci.yml, of its content
+            # or only of its mode, takes the base's parity rules away.
+            inconsistent = {**hollow, '.codeflow/test-config.json': '{"consistent": false}\n'}
+            done, text = pull_request('workflow-content', {**inconsistent,
+                                                           '.github/workflows/codeflow-ci.yml': 'name: changed\n'})
+            self.assertNotEqual(done.returncode, 0, text)
+            self.assertIn('base parity', text)
+            git('switch', '-q', '--detach', base)
+            git('checkout', '-q', '-b', 'workflow-mode')
+            for path, body in inconsistent.items():
+                put(path, body)
+            git('add', '-A')
+            git('update-index', '--chmod=+x', '.github/workflows/codeflow-ci.yml')
+            git('commit', '-qm', 'mode only')
+            self.assertIn('100755', git('ls-tree', 'HEAD', '.github/workflows/codeflow-ci.yml'))
+            done = subprocess.run(['bash', '-c', script], cwd=repo, capture_output=True, text=True, env=env)
+            git('reset', '-q', '--hard')
+            self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn('base parity', done.stdout + done.stderr)
+            # A missing driver fails closed before any judge runs.
+            (driver / 'codeflow').unlink()
+            done, text = pull_request('no-driver', hollow)
+            self.assertNotEqual(done.returncode, 0, text)
             self.assertNotIn('base parity', text)
-            self.assertIn('journey gate: 1 journeys, 1 tests', text)
 
-    def test_a_shards_filter_and_tools_come_from_the_selection_not_the_environment(self):
-        # Review 5 F2: the pull request's web build runs before the shard's
-        # test step, and a step can write later steps' environment
-        # (GITHUB_ENV) and command path (GITHUB_PATH). The step takes its
-        # filter from the selection's output, written in by the runner, and
-        # refuses Cargo tools from outside the account's Cargo home.
+    def test_a_shards_filter_comes_from_the_selection_not_the_environment(self):
+        # Review 5 F2 and review 6: the shard job runs the pull request's
+        # code (its web build, then its tests), which can steer the job's
+        # environment, tools and reports. The filter is the selection's
+        # output, written in by the runner, so an honest run uses the base's
+        # selection whatever an earlier step put in FILTER. That catches
+        # drift. The step claims nothing about its tools: a path check
+        # cannot hold in a job the pull request steers (Cargo's own lookup
+        # passed one in review 6), so there is none.
         import tempfile
         step = self.job_step_script('gates-coverage', 'cargo llvm-cov nextest (one shard)')
         expression = "${{ fromJSON(needs.judge.outputs.shards)[format('{0}', matrix.shard)] }}"
         self.assertEqual(step.count(expression), 1)
-        self.assertEqual(step.count('tools=/home/runner/.cargo/bin\n'), 1)
+        self.assertNotIn('command -v', step)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            record = root / 'cargo.log'
-            planted, account = root / 'planted', root / 'home/.cargo/bin'
-            planted.mkdir(); account.mkdir(parents=True)
-            # The runner image's Cargo home stands at a scratch path here,
-            # holding recording tools; the planted directory holds others.
-            script = step.replace(expression, 'binary_id(=codeflow-core::selected)').replace(
-                'tools=/home/runner/.cargo/bin\n', f'tools={account}\n')
-            for tool in ('cargo', 'cargo-llvm-cov', 'cargo-nextest'):
-                for where, label in ((account, 'account'), (planted, 'planted')):
-                    (where / tool).write_text(f'#!/bin/sh\necho "{label} $*" >> "{record}"\n')
-                    (where / tool).chmod(0o755)
-            clean = f'{account}:/usr/bin:/bin'
-            # GITHUB_ENV: an earlier step set FILTER (and CARGO_HOME); the
-            # step ignores them and runs the selection's filter.
+            record, tools = root / 'cargo.log', root / 'bin'
+            tools.mkdir()
+            (tools / 'cargo').write_text(f'#!/bin/sh\necho "$*" >> "{record}"\n')
+            (tools / 'cargo').chmod(0o755)
+            script = step.replace(expression, 'binary_id(=codeflow-core::selected)')
+            path = f'{tools}:/usr/bin:/bin'
             done = subprocess.run(['bash', '-c', script], capture_output=True, text=True,
-                                  env={'PATH': clean, 'FILTER': 'test(=trivial)', 'CARGO_HOME': str(planted.parent)})
+                                  env={'PATH': path, 'FILTER': 'test(=trivial)'})
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-            self.assertIn('account llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow '
+            self.assertIn('llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow '
                           '-E binary_id(=codeflow-core::selected)', record.read_text())
             self.assertNotIn('trivial', record.read_text())
-            self.assertNotIn('planted', record.read_text())
-            # GITHUB_PATH: an earlier step put its own cargo first; refused
-            # before any tool runs.
+            # An empty selection is refused before any tool runs.
             record.write_text('')
-            done = subprocess.run(['bash', '-c', script], capture_output=True, text=True,
-                                  env={'PATH': f'{planted}:{clean}'})
-            self.assertNotEqual(done.returncode, 0)
-            self.assertIn('an earlier step changed the command path', done.stdout)
-            self.assertEqual(record.read_text(), '')
-            # An empty selection is refused.
             done = subprocess.run(['bash', '-c', step.replace(expression, '')], capture_output=True, text=True,
-                                  env={'PATH': clean})
+                                  env={'PATH': path})
             self.assertNotEqual(done.returncode, 0)
             self.assertIn('gave this shard no filter', done.stdout)
+            self.assertEqual(record.read_text(), '')
+
+    def test_the_driver_build_dispatches_only_the_runner_images_cargo_home(self):
+        # Review 6 finding 2: Cargo runs `cargo-<name>` from $CARGO_HOME/bin
+        # before PATH, and reads aliases and toolchains from the
+        # environment. The driver job runs no pull request code, and starts
+        # Cargo from an absolute path under `env -i` with the runner image's
+        # homes, so nothing in the runner's environment picks what Cargo
+        # dispatches. The build step runs here as written, with real Cargo,
+        # the image's home at a scratch path and a harmless recording
+        # subcommand in place of `build`. The hostile variables stand for
+        # what a step could have written to GITHUB_ENV.
+        import shutil
+        import tempfile
+        cargo = shutil.which('rustup') and subprocess.run(['rustup', 'which', 'cargo'], capture_output=True,
+                                                          text=True).stdout.strip()
+        if not cargo or not Path(cargo).is_file():
+            self.skipTest('no rustup toolchain cargo on this host')
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        job = workflow.split('\n  judge-build:\n', 1)[1].split('\n  gates-build:\n', 1)[0]
+        command = job.split("      - name: Build the base's codeflow\n        run: ", 1)[1].split('\n', 1)[0]
+        self.assertEqual(command, 'env -i HOME=/home/runner PATH=/home/runner/.cargo/bin:/usr/bin:/bin '
+                                  'CARGO_HOME=/home/runner/.cargo RUSTUP_HOME=/home/runner/.rustup '
+                                  '/home/runner/.cargo/bin/cargo build --locked -p codeflow-cli')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home, hostile, record = root / 'runner', root / 'hostile', root / 'record'
+            fixed = home / '.cargo' / 'bin'
+            fixed.mkdir(parents=True); (home / '.rustup').mkdir(); (hostile / 'bin').mkdir(parents=True)
+            def recorder(path, label):
+                # Bash reads BASH_ENV, so a leaked one would run here.
+                path.write_text(f'#!/bin/bash\necho "{label} home=$CARGO_HOME bash_env=$BASH_ENV" >> "{record}"\n')
+                path.chmod(0o755)
+            recorder(fixed / 'cargo-probe', 'fixed')
+            recorder(hostile / 'bin' / 'cargo-probe', 'hostile')
+            recorder(hostile / 'bin' / 'cargo-hijack', 'alias')
+            startup = hostile / 'startup.sh'
+            startup.write_text(f'echo startup >> "{record}"\n')
+            script = command.replace('/home/runner', str(home)).replace(' build --locked -p codeflow-cli', ' probe')
+            plain = f'{fixed}/cargo probe'
+            def run(text, **extra):
+                # As the runner runs a step with no shell key: `bash -e {0}`.
+                record.write_text('')
+                (root / 'step.sh').write_text(text + '\n')
+                env = {'PATH': f'{hostile / "bin"}:/usr/bin:/bin', 'HOME': str(hostile), 'CARGO_HOME': str(hostile),
+                       'RUSTUP_HOME': str(hostile), 'RUSTUP_TOOLCHAIN': 'hostile', 'BASH_ENV': str(startup), **extra}
+                done = subprocess.run(['bash', '-e', str(root / 'step.sh')], capture_output=True, text=True, env=env)
+                return done, record.read_text().splitlines()
+            (fixed / 'cargo').symlink_to(cargo)
+            # Controls: without the reset, the hostile Cargo home's probe
+            # runs, and an alias from the environment picks another tool.
+            done, lines = run(plain)
+            self.assertIn(f'hostile home={hostile} bash_env={startup}', lines, done.stderr)
+            done, lines = run(plain, CARGO_ALIAS_PROBE='hijack')
+            self.assertTrue(any(line.startswith('alias ') for line in lines), done.stderr)
+            # As written: only the fixed home's probe runs, with the fixed
+            # home and no BASH_ENV. The one `startup` line is the step's own
+            # shell, which is why the job runs no pull request code before it.
+            done, lines = run(script, CARGO_ALIAS_PROBE='hijack')
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(lines, ['startup', f'fixed home={home}/.cargo bash_env='])
+            # A missing subcommand in the fixed home fails; the hostile one
+            # still does not run.
+            (fixed / 'cargo-probe').unlink()
+            done, lines = run(script)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertEqual(lines, ['startup'])
+            # A missing Cargo fails closed before anything runs.
+            (fixed / 'cargo').unlink()
+            done, lines = run(script)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertEqual(lines, ['startup'])
 
     def test_trusted_jobs_save_no_cache_and_install_pinned_wheels_only(self):
         # Review 4 SEC-4 and install hardening: a pull_request_target job

@@ -640,8 +640,13 @@ class WorkflowStructureTests(unittest.TestCase):
         plan = workflow_steps(self.jobs["judge-windows"])
         select = [s for s in plan if s.get("id") == "select"]
         self.assertEqual(len(select), 1)
-        self.assertIn('export LIST="$RUNNER_TEMP/windows-test-list/windows-tests.json"', select[0]["text"])
-        self.assertIn('scripts/windows-partitions.py drift --list "$LIST"', select[0]["text"])
+        # The planner starts from an absolute interpreter under `env -i`,
+        # which keeps only the list's path.
+        self.assertIn('list="$RUNNER_TEMP/windows-test-list/windows-tests.json"', select[0]["text"])
+        self.assertIn('env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B '
+                      'scripts/windows-partitions.py drift --list "$list"', select[0]["text"])
+        self.assertIn('env -i HOME=/home/runner PATH=/usr/bin:/bin LIST="$list" /usr/bin/python3 -I -B -',
+                      select[0]["text"])
         self.assertIn('"filter", str(n), "--list", os.environ["LIST"]', select[0]["text"])
         steps = workflow_steps(self.jobs["windows-tests"])
         run = [s for s in steps if s.get("name", "").startswith("cargo nextest run")]

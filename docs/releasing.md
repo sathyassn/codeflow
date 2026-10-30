@@ -181,6 +181,13 @@ list. A pull request that changes one of them is refused automatic
 admission and needs a human merge: the operator merges it, never an agent.
 The refusal says so.
 
+The base's parity rules judge every pull request, one that changes
+`codeflow-ci.yml` included. A pull request that changes what those rules
+pin therefore fails its own `codeflow gates (judges)` job, since the base
+does not know the new form yet. Merging it over that failure is the
+operator's decision, made on review of the change; an agent never makes
+it.
+
 ### codeflow's own releases
 
 - The version source of truth is the reviewed impact annotations next to the

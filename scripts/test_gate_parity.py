@@ -463,10 +463,14 @@ class WindowsPartitionControls(unittest.TestCase):
                          # drift check, runs its planner outside isolated mode
                          # or plans without the build's list.
                          (base_ref, "          persist-credentials: false\n      - name: Fetch the archive's test list"),
-                         ('          python3 -I -B scripts/windows-partitions.py drift --list "$LIST"\n', ''),
+                         ('          env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B '
+                          'scripts/windows-partitions.py drift --list "$list"\n', ''),
                          ('"python3", "-I", "-B", script, "filter", str(n), "--list"',
                           '"python3", "-B", script, "filter", str(n), "--list"'),
                          (', "--list", os.environ["LIST"]]', ']'),
+                         # The planner keeps the runner's environment.
+                         ('env -i HOME=/home/runner PATH=/usr/bin:/bin LIST="$list" /usr/bin/python3 -I -B -',
+                          'LIST="$list" python3 -I -B -'),
                          # The partitions run whether or not the plan succeeded.
                          (" && needs.judge-windows.result == 'success'", "")):
             with self.subTest(new=new):
@@ -491,6 +495,26 @@ class GatePartControls(unittest.TestCase):
 
     def test_the_committed_parts_run_every_full_mode_target(self):
         self.assertEqual(self.problems(), [])
+
+    def test_a_judge_that_keeps_the_runners_environment_is_refused(self):
+        # TSK-1001 review 6: the jobs that run no pull request code start
+        # their evaluators from absolute paths under `env -i`.
+        clean = "env -i HOME=/home/runner PATH=/usr/bin:/bin "
+        for job, old, new in (
+                ("judge", clean + '/usr/bin/python3 -I -B - >> "$GITHUB_OUTPUT"', 'python3 -I -B - >> "$GITHUB_OUTPUT"'),
+                ("judge-build", "env -i HOME=/home/runner PATH=/home/runner/.cargo/bin:/usr/bin:/bin "
+                                "CARGO_HOME=/home/runner/.cargo RUSTUP_HOME=/home/runner/.rustup "
+                                "/home/runner/.cargo/bin/cargo build", "cargo build"),
+                ("gates-judges", clean + '"$driver/codeflow" validate', '"$driver/codeflow" validate'),
+                ("gates-judges", clean + "/usr/bin/python3 -I -B scripts/gate-parity.py",
+                 "python3 -I -B scripts/gate-parity.py"),
+                ("gates-coverage-report", clean + '/usr/bin/python3 -I -B "$CODEFLOW_JUDGE/scripts/coverage-merge.py"',
+                 'python3 -I -B "$CODEFLOW_JUDGE/scripts/coverage-merge.py"'),
+                ("gates-coverage-report", 'CODEFLOW_GATE_STARTED_AT="$CODEFLOW_GATE_STARTED_AT" /usr/bin/python3 -I -B '
+                 '"$CODEFLOW_JUDGE/scripts/journey-gate.py"', '/usr/bin/python3 -I -B "$CODEFLOW_JUDGE/scripts/journey-gate.py"')):
+            with self.subTest(job=job, old=old):
+                self.assertEqual(WORKFLOW.count(old), 1)
+                self.assert_problem(WORKFLOW.replace(old, new), f"`{job}` job must be exactly")
 
     def test_a_target_no_part_names_is_refused(self):
         self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: rust-format"),
@@ -854,8 +878,9 @@ class CoverageShardControls(unittest.TestCase):
                 self.assert_problem(self.EXACT, WORKFLOW.replace(run, changed))
         # The filter is the judge job's selection for this shard, written
         # into the step that uses it (TSK-1001, review 5 F2): another slot, a
-        # filter computed here or read from the environment, no emptiness
-        # check or no check of the Cargo tools' location is refused.
+        # filter computed here or read from the environment, or no emptiness
+        # check is refused. The job runs pull request code, so this catches
+        # drift (review 6).
         shard = "filter='${{ fromJSON(needs.judge.outputs.shards)[format('{0}', matrix.shard)] }}'"
         self.assertIn(shard, WORKFLOW)
         self.assert_problem(self.EXACT, WORKFLOW.replace(shard, shard.replace("matrix.shard", "'1'")))
@@ -865,8 +890,6 @@ class CoverageShardControls(unittest.TestCase):
         self.assert_problem(self.EXACT, WORKFLOW.replace("    needs: [reuse, judge]\n", "    needs: reuse\n"))
         self.assert_problem(self.EXACT, WORKFLOW.replace(
             '          test -n "$filter" || { echo "::error::the gate selection gave this shard no filter"; exit 1; }\n', ''))
-        self.assert_problem(self.EXACT, WORKFLOW.replace("          for tool in cargo cargo-llvm-cov cargo-nextest; do\n",
-                                                         "          for tool in; do\n"))
         self.assert_problem(self.EXACT, WORKFLOW.replace("          cargo llvm-cov clean --workspace\n", ""))
         self.assert_problem(self.EXACT, WORKFLOW.replace("          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n"
                                                          "        run: |\n          set -euo pipefail\n          filter=",
