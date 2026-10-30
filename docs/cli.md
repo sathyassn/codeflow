@@ -234,9 +234,9 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
-| `codeflow work next` | | List ready tasks first, then landed, waiting and blocked ones with their reasons, from the refs as last fetched. A landed task has an open record but its work has merged into its target; the listing gives the `codeflow task status` command that settles it, and `work claim` refuses it. Checks review evidence for stack hints |
+| `codeflow work next` | | List ready tasks first, then landed (work merged), waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
-| | `--json` | Print the same facts as JSON. |
+| | `--json` | Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`. |
 | `codeflow work claim <TASK_ID>` | | Fetch, check the task is ready and unclaimed on its target tip, then create and push `task/<id>-<slug>` from that tip. The pushed branch is an advisory mark others can see |
 | | `<TASK_ID>` | Stable task id. |
 | | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. |
@@ -589,11 +589,7 @@ Claims count local branches and branches on `origin`, on the target's fetch
 remote, and on any remotes in `git.claim_remotes` (empty by default). Branches on
 other remotes appear as information in `work next` and `work claim`; they neither
 make a task active nor create a conflict. `work next --json` keeps these in
-`informational_branches`, separate from the claim `branches`. Each task in
-`work next --json` carries its `state`; a `landed` task also carries
-`landed_branches` (the branches whose work reached the target) and
-`suggested_command` (the `codeflow task status` command that settles its
-record), and the two are an empty list and null on any other task. Claim lists
+`informational_branches`, separate from the claim `branches`. Claim lists
 its remotes live, so a narrow fetch cannot hide work.
 
 `codeflow follow` is described in the
