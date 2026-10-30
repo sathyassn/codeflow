@@ -101,7 +101,7 @@
     ".agents/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "11e8e5831443f57203af92e9891c79a5ea1773649a7c08a88f3bc15b54ad33d9",
+      "sha256": "52b746c5bed1cfd6a5d06a75b0e4f1f8704a62571ee4c6bde28d00cd6df529f0",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/SKILL.md": {
@@ -539,7 +539,7 @@
     ".agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
       "ownership": "managed",
-      "sha256": "20a7576bb76da1758d22402ee12a82039dd063f41fe9f602436b1c8380bf38a2",
+      "sha256": "185a956dda7e4c37ab443fb103a2b35788cf8f7139efd94ef3dc37bfee7fab75",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality/editorial.md": {
@@ -827,13 +827,13 @@
     ".agents/skills/cf-stack/SKILL.md": {
       "src": "agents/skills/cf-stack/SKILL.md",
       "ownership": "managed",
-      "sha256": "9467fbd4993dd869f0c1b192d5298e6ebda0695cc91bda9244b0f8af49ef4373",
+      "sha256": "6f8a6801d7f6d4dbc6a16d0b8a8e6ac15a0eb71c62bcb00afd5dec79cff0b96d",
       "exec": false
     },
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
       "ownership": "managed",
-      "sha256": "547059132369fd420ccd6a7aaf2ba16cd189bbf99022e066167b92ba871d84c0",
+      "sha256": "5fab840c3a42646f43840bb7374c2a6b12e6b5f815167267d7d794a6e7110375",
       "exec": false
     },
     ".claude/agents/cf-security-reviewer.md": {
@@ -947,7 +947,7 @@
     ".claude/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "11e8e5831443f57203af92e9891c79a5ea1773649a7c08a88f3bc15b54ad33d9",
+      "sha256": "52b746c5bed1cfd6a5d06a75b0e4f1f8704a62571ee4c6bde28d00cd6df529f0",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/SKILL.md": {
@@ -1385,7 +1385,7 @@
     ".claude/skills/cf-model-orchestrator/resources/quality/design-implementation.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
       "ownership": "managed",
-      "sha256": "20a7576bb76da1758d22402ee12a82039dd063f41fe9f602436b1c8380bf38a2",
+      "sha256": "185a956dda7e4c37ab443fb103a2b35788cf8f7139efd94ef3dc37bfee7fab75",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality/editorial.md": {
@@ -1673,7 +1673,7 @@
     ".claude/skills/cf-stack/SKILL.md": {
       "src": "agents/skills/cf-stack/SKILL.md",
       "ownership": "managed",
-      "sha256": "9467fbd4993dd869f0c1b192d5298e6ebda0695cc91bda9244b0f8af49ef4373",
+      "sha256": "6f8a6801d7f6d4dbc6a16d0b8a8e6ac15a0eb71c62bcb00afd5dec79cff0b96d",
       "exec": false
     },
     ".claude/workflows/pipeline.workflow.js": {

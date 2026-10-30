@@ -38,10 +38,14 @@ records the required interactive seat unavailable and the reduced assurance.
       message, log line, comment, test and example value with the ordinary
       word for what it does, and check what a plausible reader takes it to
       mean (`.codeflow/rules/writing.md` "Meaning the reader takes"). Apply the
-      quality contract's
-      typed-interface and runtime trust-boundary rule and test accepted
-      invalid-input behavior; never force a stricter compiler, dependency,
-      language, or stack migration merely for compliance. When the change fixes
+      quality contract's typed-code and typed-boundary-data rule
+      (`cf-model-orchestrator/resources/quality/design-implementation.md`):
+      new and changed code fully typed, an inline reason on every escape
+      type and suppression, data at every boundary parsed into a validating
+      typed model, and accepted invalid-input behavior tested. When the
+      project lacks its type checker, linter or typed-model library, adding
+      it is part of this change, unless the project's `AGENTS.md` states an
+      opt-out with its reason. When the change fixes
       a defect, apply Repair in
       `cf-model-orchestrator/resources/quality/findings.md`: state the
       evidenced mechanism and add a regression test that fails before the fix
