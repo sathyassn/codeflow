@@ -266,7 +266,11 @@ pub const SCHEMA: [KeySpec; 74] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
-        notes: "Agent guards (ADR-0009). Local-edit relief never disables protection \
+        notes: "Agent guards (ADR-0009). A write to Git's alternate object lists \
+                (`objects/info/alternates`, `objects/info/http-alternates`, in the common \
+                directory a linked worktree shares) refuses like a write to hooks, refs or \
+                config, since an alternate store adds objects Git reads as its own; reading \
+                them stays allowed. Local-edit relief never disables protection \
                 of remote-tracking refs, packed-refs or Git config authority metadata. \
                 git-guard refuses a `sed`, `find`, `xargs` or `parallel` that \
                 can change files when its command line names an enforcement \
@@ -1086,18 +1090,28 @@ pub fn first_unsupported_warning(text: &str) -> bool {
 /// Compatibility diagnostics for controls with no enforcement reader.
 #[must_use]
 pub fn unsupported_control_warnings(value: &Value) -> Vec<crate::remedy::Finding> {
+    unsupported_control_paths(value)
+        .into_iter()
+        .map(|path| {
+            crate::remedy::Finding::new(
+                format!("policy key {path} is not supported, has no effect"),
+                crate::remedy::POLICY_UNSUPPORTED.with(&[("key", path)]),
+            )
+        })
+        .collect()
+}
+
+/// The schema paths of the unsupported controls `value` sets: each a key
+/// `CodeFlow` defines, never one the project wrote.
+#[must_use]
+pub fn unsupported_control_paths(value: &Value) -> Vec<&'static str> {
     schema()
         .iter()
         .filter(|spec| {
             spec.path.contains('.') && spec.path != "git.direct_changes" && spec.is_unsupported()
         })
         .filter(|spec| lookup(value, spec.path).is_some())
-        .map(|spec| {
-            crate::remedy::Finding::new(
-                format!("policy key {} is not supported, has no effect", spec.path),
-                crate::remedy::POLICY_UNSUPPORTED.with(&[("key", spec.path)]),
-            )
-        })
+        .map(|spec| spec.path)
         .collect()
 }
 

@@ -56,6 +56,7 @@
 //! gates apart, so [`check_cargo_target_dir`] returns a warning, never a
 //! refusal.
 
+use crate::bounded_file::FileIdentity;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
@@ -221,18 +222,7 @@ pub fn unwritable_gate_dirs(
         }
     };
     for dir in dirs {
-        // A gate needs the lock file and a holder record it can create and
-        // rename into place; probe both, the record with a disposable name
-        // through the same anchored write, removed again (TSK-1003).
-        let lock = dir.join(LOCK_FILE);
-        let probe = dir.join(format!(".record-probe-{}", std::process::id()));
-        let result = open_lock_file(&lock).map(drop).and_then(|()| {
-            let (anchor, relative) = lock_anchor(&probe)?;
-            let tree = crate::contained::Tree::open(anchor)?;
-            tree.write(&relative, b"")?;
-            tree.remove(&relative)
-        });
-        if let Err(error) = result {
+        if let Err(error) = probe_lock_dir(&dir) {
             unwritable.push((dir, error));
         }
     }
@@ -254,6 +244,81 @@ pub fn unwritable_gate_dirs(
         }
     }
     unwritable
+}
+
+/// Whether a gate could use the lock folder `dir`: it needs the lock file
+/// and a holder record it can create and rename into place. Both are
+/// probed, the record with a disposable name through the same anchored
+/// write, removed again (TSK-1003). The lock itself is never taken.
+fn probe_lock_dir(dir: &Path) -> std::io::Result<()> {
+    let lock = dir.join(LOCK_FILE);
+    let probe = dir.join(format!(".record-probe-{}", std::process::id()));
+    open_lock_file(&lock).map(drop).and_then(|()| {
+        let (anchor, relative) = lock_anchor(&probe)?;
+        let tree = crate::contained::Tree::open(anchor)?;
+        tree.write(&relative, b"")?;
+        tree.remove(&relative)
+    })
+}
+
+/// What a builder seat has to write outside its worktree (TSK-337), each
+/// folder with its result: both gate lock folders (`locks` under `home` and
+/// `codeflow` under the common git directory), probed as
+/// [`unwritable_gate_dirs`] probes them, and the common git directory's
+/// `objects` and `refs`, which a commit writes, each probed by creating and
+/// removing a file whose dot-led name git never reads as an object or a
+/// ref, through an anchored write that follows no link. The gate evidence
+/// folder is not probed: builder seats run no full gate.
+#[must_use]
+pub fn builder_write_probe(
+    project_dir: &Path,
+    home: Option<&Path>,
+) -> Vec<(PathBuf, std::io::Result<()>)> {
+    let dirs = match lock_dirs(project_dir, home) {
+        Ok(dirs) => dirs,
+        Err(error) => {
+            return vec![(
+                project_dir.to_path_buf(),
+                Err(std::io::Error::other(error.to_string())),
+            )]
+        }
+    };
+    let mut results: Vec<(PathBuf, std::io::Result<()>)> = dirs
+        .iter()
+        .map(|dir| (dir.clone(), probe_lock_dir(dir)))
+        .collect();
+    if home.is_none() {
+        results.insert(
+            0,
+            (
+                PathBuf::from(HOME_LOCK_DIR),
+                Err(std::io::Error::other(
+                    "no CodeFlow home folder, so its lock folder was not probed",
+                )),
+            ),
+        );
+    }
+    let common = match git2::Repository::discover(project_dir) {
+        Ok(repo) => repo.commondir().to_path_buf(),
+        Err(error) => {
+            results.push((
+                project_dir.to_path_buf(),
+                Err(std::io::Error::other(format!(
+                    "no git repository, so the objects and refs folders were not probed: {error}"
+                ))),
+            ));
+            return results;
+        }
+    };
+    for folder in ["objects", "refs"] {
+        let relative = format!("{folder}/.codeflow-write-probe-{}", std::process::id());
+        let result = crate::contained::Tree::open(&common).and_then(|tree| {
+            tree.create_new(&relative, b"")?;
+            tree.remove(&relative)
+        });
+        results.push((common.join(folder), result));
+    }
+    results
 }
 
 /// Read holder records without taking a lock, changing a record, or creating directories.
@@ -736,11 +801,13 @@ fn open_lock_file(path: &Path) -> std::io::Result<File> {
 /// file swapped for another regular file splits coordination: a later gate
 /// would lock the new file. The lock folder is an advisory coordination
 /// boundary, not a security boundary, so a swap after this check still
-/// splits it; the check closes the window while the lock is taken.
+/// splits it; the check closes the window while the lock is taken. Both
+/// identities are read from handles this module opened, the held one and the
+/// anchored no-follow reopen, and an identity that cannot be read refuses.
 fn same_lock_file(path: &Path, file: &File) -> std::io::Result<()> {
     let (anchor, relative) = lock_anchor(path)?;
     let current = crate::contained::Tree::open(anchor)?.open_regular(&relative)?;
-    if same_file::Handle::from_file(current)? == same_file::Handle::from_file(file.try_clone()?)? {
+    if FileIdentity::of(&current)? == FileIdentity::of(file)? {
         Ok(())
     } else {
         Err(std::io::Error::other(
@@ -1231,6 +1298,38 @@ mod tests {
     }
 
     #[test]
+    fn the_builder_write_probe_covers_locks_objects_and_refs() {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let home = tmp.path().join("home");
+        let found = builder_write_probe(tmp.path(), Some(&home));
+        let dirs: Vec<&PathBuf> = found.iter().map(|(dir, _)| dir).collect();
+        assert_eq!(dirs.len(), 4, "{dirs:?}");
+        assert_eq!(dirs[0], &home.join("locks"));
+        assert!(dirs[1].ends_with(".git/codeflow"), "{dirs:?}");
+        assert!(dirs[2].ends_with(".git/objects"), "{dirs:?}");
+        assert!(dirs[3].ends_with(".git/refs"), "{dirs:?}");
+        assert!(found.iter().all(|(_, result)| result.is_ok()), "{found:?}");
+        for dir in &dirs[2..] {
+            let left: Vec<_> = std::fs::read_dir(dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().contains("write-probe"))
+                .collect();
+            assert!(left.is_empty(), "{left:?}");
+        }
+        let without_home = builder_write_probe(tmp.path(), None);
+        assert_eq!(without_home.len(), 4);
+        assert!(without_home[0].1.is_err());
+        let plain = tempfile::tempdir().unwrap();
+        let outside = builder_write_probe(plain.path(), Some(&home));
+        assert!(
+            outside.iter().any(|(_, result)| result.is_err()),
+            "{outside:?}"
+        );
+    }
+
+    #[test]
     fn lock_dirs_cover_home_and_the_git_common_dir() {
         let tmp = tempfile::tempdir().unwrap();
         git2::Repository::init(tmp.path()).unwrap();
@@ -1408,6 +1507,21 @@ mod tests {
         assert!(same_lock_file(&path, &file).is_err());
         let fresh = open_lock_file(&path).unwrap();
         assert!(same_lock_file(&path, &fresh).is_ok());
+    }
+
+    /// TSK-1021 AC-1: the check compares the identity of the held handle
+    /// with the anchored reopen on every platform: the lock path's own file
+    /// passes, a handle on another file is refused.
+    #[test]
+    fn a_lock_check_compares_file_identities() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("locks").join(LOCK_FILE);
+        let other = tmp.path().join("other").join(LOCK_FILE);
+        let file = open_lock_file(&path).unwrap();
+        let elsewhere = open_lock_file(&other).unwrap();
+        assert!(same_lock_file(&path, &file).is_ok());
+        let error = same_lock_file(&path, &elsewhere).expect_err("another file");
+        assert!(error.to_string().contains("another file"), "{error}");
     }
 
     /// TSK-1003 round four, the review's interleaving: the lock entry is a

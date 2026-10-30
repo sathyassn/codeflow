@@ -305,14 +305,23 @@ pub fn detect_release_tools(root: &Path) -> Vec<(&'static str, &'static str)> {
 /// and the detected tools agree: `none` beside a release tool should say
 /// `external`; `codeflow` beside one has two version authorities.
 #[must_use]
-pub fn release_backend_finding(backend: ReleaseBackend, tools: &[(&str, &str)]) -> Option<String> {
+pub fn release_backend_finding(
+    backend: ReleaseBackend,
+    tools: &[(&'static str, &'static str)],
+) -> Option<crate::scaffold::Shown> {
+    use crate::scaffold::Shown;
     let (tool, file) = tools.first()?;
+    let (tool, file) = (Shown::fixed(tool), Shown::fixed(file));
     match backend {
-        ReleaseBackend::None => Some(format!(
-            "{tool} owns versions here ({file}); set `[release] backend = \"external\"` in .codeflow/project.toml so CodeFlow checks only the Release impact declaration and contract watches"
+        ReleaseBackend::None => Some(crate::shown!(
+            "{} owns versions here ({}); set `[release] backend = \"external\"` in .codeflow/project.toml so CodeFlow checks only the Release impact declaration and contract watches",
+            tool,
+            file
         )),
-        ReleaseBackend::Codeflow => Some(format!(
-            "two version authorities: release.backend is codeflow and {tool} is configured ({file}); keep one per release unit"
+        ReleaseBackend::Codeflow => Some(crate::shown!(
+            "two version authorities: release.backend is codeflow and {} is configured ({}); keep one per release unit",
+            tool,
+            file
         )),
         ReleaseBackend::External => None,
     }

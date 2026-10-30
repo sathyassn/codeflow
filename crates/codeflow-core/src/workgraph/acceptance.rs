@@ -207,8 +207,38 @@ fn first_parent(repo: &Repository, at: Oid) -> Result<Option<Oid>, String> {
         .next())
 }
 
-/// A record's text without its frontmatter `status:` field and its
-/// `## Closeout` section: what must not change after the reviewed commit.
+/// The span of the `## Blocker` section when it has exactly the shape
+/// `task status <id> blocked` writes (TSK-340, issue #198): the heading, one
+/// empty line, the `reason`, `owner` and `revisit` items with a value each,
+/// and nothing after them but empty lines. Any other text in that section,
+/// another item, a paragraph or a criterion, keeps it reviewed.
+fn generated_blocker(
+    lines: &[&str],
+    scanned: &[super::record_text::ScannedLine],
+) -> Option<(usize, usize)> {
+    let (start, end) = section_span(scanned, "## Blocker")?;
+    let section = &lines[start..end];
+    let item = |at: usize, key: &str| {
+        section
+            .get(at)
+            .and_then(|line| line.strip_prefix(key))
+            .is_some_and(|value| !value.is_empty() && !value.contains('\r'))
+    };
+    let generated = section.first() == Some(&"## Blocker")
+        && section.get(1) == Some(&"")
+        && item(2, "- reason: ")
+        && item(3, "- owner: ")
+        && item(4, "- revisit: ")
+        && section.iter().skip(5).all(|line| line.is_empty())
+        && scanned[start..end]
+            .iter()
+            .all(|line| line.kind == super::record_text::LineKind::Text);
+    generated.then_some((start, end))
+}
+
+/// A record's text without its frontmatter `status:` field, its
+/// `## Closeout` section and a `## Blocker` section of the generated shape
+/// ([`generated_blocker`]): what must not change after the reviewed commit.
 /// The Closeout is the section the record parser finds (the one the
 /// acceptance block is read from), so a heading inside a comment, an HTML
 /// block or a fence neither ends nor opens it.
@@ -217,13 +247,16 @@ fn reviewed_part(content: &str) -> String {
     let frontmatter = frontmatter_len(&lines);
     let scanned = scan_record(&lines);
     let closeout = section_span(&scanned, "## Closeout");
+    let blocker = generated_blocker(&lines, &scanned);
     let mut reviewed: Vec<_> = lines
         .iter()
         .enumerate()
         .filter(|(index, line)| {
             let status_field = *index > 0 && *index < frontmatter && line.starts_with("status:");
-            let in_closeout = closeout.is_some_and(|(start, end)| (start..end).contains(index));
-            !status_field && !in_closeout
+            let within = |span: Option<(usize, usize)>| {
+                span.is_some_and(|(start, end)| (start..end).contains(index))
+            };
+            !status_field && !within(closeout) && !within(blocker)
         })
         .map(|(_, line)| *line)
         .collect();
@@ -306,7 +339,7 @@ mod authority {
         /// head.
         #[must_use]
         pub fn stacking(&self) -> StackingTips {
-            StackingTips(self.0.clone())
+            StackingTips(self.0.clone(), Vec::new())
         }
 
         /// The bases that alone may supply a reopened task's criteria.
@@ -315,6 +348,7 @@ mod authority {
             CriteriaBases {
                 bases: self.0.clone(),
                 imported_home: None,
+                judged_tips: Vec::new(),
             }
         }
     }
@@ -324,11 +358,29 @@ mod authority {
     /// `with_own_line` or a verified import's home extends it. It never
     /// supplies criteria.
     #[derive(Clone, Debug, Default)]
-    pub struct StackingTips(Vec<Oid>);
+    pub struct StackingTips(Vec<Oid>, Vec<Oid>);
 
     impl StackingTips {
         pub(super) fn tips(&self) -> &[Oid] {
             &self.0
+        }
+
+        /// The receiving lines a task landing merge may sit on: these tips
+        /// and any verified source line a caller added for landings only
+        /// ([`Self::with_landing_line`]), which never stacks a clean merge.
+        pub(super) fn landing_tips(&self) -> Vec<Oid> {
+            self.0.iter().chain(&self.1).copied().collect()
+        }
+
+        /// These tips, and `tip` as a receiving line for task landings only:
+        /// a verified source line (a release import's attributed source).
+        /// It adds no clean-merge stacking authority.
+        #[must_use]
+        pub fn with_landing_line(mut self, tip: Oid) -> Self {
+            if !self.1.contains(&tip) {
+                self.1.push(tip);
+            }
+            self
         }
 
         /// These tips and a planning or line range's own head, for a task that
@@ -349,6 +401,7 @@ mod authority {
     pub struct CriteriaBases {
         bases: Vec<Oid>,
         imported_home: Option<(String, Oid)>,
+        judged_tips: Vec<(String, Oid)>,
     }
 
     impl CriteriaBases {
@@ -369,6 +422,30 @@ mod authority {
                 .as_ref()
                 .filter(|(home, _)| home == super::super::work_start::logical_target(name))
                 .map(|(_, tip)| *tip)
+        }
+
+        /// One exact tip of an epic line this run judges as part of one pull
+        /// request into its target (TSK-433): the range's own line, or a
+        /// verified line that joined it. The caller marks only a tip the
+        /// range head contains whose epic-line proof passed, so that tip is
+        /// the range under judgment and no outside evidence of a landing; it
+        /// adds no criteria base.
+        pub(super) fn with_judged_tip(mut self, line: &str, tip: Oid) -> Self {
+            let line = super::super::work_start::logical_target(line).to_string();
+            if !self.judged_tips.contains(&(line.clone(), tip)) {
+                self.judged_tips.push((line, tip));
+            }
+            self
+        }
+
+        /// Whether `tip`, resolved for the target `name`, is that exact
+        /// judged tip ([`Self::with_judged_tip`]). Another commit under any
+        /// spelling of the same line is not.
+        pub(super) fn judged_tip(&self, name: &str, tip: Oid) -> bool {
+            let name = super::super::work_start::logical_target(name);
+            self.judged_tips
+                .iter()
+                .any(|(line, judged)| line == name && *judged == tip)
         }
     }
 }
@@ -412,8 +489,8 @@ impl From<Vec<Finding>> for BindingResult {
 
 /// Bind a completion to its reviewed source. Only this record's status and
 /// Closeout may differ in the reviewed segment. A clean task landing can
-/// transport that segment onto a line; a reopening range always reviews its
-/// own work. `base` pins the range's anchored old review when supplied.
+/// transport that segment onto a line; a reopening range reviews its own
+/// work and takes no landing's review. `base` pins the range's anchored old review when supplied.
 /// A waiver names the criterion's record-only amendment on its target;
 /// `bind_completion_with_amendment` adds the task's own range.
 #[must_use]
@@ -475,8 +552,9 @@ fn task_reopen_history(
 /// record in that range, after `own_range_base` and strictly before the
 /// reviewed commit. Once the pull request lands, that commit is on the
 /// target, so a line and the release judge accept the same waiver under
-/// the target rule. `None`, or a range that reopens the task, keeps the
-/// target rule alone.
+/// the target rule. `None`, or a range that reopens a landed completion,
+/// keeps the target rule alone; a range that reopens only a completion it
+/// made itself, before any completion landed, keeps the allowance (TSK-340).
 ///
 /// After its review, a task pull request's chain may stack a clean merge
 /// only when the merge brings a commit on the first-parent line of one of
@@ -529,6 +607,7 @@ pub(crate) fn bind_completion_with_amendment(
         Err(error) => return vec![finding(BINDING_RULE, error)].into(),
     };
     let mut recovered = false;
+    let mut planned = false;
     let mut unreadable = None;
     let reopen = (!on_target).then_some(anchor).flatten().and_then(|anchor| {
         // By identity, wherever the anchored target holds the record
@@ -553,6 +632,7 @@ pub(crate) fn bind_completion_with_amendment(
             Ok(Some(found)) => {
                 unreadable = found.refusal;
                 recovered = true;
+                planned = found.planned;
                 Some((found.at, found.old))
             }
             Ok(None) => None,
@@ -566,9 +646,9 @@ pub(crate) fn bind_completion_with_amendment(
         },
         None => false,
     };
-    // A reopening range reviews its own work: no task landing or clean line
-    // merge stacks on its review, and no own-range waiver (R-60). Only its
-    // criteria follow whether the reopened completion landed (issue #67).
+    // A reopening range reviews its own work: no task landing carries a
+    // review into it (R-60). Its criteria and its own-range waiver route
+    // follow whether the reopened completion landed (issue #67, TSK-340).
     let reopens_range = reopen
         .as_ref()
         .is_some_and(|_| !recovered || !reopen_before_range);
@@ -596,9 +676,28 @@ pub(crate) fn bind_completion_with_amendment(
             // the binding below still refuses any later change but this
             // record's status and Closeout (AC-2).
             let completed_in_range = recovered && anchor.is_some() && !reopen_before_range;
-            let review_before_reopen = match reopen.as_ref() {
-                Some((at, _)) => match is_ancestor_or_same(repo, *at, reviewed) {
-                    Ok(contains) => (reviewed == *at && !completed_in_range) || !contains,
+            // A reopening task pull request that merged its target after
+            // the review has moved its anchor past the review. Its fix range
+            // then starts where the review left the target (TSK-340): the
+            // merge-base of the review and the anchor, which must hold the
+            // very completion the anchor holds; the stacking walk below
+            // judges every commit after the review.
+            let left = match (reopen.as_ref(), transport) {
+                (Some((at, old)), Transport::TaskLanding) if !recovered => {
+                    match reopen_left_at(repo, task, old, *at, reviewed) {
+                        Ok(left) => Some(left),
+                        Err(error) => {
+                            bind(format!("{}: {error}", task.id));
+                            return findings.into();
+                        }
+                    }
+                }
+                (Some((at, _)), _) => Some(*at),
+                (None, _) => None,
+            };
+            let review_before_reopen = match left {
+                Some(at) => match is_ancestor_or_same(repo, at, reviewed) {
+                    Ok(contains) => (reviewed == at && !completed_in_range) || !contains,
                     Err(error) => {
                         bind(format!("{}: {error}", task.id));
                         return findings.into();
@@ -609,11 +708,19 @@ pub(crate) fn bind_completion_with_amendment(
             let problem = if review_before_reopen {
                 Some(format!("a reopened task's reviewed commit {reviewed} must lie inside the fix range, after its anchored base"))
             } else {
-                let carried = if reopens_range {
-                    Transport::Direct
-                } else {
-                    transport
+                // A reopening range reviews its own work: no earlier task
+                // landing carries a review into it. Its completion span
+                // (TSK-340) still ends where an ordinary task pull request's
+                // does, so after its review it may take the clean merges of
+                // its target that any task pull request may.
+                let carried = match (reopens_range, transport) {
+                    (false, transport) => Carried::Transport(transport),
+                    (true, Transport::TaskLanding) => Carried::ReopenedStack,
+                    (true, Transport::Direct) => Carried::Transport(Transport::Direct),
                 };
+                // Receiving authority is the run's pinned bases and verified
+                // line heads only: a target the record declares, resolved
+                // through a ref, never adds one (TSK-340 review round 4).
                 match binding_source(
                     repo,
                     task,
@@ -636,6 +743,37 @@ pub(crate) fn bind_completion_with_amendment(
             }
         }
     }
+    // The own-range waiver route follows the completion span (TSK-340,
+    // issue #278): a range that reopens only a completion it made itself,
+    // before any completion of the task landed, is still the task's own
+    // pull request and keeps the route, as it keeps its criteria (R-119).
+    // A reopen of a landed completion keeps its criteria frozen, so its
+    // waiver names a planning amendment on the target.
+    let own_route = if !reopens_range || (recovered && !reopen_before_range && planned) {
+        own_range_base.map_or(OwnRange::None, OwnRange::Base)
+    } else {
+        OwnRange::LandedReopen
+    };
+    match archive_problem(
+        repo,
+        task,
+        // The anchor's completion when the range reopened it; a completion
+        // the range made and reopened itself is in its own history.
+        reopen.as_ref().filter(|_| !recovered).map(|(_, old)| old),
+        anchor,
+        landing,
+    ) {
+        Ok(None) => {}
+        Ok(Some(problem)) => {
+            bind(format!("{}: {problem}", task.id));
+        }
+        Err(error) => bind(format!("{}: {error}", task.id)),
+    }
+    // "On the target" means on a receiving line the run pins (its bases,
+    // a verified line head, a release import's attributed source), never a
+    // target the record declares resolved through a ref (TSK-340 review
+    // round 4).
+    let pinned = stacking.landing_tips();
     for (id, result) in &block.criteria {
         if result.outcome == "waived" {
             if let Some(problem) = waiver_problem(
@@ -644,8 +782,8 @@ pub(crate) fn bind_completion_with_amendment(
                 id,
                 &result.evidence,
                 landing,
-                target,
-                own_range_base.filter(|_| !reopens_range),
+                &pinned,
+                own_route,
             ) {
                 bind(format!("{}: {id} waiver {problem}", task.id));
             }
@@ -656,6 +794,272 @@ pub(crate) fn bind_completion_with_amendment(
         proof: proof.filter(|_| findings.is_empty()),
         findings,
     }
+}
+
+/// Why the record's archive is not one this history made, if it is not
+/// (TSK-340). The blocks the reference record archived (the reopened
+/// completion, or the record at the anchor) stay byte for byte; the first
+/// block the range archives is the reference's active one, which
+/// `reopen_problems` checks; and the archived blocks after it are exactly
+/// the completions the range's history made, in the order it made them,
+/// none missing and none added, each with real provenance
+/// ([`historical_binding`]). A dropped, invented or reordered completion is
+/// refused.
+fn archive_problem(
+    repo: &Repository,
+    task: &RecordView,
+    reopened: Option<&RecordView>,
+    anchor: Option<Oid>,
+    landing: Landing<'_>,
+) -> Result<Option<String>, String> {
+    let archive = task.superseded_blocks();
+    if archive.is_empty() {
+        return Ok(None);
+    }
+    let at_anchor = match (reopened, anchor) {
+        (None, Some(anchor)) => record_at(repo, anchor, task)?,
+        _ => None,
+    };
+    let reference = reopened.or(at_anchor.as_ref());
+    let kept = reference
+        .map(RecordView::superseded_blocks)
+        .unwrap_or_default();
+    if archive.len() < kept.len()
+        || kept
+            .iter()
+            .zip(&archive)
+            .any(|(old, new)| old.inner != new.inner)
+    {
+        // A validated redaction is judged by its own rule; reopen_problems
+        // names the reordered or rewritten archive.
+        if reopened.is_none()
+            && reference.is_none_or(|old| super::redaction::preserves(old, task).is_err())
+        {
+            return Ok(Some(
+                "the `acceptance_superseded:` blocks the anchored record archived stay unchanged and first".into(),
+            ));
+        }
+        return Ok(None);
+    }
+    let normal = |block: &AcceptanceBlock| {
+        let mut block = block.clone();
+        block.superseded = false;
+        block.reason = None;
+        block
+    };
+    let mut tail = Vec::new();
+    for block in &archive[kept.len()..] {
+        let Ok(parsed) = &block.parsed else {
+            return Ok(Some("an archived acceptance block does not parse".into()));
+        };
+        tail.push(normal(parsed));
+    }
+    let mut made = completions_made(repo, task, anchor, landing)?;
+    // The current completion is never archived: it is the last occurrence
+    // when the record never left `complete` after it and holds the same
+    // completion. Only that one occurrence is set aside.
+    let current = active_block(task);
+    if made.last().is_some_and(|last| {
+        !last.reopened_after
+            && Some(&last.block) == current.as_ref()
+            && record_at(repo, last.at, task)
+                .ok()
+                .flatten()
+                .is_some_and(|then| then.superseded_blocks() == archive)
+    }) {
+        made.pop();
+    }
+    // The first block the range archives may be the completion the
+    // reference held before this range (at the anchor): `reopen_problems`
+    // checks it against that record, and the range's history does not hold
+    // it. A completion the range made itself is judged with the others.
+    let reference_active = reference.and_then(active_block);
+    if !tail.is_empty()
+        && tail.first() == reference_active.as_ref()
+        && made.first().map(|made| &made.block) != tail.first()
+    {
+        tail.remove(0);
+    }
+    for (
+        index,
+        Made {
+            block: held, at, ..
+        },
+    ) in made.iter().enumerate()
+    {
+        match tail.get(index) {
+            Some(archived) if archived == held => {}
+            Some(archived) => {
+                return Ok(Some(format!(
+                    "the archive must hold every completion this range made, in order: it has the block reviewed at {} where the completion reviewed at {} (made at {at}) belongs",
+                    archived.reviewed, held.reviewed
+                )))
+            }
+            None => {
+                return Ok(Some(format!(
+                    "the archive must hold every completion this range made, in order: the completion reviewed at {} (made at {at}) is missing",
+                    held.reviewed
+                )))
+            }
+        }
+        if let Some(problem) = historical_binding(repo, *at, held) {
+            return Ok(Some(format!(
+                "the archived completion reviewed at {}, made at {at}, has no real provenance: {problem}",
+                held.reviewed
+            )));
+        }
+    }
+    if let Some(extra) = tail.get(made.len()) {
+        return Ok(Some(format!(
+            "the archived acceptance block reviewed at {} is not a completion this range made; a reopen archives only a completion that was made",
+            extra.reviewed
+        )));
+    }
+    Ok(None)
+}
+
+/// One completion the range's history made: the commit that introduced
+/// it, its active block, and whether the record left `complete` after it.
+struct Made {
+    block: AcceptanceBlock,
+    at: Oid,
+    reopened_after: bool,
+}
+
+/// Every completion of `task`'s record the range's history made, from
+/// `anchor` (excluded) to the landing, in the order it made them. A
+/// completion is an occurrence, never a block's content: a commit whose
+/// record is complete while no parent holds that same completion (active
+/// block and archive) introduces one, so `complete -> todo -> complete`
+/// with an identical block is two completions. A history that cannot be
+/// read is an error, never an empty list.
+fn completions_made(
+    repo: &Repository,
+    task: &RecordView,
+    anchor: Option<Oid>,
+    landing: Landing<'_>,
+) -> Result<Vec<Made>, String> {
+    let _judgment = history::judgment();
+    let unreadable =
+        |error: git2::Error| format!("cannot read the history of {}: {error}", task.path);
+    let mut walk = history::revwalk(repo).map_err(unreadable)?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)
+        .map_err(unreadable)?;
+    walk.push(landing.commit()).map_err(unreadable)?;
+    if let Some(anchor) = anchor {
+        walk.hide(anchor).map_err(unreadable)?;
+    }
+    let state = |record: &RecordView| {
+        (record.status == "complete")
+            .then(|| active_block(record))
+            .flatten()
+            .map(|active| (active, record.superseded_blocks()))
+    };
+    let mut made: Vec<Made> = Vec::new();
+    for oid in walk {
+        let oid = oid.map_err(unreadable)?;
+        let Some(record) = record_at(repo, oid, task)? else {
+            continue;
+        };
+        let Some((active, archive)) = state(&record) else {
+            if let Some(last) = made.last_mut() {
+                last.reopened_after = true;
+            }
+            continue;
+        };
+        let commit = repo
+            .find_commit(oid)
+            .map_err(|error| format!("cannot read commit {oid}: {error}"))?;
+        let mut held_before = false;
+        for parent in history::parents(repo, &commit).map_err(|error| error.to_string())? {
+            if let Some(then) = record_at(repo, parent, task)? {
+                if state(&then).is_some_and(|(was, kept)| was == active && kept == archive) {
+                    held_before = true;
+                }
+            }
+        }
+        if !held_before {
+            made.push(Made {
+                block: active,
+                at: oid,
+                reopened_after: false,
+            });
+        }
+    }
+    Ok(made)
+}
+
+/// Why a completion the history made at `at` is not a real one, if it is
+/// not: its reviewed commit is in this repository and is `at` or an
+/// ancestor of it, and each waiver names a commit here that `at` contains.
+/// Its reviewed span is not judged again: a reopen is how a completion
+/// whose span failed is repaired (the binding refusal's own remedy), so an
+/// archived completion records what was claimed, and only the active
+/// completion carries the full binding. A history that cannot be read
+/// refuses.
+fn historical_binding(repo: &Repository, at: Oid, block: &AcceptanceBlock) -> Option<String> {
+    let Some(reviewed) = commit_of(repo, &block.reviewed) else {
+        return Some(format!(
+            "reviewed commit {} is not in this repository",
+            block.reviewed
+        ));
+    };
+    match is_ancestor_or_same(repo, reviewed, at) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Some(format!(
+                "reviewed commit {reviewed} is not the completion or an ancestor of it"
+            ))
+        }
+        Err(error) => return Some(error),
+    }
+    for (id, result) in &block.criteria {
+        if result.outcome != "waived" {
+            continue;
+        }
+        let Some(amendment) = commit_of(repo, &result.evidence) else {
+            return Some(format!("{id} waiver names a commit that is not here"));
+        };
+        match is_ancestor_or_same(repo, amendment, at) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Some(format!(
+                    "{id} waiver names {amendment}, which the completion does not contain"
+                ))
+            }
+            Err(error) => return Some(error),
+        }
+    }
+    None
+}
+
+/// Where a reopening task pull request left the completion `old` that the
+/// range's anchor `at` holds: `at` itself when it is the review's ancestor,
+/// otherwise the merge-base of `at` and the review, when that commit holds
+/// the same completion (status, active block and archive) of this task's
+/// record. Any other history keeps `at`, so the review stays refused as
+/// lying before the fix range.
+fn reopen_left_at(
+    repo: &Repository,
+    task: &RecordView,
+    old: &RecordView,
+    at: Oid,
+    reviewed: Oid,
+) -> Result<Oid, String> {
+    if is_ancestor_or_same(repo, at, reviewed)? {
+        return Ok(at);
+    }
+    let Some(left) = common_base(repo, at, reviewed)? else {
+        return Ok(at);
+    };
+    let same = record_at(repo, left, task)?.is_some_and(|then| {
+        then.status == "complete"
+            && old.status == "complete"
+            && active_block(&then).is_some()
+            && active_block(&then) == active_block(old)
+            && then.superseded_blocks() == old.superseded_blocks()
+    });
+    Ok(if same { left } else { at })
 }
 
 /// Bind an epic's own acceptance block (SPC-013 R-33, R-60), which proves
@@ -873,6 +1277,16 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<crate::git::GitName>, g
         .collect())
 }
 
+/// What may carry a review to the completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Carried {
+    /// The caller's transport, for a range that does not reopen the task.
+    Transport(Transport),
+    /// A reopening task pull request: clean merges of its target after the
+    /// review stack on it, but no task landing carries a review (TSK-340).
+    ReopenedStack,
+}
+
 /// Apply the one reviewed-span check, resolving task-landing transport only
 /// when the source and completion do not share a directly reviewed span.
 /// `stacking` holds the target tips a clean merge after the review must
@@ -883,7 +1297,7 @@ fn binding_source(
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
-    transport: Transport,
+    carried: Carried,
     stacking: &StackingTips,
     default_target: Option<Oid>,
     anchor: Option<Oid>,
@@ -894,18 +1308,28 @@ fn binding_source(
         span_head: landing.commit(),
         completion_tail: landing.commit(),
     };
-    let stacking = if transport == Transport::TaskLanding {
-        Stacking::OnTarget(stacking)
-    } else {
-        Stacking::Never
+    let receiving = stacking;
+    let stacking = match carried {
+        Carried::Transport(Transport::TaskLanding) | Carried::ReopenedStack => {
+            Stacking::OnTarget(receiving)
+        }
+        Carried::Transport(Transport::Direct) => Stacking::Never,
     };
     let Some(direct) = reviewed_span_problem(repo, task, landing, reviewed, stacking) else {
         return Ok(proof);
     };
-    if transport == Transport::Direct {
+    if carried != Carried::Transport(Transport::TaskLanding) {
         return Err(direct);
     }
-    match task_landing(repo, task, landing, reviewed, default_target, anchor) {
+    match task_landing(
+        repo,
+        task,
+        landing,
+        reviewed,
+        default_target,
+        anchor,
+        receiving,
+    ) {
         Landed::NoMerge => Err(direct),
         Landed::Span { merge, head } => {
             if let Some(problem) =
@@ -920,13 +1344,14 @@ fn binding_source(
             })
         }
         Landed::Refused(problem) => Err(problem),
+        Landed::NotALanding(why) => Err(format!("{direct} ({why})")),
     }
 }
 
 /// Whether a reviewed span may stack clean merges of the target.
 #[derive(Debug, Clone, Copy)]
 enum Stacking<'a> {
-    /// Direct work, a reopening range, a landed head and an epic.
+    /// Direct work, a landed head and an epic.
     Never,
     /// A task pull request's own chain, judged against these target tips.
     OnTarget(&'a StackingTips),
@@ -935,9 +1360,9 @@ enum Stacking<'a> {
 /// The only binding predicate: the reviewed commit is the source head or
 /// its ancestor, with only the task's status and Closeout changed afterward.
 /// With `stacking`, a task pull request's own chain may also re-merge its
-/// integration target cleanly after the review (TSK-184); direct work, a
-/// reopening range and a completion bound at a head (SPC-013 R-120) never
-/// stack.
+/// integration target cleanly after the review (TSK-184), a reopening one
+/// included (TSK-340); direct work and a completion bound at a head
+/// (SPC-013 R-120) never stack.
 fn reviewed_span_problem(
     repo: &Repository,
     task: &RecordView,
@@ -1006,18 +1431,16 @@ fn reviewed_span_problem(
         // (SPC-013 R-60: the task's own later commits change only this
         // record's status and Closeout), leading with the net change when
         // there is one and naming the commit that stopped it.
-        Stacked::No(None) => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
-            format!("{problem} after the reviewed commit {reviewed}; review the result again")
-        }),
+        Stacked::No(None) => later_change_finding(repo, &task.path, &completed, reviewed, at, None),
         Stacked::No(Some(stop)) => {
             let detail = match stop {
                 Stop::Commit { commit, changed } => format!("commit {commit}: {changed}"),
                 Stop::Other(why) => why,
             };
-            Some(match later_change(repo, &task.path, &completed, reviewed, at) {
-                Some(problem) => format!("{problem} after the reviewed commit {reviewed} ({detail}); review the result again"),
-                None => format!("the history after the reviewed commit {reviewed} does not stack on it ({detail}); review the result again"),
-            })
+            Some(
+                later_change_finding(repo, &task.path, &completed, reviewed, at, Some(&detail))
+                    .unwrap_or_else(|| format!("the history after the reviewed commit {reviewed} does not stack on it ({detail}); review the result again")),
+            )
         }
     }
 }
@@ -1155,10 +1578,19 @@ enum Landed {
     Span { merge: Oid, head: Oid },
     /// A landing merge exists, and this is why it does not carry the review.
     Refused(String),
+    /// The merge that brings the review is on no receiving line the run
+    /// trusts, so the direct span is the judgment, and this says why.
+    NotALanding(String),
 }
+
+/// How a binding finding names the commit it binds a completion at when
+/// that commit changes more than planning records. A completion bound at a
+/// range head it was not made in names that head instead (TSK-433 AC-7).
+const COMPLETION_CHANGES: &str = "the completion also changes";
 
 /// Resolve the task-landing provenance. This checks transport structure,
 /// never infers a line's parent and never grants a review verdict itself.
+#[allow(clippy::too_many_lines)] // Find, authorize and check the landing merge in one judgment order.
 fn task_landing(
     repo: &Repository,
     task: &RecordView,
@@ -1166,6 +1598,7 @@ fn task_landing(
     reviewed: Oid,
     default_target: Option<Oid>,
     anchor: Option<Oid>,
+    receiving: &StackingTips,
 ) -> Landed {
     let _judgment = history::judgment();
     if let Err(error) = history::check(repo) {
@@ -1246,9 +1679,13 @@ fn task_landing(
     };
     if let Some(path) = completion {
         return Landed::Refused(format!(
-            "the completion also changes {path}; a completion after the landing merge {} of the reviewed commit {reviewed} changes planning records only",
+            "{COMPLETION_CHANGES} {path}; a completion after the landing merge {} of the reviewed commit {reviewed} changes planning records only",
             merge.id()
         ));
+    }
+    // Only a merge on a trusted receiving line is a landing (TSK-340).
+    if let Some(why) = untrusted_landing(repo, merge.id(), reviewed, receiving) {
+        return Landed::NotALanding(why);
     }
     if let Err(error) = check_after_landing(
         repo,
@@ -1269,6 +1706,27 @@ fn task_landing(
         )),
         Err(_) => unreadable("the landing merge"),
     }
+}
+
+/// Why `merge` is no landing, if it is not: it lies on the first-parent
+/// line of none of the receiving lines this run trusts (TSK-340 review
+/// round 3). Merge shape alone never proves one.
+fn untrusted_landing(
+    repo: &Repository,
+    merge: Oid,
+    reviewed: Oid,
+    receiving: &StackingTips,
+) -> Option<String> {
+    let tips = receiving.landing_tips();
+    (!tips
+        .iter()
+        .any(|tip| is_first_parent_ancestor(repo, merge, *tip)))
+    .then(|| {
+        format!(
+            "the merge {merge} that brings the reviewed commit {reviewed} is not on the first-parent line of a target this run trusts ({}), so it is not a landing",
+            tips.iter().map(Oid::to_string).collect::<Vec<_>>().join(", ")
+        )
+    })
 }
 
 /// A direct non-planning change after landing needs both a landed adoption
@@ -1543,7 +2001,7 @@ pub fn owned_paths(
 
 /// Why the diff from `reviewed` to `head` is more than the status and
 /// Closeout of the record at `path`, which reads `completed` at `head`, if
-/// it is.
+/// it is: the first other path that changed, in its short form.
 pub(super) fn later_change(
     repo: &Repository,
     path: &str,
@@ -1551,28 +2009,81 @@ pub(super) fn later_change(
     reviewed: Oid,
     head: Oid,
 ) -> Option<String> {
+    later_change_judged(repo, path, completed, reviewed, head).map(|later| match later {
+        LaterChange::Paths { first, .. } => format!("{first} changed"),
+        LaterChange::Other(problem) => problem,
+    })
+}
+
+/// What [`later_change_judged`] found beyond the record's status and
+/// Closeout.
+enum LaterChange {
+    /// Other paths changed: how many, and the first in byte order.
+    Paths { count: usize, first: String },
+    /// The trees, the diff or the record itself.
+    Other(String),
+}
+
+/// The finding for a completion whose reviewed span is more than its
+/// record's status and Closeout, ending "; review the result again". It
+/// says what it compared and how much (TSK-433 AC-8, issue #320): the count
+/// of other paths between the reviewed commit and `at`, and the first one.
+/// `detail` names the commit that stopped a stack, when one did.
+fn later_change_finding(
+    repo: &Repository,
+    path: &str,
+    completed: &str,
+    reviewed: Oid,
+    at: Oid,
+    detail: Option<&str>,
+) -> Option<String> {
+    let detail = detail
+        .map(|detail| format!(" ({detail})"))
+        .unwrap_or_default();
+    later_change_judged(repo, path, completed, reviewed, at).map(|later| match later {
+        LaterChange::Paths { count, first } => format!(
+            "{count} {} changed between the reviewed commit {reviewed} and {at}, first: {first}{detail}; review the result again",
+            if count == 1 { "path" } else { "paths" }
+        ),
+        LaterChange::Other(problem) => {
+            format!("{problem} after the reviewed commit {reviewed}{detail}; review the result again")
+        }
+    })
+}
+
+fn later_change_judged(
+    repo: &Repository,
+    path: &str,
+    completed: &str,
+    reviewed: Oid,
+    head: Oid,
+) -> Option<LaterChange> {
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree()).ok();
     let (Some(before), Some(after)) = (tree(reviewed), tree(head)) else {
-        return Some("the trees cannot be read".to_string());
+        return Some(LaterChange::Other("the trees cannot be read".to_string()));
     };
     let Ok(diff) = repo.diff_tree_to_tree(Some(&before), Some(&after), None) else {
-        return Some("the diff cannot be read".to_string());
+        return Some(LaterChange::Other("the diff cannot be read".to_string()));
     };
     let other: Vec<String> = crate::git::diff_paths(&diff)
         .iter()
         .filter(|changed| changed.bytes() != path.as_bytes())
         .map(|changed| changed.display().to_string())
         .collect();
-    if let Some(changed) = other.first() {
-        return Some(format!("{changed} changed"));
+    if let Some(first) = other.first() {
+        return Some(LaterChange::Paths {
+            count: other.len(),
+            first: first.clone(),
+        });
     }
     let Ok(Some(then)) = blob_at(repo, reviewed, path) else {
-        return Some(format!(
+        return Some(LaterChange::Other(format!(
             "{path} is not in the reviewed commit, so its scope was never reviewed; it appeared"
-        ));
+        )));
     };
-    (reviewed_part(&then) != reviewed_part(completed))
-        .then(|| "the record changed outside its status and Closeout".to_string())
+    (reviewed_part(&then) != reviewed_part(completed)).then(|| {
+        LaterChange::Other("the record changed outside its status and Closeout".to_string())
+    })
 }
 
 /// The tip of the line `task` belongs to: its declared integration target
@@ -1623,6 +2134,7 @@ fn recovered_completion(
         return Ok(None);
     };
     let mut refusal = None;
+    let mut planned = false;
     if let Some(anchor) = anchor {
         let range = Range {
             anchor,
@@ -1636,7 +2148,10 @@ fn recovered_completion(
             // task's own pull request before its first landing, and R-52's
             // own-task allowance applies (issue #67). CI prints the change
             // against the target for the reviewer.
-            (Landed::Planned, _) => old.criteria = task.criteria.clone(),
+            (Landed::Planned, _) => {
+                old.criteria = task.criteria.clone();
+                planned = true;
+            }
             (Landed::Landed { .. }, Authority::Held(record)) => old.criteria = record.criteria,
             (Landed::Landed { .. }, Authority::Unknown(reason)) => {
                 if changed(&old) {
@@ -1676,7 +2191,12 @@ fn recovered_completion(
             old = retained;
         }
     }
-    Ok(Some(Recovered { at, old, refusal }))
+    Ok(Some(Recovered {
+        at,
+        old,
+        refusal,
+        planned,
+    }))
 }
 
 /// A completion a range reopened, recovered from the history below its
@@ -1688,6 +2208,9 @@ struct Recovered {
     old: RecordView,
     /// Why the criteria to keep could not be decided, when they could not.
     refusal: Option<String>,
+    /// No completion of the task landed: the range is still the task's own
+    /// pull request before its first landing (R-52, R-119).
+    planned: bool,
 }
 
 /// The commits a completion is judged over: those `head` reaches and
@@ -1774,6 +2297,12 @@ fn judge_reopened(
                 crate::git::display_text(name)
             ));
         }
+        // The epic line's pull request into its target judges the line's
+        // history up to its head, so a proved tip of that line the head
+        // contains is the range under judgment, not a target it is not
+        // judged against (TSK-433). Only the exact tips a proof covered
+        // are; any other commit, under any spelling, stays outside evidence.
+        found.retain(|(_, tip)| !criteria.judged_tip(name, *tip));
         tips.extend(found);
     }
     match default_target_name(repo) {
@@ -2163,6 +2692,27 @@ pub(super) fn record_uid(content: &str) -> Option<String> {
     (!uid.is_empty()).then(|| uid.clone())
 }
 
+/// Whether a waiver may name a commit of the task's own range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnRange {
+    /// The task's own pull request, from this base (TSK-184).
+    Base(Oid),
+    /// No own range: a line, a release range, or a run with no own branch.
+    None,
+    /// A range that reopens a landed completion, whose criteria stay frozen
+    /// (R-119): only the target route applies, and the refusal says so.
+    LandedReopen,
+}
+
+/// What "on the target" requires of a waiver's commit (TSK-340 AC-7, issue
+/// #354): a receiving line the run pins holds it, never a ref this clone can
+/// move.
+const ON_TARGET: &str = "on the target means a receiving line this run pins holds the commit (the pull request's base in `codeflow ci`, `--base` in `task status`)";
+
+/// The sanctioned route to a waiver a refusal names (TSK-340 AC-7): the
+/// planning amendment R-60 accepts, which the review must contain.
+const WAIVER_ROUTE: &str = "amend the criterion through a planning pull request into the target, merge the target into this branch before the review, and name that planning commit";
+
 /// Why a waiver's commit is not the planning amendment for this record and
 /// criterion on the target, if it is not.
 #[allow(clippy::too_many_lines)] // Read the waiver's target, range and record proofs in one refusal path.
@@ -2172,8 +2722,8 @@ fn waiver_problem(
     id: &str,
     evidence: &str,
     landing: Landing<'_>,
-    target_tip: Option<Oid>,
-    own_range_base: Option<Oid>,
+    pinned: &[Oid],
+    own_range: OwnRange,
 ) -> Option<String> {
     let Some(amendment) = commit_of(repo, evidence) else {
         return Some(format!(
@@ -2188,21 +2738,38 @@ fn waiver_problem(
             "names the pull request head; a waiver is a planning amendment on the target".into(),
         );
     }
-    let Some(tip) = target_tip else {
-        return Some("cannot be checked: the target does not resolve here".into());
-    };
-    let own_range = match is_ancestor_or_same(repo, amendment, tip) {
-        Ok(contains) => !contains,
-        Err(error) => return Some(error),
-    };
-    if own_range {
-        // Without the task's own range (a line, a release range, a
-        // reopening range), the target route is the only one.
-        let Some(own_range_base) = own_range_base else {
-            return Some(format!(
-                "names {}, which is not on the target",
-                evidence.trim()
-            ));
+    if pinned.is_empty() {
+        return Some(format!(
+            "names {}, which cannot be checked: this run pins no target; {ON_TARGET}",
+            evidence.trim()
+        ));
+    }
+    let mut off_target = true;
+    for tip in pinned {
+        match is_ancestor_or_same(repo, amendment, *tip) {
+            Ok(true) => off_target = false,
+            Ok(false) => {}
+            Err(error) => return Some(error),
+        }
+    }
+    if off_target {
+        // Without the task's own range (a line, a release range, a range
+        // that reopens a landed completion), the target route is the only
+        // one.
+        let own_range_base = match own_range {
+            OwnRange::Base(base) => base,
+            OwnRange::None => {
+                return Some(format!(
+                    "names {}, which is not on the target; {ON_TARGET}; {WAIVER_ROUTE}",
+                    evidence.trim()
+                ))
+            }
+            OwnRange::LandedReopen => {
+                return Some(format!(
+                    "names {}, which is not on the target; a reopened task's waiver must name a planning commit on the target that amends this criterion, since a completion of it landed and its criteria are frozen; {ON_TARGET}; {WAIVER_ROUTE}",
+                    evidence.trim()
+                ))
+            }
         };
         let reviewed = active_block(task).and_then(|block| commit_of(repo, &block.reviewed));
         let before_base = match is_ancestor_or_same(repo, amendment, own_range_base) {
@@ -2217,7 +2784,10 @@ fn waiver_problem(
             Err(error) => return Some(error),
         };
         if before_base || reviewed == Some(amendment) || !before_review {
-            return Some("is not on the target or a record-only amendment strictly before the reviewed revision in this task's range".into());
+            return Some(format!(
+                "names {}, which is not on the target or a record-only amendment strictly before the reviewed revision in this task's range; {ON_TARGET}; {WAIVER_ROUTE}",
+                evidence.trim()
+            ));
         }
         let Ok(commit) = repo.find_commit(amendment) else {
             return Some("amendment cannot be read".into());
@@ -2231,7 +2801,10 @@ fn waiver_problem(
             || paths
                 .is_ok_and(|paths| paths.is_empty() || paths.iter().any(|path| path != &task.path))
         {
-            return Some("must change only this task's record".into());
+            return Some(format!(
+                "names {}, which must change only this task's record to count as an amendment in its own range, and is not on the target; {ON_TARGET}; {WAIVER_ROUTE}",
+                evidence.trim()
+            ));
         }
     }
     let contains = match is_ancestor_or_same(repo, amendment, landing.commit()) {
@@ -2243,6 +2816,27 @@ fn waiver_problem(
             "names {}, which the completion does not contain; rebase onto the amendment",
             evidence.trim()
         ));
+    }
+    if !off_target {
+        // R-60 (TSK-340 review): a waiver is an amendment the review saw. A
+        // planning amendment on the target counts only when the reviewed
+        // commit contains it, wherever the completion is made, so no merge
+        // after the review, whichever way its parents run, brings a later
+        // amendment in as a waiver. Merge topology never grants this.
+        let reviewed = active_block(task).and_then(|block| commit_of(repo, &block.reviewed));
+        let seen = match reviewed
+            .map(|reviewed| is_ancestor_or_same(repo, amendment, reviewed))
+            .transpose()
+        {
+            Ok(seen) => seen.unwrap_or(false), // No review cannot authorize a waiver.
+            Err(error) => return Some(error),
+        };
+        if !seen {
+            return Some(format!(
+                "names {}, which the reviewed commit does not contain; a waiver names a planning amendment made before the review",
+                evidence.trim()
+            ));
+        }
     }
     let Ok(commit) = repo.find_commit(amendment) else {
         return Some(format!("names {}, which cannot be read", evidence.trim()));
@@ -3332,6 +3926,7 @@ pub fn completions_in_range(
         *criteria == Criteria::Amendable,
     );
     let mut reviewed = Vec::new();
+    let mut proofs = LineProofs::default();
     for task in after
         .records
         .values()
@@ -3403,12 +3998,28 @@ pub fn completions_in_range(
                 Some(source_base.unwrap_or(anchor)),
                 (own_task == Some(task.id.as_str())).then_some(anchor),
                 &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
-                &run.criteria(),
+                &judged_line(
+                    repo,
+                    run.criteria(),
+                    criteria,
+                    (line, task),
+                    head_oid,
+                    &mut proofs,
+                ),
             );
             if let Some(proof) = bound.proof {
                 reviewed.push(proof.reviewed);
             }
-            findings.extend(bound.findings);
+            // A completion made before the range head but bound at it (a
+            // frozen range) did not make the head's change: name the head.
+            let at_head = (origin == head_oid && introduced != head_oid)
+                .then(|| format!("the range head {head_oid} also changes"));
+            findings.extend(bound.findings.into_iter().map(|mut found| {
+                if let Some(at_head) = &at_head {
+                    found.message = found.message.replace(COMPLETION_CHANGES, at_head);
+                }
+                found
+            }));
         }
     }
     findings.extend(epic_completions_in_range(
@@ -3443,6 +4054,152 @@ fn with_own_line(
         }
     }
     tips
+}
+
+/// The criteria bases for `task` in a range, marking tips of the line the
+/// task declares as judged when the range is an `integration/` line into
+/// its target with amendable criteria and the task declares either that
+/// line or a joined line (TSK-433). Every mark rests on the epic-line proof
+/// ([`super::work_start::check_epic_line`]) into the default target, never
+/// on the range's class or the record's text: a workspace root branch is
+/// amendable without that proof, so its class alone marks nothing.
+///
+/// The judged line is marked only when it passes the proof at the range
+/// head; then the head and each other tip of the line the head contains
+/// that passes the proof itself are marked. A joined line is another epic
+/// line with at least one tip in the range head, every such tip passing the
+/// proof; those tips are marked, and the judged line's as above. A tip that
+/// fails the proof, or cannot be read, stays unmarked and keeps today's
+/// refusal. A mark covers one exact commit, so another commit under another
+/// spelling of the same line is never covered. The marks add no criteria
+/// base: they only keep the range's own proved tips from counting as a
+/// target the run is not judged against. A planning range, a task range or
+/// a task of another target keeps the run's bases alone.
+fn judged_line(
+    repo: &Repository,
+    bases: CriteriaBases,
+    criteria: &Criteria,
+    (line, task): (Option<&str>, &RecordView),
+    head: Oid,
+    proofs: &mut LineProofs,
+) -> CriteriaBases {
+    let declared = task
+        .integration_target
+        .as_deref()
+        .filter(|target| !target.is_empty());
+    let (Criteria::Amendable, Some(line), Some(declared)) = (criteria, line, declared) else {
+        return bases;
+    };
+    if !line.starts_with("integration/") {
+        return bases;
+    }
+    let declared = super::work_start::logical_target(declared);
+    if declared == super::work_start::logical_target(line) {
+        return with_line_tips(repo, bases, line, head, proofs);
+    }
+    // A joined line's task may name the judged line too, as a target it
+    // had before it moved to its own line (TSK-422): both lines' proved
+    // tips the head contains are the range.
+    if !declared.starts_with("integration/") || !proofs.proved(repo, line, head) {
+        return bases;
+    }
+    let Some(joined) = joined_tips(repo, declared, head, proofs) else {
+        return bases;
+    };
+    let bases = joined
+        .into_iter()
+        .fold(bases, |bases, tip| bases.with_judged_tip(declared, tip));
+    with_line_tips(repo, bases, line, head, proofs)
+}
+
+/// `bases` with the judged `line` marked when it passes the epic-line proof
+/// at `head`: the head itself, and each other tip of the line the head
+/// contains that passes the proof itself. Unchanged otherwise; a tip that
+/// cannot be read stays unmarked (fail closed).
+fn with_line_tips(
+    repo: &Repository,
+    bases: CriteriaBases,
+    line: &str,
+    head: Oid,
+    proofs: &mut LineProofs,
+) -> CriteriaBases {
+    if !proofs.proved(repo, line, head) {
+        return bases;
+    }
+    let mut bases = bases.with_judged_tip(line, head);
+    let Ok(tips) = target_tips(repo, line) else {
+        return bases;
+    };
+    for (_, tip) in tips {
+        if tip != head
+            && matches!(is_ancestor_or_same(repo, tip, head), Ok(true))
+            && proofs.proved(repo, line, tip)
+        {
+            bases = bases.with_judged_tip(line, tip);
+        }
+    }
+    bases
+}
+
+/// The tips of `joined`, an epic line other than the judged one, when it
+/// joined it: at least one of its tips is in the range head, and every such
+/// tip passes the epic-line proof into the default target. `None` otherwise;
+/// any read failure answers `None`, which keeps the joined tips outside
+/// evidence (fail closed).
+fn joined_tips(
+    repo: &Repository,
+    joined: &str,
+    head: Oid,
+    proofs: &mut LineProofs,
+) -> Option<Vec<Oid>> {
+    let tips = target_tips(repo, joined).ok()?;
+    let mut contained = Vec::new();
+    for (_, tip) in tips {
+        if !is_ancestor_or_same(repo, tip, head).ok()? {
+            continue;
+        }
+        if !proofs.proved(repo, joined, tip) {
+            return None;
+        }
+        contained.push(tip);
+    }
+    (!contained.is_empty()).then_some(contained)
+}
+
+/// Epic-line proofs ([`epic_line_proved`]) read once per line and tip in
+/// one run, since every completion of a line asks the same question.
+#[derive(Default)]
+struct LineProofs(std::collections::HashMap<(String, Oid), bool>);
+
+impl LineProofs {
+    fn proved(&mut self, repo: &Repository, line: &str, tip: Oid) -> bool {
+        *self
+            .0
+            .entry((line.to_string(), tip))
+            .or_insert_with(|| epic_line_proved(repo, line, tip))
+    }
+}
+
+/// Whether `line` at `tip` passes the epic-line proof into the default
+/// target ([`super::work_start::check_epic_line`]): an epic that exists, a
+/// task of it targeting the line, and a first-parent history of merges or
+/// landed adoptions. Any read failure answers no (fail closed).
+fn epic_line_proved(repo: &Repository, line: &str, tip: Oid) -> bool {
+    let Ok(default) = default_target_name(repo) else {
+        return false;
+    };
+    let Ok(Some(default_tip)) = imports::home_tip(repo, &default.name) else {
+        return false;
+    };
+    let root = repo.workdir().unwrap_or_else(|| repo.path());
+    super::work_start::check_epic_line(
+        root,
+        line,
+        &default.name,
+        &default_tip.to_string(),
+        &tip.to_string(),
+    )
+    .is_ok()
 }
 
 /// The anchored base of the task landing that carried `introduced` onto
@@ -4567,6 +5324,96 @@ mod tests {
         assert!(blob_at(&repo, git2::Oid::ZERO_SHA1, "missing.md").is_err());
         assert!(blob_at(&repo, oid, "missing.md").unwrap().is_none());
     }
+    /// TSK-340 AC-1 (issue #198): the Blocker `task status` writes and
+    /// removes is not reviewed scope; any other Blocker text, the criteria,
+    /// the deliverables and the rest of the record stay reviewed.
+    #[test]
+    fn r340_a_generated_blocker_is_not_reviewed_scope() {
+        let reviewed = "---\nid: TSK-001\nstatus: todo\n---\n# TSK-001\n\n## Deliverables\n\n- src/lib.rs\n\n## Acceptance Criteria\n\n- AC-1 When run, it works.\n\n## Closeout\n\nPending.\n";
+        let blocker = "## Blocker\n\n- reason: waits on the host\n- owner: ops\n- revisit: the host is ready\n\n## Closeout";
+        let held = reviewed
+            .replace("status: todo", "status: blocked")
+            .replace("## Closeout", blocker);
+        assert_eq!(reviewed_part(reviewed), reviewed_part(&held));
+        for (what, forged) in [
+            (
+                "extra text",
+                blocker.replace("ready\n", "ready\n\nAlso ship src/extra.rs.\n"),
+            ),
+            (
+                "extra item",
+                blocker.replace("- owner", "- AC-2 When run, it also deploys.\n- owner"),
+            ),
+            ("empty value", blocker.replace("- owner: ops", "- owner: ")),
+            ("missing item", blocker.replace("- owner: ops\n", "")),
+            (
+                "hidden text",
+                blocker.replace("ready\n", "ready\n<!--\nhidden\n-->\n"),
+            ),
+            (
+                "other heading",
+                blocker.replace("## Blocker", "## Blocker notes"),
+            ),
+        ] {
+            let forged = reviewed.replace("## Closeout", &forged);
+            assert_ne!(reviewed_part(reviewed), reviewed_part(&forged), "{what}");
+        }
+        for (what, changed) in [
+            ("criteria", held.replace("it works", "it may work")),
+            ("deliverables", held.replace("src/lib.rs", "src/other.rs")),
+        ] {
+            assert_ne!(reviewed_part(reviewed), reviewed_part(&changed), "{what}");
+        }
+    }
+
+    /// TSK-340 AC-2 (issue #217): one chronological archive is accepted
+    /// against the branch's last completion and against an earlier
+    /// completion on the anchored target; a reordered, dropped or rewritten
+    /// archived block is refused.
+    #[test]
+    fn r340_one_chronological_archive_reads_against_either_completion() {
+        let fence = |inner: &str| format!("```yaml\n{inner}```\n");
+        let block = |reviewed: char, reason: Option<&str>| {
+            let head = match reason {
+                Some(reason) => format!("acceptance_superseded:\n  reason: {reason}\n"),
+                None => "acceptance:\n".to_string(),
+            };
+            fence(&format!(
+                "{head}  reviewed: {}\n  review: session:r@sha256:00\n  criteria:\n    AC-1: verified | ran\n  journey: none | no journey criterion\n  not_verified: none\n  follow_ups: none: test\n  verdict: approved\n",
+                reviewed.to_string().repeat(40)
+            ))
+        };
+        let record = |status: &str, closeout: &[String]| {
+            let content = format!(
+                "---\nid: TSK-001\nstatus: {status}\n---\n# TSK-001\n\n## Acceptance Criteria\n\n- AC-1 When run, it works.\n\n## Closeout\n\n{}",
+                closeout.join("\n")
+            );
+            RecordView::parse(
+                RecordKind::Task,
+                "project-management/tasks/TSK-001.md",
+                &content,
+            )
+            .unwrap()
+        };
+        let a = |reason| block('a', reason);
+        let b = |reason| block('b', reason);
+        let target = record("complete", &[a(None)]);
+        let line = record("complete", &[a(Some("first")), b(None)]);
+        let reopened = record("todo", &[a(Some("first")), b(Some("second"))]);
+        let problems = super::super::lifecycle::reopen_problems;
+        assert_eq!(problems(Some(&line), &reopened), Vec::<String>::new());
+        assert_eq!(problems(Some(&target), &reopened), Vec::<String>::new());
+        let reordered = record("todo", &[b(Some("second")), a(Some("first"))]);
+        assert!(problems(Some(&line), &reordered)[0].contains("chronological order"));
+        assert!(!problems(Some(&target), &reordered).is_empty());
+        let dropped = record("todo", &[b(Some("second"))]);
+        assert!(!problems(Some(&line), &dropped).is_empty());
+        let renamed = record("todo", &[a(Some("other")), b(Some("second"))]);
+        assert!(problems(Some(&line), &renamed)[0].contains("chronological order"));
+        let skipped = record("todo", &[b(Some("second")), b(Some("third"))]);
+        assert!(!problems(Some(&target), &skipped).is_empty());
+    }
+
     #[test]
     fn r16_reviewed_part_ignores_closeout_spacing_but_keeps_content_cr() {
         let before = "---\nstatus: planning\n---\n# Epic\n\nOutcome.\n";
@@ -4828,7 +5675,10 @@ mod tests {
             let task =
                 RecordView::parse(RecordKind::Task, ADOPTION_TASK, &self.read(ADOPTION_TASK))
                     .unwrap();
-            bind_completion(
+            // The run pins the line the completion is made on (TSK-340:
+            // only a pinned or verified line receives a landing).
+            let run = RunBases::new([self.base, self.merge]);
+            bind_completion_with_amendment(
                 &repo,
                 &task,
                 &Graph::default(),
@@ -4836,6 +5686,9 @@ mod tests {
                 Some(self.base),
                 Transport::TaskLanding,
                 None, // This fixture completes on its checked-out branch, without a PR range.
+                None,
+                &run.stacking(),
+                &run.criteria(),
             )
         }
     }

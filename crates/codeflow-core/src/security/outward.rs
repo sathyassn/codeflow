@@ -115,6 +115,17 @@ pub(crate) enum PositionalSource {
     Supplier,
 }
 
+/// Whether stdin is given at the current command position, scoped across
+/// recursion.
+#[derive(Clone, Copy, Default)]
+struct InputScope {
+    /// Whether the line gives the current command position stdin.
+    bound: bool,
+    /// Whether the shell reading the current text was itself given stdin;
+    /// the first stage of a pipeline reads that stdin.
+    outer: bool,
+}
+
 #[derive(Default)]
 struct Parsed {
     resolve_shell: bool,
@@ -127,6 +138,10 @@ struct Parsed {
     code: Vec<String>,
     stdin_interpreter: usize,
     commands: Vec<Unwrapped>,
+    /// Literal stdin at the current command position, scoped across recursion.
+    literal_input: Option<String>,
+    /// Whether the current command position and its shell have stdin.
+    input: InputScope,
     home: Option<PathBuf>,
     created_tags: Vec<(PathBuf, String)>,
     calls: Vec<InterpreterCall>,
@@ -152,6 +167,7 @@ pub(crate) struct InterpreterCall {
     /// Shell expansions the shared resolver could not establish.
     pub(crate) unresolved: Vec<String>,
     pub(crate) links: Vec<super::composed::paths::Link>,
+    pub(crate) checkouts: Vec<PathBuf>,
     /// The words the interpreter hands its program, read by the family's
     /// own option grammar: the values of its options, a script, and every
     /// word after the code or script boundary. Inline code is left out.
@@ -190,20 +206,39 @@ pub(crate) enum Supplier {
         /// `-execdir` or `-okdir`: the command runs in the directory of
         /// each path `find` visits.
         in_dir: bool,
+        /// `fd -x`/`-X`: the command gets each path even with no `{}`
+        /// placeholder, which `fd` then appends.
+        appends: bool,
     },
 }
 
 /// A simple command the line runs, as [`unwrapped_commands`] reaches it.
+#[derive(Clone)]
 pub(crate) struct Unwrapped {
     pub(crate) args: Vec<String>,
+    /// Literal stdin from this command position, before any file-list parsing.
+    pub(crate) input: Option<String>,
+    /// Whether the line gives this command stdin (a pipe or an input
+    /// redirection), whether or not the guard can read what it holds.
+    pub(crate) stdin_bound: bool,
+    pub(crate) unresolved: Vec<String>,
+    pub(crate) supplier: Option<Supplier>,
     /// For each word, whether the shell may expand it as an unquoted glob
     /// or brace pattern; `None` when the parse that reached it lost that.
     pub(crate) expands: Option<Vec<bool>>,
     pub(crate) cwd: Option<PathBuf>,
+    pub(crate) links: Vec<super::composed::paths::Link>,
 }
+
+/// The operand that stands for a command run in a directory env moves to
+/// but the guard cannot establish (`env -C "$D"`); the secret-read check
+/// refuses it as cannot-verify (TSK-1002 review 03).
+pub(crate) const UNVERIFIED_ENV_DIRECTORY: &str = "__unverified_env_directory";
 
 pub(crate) fn unwrapped_commands(command: &str, cwd: &Path, home: Option<&Path>) -> Vec<Unwrapped> {
     let mut parsed = Parsed {
+        resolve_shell: true,
+        shell_home: home.map(Path::to_path_buf),
         home: home.map(Path::to_path_buf),
         ..Parsed::default()
     };
@@ -361,29 +396,67 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 16 {
         return;
     }
+    let inherited_input = out.literal_input.take();
+    let inherited_bound = out.input.bound;
+    let outer_bound = std::mem::replace(&mut out.input.outer, inherited_bound);
     if let Some(cwd) = cwd.filter(|_| out.resolve_shell) {
         for step in super::composed::paths::commands(command, cwd, out.shell_home.as_deref()) {
+            let input = step.input(inherited_input.as_deref()).map(str::to_owned);
+            out.literal_input.clone_from(&input);
+            out.input.bound = step.input_bound(inherited_bound);
             let first_call = out.calls.len();
+            let first_command = out.commands.len();
             if step.text == "__unresolved_shell_code" {
                 out.calls.push(InterpreterCall {
                     positional_source: PositionalSource::Unresolved,
                     unresolved: step.unresolved.clone(),
                     links: step.links.clone(),
+                    checkouts: step.checkouts.clone(),
                     args: Vec::new(),
                     patterns: Vec::new(),
                     cwd: step.cwd.clone(),
                     chdir: Vec::new(),
-                    code: Vec::new(),
+                    code: input.iter().cloned().collect(),
                     supplier: None,
                 });
             }
             let first_code = out.code.len();
             visit_literal(&step.text, step.cwd.as_deref(), depth, out);
+            for command in &mut out.commands[first_command..] {
+                command.unresolved.extend(step.unresolved.iter().cloned());
+                command.links.clone_from(&step.links);
+            }
+            // xargs turns stdin text into child operands, not code. Unknown
+            // producers and argument files cannot certify those operands.
+            let (supplied, replacement) =
+                xargs_input(input.as_deref(), &out.commands[first_command..]);
+            for command in &mut out.commands[first_command..] {
+                if matches!(command.supplier, Some(Supplier::Xargs)) {
+                    apply_xargs_input(
+                        &mut command.args,
+                        &mut command.unresolved,
+                        supplied.as_deref(),
+                        replacement.as_deref(),
+                    );
+                    // Resolved stdin text is already shell output; it must not
+                    // acquire a second round of shell glob expansion.
+                    command.expands = Some(vec![false; command.args.len()]);
+                }
+            }
             for call in &mut out.calls[first_call..] {
                 call.unresolved.extend(step.unresolved.iter().cloned());
                 call.links.clone_from(&step.links);
+                call.checkouts.clone_from(&step.checkouts);
+                if matches!(call.supplier, Some(Supplier::Xargs)) {
+                    apply_xargs_input(
+                        &mut call.args,
+                        &mut call.unresolved,
+                        supplied.as_deref(),
+                        replacement.as_deref(),
+                    );
+                }
                 if call.code.is_empty() {
-                    if let Some(code) = &step.input_code {
+                    if let Some(code) = &input {
                         call.code = vec![code.clone()];
                     } else if step.text.contains("<<") {
                         call.code = out.code[first_code..].to_vec();
@@ -393,6 +466,184 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         }
     } else {
         visit_literal(command, cwd, depth, out);
+    }
+    out.literal_input = inherited_input;
+    out.input.bound = inherited_bound;
+    out.input.outer = outer_bound;
+}
+
+/// xargs input has quote/backslash handling, but no shell comments,
+/// substitutions or glob expansion. Unknown input modes remain unverified.
+fn xargs_words(input: &str, split_blanks: bool) -> Option<Vec<String>> {
+    // Windows path separators and xargs escape syntax can give different
+    // filenames. Do not certify a path after silently deleting separators.
+    // Explicit delimiters bypass this parser and preserve the supplied bytes.
+    if input.contains('\0') || cfg!(windows) && input.contains('\\') {
+        return None;
+    }
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut started = false;
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        if !split_blanks && !started && quote.is_none() && matches!(ch, ' ' | '\t') {
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            let next = chars.next()?;
+            if next == '\n' || quote == Some('"') && !matches!(next, '"' | '\\') {
+                return None;
+            }
+            word.push(next);
+            started = true;
+        } else if matches!(ch, '\'' | '"') {
+            if quote == Some(ch) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(ch);
+            } else {
+                word.push(ch);
+            }
+            started = true;
+        } else if quote.is_none() && (ch == '\n' || split_blanks && ch.is_ascii_whitespace()) {
+            if started {
+                if !split_blanks && word.ends_with(|ch: char| ch.is_ascii_whitespace()) {
+                    return None;
+                }
+                words.push(std::mem::take(&mut word));
+                started = false;
+            }
+        } else {
+            word.push(ch);
+            started = true;
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if started {
+        if !split_blanks && word.ends_with(|ch: char| ch.is_ascii_whitespace()) {
+            return None;
+        }
+        words.push(word);
+    }
+    Some(words)
+}
+
+fn xargs_input(
+    input: Option<&str>,
+    commands: &[Unwrapped],
+) -> (Option<Vec<String>>, Option<String>) {
+    let Some(command) = commands.iter().find(|command| {
+        command
+            .args
+            .first()
+            .is_some_and(|name| crate::hooks::git_guard::launcher_name(name) == "xargs")
+    }) else {
+        return (None, None);
+    };
+    let rest = &command.args[1..];
+    let Some(end) = skip_launcher_options("xargs", rest) else {
+        return (None, None);
+    };
+    let mut at = 0;
+    let mut delimiter = None;
+    let mut replacement = None;
+    let mut verified = true;
+    while at < end {
+        let arg = &rest[at];
+        at += 1;
+        if arg == "--" {
+            break;
+        }
+        if arg == "--replace" {
+            replacement = Some("{}".into());
+            continue;
+        }
+        let (option, attached) = if arg.starts_with("--") {
+            arg.split_once('=')
+                .map_or((arg.as_str(), None), |(key, value)| (key, Some(value)))
+        } else if arg.len() > 2 {
+            (&arg[..2], Some(&arg[2..]))
+        } else {
+            (arg.as_str(), None)
+        };
+        let Some(valued) = launcher_option("xargs", option) else {
+            verified = false;
+            break;
+        };
+        let value = if valued {
+            if let Some(value) = attached {
+                Some(value)
+            } else {
+                let value = rest.get(at).map(String::as_str);
+                at += 1;
+                value
+            }
+        } else {
+            attached
+        };
+        match option {
+            "-0" | "--null" => delimiter = Some('\0'),
+            "-a" | "--arg-file" => verified = false,
+            "-I" | "--replace" => replacement = value.map(str::to_owned),
+            "-d" | "--delimiter" => {
+                delimiter = value.and_then(|value| match value {
+                    "\\n" => Some('\n'),
+                    "\\0" => Some('\0'),
+                    "\\t" => Some('\t'),
+                    _ => {
+                        let mut chars = value.chars();
+                        let first = chars.next()?;
+                        chars.next().is_none().then_some(first)
+                    }
+                });
+                verified &= delimiter.is_some();
+            }
+            _ => {}
+        }
+    }
+    verified &= replacement.as_ref().is_none_or(|value| !value.is_empty());
+    let supplied = input.filter(|_| verified).and_then(|input| {
+        if let Some(delimiter) = delimiter {
+            Some(
+                input
+                    .split(delimiter)
+                    .filter(|word| !word.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        } else {
+            xargs_words(input, replacement.is_none())
+        }
+    });
+    (supplied, replacement)
+}
+
+fn apply_xargs_input(
+    args: &mut Vec<String>,
+    unresolved: &mut Vec<String>,
+    input: Option<&[String]>,
+    replacement: Option<&str>,
+) {
+    if let Some(input) = input {
+        if input.is_empty() {
+            return;
+        }
+        if let Some(replacement) = replacement.filter(|value| !value.is_empty()) {
+            let template = args.clone();
+            args.clear();
+            for word in input {
+                args.extend(template.iter().map(|arg| arg.replace(replacement, word)));
+            }
+        } else {
+            args.extend_from_slice(input);
+        }
+    } else {
+        let unknown = "__unverified_xargs_input".to_string();
+        args.push(unknown.clone());
+        unresolved.push(unknown);
     }
 }
 
@@ -406,17 +657,13 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         .clone()
         .or_else(|| crate::hooks::git_guard::configuration_line_backstop(command));
     let mut directories = vec![cwd.map(Path::to_path_buf)];
-    // argv walks find's child with its supplier attached. Flattening that
-    // same child here would lose the evidence for its positional arguments.
-    let words = command_argv(command);
-    let segments = if out.resolve_shell
-        && strip_launchers(&words).is_some_and(|(program, _)| program == "find")
-    {
-        vec![command.to_owned()]
-    } else {
-        expand_commands(command)
-    };
-    for segment in segments {
+    // Pipeline carriers include the producer text. Split those before argv
+    // inspection; find's child retains its supplier evidence in argv.
+    let segments = visit_segments(command, out.resolve_shell);
+    let stages = if out.resolve_shell { segments.len() } else { 1 };
+    let (step_input, step_bound) = (out.literal_input.clone(), out.input.bound);
+    for (stage, segment) in segments.into_iter().enumerate() {
+        stage_input(out, &segment, (stage, stages), (&step_input, step_bound));
         let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
         let before = words.len();
         strip_reserved_words(&mut words);
@@ -442,10 +689,15 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
         for dir in &directories {
             // The shell reads these files even when the executable is not a
             // reader. Keep their cwd alongside the unwrapped command's cwd.
-            for source in crate::hooks::git_guard::redirect_reads(&segment) {
+            for (source, expands) in crate::hooks::git_guard::redirect_reads(&segment) {
                 out.commands.push(Unwrapped {
+                    input: None,
+                    stdin_bound: false,
+                    links: Vec::new(),
                     args: vec!["cat".to_string(), source],
-                    expands: None,
+                    unresolved: Vec::new(),
+                    supplier: out.supplier.clone(),
+                    expands: Some(vec![false, expands]),
                     cwd: dir.clone(),
                 });
             }
@@ -501,7 +753,43 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
             }
         }
     }
+    out.literal_input = step_input;
+    out.input.bound = step_bound;
     out.config_trigger = inherited;
+}
+
+/// The stdin of pipeline stage `stage` of `stages`. Only the last stage of
+/// a pipeline carrier reads the step's input. A later stage reads the one
+/// before it, which the guard does not read; the first reads the enclosing
+/// shell's stdin or its own redirection.
+fn stage_input(
+    out: &mut Parsed,
+    segment: &str,
+    (stage, stages): (usize, usize),
+    (step_input, step_bound): (&Option<String>, bool),
+) {
+    if stage + 1 < stages {
+        out.literal_input = None;
+        out.input.bound = stage > 0
+            || out.input.outer
+            || segment.contains("<<")
+            || !crate::hooks::git_guard::redirect_reads(segment).is_empty();
+    } else {
+        out.literal_input.clone_from(step_input);
+        out.input.bound = step_bound;
+    }
+}
+
+fn visit_segments(command: &str, positioned: bool) -> Vec<String> {
+    if !positioned {
+        return expand_commands(command);
+    }
+    // visit/argv read carried bodies at their own command positions.
+    // Expanding them here again loses their pipeline stdin evidence. A
+    // `find` keeps its `-exec` command in its own segment, and a pipeline
+    // after it is split like any other, so `find X | xargs cat` hands
+    // `cat` input the guard does not read (TSK-1002 Fable review 15).
+    crate::hooks::git_guard::command_segments(command)
 }
 
 /// Every directory a line may run an interpreter in (TSK-302 review round
@@ -524,11 +812,15 @@ impl DirSet {
     pub(crate) fn change(&mut self, change: &DirChange) {
         match change {
             DirChange::To(target) => {
-                let next: Vec<PathBuf> = self
+                let Some(next) = self
                     .dirs
                     .iter()
-                    .map(|dir| lexical_join(dir, target))
-                    .collect();
+                    .map(|dir| physical_join(dir, target))
+                    .collect::<Option<Vec<PathBuf>>>()
+                else {
+                    self.unknown = true;
+                    return;
+                };
                 for dir in next {
                     if !self.dirs.contains(&dir) {
                         if self.dirs.len() == DIR_SET_LIMIT {
@@ -560,6 +852,89 @@ pub(crate) fn lexical_join(dir: &Path, target: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// Whether a directory operand is a UNC, device or verbatim spelling
+/// (`\\host\share`, `//host/share`, `\\?\`, `\\.\`, `\??\`). Such an
+/// operand is never resolved: the guard does not contact a host a command
+/// names (TSK-1002 review 03, ruling 7).
+pub(crate) fn remote_or_namespace_operand(operand: &str) -> bool {
+    let slashed = operand.replace('\\', "/");
+    slashed.starts_with("//") || slashed.starts_with("/??/")
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many filesystem reads [`physical_join`] made on this thread.
+    pub(crate) static JOIN_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The directory a program's own directory option (`env -C`, `ruby -C`,
+/// `pwsh -wd`, `tar -C`, `make -C`) moves to, as `chdir` resolves it: the
+/// base is the physical directory the program starts in, and each link is
+/// resolved before the `..` after it, so `alias/..` is the parent of the
+/// link's target and `..` from a directory reached through a link is that
+/// target's parent (TSK-1002 reviews 02 and 03, B4). Without a parent
+/// component the spelling is the path, as [`lexical_join`] reads it; a
+/// result naming the same place as the lexical spelling keeps that
+/// spelling. `None`, an unknown directory, for a UNC or namespace operand
+/// (before any filesystem access), or when the base or a component before
+/// a parent component is absent, unreadable or a link the guard cannot
+/// resolve: the line may make it a link before the program runs.
+pub(crate) fn physical_join(dir: &Path, target: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    // A target that is not text cannot be checked for a namespace prefix,
+    // so it is unknown too.
+    if target.to_str().is_none_or(remote_or_namespace_operand) {
+        return None;
+    }
+    let target = crate::portable_path::without_verbatim(target.to_path_buf());
+    let components: Vec<_> = target.components().collect();
+    let Some(last_parent) = components
+        .iter()
+        .rposition(|part| matches!(part, Component::ParentDir))
+    else {
+        return Some(lexical_join(dir, &target));
+    };
+    let canonical = |path: &Path| {
+        #[cfg(test)]
+        JOIN_READS.with(|reads| reads.set(reads.get() + 1));
+        crate::portable_path::canonicalize(path).ok()
+    };
+    let mut path = if target.has_root() {
+        PathBuf::new()
+    } else {
+        canonical(dir)?
+    };
+    for (at, part) in components.iter().enumerate() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                path.pop();
+            }
+            Component::Normal(name) => {
+                path.push(name);
+                if at > last_parent {
+                    continue;
+                }
+                #[cfg(test)]
+                JOIN_READS.with(|reads| reads.set(reads.get() + 1));
+                match crate::absence::symlink_metadata_optional(&path) {
+                    Ok(Some(meta)) if meta.file_type().is_symlink() => {
+                        path = canonical(&path)?;
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(_) => return None,
+                }
+            }
+            other => path.push(other.as_os_str()),
+        }
+    }
+    let lexical = lexical_join(dir, &target);
+    if canonical(&lexical).as_ref() == Some(&path) {
+        return Some(lexical);
+    }
+    Some(path)
 }
 
 /// A directory change one simple command makes.
@@ -647,12 +1022,10 @@ fn launcher_options(launcher: &str) -> Option<(&'static [&'static str], &'static
                 "-a",
                 "--arg-file",
                 "--delimiter",
-                "--eof",
                 "--max-lines",
                 "--max-args",
                 "--max-procs",
                 "--max-chars",
-                "--replace",
                 "--process-slot-var",
             ],
             &[
@@ -662,6 +1035,8 @@ fn launcher_options(launcher: &str) -> Option<(&'static [&'static str], &'static
                 "-p",
                 "-x",
                 "--null",
+                "--replace",
+                "--eof",
                 "--no-run-if-empty",
                 "--verbose",
                 "--interactive",
@@ -803,6 +1178,7 @@ pub(crate) fn directory_operand(operand: &str, home: Option<&Path>) -> DirChange
         || crate::hooks::git_guard::has_glob(operand)
         || operand.contains(['{', '}'])
         || operand == "-"
+        || remote_or_namespace_operand(operand)
     {
         return DirChange::Unknown;
     }
@@ -1031,8 +1407,14 @@ fn argv(
         return;
     };
     let name = crate::hooks::git_guard::launcher_name(program);
+    let command_at = out.commands.len();
     out.commands.push(Unwrapped {
+        input: out.literal_input.clone(),
+        stdin_bound: out.input.bound,
+        links: Vec::new(),
         args: args.to_vec(),
+        unresolved: Vec::new(),
+        supplier: out.supplier.clone(),
         expands: patterns.map(<[bool]>::to_vec),
         cwd: cwd.map(Path::to_path_buf),
     });
@@ -1075,6 +1457,27 @@ fn argv(
         }
     }
     if name == "env" {
+        if let Some(command) = crate::hooks::git_guard::env_split_command(args) {
+            // The split string read by env's own grammar runs where its
+            // own `-C` moves, judged from the line's directory (TSK-1002
+            // review 02).
+            if let Some(Ok(words)) = crate::hooks::git_guard::env_split_argv(args) {
+                argv(&words, None, cwd, depth + 1, out);
+                return;
+            }
+            // A string the guard cannot read exactly: retain every trailing
+            // argument without certifying a directory for the child, and
+            // read the command as one unverifiable operand.
+            if cwd.is_some() {
+                let marker = [
+                    "cat".to_string(),
+                    format!("{UNVERIFIED_ENV_DIRECTORY}{}", args.join(" ")),
+                ];
+                argv(&marker, None, cwd, depth + 1, out);
+            }
+            visit(&command, None, depth + 1, out);
+            return;
+        }
         if let (Some(dir), Some(inner)) = (
             rest.iter().find_map(|s| s.strip_prefix("GIT_DIR=")),
             skip_env(rest),
@@ -1096,27 +1499,53 @@ fn argv(
     }
     let inner = match name {
         "env" => {
-            if let Some(at) = rest
-                .iter()
-                .position(|a| a == "-C" || a == "--chdir" || a.starts_with("--chdir="))
-            {
-                let path = rest[at]
-                    .strip_prefix("--chdir=")
-                    .or_else(|| rest.get(at + 1).map(String::as_str));
-                if let (Some(cwd), Some(path), Some(inner)) = (cwd, path, skip_env(rest)) {
-                    argv(
-                        inner,
-                        pattern_tail(patterns, inner.len()),
-                        Some(&cwd.join(path)),
-                        depth + 1,
-                        out,
-                    );
+            // The command also runs in each directory env moves to, read by
+            // env's full grammar (`-CDIR`, `-iC DIR`, `--chdir=DIR --`). A
+            // directory the guard cannot establish, or env words it cannot
+            // read, leave the command with no known directory, so its
+            // relative operands refuse (TSK-1002 review 03).
+            let moved = match crate::hooks::git_guard::env_words(rest, 0) {
+                Ok(words) if words.split.is_none() && !words.dirs.is_empty() => Some((
+                    words.end,
+                    cwd.and_then(|cwd| {
+                        words
+                            .dirs
+                            .iter()
+                            .try_fold(cwd.to_path_buf(), |dir, change| {
+                                match directory_operand(change, out.home.as_deref()) {
+                                    DirChange::To(target) => physical_join(&dir, &target),
+                                    DirChange::Unknown => None,
+                                }
+                            })
+                    }),
+                )),
+                Ok(_) => None,
+                Err(_) => skip_env(rest).map(|inner| (rest.len() - inner.len(), None)),
+            };
+            if let Some((end, dir)) = moved {
+                let inner = &rest[end..];
+                // env's own directory change the guard cannot establish,
+                // where the line's directory is known: the command reads
+                // relative names there, so it is read as one unverifiable
+                // file operand, judged first so the refusal names env's
+                // words.
+                if dir.is_none() && cwd.is_some() {
+                    // The marker carries env's words as written, which the
+                    // refusal shows in place of the marker.
+                    let written = format!("env {}", rest[..end].join(" "));
+                    let marker = [
+                        "cat".to_string(),
+                        format!("{UNVERIFIED_ENV_DIRECTORY}{written}"),
+                    ];
+                    argv(&marker, None, cwd, depth + 1, out);
                 }
-            }
-            if let Some(at) = rest.iter().position(|a| a == "-S" || a == "--split-string") {
-                if let Some(script) = rest.get(at + 1) {
-                    visit(script, cwd, depth + 1, out);
-                }
+                argv(
+                    inner,
+                    pattern_tail(patterns, inner.len()),
+                    dir.as_deref(),
+                    depth + 1,
+                    out,
+                );
             }
             skip_env(rest)
         }
@@ -1146,12 +1575,10 @@ fn argv(
                 "-a",
                 "--arg-file",
                 "--delimiter",
-                "--eof",
                 "--max-lines",
                 "--max-args",
                 "--max-procs",
                 "--max-chars",
-                "--replace",
             ],
         )),
         name if crate::hooks::git_guard::is_shell(name) => {
@@ -1188,6 +1615,7 @@ fn argv(
                         before: rest[..at].to_vec(),
                         cwd: cwd.map(Path::to_path_buf),
                         in_dir: matches!(word.as_str(), "-execdir" | "-okdir"),
+                        appends: false,
                     };
                     let outer = out.supplier.replace(supplier);
                     argv(
@@ -1199,6 +1627,32 @@ fn argv(
                     );
                     out.supplier = outer;
                 }
+            }
+            None
+        }
+        "fd" | "fdfind" => {
+            if let Some(exec) = fd_exec(rest) {
+                let mut tail = rest[exec.command.start..].to_vec();
+                if let Some(first) = exec.first {
+                    tail[0] = first;
+                }
+                let len = exec.command.len();
+                let supplier = Supplier::Find {
+                    starts: exec.roots,
+                    before: exec.before,
+                    cwd: cwd.map(Path::to_path_buf).filter(|_| !exec.moved),
+                    in_dir: false,
+                    appends: true,
+                };
+                let outer = out.supplier.replace(supplier);
+                argv(
+                    &tail[..len],
+                    pattern_tail(patterns, tail.len()).map(|p| &p[..len]),
+                    cwd,
+                    depth + 1,
+                    out,
+                );
+                out.supplier = outer;
             }
             None
         }
@@ -1224,6 +1678,31 @@ fn argv(
         }
     };
     if let Some(inner) = inner {
+        // A launcher `fd` runs with nothing after it runs each path `fd`
+        // hands it, a program the guard cannot read: the walk stands with
+        // an unresolved command over an unread root, as an empty exec value
+        // does (TSK-1002 security review 03, L1: `fd . DIR --exec=env`).
+        if inner.is_empty() {
+            if let Some(call) = out.commands.get_mut(command_at) {
+                if let Some(Supplier::Find {
+                    starts,
+                    appends: true,
+                    ..
+                }) = call.supplier.as_mut()
+                {
+                    starts.push("$CODEFLOW_UNREAD_ROOT".to_string());
+                    call.args = vec![FD_UNREAD_COMMAND.to_string()];
+                    call.expands = None;
+                    return;
+                }
+            }
+        }
+        if name != "xargs" {
+            // The child receives these operands. Recording the wrapper as
+            // a second file reader loses the child's input/output roles.
+            // xargs itself can read an argument file and keeps that check.
+            out.commands.remove(command_at);
+        }
         let outer = if name == "xargs" {
             out.supplier.replace(Supplier::Xargs)
         } else {
@@ -1240,8 +1719,9 @@ fn argv(
     }
 }
 
-/// The launchers `argv` unwraps, read by their bare name.
-const MODELED_LAUNCHERS: &[&str] = &[
+/// The launchers `argv` unwraps, read by their bare name; inside the
+/// closed list of [`super::launchers`].
+pub(crate) const MODELED_LAUNCHERS: &[&str] = &[
     "env",
     "command",
     "builtin",
@@ -1259,6 +1739,50 @@ const MODELED_LAUNCHERS: &[&str] = &[
     "stdbuf",
     "timeout",
     "xargs",
+];
+
+/// Programs that read the files they are given, read as a command another
+/// program may launch (`uv run --directory DIR cat auth.json`).
+const LAUNCHED_READERS: &[&str] = &[
+    "cat",
+    "head",
+    "tail",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "wc",
+    "od",
+    "hexdump",
+    "xxd",
+    "strings",
+    "jq",
+    "base64",
+    "less",
+    "more",
+    "bat",
+    "nl",
+    "tac",
+    "sort",
+    "uniq",
+    "cut",
+    "awk",
+    "sed",
+    "diff",
+    "cmp",
+    "tar",
+    "zip",
+    "cp",
+    "md5",
+    "md5sum",
+    "shasum",
+    "sha1sum",
+    "sha256sum",
+    "sha512sum",
+    "cksum",
+    "b2sum",
+    "stat",
+    "file",
 ];
 
 /// A program the grammar does not model may itself launch what follows it
@@ -1336,6 +1860,36 @@ fn unmodeled_launch(
             break;
         }
     }
+    // A file reader this program may run (`uv run --directory DIR cat
+    // auth.json`, `direnv exec DIR cat auth.json`) reads its operands where
+    // the program puts it, which the guard does not know: they take the
+    // unknown-directory rule, as inline code does (TSK-1002 review 06). A
+    // reader is never a launcher itself.
+    if !prints && !LAUNCHED_READERS.contains(&name) {
+        if let Some(at) = rest.iter().position(|word| {
+            LAUNCHED_READERS.contains(&crate::hooks::git_guard::launcher_name(word))
+        }) {
+            // A program the guard does not model passes on stdin it cannot
+            // read: bound, with no literal text.
+            let mut reader = Parsed {
+                supplier: out.supplier.clone(),
+                input: InputScope {
+                    bound: out.input.bound,
+                    outer: false,
+                },
+                ..Parsed::default()
+            };
+            argv(
+                &rest[at..],
+                pattern_tail(patterns, rest.len() - at),
+                None,
+                depth + 1,
+                &mut reader,
+            );
+            out.commands.extend(reader.commands);
+            inner.calls.extend(reader.calls);
+        }
+    }
     out.calls.extend(inner.calls);
     out.opaque |= inner.opaque;
     out.runs |= inner.runs;
@@ -1348,8 +1902,240 @@ fn holds_a_command_line(word: &str) -> bool {
     word.contains([' ', '\t', '\n', ';', '&', '|'])
 }
 
-/// The starting points of a `find` call: the words before its expression,
-/// after the `-H`, `-L` and `-P` options, or `.` when there are none.
+/// What `fd` (`fdfind`) hands a command with `-x`/`--exec` or
+/// `-X`/`--exec-batch`.
+struct FdExec {
+    /// The roots it walks, `.` when it names none; an unread form stands
+    /// as `$CODEFLOW_UNREAD_ROOT`, a root the guard cannot establish.
+    roots: Vec<String>,
+    /// `-L` when it follows links.
+    before: Vec<String>,
+    /// Whether `--base-directory` moves it before it walks.
+    moved: bool,
+    /// The command's words in the arguments.
+    command: std::ops::Range<usize>,
+    /// The first word in place of `command`'s first: the value attached
+    /// to the option (`--exec=cat`, `-xcat`), whose range is that option
+    /// word alone, or [`FD_UNREAD_COMMAND`] when no command word can be
+    /// read.
+    first: Option<String>,
+}
+
+/// The command word an `fd` exec option stands for when the guard cannot
+/// read one; it is unresolved, so the call refuses as unverifiable.
+pub(crate) const FD_UNREAD_COMMAND: &str = "$CODEFLOW_UNREAD_COMMAND";
+
+/// The options of `fd` 10 that take a value (`fd --help`).
+const FD_VALUED_SHORT: &str = "etEdSojc";
+const FD_VALUED_LONG: &[&str] = &[
+    "--extension",
+    "--type",
+    "--exclude",
+    "--max-depth",
+    "--min-depth",
+    "--exact-depth",
+    "--size",
+    "--changed-within",
+    "--changed-after",
+    "--changed-before",
+    "--change-newer-than",
+    "--change-older-than",
+    "--newer",
+    "--older",
+    "--owner",
+    "--threads",
+    "--max-results",
+    "--color",
+    "--ignore-file",
+    "--format",
+    "--batch-size",
+    "--path-separator",
+    "--and",
+    "--max-buffer-time",
+];
+const FD_FLAGS_SHORT: &str = "HIusigFalLp0q1hV";
+const FD_FLAGS_LONG: &[&str] = &[
+    "--hidden",
+    "--no-hidden",
+    "--no-ignore",
+    "--ignore",
+    "--no-ignore-vcs",
+    "--ignore-vcs",
+    "--no-require-git",
+    "--require-git",
+    "--no-ignore-parent",
+    "--no-global-ignore-file",
+    "--unrestricted",
+    "--case-sensitive",
+    "--ignore-case",
+    "--glob",
+    "--regex",
+    "--fixed-strings",
+    "--absolute-path",
+    "--relative-path",
+    "--list-details",
+    "--follow",
+    "--no-follow",
+    "--full-path",
+    "--print0",
+    "--prune",
+    "--quiet",
+    "--show-errors",
+    "--one-file-system",
+    "--strip-cwd-prefix",
+    "--help",
+    "--version",
+];
+
+/// The command an `fd` call runs on each path it finds, with the roots it
+/// walks (TSK-1002 Fable review 16), read by `fd`'s own grammar: options,
+/// a pattern, then roots, `--search-path` roots included; `-x`, `--exec`,
+/// `-X` or `--exec-batch` takes every word after it up to a `;`, and a
+/// value attached to one (`--exec=cat`, `-x=cat`, `-xcat`) is the whole
+/// command, as clap reads it; the words after it are `fd`'s again. An
+/// option it does not know stands as a root it cannot establish, and an
+/// exec option whose command it cannot read runs an unresolved command.
+/// `None` when `fd` runs no command.
+#[allow(clippy::too_many_lines)] // One pass of fd's option grammar, long and short forms.
+fn fd_exec(args: &[String]) -> Option<FdExec> {
+    const UNREAD: &str = "$CODEFLOW_UNREAD_ROOT";
+    let mut positionals: Vec<String> = Vec::new();
+    let mut roots = Vec::new();
+    let mut before = Vec::new();
+    let mut moved = false;
+    let mut command = None;
+    let mut first = None;
+    let mut unread = false;
+    let mut at = 0;
+    let mut options = true;
+    let start_command = |at: usize| {
+        let end = args[at..]
+            .iter()
+            .position(|word| word == ";")
+            .map_or(args.len(), |end| at + end);
+        at..end
+    };
+    while at < args.len() {
+        let word = args[at].as_str();
+        if !options || !word.starts_with('-') || word == "-" {
+            positionals.push(word.to_string());
+            at += 1;
+            continue;
+        }
+        if word == "--" {
+            options = false;
+            at += 1;
+            continue;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = match long.split_once('=') {
+                Some((name, value)) => (format!("--{name}"), Some(value.to_string())),
+                None => (word.to_string(), None),
+            };
+            match name.as_str() {
+                "--exec" | "--exec-batch" => {
+                    if let Some(value) = value {
+                        command = Some(at..at + 1);
+                        first = Some(value);
+                        at += 1;
+                        continue;
+                    }
+                    let range = start_command(at + 1);
+                    at = range.end + 1;
+                    first = None;
+                    command = Some(range);
+                    continue;
+                }
+                "--search-path" | "--base-directory" => {
+                    let value = if let Some(value) = value {
+                        value
+                    } else {
+                        at += 1;
+                        args.get(at).cloned().unwrap_or_else(|| UNREAD.to_string())
+                    };
+                    if name == "--search-path" {
+                        roots.push(value);
+                    } else {
+                        moved = true;
+                    }
+                }
+                "--follow" => before.push("-L".to_string()),
+                _ if FD_VALUED_LONG.contains(&name.as_str()) => {
+                    if value.is_none() {
+                        at += 1;
+                    }
+                }
+                _ if FD_FLAGS_LONG.contains(&name.as_str()) => {}
+                _ => unread = true,
+            }
+            at += 1;
+            continue;
+        }
+        let letters: Vec<char> = word[1..].chars().collect();
+        for (index, letter) in letters.iter().enumerate() {
+            let attached = letters[index + 1..].iter().collect::<String>();
+            if matches!(letter, 'x' | 'X') {
+                if !attached.is_empty() {
+                    // clap drops one `=` before an attached short value.
+                    let value = attached.strip_prefix('=').unwrap_or(&attached);
+                    command = Some(at..at + 1);
+                    first = Some(value.to_string());
+                    break;
+                }
+                let range = start_command(at + 1);
+                at = range.end;
+                first = None;
+                command = Some(range);
+                break;
+            }
+            if *letter == 'L' {
+                before.push("-L".to_string());
+            }
+            if FD_VALUED_SHORT.contains(*letter) {
+                if attached.is_empty() {
+                    at += 1;
+                }
+                break;
+            }
+            if !FD_FLAGS_SHORT.contains(*letter) {
+                unread = true;
+                break;
+            }
+        }
+        at += 1;
+    }
+    let mut command = command?;
+    // An exec option with no command word, or an empty attached value,
+    // runs a command the guard cannot read: it stands as an unresolved
+    // word in the option's place, and the walk is judged with it.
+    if command.is_empty()
+        || first
+            .as_deref()
+            .is_some_and(|word| word.chars().all(crate::hooks::git_guard::shell_blank))
+    {
+        let option = command.start.saturating_sub(1).min(args.len() - 1);
+        if command.is_empty() {
+            command = option..option + 1;
+        }
+        first = Some(FD_UNREAD_COMMAND.to_string());
+        unread = true;
+    }
+    roots.extend(positionals.into_iter().skip(1));
+    if roots.is_empty() {
+        roots.push(".".to_string());
+    }
+    if unread {
+        roots.push(UNREAD.to_string());
+    }
+    Some(FdExec {
+        roots,
+        before,
+        moved,
+        command,
+        first,
+    })
+}
+
 fn find_starts(args: &[String]) -> Vec<String> {
     let rest = &args[args
         .iter()
@@ -1389,6 +2175,8 @@ fn cd_operand(args: &[String]) -> Option<&str> {
 /// suffix (`python3.13`, `ruby3.3`) and a Windows `.exe` are read as the
 /// interpreter they name.
 pub(crate) fn interpreter_family(name: &str) -> Option<&'static str> {
+    let normalized = name.to_ascii_lowercase();
+    let name = normalized.as_str();
     let name = name.strip_suffix(".exe").unwrap_or(name);
     // The name without its version suffix: the digits and dots it ends with.
     let end = name
@@ -1402,8 +2190,331 @@ pub(crate) fn interpreter_family(name: &str) -> Option<&'static str> {
         "nodejs" => Some("nodejs"),
         "perl" => Some("perl"),
         "ruby" => Some("ruby"),
+        "powershell" | "pwsh" => Some("powershell"),
+        "cmd" => Some("cmd"),
+        "osascript" => Some("osascript"),
+        "deno" => Some("deno"),
+        "make" | "gmake" => Some("make"),
         _ => None,
     }
+}
+
+fn make_stdin_code(args: &[String]) -> bool {
+    args.iter().enumerate().any(|(at, arg)| {
+        let file = if matches!(arg.as_str(), "-f" | "--file" | "--makefile") {
+            args.get(at + 1).map(String::as_str)
+        } else {
+            arg.strip_prefix("--file=")
+                .or_else(|| arg.strip_prefix("--makefile="))
+                .or_else(|| arg.strip_prefix("-f").filter(|value| !value.is_empty()))
+        };
+        file.is_some_and(|file| {
+            matches!(file, "-" | "/dev/stdin" | "/dev/fd/0" | "/proc/self/fd/0")
+        })
+    })
+}
+
+fn make_inline_code(args: &[String]) -> Vec<String> {
+    args.iter()
+        .enumerate()
+        .filter_map(|(at, arg)| {
+            if arg == "--eval" {
+                args.get(at + 1).cloned()
+            } else {
+                arg.strip_prefix("--eval=").map(str::to_owned)
+            }
+        })
+        .collect()
+}
+
+/// Options must be consumed before choosing the executable body. Unknown
+/// arities cannot establish which later word is code.
+fn deno_input(args: &[String]) -> Result<(Program, Option<String>, Vec<String>), &'static str> {
+    let mut mode = None;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if matches!(arg.as_str(), "eval" | "run" | "repl") && mode.is_none() {
+            mode = Some(arg.as_str());
+            continue;
+        }
+        let (option, attached) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(k, v)| (k, Some(v)));
+        if matches!(option, "--eval") && mode == Some("repl") {
+            let body = attached
+                .map(str::to_owned)
+                .or_else(|| args.get(at).cloned())
+                .ok_or("deno eval body is missing")?;
+            if at + usize::from(attached.is_none()) < args.len() {
+                return Err("cannot establish deno repl options after its eval body");
+            }
+            return Ok((Program::Inline, Some(body), Vec::new()));
+        }
+        if matches!(
+            option,
+            "--ext"
+                | "-c"
+                | "--config"
+                | "--import-map"
+                | "--location"
+                | "--env-file"
+                | "--seed"
+                | "--inspect"
+                | "--inspect-brk"
+                | "--v8-flags"
+                | "--cert"
+                | "--lock"
+                | "--log-level"
+        ) {
+            if attached.is_none() {
+                args.get(at).ok_or("deno option value is missing")?;
+                at += 1;
+            }
+            continue;
+        }
+        if matches!(option, "--help" | "--version") {
+            return Ok((Program::Script, None, Vec::new()));
+        }
+        // Permission, unstable and reload flags take a value only with `=`
+        // (`--allow-read=dir`), so they never consume the next word.
+        if [
+            "--allow-",
+            "--deny-",
+            "--unstable",
+            "--watch",
+            "--reload",
+            "--no-remote",
+            "--node-modules-dir",
+        ]
+        .iter()
+        .any(|prefix| option.starts_with(prefix))
+            || matches!(option, "-r" | "-R" | "-W" | "-N" | "-E" | "-S" | "-P")
+        {
+            continue;
+        }
+        if matches!(
+            option,
+            "--quiet"
+                | "-q"
+                | "--no-check"
+                | "--check"
+                | "--no-config"
+                | "--no-lock"
+                | "--cached-only"
+                | "--allow-all"
+                | "-A"
+        ) || mode == Some("eval") && matches!(option, "-p" | "--print")
+        {
+            // `deno eval -p CODE` prints the value of the same inline code.
+            continue;
+        }
+        if arg.starts_with('-') && arg != "-" {
+            return Err("cannot establish deno code after an unknown option");
+        }
+        return match mode {
+            Some("eval") => Ok((Program::Inline, Some(arg.clone()), args[at..].to_vec())),
+            // A bare script (`deno main.ts`) runs like `run`.
+            Some("run") | None if arg == "-" || descriptor_program(arg) => {
+                Ok((Program::Stdin, None, args[at..].to_vec()))
+            }
+            Some("run") => Ok((Program::Script, None, args[at - 1..].to_vec())),
+            None if arg.contains(['.', '/', '\\']) => {
+                Ok((Program::Script, None, args[at - 1..].to_vec()))
+            }
+            // Another subcommand (`deno test`, `deno task dev`, `deno fmt`)
+            // takes no inline code: an ordinary program whose words stay
+            // operands.
+            None => Ok((Program::Script, None, args[at..].to_vec())),
+            _ => Err("cannot establish deno's executable input"),
+        };
+    }
+    match mode {
+        // `deno` alone opens the REPL, which reads standard input.
+        Some("run" | "repl") | None => Ok((Program::Stdin, None, Vec::new())),
+        _ => Err("cannot establish deno's executable input"),
+    }
+}
+
+/// Arguments handed to a program, excluding the interpreter's own code and
+/// options. None means an unmodelled executable, whose operands stay visible.
+pub(crate) fn recursive_arguments(name: &str, args: &[String]) -> Option<Vec<String>> {
+    if crate::hooks::git_guard::is_shell(name) {
+        let mut words = vec![name.to_string()];
+        words.extend_from_slice(args);
+        if crate::hooks::git_guard::shell_inline_code(name, args).is_some()
+            || crate::hooks::git_guard::reads_shell_stdin(&words)
+        {
+            return Some(Vec::new());
+        }
+        return Some(
+            args.iter()
+                .skip_while(|arg| arg.starts_with('-'))
+                .cloned()
+                .collect(),
+        );
+    }
+    let family = interpreter_family(name)?;
+    match family {
+        "python" | "node" | "nodejs" | "perl" | "ruby" => Some(
+            interpreter_argument_roles(family, args, None, false)
+                .0
+                .into_iter()
+                .map(|(value, _)| value)
+                .collect(),
+        ),
+        "deno" => Some(deno_input(args).map_or_else(|_| Vec::new(), |(_, _, arguments)| arguments)),
+        "make" => Some(Vec::new()), // Targets and recipe flags are not tree inputs.
+        "osascript" => {
+            let mut at = 0;
+            while let Some(arg) = args.get(at) {
+                match arg.as_str() {
+                    "-e" | "-l" | "-s" => at += 2,
+                    "-i" => at += 1,
+                    "--" => return Some(args[at + 1..].to_vec()),
+                    _ => return Some(args[at..].to_vec()),
+                }
+            }
+            Some(Vec::new())
+        }
+        _ => None,
+    }
+}
+
+/// Remove only the separators accepted by the shared shell reader.
+fn shell_trim_start(text: &str) -> &str {
+    let start = text
+        .char_indices()
+        .find(|(_, ch)| !crate::hooks::git_guard::shell_blank(*ch))
+        .map_or(text.len(), |(at, _)| at);
+    &text[start..]
+}
+
+/// Every body is code. Only a complete quoted shell string can be handed
+/// to the shell scanner; constructed commands stay unreadable.
+fn applescript_bodies(args: &[String]) -> (Vec<String>, bool) {
+    let mut bodies = Vec::new();
+    let mut unread = false;
+    for pair in args.windows(2).filter(|pair| pair[0] == "-e") {
+        let body = &pair[1];
+        bodies.push(body.clone());
+        let lower = body.to_ascii_lowercase();
+        for marker in ["do shell script", "doshellscript", "do script"] {
+            for (at, _) in lower.match_indices(marker) {
+                let tail = shell_trim_start(&body[at + marker.len()..]);
+                let tail = shell_trim_start(tail.trim_start_matches('('));
+                let mut chars = tail.char_indices();
+                let Some((_, quote @ ('\'' | '"'))) = chars.next() else {
+                    unread = true;
+                    continue;
+                };
+                let mut shell = String::new();
+                let mut escaped = false;
+                let mut end = None;
+                for (at, ch) in chars {
+                    if escaped {
+                        shell.push(ch);
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == quote {
+                        end = Some(at + ch.len_utf8());
+                        break;
+                    } else {
+                        shell.push(ch);
+                    }
+                }
+                if end.is_none_or(|at| shell_trim_start(&tail[at..]).starts_with(['&', '+'])) {
+                    unread = true;
+                } else {
+                    bodies.push(shell);
+                }
+            }
+        }
+    }
+    (bodies, unread)
+}
+
+fn record_extended_interpreter(
+    name: &str,
+    rest: &[String],
+    patterns: Option<&[bool]>,
+    cwd: Option<&Path>,
+    out: &mut Parsed,
+) -> bool {
+    if !matches!(name, "powershell" | "cmd" | "osascript" | "deno" | "make") {
+        return false;
+    }
+    let first = out.code.len();
+    let mut unread = false;
+    if matches!(name, "powershell" | "cmd") {
+        if let Some(mut code) = crate::hooks::git_guard::shell_inline_code(name, rest) {
+            unread |= code == "__unresolved_shell_code";
+            if cfg!(windows) {
+                code = code.replace('\\', "/");
+                if let Some(home) = out.home.as_deref() {
+                    code = code.replace("%USERPROFILE%", &crate::portable_path::slashed(home));
+                }
+            }
+            if name == "powershell" && code == "-" {
+                out.stdin_interpreter += 1;
+            } else {
+                out.code.push(code);
+            }
+        }
+    } else if name == "deno" {
+        match deno_input(rest) {
+            Ok((program, code, _)) => {
+                out.stdin_interpreter += usize::from(program == Program::Stdin);
+                out.code.extend(code);
+            }
+            Err(_) => unread = true,
+        }
+    } else if name == "make" {
+        out.code.extend(make_inline_code(rest));
+        out.stdin_interpreter += usize::from(make_stdin_code(rest));
+    } else {
+        let (bodies, unknown) = applescript_bodies(rest);
+        out.code.extend(bodies);
+        unread |= unknown;
+    }
+    if unread {
+        out.code.push("__unresolved_shell_code".into());
+    }
+    out.calls.push(InterpreterCall {
+        positional_source: out.positional_source,
+        unresolved: if unread {
+            vec!["interpreter parameters or executable code cannot be verified".into()]
+        } else {
+            Vec::new()
+        },
+        links: Vec::new(),
+        checkouts: Vec::new(),
+        // Make targets and directory flags are not arguments to its recipe
+        // commands. Its code and named input files have separate judgments.
+        args: if name == "make" {
+            Vec::new()
+        } else {
+            rest.to_vec()
+        },
+        patterns: if name == "make" {
+            Vec::new()
+        } else {
+            patterns.map_or_else(|| vec![true; rest.len()], <[bool]>::to_vec)
+        },
+        cwd: cwd.map(Path::to_path_buf),
+        // pwsh runs its code in `-WorkingDirectory` (TSK-1002 review 03).
+        chdir: if name == "powershell" {
+            crate::hooks::git_guard::powershell_working_directory(rest)
+                .map(|dir| vec![dir.to_string()])
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
+        code: out.code[first..].to_vec(),
+        supplier: out.supplier.clone(),
+    });
+    true
 }
 
 fn record_interpreter(
@@ -1414,6 +2525,9 @@ fn record_interpreter(
     out: &mut Parsed,
 ) {
     if let Some(name) = interpreter_family(name) {
+        if record_extended_interpreter(name, rest, patterns, cwd, out) {
+            return;
+        }
         let flag = if name.starts_with("python") {
             "-c"
         } else {
@@ -1455,6 +2569,23 @@ fn record_interpreter(
                 found = true;
             }
         }
+        // Every word the family's option grammar reads as code is inspected
+        // as a body, so a code form the scan above misses (`--print=CODE`)
+        // cannot leave the operands without being read (review 01, B2).
+        for at in interpreter_code_positions(name, rest) {
+            let Some(word) = rest.get(at) else { continue };
+            let code = word
+                .strip_prefix("--")
+                .and_then(|long| long.split_once('=').map(|(_, value)| value))
+                .unwrap_or(word);
+            if !out.code[code_from..]
+                .iter()
+                .any(|body| word.ends_with(body.as_str()) && !body.is_empty())
+            {
+                out.code.push(code.to_string());
+            }
+            found = true;
+        }
         if !found {
             out.stdin_interpreter += 1;
         }
@@ -1468,6 +2599,7 @@ fn record_interpreter(
             positional_source: out.positional_source,
             unresolved: Vec::new(),
             links: Vec::new(),
+            checkouts: Vec::new(),
             args,
             patterns,
             cwd: cwd.map(Path::to_path_buf),
@@ -1553,10 +2685,62 @@ fn pattern_tail(patterns: Option<&[bool]>, len: usize) -> Option<&[bool]> {
 /// script ends the options, and so does node's eval code; perl and ruby
 /// read options until the first other word. An option the table does not
 /// know is a flag, so a word after it stays an argument either way.
-fn interpreter_arguments(
+pub(crate) fn interpreter_arguments(
     family: &str,
     rest: &[String],
     patterns: Option<&[bool]>,
+) -> (Vec<(String, bool)>, Vec<String>) {
+    interpreter_argument_roles(family, rest, patterns, true)
+}
+
+/// The words an interpreter may load as program text: every option value
+/// (`-r FILE`, `--require FILE`, `-I DIR`), read conservatively, and the
+/// script operand. The words after the script are the program's own
+/// arguments, which it reads as data.
+pub(crate) fn interpreter_program_files(family: &str, rest: &[String]) -> Vec<String> {
+    let (with_values, _) = interpreter_argument_roles(family, rest, None, true);
+    let (positional, _) = interpreter_argument_roles(family, rest, None, false);
+    let values = with_values.len().saturating_sub(positional.len());
+    let mut files: Vec<String> = with_values[..values]
+        .iter()
+        .map(|(text, _)| text.clone())
+        .collect();
+    if family_program(family, rest) == Program::Script {
+        files.extend(positional.first().map(|(text, _)| text.clone()));
+    }
+    files
+}
+
+/// The positions in `rest` of the words that carry inline code (`-e CODE`,
+/// `-c CODE`, `--eval=CODE`, an attached `-eCODE`). Such a word is program
+/// text, which the code-body checks inspect, not a file operand.
+pub(crate) fn interpreter_code_positions(family: &str, rest: &[String]) -> Vec<usize> {
+    let mut code = Vec::new();
+    interpreter_roles(family, rest, None, false, &mut code);
+    code
+}
+
+/// The directory changes an interpreter's own options make (`ruby -C DIR`,
+/// `-CDIR`, clustered `-wCDIR`), read by the shared option grammar.
+pub(crate) fn interpreter_chdirs(family: &str, rest: &[String]) -> Vec<String> {
+    interpreter_argument_roles(family, rest, None, false).1
+}
+
+fn interpreter_argument_roles(
+    family: &str,
+    rest: &[String],
+    patterns: Option<&[bool]>,
+    option_values: bool,
+) -> (Vec<(String, bool)>, Vec<String>) {
+    interpreter_roles(family, rest, patterns, option_values, &mut Vec::new())
+}
+
+fn interpreter_roles(
+    family: &str,
+    rest: &[String],
+    patterns: Option<&[bool]>,
+    option_values: bool,
+    code: &mut Vec<usize>,
 ) -> (Vec<(String, bool)>, Vec<String>) {
     let mut args = Vec::new();
     let mut chdir = Vec::new();
@@ -1584,14 +2768,17 @@ fn interpreter_arguments(
                 .split_once('=')
                 .map_or((long, None), |(n, v)| (n, Some(v)));
             if matches!(family, "node" | "nodejs") && matches!(name, "eval" | "print") {
+                code.push(if value.is_none() { at } else { at - 1 });
                 at += usize::from(value.is_none());
                 args.extend(after(at));
                 return (args, chdir);
             }
             if value.is_none() && long_takes_value(family, name) {
-                args.extend(rest.get(at).map(|text| argument(at, text.clone())));
+                if option_values {
+                    args.extend(rest.get(at).map(|text| argument(at, text.clone())));
+                }
                 at += 1;
-            } else {
+            } else if option_values {
                 args.push(argument(at - 1, word.clone()));
             }
             continue;
@@ -1616,8 +2803,12 @@ fn interpreter_arguments(
                 Short::Code => {
                     if matches!(family, "node" | "nodejs") && !tail.is_empty() {
                         // `-pe`: the code is the next word.
+                        code.push(at);
                         at += 1;
                     } else {
+                        // Attached code shares the option's word; detached
+                        // code is the next word.
+                        code.push(if attached { at - 1 } else { at });
                         value(&mut at);
                     }
                     if !matches!(family, "perl" | "ruby") {
@@ -1625,7 +2816,12 @@ fn interpreter_arguments(
                         return (args, chdir);
                     }
                 }
-                Short::Value => args.extend(value(&mut at)),
+                Short::Value => {
+                    let value = value(&mut at);
+                    if option_values {
+                        args.extend(value);
+                    }
+                }
                 Short::Chdir => chdir.extend(value(&mut at).map(|(text, _)| text)),
                 Short::Module => {
                     // `-m MODULE`: a module name, not a path; the words
@@ -2082,6 +3278,34 @@ enum Program {
 /// Where an interpreter family of `family` takes its program from, read by
 /// the same option grammar as [`interpreter_arguments`].
 fn family_program(family: &str, rest: &[String]) -> Program {
+    if family == "deno" {
+        return deno_input(rest).map_or(Program::Inline, |(program, _, _)| program);
+    }
+    if family == "make" {
+        return if make_stdin_code(rest) {
+            Program::Stdin
+        } else if make_inline_code(rest).is_empty() {
+            Program::Script
+        } else {
+            Program::Inline
+        };
+    }
+    if matches!(family, "powershell" | "cmd" | "osascript" | "deno") {
+        if family == "powershell"
+            && crate::hooks::git_guard::shell_inline_code(family, rest).as_deref() == Some("-")
+        {
+            return Program::Stdin;
+        }
+        return if (matches!(family, "powershell" | "cmd")
+            && crate::hooks::git_guard::shell_inline_code(family, rest).is_some())
+            || (family == "osascript" && rest.iter().any(|arg| arg == "-e"))
+            || (family == "deno" && rest.iter().any(|arg| arg == "eval"))
+        {
+            Program::Inline
+        } else {
+            Program::Script
+        };
+    }
     let mut at = 0;
     while let Some(word) = rest.get(at) {
         at += 1;
@@ -2326,6 +3550,294 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fd_hands_its_roots_to_the_command_it_runs() {
+        let read = |line: &str| {
+            let words: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+            fd_exec(&words).map(|exec| {
+                let mut command = words[exec.command].to_vec();
+                if let Some(first) = exec.first {
+                    command[0] = first;
+                }
+                (exec.roots, exec.before, exec.moved, command.join(" "))
+            })
+        };
+        let roots = |roots: &[&str]| roots.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert!(read("auth ~/.codex").is_none());
+        let (found, before, moved, command) = read("auth ~/.codex -x cat").unwrap();
+        assert_eq!(
+            (found, before, moved, command.as_str()),
+            (roots(&["~/.codex"]), vec![], false, "cat")
+        );
+        assert_eq!(read("-t f . ~/.codex --exec cat {} ;").unwrap().3, "cat {}");
+        assert_eq!(read("-X wc -l").unwrap().0, roots(&["."]));
+        assert_eq!(
+            read("--exec-batch cat . ~/.codex").unwrap().3,
+            "cat . ~/.codex"
+        );
+        assert_eq!(
+            read(". --search-path ~/.codex -x cat").unwrap().0,
+            roots(&["~/.codex"])
+        );
+        assert_eq!(read("-L . src -x cat").unwrap().1, vec!["-L".to_string()]);
+        assert!(read("--base-directory /x . -x cat").unwrap().2);
+        assert_eq!(
+            read("--mystery . src -x cat").unwrap().0,
+            roots(&["src", "$CODEFLOW_UNREAD_ROOT"])
+        );
+        assert_eq!(read("-e md . src -x wc -l").unwrap().0, roots(&["src"]));
+        // Fable review 17: an attached value is the whole command, and the
+        // words after it are fd's own again.
+        for (line, command) in [
+            (". ~/.codex --exec=cat", "cat"),
+            ("--exec=cat . ~/.codex", "cat"),
+            (". ~/.codex --exec-batch=cat", "cat"),
+            (". ~/.codex -x=cat", "cat"),
+            (". ~/.codex -xless", "less"),
+            (". ~/.codex -Hxjq", "jq"),
+            (". ~/.codex -X=wc", "wc"),
+        ] {
+            let (found, _, _, read_command) = read(line).unwrap();
+            assert_eq!(
+                (found, read_command.as_str()),
+                (roots(&["~/.codex"]), command),
+                "{line}"
+            );
+        }
+        // An exec option with no readable command runs an unresolved one
+        // over an unread root.
+        for line in [". src --exec=", ". src -x", ". src -x ;", ". src -x="] {
+            let (found, _, _, command) = read(line).unwrap();
+            assert_eq!(
+                (found, command.as_str()),
+                (
+                    roots(&["src", "$CODEFLOW_UNREAD_ROOT"]),
+                    "$CODEFLOW_UNREAD_COMMAND"
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    /// TSK-1002 review 02, B4: a directory option's `..` after a link is
+    /// the parent of the link's target; a missing component before `..`
+    /// leaves the directory unknown; without `..` after a name the spelling
+    /// is the path.
+    #[cfg(unix)]
+    #[test]
+    fn directory_options_resolve_parent_components_physically() {
+        use std::path::Path;
+        let temp = tempfile::tempdir().unwrap();
+        let base = crate::portable_path::canonicalize(temp.path()).unwrap();
+        std::fs::create_dir_all(base.join("store/child")).unwrap();
+        std::fs::create_dir_all(base.join("repo/sub")).unwrap();
+        std::os::unix::fs::symlink(base.join("store/child"), base.join("repo/alias")).unwrap();
+        let repo = base.join("repo");
+        let join = |target: &str| super::physical_join(&repo, Path::new(target));
+        assert_eq!(join("alias/.."), Some(base.join("store")));
+        assert_eq!(join("sub/../alias/.."), Some(base.join("store")));
+        assert_eq!(join("sub/.."), Some(repo.clone()));
+        assert_eq!(join("alias"), Some(repo.join("alias")));
+        assert_eq!(join("../x"), Some(base.join("x")));
+        assert_eq!(join("absent/.."), None);
+        assert_eq!(join("absent"), Some(repo.join("absent")));
+        // Review 03, ruling 5: `..` from a directory reached through a link
+        // is the target's parent, so successive changes keep the physical
+        // place (`env -C alias env -C ..`).
+        assert_eq!(
+            super::physical_join(&repo.join("alias"), Path::new("..")),
+            Some(base.join("store"))
+        );
+        assert_eq!(
+            super::physical_join(&repo.join("alias"), Path::new("../child/..")),
+            Some(base.join("store"))
+        );
+    }
+
+    /// TSK-1002 review 03, ruling 7: a UNC, device or verbatim directory
+    /// option is unknown before any filesystem access.
+    #[test]
+    fn remote_directory_options_are_unknown_before_any_read() {
+        use std::path::Path;
+        let temp = tempfile::tempdir().unwrap();
+        for target in [
+            r"\\fixture-host\fixture-share\child\..",
+            "//fixture-host/fixture-share",
+            r"\\?\C:\Users\..",
+            r"\\.\C:\x\..",
+            r"\??\C:\x\..",
+        ] {
+            super::JOIN_READS.with(|reads| reads.set(0));
+            assert_eq!(super::physical_join(temp.path(), Path::new(target)), None);
+            assert_eq!(super::JOIN_READS.with(std::cell::Cell::get), 0, "{target}");
+            assert_eq!(
+                super::directory_operand(target, None),
+                super::DirChange::Unknown,
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    fn r25_env_split_keeps_trailing_arguments_and_reads_its_directory() {
+        // TSK-1002 review 02: a split string env's grammar reads exactly
+        // runs where its own `-C` moves, from the line's directory; one the
+        // guard cannot read leaves the directory unknown.
+        let temp = tempfile::tempdir().unwrap();
+        let sub = temp.path().join("sub");
+        for (prefix, cwd) in [
+            ("env -S 'python3 tool.py'", Some(temp.path().to_path_buf())),
+            (
+                "env --split-string='python3 tool.py'",
+                Some(temp.path().to_path_buf()),
+            ),
+            ("env -iS 'python3 tool.py'", Some(temp.path().to_path_buf())),
+            (
+                "nice env -S 'python3 tool.py'",
+                Some(temp.path().to_path_buf()),
+            ),
+            ("env -S '-C sub python3 tool.py'", Some(sub)),
+            ("env -S '${X} python3 tool.py'", None),
+        ] {
+            let line = format!("{prefix} 'ordinary data.json'");
+            let calls = super::interpreter_calls_with_home(&line, temp.path(), None);
+            assert!(
+                calls.iter().any(|call| {
+                    call.args == ["tool.py", "ordinary data.json"] && call.cwd == cwd
+                }),
+                "{line}: {calls:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn r24_nested_archive_readers_keep_their_own_stdin() {
+        let temp = tempfile::tempdir().unwrap();
+        for (line, expected) in [
+            (
+                r#"bash -c 'printf "%s\n" clean/notes.rs | cpio -o'"#,
+                Some("clean/notes.rs\n"),
+            ),
+            (
+                "printf '%s\\n' clean/notes.rs | bash -c 'producer | cpio -o'",
+                None,
+            ),
+            (
+                "printf '%s\\n' outer | bash -c 'printf \"%s\\n\" inner | cpio -o'",
+                Some("inner\n"),
+            ),
+            (
+                "printf '%s\\n' clean/notes.rs | bash -c 'cpio -o'",
+                Some("clean/notes.rs\n"),
+            ),
+            ("printf '%s\\n' outer | (producer | cpio -o)", None),
+            ("printf '%s\\n' outer | bash -c 'cpio -o < names.txt'", None),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o 00< names.txt'",
+                None,
+            ),
+            ("printf '%s\\n' outer | bash -c 'cpio -o <&3'", None),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o 3< names.txt'",
+                Some("outer\n"),
+            ),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o <<< inner < names.txt'",
+                None,
+            ),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o <<< inner'",
+                Some("inner\n"),
+            ),
+            ("printf '%s\\n' outer | bash -c 'cpio -o <<< $UNSET'", None),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o <<E\n$UNSET\nE'",
+                None,
+            ),
+            (
+                "printf '%s\\n' outer | bash -c 'cpio -o <<E\ninner\nE'",
+                Some("inner\n"),
+            ),
+        ] {
+            let commands = super::unwrapped_commands(line, temp.path(), None);
+            let readers: Vec<_> = commands
+                .iter()
+                .filter(|command| command.args.first().is_some_and(|arg| arg == "cpio"))
+                .collect();
+            assert!(!readers.is_empty(), "{line}");
+            for reader in readers {
+                assert_eq!(reader.input.as_deref(), expected, "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn r24_applescript_shell_separators_preserve_other_characters() {
+        for (body, unread) in [
+            ("do shell script \t\n \"printf hello\"", false),
+            ("do shell script \"printf hello\"\n + suffix", true),
+            ("do shell script\u{a0}\"printf hello\"", true),
+        ] {
+            let (_, actual) = super::applescript_bodies(&["-e".into(), body.into()]);
+            assert_eq!(actual, unread, "{body}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tsk1002_ci1_native_xargs_escapes_are_unverified() {
+        for input in [r"C:\home\.codex\auth.json", r"\\server\home\auth.json"] {
+            assert!(super::xargs_words(input, true).is_none(), "{input}");
+            assert!(super::xargs_words(input, false).is_none(), "{input}");
+        }
+        assert_eq!(
+            super::xargs_words("C:/home/notes.md\n", true),
+            Some(vec!["C:/home/notes.md".to_string()])
+        );
+    }
+
+    /// Every code form the option grammar reads, attached or separate, is
+    /// inspected as a body, so no word leaves the file operands unread
+    /// (review 01, B2: `node --print=CODE`).
+    #[test]
+    fn every_code_position_is_an_inspected_body() {
+        for (command, code) in [
+            ("node --print='CODE1'", "CODE1"),
+            ("node --print 'CODE1'", "CODE1"),
+            ("node --eval='CODE1'", "CODE1"),
+            ("node --eval 'CODE1'", "CODE1"),
+            ("node -p 'CODE1'", "CODE1"),
+            ("node -pe 'CODE1'", "CODE1"),
+            ("node -e 'CODE1'", "CODE1"),
+            ("nodejs --print='CODE1' x", "CODE1"),
+            ("python3 -c 'CODE1'", "CODE1"),
+            ("python3 -cCODE1", "CODE1"),
+            ("python3 -Ic 'CODE1'", "CODE1"),
+            ("perl -e 'CODE1'", "CODE1"),
+            ("perl -neCODE1", "CODE1"),
+            ("perl -E 'CODE1'", "CODE1"),
+            ("ruby -e 'CODE1'", "CODE1"),
+            ("ruby -eCODE1", "CODE1"),
+            ("ruby -w -e 'CODE1'", "CODE1"),
+        ] {
+            let bodies = super::interpreter_bodies(command);
+            assert!(
+                bodies.iter().any(|body| body.contains(code)),
+                "{command}: {bodies:?}"
+            );
+            let words = crate::hooks::git_guard::command_argv(command);
+            let family = super::interpreter_family(&words[0]).unwrap();
+            for at in super::interpreter_code_positions(family, &words[1..]) {
+                assert!(
+                    bodies
+                        .iter()
+                        .any(|body| words[at + 1].ends_with(body.as_str())),
+                    "{command}: position {at} has no body in {bodies:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn interpreter_bodies_remove_shell_quotes_once() {
         for command in [

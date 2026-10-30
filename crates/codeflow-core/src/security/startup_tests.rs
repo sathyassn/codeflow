@@ -2394,3 +2394,23 @@ fn an_expanding_pattern_and_a_preprocessor_root_are_judged() {
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
+
+/// Whether a line names `RIPGREP_CONFIG_PATH` is read once per line, never
+/// once per segment: the read expands the whole line, so asking per
+/// segment made a long chain quadratic (the bounded guard time check in
+/// `hooks_cli`). The verdicts stay the same.
+#[test]
+fn a_long_chain_reads_the_ripgrep_config_name_once() {
+    let f = Fixture::new();
+    let reads = |command: &str| {
+        crate::security::search_pattern::RIPGREP_CONFIG_READS.with(|reads| reads.set(0));
+        let found = f.judge(command);
+        assert!(!refused(&found), "{command}: {found:?}");
+        crate::security::search_pattern::RIPGREP_CONFIG_READS.with(std::cell::Cell::get)
+    };
+    let one = "rg 'a b' docs";
+    let short = reads(one);
+    let long = reads(&vec![one; 40].join(" && "));
+    assert!(short >= 1, "the search path was not reached");
+    assert_eq!(long, short, "reads grew with the segment count");
+}

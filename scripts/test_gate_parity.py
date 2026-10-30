@@ -378,7 +378,7 @@ class GateBinaryControls(unittest.TestCase):
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
                 '--extract-overwrite --no-fail-fast --profile codeflow '
                 '-E "$FILTER"')
-PARTITION_FILTER = "FILTER: ${{ fromJSON(needs.judge.outputs.partitions)[format('{0}', matrix.partition)] }}"
+PARTITION_FILTER = "FILTER: ${{ fromJSON(needs.judge-windows.outputs.partitions)[format('{0}', matrix.partition)] }}"
 ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst"
 
 
@@ -436,16 +436,32 @@ class WindowsPartitionControls(unittest.TestCase):
                 self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
                 self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(workflow))
 
-    def test_a_filter_the_judge_job_did_not_select_is_drift(self):
-        # TSK-1001: the partition filter is the judge job's output for this
-        # partition, refused when empty; a filter the partition job computes
-        # itself, after checking out the pull request, is not the base's.
+    def test_a_filter_the_plan_job_did_not_select_is_drift(self):
+        # TSK-1001: the partition filter is the judge-windows job's output for
+        # this partition, refused when empty; a filter the partition job
+        # computes itself, after checking out the pull request, is not the
+        # base's. TSK-1063: the plan job reads the build's list as data and
+        # runs only the base's planner, in isolated mode.
         self.assertIn(PARTITION_FILTER, WORKFLOW)
+        self.assertEqual(parity.windows_plan_problems(parity.workflow_jobs(WORKFLOW)), [])
+        base_ref = ("          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha "
+                    "|| github.sha }}\n          persist-credentials: false\n      - name: Fetch the archive's test list")
+        self.assertEqual(WORKFLOW.count(base_ref), 1)
         for old, new in ((PARTITION_FILTER, 'FILTER: ${{ matrix.partition }}'),
                          (PARTITION_FILTER, PARTITION_FILTER.replace("outputs.partitions", "outputs.shards")),
-                         ("    needs: [windows-build, judge]\n", "    needs: windows-build\n"),
+                         ("    needs: [windows-build, judge-windows]\n", "    needs: windows-build\n"),
                          ('        run: test -n "$FILTER"\n\n      - name: Fetch the test archive',
-                          '        run: true\n\n      - name: Fetch the test archive')):
+                          '        run: true\n\n      - name: Fetch the test archive'),
+                         # The plan job checks out the pull request, skips the
+                         # drift check, runs its planner outside isolated mode
+                         # or plans without the build's list.
+                         (base_ref, "          persist-credentials: false\n      - name: Fetch the archive's test list"),
+                         ('          python3 -I -B scripts/windows-partitions.py drift --list "$LIST"\n', ''),
+                         ('"python3", "-I", "-B", script, "filter", str(n), "--list"',
+                          '"python3", "-B", script, "filter", str(n), "--list"'),
+                         (', "--list", os.environ["LIST"]]', ']'),
+                         # The partitions run whether or not the plan succeeded.
+                         (" && needs.judge-windows.result == 'success'", "")):
             with self.subTest(new=new):
                 workflow = WORKFLOW.replace(old, new)
                 self.assertNotEqual(workflow, WORKFLOW)

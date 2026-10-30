@@ -64,7 +64,18 @@ description: Land finished work (docs and capability updates, then a PR through 
    Follow the project template and conventional-commit policy; attribute
    measured evidence to its revision and scope. Missing required evidence
    keeps the PR draft. Lint the body with `codeflow ci` before pushing and
-   opening the PR. No AI attribution or emoji.
+   opening the PR. No AI attribution or emoji. On an epic line's PR into
+   its target, `codeflow ci` binds each task of the line at its landing on
+   the line, as that task's own PR into the line was judged. A task of
+   another verified epic line that joined this one, with its tip in the PR
+   head, is judged the same way. Each binding rests on the epic-line proof
+   of the line's own history, so a task that targets `main`, a line tip
+   beyond the PR head, or a line that fails the proof, a workspace root
+   branch included, gets no such binding. Run without a PR body on an
+   `integration/` line that fails the proof, `codeflow ci` judges the line
+   as frozen task work, unless it is the workspace root branch or the range
+   carries only what a planning amendment may; when the selected criteria
+   are frozen, it prints why.
 7. After opening, follow
    [references/pr-evidence.md](references/pr-evidence.md), "After opening":
    no polling by default. Only where the adopted policy requires hosted

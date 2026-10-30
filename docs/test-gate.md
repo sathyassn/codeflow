@@ -19,7 +19,7 @@ target. The selector never substitutes `main` or the previous commit.
 | `--since <rev>` | Resolves this explicit comparison to a commit and requires it to be an ancestor of HEAD |
 | `--all` | Executes every eligible target; landing candidates use this control |
 | `--only <targets>` | Executes named targets and their prerequisites; never creates complete gate evidence |
-| `--config <path>` | Reads the targets from that file instead of `.codeflow/test-config.json`, with no fallback to it or to stack detection; evidence binds to that file's bytes. A missing path, a symbolic link, or a file that is not regular or readable is refused before any target starts. CI uses it to run a trusted copy of the config against a candidate checkout (TSK-1020) |
+| `--config <path>` | Reads the targets from that file instead of `.codeflow/test-config.json`, with no fallback to it or to stack detection; evidence binds to that file's bytes. A missing path, a symbolic link, or a file that is not regular or readable is refused before any target starts. CI can use it to run a trusted copy of the config against a candidate checkout (TSK-1020) |
 | No selection flags | Full executes every target; quick and essential resolve the task's declared line and use per-target evidence |
 
 A qualifying record has a matching config digest and the comparison base's

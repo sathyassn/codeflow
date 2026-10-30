@@ -61,7 +61,7 @@ class GateContracts(unittest.TestCase):
         self.assertIn('cargo nextest archive --workspace --profile codeflow', windows['windows-build'])
         tests = windows['windows-tests']
         self.assertIn('name: windows-junit-${{ matrix.partition }}', tests)
-        self.assertIn('    needs: [windows-build, judge]\n', tests)
+        self.assertIn('    needs: [windows-build, judge-windows]\n', tests)
         self.assertIn('cargo nextest run --archive-file', tests)
         self.assertNotIn('rust-cache', tests)
         self.assertNotIn('cargo build', tests)
@@ -399,9 +399,11 @@ class GateContracts(unittest.TestCase):
     def test_a_pull_request_cannot_narrow_its_own_gate(self):
         # Review 3 SF-1 and review 4: the gate's selection scripts, their
         # data, the journey map and the floor config come from the base
-        # revision. The shards' and partitions' filters are computed by the
-        # `judge` job, which checks out the base and runs no pull request
-        # code, and reach those jobs only as job outputs. Jobs that judge
+        # revision. The shards' filters are computed by the `judge` job and
+        # the partitions' by the `judge-windows` job (from the build's test
+        # list, read as data); both check out the base and run no pull
+        # request code, and the filters reach the shard and partition jobs
+        # only as job outputs. Jobs that judge
         # results unpack the base's judge files beside the checkout (one
         # pinned step) and run them in isolated mode. Every judge script runs
         # under `-I -B`, so neither the environment nor a planted module
@@ -419,7 +421,7 @@ class GateContracts(unittest.TestCase):
                     for use in re.finditer(r'(\S*)' + judges.pattern, line)]
             for line, use in uses:
                 with self.subTest(job=name, use=use.group(0)):
-                    if name == 'judge':
+                    if name in ('judge', 'judge-windows'):
                         self.assertIn("ref: ${{ github.event_name == 'pull_request' && "
                                       "github.event.pull_request.base.sha || github.sha }}", body)
                         continue
@@ -433,13 +435,15 @@ class GateContracts(unittest.TestCase):
         for name in ('gates-coverage', 'windows-tests'):
             with self.subTest(job=name):
                 self.assertNotRegex(code(jobs[name]), judges, 'the shard and partition jobs only read the selection')
-                self.assertIn('judge]', jobs[name].split('    needs: ', 1)[1].split('\n', 1)[0])
+                self.assertRegex(jobs[name].split('    needs: ', 1)[1].split('\n', 1)[0], r'judge(-windows)?\]$')
         self.assertIn('--floor-from "$CODEFLOW_JUDGE/.codeflow/test-config.json"', workflow)
         for path in PARITY.JUDGE_FILES:
             self.assertTrue((ROOT / path).exists(), path)
         judge_step = '\n'.join(line[10:] for line in PARITY.JUDGE_STEP.split('        run: |\n', 1)[1].splitlines())
-        select = code(jobs['judge']).split('        run: |\n', 1)[1]
-        select = '\n'.join(line[10:] for line in select.splitlines())
+        def run_block(job):
+            block = code(jobs[job]).split('        run: |\n', 1)[1]
+            return '\n'.join(line[10:] for line in block.splitlines())
+        select, plan = run_block('judge'), run_block('judge-windows')
         import shutil
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
@@ -490,14 +494,24 @@ class GateContracts(unittest.TestCase):
                                          capture_output=True, text=True)
                     self.assertEqual(ran.returncode, 0, ran.stderr[-2000:])
                     self.assertRegex(ran.stderr, r'Ran [1-9]\d* tests')
+            # The build's test list, as the Windows build writes it: every
+            # measured test, so the drift check passes on the real data.
+            windows = json.loads(read('scripts/windows-test-times.json'))
+            listing = temp / 'windows-test-list' / 'windows-tests.json'
+            listing.parent.mkdir()
+            listing.write_text(json.dumps({'rust-suites': {
+                binary: {'testcases': {name: {'ignored': False} for name in names}}
+                for binary, names in windows['names'].items()}}))
             expected = {}
-            for name, script in (('shards', 'coverage-shards.py'), ('partitions', 'windows-partitions.py')):
-                data = json.loads(read(f'scripts/{"coverage" if name == "shards" else "windows"}-test-times.json'))
+            for name, script, data, extra in (
+                    ('shards', 'coverage-shards.py', 'coverage', []),
+                    ('partitions', 'windows-partitions.py', 'windows', ['--list', str(listing)])):
+                count = int(json.loads(read(f'scripts/{data}-test-times.json'))['partitions'])
                 expected[name] = {str(n): subprocess.run(['python3', '-I', '-B', str(ROOT / 'scripts' / script),
-                                                          'filter', str(n)], check=True, capture_output=True,
+                                                          'filter', str(n), *extra], check=True, capture_output=True,
                                                          text=True).stdout.strip()
-                                  for n in range(1, int(data['partitions']) + 1)}
-                ran = subprocess.run(['python3', '-I', '-B', str(judge / 'scripts' / script), 'filter', '1'],
+                                  for n in range(1, count + 1)}
+                ran = subprocess.run(['python3', '-I', '-B', str(judge / 'scripts' / script), 'filter', '1', *extra],
                                      cwd=outside, capture_output=True, text=True, check=True)
                 self.assertEqual(ran.stdout.strip(), expected[name]['1'])
             # The checkout keeps the pull request's copies for the code under test.
@@ -518,18 +532,28 @@ class GateContracts(unittest.TestCase):
                 output = Path(directory) / 'output'
                 output.write_text('')
                 ran = subprocess.run(['bash', '-c', script], cwd=cwd, capture_output=True, text=True,
-                                     env={**hostile, 'GITHUB_OUTPUT': str(output)})
+                                     env={**hostile, 'GITHUB_OUTPUT': str(output), 'RUNNER_TEMP': str(temp)})
                 found = dict(line.split('=', 1) for line in output.read_text().splitlines())
                 return ran, {key: json.loads(value) for key, value in found.items()}
-            ran, found = selection(select, checkout)
-            self.assertEqual(ran.returncode, 0, ran.stderr)
-            self.assertEqual(found, expected)
-            # Controls: without isolation the planted module runs, and the
-            # pull request's own scripts would select one trivial test.
-            ran, _ = selection(select.replace('python3 -I -B -', 'python3 -B -'), checkout)
-            self.assertIn('planted module ran', ran.stderr)
-            ran, found = selection(select, repo)
-            self.assertNotEqual(found, expected)
+            for label, script, key in (('judge', select, 'shards'), ('judge-windows', plan, 'partitions')):
+                with self.subTest(job=label):
+                    ran, found = selection(script, checkout)
+                    self.assertEqual(ran.returncode, 0, ran.stderr)
+                    self.assertEqual(found, {key: expected[key]})
+                    # Controls: without isolation the planted module runs,
+                    # and the pull request's own scripts would select one
+                    # trivial test.
+                    ran, _ = selection(script.replace('python3 -I -B -', 'python3 -B -'), checkout)
+                    self.assertIn('planted module ran', ran.stderr)
+                    ran, found = selection(script, repo)
+                    self.assertNotEqual(found, {key: expected[key]})
+            # The plan refuses a list the measurements no longer cover
+            # (the drift check runs before any partition is planned).
+            listing.write_text(json.dumps({'rust-suites': {'codeflow-cli::new_binary': {'testcases': {
+                f'new_{n}': {'ignored': False} for n in range(5000)}}}}))
+            ran, found = selection(plan, checkout)
+            self.assertNotEqual(ran.returncode, 0)
+            self.assertEqual(found, {})
 
     def test_trusted_jobs_save_no_cache_and_install_pinned_wheels_only(self):
         # Review 4 SEC-4 and install hardening: a pull_request_target job

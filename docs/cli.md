@@ -86,7 +86,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--force` | Overwrite existing files (never the default). |
 | | `--workspace` | Set up an umbrella workspace: put the root checkout on its root branch (created from the default branch if missing), write `git.root_branch`, and ignore every nested git repository. Refuses over uncommitted changes. |
 | `codeflow update` | | Refresh managed scaffold files (3-way merge; never clobbers) |
-| | `--diff <FILE>` | Write the report plus unified diffs of applied changes to a file. |
+| | `--diff <FILE>` | Write the report plus each applied change to a file. The export never shows a value, key name or line from the project's files or the recorded baseline: JSON, TOML and YAML list the changed key paths with the shipped value and a marker for the project's side; text shows the shipped lines written and counts the rest; any other format, or a file that does not parse, is withheld. |
 | | `--force` | Replace user-modified managed files instead of merging. |
 | | `--pin <VERSION>` | Only pin this codeflow release for CI: download its archives, check them against its sha256.sum and write `scaffold_version` and their digests (`[scaffold_sha256]`) to .codeflow/project.toml. Nothing else changes. The version must read as MAJOR.MINOR.PATCH with an optional -prerelease and +build; any other is refused before a download. Upgrade step one; land it before the update. |
 | `codeflow epic new <TITLE>` | | Allocate the next `EPC-NNN` and scaffold the epic from the template |
@@ -126,6 +126,8 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--revisit <REVISIT>` | The event that revisits the blocker. |
 | | `--scope <SCOPE>` | Where a cancelled record's scope went. |
 | | `--acceptance <FILE>` | A file holding the acceptance block to add to the Closeout on completion: the YAML between the fences, starting with a top-level `acceptance:` key that holds `reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`. |
+| | `--base <REF>` | The receiving target's tip a task completion binds against, such as `origin/main`. In a clone with remotes, `task status` grants landing, stacking and waiver authority only with `--base` and `--into`, because any process in the clone can change the git settings that would otherwise decide it; hosted CI pins its own base and is the authority. |
+| | `--into <BRANCH>` | The receiving target's branch name, such as `main`; given with `--base`. |
 | `codeflow adr new <TITLE>` | | Number the next ADR and write it from the template as `proposed` |
 | | `<TITLE>` | Decision title. |
 | `codeflow ids seed` | | Register every id on every ref and in retained history, once (maintainer) |
@@ -228,10 +230,10 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
 | | `--merge` | Preserve the source head with a no-fast-forward merge commit. |
-| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, git-config-includes, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
+| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
-| | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable. |
+| | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
 | `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
 | | `--json` | Print the same facts as JSON. |

@@ -937,18 +937,18 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
         "the orchestrator skill must expose independent discovery in its description"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("twenty-three health checks"),
+        normalize_whitespace(&capabilities).contains("twenty-four health checks"),
         "CAP-008 must count the policy-source doctor check"
     );
     let readme = normalize_whitespace(&read("README.md"));
     let architecture = normalize_whitespace(&read("docs/architecture.md"));
     assert!(
-        readme.contains("Health checks (23): hooks, claude, codex, grok, startup-files, git-config-includes, config"),
+        readme.contains("Health checks (24): hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config"),
         "README must list the grok doctor check"
     );
     assert!(
         architecture.contains(
-            "23 checks: hooks, claude, codex, grok, startup-files, git-config-includes, config"
+            "24 checks: hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config"
         ),
         "architecture must list the grok doctor check"
     );
@@ -1540,9 +1540,35 @@ fn records_and_planning_name_deliverables_and_homes() {
     let plan = normalize_whitespace(&read("assets/base/agents/skills/cf-plan/SKILL.md"));
     assert!(
         plan.contains(
-            "Before materializing records, check that every task names its deliverables and their homes (checklist item 6) against the project's structure authority"
+            "that every task names its deliverables and their homes (checklist item 6) against the project's structure authority"
         ),
         "cf-plan lost the deliverables check"
+    );
+    // TSK-435: the value line lives under `## Outcome` in both templates,
+    // and both skills name it there; an epic carries its own Deliverables.
+    assert!(
+        plan.contains(
+            "check that every epic and task states its value line under `## Outcome` (checklist item 2)"
+        ),
+        "cf-plan lost the Outcome check"
+    );
+    assert!(
+        method.contains("Its home is the record's `## Outcome` section"),
+        "cf-method lost the Outcome home"
+    );
+    for (name, template) in [("task", &task), ("epic", &epic)] {
+        assert!(
+            template.contains("\"after this merges, <who> can <do what>\""),
+            "{name} template lost the Outcome comment"
+        );
+    }
+    let raw_epic = read("assets/base/pm/epic.md.tmpl");
+    let at = |heading: &str| raw_epic.find(heading).unwrap_or(usize::MAX);
+    assert!(
+        at("\n## Summary\n") < at("\n## Outcome\n")
+            && at("\n## Outcome\n") < at("\n## Deliverables\n")
+            && at("\n## Deliverables\n") < at("\n## Acceptance Criteria\n"),
+        "the epic template carries Summary, Outcome, Deliverables, criteria in order"
     );
 }
 
@@ -2870,8 +2896,62 @@ const LIVE_STATE_OBLIGATIONS: &[LiveStateObligation] = &[
     LiveStateObligation {
         path: "assets/base/rules/workflow-discipline.md",
         section: "Check changeable state live",
-        clause: "say the fact is unverified and give the time of the last check,",
-        reversed: "state the last known value as current,",
+        clause: "**When a live check is impossible,** say the fact is unverified and give the time of the last check,",
+        reversed: "**When a live check is impossible,** state the last known value as current,",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "This is the one statement of how a session treats state that can change; other files point here.",
+        reversed: "This is one of several statements of how a session treats state that can change; other files may restate it.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "Changeable state is anything that can differ from the last time you looked: seat and model availability and usage limits; tools, MCP servers and credentials; CI runs, required checks and rulesets; PR, branch and integration-line state; task record status; host load and locks; and other agents' progress.",
+        reversed: "Changeable state is limited to seat and model availability.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**Check it at the moment of use.**",
+        reversed: "**Check it once per session.**",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "Before you state such a fact, route on it or act on it, check it live with a probe that observes it now:",
+        reversed: "Before you state such a fact, route on it or act on it, rely on the last result you saw:",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**A fresh check is not a retry.**",
+        reversed: "**A fresh check is a retry.**",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "\"Navigate blockers\" bounds recovery within one attempt: one confirmation of a failure, then a new hypothesis, never the same retry unchanged.",
+        reversed: "\"Navigate blockers\" allows unlimited recovery within one attempt: repeat the same failed probe unchanged.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**Facts bound to an immutable identity need no re-check.**",
+        reversed: "**Facts bound to an immutable identity are trusted for good.**",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**An earlier result is a lead, never a fact.**",
+        reversed: "**An earlier result is a fact.**",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "**Resume, compaction and summaries change nothing.**",
+        reversed: "**Resume, compaction and summaries refresh every fact.**",
     },
     LiveStateObligation {
         path: "assets/base/rules/workflow-discipline.md",
@@ -2890,6 +2970,42 @@ const LIVE_STATE_OBLIGATIONS: &[LiveStateObligation] = &[
         section: "Check changeable state live",
         clause: "The content at a commit SHA, a merged PR's merge commit or a finished run's recorded result stays true.",
         reversed: "The content at a commit SHA, a merged PR's merge commit or a finished run's recorded result is checked again at each use.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "What can change is whether that identity is still the one that matters, such as where a branch points now; check that live.",
+        reversed: "What can change is whether that identity is still the one that matters, such as where a branch points now; never check that live.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "Each claim and routing decision gets its own check.",
+        reversed: "One check covers every claim and routing decision in the session.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "If it fails, that decision takes its fallback with no further retries; if it succeeds, the decision uses the recovered state.",
+        reversed: "If it fails, that decision keeps retrying; if it succeeds, the decision keeps the earlier result.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "A previous probe, an error or usage-limit message, a peer's report or a note in a record tells you where to look.",
+        reversed: "A previous probe, an error or usage-limit message, a peer's report or a note in a record establishes the current state.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "It never establishes the current state, and a stated expiry or reset time is not proof that the state still holds.",
+        reversed: "It establishes the current state until a stated expiry or reset time passes.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "Never present it as current.",
+        reversed: "Present it as current.",
     },
     LiveStateObligation {
         path: "assets/base/rules/workflow-discipline.md",
@@ -2918,8 +3034,14 @@ const LIVE_STATE_OBLIGATIONS: &[LiveStateObligation] = &[
     LiveStateObligation {
         path: "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
         section: "Invariants",
-        clause: "A seat recorded unavailable is probed live again before every later assignment and review routing;",
-        reversed: "A seat recorded unavailable stays unavailable for later assignments and review routing;",
+        clause: "A seat recorded unavailable is probed live again before every later assignment and review routing; an earlier failure or usage-limit message is a lead, never a fact.",
+        reversed: "A seat recorded unavailable stays unavailable for later assignments and review routing; an earlier failure or usage-limit message settles it.",
+    },
+    LiveStateObligation {
+        path: "assets/base/agents/skills/cf-model-orchestrator/resources/quality/plan.md",
+        section: "Plan fields",
+        clause: "A recorded exclusion is a lead for the next routing decision, never a fact: that decision probes the route live first",
+        reversed: "A recorded exclusion holds for every later routing decision in the task",
     },
     LiveStateObligation {
         path: "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
@@ -2981,25 +3103,111 @@ fn live_state_files() -> BTreeMap<&'static str, BTreeMap<String, String>> {
         .collect()
 }
 
-/// TSK-455 review round 1: the operative clauses, not their headings, are
-/// pinned inside their sections, and a reversed wording of each one fails.
+/// TSK-455 review rounds 1 and 3: the operative clauses, not their headings,
+/// are pinned inside their sections, and a reversed or removed wording of
+/// each one fails.
 #[test]
 fn live_state_obligations_hold_and_a_reversed_clause_fails() {
     let files = live_state_files();
     assert_eq!(live_state_gaps(&files), Vec::<String>::new());
     for duty in LIVE_STATE_OBLIGATIONS {
+        for (change, replacement) in [("reversing", duty.reversed), ("removing", "")] {
+            let mut mutated = files.clone();
+            let body = mutated
+                .get_mut(duty.path)
+                .and_then(|sections| sections.get_mut(duty.section))
+                .expect("section present");
+            *body = body.replace(duty.clause, replacement);
+            let gaps = live_state_gaps(&mutated);
+            assert!(
+                gaps.iter().any(|gap| gap.ends_with(duty.clause)),
+                "{change} {:?} in {} must fail the check",
+                duty.clause,
+                duty.path
+            );
+        }
+    }
+}
+
+/// A section whose every sentence is accounted for: each is an obligation
+/// above or one of these non-operative fragments (a label, an example), so
+/// a sentence added or left out of the table fails the coverage check.
+struct CoveredSection {
+    path: &'static str,
+    section: &'static str,
+    non_operative: &'static [&'static str],
+}
+
+/// The rule's one home (TSK-455 AC-1), sentence by sentence.
+const LIVE_STATE_COVERED: &[CoveredSection] = &[CoveredSection {
+    path: "assets/base/rules/workflow-discipline.md",
+    section: "Check changeable state live",
+    non_operative: &[
+        "**What counts.**",
+        "a command, an API read or a native canary.",
+        "for example \"Codex unverified, last probed at 14:05\".",
+    ],
+}];
+
+/// What a covered section holds beyond its obligations and listed
+/// non-operative fragments, each of which must occur in it exactly once;
+/// list markers and whitespace are not content.
+fn coverage_residue(
+    files: &BTreeMap<&str, BTreeMap<String, String>>,
+    covered: &CoveredSection,
+) -> String {
+    let mut body = files
+        .get(covered.path)
+        .and_then(|sections| sections.get(covered.section))
+        .cloned()
+        .unwrap_or_default();
+    let clauses = LIVE_STATE_OBLIGATIONS
+        .iter()
+        .filter(|duty| duty.path == covered.path && duty.section == covered.section)
+        .map(|duty| duty.clause);
+    let mut repeated = Vec::new();
+    for fragment in clauses.chain(covered.non_operative.iter().copied()) {
+        if body.matches(fragment).count() > 1 {
+            repeated.push(fragment);
+        }
+        body = body.replace(fragment, "");
+    }
+    let rest = body
+        .split_whitespace()
+        .filter(|word| *word != "-")
+        .collect::<Vec<_>>()
+        .join(" ");
+    if repeated.is_empty() {
+        rest
+    } else {
+        format!("{rest} [repeated: {repeated:?}]")
+    }
+}
+
+/// TSK-455 review round 4: every sentence of the rule's home is an
+/// obligation or a listed non-operative fragment, and an unlisted sentence
+/// added to the section fails.
+#[test]
+fn every_sentence_of_the_live_state_home_is_accounted_for() {
+    let files = live_state_files();
+    for covered in LIVE_STATE_COVERED {
+        assert_eq!(
+            coverage_residue(&files, covered),
+            "",
+            "{} \"{}\" holds a sentence that is neither pinned nor listed as non-operative",
+            covered.path,
+            covered.section
+        );
         let mut mutated = files.clone();
-        let body = mutated
-            .get_mut(duty.path)
-            .and_then(|sections| sections.get_mut(duty.section))
-            .expect("section present");
-        *body = body.replace(duty.clause, duty.reversed);
-        let gaps = live_state_gaps(&mutated);
+        mutated
+            .get_mut(covered.path)
+            .and_then(|sections| sections.get_mut(covered.section))
+            .expect("section present")
+            .push_str(" Agents may skip the check when they are busy.");
         assert!(
-            gaps.iter().any(|gap| gap.ends_with(duty.clause)),
-            "reversing {:?} in {} must fail the check",
-            duty.clause,
-            duty.path
+            coverage_residue(&mutated, covered).contains("skip the check"),
+            "an unlisted sentence in {} must fail the coverage check",
+            covered.path
         );
     }
 }

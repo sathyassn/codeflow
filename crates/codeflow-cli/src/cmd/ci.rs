@@ -320,6 +320,7 @@ fn ci_environment(
         "GITHUB_HEAD_REF",
         "GITHUB_EVENT_NAME",
         "CI_MERGE_REQUEST_DIFF_BASE_SHA",
+        "CI_MERGE_REQUEST_TARGET_BRANCH_SHA",
         "CI_COMMIT_SHA",
         "BITBUCKET_PR_DESTINATION_COMMIT",
         "BITBUCKET_COMMIT",
@@ -657,6 +658,13 @@ pub fn run(args: &CiArgs) -> i32 {
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     if scope_ready {
+        let target_tip = target_tip(
+            &root,
+            &line_target,
+            args.into.as_deref(),
+            &names,
+            &environment,
+        );
         record_checks(
             &root,
             &base_candidates,
@@ -674,6 +682,7 @@ pub fn run(args: &CiArgs) -> i32 {
             },
             &names,
             &line_target,
+            &target_tip,
             &mut tagged,
             &mut ran,
         );
@@ -1343,6 +1352,7 @@ fn record_checks(
     on_line: bool,
     names: &Names<'_>,
     line_target: &str,
+    target_tip: &Result<String, NoTarget>,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -1400,10 +1410,135 @@ fn record_checks(
         authority,
         on_line,
         brought.as_ref(),
+        target_tip,
         tagged,
         ran,
     );
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
+}
+
+/// The tip of `target`, the branch the range lands on, which the Outcome
+/// adoption marker is judged against (TSK-435). It comes from an identity
+/// the change cannot choose, never from `--base`, which the pre-push hook
+/// sets to a merge-base and any caller can set to any commit, and never
+/// from a ref the change's author can write without a fetch:
+///
+/// - the destination's advertisement the pre-push hook hands over, for the
+///   target the hook names with `--into` (`handed`), by the same rule that
+///   bounds the push's range, else the destination's default branch; a
+///   declaration the range rejected never names it, and a destination with
+///   no branch holds no list, so it refuses;
+/// - the hosting platform's target commit (GitLab
+///   `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, Bitbucket
+///   `BITBUCKET_PR_DESTINATION_COMMIT`);
+/// - otherwise the target's remote-tracking ref, which GitHub's checkout
+///   and the shipped GitLab and Bitbucket jobs fetch, then its local
+///   branch; the git guard keeps agents from moving either for a
+///   protected branch.
+///
+/// A target with no tip from these sources is never treated as absent:
+/// without it the head's own list would decide its own exemptions. The
+/// error says what is missing and how to supply it, and the check refuses.
+fn target_tip(
+    root: &Path,
+    target: &str,
+    handed: Option<&str>,
+    names: &Names<'_>,
+    environment: &BTreeMap<String, String>,
+) -> Result<String, NoTarget> {
+    if let (Some(url), Some(listed)) = (names.destination, names.advertisement) {
+        let destination = codeflow_core::workgraph::release_line::from_advertisement(url, listed)
+            .map_err(NoTarget::read)?;
+        let branch = match handed {
+            Some(handed) => named_branch(handed).unwrap_or_else(|| handed.to_string()),
+            None => match &destination.default {
+                Some((name, _)) => name.clone(),
+                None => {
+                    return Err(NoTarget {
+                        message: "the destination has no branch yet, so it holds no list to judge the marker against".into(),
+                        remedy: "push the branch this work lands on to the destination first, then push this branch".into(),
+                    })
+                }
+            },
+        };
+        let shown = codeflow_core::git::display_text(&branch);
+        let advertised = destination
+            .heads
+            .iter()
+            .chain(destination.default.iter())
+            .any(|(name, _)| *name == branch);
+        if !advertised {
+            return Err(NoTarget {
+                message: format!(
+                    "the destination does not advertise the target branch '{shown}', so it holds no list to judge the marker against"
+                ),
+                remedy: format!(
+                    "push '{shown}' to this destination before the work that lands on it (a new line goes first), or push to the destination that holds it; a fork fetches the upstream '{shown}' and pushes it to the fork first"
+                ),
+            });
+        }
+        return codeflow_core::workgraph::release_line::advertised_tip_here(
+            root,
+            &destination,
+            &branch,
+        )
+        .map(|tip| tip.to_string())
+        .map_err(NoTarget::read);
+    }
+    for key in [
+        "CI_MERGE_REQUEST_TARGET_BRANCH_SHA",
+        "BITBUCKET_PR_DESTINATION_COMMIT",
+    ] {
+        if let Some(sha) = environment.get(key).filter(|sha| !sha.is_empty()) {
+            return rev_parse(root, sha)
+                .map_err(NoTarget::read)?
+                .ok_or_else(|| NoTarget {
+                    message: format!("{key} '{sha}' names no commit here"),
+                    remedy: "fetch the target commit the platform names into this clone, then rerun `codeflow ci`".into(),
+                });
+        }
+    }
+    let branch = named_branch(target).unwrap_or_else(|| target.to_string());
+    let anchors = [
+        format!("refs/remotes/origin/{branch}"),
+        format!("refs/heads/{branch}"),
+    ];
+    if let Some(tip) = resolve_base(root, &anchors).map_err(NoTarget::read)? {
+        return Ok(tip);
+    }
+    let shown = codeflow_core::git::display_text(&branch);
+    let remedy = if origin_url(root).map_err(NoTarget::read)?.is_some() {
+        format!(
+            "fetch it (`git fetch origin {shown}`), or name the branch this work lands on with `--into <branch>`"
+        )
+    } else {
+        format!(
+            "a repository with no remote judges the marker against its local '{shown}': create that branch, or name the branch this work lands on with `--into <branch>`"
+        )
+    };
+    Err(NoTarget {
+        message: format!(
+            "the tip of the target branch '{shown}' cannot be resolved here, so no list exists to judge the marker against"
+        ),
+        remedy,
+    })
+}
+
+/// Why the target's tip, the Outcome marker's authority, is not available,
+/// and how the user supplies it.
+pub(super) struct NoTarget {
+    pub(super) message: String,
+    pub(super) remedy: String,
+}
+
+impl NoTarget {
+    /// A Git or advertisement read that failed.
+    fn read(error: String) -> Self {
+        Self {
+            message: error,
+            remedy: "repair the Git read the message names, then retry".into(),
+        }
+    }
 }
 
 /// The resolved target for the line proof, using the repository default

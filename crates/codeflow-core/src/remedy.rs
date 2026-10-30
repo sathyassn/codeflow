@@ -61,20 +61,99 @@ impl Clearing {
         Remedy(self.text.to_string())
     }
 
-    /// The remedy with each `{key}` replaced by its value.
+    /// The remedy with each `{key}` replaced by its value, in one pass over
+    /// the catalogued text. Only that text is read as template syntax: a
+    /// value is copied as it is, so a brace in a path neither fills nor
+    /// trips a placeholder check, and no check message quotes a value
+    /// (TSK-1029).
     #[must_use]
     pub fn with(&'static self, fills: &[(&str, &str)]) -> Remedy {
-        let mut text = self.text.to_string();
-        for (key, value) in fills {
-            text = text.replace(&format!("{{{key}}}"), value);
+        let mut text = String::with_capacity(self.text.len());
+        for piece in self.pieces() {
+            match piece {
+                Piece::Fixed(fixed) => text.push_str(fixed),
+                Piece::Key(key) => {
+                    let fill = fills.iter().find(|(name, _)| *name == key);
+                    debug_assert!(fill.is_some(), "{} has no fill for {{{key}}}", self.name);
+                    if let Some((_, value)) = fill {
+                        text.push_str(value);
+                    } else {
+                        text.push('{');
+                        text.push_str(key);
+                        text.push('}');
+                    }
+                }
+            }
         }
-        debug_assert!(
-            !text.contains('{'),
-            "{} left a placeholder: {text}",
-            self.name
-        );
         Remedy(text)
     }
+
+    /// The remedy with each `{path}` filled by `path`, as [`Shown`] text,
+    /// for a warning inside the display boundary of `codeflow update`
+    /// (TSK-1029). Only the catalogued text is read as template syntax.
+    ///
+    /// [`Shown`]: crate::scaffold::Shown
+    #[must_use]
+    pub fn shown_for(&'static self, path: &std::path::Path) -> crate::scaffold::Shown {
+        use crate::scaffold::Shown;
+        let mut text = Shown::default();
+        for piece in self.pieces() {
+            match piece {
+                Piece::Fixed(fixed) => text.push(&Shown::fixed(fixed)),
+                Piece::Key(key) => {
+                    debug_assert!(key == "path", "{} has a {{{key}}} to fill", self.name);
+                    text.push(&Shown::path(path));
+                }
+            }
+        }
+        text
+    }
+
+    /// The catalogued text split into fixed runs and `{key}` placeholders.
+    /// Every `{` in a catalogue entry opens a placeholder
+    /// (`every_catalogue_brace_opens_a_named_placeholder` checks).
+    fn pieces(&'static self) -> Vec<Piece> {
+        let mut pieces = Vec::new();
+        let mut rest = self.text;
+        while let Some(open) = rest.find('{') {
+            let Some(close) = rest[open..].find('}') else {
+                break;
+            };
+            pieces.push(Piece::Fixed(&rest[..open]));
+            pieces.push(Piece::Key(&rest[open + 1..open + close]));
+            rest = &rest[open + close + 1..];
+        }
+        pieces.push(Piece::Fixed(rest));
+        pieces
+    }
+}
+
+/// A run of a catalogued remedy text: fixed text, or a placeholder's key.
+enum Piece {
+    Fixed(&'static str),
+    Key(&'static str),
+}
+
+/// A warning or note in the form [`Finding::line`] writes, built from
+/// [`Shown`] text: what was found, then the catalogued step that clears it
+/// (TSK-1029).
+///
+/// [`Shown`]: crate::scaffold::Shown
+#[must_use]
+pub fn shown_line(
+    plane: &'static str,
+    kind: &'static str,
+    text: &crate::scaffold::Shown,
+    remedy: &crate::scaffold::Shown,
+) -> crate::scaffold::Shown {
+    use crate::scaffold::Shown;
+    crate::shown!(
+        "{}: {}: {}\n  clear it: {}",
+        Shown::fixed(plane),
+        Shown::fixed(kind),
+        text,
+        remedy
+    )
 }
 
 /// A rendered remedy, made only from a [`Clearing`], or from the sanctioned
@@ -126,6 +205,14 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// Order findings by what they say, reading an id in the text by its
+    /// number (`TSK-999` before `TSK-1000`), then by remedy.
+    #[must_use]
+    pub fn by_text(&self, other: &Self) -> std::cmp::Ordering {
+        crate::ids::compare_ids(&self.text, &other.text)
+            .then_with(|| self.remedy.cmp(&other.remedy))
+    }
+
     /// A finding and its remedy.
     #[must_use]
     pub fn new(text: impl Into<String>, remedy: Remedy) -> Self {
@@ -222,6 +309,12 @@ catalog! {
     /// An open task that names no deliverables (sathyassn/codeflow#40).
     TASK_DELIVERABLES = Step::Edit("{path}"),
         "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`, or name the path the task changes in its Description; a home not known yet is marked provisional with what decides it";
+    /// An open record with no filled Outcome section (TSK-435).
+    RECORD_OUTCOME = Step::Edit("{path}"),
+        "in {path}, add one line under `## Outcome`, between the Description (or Summary) and the Deliverables: after this merges, <who> can <do what>";
+    /// An epic created after adoption that names no deliverables (TSK-435).
+    EPIC_DELIVERABLES = Step::Edit("{path}"),
+        "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`; a home not known yet is marked provisional with what decides it";
     /// A documentation layer the project does not have.
     DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
         "run `codeflow update`, which restores {path} at this project's tier";
@@ -291,6 +384,11 @@ catalog! {
     /// range (SPC-013 R-52, TSK-248): evidence, not a refusal.
     LINE_ADOPTION_OUTSIDE_RANGE = Step::Codeflow("codeflow ci"),
         "nothing to change: the entry adopts nothing in this range, and `codeflow ci` still refuses any direct commit in it that no entry adopts; a human reviewer confirms the entry names a commit that landed earlier, and a planning pull request that removes it from `line_adoptions` in {epic} ends this note";
+    /// An `integration/` head judged without a pull request body that fails
+    /// the epic-line proof, so its completions bind at the range head with
+    /// frozen criteria (TSK-433 AC-7).
+    UNVERIFIED_LINE_FROZEN = Step::Codeflow("codeflow ci"),
+        "land work on the line only by classified pull requests, and adopt each direct commit with a `line_adoptions` entry in its epic that a human reviewer approves in a planning pull request that lands on the line, so the line passes the epic-line proof; then rerun `codeflow ci`";
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";
@@ -550,6 +648,9 @@ catalog! {
     /// A project without its codeflow configuration.
     DOCTOR_INIT = Step::Codeflow("codeflow init"),
         "run `codeflow init` in the project root";
+    /// A project without the Outcome section's adoption marker (TSK-435).
+    DOCTOR_OUTCOME_MARKER = Step::Codeflow("codeflow update"),
+        "run `codeflow update`, which writes `outcome_present_uids` to .codeflow/project.toml once, listing the task and epic records present now; those only warn without an `## Outcome` section, and later ones must state it";
     /// A tool doctor looks for on PATH and does not find.
     DOCTOR_TOOL_MISSING = Step::Codeflow("codeflow doctor"),
         "install {tool} on PATH, then `codeflow doctor --check {check}` confirms it";
@@ -570,6 +671,9 @@ catalog! {
     /// Directories a full gate writes that this process cannot write.
     DOCTOR_GATE_DIRS = Step::Edit(".claude/settings.json"),
         "make {paths} writable for the process that runs the full gate: inside the Claude Code sandbox the operator adds them to `sandbox.filesystem.allowWrite` in `.claude/settings.json` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs `codeflow test --mode full` outside the sandbox; then `codeflow doctor --check permissions` confirms it";
+    /// Gate directories a Codex seat cannot write (TSK-337).
+    DOCTOR_GATE_DIRS_CODEX = Step::Codeflow("codeflow doctor --preflight"),
+        "this runs in a Codex sandbox, which cannot write {paths}. A review seat's `cf-guard` profile grants none of them, by design, so run `codeflow reserve` and quick-mode heavy targets in a builder seat; full gates stay with the primary. The operator, or the session that launched the seat, relaunches the builder seat with the Codex builder launch in cf-model-orchestrator's `resources/routing/transport.md`, from the main checkout root: its override grants `~/.codeflow/locks` and its `cf-builder` profile writes the common `.git`. Outside the seat, `codeflow doctor --preflight` checks that launch, and `codeflow doctor --check permissions` in the relaunched seat confirms it";
     /// A state the sandbox hides from doctor.
     DOCTOR_SANDBOX_UNSEEN = Step::Codeflow("codeflow doctor"),
         "the operator runs `codeflow doctor --check {check}` outside the sandbox, in a separate terminal, to confirm {what}";
@@ -588,6 +692,12 @@ catalog! {
     /// manages.
     DOCTOR_GROK_MISSING_GUARD = Step::Edit("{path}"),
         "`codeflow update` does not restore the shell guard in {path}: in it, add the shipped guard group this finding quotes to the `PreToolUse` list under `hooks`, exactly as quoted, creating the file with that list if it does not exist; then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
+    /// A `CodeFlow` guard hook entry a harness reads without the shipped
+    /// `timeout`, or a Claude one without `"onFailure": "block"`, so a
+    /// guard that does not answer in time can let the tool call through
+    /// (TSK-1082).
+    DOCTOR_GUARD_TIMEOUTS = Step::Codeflow("codeflow update"),
+        "run `codeflow update`, which gives the CodeFlow guard entries in `.claude/settings.json` the shipped fields and moves `.grok/hooks/codeflow.json` and `.codex/hooks.json` to them by a 3-way merge (where your edit overlaps, it writes a `.new` file beside the file: resolve it in favour of the shipped fields and delete it). In a file update does not manage, such as `.claude/settings.local.json`, set each named entry's `timeout` to {timeout}, and in Claude settings its `onFailure` to `block`, by hand. Codex asks you to approve a changed hook again in `/hooks`. Then `codeflow doctor --check guard-timeouts` confirms it";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";
@@ -717,6 +827,10 @@ catalog! {
     /// does not pass the payload through unchanged.
     GUARD_PAYLOAD_MALFORMED = Step::Edit("{path}"),
         "make the hook entry that runs `codeflow hook {guard}` pass the harness payload on stdin unchanged, in {path}; the next tool call is then read";
+    /// A session guard that reached no decision before its own deadline,
+    /// so it refused rather than let the harness time it out (TSK-1082).
+    GUARD_DEADLINE = Step::Codeflow("codeflow doctor"),
+        "retry the command; if the guard stalls again, something it reads blocks, such as a FIFO or device a git configuration include names, or a hung filesystem: `codeflow doctor --check git-config-includes` names the include files, and the operator repairs or removes the one that blocks";
     /// A session summary that could not be written.
     SESSION_SUMMARY_UNWRITTEN = Step::Edit("{path}"),
         "{repair}: {path}; the session ledger lives under git's common directory, and the next session end writes it";
@@ -735,6 +849,10 @@ catalog! {
     OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),
         "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
 
+    /// A recursive read or glob whose complete selected paths cannot be inspected.
+    SECRET_SELECTION = Step::Edit(".codeflow/policy.json"),
+        "narrow the search roots or file selection to paths the guard can inspect within its metadata budget, without including secret stores; the operator runs an intended secret read personally in a separate terminal; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+
     /// A branch push that would include tags because of effective Git config.
     PUSH_WITHOUT_FOLLOW_TAGS = Step::Git("git push"),
         "push only the intended branch with `git push --no-follow-tags <remote> <branch>`; tag publication remains operator-owned";
@@ -752,6 +870,7 @@ mod tests {
             &super::PROTECTED_DELETE,
             &super::PR_MERGE_PROTECTED,
             &super::OUTWARD_ACTION,
+            &super::SECRET_SELECTION,
             &super::PRIVILEGE_ESCALATION,
         ] {
             assert!(
@@ -766,6 +885,52 @@ mod tests {
             assert!(remedy
                 .text
                 .contains("HEAD while no remote-tracking refs exist"));
+        }
+    }
+
+    /// `Clearing::pieces` reads every `{` as a placeholder; each entry's
+    /// braces pair up around a plain key.
+    #[test]
+    fn every_catalogue_brace_opens_a_named_placeholder() {
+        for clearing in super::CATALOG {
+            let mut rest = clearing.text;
+            while let Some(open) = rest.find('{') {
+                let close = rest[open..]
+                    .find('}')
+                    .unwrap_or_else(|| panic!("{}: an unclosed brace", clearing.name));
+                let key = &rest[open + 1..open + close];
+                assert!(
+                    !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                    "{}: {{{key}}} is not a placeholder",
+                    clearing.name
+                );
+                rest = &rest[open + close + 1..];
+            }
+            assert!(
+                !rest.contains('}'),
+                "{}: a lone closing brace",
+                clearing.name
+            );
+        }
+    }
+
+    /// TSK-1029 review: a path is copied as it is. Braces and control
+    /// characters in it neither fill nor trip a placeholder, and a debug
+    /// build does not panic, for both registry remedies.
+    #[test]
+    fn a_brace_in_a_filled_path_is_copied_as_text() {
+        let path = "/home{label}/x{path}\u{1b}[31m{";
+        for clearing in [&super::REGISTRY_UNWRITTEN, &super::REGISTRY_ROOT_UNREADABLE] {
+            let shown = clearing.shown_for(std::path::Path::new(path));
+            assert_eq!(
+                shown.matches(path).count(),
+                clearing.text.matches("{path}").count()
+            );
+            let remedy = clearing.with(&[("path", path)]);
+            assert_eq!(
+                remedy.matches(path).count(),
+                clearing.text.matches("{path}").count()
+            );
         }
     }
 }

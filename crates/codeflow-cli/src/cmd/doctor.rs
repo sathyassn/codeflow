@@ -15,9 +15,18 @@ pub struct DoctorArgs {
     #[arg(long)]
     pub list: bool,
     /// Print the seat, sandbox and tool evidence the orchestrator preflight
-    /// reads, each value marked configured, observed or unavailable.
+    /// reads, each value marked configured, observed or unavailable; exit 1
+    /// when Codex refuses the builder launch or a builder write is refused;
+    /// when the builder write probe gives no result, the line says builder
+    /// readiness is not established and the exit stays 0.
     #[arg(long, conflicts_with_all = ["check", "list"])]
     pub preflight: bool,
+    /// Internal (TSK-337): print whether this process can write each folder
+    /// a Codex builder seat writes outside its worktree, one line each, and
+    /// exit 1 when one is denied. The preflight runs it inside `codex
+    /// sandbox` under the builder launch.
+    #[arg(long, hide = true, conflicts_with_all = ["check", "list", "preflight"])]
+    pub builder_write_probe: bool,
 }
 
 /// Run doctor checks; exit 0 when healthy (warnings allowed), 1 on failures.
@@ -35,10 +44,35 @@ pub fn run(args: &DoctorArgs) -> i32 {
     if args.preflight {
         let mut out = std::io::stdout();
         let excluded = project_roots(&root);
-        for line in preflight_report(&root, &|name| find_on_path(name, &excluded)) {
+        let codeflow = std::env::current_exe().ok();
+        let (lines, failed) = preflight_report(
+            &root,
+            &|name| find_on_path(name, &excluded),
+            codeflow.as_deref(),
+        );
+        for line in lines {
             let _ = term_writeln!(out, "{line}");
         }
-        return 0;
+        return i32::from(failed);
+    }
+    if args.builder_write_probe {
+        let mut out = std::io::stdout();
+        let mut failed = false;
+        for (dir, result) in
+            codeflow_core::testing::gate_guard::builder_write_probe(&root, home.as_deref())
+        {
+            let dir = shown(&dir.display());
+            match result {
+                Ok(()) => {
+                    let _ = term_writeln!(out, "writable {dir}");
+                }
+                Err(error) => {
+                    failed = true;
+                    let _ = term_writeln!(out, "denied {dir}: {}", shown(&error));
+                }
+            }
+        }
+        return i32::from(failed);
     }
     let Some(project_dir) = root.to_str() else {
         eprintln!(
@@ -140,9 +174,10 @@ fn executable_line(
         Some(path) => format!(
             "{label} {name}: observed on PATH at {path}; {run}",
             path = shown(&path.display()),
-            // The builder profile line loads codex's config (TSK-1003).
+            // The builder profile line loads codex's config (TSK-1003) and
+            // runs the grant check in its sandbox (TSK-337).
             run = if name == "codex" {
-                "doctor runs it only to load its config for the builder profile line"
+                "doctor runs it only for the builder profile line, to load its config and to run the builder grant check in its sandbox"
             } else {
                 "doctor does not run it"
             }
@@ -305,17 +340,76 @@ fn sandbox_lines(root: &std::path::Path) -> Vec<String> {
 }
 
 /// What the installed Codex says about the builder launch overrides
-/// (TSK-1003). This is the one preflight value that runs a binary:
-/// `codex --version` and `codex features list` with the overrides, which
-/// load config and start no model, session or sandbox. An exit code of 0
-/// shows only that Codex accepted the command; whether the project config
-/// loaded is read from the feature table, and is otherwise unverified.
+/// (TSK-1003, TSK-337), with `true` when it observed a failure: a refusal,
+/// or a write the launch does not give. This is the one preflight value
+/// that runs a binary: `codex --version` and `codex features list` with the
+/// overrides, which load config and start no model, session or sandbox,
+/// and then `codex sandbox` with the same overrides and the managed config
+/// running `codeflow doctor --builder-write-probe` (the `codeflow` at
+/// `codeflow`, this process) from the folder a builder seat starts in, the
+/// main checkout root. When that run gives no result, the line says
+/// readiness is not established and the preflight does not fail on it.
 fn codex_builder_line(
-    root: &std::path::Path,
+    project: &std::path::Path,
     look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
-) -> String {
+    codeflow: Option<&std::path::Path>,
+) -> (String, bool) {
+    use codeflow_core::doctor::GrantCheck;
+    let (line, stop) = codex_builder_load(project, look);
+    if let Some(failed) = stop {
+        return (line, failed);
+    }
+    let Some(codex) = look("codex") else {
+        return (line, false);
+    };
+    let Some(codeflow) = codeflow else {
+        return (
+            format!("{line}; builder grants: unavailable: doctor cannot name its own binary to run the write probe; builder readiness is not established"),
+            false,
+        );
+    };
+    let root = codeflow_core::doctor::builder_launch_root(project);
+    let place = shown(&root.display());
+    match codeflow_core::doctor::probe_codex_builder_grants(&root, &codex, codeflow) {
+        GrantCheck::Effective(dirs) => (
+            format!(
+                "{line}; builder grants: observed effective from {place} under `codex sandbox` with the launch overrides and managed config: wrote {}",
+                shown(&dirs.join(", "))
+            ),
+            false,
+        ),
+        GrantCheck::NotEffective(message) => (
+            format!(
+                "{line}; builder grants: observed NOT EFFECTIVE from {place} under `codex sandbox` with the launch overrides and managed config: {}; a builder seat launched as transport.md says cannot run `codeflow reserve`, a quick-mode heavy target or a commit there",
+                shown(&message)
+            ),
+            true,
+        ),
+        GrantCheck::NotRun(reason) => (
+            format!(
+                "{line}; builder grants: unavailable: {}; builder readiness is not established, so a builder seat's own writes are the evidence",
+                shown(&reason)
+            ),
+            false,
+        ),
+    }
+}
+
+/// The `codex features list` part of the builder line, run from the
+/// builder launch root: the text, and `Some(true)` for a refusal,
+/// `Some(false)` when nothing more should run, `None` when Codex accepted
+/// the overrides in both runs.
+#[allow(clippy::too_many_lines)]
+fn codex_builder_load(
+    project: &std::path::Path,
+    look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+) -> (String, Option<bool>) {
     use codeflow_core::doctor::{CodexLoad, ProjectLayer};
     let label = "codex builder profile";
+    // A builder seat starts in the main checkout root and gets that
+    // checkout's project config (TSK-337), so the probe reads it there.
+    let root = codeflow_core::doctor::builder_launch_root(project);
+    let root = root.as_path();
     let config = std::fs::read_to_string(root.join(".codex/config.toml"))
         .ok()
         .and_then(|text| text.parse::<toml::Table>().ok());
@@ -325,15 +419,26 @@ fn codex_builder_line(
         .and_then(toml::Value::as_table)
         .is_some_and(|profiles| profiles.contains_key("cf-builder"));
     if !defines_builder {
-        return format!("{label}: unavailable: .codex/config.toml defines no cf-builder profile");
+        return (
+            format!("{label}: unavailable: .codex/config.toml defines no cf-builder profile"),
+            Some(false),
+        );
     }
     let Some(codex) = look("codex") else {
-        return format!("{label}: unavailable: codex not found on PATH");
+        return (
+            format!("{label}: unavailable: codex not found on PATH"),
+            Some(false),
+        );
     };
     let probe = codeflow_core::doctor::probe_codex_builder_profile(root, &codex);
     let version = match &probe.version {
         Ok(version) => version.clone(),
-        Err(reason) => return format!("{label}: unavailable: {}", shown(reason)),
+        Err(reason) => {
+            return (
+                format!("{label}: unavailable: {}", shown(reason)),
+                Some(false),
+            )
+        }
     };
     let version = shown(&version);
     let stage = |load: &CodexLoad, name: &str| match load {
@@ -350,14 +455,20 @@ fn codex_builder_line(
     .collect();
     if problems.iter().any(|(rejected, _)| *rejected) {
         let text: Vec<&str> = problems.iter().map(|(_, text)| text.as_str()).collect();
-        return format!(
-            "{label}: observed REJECTED by {version}: {}; a builder seat launched as transport.md says will not open, so qualify the profile on this Codex before building",
-            shown(&text.join("; "))
+        return (
+            format!(
+                "{label}: observed REJECTED by {version}: {}; a builder seat launched as transport.md says will not open, so qualify the profile on this Codex before building",
+                shown(&text.join("; "))
+            ),
+            Some(true),
         );
     }
     if !problems.is_empty() {
         let text: Vec<&str> = problems.iter().map(|(_, text)| text.as_str()).collect();
-        return format!("{label}: unavailable: {}", shown(&text.join("; ")));
+        return (
+            format!("{label}: unavailable: {}", shown(&text.join("; "))),
+            Some(false),
+        );
     }
     let configured: std::collections::BTreeMap<String, bool> = config
         .as_ref()
@@ -373,8 +484,8 @@ fn codex_builder_line(
     let accepted = format!(
         "{label}: observed {version} accepts the builder launch overrides without a project config, as the TUI startup load reads them, and in the project folder"
     );
-    let boundary = "doctor cannot observe the boundary a running seat enforces";
-    match probe.project_layer(&configured) {
+    let boundary = "doctor cannot observe the whole boundary a running seat enforces";
+    let text = match probe.project_layer(&configured) {
         Some(ProjectLayer::ConsistentWithLoading { features }) => {
             let features: Vec<String> = features
                 .iter()
@@ -399,7 +510,8 @@ fn codex_builder_line(
         Some(ProjectLayer::Unverified { conflicting: false }) | None => format!(
             "{accepted}; whether Codex loaded the project config is unverified, because no feature the project sets differs from the user config; {boundary}"
         ),
-    }
+    };
+    (text, None)
 }
 
 /// The preflight evidence report (TSK-452): each value is marked
@@ -408,17 +520,19 @@ fn codex_builder_line(
 fn preflight_report(
     root: &std::path::Path,
     look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
-) -> Vec<String> {
+    codeflow: Option<&std::path::Path>,
+) -> (Vec<String>, bool) {
     let mut lines = vec![
         "preflight evidence for cf-model-orchestrator; read it, then make the live observations the preflight requires".to_string(),
     ];
     lines.extend(seat_lines(root, look));
     lines.extend(sandbox_lines(root));
-    lines.push(codex_builder_line(root, look));
+    let (builder, failed) = codex_builder_line(root, look, codeflow);
+    lines.push(builder);
     for tool in PREFLIGHT_TOOLS {
         lines.push(executable_line("tool", tool, look));
     }
-    lines
+    (lines, failed)
 }
 
 /// The testable core of [`run`]: explicit options and output sink, no
@@ -501,6 +615,7 @@ mod tests {
             check: check.map(ToString::to_string),
             list,
             preflight: false,
+            builder_write_probe: false,
         }
     }
 
@@ -525,7 +640,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             cf.join("project.toml"),
-            "schema_version = 1\ntier = \"standard\"\nscaffold_version = \"3.1.0\"\nstack = \"rust\"\nareas = [\"engine\"]\npolicy_armed = false\ngit_hooks = \"unwired\"\npermission_preset = \"acceptEdits\"\n",
+            "schema_version = 1\ntier = \"standard\"\nscaffold_version = \"3.1.0\"\nstack = \"rust\"\nareas = [\"engine\"]\npolicy_armed = false\ngit_hooks = \"unwired\"\npermission_preset = \"acceptEdits\"\noutcome_present_uids = []\n",
         )
         .unwrap();
         let opts = Options {

@@ -11,6 +11,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -86,7 +88,10 @@ fn refused(out: &Output, what: &str) -> String {
     stderr
 }
 
+/// Commit everything, each new record's Outcome stated first as its
+/// author states it (TSK-435).
 fn commit(root: &Path, message: &str) {
+    outcome::state_outcomes(root);
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", message]);
 }
@@ -649,6 +654,7 @@ fn a_number_shaped_pin_is_refused_with_the_quote_remedy_on_a_fresh_project() {
             "- AC-1 When run, the system shall work.\n",
         );
     }
+    outcome::state_outcomes(&root);
     ok(
         &codeflow(&root, &["validate", "--docs"]),
         "validate before the pin",

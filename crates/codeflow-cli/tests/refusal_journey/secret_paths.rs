@@ -94,19 +94,9 @@ fn installed_hooks_refuse_secret_path_spellings_without_execution() {
     }
 }
 
-/// Exercise the OS with paths from the installed denyRead list, without
-/// invoking a guard. This is a native macOS primitive test, not a claim that
-/// any running harness adopted the generated profile. Linux/WSL and Windows
-/// need their own native evidence; they do not run this Seatbelt fixture.
 #[cfg(target_os = "macos")]
-#[test]
-fn native_macos_sandbox_denies_stores_but_not_workspace_key_names() {
+fn native_secret_read_profile(settings: &Value, home: &std::path::Path) -> (String, Vec<PathBuf>) {
     use std::fmt::Write as _;
-    let project = Project::new();
-    let settings: Value =
-        serde_json::from_slice(&std::fs::read(project.root.join(".claude/settings.json")).unwrap())
-            .unwrap();
-    let home = project.home.canonicalize().unwrap();
     let mut profile = String::from("(version 1)(allow default)");
     let mut paths = Vec::new();
     for store in settings["sandbox"]["filesystem"]["denyRead"]
@@ -135,6 +125,22 @@ fn native_macos_sandbox_denies_stores_but_not_workspace_key_names() {
         .unwrap();
         paths.push(file);
     }
+    (profile, paths)
+}
+
+/// Exercise the OS with paths from the installed denyRead list, without
+/// invoking a guard. This is a native macOS primitive test, not a claim that
+/// any running harness adopted the generated profile. Linux/WSL and Windows
+/// need their own native evidence; they do not run this Seatbelt fixture.
+#[cfg(target_os = "macos")]
+#[test]
+fn native_macos_sandbox_denies_stores_and_leaves_workspace_files_readable() {
+    let project = Project::new();
+    let settings: Value =
+        serde_json::from_slice(&std::fs::read(project.root.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    let home = project.home.canonicalize().unwrap();
+    let (profile, paths) = native_secret_read_profile(&settings, &home);
     for path in &paths {
         success(&Command::new("/bin/cat").arg(path).output().unwrap());
         for spelling in [
@@ -156,7 +162,25 @@ fn native_macos_sandbox_denies_stores_but_not_workspace_key_names() {
             );
         }
     }
-    for name in ["README.md", "id_rsa", ".env"] {
+    // File-tool rules are a separate plane from native store-root denies.
+    assert!(settings["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|rule| rule == "Read(**/id_rsa*)"));
+    let key = project.root.join("id_rsa");
+    std::fs::write(&key, "planted fixture\n").unwrap();
+    let out = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", &profile, "/bin/cat"])
+        .arg(&key)
+        .output()
+        .unwrap();
+    success(&out);
+    assert_eq!(out.stdout, b"planted fixture\n");
+    for harness in ["claude", "codex", "grok"] {
+        project.shell(harness, "cat id_rsa", Some("security.secret_reads"));
+    }
+    for name in ["README.md", ".env"] {
         let path = project.root.join(name);
         std::fs::write(&path, "ordinary fixture\n").unwrap();
         success(
@@ -167,4 +191,115 @@ fn native_macos_sandbox_denies_stores_but_not_workspace_key_names() {
                 .unwrap(),
         );
     }
+}
+
+#[path = "../support/guard_cases.rs"]
+mod guard_cases;
+
+#[path = "../support/guard_review_cases.rs"]
+mod guard_review_cases;
+
+#[path = "../support/guard_review3_cases.rs"]
+mod guard_review3_cases;
+
+#[test]
+fn tsk1002_review3_installed_routes_keep_the_same_verdicts() {
+    let project = Project::new();
+    guard_review_cases::seed(&project.root, &project.home);
+    guard_review3_cases::seed(&project.root, &project.home);
+    for finding in 40..50 {
+        let &(_, _, command, refuse) = guard_review3_cases::CASES
+            .iter()
+            .find(|case| case.0 == finding)
+            .unwrap();
+        let line = command.replace(
+            "@HOME@",
+            &codeflow_core::portable_path::slashed(&project.home),
+        );
+        for harness in ["claude", "codex", "grok"] {
+            let outputs = project.replay(harness, "Bash", json!({"command":line}));
+            assert!(!outputs.is_empty(), "{harness}: no installed hook ran");
+            if refuse {
+                assert!(
+                    outputs.iter().any(|out| out.status.code() == Some(2)),
+                    "{harness}: {line}: {outputs:?}"
+                );
+            } else {
+                assert!(
+                    outputs.iter().all(|out| out.status.success()),
+                    "{harness}: {line}: {outputs:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn tsk1002_review_installed_hooks_refuse_executable_inputs() {
+    let project = Project::new();
+    guard_review_cases::seed(&project.root, &project.home);
+    #[cfg(unix)]
+    guard_review_cases::seed_links(&project.root, &project.home);
+    let mut wrong = Vec::new();
+    // One representative per mechanism through each installed hook route;
+    // hooks_cli covers the complete payload table and native Windows names.
+    for harness in ["claude", "codex", "grok"] {
+        for finding in [1, 2, 3, 4, 5, 6, 8, 9] {
+            #[cfg(not(unix))]
+            if finding == 8 {
+                continue;
+            }
+            let &(_, owner, command, refuse) = guard_review_cases::CASES
+                .iter()
+                .find(|c| c.0 == finding)
+                .unwrap();
+            let line = guard_review_cases::render(command, &project.root, &project.home);
+            let outputs = project.replay(harness, "Bash", json!({"command":line}));
+            let expected_rule = if owner == "git-guard" || finding == 6 {
+                "git.hook_integrity"
+            } else {
+                "security.secret_reads"
+            };
+            let refused = outputs.iter().any(|out| {
+                out.status.code() == Some(2)
+                    && String::from_utf8_lossy(&out.stderr).contains(expected_rule)
+            });
+            if (refuse && !refused) || (!refuse && outputs.iter().any(|out| !out.status.success()))
+            {
+                wrong.push(format!("{harness}: F{finding}: {line:?}: {outputs:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn tsk1002_ac14_installed_hooks_classify_every_planted_case() {
+    let project = Project::new();
+    guard_cases::seed_glob_matches(&project.root);
+    let mut wrong = Vec::new();
+    for harness in ["claude", "codex", "grok"] {
+        for &(ac, line, refuse) in guard_cases::CASES {
+            // replay() invokes the installed harness's hook commands. It never
+            // invokes the planted shell text as a command.
+            let outputs = project.replay(harness, "Bash", json!({"command": line}));
+            let expected_rule =
+                if guard_cases::refusing_guard(ac, line) == "git-guard" || ac == 5 || ac == 2 {
+                    "git.hook_integrity"
+                } else {
+                    "security.secret_reads"
+                };
+            let refused = outputs.iter().any(|out| {
+                out.status.code() == Some(2)
+                    && String::from_utf8_lossy(&out.stderr).contains(expected_rule)
+            });
+            if (refuse && !refused) || (!refuse && outputs.iter().any(|out| !out.status.success()))
+            {
+                wrong.push(format!(
+                    "{harness}: AC-{ac}: expected refuse={refuse}: {line:?}: {outputs:?}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

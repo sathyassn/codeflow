@@ -16,6 +16,8 @@ use std::process::{Command, Output};
 
 const LINE: &str = "integration/EPC-001-offline";
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -93,7 +95,10 @@ fn refused(out: &Output, what: &str, reason: &str) -> String {
     all
 }
 
+/// Commit everything, each new record's Outcome stated first as its
+/// author states it (TSK-435).
 fn commit(root: &Path, message: &str) -> String {
+    outcome::state_outcomes(root);
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", message]);
     git(root, &["rev-parse", "HEAD"])

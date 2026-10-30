@@ -9,8 +9,12 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
+#[path = "acceptance_journey/sequence.rs"]
+mod sequence;
 use process_folders::isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {
@@ -92,7 +96,10 @@ fn fails(out: &Output, what: &str, reason: &str) {
     );
 }
 
+/// Commit everything, with each new record's Outcome stated as its author
+/// states it before committing (TSK-435).
 fn commit(root: &Path, message: &str) -> String {
+    outcome::state_outcomes(root);
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", message]);
     git(root, &["rev-parse", "HEAD"])
@@ -193,6 +200,7 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
         &codeflow(&root, &["init", "--yes", "--full"]),
         "init --full",
     );
+    let main = git(&root, &["branch", "--show-current"]);
     git(&root, &["switch", "-q", "-c", LINE]);
 
     // Plan: an epic and two tasks; the first has a journey criterion, the
@@ -231,6 +239,10 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
     )
     .unwrap();
     commit(&root, "chore: plan the acceptance journey");
+    // The plan also lands on `main`, so the records at the default target
+    // name the line its tasks target (TSK-340: only base records qualify a
+    // line for `task status`).
+    sequence::host_merge(&root, &main, "plan/acceptance");
     git(&root, &["switch", "-q", LINE]);
     git(
         &root,
@@ -298,7 +310,7 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
     fails(
         &ci(&root, branch, "TSK-001"),
         "a stale block after a later code change",
-        "src/lib.rs changed after the reviewed commit",
+        "first: src/lib.rs",
     );
     git(&root, &["reset", "-q", "--hard", &completed]);
 
@@ -1158,7 +1170,7 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
     // its pull request is: the late code follows the owner's completion.
     assert!(
         said.contains(&format!(
-            "TSK-003 (completed directly on the release line at {}): src/late.rs changed after the reviewed commit",
+            "TSK-003 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
             &completed[..9]
         )),
         "{said}"
@@ -1180,7 +1192,7 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
         ),
         "code after the completion",
         &format!(
-            "TSK-003 (completed directly on the release line at {}): src/late.rs changed after the reviewed commit",
+            "TSK-003 (completed directly on the release line at {}): 1 path changed between the reviewed commit",
             &completed[..9]
         ),
     );

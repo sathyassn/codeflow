@@ -412,8 +412,13 @@ A task can name an amendment already on its integration target. Before its
 first landing, it can also name an amendment in its own task range. In that
 case the amendment changes only its record and is strictly after the range's
 merge-base and strictly before `reviewed` in commit ancestry. The amendment
-cannot be the reviewed commit or the completion commit. A reopened range
-cannot use that own-range allowance. An epic waiver names a planning
+cannot be the reviewed commit or the completion commit. A range that
+reopens a completion that never landed keeps that own-range allowance,
+whatever caused the reopen. A range that reopens a landed completion cannot
+use it. A waiver refused as not on the target is told what that requires: a
+receiving line the run pins holds the commit. The refusal names the route: a
+planning pull request into the target that amends the criterion, merged into
+the branch before the review. An epic waiver names a planning
 amendment that its reviewed commit contains. A waiver changes a criterion's
 result; it does not authorize redacting an acceptance block.
 
@@ -630,10 +635,12 @@ Shared engineering, security, testing, design, and review doctrine stays in
 `AGENTS.md` and the relevant skills. Repeating it in every task creates stale
 checklist theater. A record instantiates only what is specific:
 
-- outcome, audience where relevant, scope, and non-goals;
+- outcome, audience where relevant, scope, and non-goals, with the value
+  line under `## Outcome`;
 - affected capabilities, surfaces, interfaces, and direct dependencies;
 - each task's deliverables and their homes as paths in the project's
-  structure (`## Deliverables`), and the homes an epic's tasks write;
+  structure (`## Deliverables`), and an epic's own `## Deliverables` with
+  the homes its tasks write;
 - testable acceptance criteria and selected evidence;
 - producer and reviewer for non-trivial work;
 - task-specific risk, recovery, test-data, or environment requirements, in

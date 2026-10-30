@@ -28,6 +28,10 @@ fn task(root: &Path, status: &str, closeout: &str) {
         .replace(
             "integration_target: main",
             &format!("integration_target: {LINE}"),
+        )
+        .replace(
+            "epic_id: null\nstandalone_reason: bounded work",
+            "epic_id: EPC-001\nstandalone_reason: null",
         );
     std::fs::write(
         root.join(TASK),
@@ -44,6 +48,14 @@ fn fixture() -> tempfile::TempDir {
     git(root, &["config", "user.name", "Test"]);
     std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
     task(root, "todo", "Pending.\n");
+    // The epic is on `main` beside its task, so the records at the default
+    // target name the line (TSK-340: only base records qualify a line).
+    std::fs::create_dir_all(root.join("project-management/epics")).unwrap();
+    std::fs::write(
+        root.join("project-management/epics/EPC-001.md"),
+        "---\nid: EPC-001\ntitle: \"line\"\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-09-26\n---\n\n# EPC-001: line\n\n## Summary\n\nA line.\n\n## Acceptance Criteria\n\n- AC-1 When used, the line shall work.\n",
+    )
+    .unwrap();
     commit(root, "chore: plan work");
     git(root, &["switch", "-qc", LINE]);
     dir

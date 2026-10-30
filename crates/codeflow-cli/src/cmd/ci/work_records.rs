@@ -2,12 +2,14 @@
 //! record the range changes is judged by the same lifecycle judge the status
 //! verbs use, from the merge-base to the head. Only projects with durable
 //! work tracking run it; a project without records sees no record rule.
+//! The Outcome adoption marker (TSK-435) is judged in every project,
+//! against the tip of the branch the range lands on.
 
 use std::path::Path;
 
 use codeflow_core::hooks::{PolicyLevel, Violation};
 use codeflow_core::workgraph::lifecycle::{
-    judge_line_under, judge_pull_request_under, judge_release_range, Brought,
+    judge_line_under, judge_pull_request_under, judge_release_range, outcome_marker_errors, Brought,
 };
 
 /// Run the check for `codeflow ci`, record its findings and whether it ran,
@@ -15,6 +17,8 @@ use codeflow_core::workgraph::lifecycle::{
 /// governs; `None` means the resolved base. `on_line` says the range is a
 /// verified epic line, whose landings are judged one by one; `brought`, on a
 /// release range, names the records judged where each was introduced.
+/// `target_tip` is the tip of the branch the range lands on, which the
+/// Outcome marker is judged against (see [`super::target_tip`]).
 #[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 pub(super) fn dispatch(
     root: &Path,
@@ -23,6 +27,7 @@ pub(super) fn dispatch(
     authority: Option<&str>,
     on_line: bool,
     brought: Option<&Brought>,
+    target_tip: &Result<String, super::NoTarget>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -36,7 +41,7 @@ pub(super) fn dispatch(
             return;
         }
     };
-    let outcome = check(
+    let mut outcome = check(
         root,
         resolved_base.as_deref(),
         head,
@@ -44,8 +49,17 @@ pub(super) fn dispatch(
         on_line,
         brought,
     );
+    // The marker is judged wherever the range resolved, whatever the
+    // tracking state.
+    if resolved_base.is_some() {
+        outcome.violations.extend(marker(root, target_tip, head));
+        outcome.marker_ran = true;
+    }
     if outcome.ran {
         ran.push("work-records");
+    }
+    if outcome.marker_ran {
+        ran.push("outcome-marker");
     }
     for notice in &outcome.notices {
         eprintln!(
@@ -73,6 +87,8 @@ pub(super) struct Outcome {
     /// Facts to show without blocking, such as an edited baseline list.
     pub notices: Vec<codeflow_core::remedy::Finding>,
     pub ran: bool,
+    /// Whether the Outcome adoption marker was judged.
+    pub marker_ran: bool,
 }
 
 /// Judge the records changed between the merge-base of `base` and `head`,
@@ -97,6 +113,7 @@ pub(super) fn check(
                 violations: Vec::new(),
                 notices: Vec::new(),
                 ran: false,
+                marker_ran: false,
             }
         }
         Err(violation) => {
@@ -104,6 +121,7 @@ pub(super) fn check(
                 violations: vec![violation],
                 notices: Vec::new(),
                 ran: true,
+                marker_ran: false,
             }
         }
     }
@@ -112,6 +130,7 @@ pub(super) fn check(
             violations: Vec::new(),
             notices: Vec::new(),
             ran: false,
+            marker_ran: false,
         };
     };
     // A release range judges each brought record where it was introduced
@@ -138,14 +157,54 @@ pub(super) fn check(
                 violations,
                 notices: verdict.notices,
                 ran: true,
+                marker_ran: false,
             }
         }
         Err(error) => Outcome {
             violations: vec![block(format!("cannot read the record range: {error}"))],
             notices: Vec::new(),
             ran: true,
+            marker_ran: false,
         },
     }
+}
+
+/// The Outcome adoption marker's refusals (TSK-435): the head's list
+/// judged against `target_tip`, never against the range's base, which the
+/// pre-push hook sets to a merge-base or another boundary. A project with
+/// only epics, or no records yet, is judged too. A target with no trusted
+/// tip refuses with the recovery its [`super::NoTarget`] names, and a
+/// marker or history that cannot be read refuses.
+fn marker(root: &Path, target_tip: &Result<String, super::NoTarget>, head: &str) -> Vec<Violation> {
+    let tip = match target_tip {
+        Ok(tip) => tip,
+        Err(missing) => {
+            return vec![Violation::always_blocking(
+                "work.records",
+                format!(
+                    "cannot judge the Outcome adoption marker in .codeflow/project.toml: {}",
+                    missing.message
+                ),
+                &missing.remedy,
+            )]
+        }
+    };
+    match outcome_marker_errors(root, tip, Some(head)) {
+        Ok(errors) => errors.into_iter().map(marker_block).collect(),
+        Err(error) => vec![Violation::always_blocking(
+            "work.records",
+            format!("cannot judge the Outcome adoption marker in .codeflow/project.toml: {error}"),
+            "repair the Git read the message names (a shallow clone fetches full history), then retry",
+        )],
+    }
+}
+
+fn marker_block(message: String) -> Violation {
+    Violation::always_blocking(
+        "work.records",
+        message,
+        "keep `outcome_present_uids` as the target lists it, or drop uids from it; a record made after adoption states its Outcome instead",
+    )
 }
 
 pub(super) fn block(message: String) -> Violation {

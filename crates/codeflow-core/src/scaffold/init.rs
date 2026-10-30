@@ -26,7 +26,8 @@ use super::state::{
 };
 use super::template::TemplateContext;
 use super::version::check_write_version;
-use super::{gitutil, hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
+use super::{gitutil, hash, pr_template, should_skip_initial_stack_adr, ScaffoldError, Shown};
+use crate::shown;
 
 /// Answers to init's at-most-three questions (charter §4.1: product
 /// one-liner, areas, permission preset). `None` = use the default / the
@@ -134,20 +135,27 @@ fn init_writes(
         detected.to_string()
     };
 
-    let mut report = Report::new(format!("codeflow init ({tier} tier)"));
+    let mut report = Report::new(shown!(
+        "codeflow init ({} tier)",
+        Shown::fixed(tier.as_str())
+    ));
     if was_empty {
-        report
-            .notes
-            .push("empty directory: bootstrapped a fresh repository".to_string());
+        report.notes.push(Shown::fixed(
+            "empty directory: bootstrapped a fresh repository",
+        ));
     } else if !had_repo {
         report
             .notes
-            .push("no git repository found: ran `git init`".to_string());
+            .push(Shown::fixed("no git repository found: ran `git init`"));
     }
     if let (Some(recorded), Some(requested)) = (recorded_tier, opts.tier) {
         if requested < recorded {
-            report.notes.push(format!(
-                "tier downgrade ({recorded} -> {requested}) not performed: downgrade means stop managing, never delete; staying at {recorded}"
+            let recorded = Shown::fixed(recorded.as_str());
+            report.notes.push(shown!(
+                "tier downgrade ({} -> {}) not performed: downgrade means stop managing, never delete; staying at {}",
+                recorded,
+                Shown::fixed(requested.as_str()),
+                recorded
             ));
         }
     }
@@ -184,6 +192,11 @@ fn init_writes(
         ),
     };
     state.store(root)?;
+    // The Outcome section's adoption marker (TSK-435): a fresh project lists
+    // no record, so every record it creates must state its Outcome.
+    if let Some(note) = super::update::record_outcome_marker(root)? {
+        report.notes.push(note);
+    }
 
     // Phase 2: install manifest entries for this tier + preset.
     let mut installed = InstalledManifest::load_or_default(root, &opts.binary_version)?;
@@ -201,10 +214,9 @@ fn init_writes(
             report.file_with_notes(
                 &entry.dest,
                 Action::Skipped,
-                vec![
-                    "brownfield repository already has ADRs; starter stack decision not added"
-                        .to_string(),
-                ],
+                vec![Shown::fixed(
+                    "brownfield repository already has ADRs; starter stack decision not added",
+                )],
             );
             continue;
         }
@@ -215,9 +227,9 @@ fn init_writes(
             report.file_with_notes(
                 &entry.dest,
                 Action::Skipped,
-                vec![format!(
+                vec![shown!(
                     "the project's PR template {} is kept; no second template installed",
-                    kept.path
+                    Shown::path(&kept.path)
                 )],
             );
             continue;
@@ -289,12 +301,12 @@ fn init_writes(
             &written,
             &format!("chore: scaffold codeflow {tier} tier"),
         )?;
-        report
-            .notes
-            .push("scaffold commit created with branch policy armed".to_string());
+        report.notes.push(Shown::fixed(
+            "scaffold commit created with branch policy armed",
+        ));
     } else {
         report.notes.push(
-            "existing repository: scaffold files left uncommitted — review and commit them on a branch".to_string(),
+            Shown::fixed("existing repository: scaffold files left uncommitted — review and commit them on a branch"),
         );
     }
 
@@ -303,8 +315,9 @@ fn init_writes(
     match hook_manager {
         None => {
             gitutil::config_set(root, "core.hooksPath", CODEFLOW_HOOKS_PATH)?;
-            report.notes.push(format!(
-                "git hooks wired: core.hooksPath = {CODEFLOW_HOOKS_PATH}"
+            report.notes.push(shown!(
+                "git hooks wired: core.hooksPath = {}",
+                Shown::fixed(CODEFLOW_HOOKS_PATH)
             ));
             // Brownfield choice: hooks git ran from its own folder until now.
             if let Some(found) = detect::git_dir_hooks(root) {
@@ -312,8 +325,17 @@ fn init_writes(
             }
         }
         Some(manager) => {
-            report.notes.push(format!(
-                "existing hook manager detected ({manager}) — not clobbered. To enable codeflow's git gates, call the shims from your hook manager, e.g. add `\"$(git rev-parse --show-toplevel)\"/{CODEFLOW_HOOKS_PATH}/pre-commit` to its pre-commit step (same for commit-msg and pre-push). Recorded git_hooks = \"unwired\"; `codeflow doctor` will surface this."
+            let manager = match &manager {
+                detect::HookManager::Husky => Shown::fixed("husky"),
+                detect::HookManager::Lefthook => Shown::fixed("lefthook"),
+                detect::HookManager::HooksPath(path) => {
+                    shown!("core.hooksPath={}", Shown::path(path))
+                }
+            };
+            report.notes.push(shown!(
+                "existing hook manager detected ({}) — not clobbered. To enable codeflow's git gates, call the shims from your hook manager, e.g. add `\"$(git rev-parse --show-toplevel)\"/{}/pre-commit` to its pre-commit step (same for commit-msg and pre-push). Recorded git_hooks = \"unwired\"; `codeflow doctor` will surface this.",
+                manager,
+                Shown::fixed(CODEFLOW_HOOKS_PATH)
             ));
         }
     }
@@ -327,8 +349,7 @@ fn init_writes(
     let codex_dir = root.join(".codex");
     if codex_dir.join("hooks.json").exists() || codex_dir.join("config.toml").exists() {
         report.notes.push(
-            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and high default effort, with shell startup files read only; a builder seat launches with the cf-builder overrides in the cf-model-orchestrator transport posture table, a reviewer with no --sandbox flag; in-session guards activate after one-time `/hooks` trust inside interactive codex, which `codeflow doctor --check codex` confirms (git hooks + CI enforce regardless)"
-                .to_string(),
+            Shown::fixed("codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve) and no effort setting (each person sets their own), with shell startup files read only; a builder seat launches with the cf-builder overrides in the cf-model-orchestrator transport posture table, a reviewer with no --sandbox flag; in-session guards activate after one-time `/hooks` trust inside interactive codex, which `codeflow doctor --check codex` confirms (git hooks + CI enforce regardless)"),
         );
     }
 
@@ -336,16 +357,14 @@ fn init_writes(
     // surface the arming and the branch guidance. Fresh repos already committed
     // the armed state above, so their tree is clean and needs no such note.
     if newly_armed && !fresh_repo {
-        report.notes.push(
-            "branch policy armed (policy_armed = true); start feature work on a feat/* branch"
-                .to_string(),
-        );
+        report.notes.push(Shown::fixed(
+            "branch policy armed (policy_armed = true); start feature work on a feat/* branch",
+        ));
     }
 
     if tier >= Tier::Standard {
         report.notes.push(
-            "next: run `/cf-customize` to reconcile this consuming project's docs/product.md, docs/architecture.md, AGENTS.md, CLAUDE.md, CI commands, harness autonomy, and required tools/MCPs; the skill verifies effective settings and live canaries before changing anything outside the repository"
-                .to_string(),
+            Shown::fixed("next: run `/cf-customize` to reconcile this consuming project's docs/product.md, docs/architecture.md, AGENTS.md, CLAUDE.md, CI commands, harness autonomy, and required tools/MCPs; the skill verifies effective settings and live canaries before changing anything outside the repository"),
         );
     }
 
@@ -410,11 +429,15 @@ pub(crate) fn render_entry(
         report.file_with_notes(
             &entry.dest,
             Action::MissingAsset,
-            vec![format!("asset {asset_path} not shipped in this build")],
+            vec![shown!(
+                "asset {} not shipped in this build",
+                Shown::path(&asset_path)
+            )],
         );
-        report.warnings.push(format!(
-            "asset {asset_path} missing (not authored yet) — {} skipped",
-            entry.dest
+        report.warnings.push(shown!(
+            "asset {} missing (not authored yet) — {} skipped",
+            Shown::path(&asset_path),
+            Shown::path(&entry.dest)
         ));
         return Ok(None);
     };
@@ -498,7 +521,7 @@ fn install_entry(
     // a pre-planted link would otherwise let the write below escape the target
     // directory. Reported, never silent.
     if let Err(e) = guard_beneath_root(root, Path::new(&entry.dest)) {
-        report.file_with_notes(&entry.dest, Action::Skipped, vec![e.to_string()]);
+        report.file_with_notes(&entry.dest, Action::Skipped, vec![Shown::from(&e)]);
         return Ok(());
     }
     let Some(rendered) = render_entry(source, entry, ctx, report)? else {
@@ -538,17 +561,17 @@ fn install_entry(
                     if recorded.is_none() {
                         record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     }
-                    "user-owned: existing file left untouched".to_string()
+                    Shown::fixed("user-owned: existing file left untouched")
                 }
                 (_, Some(rec)) if rec.sha256 == hash::sha256_hex(current.as_bytes()) => {
                     if current == rendered {
                         report.file(&entry.dest, Action::Unchanged);
                         return Ok(());
                     }
-                    "newer shipped version available — run `codeflow update`".to_string()
+                    Shown::fixed("newer shipped version available — run `codeflow update`")
                 }
                 (_, Some(_)) => {
-                    "locally modified — run `codeflow update` to 3-way merge".to_string()
+                    Shown::fixed("locally modified — run `codeflow update` to 3-way merge")
                 }
                 (_, None) => {
                     if current == rendered {
@@ -569,20 +592,20 @@ fn install_entry(
                             report.file_with_notes(
                                 &entry.dest,
                                 Action::Created,
-                                vec!["written by an earlier interrupted init — record completed"
-                                    .to_string()],
+                                vec![Shown::fixed(
+                                    "written by an earlier interrupted init — record completed",
+                                )],
                             );
                         } else {
                             report.file_with_notes(
                                 &entry.dest,
                                 Action::Unchanged,
-                                vec!["identical existing file adopted as managed".to_string()],
+                                vec![Shown::fixed("identical existing file adopted as managed")],
                             );
                         }
                         return Ok(());
                     }
-                    "exists and is not codeflow-managed — left untouched (--force to overwrite)"
-                        .to_string()
+                    Shown::fixed("exists and is not codeflow-managed — left untouched (--force to overwrite)")
                 }
             };
             report.file_with_notes(&entry.dest, Action::Skipped, vec![note]);
@@ -654,8 +677,9 @@ fn install_entry(
                         report.file_with_notes(
                             &entry.dest,
                             Action::Changed,
-                            vec!["managed block updated; content outside markers untouched"
-                                .to_string()],
+                            vec![Shown::fixed(
+                                "managed block updated; content outside markers untouched",
+                            )],
                         );
                     }
                     BlockOutcome::Appended => {
@@ -664,7 +688,7 @@ fn install_entry(
                         report.file_with_notes(
                             &entry.dest,
                             Action::Merged,
-                            vec!["codeflow block appended to existing file".to_string()],
+                            vec![Shown::fixed("codeflow block appended to existing file")],
                         );
                     }
                 }
@@ -761,7 +785,7 @@ mod tests {
             tier,
             "9.9.9",
         );
-        let mut report = Report::new("test".to_string());
+        let mut report = Report::new(Shown::fixed("test"));
         render_entry(&source, entry, &ctx, &mut report)
             .expect("render succeeds")
             .expect("AGENTS.md asset is present")

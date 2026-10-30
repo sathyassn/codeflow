@@ -85,7 +85,8 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
 # TSK-203: the Windows suite runs in nextest partitions. TSK-265: one job
 # builds the suite into a nextest archive and each partition runs that
 # archive with the filterset scripts/windows-partitions.py gives it from
-# measured durations. The archived run stands for the whole suite only when
+# measured durations and the archive's test list (TSK-1063: the list places
+# binaries the data does not know). The archived run stands for the whole suite only when
 # the archive is built from the whole workspace with the same profile, and
 # the matrix runs every partition from 1 to the plan's count exactly once.
 # The plan itself gives every test exactly one partition, and the Windows
@@ -95,11 +96,13 @@ ARCHIVED_RUN = re.compile(
     r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
     r"--no-fail-fast --profile codeflow "
     r'-E "\$FILTER"$')
-# TSK-1001: the filter is the base's selection, computed by the `judge` job
-# from the base revision and handed over as a job output; the partition job
+# TSK-1001: the filter is the base's plan, computed by the `judge-windows`
+# job from the base revision's planner and data with the build's test list
+# as data (TSK-1063), and handed over as a job output; the partition job
 # reads it from that output only and refuses an empty one.
 PARTITION_FILTER = ("    env:\n"
-                    "      FILTER: ${{ fromJSON(needs.judge.outputs.partitions)[format('{0}', matrix.partition)] }}")
+                    "      FILTER: ${{ fromJSON(needs.judge-windows.outputs.partitions)[format('{0}', matrix.partition)] }}")
+PARTITION_NEEDS = "    needs: [windows-build, judge-windows]"
 FILTER_CHECK = 'run: test -n "$FILTER"'
 PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
 
@@ -123,7 +126,9 @@ def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
     (every job whose id starts with `windows`). An archive build runs no
     test; the archived partitions stand for the suite they cover."""
     out = set()
-    jobs = {name: text for name, text in workflow_jobs(workflow).items() if name.startswith("windows")}
+    every = workflow_jobs(workflow)
+    jobs = {name: text for name, text in every.items() if name.startswith("windows")}
+    plan_problems = windows_plan_problems(every)
     archives = {match.group(1) for text in jobs.values()
                 for run in re.finditer(r"^\s*run:\s*(.+?)\s*$", text, re.M)
                 if (match := ARCHIVE.match(norm(run.group(1))))}
@@ -137,9 +142,11 @@ def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
             if archived:
                 count = planned_partitions() if planned is None else planned
                 lines = norm_job(text)
-                if (PARTITION_FILTER not in "\n".join(lines) or "    needs: [windows-build, judge]" not in lines
+                if (PARTITION_FILTER not in "\n".join(lines) or PARTITION_NEEDS not in lines
                         or not any(line.strip() == FILTER_CHECK for line in lines)):
-                    cmd = f"{cmd} (the filter is not the judge job's selection for this partition)"
+                    cmd = f"{cmd} (the filter is not the judge-windows job's plan for this partition)"
+                elif plan_problems:
+                    cmd = f"{cmd} ({plan_problems[0]})"
                 elif archived.group(1) not in archives:
                     cmd = f"{cmd} (no windows job builds the archive {archived.group(1)})"
                 elif partitions != list(range(1, count + 1)):
@@ -262,7 +269,8 @@ COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-u
 # TSK-1001: every gate job that selects tests or judges floors takes these
 # judge files from the base revision first, so a pull request cannot narrow
 # its own gate.
-JUDGE_FILES = (".codeflow/test-config.json", "crates/codeflow-cli/tests/journey_gate.toml",
+JUDGE_FILES = (".codeflow/test-config.json", ".github/workflows/codeflow-ci.yml",
+               "crates/codeflow-cli/tests/journey_gate.toml",
                "scripts/coverage-merge.py", "scripts/coverage-shards.py", "scripts/coverage-test-times.json",
                "scripts/journey-gate.py", "scripts/windows-partitions.py", "scripts/windows-test-times.json",
                "scripts/test_coverage_merge.py", "scripts/test_journey_gate.py", "scripts/test_windows_partitions.py",
@@ -279,7 +287,7 @@ JUDGE_STEP = """\
             judge="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/codeflow-judge"
             rm -rf "$judge" && mkdir -p "$judge"
             git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py scripts/fixtures/coverage-merge | tar -x -C "$judge"
+            git archive "$BASE_SHA" -- .codeflow/test-config.json .github/workflows/codeflow-ci.yml crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py scripts/fixtures/coverage-merge | tar -x -C "$judge"
           else
             judge="$(pwd)"
           fi
@@ -524,6 +532,7 @@ WINDOWS_VERDICT_JOB = """\
           TESTS: ${{{{ needs.windows-tests.result }}}}
           JOURNEYS: ${{{{ needs.windows-journeys.result }}}}
           RELEASE: ${{{{ needs.windows-release-journey.result }}}}
+          MISSING: ${{{{ needs.windows-journeys.outputs.missing }}}}
         run: |
           if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \\
             && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
@@ -535,6 +544,9 @@ WINDOWS_VERDICT_JOB = """\
             exit 1
           fi
           if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
+            if [ -n "$MISSING" ]; then
+              echo "::error::Windows test partition(s) ${{MISSING}} ended without a report (a timeout or a cancellation); their tests did not finish, none is known to have failed"
+            fi
             echo "::error::Windows concluded checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}}; see the windows jobs"
             exit 1
           fi
@@ -582,10 +594,10 @@ def build_job_problems(jobs: dict[str, str], gate: str) -> list[str]:
 
 # TSK-1001: the gate's selection is computed in a job that runs no pull
 # request code: it checks out the base revision (a pull request's base, any
-# other event's own commit), runs only that revision's selection scripts in
-# isolated mode and hands each slot's filter to the shard and partition jobs
-# as a job output. A step those jobs run after checking out the pull request
-# cannot rewrite it.
+# other event's own commit), runs only that revision's selection script in
+# isolated mode and hands each shard's filter to the shard jobs as a job
+# output. A step those jobs run after checking out the pull request cannot
+# rewrite it.
 SELECTION_JOB = """\
     if: {condition}
     name: gate selection
@@ -594,28 +606,85 @@ SELECTION_JOB = """\
     timeout-minutes: 5
     outputs:
       shards: ${{{{ steps.select.outputs.shards }}}}
-      partitions: ${{{{ steps.select.outputs.partitions }}}}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{{{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}}}
           persist-credentials: false
-      - name: Select the shards and partitions from the base
+      - name: Select the shards from the base
         id: select
         shell: bash
         run: |
           set -euo pipefail
           python3 -I -B - >> "$GITHUB_OUTPUT" <<'PY'
           import json, subprocess
-          for name, script, data in (("shards", "scripts/coverage-shards.py", "scripts/coverage-test-times.json"),
-                                     ("partitions", "scripts/windows-partitions.py", "scripts/windows-test-times.json")):
-              count = int(json.load(open(data))["partitions"])
-              found = {{str(n): subprocess.run(["python3", "-I", "-B", script, "filter", str(n)], check=True,
-                                              capture_output=True, text=True).stdout.strip() for n in range(1, count + 1)}}
-              assert count > 0 and all(found.values()), f"{{script}} selected nothing for a slot"
-              print(f"{{name}}={{json.dumps(found, sort_keys=True)}}")
+          script = "scripts/coverage-shards.py"
+          count = int(json.load(open("scripts/coverage-test-times.json"))["partitions"])
+          found = {{str(n): subprocess.run(["python3", "-I", "-B", script, "filter", str(n)], check=True,
+                                          capture_output=True, text=True).stdout.strip() for n in range(1, count + 1)}}
+          assert count > 0 and all(found.values()), f"{{script}} selected nothing for a slot"
+          print(f"shards={{json.dumps(found, sort_keys=True)}}")
           PY
 """
+
+
+# TSK-1001 and TSK-1063: the Windows partition plan reads the build's test
+# list, so it runs after the build, in a job that runs no pull request
+# code: it checks out the base revision, fetches the list as data, runs the
+# base's planner in isolated mode (its drift check first) and hands each
+# partition's filter to the partition jobs as a job output. It runs under
+# the partition jobs' own condition.
+WINDOWS_PLAN_JOB = """\
+    if: {condition}
+    name: windows partition plan
+    needs: windows-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      partitions: ${{{{ steps.select.outputs.partitions }}}}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{{{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}}}
+          persist-credentials: false
+      - name: Fetch the archive's test list
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-test-list
+          path: ${{{{ runner.temp }}}}/windows-test-list
+      - name: Plan the partitions from the base
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LIST="$RUNNER_TEMP/windows-test-list/windows-tests.json"
+          python3 -I -B scripts/windows-partitions.py drift --list "$LIST"
+          python3 -I -B - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, os, subprocess
+          script = "scripts/windows-partitions.py"
+          count = int(json.load(open("scripts/windows-test-times.json"))["partitions"])
+          found = {{str(n): subprocess.run(["python3", "-I", "-B", script, "filter", str(n), "--list", os.environ["LIST"]],
+                                          check=True, capture_output=True, text=True).stdout.strip()
+                   for n in range(1, count + 1)}}
+          assert count > 0 and all(found.values()), f"{{script}} selected nothing for a partition"
+          print(f"partitions={{json.dumps(found, sort_keys=True)}}")
+          PY
+"""
+PLAN_GATE = " && needs.judge-windows.result == 'success'"
+
+
+def windows_plan_problems(jobs: dict[str, str]) -> list[str]:
+    """Why the `judge-windows` job is not exactly the base-run partition
+    plan, under the partition jobs' condition less its own result."""
+    tests = re.search(r"^ {4}if:\s*(.+?)\s*$", jobs.get("windows-tests", ""), re.M)
+    if not tests or PLAN_GATE not in tests.group(1):
+        return ["the windows-tests job must run only when the partition plan succeeded "
+                f"(`{PLAN_GATE.strip(' &')}` in its condition)"]
+    expected = WINDOWS_PLAN_JOB.format(condition=tests.group(1).replace(PLAN_GATE, "", 1))
+    if norm_job(jobs.get("judge-windows", "")) != norm_job(expected):
+        return ["the `judge-windows` job must be exactly this, so the Windows partition plan comes from the "
+                "base revision in a job that runs no pull request code:\n" + expected]
+    return []
 
 
 # TSK-1001 and TSK-1020: the gate parts run the base revision's codeflow

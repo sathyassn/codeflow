@@ -88,7 +88,7 @@ Linux-native tooling or Claude sandboxing.
 |---|---|
 | The shell installer | You install the latest release on macOS or Linux |
 | The PowerShell installer | You install the latest release, 3.1.0 or later, on native Windows; Git for Windows is required |
-| `cargo install --path crates/codeflow-cli` | You build from a checkout and have a Rust toolchain |
+| `cargo install --locked --path crates/codeflow-cli` | You build from a checkout and have a Rust toolchain |
 | One platform archive checked against its `.sha256` file | You are pinning a version or scripting the install |
 
 1. Pick a path from the table.
@@ -107,7 +107,7 @@ Linux-native tooling or Claude sandboxing.
    Or build from a checkout:
 
    ```sh
-   cargo install --path crates/codeflow-cli
+   cargo install --locked --path crates/codeflow-cli
    ```
 
    Or pin one archive. Substitute the version you pin and your platform's
@@ -328,15 +328,15 @@ Upgrade the binary once, then run `codeflow update` in each repository.
 
 | Motion | How | Effect |
 |---|---|---|
-| Upgrade the binary | Re-run an install path: the `curl \| sh` installer again, or `git pull` then `cargo install --path crates/codeflow-cli`, or download the newer archive (see Install). There is no self-updater (`install-updater = false`) | Improves every repo at once, because hooks call `codeflow` from `PATH` |
+| Upgrade the binary | Re-run an install path: the `curl \| sh` installer again, or `git pull` then `cargo install --locked --path crates/codeflow-cli`, or download the newer archive (see Install). There is no self-updater (`install-updater = false`) | Improves every repo at once, because hooks call `codeflow` from `PATH` |
 | `codeflow update` per repo | Run it in the repository | Refreshes scaffold files. Until you do, every command prints a version-skew warning |
 
 1. Upgrade the `codeflow` on `PATH` first. The hooks run that binary. A binary
    older than a [new policy key](policy-reference.md#where-a-new-key-goes)
    rejects the policy file, which blocks every commit until you upgrade (for
    example `git.policy_characters`, ADR-0067).
-2. Run `codeflow update` in the repository. Add `--diff <FILE>` to write the
-   report with unified diffs.
+2. Run `codeflow update` in the repository. Add `--diff <FILE>` to export the
+   changes without project values (`docs/cli.md`).
 3. Resolve each `<name>.new`, move it over the live file, then rerun `codeflow update`.
 
 | Case | What `update` does |

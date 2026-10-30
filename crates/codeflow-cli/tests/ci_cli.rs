@@ -22,6 +22,8 @@ mod change_class_probes;
 mod destination;
 #[path = "ci_cli/document_indexes.rs"]
 mod document_indexes;
+#[path = "ci_cli/outcome_marker.rs"]
+mod outcome_marker;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
 #[path = "ci_cli/range_context.rs"]
@@ -118,8 +120,9 @@ fn installed_push(dir: &Path, branch: &str) -> Output {
         .expect("git push runs")
 }
 
-/// A `git` process for the fixtures: no user or system configuration, this
-/// build as the hook binary, an isolated home, and no agent markers.
+/// A fixture Git command in `dir`: no global or system configuration, the
+/// installed hooks bound to the binary under test, an isolated home and no
+/// agent session marker.
 fn git_command(dir: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(dir)

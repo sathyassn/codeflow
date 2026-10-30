@@ -140,14 +140,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
-    // Failed Git stderr is displayed inside Err. Successful ignore-rule stdout remains exact bytes.
-    (
-        "codeflow-core/src/root_checkout.rs",
-        "git_stdin",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-cli/src/cmd/ci.rs",
@@ -492,14 +484,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
-    // an object id or fixed ASCII word git prints, compared with ASCII only (`true`)
-    (
-        "codeflow-core/src/root_checkout.rs",
-        "effective_ignore_case",
-        "from_utf8_lossy",
-        1,
-        "ascii-marker",
-    ),
     // BranchStep::name returns the already validated branch String by reference unchanged; no native bytes are decoded or replaced.
     (
         "codeflow-core/src/root_checkout.rs",
@@ -512,30 +496,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "codeflow-core/src/root_checkout.rs",
         "git_run",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
-    // Failed-process stderr is display-only; it never supplies a config value or an absence answer.
-    (
-        "codeflow-core/src/scaffold/gitutil.rs",
-        "failed",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
-    // a git or tool error message shown to a person, never compared
-    (
-        "codeflow-core/src/scaffold/gitutil.rs",
-        "add_and_commit",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
-    // a git or tool error message shown to a person, never compared
-    (
-        "codeflow-core/src/scaffold/gitutil.rs",
-        "git_ok",
         "from_utf8_lossy",
         1,
         "display",
@@ -628,6 +588,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
+    // Body bytes come from strict parse_frontmatter; the Outcome and Deliverables sections are read from already validated UTF-8, never lossy record identities.
+    (
+        "codeflow-core/src/validate/mod.rs",
+        "validate_epic",
+        "from_utf8_lossy",
+        1,
+        "format-contract",
+    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/validate/portal.rs",
@@ -683,14 +651,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "from_utf8_lossy",
         1,
         "schema-reject-only",
-    ),
-    // curl's stderr after a failed download, shown in the refusal only; the downloaded bytes are returned unchanged
-    (
-        "codeflow-core/src/scaffold/release_pin.rs",
-        "fetch_with_curl",
-        "from_utf8_lossy",
-        1,
-        "display",
     ),
     // a fixture clone's stderr in its panic message and its stdout returned to tests that show or discard it; neither is compared as a name
     (
@@ -1557,14 +1517,58 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // accepted.
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
-        "codex_builder_line",
+        "codex_builder_load",
         "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // TSK-337: outside a repository the builder launch root is the project
+    // folder itself, so the probe runs there and reports what it observed;
+    // nothing is granted or skipped on that fallback.
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "builder_launch_root",
+        "obtain-absent:Repository::discover",
+        1,
+        "display",
+    ),
+    // TSK-337: the write probe's lines are read by their format; a line
+    // that does not fit leaves the grant check unavailable, never
+    // effective. The sandbox's error text is split only to print it.
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "probe_lines",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "error_text",
+        "lines",
         1,
         "display",
     ),
     (
         "crates/codeflow-core/src/doctor/codex_profile.rs",
         "load",
+        "lines",
+        1,
+        "display",
+    ),
+    // TSK-1029: the `update --diff` export splits a text patch and a file
+    // into lines only to decide which shipped lines it prints and how many
+    // other lines it counts; no command, path or policy is selected.
+    (
+        "crates/codeflow-core/src/scaffold/diff_redact.rs",
+        "text",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/scaffold/diff_redact.rs",
+        "likeness",
         "lines",
         1,
         "display",
@@ -1934,6 +1938,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "schema-reject-only",
+    ),
+    // TSK-1002: a quoted Git path on stdin whose octal escapes are not UTF-8 makes unquote return None, and reads refuses the command as one it cannot decode.
+    (
+        "crates/codeflow-core/src/security/interpreter/git_reads.rs",
+        "unquote",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
     ),
     // Octal escape digits that are not UTF-8 make unquote_git_path return unproven None; diff_path turns None into a cannot-read Err, so evaluate_commit_range marks added-lines skipped (ci exits 2) and conflict_markers::dispatch reports an incomplete finding at its level.
     (
@@ -2857,6 +2869,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // Parses a JSON, TOML or YAML file only to redact it for the `update --diff` export; a side that does not parse is withheld, and no command, path or policy authority is selected (TSK-1029).
+    (
+        "crates/codeflow-core/src/scaffold/diff_redact.rs",
+        "Format::parse",
+        "obtain-absent:from_str",
+        3,
+        "display",
+    ),
     // Normalizes natural-language request keywords using explicit punctuation; output chooses advisory guidance text, not command/ref/path authority.
     (
         "crates/codeflow-core/src/hooks/guidance.rs",
@@ -3676,6 +3696,46 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // A report's lines, split only to indent each for the terminal or the export; nothing is decided from them.
+    (
+        "crates/codeflow-core/src/scaffold/report.rs",
+        "Report::shown",
+        "lines",
+        1,
+        "display",
+    ),
+    // The same indenting split when the report is written to the terminal.
+    (
+        "crates/codeflow-core/src/scaffold/report.rs",
+        "Report::write_block",
+        "lines",
+        1,
+        "display",
+    ),
+    // A retired entry that is not a JSON string is shown as a placeholder, never as text; only the report line is affected, and the entry is retired either way.
+    (
+        "crates/codeflow-core/src/scaffold/settings_merge.rs",
+        "shown_entry",
+        "obtain-absent:as_str",
+        1,
+        "display",
+    ),
+    // Only an unborn branch writes the Outcome marker without a commit; any other HEAD error refuses the update.
+    (
+        "crates/codeflow-core/src/scaffold/update.rs",
+        "record_outcome_marker",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    // Only an unborn branch skips the migration baseline (no commit to record); any other HEAD error refuses the update.
+    (
+        "crates/codeflow-core/src/scaffold/update.rs",
+        "record_work_records_baseline",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
     // Any HEAD read error refuses with the no-commit stop; the wording assumes an unborn branch, but nothing proceeds.
     (
         "crates/codeflow-core/src/root_checkout.rs",
@@ -3684,6 +3744,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Any HEAD read error prints the fixed "cannot read the repository" hint; nothing is switched or decided from it.
+    (
+        "crates/codeflow-core/src/root_checkout.rs",
+        "workspace_hint_shown",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    // `Shipped::as_str` returns the shipped default's text, not an Option; a key it does not hold is a placeholder in the report line only.
+    (
+        "crates/codeflow-core/src/scaffold/update.rs",
+        "policy_key",
+        "obtain-absent:as_str",
+        1,
+        "display",
+    ),
     // The name is compared with GIT_HOOK_NAMES, all ASCII, so a name that is not UTF-8 is none of them; the list feeds only advisory doctor and update notes.
     (
         "crates/codeflow-core/src/scaffold/detect.rs",
@@ -3691,30 +3767,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:into_string",
         1,
         "ascii-marker",
-    ),
-    // Only failed-process stderr is trimmed for a refusal diagnostic.
-    (
-        "crates/codeflow-core/src/scaffold/gitutil.rs",
-        "failed",
-        "trim",
-        1,
-        "display",
-    ),
-    // Trims stderr solely when producing an error for a failed Git command.
-    (
-        "crates/codeflow-core/src/scaffold/gitutil.rs",
-        "add_and_commit",
-        "trim",
-        1,
-        "display",
-    ),
-    // Trims stderr solely when producing an error for a failed Git command.
-    (
-        "crates/codeflow-core/src/scaffold/gitutil.rs",
-        "git_ok",
-        "trim",
-        1,
-        "display",
     ),
     // Trims literal JSON whitespace around an object insertion point, not a JSON string or key; verified reparses and compares the complete expected value.
     (
@@ -3819,22 +3871,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "split_terminator",
         1,
         "schema-reject-only",
-    ),
-    // The first trimmed run line is only a label in the warning identifying an already-classified workflow step.
-    (
-        "crates/codeflow-core/src/scaffold/update.rs",
-        "scan_order",
-        "lines",
-        1,
-        "display",
-    ),
-    // The first trimmed run line is only a label in the warning identifying an already-classified workflow step.
-    (
-        "crates/codeflow-core/src/scaffold/update.rs",
-        "scan_order",
-        "trim",
-        1,
-        "display",
     ),
     // None means canonical containment is unproven, so temp_place grants no safe temporary-path exemption; raw catastrophic classification stays active.
     (
@@ -4603,10 +4639,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // A tree that cannot be read returns Some(the trees cannot be read), which reviewed_span_problem and stacked turn into a refusal finding.
+    // A tree that cannot be read returns Some(the trees cannot be read), which reviewed_span_problem and stacked turn into a refusal finding (through later_change and later_change_finding).
     (
         "crates/codeflow-core/src/workgraph/acceptance.rs",
-        "later_change",
+        "later_change_judged",
         "obtain-absent:find_commit",
         1,
         "unproven",
@@ -4632,7 +4668,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "waiver_problem",
         "trim",
-        7,
+        12,
         "display",
     ),
     // Normalizes human-authored standalone explanation and rejects an empty narrative; task identity and integration target are separate exact fields.
@@ -4891,6 +4927,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // TSK-435: collapses whitespace in an Outcome line so a respaced `<do  what>` still reads as the template token; prose only, never a path or Git name.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "spaced",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
+    // TSK-435: lets a respaced Outcome token such as `< do  what >` run across whitespace while it is scanned; prose only, never a path or Git name.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "token_spans",
+        "is_whitespace",
+        1,
+        "prose",
+    ),
     // Public raw acceptance-text reader removes LF/CRLF once. acceptance_blocks passes already-framed lines directly to parse_acceptance_lines so content CR is never stripped again.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
@@ -5051,27 +5103,19 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         3,
         "format-contract",
     ),
-    // None withholds the own-range waiver route: waiver_problem then returns a problem, so a failure can only add a binding finding.
+    // An unreadable HEAD is not the target branch, so the range is anchored on the qualified target: the stricter, pull-request judgment.
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
+        "qualify",
         "obtain-absent:head",
         1,
         "unproven",
     ),
-    // None withholds the own-range waiver route: waiver_problem then returns a problem, so a failure can only add a binding finding.
+    // A base policy that does not parse qualifies only `main` and `master`, the shipped default: a declared target then adds no receiving line.
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
-        "obtain-absent:merge_base",
-        1,
-        "unproven",
-    ),
-    // An unresolved target gives None, and waiver_problem then refuses an own-range waiver as not on the target; nothing is allowed by the fold.
-    (
-        "crates/codeflow-core/src/workgraph/status_verb.rs",
-        "own_range_base",
-        "obtain-absent:peel_to_commit",
+        "qualify",
+        "obtain-absent:from_str",
         1,
         "unproven",
     ),
@@ -5619,18 +5663,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:installer-awk-lines",
     ),
-    // Trims curl's stderr for the refusal message only.
-    (
-        "crates/codeflow-core/src/scaffold/release_pin.rs",
-        "fetch_with_curl",
-        "trim",
-        1,
-        "display",
-    ),
     // sha256.sum is read as sha256sum writes it: one digest and one file name per line, separated by blanks; a file that is not UTF-8 refuses before this split.
     (
         "crates/codeflow-core/src/scaffold/release_pin.rs",
-        "pin_release",
+        "verified_digests",
         "lines",
         1,
         "grammar:sha256sum-lines",
@@ -5638,7 +5674,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // sha256.sum fields are the digest then the file name, split as sha256sum separates them; the name must equal the ASCII asset name and the digest must be lowercase hex, so no other spacing is accepted.
     (
         "crates/codeflow-core/src/scaffold/release_pin.rs",
-        "pin_release",
+        "verified_digests",
         "split_whitespace",
         1,
         "grammar:sha256sum-lines",
@@ -5658,14 +5694,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_start",
         1,
         "grammar:installer-awk-lines",
-    ),
-    // Drops the line break from the line shown in doctor's label, which is printed escaped.
-    (
-        "crates/codeflow-core/src/scaffold/release_pin.rs",
-        "unread_line",
-        "trim_end_matches",
-        1,
-        "display",
     ),
     // A forecast whose bytes do not deserialize is reported as forecast_invalid with its path and joins nothing; the report says so instead of reading it as absent.
     (
@@ -6725,6 +6753,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "ErrorKind::NotFound", 2, "The record home is absent only when both the followed and the unfollowed stat of the leaf under the discovered repository root find no name; a dangling link is reported as unreadable and fails validation."),
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "is_file", 1, "Type check on metadata whose errors other than NotFound fail the check; a directory goes to collect_record_files, which propagates its errors."),
     ("crates/codeflow-cli/src/embedded.rs", "EmbeddedAssets::read", "ErrorKind::NotFound", 1, "Debug builds only (cfg(debug_assertions)) read the source tree's assets directory, mirroring the release Raw::get Option contract; release binaries never take this path."),
+    ("crates/codeflow-core/src/absence.rs", "entry", "ErrorKind::NotFound", 1, "Serves the Windows short-name mapper: a leaf that is not found is Creatable only when missing_leaf finds a resolving directory above it, which the mapper refuses, and Impossible only beneath a non-directory or a refused name; a dangling or unreadable ancestor and every other error propagate, so the mapper fails closed."),
     ("crates/codeflow-core/src/absence.rs", "failure_proves_no_entry", "ErrorKind::NotFound", 1, "Serves cannot_exist and existing_metadata for the guards: a leaf that is not found names nothing when missing_leaf settles its ancestors (beneath a directory, beneath a non-directory, or under a refused name), or when the path is relative and every ancestor, including the empty one, is not found; an absolute path in that state, a dangling ancestor or an unreadable ancestor is an error, so the guard fails closed."),
     ("crates/codeflow-core/src/absence.rs", "missing_leaf", "ErrorKind::NotFound", 2, "The ancestor walk behind proven absence: an ancestor that is not found only continues the walk to the first existing one, and a dangling ancestor link becomes an error."),
     ("crates/codeflow-core/src/absence.rs", "missing_leaf", "is_dir", 1, "Type check on ancestor metadata obtained with errors propagated; a non-directory ancestor is reported as such, which proven_absent turns into an error, never absence."),
@@ -6779,7 +6808,6 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/edit_guard.rs", "enforcement_patterns", "is_file", 1, "Git marker absence is proven; metadata errors propagate before classifying an existing linked-worktree gitfile."),
     ("crates/codeflow-core/src/hooks/edit_guard.rs", "find_candidates", "is_dir", 1, "Directory entry file_type errors propagate before testing the obtained type."),
     ("crates/codeflow-core/src/hooks/git_discard.rs", "restore_paths", "is_dir", 1, "Missing paths are proven absent; existing symlink metadata errors propagate before directory classification."),
-    ("crates/codeflow-core/src/hooks/git_guard.rs", "every_path_below", "is_dir", 1, "Obtained path metadata; failures produce GlobStop::Unreadable and refuse the glob judgment."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "expand_components", "is_dir", 1, "Obtained entry FileType; failures produce GlobStop::Unreadable rather than omitting recursion."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_directory", "is_dir", 1, "After proven absence handling, metadata errors are unproven; a known non-directory has no glob children."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "read_sed_script", "is_file", 2, "Both path and opened-file metadata are fallibly obtained; errors already yield SedRead::Unreadable."),
@@ -6793,6 +6821,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/repo.rs", "hidden_checkout_under", "is_dir", 2, "Target metadata and directory entry file_type are obtained with errors propagated; only their already obtained types select traversal."),
     ("crates/codeflow-core/src/hooks/repo.rs", "hidden_checkout_under", "is_file", 1, "Marker absence is proven first and metadata errors propagate; its obtained type selects gitfile parsing."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open_checkout", "is_dir", 1, "Marker metadata was obtained with errors propagated; this tests its type, not its existence."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "marker", "is_dir", 1, "Records the type of metadata symlink_metadata_optional obtained; a read error leaves the owner without a marker, so it is opened again, and a marker only detects change, so it never removes an owner."),
     ("crates/codeflow-core/src/hooks/repo.rs", "registered_marker", "is_file", 1, "Registration symlink metadata is read with errors propagated; only a regular file is accepted, so a symlink or another type fails closed before absence is judged."),
     ("crates/codeflow-core/src/hooks/repo.rs", "read_registration", "is_file", 1, "Marker metadata was obtained with errors propagated; the type selects the physical gitfile parent cross-check."),
     ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "ErrorKind::NotADirectory", 1, "Selects repair wording after a ledger write has already failed; the original LedgerUnwritten error remains."),
@@ -6815,7 +6844,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/model_catalog/scan.rs", "scan", "is_dir", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/model_catalog/scan.rs", "scan", "is_file", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/model_qualification.rs", "load_bindings", "is_dir", 1, "Absence is proven first; a directory check that fails returns Err, so an unreadable directory refuses and is never read as empty."),
-    ("crates/codeflow-core/src/model_qualification.rs", "read_bounded_json", "is_file", 2, "Type checks on metadata obtained with errors propagated; false returns Err."),
+    ("crates/codeflow-core/src/model_qualification.rs", "read_bounded_json_with_hook", "is_file", 2, "Type checks on metadata obtained with errors propagated; false returns Err."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_dir", 1, "Type check on entry.file_type(), whose error propagates out of load_skill_tree to its callers."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_file", 1, "Type check on entry.file_type(), whose error propagates; a regular file is then read with its error propagated."),
     ("crates/codeflow-core/src/bounded_file.rs", "read_regular", "is_file", 1, "Type check on std::fs::metadata with its error propagated, so a missing path or dangling link keeps NotFound for the caller; a non-regular file is refused with InvalidInput before it is opened, so a fifo never blocks."),
@@ -6960,10 +6989,11 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/workgraph/layout.rs", "task_dir_has_record", "is_file", 1, "Type check on entry.file_type() with errors mapped to Unreadable."),
     ("crates/codeflow-core/src/workgraph/layout.rs", "task_record_files", "is_dir", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/workgraph/lifecycle.rs", "recorded_baseline", "ErrorKind::NotFound", 1, "Gives the empty baseline only after proven_absent confirms the file is missing."),
+    ("crates/codeflow-core/src/workgraph/lifecycle.rs", "project_table_in", "ErrorKind::NotFound", 1, "Reads no Outcome marker only after proven_absent confirms project.toml is missing; every other read error refuses."),
     ("crates/codeflow-core/src/workgraph/light_paths.rs", "next_adr_id", "ErrorKind::NotFound", 1, "Starts at ADR-0001 only after proven_absent confirms the directory is missing."),
     ("crates/codeflow-core/src/workgraph/record_template.rs", "load", "ErrorKind::NotFound", 1, "Uses the embedded template only when proven_absent confirms the project template is missing; otherwise it refuses."),
-    ("crates/codeflow-core/src/workgraph/history_graph.rs", "identity", "is_file", 1, "Metadata from the opened cache must be a regular file; every other file type refuses, never means absent."),
-    ("crates/codeflow-core/src/workgraph/history_graph.rs", "identity", "ErrorKind::NotFound", 1, "A missing optional graph, chain or alternates file adds no cached history; every other read failure refuses. A chain-named graph must exist."),
+    ("crates/codeflow-core/src/workgraph/history_graph.rs", "snapshot", "is_file", 1, "Metadata from the opened cache must be a regular file; every other file type refuses, never means absent."),
+    ("crates/codeflow-core/src/workgraph/history_graph.rs", "snapshot", "ErrorKind::NotFound", 1, "A missing optional graph, chain or alternates file adds no cached history; every other read failure refuses. A chain-named graph must exist."),
     ("crates/codeflow-core/src/workgraph/release_line.rs", "shallow_boundary", "ErrorKind::NotFound", 1, "Missing common or private shallow files contribute no boundary; both files are read, and every other read error refuses."),
     ("crates/codeflow-core/src/workgraph/release_line.rs", "History::parent_of", "exists", 1, "An object database without the object returns Err with a fetch or unshallow remedy; it never reads as a root or as absent."),
     ("crates/codeflow-core/src/workgraph/release_line.rs", "history_overlay", "ErrorKind::NotFound", 1, "A graft file that cannot be found is unreadable to git and libgit2 as well, so no overlay is in effect for either; other errors refuse."),

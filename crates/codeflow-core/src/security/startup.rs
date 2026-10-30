@@ -814,9 +814,21 @@ struct Line<'a> {
     /// Every `NAME=value` the line sets, which a writer may read as options
     /// ([`super::unresolved::line_assignments`]).
     environment: Vec<(String, String)>,
+    /// Whether [`Line::text`] names `RIPGREP_CONFIG_PATH`, read once for
+    /// all its segments ([`Line::names_ripgrep_config`]).
+    ripgrep_config: std::cell::OnceCell<bool>,
 }
 
 impl Line<'_> {
+    /// Whether the line names `RIPGREP_CONFIG_PATH`. Reading it expands the
+    /// whole line, so it is read on first use and kept: asking once per
+    /// segment made a long chain quadratic.
+    fn names_ripgrep_config(&self) -> bool {
+        *self
+            .ripgrep_config
+            .get_or_init(|| super::search_pattern::names_ripgrep_config(self.text))
+    }
+
     /// A finding about this line's class: `security.shell_startup`, which
     /// always blocks, for a startup file; `git.hook_integrity` at its policy
     /// level for a user or system git configuration file, the rule a direct
@@ -1431,6 +1443,7 @@ fn judge_class(
         unknown: run.unknown.clone(),
         staged: false,
         environment: super::unresolved::line_assignments(segments),
+        ripgrep_config: std::cell::OnceCell::new(),
     };
     line.assigned = literal_assignments(segments);
     line.staged = staged_name(segments, &line).is_some();
@@ -2504,7 +2517,7 @@ fn search_words<'a>(
         .get(literal.len().saturating_sub(args.len())..)
         .filter(|tail| tail.len() == args.len())
         .map_or_else(|| vec![false; args.len()], <[bool]>::to_vec);
-    let configured = super::search_pattern::names_ripgrep_config(line.text);
+    let configured = line.names_ripgrep_config();
     if let Some(v) = preprocessor_violation(name, args, &literal, configured, line, dirs) {
         return Err(v);
     }
