@@ -258,7 +258,13 @@ a `-name` test in a plain conjunction: `find ~/.codex -type f -exec cat {}
 available; with `-L` or `-follow` it refuses as cannot-verify. `find`
 piped into `xargs` gives the command input the guard does not read, so
 `find src | xargs cat` refuses as cannot-verify, as `ls | xargs cat`
-does; use `find ... -exec ... {} +`.
+does; use `find ... -exec ... {} +`. `fd` and `fdfind` with `-x`,
+`--exec`, `-X` or `--exec-batch` read their roots (the operands after the
+pattern, `--search-path` values, or the current directory) the same way,
+without narrowing by the pattern: `fd . ~/.codex -x cat` refuses, while
+`fd . src -x cat` stays available. `-L`, `--follow`, an option the guard
+does not know and a `--base-directory` the guard cannot follow refuse as
+cannot-verify.
 Listings and metadata operands do not inherit the ancestor rule for content
 readers; explicit secret-store operands retain their own protection.
 
@@ -275,10 +281,12 @@ part standing for any text: `cat ~/.codex/$(echo auth).json` refuses as
 cannot-verify because it may name `~/.codex/auth.json`, while `cat
 src/$(echo main).rs` stays available. A command word the shell fills in
 at run time (`$P`, `"$P"`, `${P}`, after a launcher too) refuses as
-cannot-verify unless the line assigns it a one-word value the guard
-resolves: `P=ls; $P` stays available, while a value with blanks
+cannot-verify unless the line assigns it a value the guard resolves:
+`P=ls; $P` stays available, while an unquoted value with blanks
 (`P='cat README.md'; $P`), which the shell splits at run time, refuses as
-cannot-verify. So does a program word the line does not set: an inherited
+cannot-verify. A quoted `"$P"` whose value holds blanks is judged as the
+command line its words form; the shell runs no program by that name, so
+this reading only adds refusals. So does a program word the line does not set: an inherited
 `$EDITOR`, `$PAGER` or `$SHELL`, and a forwarded `"$@"` (`f() { "$@"; };
 f printf x`). Name the program literally instead. A program value Git
 runs is a different construct: Git hands it to a shell as a command line,
@@ -287,7 +295,11 @@ reachable from any directory, so this refusal does not depend on where
 the line runs. A source glob that expands
 completely without secret matches remains available; the same glob refuses
 after `id_rsa.rs` is planted among its matches. A quoted shell wildcard
-remains literal, including `cat < 'id_rs?'`. Lines naming dotglob,
+remains literal, including `cat < 'id_rs?'`. A zsh `^` negation that opens
+a path component (`^README.md`) may match any name there; one after a
+literal part of its component (`HEAD^`, `main^2`) matches only names that
+start with that part, so caret revisions stay available and `cat
+copies/id^` refuses when `copies/id_rsa` exists. Lines naming dotglob,
 GLOBIGNORE or globdots make secret-read globs unverified because those
 options change hidden-file selection.
 
@@ -646,6 +658,34 @@ natively. The command guard refuses that workspace read, and the installed
 prove live harness dispatch or profile adoption. Linux/WSL and native Windows
 sandbox enforcement require separate platform evidence. A seat without an
 active filesystem sandbox has no native backstop.
+
+### Command launchers the guards model
+
+Operator decision 2026-10-29: where a class cannot be closed soundly, the
+text guard's promise is narrowed instead. A word naming a secret or an
+enforcement path is judged as any program's operand, whatever launches it.
+The command a launcher runs, the directory it runs in and the paths a
+launcher hands it are read only for this closed list, Git's own runners
+(read by the Git runner reader) and the programs below; the code holds the
+same list in one place (`security/launchers.rs`), and a test keeps the two
+equal.
+
+- Launchers: `-`, `builtin`, `busybox`, `caffeinate`, `chrt`, `command`,
+  `doas`, `env`, `exec`, `gsudo`, `ionice`, `nice`, `nocorrect`,
+  `noglob`, `nohup`, `pkexec`, `setsid`, `stdbuf`, `sudo`, `taskset`,
+  `time`, `timeout`, `unbuffer`, `xcrun`, and the GNU names of the
+  coreutils ones with a g prefix.
+- Suppliers: `fd`, `fdfind`, `find`, `parallel`, `watch`, `xargs`.
+- Package runners: `bunx`, `npx`, `pnpx`, `pnx`.
+- Shells: `ash`, `bash`, `cmd`, `csh`, `dash`, `fish`, `ksh`, `lksh`,
+  `mksh`, `oksh`, `posh`, `powershell`, `pwsh`, `rbash`, `sh`, `tcsh`,
+  `yash`, `zsh`.
+- Interpreters: `deno`, `make`, `node`, `nodejs`, `osascript`, `perl`,
+  `python`, `ruby`.
+
+A program outside this list that moves the command it runs to another
+directory, or hands it paths it finds, is outside the text guard's
+promise; the qualified shell parser (TSK-1073, 4.0.0) owns that residual.
 
 ## Planning amendment paths
 
@@ -1323,10 +1363,19 @@ operands.
   (`gzip`, `xz`, `zstd --rm`); the output operand of `uniq` and `xxd`; the
   prefix `split` and `csplit` write under; and Git's own overwrites: `git
   checkout [REV] -- PATH`, `git restore PATH` (not `--staged` alone),
-  `git checkout-index` and `git apply --directory=DIR`. `git worktree
-  remove` without `--force` removes only a clean worktree, whose files are
-  all committed: it is the sanctioned cleanup after a landing and stays
-  allowed. The writer list stays a filter that only refuses; the
+  `git checkout-index` and `git apply --directory=DIR`. A path is judged
+  as written: one naming an enforcement file, or a glob or pathspec that
+  may select one (`-- .claude`, `-- '*'`, `-- :/`), refuses. A path that
+  names only a directory holding enforcement files (`git checkout main --
+  .`, `git restore .`, `git checkout-index -a -f`) restores their committed
+  content, as switching to that ref does, and is not refused; switching
+  refs stays allowed by necessity, so refusing those spellings would
+  protect nothing it leaves open. The commit operand of `git checkout`
+  (`-b`, `-B` and `--orphan` start points, a revision before `--`, and a
+  first operand with a `~N` or `^N` suffix) is not a written path. `git
+  worktree remove` without `--force` removes only a clean worktree, whose
+  files are all committed: it is the sanctioned cleanup after a landing
+  and stays allowed. The writer list stays a filter that only refuses; the
   installed sandbox's write denies remain the backstop for a writer it
   does not name.
 
