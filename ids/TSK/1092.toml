@@ -1,0 +1,11 @@
+id = "TSK-1092"
+uid = "1a4f55e1-96d4-4a26-a6e9-84b859ac0f76"
+kind = "TSK"
+title = "A refused interpreter that names an enforcement path says what it found and names the read route"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T20:33:34Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
