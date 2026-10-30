@@ -173,6 +173,27 @@ under-design and a reviewer refuses it. A shortcut never weakens a guard,
 hook, gate, policy, credential path, input validation or other security
 control; those stay under "Match the gate".
 
+**Declare each value once.** A value with meaning (a name, id, path,
+setting, limit or closed set of strings) is declared once, as a constant,
+enum or type, and every use reads it, is generated from it or is checked
+against it. A value used in one place, or whose copies would change for
+different reasons, needs no constant. A closed set of strings that the
+project defines is an enum or literal type, not raw strings compared by
+hand. Where a file cannot import from the home's language (a workflow,
+policy, infrastructure or config file), its copy is generated from the home
+or a check compares the two. A shared shape or helper has one home that
+callers import. DRY and modular mean one home for each piece of knowledge,
+so a rename is one edit. Code that only looks alike but changes for
+different reasons stays separate, since a wrong shared abstraction costs
+more than the copy. Before writing a value, a closed set or a helper, look
+for a home the project already has and use it. A deliberate copy is allowed
+only with its reason at the site, in these cases: a test's expected value,
+kept independent of the code under test; a stable protocol or format
+constant fixed outside the project; documentation and examples; and a mirror
+that is generated from the home or checked against it. Any other new copy of
+a value or code that already has a home is under-design, and a reviewer
+refuses it.
+
 ## Prove it at every surface
 
 **Prove it at every surface.** Verify the work where it runs: unit,

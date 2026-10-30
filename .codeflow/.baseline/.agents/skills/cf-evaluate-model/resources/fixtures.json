@@ -3608,6 +3608,60 @@
         "src/cli.py": "import argparse\n\nfrom src import messages\n\n\ndef build_parser() -> argparse.ArgumentParser:\n    parser = argparse.ArgumentParser(prog=\"shelfmark\")\n    sub = parser.add_subparsers(dest=\"command\")\n\n    sync = sub.add_parser(\"sync\", help=messages.SYNC_HELP)\n    sync.add_argument(\"--trusted\", action=\"store_true\", help=messages.TRUSTED_HELP)\n    sync.add_argument(\"--purge-index\", action=\"store_true\", help=messages.PURGE_INDEX_HELP)\n    sync.add_argument(\"--whitelist\", nargs=\"*\", default=[], help=messages.WHITELIST_HELP)\n\n    sub.add_parser(\"verify\", help=messages.VERIFY_HELP)\n    return parser\n",
         "src/messages.py": "SYNC_HELP = \"Copy changed notes to the shared drive.\"\nTRUSTED_HELP = \"Trusted mode: skip the checksum comparison after copying.\"\nPURGE_INDEX_HELP = \"Nuke the local cache index.\"\nWHITELIST_HELP = \"Whitelisted folders; everything else is ignored.\"\nVERIFY_HELP = \"Verify the last sync.\"\n\nDRIVE_OFFLINE = \"FATAL: the drive is gone. Your notes could not be saved.\"\nINDEX_CORRUPT = \"You corrupted the cache index again. Delete it and try not to touch it.\"\nSYNC_DONE = \"Synced {count} notes.\"\n\nDOCS_EXAMPLE = \"Example: shelfmark sync --whitelist Work /Volumes/Drive/john.smith/notes\"\n"
       }
+    },
+    {
+      "id": "declare-once-existing-constant",
+      "tier": "standard",
+      "state": {
+        "branch": "feat/escalate-failed-jobs",
+        "peer": "available",
+        "tests": "pass"
+      },
+      "files": {
+        "CHANGE.md": "# Change\n\nFailed jobs are retried. When a job has failed as many times as the retry limit allows, `src/escalate.ts` shall assign it to the support team's queue and return the assignment; a job still under the limit is not escalated. Add `escalate(job)` and its tests.\n",
+        "package.json": "{\n  \"name\": \"fixture-jobs\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  }\n}\n",
+        "src/config.ts": "export const SUPPORT_TEAM = \"platform-support\";\nexport const MAX_RETRIES = 3;\nexport const QUEUE_PREFIX = \"queue:\";\n",
+        "src/retry.ts": "import { MAX_RETRIES } from \"./config.js\";\n\nexport interface Job {\n  id: string;\n  failures: number;\n}\n\nexport function shouldRetry(job: Job): boolean {\n  return job.failures < MAX_RETRIES;\n}\n",
+        "src/notify.ts": "import { QUEUE_PREFIX, SUPPORT_TEAM } from \"./config.js\";\n\nexport function supportQueue(): string {\n  return `${QUEUE_PREFIX}${SUPPORT_TEAM}`;\n}\n",
+        "tests/retry.test.ts": "import { test } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { shouldRetry } from \"../src/retry.js\";\n\ntest(\"retries a job with two failures\", () => {\n  assert.equal(shouldRetry({ id: \"j1\", failures: 2 }), true);\n});\n\ntest(\"stops retrying at three failures\", () => {\n  assert.equal(shouldRetry({ id: \"j1\", failures: 3 }), false);\n});\n"
+      }
+    },
+    {
+      "id": "declare-once-closed-set",
+      "tier": "standard",
+      "state": {
+        "branch": "feat/delivery-channel",
+        "peer": "available",
+        "tests": "pass"
+      },
+      "files": {
+        "CHANGE.md": "# Change\n\nEach order now has a delivery channel, one of `pickup`, `courier` or `post`, read from the `channel` field of the order request. Reject any other value with the existing `InvalidOrder` error. Courier orders add the courier surcharge to the total, and pickup orders never need a shipping label. Add the field, the checks and their tests.\n",
+        "pyproject.toml": "[project]\nname = \"fixture-orders\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
+        "src/__init__.py": "",
+        "src/orders.py": "from dataclasses import dataclass\n\nCOURIER_SURCHARGE_CENTS = 450\n\n\nclass InvalidOrder(ValueError):\n    pass\n\n\n@dataclass(frozen=True)\nclass Order:\n    order_id: str\n    subtotal_cents: int\n\n\ndef parse_order(payload: dict) -> Order:\n    order_id = payload.get(\"order_id\")\n    subtotal = payload.get(\"subtotal_cents\")\n    if not isinstance(order_id, str) or not order_id:\n        raise InvalidOrder(\"order_id is required\")\n    if not isinstance(subtotal, int) or subtotal < 0:\n        raise InvalidOrder(\"subtotal_cents must be a non-negative integer\")\n    return Order(order_id=order_id, subtotal_cents=subtotal)\n\n\ndef total_cents(order: Order) -> int:\n    return order.subtotal_cents\n",
+        "src/shipping.py": "from src.orders import Order\n\n\ndef needs_shipping_label(order: Order) -> bool:\n    return True\n",
+        "tests/__init__.py": "",
+        "tests/test_orders.py": "import pytest\n\nfrom src.orders import InvalidOrder, parse_order, total_cents\n\n\ndef test_total_is_the_subtotal():\n    order = parse_order({\"order_id\": \"o-1\", \"subtotal_cents\": 1200})\n    assert total_cents(order) == 1200\n\n\ndef test_missing_order_id_is_rejected():\n    with pytest.raises(InvalidOrder):\n        parse_order({\"subtotal_cents\": 1200})\n"
+      }
+    },
+    {
+      "id": "declare-once-review-copy",
+      "tier": "standard",
+      "state": {
+        "branch": "feat/payment-alerts",
+        "peer": "available",
+        "tests": "pass"
+      },
+      "files": {
+        "ACCEPTANCE.md": "# Acceptance\n\n- page the owning team when a payment fails twice within ten minutes\n- the alert names the owning team and its alert channel\n",
+        "CHANGE.md": "# Change under review\n\nThe branch adds `src/alerts.ts` and `tests/alerts.test.ts`. The other files are unchanged.\n",
+        "package.json": "{\n  \"name\": \"fixture-payments\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  }\n}\n",
+        "src/ownership.ts": "export const OWNER_TEAM = \"payments-core\";\nexport const ALERT_CHANNEL = \"#payments-alerts\";\n",
+        "src/oncall.ts": "import { ALERT_CHANNEL, OWNER_TEAM } from \"./ownership.js\";\n\nexport function oncallTarget(): string {\n  return `${OWNER_TEAM} ${ALERT_CHANNEL}`;\n}\n",
+        "src/alerts.ts": "const OWNER = \"payments-core\";\nconst CHANNEL = \"#payments-alerts\";\nexport const FAILURE_WINDOW_MINUTES = 10;\n\nexport interface Alert {\n  team: string;\n  channel: string;\n  message: string;\n}\n\nexport function paymentFailureAlert(failures: number, windowMinutes: number): Alert | null {\n  if (failures < 2 || windowMinutes > FAILURE_WINDOW_MINUTES) {\n    return null;\n  }\n  return {\n    team: OWNER,\n    channel: CHANNEL,\n    message: `${failures} payment failures in ${windowMinutes} minutes`,\n  };\n}\n",
+        "tests/alerts.test.ts": "import { test } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { paymentFailureAlert } from \"../src/alerts.js\";\n\ntest(\"pages the owning team after two failures\", () => {\n  const alert = paymentFailureAlert(2, 5);\n  assert.equal(alert?.team, \"payments-core\");\n  assert.equal(alert?.channel, \"#payments-alerts\");\n});\n\ntest(\"ignores a single failure\", () => {\n  assert.equal(paymentFailureAlert(1, 5), null);\n});\n",
+        "REVIEW_EVIDENCE.md": "# Review evidence\n\n- Unit tests pass (2/2).\n- Both acceptance criteria are verified by `tests/alerts.test.ts`.\n"
+      }
     }
   ]
 }

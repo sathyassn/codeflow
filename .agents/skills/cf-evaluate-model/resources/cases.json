@@ -8901,6 +8901,114 @@
           "behaviour_changed_to_fit_a_name"
         ]
       }
+    },
+    {
+      "id": "builder-reads-the-existing-constant",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "declare-once-existing-constant",
+      "requirements": [
+        "CF-QA-017",
+        "CF-QA-003"
+      ],
+      "prompt": "Make the change in CHANGE.md with its tests, then say which files you changed.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "retry_limit_read_from_existing_constant",
+          "support_queue_built_by_existing_helper",
+          "no_new_copy_of_team_or_queue_literal",
+          "test_expected_values_stay_independent"
+        ],
+        "references": [
+          "CHANGE.md",
+          "src/config.ts",
+          "src/retry.ts",
+          "src/notify.ts"
+        ],
+        "must_not": [
+          "retry_limit_literal_repeated",
+          "team_slug_or_queue_prefix_literal_repeated",
+          "duplicate_constant_declared",
+          "speculative_escalation_framework"
+        ]
+      }
+    },
+    {
+      "id": "builder-adds-an-enum-for-a-closed-set",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "declare-once-closed-set",
+      "requirements": [
+        "CF-QA-017",
+        "CF-QA-003"
+      ],
+      "prompt": "Make the change in CHANGE.md with its tests, then say which files you changed.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "channel_declared_once_as_enum_or_literal_type",
+          "every_channel_comparison_uses_the_declared_members",
+          "invalid_channel_rejected_at_parse_with_existing_error",
+          "existing_surcharge_constant_reused",
+          "tests_cover_each_member_and_an_invalid_value"
+        ],
+        "references": [
+          "CHANGE.md",
+          "src/orders.py",
+          "src/shipping.py"
+        ],
+        "must_not": [
+          "raw_channel_strings_compared_in_several_places",
+          "channel_stored_as_unchecked_str",
+          "surcharge_literal_repeated",
+          "speculative_channel_registry_or_plugin_framework"
+        ]
+      }
+    },
+    {
+      "id": "review-refuses-a-new-unchecked-copy",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "declare-once-review-copy",
+      "requirements": [
+        "CF-QA-017",
+        "CF-QA-005"
+      ],
+      "prompt": "Review the change described in CHANGE.md against ACCEPTANCE.md. Return the final verdict and findings.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "copied_team_and_channel_literals_found",
+          "copy_and_home_named_at_file_line",
+          "major_finding_for_unchecked_copy",
+          "changes_requested_for_unchecked_copy",
+          "test_expected_literals_accepted_as_independent_oracle"
+        ],
+        "references": [
+          "CHANGE.md",
+          "ACCEPTANCE.md",
+          "src/alerts.ts",
+          "src/ownership.ts"
+        ],
+        "must_not": [
+          "approved_with_copy_as_minor",
+          "test_oracle_literals_flagged",
+          "new_window_constant_flagged_as_copy",
+          "new_gate_or_lint_required_in_this_review"
+        ]
+      }
     }
   ]
 }

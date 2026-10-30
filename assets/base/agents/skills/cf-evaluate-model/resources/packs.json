@@ -220,7 +220,10 @@
         "design-fidelity-review",
         "a11y-conformance-target",
         "changed-journey-needs-whole-flow-proof",
-        "parallel-ui-resources-isolate-and-clean"
+        "parallel-ui-resources-isolate-and-clean",
+        "builder-reads-the-existing-constant",
+        "builder-adds-an-enum-for-a-closed-set",
+        "review-refuses-a-new-unchecked-copy"
       ]
     },
     {

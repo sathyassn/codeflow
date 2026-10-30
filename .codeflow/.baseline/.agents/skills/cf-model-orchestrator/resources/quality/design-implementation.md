@@ -13,11 +13,13 @@ as the changed path. If the path meets the trigger in
 [performance](performance.md), read it.
 
 Follow the language, framework, and repository idioms; keep business rules
-single-sourced; use focused composable units, clear interfaces, and explicit
-state and side effects. Do not hard-code supported variability, secrets, or
-duplicated domain decisions; named stable invariants need not become
-configuration. Unexplained hard-coding, duplicated business knowledge,
-swallowed errors, or missing accepted edge/error handling is brittle
+single-sourced and declare each value with meaning once (the discipline
+rules' declare-once rule in "Write only what earns its keep"); use focused
+composable units, clear interfaces, and explicit state and side effects. Do
+not hard-code supported variability, secrets, or duplicated domain decisions;
+named stable invariants need not become configuration. Unexplained
+hard-coding, duplicated business knowledge, a new unchecked copy of a value or
+code that has a home, swallowed errors, or missing accepted edge/error handling is brittle
 under-design and is `changes_requested`, even when the smaller diff passes;
 so is an unmarked shortcut (the discipline rules' shortcut rule).
 

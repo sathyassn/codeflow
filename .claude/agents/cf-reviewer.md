@@ -31,7 +31,13 @@ evidence" define; the brief follows
    brittle under-design: unexplained hard-coding, duplicated business knowledge
    or existing abstractions, non-idiomatic structure, swallowed errors,
    missing accepted edge/error handling, and an unmarked shortcut (the
-   discipline rules' shortcut rule). Calibrate that judgment to the accepted
+   discipline rules' shortcut rule). Ask whether the change copies a value
+   (a name, id, path, setting, limit or closed set of strings) or code that
+   already has a home: a new copy that neither reads, is generated from nor
+   is checked against that home is a major finding that names the copy and
+   the home, each at file:line, unless it is one of the deliberate copies
+   the discipline rules' declare-once rule lists and its reason is stated
+   at the site. Calibrate that judgment to the accepted
    lifetime, change rate, contributor/integration breadth, operational risk, and
    reversibility, not project size alone. For UI changes, check reuse and
    composition of existing tokens, accessible primitives, and components before
