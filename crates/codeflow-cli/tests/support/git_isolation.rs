@@ -37,9 +37,9 @@ pub fn names_host_state(name: &OsStr) -> bool {
 }
 
 /// Remove every inherited variable [`names_host_state`] names (every `GIT_*`
-/// variable except the maintenance settings the repository forces, such as
-/// `GIT_PAGER`, `GIT_TEMPLATE_DIR` and the author settings, and the
-/// variables in [`HOST_VARIABLES`]) and point the system and global
+/// variable, such as `GIT_PAGER`, `GIT_TEMPLATE_DIR` and the author
+/// settings, except the maintenance settings the repository forces, which
+/// stay; and the variables in [`HOST_VARIABLES`]) and point the system and global
 /// configuration at `/dev/null`. A test that needs a value sets it after this
 /// call.
 pub fn strip_host_git_state(cmd: &mut Command) -> &mut Command {
