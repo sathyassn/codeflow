@@ -439,10 +439,18 @@ fn restored_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, String> {
     let mut paths = Vec::new();
     let mut staged = false;
     let mut worktree = false;
+    let mut branch = false;
+    let mut separated = false;
     let mut words = rest.iter();
     while let Some(word) = words.next() {
         if word == "--" {
+            // Before `--`, `git checkout` takes only the tree-ish it
+            // restores from.
+            if verb == "checkout" {
+                paths.clear();
+            }
             paths.extend(words.by_ref().cloned());
+            separated = true;
             break;
         }
         if word.starts_with("--pathspec-from-file") {
@@ -451,6 +459,7 @@ fn restored_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, String> {
             ));
         }
         if valued.contains(&word.as_str()) {
+            branch |= verb == "checkout" && word != "--conflict";
             words.next();
             continue;
         }
@@ -473,7 +482,37 @@ fn restored_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, String> {
     if verb == "restore" && staged && !worktree {
         return Ok(Vec::new());
     }
+    if verb == "checkout" {
+        // `git checkout -b`, `-B` and `--orphan` switch branches and take
+        // no paths (Git refuses both at once).
+        if branch {
+            return Ok(Vec::new());
+        }
+        // Without `--`, Git reads a first operand that names a commit as
+        // the commit to check out. One with a revision suffix (`HEAD~3`,
+        // `main^`) is that commit: as a pathspec it could match only a
+        // tracked file literally so named, never an enforcement file.
+        if !separated && paths.first().is_some_and(|word| revision_suffixed(word)) {
+            paths.remove(0);
+        }
+    }
     Ok(paths)
+}
+
+/// A word spelled as a ref name followed by `~N` or `^N` suffixes.
+fn revision_suffixed(word: &str) -> bool {
+    let Some(at) = word.find(['~', '^']) else {
+        return false;
+    };
+    let (base, suffix) = word.split_at(at);
+    base.starts_with(|ch: char| ch.is_ascii_alphanumeric() || ch == '_')
+        && !base.contains("..")
+        && base
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || "_./-".contains(ch))
+        && suffix
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || ch == '~' || ch == '^')
 }
 
 pub(super) fn command_options(verb: &str) -> bool {
@@ -2251,4 +2290,35 @@ fn keeps_checkouts(program: &str, args: &[String]) -> bool {
                 | "pwd"
         )
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn written(verb: &str, line: &str) -> Vec<String> {
+        let rest: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+        restored_paths(verb, &rest).unwrap()
+    }
+
+    #[test]
+    fn checkout_writes_its_paths_and_not_its_commit() {
+        let none = Vec::<String>::new();
+        assert_eq!(written("checkout", "-B main HEAD~3"), none);
+        assert_eq!(written("checkout", "-b x origin/main"), none);
+        assert_eq!(written("checkout", "HEAD~3"), none);
+        assert_eq!(written("checkout", "main^"), none);
+        assert_eq!(written("checkout", "HEAD~1 -- a.txt"), vec!["a.txt"]);
+        assert_eq!(written("checkout", "-- .claude/x"), vec![".claude/x"]);
+        assert_eq!(
+            written("checkout", "main .claude/x"),
+            vec!["main", ".claude/x"]
+        );
+        assert_eq!(
+            written("checkout", "../.codeflow~1"),
+            vec!["../.codeflow~1"]
+        );
+        assert_eq!(written("restore", "--source HEAD~1 a.txt"), vec!["a.txt"]);
+        assert_eq!(written("restore", "--staged a.txt"), none);
+    }
 }
