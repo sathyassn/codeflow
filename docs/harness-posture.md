@@ -75,28 +75,28 @@ specific shell. `/cf-customize` must canary the selected shell and commands.
 ### Gate evidence in a Claude session
 
 The shipped Claude presets let a sandboxed session write
-`~/.codeflow/locks` and `~/.codeflow/gate-runs`, so a full gate run in the
-session can take its locks, pass its evidence preflight and copy its run
-folder to the durable home.
+`~/.codeflow/locks`, so `codeflow reserve` and quick-mode heavy targets can
+take their locks. No preset grants `~/.codeflow/gate-runs`: the operator
+decided on 2026-10-30 to drop that grant and add no local recorder
+(TSK-1044 AC-4).
 
-- **Writable reports earn no credit.** Any process of the user can write
-  `gate-runs`, the session through this grant and the candidate's tests in
-  any case, so no run record removes a target from any run (ADR-0089).
-  This holds whatever the grant.
+- **Full gates run outside the sandbox.** A full gate in a sandboxed
+  session fails its evidence preflight, so the primary runs it in the
+  operator's terminal or as an approved unsandboxed run. Only the primary
+  runs full gates. `codeflow doctor --check permissions` reports the
+  evidence folder as unwritable by design inside the sandbox.
+- **Writable reports earn no credit.** Any process of the user can still
+  write `gate-runs`, the candidate's tests included, so no run record
+  removes a target from any run (ADR-0089).
 - **Writes never follow a planted link.** The preflight, the lock files,
-  the run record, each target's logs and report copies, and the durable
-  copy refuse a link, junction or planted name at the build-output folder,
-  the CodeFlow home or anything beneath them, so a session that plants one
-  cannot redirect a later gate's writes, even one run outside the sandbox
-  (TSK-1044). The project folder, the parent of an absolute
-  `CARGO_TARGET_DIR` and the parent of the CodeFlow home are trusted as
-  roots; a session that cannot write those parents cannot replace them.
-- **The grant itself waits on the operator's decision** (TSK-1044 AC-4):
-  keep it, narrow it to the repository's own folder, or drop it. Until
-  the decision is recorded the presets keep it, and a full gate runs in
-  the session as before. If it is dropped, a sandboxed full gate fails the
-  evidence preflight and the durable copy, and full gates run outside the
-  sandbox: in the operator's terminal or as an approved unsandboxed run.
+  the run record, each target's logs and report copies, the stale-report
+  cleanup, the producer-output check and the durable copy refuse a link,
+  junction or planted name at the build-output folder, the CodeFlow home
+  or anything beneath them, so a session that plants one cannot redirect
+  a later gate's writes, even one run outside the sandbox. The project
+  folder, the parent of an absolute `CARGO_TARGET_DIR` and the parent of
+  the CodeFlow home are trusted as roots; a session that cannot write
+  those parents cannot replace them.
 
 ### Codex permission profile
 

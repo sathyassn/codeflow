@@ -585,11 +585,8 @@ const PRESENT_STATE_WRITE_ROOTS: [&str; 2] = [
 
 #[test]
 fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
-    use codeflow_core::testing::gate_guard::{HOME_EVIDENCE_DIR, HOME_LOCK_DIR};
-    let gate_roots = [
-        format!("~/.codeflow/{HOME_LOCK_DIR}"),
-        format!("~/.codeflow/{HOME_EVIDENCE_DIR}"),
-    ];
+    use codeflow_core::testing::gate_guard::HOME_LOCK_DIR;
+    let gate_roots = [format!("~/.codeflow/{HOME_LOCK_DIR}")];
     let expected: Vec<&str> = PRESENT_STATE_WRITE_ROOTS
         .iter()
         .copied()
@@ -605,7 +602,7 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
             .collect();
         assert_eq!(
             allow_write, expected,
-            "{name}: the sandbox may add only the cf-present state directory and the full gate's lock and evidence directories as write roots"
+            "{name}: the sandbox may add only the cf-present state directory and the gate's lock directory as write roots"
         );
         // The only write denies are the shell startup class and the default
         // git configuration files (TSK-242).
@@ -617,6 +614,35 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
             serde_json::json!(denied),
             "{name}: the sandbox denies writes only to the shell startup class and the default git configuration files"
         );
+    }
+}
+
+/// TSK-1044 AC-4, decided by the operator on 2026-10-30: no Claude preset
+/// grants the gate evidence folder, so a sandboxed session cannot plant or
+/// replace durable evidence; full gates run outside the sandbox. Checked in
+/// every shipped preset and in this repository's managed baseline copy.
+#[test]
+fn no_claude_settings_grant_the_gate_evidence_folder() {
+    use codeflow_core::testing::gate_guard::HOME_EVIDENCE_DIR;
+    let evidence = format!(".codeflow/{HOME_EVIDENCE_DIR}");
+    let mut copies: Vec<(String, serde_json::Value)> = preset_files()
+        .into_iter()
+        .map(|name| {
+            let value = load(&name);
+            (name, value)
+        })
+        .collect();
+    let baseline = repo_root().join(".codeflow/.baseline/.claude/settings.json");
+    copies.push((baseline.display().to_string(), read_json(&baseline)));
+    for (name, value) in copies {
+        let grants: Vec<&str> = value["sandbox"]["filesystem"]["allowWrite"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|path| path.contains(&evidence))
+            .collect();
+        assert!(grants.is_empty(), "{name} grants {grants:?}");
     }
 }
 
