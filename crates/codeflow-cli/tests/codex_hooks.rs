@@ -286,9 +286,11 @@ mod guard_forms;
 /// decisions, the line's, are proven by the `text_guard_invariant` replay.
 #[cfg(unix)]
 fn strict_run_time_refusal(out: &std::process::Output) -> bool {
+    let stderr = String::from_utf8_lossy(&out.stderr);
     out.status.code() == Some(2)
-        && String::from_utf8_lossy(&out.stderr)
-            .contains("the strict text rule cannot verify the run-time argument")
+        && stderr.matches("policy rule ").count() == 1
+        && stderr.contains("policy rule security.text_guard (block)")
+        && stderr.contains("the strict text rule cannot verify the run-time argument")
 }
 
 /// Run the shipped Codex exec-guard wiring through the shell, as Codex

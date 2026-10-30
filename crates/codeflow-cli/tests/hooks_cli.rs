@@ -24,7 +24,8 @@ mod text_rule;
 fn run_time_word_refusal(out: &Output) -> bool {
     let stderr = String::from_utf8_lossy(&out.stderr);
     out.status.code() == Some(2)
-        && stderr.contains("git.hook_integrity")
+        && stderr.matches("policy rule ").count() == 1
+        && stderr.contains("policy rule security.text_guard (block)")
         && stderr.contains("cannot verify the run-time argument")
 }
 
@@ -9050,7 +9051,7 @@ fn exec_guard_keeps_the_starting_directory_after_cd() {
 fn interpreter_argument_refused(output: &Output) -> bool {
     let err = String::from_utf8_lossy(&output.stderr);
     output.status.code() == Some(2)
-        && err.contains("git.hook_integrity")
+        && (err.contains("git.hook_integrity") || err.contains("security.text_guard"))
         && err.contains("interpreter")
         && !err.contains("interpreter code")
 }
@@ -9456,7 +9457,8 @@ fn guards_read_a_search_pattern_as_text() {
     for command in &cost {
         let out = run("exec-guard", command);
         let err = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+        // The strict rule's own refusal takes `security.text_guard`.
+        if out.status.code() != Some(2) || !err.contains("security.text_guard") {
             wrong.push(format!("exec-guard should refuse: {command}: {err}"));
         }
     }
@@ -9898,7 +9900,9 @@ fn shell_expansions_preserve_checkout_protection() {
                 output.status.code()
             );
             if output.status.code() != Some(expected)
-                || (refuse && !stderr.contains("git.hook_integrity"))
+                || (refuse
+                    && !stderr.contains("git.hook_integrity")
+                    && !stderr.contains("security.text_guard"))
             {
                 wrong.push(format!("{guard}: expected {expected}: {line}: {stderr}"));
             }
