@@ -295,25 +295,40 @@ fn perimeter(
     out
 }
 
-/// An open recovery window: B or C names a bypass actor.
+/// An open recovery window: any ruleset named as B or C names a bypass
+/// actor. Every ruleset of the name is judged, since GitHub does not keep
+/// names unique; two of one name fail, because `remote protect` refuses to
+/// write either and one could hold a list the other hides.
 fn open_windows(rulesets: &[Value], out: &mut Perimeter) {
-    let named = |name: &str| rulesets.iter().find(|r| r["name"] == name);
     for name in [RULESET_AUTHORITY_CHECKS, RULESET_LINE_CHECKS] {
-        let Some(ruleset) = named(name) else { continue };
-        let label = remote::ruleset_label(ruleset);
-        match ruleset.get("bypass_actors").and_then(Value::as_array) {
-            Some(actors) if !actors.is_empty() => out.fails.push(format!(
-                "ruleset {label} lets {} bypass it, so a recovery window is open since {}; close it: codeflow remote protect",
-                actors_text(actors),
-                ruleset
-                    .get("updated_at")
-                    .and_then(Value::as_str)
-                    .unwrap_or("an unknown time")
-            )),
-            Some(_) => {}
-            None => out
-                .unread
-                .push(format!("ruleset {label} bypass list not readable")),
+        let named: Vec<&Value> = rulesets.iter().filter(|r| r["name"] == name).collect();
+        if named.len() > 1 {
+            out.fails.push(format!(
+                "{} rulesets are named '{name}' ({}), so `codeflow remote protect` writes neither; keep one on the host, then run it",
+                named.len(),
+                named
+                    .iter()
+                    .map(|r| remote::ruleset_label(r))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        for ruleset in named {
+            let label = remote::ruleset_label(ruleset);
+            match ruleset.get("bypass_actors").and_then(Value::as_array) {
+                Some(actors) if !actors.is_empty() => out.fails.push(format!(
+                    "ruleset {label} lets {} bypass it, so a recovery window is open since {}; close it: codeflow remote protect",
+                    remote::actors_text(actors),
+                    ruleset
+                        .get("updated_at")
+                        .and_then(Value::as_str)
+                        .unwrap_or("an unknown time")
+                )),
+                Some(_) => {}
+                None => out
+                    .unread
+                    .push(format!("ruleset {label} bypass list not readable")),
+            }
         }
     }
 }
@@ -334,7 +349,7 @@ fn loose_authority_pins(rulesets: &[Value], out: &mut Perimeter) {
             .collect();
         if !loose.is_empty() {
             out.warns.push(format!(
-                "ruleset {} accepts {} from GitHub Actions or any source, which any workflow can produce; pin it to the authority App with `codeflow remote protect --check-app <id>`",
+                "ruleset {} accepts {} from GitHub Actions or any source, which any workflow can produce; pin it to the authority App on the host, since `codeflow remote protect` pins only a name its own rulesets leave unpinned and never changes a pin",
                 remote::ruleset_label(ruleset),
                 loose.join(", ")
             ));
@@ -458,24 +473,6 @@ fn rules_of<'a>(ruleset: &'a Value, kind: &'a str) -> impl Iterator<Item = &'a V
         .filter(move |rule| rule["type"] == kind)
 }
 
-/// `RepositoryRole 5 (always), Team 9 (pull_request)`.
-fn actors_text(actors: &[Value]) -> String {
-    actors
-        .iter()
-        .map(|actor| {
-            format!(
-                "{} {} ({})",
-                actor["actor_type"].as_str().unwrap_or("actor"),
-                actor["actor_id"]
-                    .as_u64()
-                    .map_or_else(|| "-".to_string(), |id| id.to_string()),
-                actor["bypass_mode"].as_str().unwrap_or("always")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// How the owned rulesets differ from `profile`.
 fn profile_gaps(rulesets: &[Value], profile: Profile, out: &mut Perimeter) {
     let mut gaps = Vec::new();
@@ -484,35 +481,41 @@ fn profile_gaps(rulesets: &[Value], profile: Profile, out: &mut Perimeter) {
         RULESET_AUTHORITY_CHECKS,
         RULESET_LINE_CHECKS,
     ] {
-        let Some(ruleset) = rulesets.iter().find(|r| r["name"] == name) else {
+        let named: Vec<&Value> = rulesets.iter().filter(|r| r["name"] == name).collect();
+        if named.is_empty() {
             gaps.push(format!("ruleset '{name}' is missing"));
             continue;
-        };
-        let label = remote::ruleset_label(ruleset);
-        let mut lacks = Vec::new();
-        if ruleset["enforcement"] != "active" {
-            lacks.push("it is not active".to_string());
         }
-        let include = ruleset
-            .pointer("/conditions/ref_name/include")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        if name != RULESET_LINE_CHECKS && !include.contains(&Value::from("~DEFAULT_BRANCH")) {
-            lacks.push("it does not target ~DEFAULT_BRANCH".to_string());
+        if named.len() > 1 {
+            gaps.push(format!("{} rulesets are named '{name}'", named.len()));
         }
-        if name == RULESET_AUTHORITY_UPDATES {
-            lacks.extend(update_gaps(ruleset, profile, out));
-        } else {
-            lacks.extend(checks_gaps(ruleset, name, profile));
-        }
-        if !lacks.is_empty() {
-            gaps.push(format!("ruleset {label}: {}", lacks.join(", ")));
+        for ruleset in named {
+            let label = remote::ruleset_label(ruleset);
+            let mut lacks = Vec::new();
+            if ruleset["enforcement"] != "active" {
+                lacks.push("it is not active".to_string());
+            }
+            let include = ruleset
+                .pointer("/conditions/ref_name/include")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if name != RULESET_LINE_CHECKS && !include.contains(&Value::from("~DEFAULT_BRANCH")) {
+                lacks.push("it does not target ~DEFAULT_BRANCH".to_string());
+            }
+            if name == RULESET_AUTHORITY_UPDATES {
+                lacks.extend(update_gaps(ruleset, profile, out));
+            } else {
+                lacks.extend(checks_gaps(ruleset, name, profile));
+            }
+            if !lacks.is_empty() {
+                gaps.push(format!("ruleset {label}: {}", lacks.join(", ")));
+            }
         }
     }
     if !gaps.is_empty() {
         out.warns.push(format!(
-            "the owned rulesets differ from the {} profile ({}); run `codeflow remote protect --profile {}`",
+            "the owned rulesets differ from the {} profile ({}); `codeflow remote protect --profile {}` adds a missing ruleset or rule, raises approvals, makes checks strict, activates and retargets; A's bypass list, an `update` rule on B or C, a changed pin and a duplicate name are edited on the host",
             profile.as_str(),
             gaps.join("; "),
             profile.as_str()
@@ -547,7 +550,7 @@ fn update_gaps(ruleset: &Value, profile: Profile, out: &mut Perimeter) -> Vec<St
                     if actors.is_empty() {
                         "empty".to_string()
                     } else {
-                        actors_text(actors)
+                        remote::actors_text(actors)
                     },
                     profile.as_str()
                 ));
@@ -2012,6 +2015,65 @@ jobs:
             "{}",
             result.message
         );
+    }
+
+    /// Security review round 1 (major): a second ruleset with B's or C's
+    /// name and a bypass actor fails, whether the first of that name is
+    /// bound, disabled or aimed at another ref; two rulesets of the name
+    /// fail even with empty lists, since `remote protect` refuses to write
+    /// either.
+    #[test]
+    fn every_ruleset_with_an_owned_name_is_judged() {
+        for name in ["codeflow authority checks", "codeflow line checks"] {
+            for first in ["bound", "disabled", "retargeted"] {
+                let mut world = protected_world();
+                match first {
+                    "disabled" => ruleset_mut(&mut world, name)["enforcement"] = "disabled".into(),
+                    "retargeted" => {
+                        ruleset_mut(&mut world, name)["conditions"]["ref_name"]["include"] =
+                            serde_json::json!(["refs/heads/elsewhere"]);
+                    }
+                    _ => {}
+                }
+                let mut second = ruleset_mut(&mut world, name).clone();
+                second["id"] = 40.into();
+                second["enforcement"] = "active".into();
+                second["bypass_actors"] = serde_json::json!([
+                    { "actor_id": 9, "actor_type": "Team", "bypass_mode": "always" }
+                ]);
+                world.rulesets.push(second);
+                let result = judge(world, Some("solo-administrator"));
+                assert_eq!(
+                    result.status,
+                    Status::Fail,
+                    "{name} {first}: {}",
+                    result.message
+                );
+                assert!(
+                    result.message.contains("lets Team 9 (always) bypass it"),
+                    "{name} {first}: {}",
+                    result.message
+                );
+            }
+            let mut world = protected_world();
+            let mut twin = ruleset_mut(&mut world, name).clone();
+            twin["id"] = 41.into();
+            world.rulesets.push(twin);
+            let result = judge(world, None);
+            assert_eq!(
+                result.status,
+                Status::Fail,
+                "{name} twin: {}",
+                result.message
+            );
+            assert!(
+                result
+                    .message
+                    .contains(&format!("2 rulesets are named '{name}'")),
+                "{name} twin: {}",
+                result.message
+            );
+        }
     }
 
     /// AC-3: a non-strict check rule on the lines (this repository's

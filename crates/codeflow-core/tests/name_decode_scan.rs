@@ -3718,9 +3718,9 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // A bypass actor's missing type or mode is shown as a placeholder in the failure message; the non-empty list alone fails the check.
+    // A bypass actor's missing type or mode is shown as a placeholder in a report or failure line; the non-empty list alone decides.
     (
-        "crates/codeflow-core/src/doctor/remote_perimeter.rs",
+        "crates/codeflow-core/src/remote.rs",
         "actors_text",
         "obtain-absent:as_str",
         2,

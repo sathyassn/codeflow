@@ -1333,16 +1333,36 @@ fn describe(body: &Value) -> String {
             other => parts.push(other.to_string()),
         }
     }
-    let actors = body
-        .get("bypass_actors")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len);
-    parts.push(if actors == 0 {
-        "no bypass".to_string()
-    } else {
-        format!("{actors} bypass actor(s)")
-    });
+    parts.push(
+        match body
+            .get("bypass_actors")
+            .and_then(Value::as_array)
+            .filter(|actors| !actors.is_empty())
+        {
+            None => "no bypass".to_string(),
+            Some(actors) => format!("bypass: {}", actors_text(actors)),
+        },
+    );
     parts.join(", ")
+}
+
+/// A bypass list for a reader: `RepositoryRole 5 (always), Team 9
+/// (pull_request)`; a missing mode is GitHub's default, `always`.
+pub(crate) fn actors_text(actors: &[Value]) -> String {
+    actors
+        .iter()
+        .map(|actor| {
+            format!(
+                "{} {} ({})",
+                actor["actor_type"].as_str().unwrap_or("actor"),
+                actor["actor_id"]
+                    .as_u64()
+                    .map_or_else(|| "-".to_string(), |id| id.to_string()),
+                actor["bypass_mode"].as_str().unwrap_or("always")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // ---------------------------------------------------------------------------

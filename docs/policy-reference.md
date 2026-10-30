@@ -995,8 +995,9 @@ writes B's empty bypass list back. The same route applies to C for a line.
   host cannot narrow this; it is accepted, and visible in `doctor` and the
   host's audit log.
 - **A window cannot stay open unnoticed.** `codeflow doctor --check
-  remote-perimeter` fails while B's or C's bypass list is not empty, naming
-  the actors, the time the ruleset last changed and the close.
+  remote-perimeter` fails while any ruleset named as B or C has a bypass
+  list that is not empty, naming the actors, the time the ruleset last
+  changed and the close.
 - **Not yet proven on a host.** This route has not been exercised on a
   hosted fixture. Until the scratch-repository fixture of TSK-1080 runs it,
   treat it as the planned route, not a proven one.
@@ -1006,7 +1007,8 @@ writes B's empty bypass list back. The same route applies to C for a line.
 `codeflow doctor --check remote-perimeter [--profile <name>]` adds these
 to its required-checks answer:
 
-- **Fail:** B or C lists a bypass actor.
+- **Fail:** any ruleset named as B or C lists a bypass actor, or two
+  rulesets share B's or C's name (`remote protect` writes neither).
 - **Warn:** with `--profile`, the owned rulesets differ from it or one is
   missing; classic protection on the default branch has `enforce_admins`
   off; a required-checks rule on the line pattern is not strict; no active

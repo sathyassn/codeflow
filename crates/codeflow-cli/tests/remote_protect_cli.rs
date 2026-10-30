@@ -241,7 +241,7 @@ fn two_runs_write_the_owned_rulesets_once_and_never_the_foreign_one() {
     assert!(first.status.success(), "{report}");
     assert!(report.contains("status: applied"), "{report}");
     for name in [
-        "created ruleset 'codeflow authority updates' (1001) on ~DEFAULT_BRANCH",
+        "created ruleset 'codeflow authority updates' (1001) on ~DEFAULT_BRANCH: only bypass actors update it, bypass: RepositoryRole 5 (always)",
         "created ruleset 'codeflow authority checks' (1002) on ~DEFAULT_BRANCH",
         "created ruleset 'codeflow line checks' (1003) on refs/heads/integration/**",
         "strict checks: trusted: commit standards (app 15368), trusted: secret scan (app 15368), codeflow gates (app 15368), windows (app 15368)",
