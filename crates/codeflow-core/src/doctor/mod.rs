@@ -165,6 +165,10 @@ pub struct Options {
     /// `GROK_HOME`, `GROK_FOLDER_TRUST`); `None` reads the process
     /// environment.
     pub env_var: Option<EnvVarFn>,
+    /// The branch-protection profile `remote-perimeter` compares the owned
+    /// rulesets with (`solo-administrator` or `independent-review`);
+    /// `None` compares none, and the security floor is judged either way.
+    pub remote_profile: Option<String>,
 }
 
 impl Options {
