@@ -159,3 +159,77 @@ fn files_below(path: &Path, files: &mut Vec<PathBuf>) {
         }
     }
 }
+
+/// TSK-1044 review 1: a link planted at the build-output folder (`target`,
+/// or the last component of an absolute `CARGO_TARGET_DIR`) or at the
+/// `CodeFlow` home itself is refused before any write; the folder it points
+/// at stays unchanged.
+#[test]
+fn a_link_at_the_build_output_folder_or_the_home_is_refused() {
+    for case in ["target", "absolute target", "home"] {
+        let dir = repository("true");
+        let (outside, _) = outside();
+        let parent = tempfile::tempdir().unwrap();
+        let mut home = parent.path().join("home");
+        let mut command = super::command(dir.path(), &home, &["test", "--mode", "full"]);
+        match case {
+            "target" => {
+                std::os::unix::fs::symlink(outside.path(), dir.path().join("target")).unwrap();
+            }
+            "absolute target" => {
+                let link = parent.path().join("build");
+                std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+                command.env("CARGO_TARGET_DIR", &link);
+            }
+            _ => {
+                home = parent.path().join("linked-home");
+                std::os::unix::fs::symlink(outside.path(), &home).unwrap();
+                command.env("CODEFLOW_HOME", &home);
+            }
+        }
+        let output = command.output().unwrap();
+        let text = stderr(&output);
+        assert!(!output.status.success(), "{case}: accepted: {text}");
+        assert!(text.contains("is a symbolic link"), "{case}: {text}");
+        unchanged(outside.path());
+    }
+}
+
+/// TSK-1044 review 1: a report whose folder is a link is refused, so the
+/// outside file of that name is never copied into the run folder.
+#[test]
+fn a_report_under_a_linked_folder_is_never_copied() {
+    let (outside, _) = outside();
+    std::fs::write(
+        outside.path().join("junit.xml"),
+        "<testsuites/>outside-secret-7f3",
+    )
+    .unwrap();
+    let dir = repository("true");
+    let path = dir.path().join(".codeflow/test-config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["targets"][1]["report"] =
+        serde_json::json!({"format": "junit", "path": "reports/junit.xml"});
+    std::fs::write(&path, config.to_string()).unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("reports")).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "full"]);
+    let text = stderr(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("report") && text.contains("refused"),
+        "{text}"
+    );
+    let mut copied = Vec::new();
+    files_below(&dir.path().join("target/codeflow-gate"), &mut copied);
+    files_below(&home.path().join("gate-runs"), &mut copied);
+    for path in copied {
+        let bytes = std::fs::read(&path).unwrap_or_default();
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("outside-secret-7f3"),
+            "outside report copied to {}",
+            path.display()
+        );
+    }
+}

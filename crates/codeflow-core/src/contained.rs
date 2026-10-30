@@ -79,6 +79,42 @@ pub(crate) fn relative_to(root: &Path, path: &Path) -> io::Result<String> {
     Ok(parts.join("/"))
 }
 
+/// `path` split into its parent folder, the trusted root a [`Tree`] opens,
+/// and its last component as the `/`-free name the walk then enters without
+/// following, so a link or junction at `path` itself is refused rather than
+/// trusted as a root (TSK-1044).
+///
+/// # Errors
+///
+/// When `path` has no parent or its last component is not a UTF-8 name.
+pub(crate) fn split_leaf(path: &Path) -> io::Result<(&Path, String)> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    match (parent, path.components().next_back()) {
+        (Some(parent), Some(Component::Normal(name))) => {
+            Ok((parent, name.to_str().ok_or_else(invalid)?.to_string()))
+        }
+        _ => Err(invalid()),
+    }
+}
+
+/// Refuse an opened file with more than one name: a hard link planted at a
+/// path `CodeFlow` copies from would bring a file from elsewhere with it.
+/// Read from the opened handle on every platform.
+///
+/// # Errors
+///
+/// When the file has another name, or its link count cannot be read.
+pub(crate) fn single_name(file: &File) -> io::Result<()> {
+    if platform::link_count(file)? == 1 {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "a file with more than one name (a hard link) is never copied",
+        ))
+    }
+}
+
 /// Create `relative` under `root`, as [`Tree::create_new`] does.
 ///
 /// # Errors
@@ -781,6 +817,11 @@ mod platform {
         parent.file.sync_all()
     }
 
+    pub(super) fn link_count(file: &File) -> io::Result<u64> {
+        use std::os::unix::fs::MetadataExt as _;
+        Ok(file.metadata()?.nlink())
+    }
+
     pub(super) fn entries(parent: &ConfinedDirectory, maximum: usize) -> io::Result<Vec<OsString>> {
         struct Stream(*mut libc::DIR);
         impl Drop for Stream {
@@ -1025,6 +1066,21 @@ mod platform {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    pub(super) fn link_count(file: &File) -> io::Result<u64> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+        // SAFETY: a live handle and writable storage sized for the structure.
+        let success =
+            unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+        if success == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call succeeded and initialized the structure.
+        Ok(u64::from(unsafe { info.assume_init() }.nNumberOfLinks))
     }
 
     // Windows has no directory-fsync parity here. File contents are flushed
@@ -1544,5 +1600,31 @@ mod tests {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod leaf_tests {
+    use super::{single_name, split_leaf};
+    use std::path::Path;
+
+    #[test]
+    fn a_path_splits_into_its_parent_and_a_name() {
+        let (parent, leaf) = split_leaf(Path::new("/home/user/.codeflow")).unwrap();
+        assert_eq!(parent, Path::new("/home/user"));
+        assert_eq!(leaf, ".codeflow");
+        for bad in ["/", "", ".codeflow", "/home/.."] {
+            assert!(split_leaf(Path::new(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_file_with_a_second_name_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = dir.path().join("one");
+        std::fs::write(&one, "x").unwrap();
+        single_name(&std::fs::File::open(&one).unwrap()).unwrap();
+        std::fs::hard_link(&one, dir.path().join("two")).unwrap();
+        assert!(single_name(&std::fs::File::open(&one).unwrap()).is_err());
     }
 }

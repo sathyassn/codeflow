@@ -4126,6 +4126,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // var_os returns OS bytes or genuine unset; an unset CARGO_TARGET_DIR is `target`; a build-output folder whose last name is not UTF-8 is refused, and the other components stay native path bytes, never decoded lossily (TSK-1044).
+    (
+        "crates/codeflow-core/src/testing/delivery.rs",
+        "target_anchor",
+        "obtain-absent:var_os",
+        1,
+        "format-contract",
+    ),
     // var_os returns OS bytes or genuine unset; present CARGO_TARGET_DIR bytes become the native PathBuf without decoding or normalization.
     (
         "crates/codeflow-core/src/testing/delivery.rs",
@@ -6937,8 +6945,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "ErrorKind::NotFound", 1, "Only a NotFound from symlink_metadata on the named path becomes ConfigNotFound, a refusal; every other error refuses as unreadable (TSK-1020)."),
     ("crates/codeflow-core/src/testing/config/mod.rs", "load_named_test_config", "is_file", 1, "Read from symlink_metadata after links are refused; false refuses the named config as not regular, and the bounded no-follow reader rechecks the opened file (TSK-1020)."),
     ("crates/codeflow-core/src/testing/gate.rs", "copy_folder", "is_dir", 1, "Type check on metadata the anchored walk read without following, errors propagated; a link or special file fails before it, and a file then reopens through open_regular (TSK-1044)."),
-    ("crates/codeflow-core/src/testing/runner/mod.rs", "read_report", "is_file", 2, "Type check on metadata from the opened report, errors propagated; false refuses the report copy and fails the target (TSK-1044)."),
-    ("crates/codeflow-core/src/testing/runner/mod.rs", "run_owed_target", "exists", 4, "One guards removing a stale report that feeds only the display summary; one false fails the target; two pick evidence copies, and the gate rereads the original paths."),
+    ("crates/codeflow-core/src/testing/runner/mod.rs", "open_report", "ErrorKind::NotFound", 1, "The anchored walk refuses a link at any component before it can report not found, so not found is a missing report, which is skipped as before; other errors refuse the copy and fail the target (TSK-1044)."),
+    ("crates/codeflow-core/src/testing/runner/mod.rs", "run_owed_target", "exists", 2, "One guards removing a stale report that feeds only the display summary; one false fails the target. Report copies open through open_report (TSK-1044)."),
     ("crates/codeflow-core/src/testing/setup/detect.rs", "detect_go", "try_exists", 1, "try_exists propagates metadata errors; only a dangling go.mod link reads false, which only drops a proposed target from a starting config the tool could not build anyway."),
     ("crates/codeflow-core/src/testing/setup/detect.rs", "detect_node", "try_exists", 1, "try_exists propagates metadata errors; only a dangling package.json link reads false, which only drops a proposed target from a starting config."),
     ("crates/codeflow-core/src/testing/setup/detect.rs", "detect_python", "try_exists", 1, "try_exists and the read propagate their errors; only a dangling manifest link reads false, which only drops a proposed target from a starting config."),

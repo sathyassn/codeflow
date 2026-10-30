@@ -37,17 +37,23 @@ since, is read by nothing.
 A run writes its record and each target's logs and report copies into
 `<target>/codeflow-gate/<run id>/`, and a full run with a revision copies
 that folder to `~/.codeflow/gate-runs/<repo>/<run id>/`. Every one of these
-writes walks from a held handle of the build-output root or the CodeFlow
-home and never follows a symbolic link or a Windows junction or other
-reparse point at any component. The run record and every durable file are
+writes, and the gate's lock files, walks from a held handle of a trusted
+root and never follows a symbolic link or a Windows junction or other
+reparse point at any component below it. The trusted roots are the
+project folder (for `target/` or a relative `CARGO_TARGET_DIR`), the
+parent of an absolute `CARGO_TARGET_DIR`, and the parent of the CodeFlow
+home, so a link at the build-output folder or at the home itself is
+refused. Point `CARGO_TARGET_DIR` or `CODEFLOW_HOME` at the real folder
+rather than a link to it. The run record and every durable file are
 created exclusively, so a name planted there, a link or hard link
-included, is refused rather than written through. The copy refuses a
-link, a pipe or other special file, and (on Unix) a file with more than
-one name inside the run folder. A target's report is opened without
-following a link at its own name. A refusal names the path and fails the
-gate; nothing is written outside the evidence folders. The build-output
-root itself (`target/` or `CARGO_TARGET_DIR`) and the CodeFlow home are
-trusted as roots, as cargo trusts its target folder.
+included, is refused rather than written through; each target's logs and
+report copies are replaced atomically, never written through a link. The
+copy refuses a link, a pipe or other special file, and a file with more
+than one name inside the run folder. A target's report is opened through
+the same walk from the project or the build-output folder and must be a
+regular file with one name; a report outside both is refused. A refusal
+names the path and fails the gate; nothing is written outside the
+evidence folders.
 
 The default full gate and both `codeflow integrate` modes execute every
 target, as every run now does.

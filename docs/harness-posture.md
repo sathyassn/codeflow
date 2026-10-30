@@ -83,10 +83,14 @@ folder to the durable home.
   `gate-runs`, the session through this grant and the candidate's tests in
   any case, so no run record removes a target from any run (ADR-0089).
   This holds whatever the grant.
-- **Writes never follow a planted link.** The preflight, the run record,
-  each target's logs and the durable copy refuse links, junctions and
-  planted names, so a session that plants one cannot redirect a later
-  gate's writes, even one run outside the sandbox (TSK-1044).
+- **Writes never follow a planted link.** The preflight, the lock files,
+  the run record, each target's logs and report copies, and the durable
+  copy refuse a link, junction or planted name at the build-output folder,
+  the CodeFlow home or anything beneath them, so a session that plants one
+  cannot redirect a later gate's writes, even one run outside the sandbox
+  (TSK-1044). The project folder, the parent of an absolute
+  `CARGO_TARGET_DIR` and the parent of the CodeFlow home are trusted as
+  roots; a session that cannot write those parents cannot replace them.
 - **The grant itself waits on the operator's decision** (TSK-1044 AC-4):
   keep it, narrow it to the repository's own folder, or drop it. Until
   the decision is recorded the presets keep it, and a full gate runs in

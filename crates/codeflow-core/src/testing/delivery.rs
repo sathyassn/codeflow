@@ -68,6 +68,41 @@ pub fn target_dir(root: &Path) -> PathBuf {
     root.join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
 }
 
+/// The trusted folder the gate's evidence writes walk from, and the
+/// build-output folder's `/`-separated path beneath it (TSK-1044). For
+/// `target` or a relative `CARGO_TARGET_DIR` made only of names, the folder
+/// is the project and every component of the build-output path is entered
+/// without following a link; otherwise it is the build-output folder's
+/// parent, and its last component is entered that way. Either way a link or
+/// junction planted at the build-output folder is refused, never trusted.
+///
+/// # Errors
+///
+/// When the build-output path has no parent or a component that is not a
+/// UTF-8 name.
+pub fn target_anchor(root: &Path) -> Result<(PathBuf, String), TestingError> {
+    let configured = std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into());
+    let path = Path::new(&configured);
+    if path.is_relative() {
+        if let Ok(relative) = crate::contained::relative_to(Path::new(""), path) {
+            if !relative.is_empty() {
+                return Ok((root.to_path_buf(), relative));
+            }
+        }
+    }
+    let full = root.join(path);
+    let (parent, leaf) = crate::contained::split_leaf(&full).map_err(|_| {
+        invalid(
+            root,
+            format!(
+                "build-output folder {} has no parent or is not a UTF-8 name",
+                full.display()
+            ),
+        )
+    })?;
+    Ok((parent.to_path_buf(), leaf))
+}
+
 /// The durable evidence folder of the repository at `root`, relative to the
 /// `CodeFlow` home: `gate-runs/<digest of the repository's common folder>`.
 pub fn durable_relative(root: &Path) -> String {
@@ -345,10 +380,10 @@ pub fn check_only(
 /// Git's text output, or an error when it failed or is not valid UTF-8.
 ///
 /// OS text rule (issue 79, `docs/architecture.md`): kept strict on purpose.
-/// The output decides which targets a run may skip, and an error makes every
-/// caller select every target, so a path that is not valid UTF-8 widens the
-/// run and never narrows it. A lossy path could match a `narrow` pattern the
-/// real bytes do not and drop a check the change owes.
+/// Its one caller, the untracked-input scan of a target's recorded evidence,
+/// reads an error as "evidence unavailable", so a path that is not valid
+/// UTF-8 is never matched by its lossy spelling. No run is narrowed by it:
+/// no record earns selection credit (ADR-0089).
 pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
     let output = crate::git::command()
         .args(args)
@@ -643,10 +678,10 @@ mod tests {
         assert_eq!(tracked(dir.path()).unwrap().len(), 3);
     }
 
-    /// Kept strict on purpose: git output that is not valid UTF-8 is `None`,
-    /// which every caller reads as "select every target".
+    /// Kept strict on purpose: git output that is not valid UTF-8 is an
+    /// error, never a lossy spelling.
     #[test]
-    fn git_output_that_is_not_utf8_selects_every_target() {
+    fn git_output_that_is_not_utf8_is_an_error() {
         let dir = repository_with_a_non_utf8_path();
         assert!(git_output(dir.path(), &["ls-tree", "-r", "--name-only", "-z", "HEAD"]).is_err());
         assert!(git_output(dir.path(), &["rev-parse", "HEAD"]).is_ok());
