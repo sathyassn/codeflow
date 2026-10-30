@@ -26,6 +26,7 @@ mod ci_pin;
 mod codex_profile;
 mod git_config;
 mod grok_hooks;
+mod guard_timeouts;
 mod remote_perimeter;
 mod sandbox;
 mod startup_files;
@@ -296,6 +297,7 @@ const CHECK_NAMES: &[&str] = &[
     "claude",
     "codex",
     "grok",
+    "guard-timeouts",
     "startup-files",
     "sandbox",
     "git-config-includes",
@@ -335,6 +337,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("claude", check_claude);
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
+    m.insert("guard-timeouts", guard_timeouts::check);
     m.insert("startup-files", startup_files::check);
     m.insert("sandbox", sandbox::check);
     m.insert("git-config-includes", git_config::check);
@@ -4332,7 +4335,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 24);
+        assert_eq!(check_names().len(), 25);
     }
 
     #[test]

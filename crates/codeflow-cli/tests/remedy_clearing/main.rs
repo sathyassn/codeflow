@@ -82,6 +82,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DISCARD_LOCAL_WORK", Runs),
     ("ABSENT_WORKTREE", Runs),
     ("OUTWARD_ACTION", Excluded(HumanAuthority)),
+    ("SECRET_SELECTION", Runs),
     ("PUSH_WITHOUT_FOLLOW_TAGS", Runs),
     ("TASK_STATUS", Runs),
     ("EPIC_STATUS", Runs),
@@ -202,6 +203,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_GROK_HOOKS", Runs),
     ("DOCTOR_GROK_UNMANAGED_HOOKS", Runs),
     ("DOCTOR_GROK_MISSING_GUARD", Runs),
+    ("DOCTOR_GUARD_TIMEOUTS", Runs),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
     ("DOCTOR_DELEGATES_SIGN_IN", Excluded(HumanAuthority)),
@@ -245,6 +247,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("HOOK_UNEVALUATED", Runs),
     ("HOOK_STDIN_UNREAD", Runs),
     ("GUARD_PAYLOAD_MALFORMED", Runs),
+    // The operator repairs or removes the input the guard waits on.
+    ("GUARD_DEADLINE", Excluded(HumanAuthority)),
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
     ("REFUSAL_UNRECORDED", Runs),
     ("REGISTRY_UNWRITTEN", Runs),
@@ -2186,7 +2190,7 @@ fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
         .unwrap();
     let edited = old.replace(
         exec_line,
-        &exec_line.replace("\"timeout\": 10", "\"timeout\": 15"),
+        &exec_line.replace("\"timeout\": 30", "\"timeout\": 15"),
     );
     assert_ne!(edited, old);
     write(&root, ".grok/hooks/codeflow.json", &edited);
@@ -2223,7 +2227,7 @@ fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
                 .find(|line| line.contains("hook exec-guard"))
                 .unwrap();
             let resolved =
-                shipped.replace(line, &line.replace("\"timeout\": 10", "\"timeout\": 15"));
+                shipped.replace(line, &line.replace("\"timeout\": 30", "\"timeout\": 15"));
             write(&root, ".grok/hooks/codeflow.json", &resolved);
             std::fs::remove_file(root.join(".grok/hooks/codeflow.json.new")).unwrap();
         },
@@ -2232,6 +2236,90 @@ fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
     let after = doctor(&root, "grok");
     assert!(
         after.contains("canary: the shipped shell guard grok runs refused a dangerous command"),
+        "{after}"
+    );
+}
+
+/// TSK-1082: a project installed before the guard entries carried the
+/// shared timeout and Claude's `"onFailure": "block"`, its baselines
+/// recorded as that release shipped them. Doctor names each guard entry
+/// in each harness file; `codeflow update`, the printed step, moves them
+/// all to the shipped fields and doctor passes.
+#[test]
+fn clears_doctor_guard_timeouts() {
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    let timeout = "\"timeout\": 30";
+    // The guard entries as earlier releases shipped them: neither field.
+    let strip = |text: &str| {
+        let mut value: serde_json::Value = serde_json::from_str(text).unwrap();
+        let mut stripped = 0;
+        for group in value["hooks"]["PreToolUse"].as_array_mut().unwrap() {
+            for handler in group["hooks"].as_array_mut().unwrap() {
+                let handler = handler.as_object_mut().unwrap();
+                if handler.remove("onFailure").is_some() {
+                    assert!(handler.remove("timeout").is_some());
+                    stripped += 1;
+                }
+            }
+        }
+        assert_eq!(stripped, 2, "{text}");
+        serde_json::to_string_pretty(&value).unwrap()
+    };
+    write(
+        &root,
+        ".claude/settings.json",
+        &strip(&read(&root, ".claude/settings.json")),
+    );
+    write(
+        &root,
+        ".codeflow/.baseline/.claude/settings.json",
+        &strip(include_str!(
+            "../../../../assets/base/settings/default.json"
+        )),
+    );
+    for (path, shipped) in [
+        (
+            ".grok/hooks/codeflow.json",
+            include_str!("../../../../assets/base/grok/hooks.json"),
+        ),
+        (
+            ".codex/hooks.json",
+            include_str!("../../../../assets/base/codex/hooks.json"),
+        ),
+    ] {
+        let old = shipped.replace(&format!("{timeout} }}"), "\"timeout\": 10 }");
+        assert_ne!(old, shipped, "{path}");
+        write(&root, path, &old);
+        write(&root, &format!(".codeflow/.baseline/{path}"), &old);
+    }
+
+    let finding = "a guard that does not answer in time can let the tool call through";
+    let before = doctor(&root, "guard-timeouts");
+    for named in [
+        ".claude/settings.json: git-guard has no `timeout` and no `\"onFailure\": \"block\"`",
+        ".grok/hooks/codeflow.json: edit-guard has `timeout` 10, not the shipped 30",
+        ".codex/hooks.json: exec-guard has `timeout` 10, not the shipped 30",
+    ] {
+        assert!(before.contains(named), "{named}: {before}");
+    }
+    prove(
+        "DOCTOR_GUARD_TIMEOUTS",
+        finding,
+        || doctor(&root, "guard-timeouts"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_GUARD_TIMEOUTS", None);
+            assert_eq!(step, "codeflow update");
+            run_printed(&root, &step, &[], &[]);
+        },
+    );
+    let after = doctor(&root, "guard-timeouts");
+    assert!(
+        after.contains("every CodeFlow guard hook entry carries the shipped 30 second timeout"),
+        "{after}"
+    );
+    assert!(
+        after.contains("Grok and Codex have no fail-closed setting"),
         "{after}"
     );
 }

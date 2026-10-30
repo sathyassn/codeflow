@@ -23,6 +23,7 @@ serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 glob = "0.3"
+globset = "0.4"
 quick-xml = "0.41"
 regex = "1"
 git2 = { version = "0.21", default-features = false }

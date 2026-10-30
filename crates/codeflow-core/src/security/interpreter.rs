@@ -1,8 +1,13 @@
 //! Conservative literal inspection inside interpreter code, never ordinary
 //! data, and of the arguments an interpreter is given (TSK-302).
+use super::search_pattern::CommandLine;
 use super::{actions, outward, pattern::matches_extended_glob};
 use crate::hooks::{PolicyLevel, SecuritySection, Violation};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+mod git_reads;
+pub(crate) mod git_repository;
+mod git_staging;
 
 /// [`evaluate_ruled`] under the baseline rule alone.
 #[cfg(test)]
@@ -29,55 +34,49 @@ pub(crate) fn evaluate_ruled(
     home: Option<&Path>,
     strict: Option<&str>,
 ) -> Vec<Violation> {
-    let mut violations = Vec::new();
-    if levels.secret_reads.is_active() {
-        for unwrapped in outward::unwrapped_commands(command, cwd, home) {
-            let args = &unwrapped.args;
-            let name = args
-                .first()
-                .map_or("", |s| super::unresolved::writer_name(s));
-            if matches!(
-                name,
-                "cat"
-                    | "head"
-                    | "tail"
-                    | "less"
-                    | "more"
-                    | "bat"
-                    | "sed"
-                    | "awk"
-                    | "grep"
-                    | "rg"
-                    | "cp"
-                    | "base64"
-                    | "Get-Content"
-            ) {
-                // Only a word the shell expands names files it never spells;
-                // a quoted search pattern such as `'^/etc/.*'` is text.
-                let expands = |at: usize| {
-                    unwrapped
-                        .expands
-                        .as_ref()
-                        .is_none_or(|flags| flags.get(at).copied().unwrap_or(true))
-                };
-                let reader_cwd = unwrapped.cwd.as_deref().unwrap_or(cwd);
-                if let Some((_, path)) = args
-                    .iter()
-                    .enumerate()
-                    .skip(1)
-                    .find(|(at, word)| secret_path(word, reader_cwd, home, Some(expands(*at))))
-                {
-                    violations.push(Violation::new(
-                        "security.secret_reads",
-                        levels.secret_reads,
-                        format!("keychain or secret-store read names `{path}`"),
-                        crate::remedy::OUTWARD_ACTION.remedy(),
-                    ));
-                }
-            }
+    let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+    // A rooted Windows home without a drive inherits the caller's drive.
+    // Keep absolute homes unchanged so kernel link/parent semantics survive.
+    let resolved_home = home.map(|home| {
+        let home = if cfg!(windows) && home.has_root() && !home.is_absolute() {
+            cwd.join(home)
+        } else {
+            home.to_path_buf()
+        };
+        // The original spelling remains available when no mapping exists;
+        // using it as an operand still takes guard_path's refusal below.
+        crate::portable_path::guard_path(&home).unwrap_or(home)
+    });
+    let home = resolved_home.as_deref();
+    let session_dir = crate::portable_path::guard_path(cwd).ok();
+    let _shares = TrustedShares::enter(&[home, session_dir.as_deref()]);
+    // Position-scoped arguments carry more precise provenance than the broad
+    // literal scan below. Keep their finding first when both name one path.
+    let mut violations = super::arguments::evaluate(command, integrity, cwd, root, home, strict);
+    violations.extend(secret_reads(command, levels, cwd, home));
+    let visible = if command.contains("<<") {
+        super::composed::paths::execution_text(command, cwd, home)
+    } else {
+        command.to_owned()
+    };
+    let mut codes = outward::interpreter_bodies(&visible);
+    codes.extend(
+        outward::interpreter_calls_with_home(command, cwd, home)
+            .into_iter()
+            .flat_map(|call| call.code),
+    );
+    codes.sort();
+    codes.dedup();
+    for code in codes {
+        if code == "__unresolved_shell_code" && levels.secret_reads.is_active() {
+            violations.push(Violation::new(
+                "security.secret_reads",
+                levels.secret_reads,
+                "cannot verify the executable input's secret reads".to_string(),
+                crate::remedy::OUTWARD_ACTION.remedy(),
+            ));
+            continue;
         }
-    }
-    for code in outward::interpreter_bodies(command) {
         if levels.headless_peer_runs.is_active() {
             if let Some(run) = super::headless::raw_run(&code) {
                 violations.push(crate::hooks::exec_guard::headless_violation(
@@ -128,15 +127,996 @@ pub(crate) fn evaluate_ruled(
             }
         }
     }
-    violations.extend(super::arguments::evaluate(
-        command, integrity, cwd, root, home, strict,
-    ));
+    if levels.secret_reads.is_active() {
+        violations.extend(code_reads_where_calls_run(command, cwd, home, levels));
+    }
     violations
+}
+
+/// Code runs in the directory its call runs in: one a launcher moves to
+/// (`env -C`) or the interpreter's own (`ruby -C`, `pwsh
+/// -WorkingDirectory`). Its literals are judged there as well as in the
+/// line's directory. In a directory the guard cannot establish, a relative
+/// literal that could name a secret refuses (TSK-1002 review 03).
+fn code_reads_where_calls_run(
+    command: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    levels: &SecuritySection,
+) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for call in outward::interpreter_calls_with_home(command, cwd, home) {
+        // Inline code after a directory change the guard cannot establish
+        // refuses: the guard does not read names out of code it cannot
+        // place (TSK-1002 review 03, ruling 4). Arguments without inline
+        // code keep the operand rules.
+        if call.cwd.is_none() {
+            if !call.code.is_empty() {
+                violations.push(Violation::new(
+                    "security.secret_reads",
+                    levels.secret_reads,
+                    "cannot verify interpreter code: it runs after a directory change the guard cannot establish".into(),
+                    crate::remedy::SECRET_SELECTION.remedy(),
+                ));
+            }
+            continue;
+        }
+        let dir = call.cwd.clone().and_then(|start| {
+            call.chdir.iter().try_fold(start, |dir, change| {
+                match outward::directory_operand(change, home) {
+                    outward::DirChange::To(target) => outward::physical_join(&dir, &target),
+                    outward::DirChange::Unknown => None,
+                }
+            })
+        });
+        if dir.as_deref() == Some(cwd) {
+            continue;
+        }
+        let Some(dir) = dir else {
+            // The interpreter's own directory option cannot be established:
+            // its inline code refuses whole, as after any other unknown
+            // directory change (ruling 4).
+            if !call.code.is_empty() {
+                violations.push(Violation::new(
+                    "security.secret_reads",
+                    levels.secret_reads,
+                    "cannot verify interpreter code: cannot establish the directory the code runs in".into(),
+                    crate::remedy::OUTWARD_ACTION.remedy(),
+                ));
+            }
+            continue;
+        };
+        for code in &call.code {
+            for word in outward::literal_words(code) {
+                if !secret_path(&word, &dir, home, None) {
+                    continue;
+                }
+                let message = format!(
+                    "interpreter code names the secret store `{word}` in the directory it runs in"
+                );
+                violations.push(Violation::new(
+                    "security.secret_reads",
+                    levels.secret_reads,
+                    message,
+                    crate::remedy::OUTWARD_ACTION.remedy(),
+                ));
+            }
+        }
+    }
+    violations
+}
+
+/// Whether a relative word, read in a directory the guard cannot establish,
+/// could name a secret: joined to any directory on the way to a protected
+/// home path, or to a directory outside the home, it names a protected
+/// path. An absolute or home word is judged as written; a parent component
+/// can reach any directory, so it could.
+fn relative_may_name_secret(word: &str) -> bool {
+    let slashed = word.replace('\\', "/");
+    let drive = slashed
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        && slashed.as_bytes().get(1) == Some(&b':');
+    if slashed.starts_with(['/', '~']) || drive {
+        return false;
+    }
+    let word = slashed.trim_start_matches("./");
+    !word.is_empty()
+        && (word.split('/').any(|part| part == "..")
+            || protected_dirs()
+                .iter()
+                .any(|dir| secret_path_spelling(&format!("{dir}/{word}"), None, Some(true))))
+}
+
+/// Whether a relative word names a secret in some directory: its name is a
+/// secret basename, or its path is a secret below a protected home
+/// directory (`auth.json`, `.codex/auth.json`, `id_rsa`), by the same
+/// names the absolute-path checks use. After a parent component
+/// the rest may start anywhere, so only the rest is judged. This is the
+/// rule for a relative operand read after a directory change the guard
+/// cannot establish (TSK-1002 review 02).
+fn relative_names_secret(word: &str) -> bool {
+    let word = word.replace('\\', "/");
+    let drive = word.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && word.as_bytes().get(1) == Some(&b':');
+    if word.starts_with(['/', '~']) || drive {
+        return false;
+    }
+    let word = word
+        .rsplit_once("/../")
+        .map_or(word.as_str(), |(_, rest)| rest)
+        .trim_start_matches("../")
+        .trim_start_matches("./");
+    if word.is_empty() || word == ".." || word == "." {
+        return false;
+    }
+    // A name counts where its own spelling makes the path secret: in a
+    // directory denied as a whole every name is secret, which says nothing
+    // about this name, so an ordinary name of the same depth is the control.
+    let ordinary = word
+        .split('/')
+        .map(|_| "__codeflow_ordinary_name__")
+        .collect::<Vec<_>>()
+        .join("/");
+    protected_dirs().iter().any(|dir| {
+        secret_path_spelling(&format!("{dir}/{word}"), None, Some(true))
+            && !secret_path_spelling(&format!("{dir}/{ordinary}"), None, Some(true))
+    })
+}
+
+/// The home directories on the way to a protected path, with the home and
+/// a directory outside it, where a relative word may be read.
+fn protected_dirs() -> &'static [String] {
+    static DIRS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    DIRS.get_or_init(|| {
+        let table = actions::table();
+        let rules = table
+            .claude_read_groups
+            .iter()
+            .filter(|group| group.carveouts.is_empty())
+            .flat_map(|group| group.denies.iter())
+            .filter_map(|rule| rule.strip_prefix("Read(")?.strip_suffix(')'))
+            .chain(table.sandbox_read_denies.iter().map(String::as_str));
+        let mut dirs = vec!["~".to_string(), "/__unknown_directory__".to_string()];
+        for rule in rules.filter(|rule| rule.starts_with("~/")) {
+            let mut dir = "~".to_string();
+            for part in rule[2..].split('/') {
+                if crate::hooks::git_guard::has_glob(part) {
+                    break;
+                }
+                dir = format!("{dir}/{part}");
+                dirs.push(dir.clone());
+            }
+        }
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    })
+}
+
+/// The refusal a Git input verdict makes, if any.
+fn git_input_violation(
+    levels: &SecuritySection,
+    result: Result<bool, &'static str>,
+) -> Option<Violation> {
+    let reason = match result {
+        Ok(false) => return None,
+        Ok(true) => "Git input names a secret file or object path".to_string(),
+        Err(why) => format!("cannot verify Git input: {why}"),
+    };
+    Some(Violation::new(
+        "security.secret_reads",
+        levels.secret_reads,
+        reason,
+        crate::remedy::SECRET_SELECTION.remedy(),
+    ))
+}
+
+/// `call` with a Git alias expanded, so it is judged by its expansion
+/// (TSK-1002 review 07). Spellings the guard refuses in any Git call,
+/// pathspec magic and share or namespace words among them, refuse before
+/// the lookup touches anything (reviews 08 and 09).
+fn expanded_alias(
+    call: outward::Unwrapped,
+    command: &str,
+) -> Result<outward::Unwrapped, &'static str> {
+    let share =
+        |dir: &Path| unmapped_share_root(Path::new("/"), &crate::portable_path::slashed(dir));
+    git_reads::refused_form(&call)?;
+    let expanded = git_reads::expand_alias(&call, command, &share)?.unwrap_or(call);
+    // An alias value can hold any spelling a command line can.
+    git_reads::refused_form(&expanded)?;
+    Ok(expanded)
+}
+
+/// `call` with a Git alias expanded, for a check outside this module.
+///
+/// # Errors
+///
+/// Why the alias or its expansion cannot be read.
+pub(crate) fn git_alias_expanded(
+    call: outward::Unwrapped,
+    command: &str,
+) -> Result<outward::Unwrapped, &'static str> {
+    expanded_alias(call, command)
+}
+
+/// A `GIT_*` variable the guard has not classified may move what Git reads
+/// (TSK-1002 Codex review 10): unlisted means unknown.
+fn git_environment_violation(command: &str, levels: &SecuritySection) -> Option<Violation> {
+    let why = crate::security::git_preflight::unclassified_environment(command)
+        .map(|name| format!("cannot establish what Git reads under `{name}`"))
+        .or_else(|| {
+            crate::security::git_preflight::exec_path_option(command).then(|| {
+                "cannot establish the helper programs Git runs from `--exec-path`".to_string()
+            })
+        })?;
+    Some(Violation::new(
+        "security.secret_reads",
+        levels.secret_reads,
+        format!("cannot verify Git input: {why}"),
+        crate::remedy::SECRET_SELECTION.remedy(),
+    ))
+}
+
+fn secret_reads(
+    command: &str,
+    levels: &SecuritySection,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Vec<Violation> {
+    secret_reads_at(command, levels, cwd, home, 0)
+}
+
+/// Why a call's program word cannot be judged, if it cannot: one the shell
+/// fills in at run time that the guard does not resolve (`$P`, `"$P"`,
+/// `${P}`, after any launcher), refused as cannot-verify. A variable whose
+/// value holds blanks (`P='cat x'; $P`) stays unresolved, since the shell
+/// splits it at run time, so it refuses the same way (TSK-1002 Fable review
+/// 15). A program word that still holds blanks here, such as a quoted
+/// literal path, is judged as the command line its words would split
+/// into, at most twice nested. A program value Git runs is a command line
+/// Git hands to a shell, judged as one
+/// ([`super::git_preflight::program_runs`]). A secret store is reachable
+/// from any directory, so the refusal does not depend on where the line
+/// runs.
+fn program_word_unverified(
+    call: &outward::Unwrapped,
+    cwd: &Path,
+    home: Option<&Path>,
+    levels: &SecuritySection,
+    depth: usize,
+) -> Option<String> {
+    let program = call.args.first()?;
+    if program == outward::FD_UNREAD_COMMAND {
+        return Some(
+            "cannot verify the command `fd` runs on each path it finds: name it after `-x`".into(),
+        );
+    }
+    if crate::hooks::git_guard::unresolved_word(program) || program.contains(['\u{1}', '\u{2}']) {
+        let shown: String = program
+            .chars()
+            .map(|ch| if ch.is_control() { '?' } else { ch })
+            .collect();
+        return Some(format!(
+            "cannot verify the program `{shown}`: the shell fills it in at run time"
+        ));
+    }
+    // The shell splits an unquoted expansion at its default field
+    // separators: space, tab and newline.
+    if !program.contains([' ', '\t', '\n']) {
+        return None;
+    }
+    if depth >= 2 {
+        return Some(format!(
+            "cannot verify the program `{program}`: its words split more than the guard reads"
+        ));
+    }
+    let quoted: Vec<String> = call.args[1..]
+        .iter()
+        .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
+        .collect();
+    let line = std::iter::once(program.clone())
+        .chain(quoted)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let dir = call.cwd.as_deref().unwrap_or(cwd);
+    secret_reads_at(&line, levels, dir, home, depth + 1)
+        .into_iter()
+        .find(|violation| violation.level.is_active())
+        .map(|violation| violation.message)
+}
+
+#[allow(clippy::too_many_lines)] // One ordered pass of the read checks over every call.
+fn secret_reads_at(
+    command: &str,
+    levels: &SecuritySection,
+    cwd: &Path,
+    home: Option<&Path>,
+    depth: usize,
+) -> Vec<Violation> {
+    let mapped_home = home
+        .map(|home| crate::portable_path::guard_path(home).unwrap_or_else(|_| home.to_path_buf()));
+    let home = mapped_home.as_deref();
+    // Spell the working directory as the home is spelled: store and glob
+    // checks compare cwd-joined text with the home's text, and a Windows cwd
+    // under `RUNNER~1` would never match a mapped home (hosted run
+    // 40620672525, `cat auth.{json}` in the store).
+    let mapped_cwd = crate::portable_path::guard_path(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let cwd = mapped_cwd.as_path();
+    let mut violations = Vec::new();
+    // Every call on the line shares the line's facts, read once.
+    let line = CommandLine::new(command);
+    if levels.secret_reads.is_active() {
+        violations.extend(git_environment_violation(command, levels));
+        let calls = outward::unwrapped_commands(command, cwd, home);
+        for unwrapped in calls {
+            let mut unwrapped = match expanded_alias(unwrapped, command) {
+                Ok(unwrapped) => unwrapped,
+                Err(why) => {
+                    violations.extend(git_input_violation(levels, Err(why)));
+                    continue;
+                }
+            };
+            // A Git call reads its relative operands from the directory its
+            // `-C` options move it to (TSK-1002 Fable review 15).
+            if let Some(directory) = git_repository::call_directory(&unwrapped, home) {
+                unwrapped.cwd = directory;
+            }
+            let args = &unwrapped.args;
+            if let Some(why) = program_word_unverified(&unwrapped, cwd, home, levels, depth) {
+                violations.push(Violation::new(
+                    "security.secret_reads",
+                    levels.secret_reads,
+                    why,
+                    crate::remedy::SECRET_SELECTION.remedy(),
+                ));
+                continue;
+            }
+            if let Some(result) = find_given_paths(&unwrapped, home) {
+                if result.as_ref().map_or(true, |secret| *secret) {
+                    // `fd` is the walker that appends its paths.
+                    let walker = match &unwrapped.supplier {
+                        Some(outward::Supplier::Find { appends: true, .. }) => "fd",
+                        _ => "find",
+                    };
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        match result {
+                            Ok(_) => format!("`{walker}` gives a command a secret file or store"),
+                            Err(why) => {
+                                format!("cannot verify the paths `{walker}` gives a command: {why}")
+                            }
+                        },
+                        crate::remedy::SECRET_SELECTION.remedy(),
+                    ));
+                    continue;
+                }
+            }
+            let name = args
+                .first()
+                .map_or("", |s| super::unresolved::writer_name(s));
+            let reader_cwd = unwrapped.cwd.as_deref().unwrap_or(cwd);
+            let mut recursive = recursive_read(name, &unwrapped, reader_cwd, home, &line);
+            if recursive.is_some() && unwrapped.cwd.is_none() {
+                recursive = Some(Err(
+                    "cannot establish the recursive reader's working directory",
+                ));
+            }
+            if let Some(result) = &recursive {
+                if result.as_ref().map_or(true, |secret| *secret) {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        match result {
+                            Ok(_) => "a recursive reader selects a secret file or store".into(),
+                            Err(why) => format!("cannot verify every recursive read path: {why}"),
+                        },
+                        crate::remedy::SECRET_SELECTION.remedy(),
+                    ));
+                    continue;
+                }
+            }
+            let judge = |path: &str| {
+                if unwrapped.cwd.is_none() && relative_names_secret(path) {
+                    return Err("cannot establish the directory the command runs in");
+                }
+                secret_path_result(path, reader_cwd, home, Some(false))
+            };
+            let pattern = |spelling: &str| secret_path_spelling(spelling, home, Some(true));
+            let judges = git_reads::Judges {
+                path: &judge,
+                pattern: &pattern,
+            };
+            if let Some(violation) = git_reads::reads(&unwrapped, &judges)
+                .and_then(|result| git_input_violation(levels, result))
+            {
+                violations.push(violation);
+                continue;
+            }
+            if let Some(why) = git_repository::moved_repository(&unwrapped, command) {
+                violations.extend(git_input_violation(levels, Err(why)));
+                continue;
+            }
+            // A Git call that stages files it does not name is judged by
+            // the files Git would stage (TSK-1002 Fable review 15).
+            if let Some(result) = git_staging::staged_secret(&unwrapped, home, &judge) {
+                if result.as_ref().map_or(true, |secret| *secret) {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        match result {
+                            Ok(_) => "the Git call stages a secret file it does not name".into(),
+                            Err(why) => {
+                                format!("cannot verify the files the Git call stages: {why}")
+                            }
+                        },
+                        crate::remedy::SECRET_SELECTION.remedy(),
+                    ));
+                    continue;
+                }
+            }
+            for (at, value, glob) in
+                file_operands(name, args, unwrapped.expands.as_deref(), &line, reader_cwd)
+            {
+                if glob && recursive.is_some() {
+                    continue;
+                }
+                let secret =
+                    inspect_operand(&line, &unwrapped, (at, value, glob), reader_cwd, home);
+                if secret.as_ref().map_or(true, |value| *value) {
+                    violations.push(Violation::new(
+                        "security.secret_reads",
+                        levels.secret_reads,
+                        match secret {
+                            Err(why) => match value.strip_prefix(outward::UNVERIFIED_ENV_DIRECTORY)
+                            {
+                                Some(written) => format!("cannot verify `{written}`: {why}"),
+                                None => format!("cannot verify file operand `{value}`: {why}"),
+                            },
+                            Ok(_) if caret_pattern(&unwrapped, at, value) => format!(
+                                "the unquoted `{value}` is a zsh `^` negation glob that \
+                                 matches a secret file or store; quote it when it is a \
+                                 revision or a search pattern"
+                            ),
+                            Ok(_) => format!("file operand names a secret file or store `{value}`"),
+                        },
+                        if secret.is_err() {
+                            crate::remedy::SECRET_SELECTION.remedy()
+                        } else {
+                            crate::remedy::OUTWARD_ACTION.remedy()
+                        },
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+    violations
+}
+
+/// The verdict a Git word gets from its Git role, or `None` when its other
+/// readings decide. An attached or proven text value names nothing. A Git
+/// object name's path part (`HEAD:id_rsa`, `main~2:.ssh/x`, `:0:id_rsa`)
+/// names a file in the tree, so it keeps the secret-name policy of a file
+/// operand whatever the revision's shape and on every platform (TSK-1002
+/// review 04). A revision word needs no filename mapping, but its object
+/// path keeps that policy too (TSK-1002 review 03, ruling 6).
+fn git_operand(
+    call: &outward::Unwrapped,
+    at: usize,
+    value: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Option<Result<bool, &'static str>> {
+    if git_text_value(call, at) {
+        return Some(Ok(false));
+    }
+    // Git matches a pathspec pattern against the tree and history, which
+    // the guard cannot list: one that could select a secret name refuses
+    // (TSK-1002 review 07 sibling sweep).
+    if git_reads::pathspec_pattern(call, at).is_some_and(|spellings| {
+        spellings
+            .iter()
+            .any(|spelling| secret_path_spelling(spelling, home, Some(true)))
+    }) {
+        return Some(Err(git_reads::PATTERN));
+    }
+    for path in git_object_paths(call, at, value) {
+        match secret_path_result(path, cwd, home, Some(false)) {
+            Ok(false) => {}
+            verdict => return Some(verdict),
+        }
+    }
+    git_revision_word(call, at, value, cwd).then(|| match object_path(value) {
+        Some(path) => secret_path_result(path, cwd, home, Some(false)),
+        None => Ok(false),
+    })
+}
+
+/// A command substitution whose output the guard cannot establish (a
+/// `pwd` after a directory change inside it, any unread program) may print
+/// any directory, so the path after it is judged as a relative name in an
+/// unknown directory (TSK-1002 review 08), and a glob after it selects
+/// entries the guard cannot list, whatever it names (review 07).
+fn substitution_root_unknown(value: &str, expands: bool) -> bool {
+    let Some((_, tail)) = value.rsplit_once(['\u{1}', '\u{2}']) else {
+        return false;
+    };
+    if expands && crate::hooks::git_guard::has_glob(tail) {
+        return true;
+    }
+    // The separators after the substitution, slash or backslash, are
+    // dropped; the name itself keeps every other character.
+    let name = tail
+        .char_indices()
+        .find(|(_, ch)| !matches!(ch, '/' | '\\'))
+        .map_or("", |(at, _)| &tail[at..]);
+    relative_names_secret(name)
+}
+
+/// Whether a word holding a command substitution the guard did not resolve
+/// into it may name a secret: each such part stands for any text, slashes
+/// included, so the word is judged as the pattern it can match, in the
+/// directory it is read in (TSK-1002 Fable review 14:
+/// `cat ~/.codex/$(echo auth).json`). A word is judged whole, never by its
+/// tail alone.
+fn substitution_may_name_secret(value: &str, cwd: &Path, home: Option<&Path>) -> bool {
+    // A word that starts with the substitution has no spelled directory:
+    // [`substitution_root_unknown`] judges what follows it.
+    let Some(first) = value.find(['\u{1}', '\u{2}']).filter(|at| *at > 0) else {
+        return false;
+    };
+    let whole = value.replace(['\u{1}', '\u{2}'], "*");
+    let below = format!("{}*/**", &value[..first]);
+    [whole, below].into_iter().any(|pattern| {
+        let rooted = pattern.starts_with('~') || Path::new(&pattern).is_absolute();
+        let pattern = if rooted {
+            pattern
+        } else {
+            format!(
+                "{}/{pattern}",
+                crate::portable_path::slashed(cwd).trim_end_matches('/')
+            )
+        };
+        secret_path_spelling(&pattern, home, Some(true))
+    })
+}
+
+/// File operands retain their command-position provenance. Declared links
+/// add possible real paths before they exist on disk; virtual script
+/// descriptors keep the interpreter's existing best-effort code boundary.
+fn inspect_operand(
+    line: &CommandLine<'_>,
+    call: &outward::Unwrapped,
+    operand: (usize, &str, bool),
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Result<bool, &'static str> {
+    let (at, value, glob) = operand;
+    if value.starts_with(outward::UNVERIFIED_ENV_DIRECTORY) {
+        return Err("cannot establish the directory env runs the command in");
+    }
+    // After a directory change the guard cannot establish, of any kind, a
+    // relative operand that could name a secret refuses (TSK-1002 review
+    // 02); other relative operands keep their verdicts below.
+    if call.cwd.is_none() && relative_names_secret(value) {
+        return Err("cannot establish the directory the command runs in");
+    }
+    if value == "__unverified_transfer_input" {
+        return Err("cannot establish a transfer option's quoted input filename");
+    }
+    if let Some(verdict) = git_operand(call, at, value, cwd, home) {
+        return verdict;
+    }
+    let name = call
+        .args
+        .first()
+        .map_or("", |program| super::unresolved::writer_name(program));
+    if matches!(name, "rsync" | "scp")
+        && remote_endpoint(value)
+        && super::unresolved::writer_effects(name, &call.args[1..], &[])
+            .and_then(|effects| effects.copy)
+            .and_then(|copy| copy.dest)
+            .as_deref()
+            == Some(value)
+    {
+        // A parsed remote destination is not a local content-read operand.
+        return Ok(false);
+    }
+    if outward::descriptor_program(value)
+        && (crate::hooks::git_guard::is_shell(name) || outward::interpreter_family(name).is_some())
+    {
+        return Ok(false);
+    }
+    let supplied = matches!(call.supplier, Some(outward::Supplier::Find { .. }))
+        && matches!(value, "$1" | "${1}" | "$@" | "${@}" | "$*" | "${*}");
+    if !supplied
+        && call.unresolved.iter().any(|word| {
+            crate::hooks::git_guard::command_argv(word)
+                .iter()
+                .any(|part| part.contains(value))
+        })
+    {
+        return Err("the file operand is supplied at run time and its paths cannot be established");
+    }
+    let expands = glob
+        || call
+            .expands
+            .as_ref()
+            .is_none_or(|flags| flags.get(at).copied().unwrap_or(true));
+    if substitution_root_unknown(value, expands) {
+        return Err("cannot establish the directory a command substitution prints");
+    }
+    if substitution_may_name_secret(value, cwd, home) {
+        return Err("cannot establish the text a command substitution prints in this path");
+    }
+    if expands
+        && crate::hooks::git_guard::has_glob(value)
+        && crate::hooks::git_guard::dot_glob_option(line.text()).is_some()
+    {
+        return Err("shell options change which hidden paths the glob selects");
+    }
+    // A relative glob or search selector in a directory the guard cannot
+    // establish selects entries it cannot list, so no name check clears it
+    // (TSK-1002 review 06). A rooted glob does not depend on it.
+    if call.cwd.is_none()
+        && (glob
+            || expands
+                && crate::hooks::git_guard::has_glob(value)
+                && !value.starts_with("~/")
+                && !Path::new(value).is_absolute())
+    {
+        return Err("cannot establish the glob's working directory");
+    }
+    if glob {
+        return secret_search_glob(
+            value,
+            name,
+            &call.args,
+            call.expands.as_deref(),
+            cwd,
+            home,
+            line,
+            &call.links,
+        );
+    }
+    let symbolic_link = name == "ln"
+        && call.args.iter().skip(1).any(|arg| {
+            arg == "--symbolic"
+                || arg == "--symbolic-link"
+                || arg.starts_with('-') && !arg.starts_with("--") && arg.contains('s')
+        });
+    let reading = (!symbolic_link).then_some(expands);
+    if secret_path_result(value, cwd, home, reading)? {
+        return Ok(true);
+    }
+    for mapped in super::composed::paths::linked_paths(value, cwd, &call.links)
+        .map_err(|_| "cannot resolve a read through a link declared on this line")?
+    {
+        if secret_path_result(&secret_path_text(&mapped)?, cwd, home, reading)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The object path of a `REV:PATH` Git word: the text after its first `:`
+/// outside a `@{...}` selector (`HEAD@{1}:a`), when not empty. `None` for a
+/// word with no object path.
+fn object_path(word: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    for (at, ch) in word.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 => {
+                return Some(&word[at + 1..]).filter(|path| !path.is_empty());
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Long options whose attached value (`--format=...`) is text in every Git
+/// command that takes one: a format, a search pattern, a person or a date.
+const GIT_TEXT_OPTIONS: &[&str] = &[
+    "--format=",
+    "--pretty=",
+    "--grep=",
+    "--author=",
+    "--committer=",
+    "--since=",
+    "--until=",
+    "--after=",
+    "--before=",
+    "--date=",
+];
+
+/// Options of `log`, `show` and `whatchanged` whose separate value is text
+/// (a pickaxe string, a search pattern, a person, a date or a count).
+const GIT_LOG_TEXT_VALUED: &[&str] = &[
+    "-S",
+    "-G",
+    "--grep",
+    "--author",
+    "--committer",
+    "--since",
+    "--until",
+    "--after",
+    "--before",
+    "-n",
+    "--max-count",
+    "--skip",
+];
+
+/// Options of `log`, `show` and `whatchanged` known to take no separate
+/// value. Any other option word leaves the roles after it unknown.
+const GIT_LOG_FLAGS: &[&str] = &[
+    "-p",
+    "-u",
+    "-s",
+    "-m",
+    "-i",
+    "-E",
+    "-F",
+    "-P",
+    "--patch",
+    "--no-patch",
+    "--stat",
+    "--shortstat",
+    "--numstat",
+    "--name-only",
+    "--name-status",
+    "--oneline",
+    "--all",
+    "--graph",
+    "--decorate",
+    "--no-decorate",
+    "--merges",
+    "--no-merges",
+    "--first-parent",
+    "--reverse",
+    "--follow",
+    "--pickaxe-regex",
+    "--pickaxe-all",
+    "--regexp-ignore-case",
+    "--extended-regexp",
+    "--fixed-strings",
+    "--perl-regexp",
+    "--all-match",
+    "--invert-grep",
+    "--abbrev-commit",
+    "--no-abbrev-commit",
+    "--date-order",
+    "--topo-order",
+    "--color",
+    "--no-color",
+    "--no-pager",
+    "--full-history",
+    "--source",
+];
+
+/// Whether the word at `at` is text by a Git object subcommand's option
+/// grammar: the attached value of a text option (`--format=a:b`), or for
+/// `log`, `show` and `whatchanged` the value of a pickaxe, search, person,
+/// date or count option, attached (`-Ga:b`) or separate (`-G a:b`). A role
+/// is proven only when every option word before it is one the grammar
+/// knows: a separate value can itself look like an option (`-S -m
+/// HEAD:x`), and an unknown option may consume the next word, so after an
+/// unknown option every word is judged (TSK-1002 review 06).
+fn git_text_value(call: &outward::Unwrapped, at: usize) -> bool {
+    let Some((program, rest)) = call.args.split_first() else {
+        return false;
+    };
+    let Some(git) = crate::hooks::git_guard::git_arguments(program, rest) else {
+        return false;
+    };
+    let Some((subcommand, tail)) = crate::hooks::git_guard::git_subcommand(&git) else {
+        return false;
+    };
+    let start = call.args.len() - tail.len();
+    if !git_reads::object_reader(subcommand) || at < start || at >= call.args.len() {
+        return false;
+    }
+    let log = matches!(subcommand, "log" | "show" | "whatchanged");
+    let attached = |word: &str| {
+        GIT_TEXT_OPTIONS
+            .iter()
+            .any(|option| word.starts_with(option))
+            || log && (word.starts_with("-S") || word.starts_with("-G")) && word.len() > 2
+    };
+    let mut index = start;
+    while index < at {
+        let word = call.args[index].as_str();
+        index += 1;
+        if word == "--" {
+            return false;
+        }
+        if !word.starts_with('-') || word == "-" {
+            continue;
+        }
+        let count = word.len() > 1 && word[1..].bytes().all(|byte| byte.is_ascii_digit());
+        if attached(word)
+            || count
+            || log && GIT_LOG_FLAGS.contains(&word)
+            || word.starts_with("--") && word.contains('=')
+        {
+            continue;
+        }
+        if log && GIT_LOG_TEXT_VALUED.contains(&word) {
+            if index == at {
+                return true;
+            }
+            index += 1;
+            continue;
+        }
+        return false;
+    }
+    attached(&call.args[at])
+}
+
+/// Every path a Git object operand may name. For a subcommand that takes
+/// objects, any operand before `--`, a separate option value included, or
+/// the attached value of an option not listed as text, may be `REV:PATH`
+/// with any revision spelling Git accepts
+/// (`HEAD:x`, `ref!name:x`, `HEAD^{/a:b}:x`, `:0:x`, `$(...):x`). The guard
+/// does not parse revision syntax; it reads the text after every `:` as a
+/// possible object path, so a secret name there refuses whatever comes
+/// before it (TSK-1002 Codex review 05, fail closed).
+fn git_object_paths<'a>(call: &outward::Unwrapped, at: usize, value: &'a str) -> Vec<&'a str> {
+    let Some((program, rest)) = call.args.split_first() else {
+        return Vec::new();
+    };
+    let Some(git) = crate::hooks::git_guard::git_arguments(program, rest) else {
+        return Vec::new();
+    };
+    let Some((subcommand, tail)) = crate::hooks::git_guard::git_subcommand(&git) else {
+        return Vec::new();
+    };
+    // Every command's operands may name an object except the commands
+    // proven to take text: a commit message or a remote spelling is not an
+    // object (TSK-1002 reviews 07 and Codex 07).
+    let start = call.args.len() - tail.len();
+    if !git_reads::object_reader(subcommand)
+        || at < start
+        || value.starts_with('-')
+        || call.args[start..at].iter().any(|word| word == "--")
+        || git_text_value(call, at)
+    {
+        return Vec::new();
+    }
+    value
+        .match_indices(':')
+        .map(|(colon, _)| &value[colon + 1..])
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
+/// A Git operand in revision form that names a short-name component but no
+/// path is a revision, not a file operand, so it needs no Windows
+/// short-name mapping (`git rebase -x 'cargo test' HEAD~3`). Git reads a
+/// word before `--` as a revision unless a path by that name exists: a
+/// non-revision operand must name an existing path, and a word that is both
+/// is refused as ambiguous. The word stays a file operand when a path by
+/// that name exists in the directory Git runs in or its work tree, after
+/// `--`, with `--no-index`, with a `-C` or work tree the guard cannot read,
+/// beside a link made earlier on the line, or when its path cannot be
+/// classified. A `REV:PATH` object name (`HEAD~1:README.md`) is judged by
+/// its revision part, the name a Windows stream suffix would leave.
+fn git_revision_word(call: &outward::Unwrapped, at: usize, value: &str, cwd: &Path) -> bool {
+    let Some((program, rest)) = call.args.split_first() else {
+        return false;
+    };
+    // On Windows `HEAD~1:README.md` opens a stream of the file `HEAD~1`, so
+    // that file is what must not exist (hosted run 40693120060).
+    let probe = if cfg!(windows) {
+        stream_base(value)
+    } else {
+        value.to_string()
+    };
+    if !call.links.is_empty()
+        || !(crate::portable_path::has_short_component(value)
+            || crate::portable_path::has_short_component(&stream_base(value)))
+        || !crate::hooks::git_guard::revision_word(value)
+    {
+        return false;
+    }
+    let Some(git) = crate::hooks::git_guard::git_arguments(program, rest) else {
+        return false;
+    };
+    let Some((_, tail)) = crate::hooks::git_guard::git_subcommand(&git) else {
+        return false;
+    };
+    let start = call.args.len() - tail.len();
+    if at < start
+        || call.args[start..at].iter().any(|word| word == "--")
+        || tail.iter().any(|word| word == "--no-index")
+    {
+        return false;
+    }
+    // Git checks the word against the directory it runs in, which `cwd`
+    // already holds with the call's `-C` options, and, with a work tree
+    // option, against that tree's top. The word must name nothing in
+    // either; `--git-dir` alone moves neither.
+    let directory = cwd.to_path_buf();
+    let mut trees = Vec::new();
+    let globals = &git[..git.len() - tail.len() - 1];
+    let mut words = globals.iter();
+    while let Some(word) = words.next() {
+        let (tree, location) = match word.as_str() {
+            // Joined into `cwd` already; one the guard cannot read leaves
+            // the word a possible file.
+            "-C" => (false, words.next().map(String::as_str)),
+            "--work-tree" => (true, words.next().map(String::as_str)),
+            "-c" => match words.next().and_then(|setting| setting.split_once('=')) {
+                Some((key, value)) if key.eq_ignore_ascii_case("core.worktree") => {
+                    (true, Some(value))
+                }
+                _ => continue,
+            },
+            _ => match word.strip_prefix("--work-tree=") {
+                Some(value) => (true, Some(value)),
+                None => continue,
+            },
+        };
+        let Some(location) = location else {
+            continue;
+        };
+        if crate::hooks::git_guard::expands(location)
+            || location.starts_with('~')
+            || crate::hooks::git_guard::has_glob(location)
+        {
+            return false;
+        }
+        if tree {
+            trees.push(outward::lexical_join(&directory, Path::new(location)));
+        }
+    }
+    std::iter::once(directory).chain(trees).all(|base| {
+        matches!(
+            crate::absence::entry(&outward::lexical_join(&base, Path::new(&probe))),
+            Ok(crate::absence::Entry::Creatable | crate::absence::Entry::Impossible)
+        )
+    })
 }
 
 /// `reader` is `Some` for a reader's argument, saying whether the shell
 /// expands it as a pattern, and `None` for a literal in interpreter code.
 fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: Option<bool>) -> bool {
+    secret_path_result(word, cwd, home, reader).unwrap_or(true)
+}
+
+fn secret_path_result(
+    word: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    reader: Option<bool>,
+) -> Result<bool, &'static str> {
+    // A directory change on the line can name a short-name directory; spell
+    // it as the home is spelled before any store or glob comparison.
+    let mapped_cwd = crate::portable_path::guard_path(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let cwd = mapped_cwd.as_path();
+    // Read a namespace spelling as the path Windows opens before any name
+    // is trimmed: a verbatim name keeps a trailing dot or space, so one the
+    // ordinary path would change refuses (review 01, B6).
+    let namespace = if cfg!(windows) {
+        match crate::portable_path::namespace_spelling(&word.replace('\\', "/")) {
+            Ok(mapped) => mapped,
+            Err(_) if reader.is_none() && stream_base(word) != word => {
+                return secret_path_result(&stream_base(word), cwd, home, reader);
+            }
+            Err(_) => return Err("cannot establish a Windows path's mapped filename"),
+        }
+    } else {
+        None
+    };
+    let word = namespace.as_deref().unwrap_or(word);
+    let spelling = crate::portable_path::filesystem_spelling(word);
+    let word = spelling.as_str();
     let expanded_word = word
         .strip_prefix("$HOME/")
         .or_else(|| word.strip_prefix("${HOME}/"))
@@ -144,88 +1124,2108 @@ fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: Option<bool>
     let word = expanded_word.as_deref().unwrap_or(word);
     // A named home may be another user's, but the configured store suffix
     // remains sensitive. Never let a leading slash replace the joined home.
-    let tilde_word = word
-        .strip_prefix('~')
-        .and_then(|tail| tail.split_once('/'))
-        .map(|(_, suffix)| format!("~/{}", suffix.trim_start_matches('/')));
+    let tilde_word = (reader != Some(false))
+        .then(|| {
+            word.strip_prefix('~')
+                .and_then(|tail| tail.split_once('/'))
+                .map(|(_, suffix)| format!("~/{}", suffix.trim_start_matches('/')))
+        })
+        .flatten();
     let word = tilde_word.as_deref().unwrap_or(word);
+    if reader.is_none() && word == "~" {
+        return Ok(false);
+    }
     // Keep the literal spelling for home patterns even when HOME is unknown.
-    // Also judge relative store names from the payload cwd, without reading
-    // files or resolving symlinks. Do not reduce paths to their basename:
+    // Also judge relative store names from the payload cwd, then inspect
+    // real targets when needed. Do not reduce paths to their basename:
     // auth.json is protected in its store, not in every project directory.
-    let absolute = if let Some(suffix) = word.strip_prefix("~/") {
+    let literal_tilde = word == "~" && reader != Some(true);
+    let absolute = if word == "~" && reader == Some(true) {
+        home.map(Path::to_path_buf)
+    } else if let Some(suffix) = word.strip_prefix("~/").filter(|_| reader != Some(false)) {
         home.map(|home| outward::lexical_join(home, Path::new(suffix)))
     } else {
         Some(outward::lexical_join(cwd, Path::new(word)))
     };
-    secret_path_spelling(word, home, reader)
-        || absolute.as_deref().is_some_and(|path| {
-            secret_path_spelling(&crate::portable_path::slashed(path), home, reader)
+    // A UNC path names a file in a share whose layout the guard cannot
+    // see. Judge it before any physical resolution, mapping or metadata
+    // read, so the guard never contacts a host a command names before
+    // refusing it (review 02, B5).
+    if cfg!(windows) {
+        if let Some(path) = absolute.as_deref() {
+            let text = crate::portable_path::slashed(path);
+            if unc_store_suffix(&text, home, reader, &trusted_shares())? {
+                return Ok(true);
+            }
+        }
+    }
+    if physical_secret(word, cwd, home, reader)? {
+        return Ok(true);
+    }
+    // Map the path the word names, after its home is resolved, never
+    // `cwd.join(word)`: a Windows cwd under `RUNNER~1` would otherwise turn
+    // `~/store` into `<cwd>/~/store` and hide the store (hosted run
+    // 40602309629). Namespace and stream spellings refuse here for every
+    // word; only a short name in the word itself replaces its spelling.
+    let absolute = match absolute
+        .map(|path| crate::portable_path::guard_path(&path))
+        .transpose()
+    {
+        Ok(absolute) => absolute,
+        // A literal in interpreter code is often no path at all (Perl's
+        // `File::Path`). Judge the file or directory a stream spelling
+        // opens; a spelling that still cannot be mapped refuses (hosted
+        // run 40623450157).
+        Err(_) if reader.is_none() => {
+            let base = stream_base(word);
+            return if base == word {
+                Err("cannot establish a Windows path's mapped filename")
+            } else {
+                secret_path_result(&base, cwd, home, reader)
+            };
+        }
+        Err(_) => return Err("cannot establish a Windows path's mapped filename"),
+    };
+    let mapped_word = absolute
+        .as_deref()
+        .filter(|_| cfg!(windows) && crate::portable_path::has_short_component(word))
+        .map(crate::portable_path::slashed);
+    let word = mapped_word.as_deref().unwrap_or(word);
+    if reader == Some(true) && (crate::hooks::git_guard::has_glob(word) || word.contains('{')) {
+        return secret_glob(word, cwd, home);
+    }
+    Ok(
+        // Flat operands name one file or store. Only recursive root
+        // inspection applies the ancestor rule for descendant reads.
+        (!literal_tilde && secret_path_spelling(word, home, None))
+            || absolute.as_deref().is_some_and(|path| {
+                secret_path_spelling(&crate::portable_path::slashed(path), home, None)
+            })
+            || match absolute.as_deref() {
+                Some(path) => real_secret_path(path, home)?,
+                None => false,
+            },
+    )
+}
+
+/// Whether the file a parent component reaches through an existing link is
+/// a secret: the kernel resolves the link before `..`, so
+/// `alias/../auth.json` opens beside the link's target, not beside the
+/// link (review 01, B4).
+fn physical_secret(
+    word: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    reader: Option<bool>,
+) -> Result<bool, &'static str> {
+    let physical = if word == "~" {
+        None
+    } else if let Some(suffix) = word.strip_prefix("~/").filter(|_| reader != Some(false)) {
+        match home {
+            Some(home) => physical_path(home, Path::new(suffix))?,
+            None => None,
+        }
+    } else {
+        physical_path(cwd, Path::new(word))?
+    };
+    match physical.as_deref() {
+        Some(path) => Ok(
+            secret_path_spelling(&crate::portable_path::slashed(path), home, None)
+                || real_secret_path(path, home)?,
+        ),
+        None => Ok(false),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many metadata reads [`physical_path`] made on this thread.
+    static PHYSICAL_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The path `word` opens from `base` when it holds a parent component: the
+/// walk starts at the physical `base`, and each existing link on the way is
+/// resolved before the next `..`, as the kernel resolves it, so
+/// `alias/..` is the parent of the link's target (TSK-1002 review 01, B4)
+/// and `..` from a directory reached through a link is the target's parent.
+/// `None` without a parent component, where the lexical path is the path
+/// opened. A link or a component the guard cannot read refuses.
+fn physical_path(base: &Path, word: &Path) -> Result<Option<PathBuf>, &'static str> {
+    use std::path::Component;
+    let components: Vec<_> = word.components().collect();
+    // Any parent component: one after a name may follow a link in the
+    // word, and a leading one leaves the physical directory the command
+    // runs in, which a link in the line's directory can move (TSK-1002
+    // review 03, ruling 5).
+    if !components
+        .iter()
+        .any(|part| matches!(part, Component::ParentDir))
+    {
+        return Ok(None);
+    }
+    let mut path = if word.has_root() {
+        PathBuf::new()
+    } else {
+        crate::portable_path::canonicalize(base).unwrap_or_else(|_| base.to_path_buf())
+    };
+    let mut exists = true;
+    for part in components {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                path.pop();
+            }
+            Component::Normal(name) => {
+                path.push(name);
+                if !exists {
+                    continue;
+                }
+                #[cfg(test)]
+                PHYSICAL_READS.with(|reads| reads.set(reads.get() + 1));
+                match crate::absence::symlink_metadata_optional(&path) {
+                    Ok(Some(meta)) if meta.file_type().is_symlink() => {
+                        path = crate::portable_path::canonicalize(&path)
+                            .map_err(|_| "cannot resolve a link before a parent component")?;
+                    }
+                    Ok(Some(_)) => {}
+                    // Below a name proven absent the kernel opens nothing,
+                    // so the rest is read by spelling.
+                    Ok(None) => exists = false,
+                    Err(_) => return Err("cannot read a path component before a parent component"),
+                }
+            }
+            other => path.push(other.as_os_str()),
+        }
+    }
+    Ok(Some(path))
+}
+
+thread_local! {
+    /// The UNC directories the operator chose for this guard call, the
+    /// home and the session's directory, lowercase with `/` separators.
+    static TRUSTED_SHARES: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Sets [`TRUSTED_SHARES`] for one guard call and clears it on drop.
+struct TrustedShares;
+
+impl TrustedShares {
+    fn enter(dirs: &[Option<&Path>]) -> Self {
+        let dirs = dirs
+            .iter()
+            .flatten()
+            .map(|dir| {
+                crate::portable_path::slashed(dir)
+                    .trim_end_matches('/')
+                    .to_ascii_lowercase()
+            })
+            .filter(|dir| dir.starts_with("//"))
+            .collect();
+        TRUSTED_SHARES.with(|trusted| *trusted.borrow_mut() = dirs);
+        Self
+    }
+}
+
+fn trusted_shares() -> Vec<String> {
+    TRUSTED_SHARES.with(|trusted| trusted.borrow().clone())
+}
+
+impl Drop for TrustedShares {
+    fn drop(&mut self) {
+        TRUSTED_SHARES.with(|trusted| trusted.borrow_mut().clear());
+    }
+}
+
+/// Whether `text` (with `/` separators) is a UNC path, in any namespace
+/// spelling, that may name a secret (review 01, B5). A share can map any
+/// directory of any machine, a store itself included, and its name need
+/// not say so. So a UNC path refuses unless it lies under a directory the
+/// operator chose for the session (the home, the session's directory, in
+/// `trusted`), where only its protected home-relative tail refuses. Any
+/// trailing part ending in a protected home path refuses everywhere.
+fn unc_store_suffix(
+    text: &str,
+    home: Option<&Path>,
+    reader: Option<bool>,
+    trusted: &[String],
+) -> Result<bool, &'static str> {
+    let lower = text.to_ascii_lowercase();
+    let rest = if let Some(rest) = lower
+        .strip_prefix("//?/unc/")
+        .or_else(|| lower.strip_prefix("//./unc/"))
+    {
+        rest
+    } else if lower.starts_with("//?/") || lower.starts_with("//./") {
+        return Ok(false);
+    } else if let Some(rest) = lower.strip_prefix("//") {
+        rest
+    } else {
+        return Ok(false);
+    };
+    let parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
+    if (1..parts.len())
+        .any(|at| secret_path_spelling(&format!("~/{}", parts[at..].join("/")), home, reader))
+    {
+        return Ok(true);
+    }
+    let unc = format!("//{}", parts.join("/"));
+    let chosen = trusted.iter().any(|dir| {
+        unc.strip_prefix(dir.as_str())
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))
+    });
+    // Elsewhere the share's root is a directory the guard cannot
+    // establish, so the tail below it is judged as in an unknown directory.
+    if !chosen && parts.len() > 2 && relative_may_name_secret(&parts[2..].join("/")) {
+        return Err(UNKNOWN_SHARE);
+    }
+    Ok(false)
+}
+
+/// Why a share outside the home and the session's directory refuses, with
+/// the remedy: its drive-letter path names what it maps.
+const UNKNOWN_SHARE: &str = "cannot establish what a network share outside the home and the session's directory maps; use its drive-letter path (a mapped drive or the local path) instead";
+
+/// A recursive root on a share whose root the guard cannot establish
+/// refuses before anything below it is listed: any directory below a share
+/// may be a store (review 01, B5). An administrative share is its drive.
+fn unmapped_share_root(base: &Path, word: &str) -> Result<(), &'static str> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
+    let written = word.replace('\\', "/");
+    let path = match crate::portable_path::namespace_spelling(&written) {
+        Ok(Some(mapped)) => mapped,
+        Ok(None) => crate::portable_path::slashed(&outward::lexical_join(base, Path::new(word))),
+        Err(_) => return Err(UNKNOWN_SHARE),
+    };
+    if !unmapped_share(&path) {
+        return Ok(());
+    }
+    let path = path.to_ascii_lowercase();
+    let chosen = trusted_shares().iter().any(|dir| {
+        path.strip_prefix(dir.as_str())
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))
+    });
+    if chosen {
+        Ok(())
+    } else {
+        Err(UNKNOWN_SHARE)
+    }
+}
+
+/// Whether `text` (with `/` separators) is a UNC path, after any namespace
+/// prefix and an administrative share's drive mapping: a share whose root
+/// the guard cannot establish.
+fn unmapped_share(text: &str) -> bool {
+    match crate::portable_path::namespace_spelling(text) {
+        Ok(Some(mapped)) => mapped.starts_with("//"),
+        Ok(None) => false,
+        Err(_) => true,
+    }
+}
+
+/// `word` (with `/` separators) without NTFS stream syntax: each component
+/// ends at its first `:` unless it is a drive (`C:`). `x::$DATA`,
+/// `dir:$I30:$INDEX_ALLOCATION/f` and `f:name` open `x`, `dir/f` and `f`.
+fn stream_base(word: &str) -> String {
+    word.split('/')
+        .map(|part| {
+            let drive = part.len() == 2
+                && part.ends_with(':')
+                && part.starts_with(|ch: char| ch.is_ascii_alphabetic());
+            if drive {
+                part
+            } else {
+                part.split(':').next().unwrap_or(part)
+            }
         })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
-    let word = word.to_ascii_lowercase();
+    let word = crate::portable_path::filesystem_spelling(word).to_ascii_lowercase();
     let home_relative = home.and_then(|home| {
         let home = crate::portable_path::slashed(home).to_ascii_lowercase();
         word.strip_prefix(home.trim_end_matches('/'))
-            .filter(|tail| tail.starts_with('/'))
+            .filter(|tail| tail.is_empty() || tail.starts_with('/'))
             .map(|tail| format!("~{tail}"))
     });
     let word = home_relative.as_deref().unwrap_or(&word);
-    actions::table().sandbox_read_denies.iter().any(|path| {
-        word == path
-            || word
-                .strip_prefix(path)
+    // A directory rule also protects the store itself, even when it is
+    // absent. This is equality, not the ancestor rule for descendant reads.
+    secret_stores()
+        .iter()
+        .any(|store| word.trim_end_matches('/') == store)
+        || actions::table().sandbox_read_denies.iter().any(|path| {
+            word == path
+                || word
+                    .strip_prefix(path)
+                    .is_some_and(|tail| tail.starts_with('/'))
+                || reader.is_some_and(|expands| secret_prefix(word, path, expands))
+        })
+        || actions::table().claude_read_groups.iter().any(|group| {
+            // This group has no carve-outs; source-name and env-file groups do.
+            group.carveouts.is_empty()
+                && group.denies.iter().any(|rule| {
+                    let Some(pattern) =
+                        rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')'))
+                    else {
+                        return false;
+                    };
+                    matches_extended_glob(word, pattern)
+                        || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
+                })
+        })
+        || secret_backup(word)
+}
+
+/// Whether `word` (lowercase, home-relative as `~/...`) is a backup copy of
+/// a named secret file, which holds the same token (TSK-1002 Fable reviews
+/// 17 and 18): in the secret's directory, or in any directory for a
+/// `**/NAME` rule such as `.netrc`, a name that is the secret's name
+/// followed by `~` or by a `.` suffix (`auth.json~`, `auth.json.bak`,
+/// `.orig`, `.old`, `.1`), or an editor swap file `.NAME.sw?`. Only a rule
+/// whose last component is a plain name counts, and a name that merely
+/// continues the secret's name (`.netrc-notes`) is a different file. A
+/// backup of a file a suffix pattern names (`*.pem`, as `x.pem.bak`) is a
+/// stated limit: telling a backup suffix from a source one
+/// (`certificate.pem.txt`) would need a suffix list (the operator's choice
+/// on security review 03, H-B).
+fn secret_backup(word: &str) -> bool {
+    let table = actions::table();
+    let hard = table
+        .claude_read_groups
+        .iter()
+        .filter(|group| group.carveouts.is_empty())
+        .flat_map(|group| group.denies.iter())
+        .filter_map(|rule| rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')));
+    let named = table.sandbox_read_denies.iter().map(String::as_str);
+    let plain = |part: &str| !part.contains(['*', '?', '[']);
+    hard.chain(named).any(|rule| {
+        let Some((directory, leaf)) = rule.rsplit_once('/') else {
+            return false;
+        };
+        if leaf.is_empty() || !plain(leaf) {
+            return false;
+        }
+        let name = if directory == "**" {
+            word.rsplit('/').next().unwrap_or(word)
+        } else if rule.starts_with("~/") && plain(directory) {
+            let Some(name) = word
+                .strip_prefix(directory.to_ascii_lowercase().as_str())
+                .and_then(|tail| tail.strip_prefix('/'))
+                .filter(|name| !name.contains('/'))
+            else {
+                return false;
+            };
+            name
+        } else {
+            return false;
+        };
+        let leaf = leaf.to_ascii_lowercase();
+        name.strip_prefix(leaf.as_str())
+            .is_some_and(|rest| rest.starts_with(['~', '.']))
+            || name
+                .strip_prefix('.')
+                .and_then(|rest| rest.strip_prefix(leaf.as_str()))
+                .is_some_and(|rest| rest.starts_with(".sw"))
+    })
+}
+
+/// Expand shell words without substituting a directory for an incomplete
+/// listing. Store directories refuse before any filesystem enumeration.
+fn secret_glob(word: &str, cwd: &Path, home: Option<&Path>) -> Result<bool, &'static str> {
+    if home_rule_glob(word, cwd, home) {
+        return Ok(true);
+    }
+    let readings = crate::hooks::git_guard::word_readings(word)
+        .ok_or("cannot inspect every brace alternative")?;
+    for reading in readings {
+        let directory = reading.rsplit_once('/').map_or("", |(dir, _)| dir);
+        if secret_directory(directory, cwd, home) {
+            return Ok(true);
+        }
+        let Some((base, pattern)) = glob_base(&reading, cwd, home) else {
+            return Err("cannot resolve the glob's home directory");
+        };
+        if !crate::hooks::git_guard::has_glob(pattern) {
+            if secret_path(pattern, base, home, Some(false)) {
+                return Ok(true);
+            }
+            continue;
+        }
+        // An expansion the guard could not finish, or an entry it cannot
+        // read as a path, leaves the selection unknown: an unseen entry may
+        // be a link into a store whatever its name, so no name check can
+        // clear it (TSK-1002 Codex review 05).
+        let paths = crate::hooks::git_guard::secret_glob_paths(pattern, base)?;
+        for path in paths {
+            let text = secret_path_text(&path)?;
+            if secret_path_spelling(&text, home, Some(false)) || real_secret_path(&path, home)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// A named home rule protects its own filename, including conservative
+/// brace readings. This does not turn its parent into a whole-directory
+/// store or apply name intersection to ordinary workspace source globs.
+fn home_rule_glob(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
+    let Some((base, relative)) = glob_base(word, cwd, home) else {
+        return false;
+    };
+    let absolute = outward::lexical_join(base, Path::new(relative));
+    let word = home_spelling(&crate::portable_path::slashed(&absolute), home);
+    let Some(readings) = secret_pattern_readings(&word) else {
+        return true;
+    };
+    // File selectors must share an actual filename. Adding descendants
+    // here would turn a public *.md leaf into an ancestor of private jsonl.
+    let intersects = |rule: &str| {
+        rule.starts_with("~/")
+            && readings
+                .iter()
+                .any(|reading| super::pattern::glob_intersects(reading, rule).unwrap_or(true))
+    };
+    let table = actions::table();
+    table
+        .sandbox_read_denies
+        .iter()
+        .map(String::as_str)
+        .any(intersects)
+        || table.claude_read_groups.iter().any(|group| {
+            group.carveouts.is_empty()
+                && group.denies.iter().any(|rule| {
+                    rule.strip_prefix("Read(")
+                        .and_then(|rule| rule.strip_suffix(')'))
+                        .is_some_and(intersects)
+                })
+        })
+}
+
+fn glob_base<'a>(
+    word: &'a str,
+    cwd: &'a Path,
+    home: Option<&'a Path>,
+) -> Option<(&'a Path, &'a str)> {
+    if let Some(tail) = word.strip_prefix("~/") {
+        home.map(|home| (home, tail))
+    } else {
+        Some((cwd, word))
+    }
+}
+
+fn home_spelling(word: &str, home: Option<&Path>) -> String {
+    let word = word.to_ascii_lowercase();
+    home.and_then(|home| {
+        let home = crate::portable_path::slashed(home).to_ascii_lowercase();
+        word.strip_prefix(home.trim_end_matches('/'))
+            .filter(|tail| tail.is_empty() || tail.starts_with('/'))
+            .map(|tail| format!("~{tail}"))
+    })
+    .unwrap_or(word)
+}
+
+fn secret_stores() -> &'static [String] {
+    static STORES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    STORES.get_or_init(|| {
+        let table = actions::table();
+        let mut stores = Vec::new();
+        let rules = table
+            .claude_read_groups
+            .iter()
+            .filter(|group| group.carveouts.is_empty())
+            .flat_map(|group| group.denies.iter())
+            .filter_map(|rule| {
+                rule.strip_prefix("Read(")
+                    .and_then(|rule| rule.strip_suffix(')'))
+            });
+        for rule in rules.filter(|rule| rule.starts_with("~/")) {
+            let Some(directory) = rule.strip_suffix("/**") else {
+                continue;
+            };
+            if directory != "~" && !crate::hooks::git_guard::has_glob(directory) {
+                stores.push(directory.to_owned());
+            }
+        }
+        stores.sort();
+        stores.dedup();
+        stores
+    })
+}
+
+fn secret_directory(directory: &str, cwd: &Path, home: Option<&Path>) -> bool {
+    let Some((base, directory)) = glob_base(directory, cwd, home) else {
+        return true;
+    };
+    let absolute = outward::lexical_join(base, Path::new(directory));
+    let spelling = home_spelling(&crate::portable_path::slashed(&absolute), home);
+    secret_stores().iter().any(|store| {
+        spelling == *store
+            || spelling
+                .strip_prefix(store)
                 .is_some_and(|tail| tail.starts_with('/'))
-            || reader.is_some_and(|expands| secret_prefix(word, path, expands))
-    }) || actions::table().claude_read_groups.iter().any(|group| {
-        // This group has no carve-outs; source-name and env-file groups do.
-        group.carveouts.is_empty()
-            && group.denies.iter().any(|rule| {
-                let Some(pattern) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')'))
-                else {
-                    return false;
+            || (crate::hooks::git_guard::has_glob(directory)
+                && (super::pattern::glob_intersects(&spelling, store).unwrap_or(true)
+                    || super::pattern::glob_intersects(&spelling, &format!("{store}/**"))
+                        .unwrap_or(true)))
+    })
+}
+
+/// Existing names are judged through their real target as well as their
+/// visible spelling. Proven absence is the only metadata failure that clears
+/// a literal operand; unreadable and dangling links cannot certify a read.
+fn real_secret_path(path: &Path, home: Option<&Path>) -> Result<bool, &'static str> {
+    if secret_path_spelling(&secret_path_text(path)?, home, None) {
+        return Ok(true);
+    }
+    if crate::absence::cannot_exist(path)
+        .map_err(|_| "cannot establish whether a read path exists")?
+    {
+        return Ok(false);
+    }
+    let real = crate::portable_path::canonicalize(path)
+        .map_err(|_| "cannot resolve a read path's real target")?;
+    let text = secret_path_text(&real)?;
+    // A link can resolve into a share (`\\?\UNC\host\share\...`).
+    if secret_path_spelling(&text, home, None)
+        || cfg!(windows) && unc_store_suffix(&text, home, None, &trusted_shares())?
+    {
+        return Ok(true);
+    }
+    let real_home = home
+        .map(|home| {
+            crate::hooks::edit_guard::normalized(home, true)
+                .map_err(|_| "cannot resolve the secret stores' home directory")
+        })
+        .transpose()?;
+    Ok(secret_path_spelling(&text, real_home.as_deref(), None))
+}
+
+#[allow(clippy::too_many_arguments)] // Search syntax and shell provenance share one context.
+fn secret_search_glob(
+    pattern: &str,
+    name: &str,
+    args: &[String],
+    expands: Option<&[bool]>,
+    cwd: &Path,
+    home: Option<&Path>,
+    line: &CommandLine<'_>,
+    links: &[super::composed::paths::Link],
+) -> Result<bool, &'static str> {
+    let rest = args.get(1..).unwrap_or_default();
+    let literal: Vec<_> = (1..args.len())
+        .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
+        .collect();
+    let mut roots =
+        super::search_pattern::search_roots(name, rest, &literal, line.names_ripgrep_config())
+            .ok_or("cannot establish the search roots")?;
+    if roots.is_empty() {
+        roots.push(".");
+    }
+    let mut read = 0;
+    for root in roots {
+        if secret_directory(root, cwd, home) {
+            return Ok(true);
+        }
+        let written = root;
+        let (base, root) =
+            glob_base(root, cwd, home).ok_or("cannot resolve a search root's home directory")?;
+        unmapped_share_root(base, root)?;
+        let globbed = crate::hooks::git_guard::has_glob(root);
+        let roots = if globbed {
+            crate::hooks::git_guard::secret_glob_paths(root, base)?
+        } else {
+            // A root such as `alias/..` walks the link target's parent.
+            vec![physical_path(base, Path::new(root))?
+                .unwrap_or_else(|| outward::lexical_join(base, Path::new(root)))]
+        };
+        let written = (!globbed).then_some(written);
+        for root in roots {
+            if search_root_matches(pattern, &root, written, home, links, &mut read)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Search tools recurse by default (grep only with a recursive flag). Copy
+/// and archive creation tools consume every descendant of their input roots.
+fn recursive_read(
+    name: &str,
+    call: &outward::Unwrapped,
+    cwd: &Path,
+    home: Option<&Path>,
+    line: &CommandLine<'_>,
+) -> Option<Result<bool, &'static str>> {
+    let args = &call.args;
+    let expands = call.expands.as_deref();
+    let links = &call.links;
+    let rest = args.get(1..).unwrap_or_default();
+    let recursive = recursive_option(name, rest);
+    if matches!(name, "rg" | "ag" | "ack") || name == "grep" && recursive {
+        let literal: Vec<_> = (1..args.len())
+            .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
+            .collect();
+        let selectors =
+            super::search_pattern::path_values(name, rest, &literal, line.names_ripgrep_config());
+        let Some(selectors) = selectors else {
+            return Some(Err("cannot establish a recursive reader's selectors"));
+        };
+        // A negated selector cannot clear an otherwise selected secret. With
+        // no positive selector the reader selects every file under its roots.
+        let patterns: Vec<_> = selectors
+            .iter()
+            .filter(|(at, value, glob)| *glob && positive_selector(rest, *at, value))
+            .map(|(_, value, _)| *value)
+            .collect();
+        if patterns.is_empty() {
+            return Some(secret_search_glob(
+                "*", name, args, expands, cwd, home, line, links,
+            ));
+        }
+        for pattern in patterns {
+            match secret_search_glob(pattern, name, args, expands, cwd, home, line, links) {
+                Ok(false) => {}
+                result => return Some(result),
+            }
+        }
+        return Some(Ok(false));
+    }
+    let selected = archive_sources(name, rest, call.input.as_deref());
+    let (roots, literal): (Vec<String>, bool) = if let Some(selected) = selected {
+        match selected {
+            Ok(sources) => sources,
+            Err(why) => return Some(Err(why)),
+        }
+    } else {
+        (
+            match name {
+                "grep" => return None, // Without recursion it reads only named files.
+                "cp" if recursive => match super::unresolved::writer_effects(name, rest, &[])
+                    .and_then(|effects| effects.copy)
+                {
+                    Some(copy) => copy.sources,
+                    None => return Some(Err("cannot establish recursive copy sources")),
+                },
+                "zip" if recursive => rest
+                    .iter()
+                    .filter(|arg| !arg.starts_with('-'))
+                    .skip(1)
+                    .cloned()
+                    .collect(),
+                "tar" => match archive_read_roots(rest, cwd) {
+                    Ok(Some(roots)) => roots,
+                    Ok(None) => return None,
+                    Err(why) => return Some(Err(why)),
+                },
+                _ => match conservative_read_roots(name, args, expands, cwd, home, line, links) {
+                    Some(Ok(roots)) => roots,
+                    Some(Err(why)) => return Some(Err(why)),
+                    None => return None,
+                },
+            },
+            false,
+        )
+    };
+    Some(inspect_recursive_roots(&roots, literal, cwd, home, links))
+}
+
+/// Whether a command `find -exec`, `-execdir`, `-ok` or `-okdir` runs may
+/// be given a secret file or store: `None` for a command `find` does not
+/// supply. The command reads what it is given, so the starting points are
+/// recursive-reader roots, as `grep -r` roots are, narrowed by a `-name`
+/// test when the expression is a plain conjunction (TSK-1002 Fable review
+/// 15). A start the guard cannot read, a relative start in an unknown
+/// directory, or a `find` that follows links cannot be verified.
+fn find_given_paths(
+    call: &outward::Unwrapped,
+    home: Option<&Path>,
+) -> Option<Result<bool, &'static str>> {
+    let Some(outward::Supplier::Find {
+        starts,
+        before,
+        cwd,
+        appends,
+        ..
+    }) = &call.supplier
+    else {
+        return None;
+    };
+    // `find` hands its paths over as `{}`, or to a shell `-c` string that
+    // passes them on as its positional parameters; `fd` hands them over
+    // either way.
+    if !appends
+        && !call
+            .args
+            .iter()
+            .skip(1)
+            .any(|word| word.contains("{}") || crate::hooks::git_guard::unresolved_word(word))
+    {
+        return None;
+    }
+    if before
+        .iter()
+        .any(|word| matches!(word.as_str(), "-L" | "-follow"))
+    {
+        return Some(Err("the walk follows links to paths the guard cannot list"));
+    }
+    let selector = match crate::hooks::git_guard::find_name_filter(before) {
+        Some(names) if names.iter().all(|(_, insensitive)| !insensitive) => names
+            .first()
+            .map_or_else(|| "*".to_string(), |(name, _)| name.clone()),
+        _ => "*".to_string(),
+    };
+    let mut read = 0;
+    for start in starts {
+        if crate::hooks::git_guard::unresolved_word(start) {
+            return Some(Err("cannot establish a root of the walk"));
+        }
+        let (base, tail) = match start.strip_prefix('~') {
+            Some("") => match home {
+                Some(home) => (home.to_path_buf(), "."),
+                None => return Some(Err("cannot establish the home directory")),
+            },
+            Some(rest) => match (rest.strip_prefix(['/', '\\']), home) {
+                (Some(rest), Some(home)) => (home.to_path_buf(), rest),
+                _ => return Some(Err("cannot establish a root of the walk")),
+            },
+            None if Path::new(start).is_absolute() => (PathBuf::new(), start.as_str()),
+            None => match cwd {
+                Some(cwd) => (cwd.clone(), start.as_str()),
+                None => return Some(Err("cannot establish the directory the walk starts in")),
+            },
+        };
+        if let Err(why) = unmapped_share_root(&base, tail) {
+            return Some(Err(why));
+        }
+        let root = base.join(tail);
+        match search_root_matches(&selector, &root, Some(start), home, &call.links, &mut read) {
+            Ok(false) => {}
+            result => return Some(result),
+        }
+    }
+    Some(Ok(false))
+}
+
+fn inspect_recursive_roots(
+    roots: &[String],
+    literal: bool,
+    cwd: &Path,
+    home: Option<&Path>,
+    links: &[super::composed::paths::Link],
+) -> Result<bool, &'static str> {
+    let mut read = 0;
+    for root in roots {
+        let (base, pattern) = if literal {
+            (cwd, root.as_str())
+        } else {
+            glob_base(root, cwd, home).ok_or("cannot establish a recursive root")?
+        };
+        unmapped_share_root(base, pattern)?;
+        let roots = if !literal && crate::hooks::git_guard::has_glob(pattern) {
+            crate::hooks::git_guard::secret_glob_paths(pattern, base)?
+        } else {
+            vec![base.join(pattern)]
+        };
+        for root in roots {
+            if search_root_matches("*", &root, None, home, links, &mut read)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// These archive modes consume filename lists, not the contents of stdin.
+/// Keep literal list bytes separate from shell-expanded argv roots.
+fn archive_sources(
+    name: &str,
+    args: &[String],
+    input: Option<&str>,
+) -> Option<Result<(Vec<String>, bool), &'static str>> {
+    if !matches!(name, "cpio" | "pax") {
+        return None;
+    }
+    let mut flags = String::new();
+    let mut operands = Vec::new();
+    let mut unknown = false;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if arg == "--" {
+            operands.extend_from_slice(&args[at..]);
+            break;
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            operands.push(arg.clone());
+        } else if let Some(long) = arg.strip_prefix("--") {
+            let (option, attached) = long
+                .split_once('=')
+                .map_or((long, false), |(name, _)| (name, true));
+            match option {
+                "create" => flags.push('o'),
+                "pass-through" => flags.push('p'),
+                "null" => flags.push('0'),
+                "owner" | "format" | "file" | "message" => at += usize::from(!attached),
+                "quiet"
+                | "verbose"
+                | "make-directories"
+                | "preserve-modification-time"
+                | "unconditional" => {}
+                _ => unknown = true,
+            }
+        } else {
+            for (offset, flag) in arg[1..].char_indices() {
+                flags.push(flag);
+                let valued = if name == "pax" {
+                    "bfopsxBEGTU"
+                } else {
+                    "CEFfHIORM"
                 };
-                matches_extended_glob(word, pattern)
-                    || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
+                if valued.contains(flag) {
+                    at += usize::from(offset + 2 == arg.len());
+                    break;
+                }
+                unknown |= !"0abBcdhilmoprtuvwHL".contains(flag);
+            }
+        }
+    }
+    let reads_names = if name == "pax" {
+        flags.contains('w')
+    } else {
+        flags.contains(['o', 'p'])
+    };
+    if !reads_names {
+        return None;
+    }
+    if unknown {
+        return Some(Err("cannot establish archive filename-list options"));
+    }
+    if name == "pax" && flags.contains('r') {
+        operands.pop(); // Pass-through destination is written, not read.
+    }
+    if name == "pax" && !operands.is_empty() {
+        return Some(Ok((operands, false)));
+    }
+    let Some(input) = input else {
+        return Some(Err("cannot establish the archive's stdin filename list"));
+    };
+    Some(Ok((
+        input
+            .split(if flags.contains('0') { '\0' } else { '\n' })
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        true,
+    )))
+}
+
+/// Directory-capable copy operations and unmodelled recursive/archive syntax
+/// retain every candidate source. Unknown input streams cannot certify roots.
+fn conservative_read_roots(
+    name: &str,
+    args: &[String],
+    expands: Option<&[bool]>,
+    cwd: &Path,
+    home: Option<&Path>,
+    line: &CommandLine<'_>,
+    links: &[super::composed::paths::Link],
+) -> Option<Result<Vec<String>, &'static str>> {
+    if matches!(
+        name,
+        "ls" | "stat"
+            | "test"
+            | "["
+            | "du"
+            | "find"
+            // `fd` lists names; the command its `-x`/`-X` runs is judged
+            // with the paths it hands over (`Supplier::Find`), so its
+            // option letters are not archive syntax (TSK-1002 review 17).
+            | "fd"
+            | "fdfind"
+            | "rm"
+            | "rmdir"
+            | "unlink"
+            | "mv"
+            | "ln"
+            | "install"
+            | "chmod"
+            | "chown"
+            | "chgrp"
+            | "echo"
+            | "printf"
+            | "print"
+    ) {
+        return None;
+    }
+    let rest = args.get(1..).unwrap_or_default();
+    let program_args = outward::recursive_arguments(name, rest);
+    let effects = super::unresolved::writer_effects(name, rest, &[]);
+    let flags = program_args.as_deref().unwrap_or_else(|| {
+        effects
+            .as_ref()
+            .map_or(rest, |effects| effects.read.flags.as_slice())
+    });
+    let unknown = effects
+        .as_ref()
+        .is_some_and(|effects| effects.read.unknown.is_some());
+    let archive = archive_syntax(flags) || unknown;
+    if matches!(name, "cp" | "scp" | "rsync") && !archive {
+        return None;
+    }
+    let copy = effects.and_then(|effects| effects.copy);
+    if copy.is_none() && !archive {
+        return None;
+    }
+    let roots: Vec<String> = if let Some(copy) = copy.filter(|_| !unknown) {
+        copy.sources
+    } else if let Some(program_args) = &program_args {
+        program_args
+            .iter()
+            .flat_map(|word| super::arguments::argument_values(word))
+            .map(str::to_owned)
+            .collect()
+    } else {
+        file_operands(name, args, expands, line, cwd)
+            .into_iter()
+            .filter(|(at, _, _)| *at != 1 || !rest.first().is_some_and(|arg| archive_verb(arg)))
+            .map(|(_, word, _)| word.to_owned())
+            .collect()
+    };
+    let directories = match recursive_directories(roots, cwd, home, links) {
+        Ok(directories) => directories,
+        Err(why) => return Some(Err(why)),
+    };
+    if directories.is_empty() {
+        return None;
+    }
+    if unknown
+        || directories.iter().any(|root| {
+            crate::hooks::git_guard::unresolved_word(root)
+                || root == "-"
+                || matches!(name, "rsync" | "scp") && remote_endpoint(root)
+        })
+    {
+        Some(Err(
+            "cannot establish every source of an unmodelled recursive or archive operation",
+        ))
+    } else {
+        Some(Ok(directories))
+    }
+}
+
+fn recursive_directories(
+    roots: Vec<String>,
+    cwd: &Path,
+    home: Option<&Path>,
+    links: &[super::composed::paths::Link],
+) -> Result<Vec<String>, &'static str> {
+    let mut directories = Vec::new();
+    for root in roots {
+        let Some((base, word)) = glob_base(&root, cwd, home) else {
+            return Err("cannot establish an unmodelled recursive root");
+        };
+        unmapped_share_root(base, word)?;
+        let path = base.join(word);
+        let planned = links
+            .iter()
+            .any(|link| link.path().starts_with(&path) || path.starts_with(link.path()));
+        if crate::hooks::git_guard::has_glob(word) || planned {
+            directories.push(root);
+        } else {
+            if crate::absence::cannot_exist(&path)
+                .map_err(|_| "cannot establish an unmodelled operand's file type")?
+            {
+                continue;
+            }
+            match crate::absence::is_kind(&path, true) {
+                Some(true) => directories.push(root),
+                Some(false) => {}
+                None => return Err("cannot establish an unmodelled operand's file type"),
+            }
+        }
+    }
+    Ok(directories)
+}
+
+fn remote_endpoint(path: &str) -> bool {
+    path.split_once(':').is_some_and(|(host, tail)| {
+        !(host.contains(['/', '\\']) || (host.len() == 1 && tail.starts_with(['/', '\\'])))
+    })
+}
+
+fn archive_syntax(flags: &[String]) -> bool {
+    flags.iter().enumerate().any(|(at, arg)| {
+        at == 0 && archive_verb(arg)
+            || matches!(
+                arg.as_str(),
+                "--recursive" | "--archive" | "--create" | "--append"
+            )
+            || arg.strip_prefix('-').is_some_and(|flags| {
+                !flags.starts_with('-')
+                    && flags.chars().all(|ch| ch.is_ascii_alphabetic())
+                    && flags.contains(['r', 'R', 'a', 'c', 'w', 'o', 'u'])
             })
     })
 }
 
-/// A reader can traverse a named directory or expand a pattern without naming
-/// the protected leaf. Only a nonempty literal prefix supplies that evidence.
-/// A word the shell does not expand is all literal: its wildcards are text.
-fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
-    let wildcard = |c| matches!(c, '*' | '?' | '[' | '{');
-    let prefix = if expands {
-        word.split(wildcard).next().unwrap_or("")
-    } else {
-        word
-    };
-    if prefix.is_empty() {
+fn archive_verb(word: &str) -> bool {
+    matches!(word, "a" | "u" | "c" | "create" | "archive")
+}
+
+/// Read option letters only up to a value-taking flag; a filename containing
+/// r is not a recursive option. cp archive mode also implies recursion.
+fn recursive_option(name: &str, args: &[String]) -> bool {
+    args.iter().enumerate().any(|(at, arg)| {
+        if arg == "--recursive"
+            || arg == "--dereference-recursive"
+            || name == "cp" && arg == "--archive"
+        {
+            return true;
+        }
+        if name == "grep"
+            && (arg == "--directories=recurse"
+                || matches!(arg.as_str(), "-d" | "--directories")
+                    && args.get(at + 1).is_some_and(|value| value == "recurse"))
+        {
+            return true;
+        }
+        let Some(flags) = arg
+            .strip_prefix('-')
+            .filter(|flags| !flags.starts_with('-'))
+        else {
+            return false;
+        };
+        let valued = match name {
+            "grep" => "efmABCDd",
+            "cp" => "tS",
+            "zip" => "Pnxs",
+            _ => "",
+        };
+        for flag in flags.chars() {
+            if matches!(flag, 'r' | 'R') || name == "cp" && flag == 'a' {
+                return true;
+            }
+            if valued.contains(flag) {
+                break;
+            }
+        }
+        false
+    })
+}
+
+/// Only inclusion options restrict the selected files. Exclusions and
+/// preprocessing selectors must not turn an unrestricted read into a subset.
+fn positive_selector(args: &[String], at: usize, value: &str) -> bool {
+    if value.starts_with('!') {
         return false;
     }
-    let patterned = prefix.len() != word.len();
-    if let Some(basename) = store.strip_prefix("**/") {
-        let stem = basename.split(wildcard).next().unwrap_or("");
-        let name = prefix.rsplit('/').next().unwrap_or("");
-        return patterned && !name.is_empty() && !stem.is_empty() && stem.starts_with(name);
-    }
-    let stem = store.split(wildcard).next().unwrap_or("");
-    if patterned {
-        // A wildcard at the home root names no store; `*.md` stays ordinary.
-        prefix != "~/" && stem.starts_with(prefix)
+    let Some(word) = args.get(at) else {
+        return false;
+    };
+    let option = if word != value && word.ends_with(value) {
+        word[..word.len() - value.len()].trim_end_matches('=')
     } else {
-        stem.strip_prefix(prefix.trim_end_matches('/'))
-            .is_some_and(|tail| tail.starts_with('/'))
+        at.checked_sub(1)
+            .and_then(|previous| args.get(previous))
+            .map_or("", String::as_str)
+    };
+    matches!(option, "--glob" | "--iglob" | "--include")
+        || option.starts_with('-') && !option.starts_with("--") && option.ends_with('g')
+}
+
+/// A create archive reads whole input trees. Read its root and archive-file
+/// options separately so the destination never becomes an input root.
+/// The directory tar's `-C` moves to, resolved as `chdir` resolves it
+/// ([`outward::physical_join`]); one the guard cannot establish refuses.
+fn archive_directory(base: &Path, value: &str) -> Result<PathBuf, &'static str> {
+    outward::physical_join(base, Path::new(value))
+        .ok_or("cannot establish the directory an archive option moves to")
+}
+
+fn archive_read_roots(args: &[String], cwd: &Path) -> Result<Option<Vec<String>>, &'static str> {
+    let creates = args.iter().enumerate().any(|(at, arg)| {
+        if arg == "--create" {
+            return true;
+        }
+        if arg.starts_with("--") || at != 0 && !arg.starts_with('-') {
+            return false;
+        }
+        for flag in arg.trim_start_matches('-').chars() {
+            if flag == 'c' {
+                return true;
+            }
+            if "fCTXIbLs".contains(flag) {
+                break;
+            }
+        }
+        false
+    });
+    if !creates {
+        return Ok(None);
     }
+    let mut base = cwd.to_path_buf();
+    let mut roots = Vec::new();
+    let mut at = 0;
+    let mut literal = false;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if !literal && arg == "--" {
+            literal = true;
+            continue;
+        }
+        if !literal
+            && matches!(
+                arg.as_str(),
+                "--directory" | "--file" | "--blocking-factor" | "--tape-length"
+            )
+        {
+            let value = args
+                .get(at)
+                .ok_or("cannot establish an archive option value")?;
+            at += 1;
+            if arg == "--directory" {
+                base = archive_directory(&base, value)?;
+            }
+        } else if !literal && arg.starts_with("--directory=") {
+            base = archive_directory(&base, &arg[12..])?;
+        } else if !literal
+            && (arg.starts_with("--file=")
+                || matches!(
+                    arg.as_str(),
+                    "--create"
+                        | "--gzip"
+                        | "--bzip2"
+                        | "--xz"
+                        | "--verbose"
+                        | "--dereference"
+                        | "--one-file-system"
+                        | "--preserve-permissions"
+                ))
+        {
+        } else if !literal
+            && (arg.starts_with('-') || at == 1 && arg.chars().all(|ch| ch.is_ascii_alphabetic()))
+        {
+            let flags = arg.trim_start_matches('-');
+            for (offset, flag) in flags.char_indices() {
+                if matches!(flag, 'f' | 'C' | 'b' | 'L' | 's') {
+                    let attached = &flags[offset + 1..];
+                    let value = if attached.is_empty() {
+                        let value = args
+                            .get(at)
+                            .ok_or("cannot establish an archive option value")?;
+                        at += 1;
+                        value.as_str()
+                    } else {
+                        attached
+                    };
+                    if flag == 'C' {
+                        base = archive_directory(&base, value)?;
+                    }
+                    break;
+                }
+                if !"czjJavhpmSo".contains(flag) {
+                    return Err("cannot establish every archive input root");
+                }
+            }
+        } else {
+            roots.push(secret_path_text(&outward::lexical_join(
+                &base,
+                Path::new(arg),
+            ))?);
+        }
+    }
+    Ok(Some(roots))
+}
+
+fn search_root_matches(
+    pattern: &str,
+    root: &Path,
+    written_root: Option<&str>,
+    home: Option<&Path>,
+    links: &[super::composed::paths::Link],
+    read: &mut usize,
+) -> Result<bool, &'static str> {
+    if pattern == "*" && secret_path_spelling(&secret_path_text(root)?, home, Some(false)) {
+        return Ok(true);
+    }
+    let patterns = crate::hooks::git_guard::brace_expand(pattern)
+        .ok_or("cannot inspect every search-glob brace alternative")?;
+    let patterns: Vec<_> = patterns
+        .iter()
+        .filter(|pattern| !pattern.starts_with('!'))
+        .map(|pattern| pattern.trim_start_matches('/').to_string())
+        .collect();
+    let patterns = if patterns.is_empty() {
+        vec!["*".into()]
+    } else {
+        patterns
+    };
+    let matchers = patterns
+        .iter()
+        .map(|pattern| selector_matchers(pattern))
+        .collect::<Result<Vec<_>, _>>()?;
+    // The guard cannot reproduce every ignore source or same-line edit.
+    // Inspect ignored names too, under the same metadata budget.
+    let root_path = crate::hooks::git_guard::prospective_path(root)
+        .map_err(|_| "cannot resolve a recursive root")?;
+    for link in links {
+        let from = crate::hooks::git_guard::prospective_path(link.path())
+            .map_err(|_| "cannot resolve a link declared before a recursive read")?;
+        if from.starts_with(&root_path) || root_path.starts_with(&from) {
+            return Err("a recursive root or descendant may traverse a link declared on this line");
+        }
+    }
+    let paths = crate::hooks::git_guard::secret_search_paths(root, read, |_| Ok(false))?;
+    for path in paths {
+        if !real_secret_path(&path, home)? {
+            continue;
+        }
+        let names = selector_spellings(&path, root, written_root)?;
+        if matchers
+            .iter()
+            .flatten()
+            .any(|matcher| names.iter().any(|name| matcher.is_match(name)))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The selector as each reading a search tool may give it, by the glob
+/// grammar ripgrep uses (`globset`): with and without backslash escapes
+/// (ripgrep on Unix and grep's `fnmatch` escape, ripgrep on Windows reads a
+/// separator), and with `*` stopping at `/` or not (grep compares name
+/// suffixes). Case is ignored, so `--iglob` and case-folding hosts are
+/// covered. A selector clears a secret only when no reading matches it; one
+/// the grammar cannot read refuses (review 02, B1).
+fn selector_matchers(pattern: &str) -> Result<Vec<globset::GlobMatcher>, &'static str> {
+    // A bracket class, equivalence class or collating element (`[[:alpha:]]`,
+    // `[[=a=]]`, `[[.a.]]`) is grep's fnmatch grammar, which globset does
+    // not model: refuse it rather than guess its matches (TSK-1002 review
+    // 03, ruling 1).
+    if pattern.contains("[:") || pattern.contains("[=") || pattern.contains("[.") {
+        return Err("a search selector uses a bracket class the guard does not read");
+    }
+    let mut matchers = Vec::new();
+    for escape in [true, false] {
+        for separator in [true, false] {
+            let glob = globset::GlobBuilder::new(pattern)
+                .literal_separator(separator)
+                .backslash_escape(escape)
+                .case_insensitive(true)
+                .build()
+                .map_err(|_| "cannot read the search glob as its tool does")?;
+            matchers.push(glob.compile_matcher());
+        }
+    }
+    Ok(matchers)
+}
+
+/// Every spelling a search tool may match a selector against for `path`
+/// under `root` (TSK-1002 review 01, B1). Tools differ: ripgrep matches
+/// the path as it walks it, root included (`copies/id_rsa` for root
+/// `copies`); grep matches the base name; a directory a selector matches
+/// selects what is below it. So a selector clears a secret only when it
+/// matches none of: any run of the path's components that ends at the
+/// file or at a directory from the root down, and the root as written
+/// joined with the path below it.
+fn selector_spellings(
+    path: &Path,
+    root: &Path,
+    written_root: Option<&str>,
+) -> Result<Vec<String>, &'static str> {
+    let text = secret_path_text(path)?;
+    let parts: Vec<&str> = text.split('/').filter(|part| !part.is_empty()).collect();
+    let below = path
+        .strip_prefix(root)
+        .map_or(0, |relative| relative.components().count());
+    // The last index a run may end at: the file, or a directory from the
+    // root down (the root's own component included).
+    let first_end = parts.len().saturating_sub(below + 1);
+    let mut names = Vec::new();
+    for end in first_end..parts.len() {
+        for start in 0..=end {
+            names.push(parts[start..=end].join("/"));
+        }
+    }
+    if let (Some(written), Ok(relative)) = (written_root, path.strip_prefix(root)) {
+        let relative = secret_path_text(relative)?;
+        let written = written.replace('\\', "/");
+        let joined = format!("{}/{relative}", written.trim_end_matches('/'));
+        names.push(joined.trim_start_matches("./").to_string());
+        names.push(joined);
+    }
+    Ok(names)
+}
+
+/// Pattern rules require actual text, never an escaped display or storage key.
+fn secret_path_text(path: &Path) -> Result<String, &'static str> {
+    let name = crate::git::GitName::from_os_str(path.as_os_str());
+    let text = name
+        .rule_text()
+        .map_err(|_| "cannot inspect a non-UTF-8 glob path")?;
+    Ok(if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.to_owned()
+    })
+}
+
+/// A program may accept a file operand even when it is not a known reader.
+/// Only syntax known to be text is excluded. Unknown short-option clusters
+/// retain every possible attached value; long options retain their = value.
+fn file_operands<'a>(
+    name: &str,
+    args: &'a [String],
+    expands: Option<&[bool]>,
+    line: &CommandLine<'_>,
+    cwd: &Path,
+) -> Vec<(usize, &'a str, bool)> {
+    if matches!(
+        name,
+        "echo"
+            | "printf"
+            | "print"
+            // These operands are written or removed, not read for contents.
+            // Input redirections are separate cat operands from outward::visit.
+            | "tee"
+            | "rm"
+            | "rmdir"
+            | "unlink"
+            | "alias"
+            | "unalias"
+            | "export"
+            | ":"
+            | "true"
+            | "false"
+            | "cd"
+            | "chdir"
+            | "pushd"
+            | "popd"
+            | "declare"
+            | "typeset"
+            | "readonly"
+            | "local"
+            | "unset"
+            | "getln"
+            | "read"
+            | "readarray"
+            | "mapfile"
+    ) {
+        return Vec::new();
+    }
+    let mut git_start = 0;
+    let mut git_root = None;
+    let mut global_files = Vec::new();
+    if name == "git" {
+        if let Some((sub, tail)) =
+            crate::hooks::git_guard::git_subcommand(args.get(1..).unwrap_or_default())
+        {
+            git_start = args.len() - tail.len() - 1;
+            global_files = git_global_files(args, git_start);
+            if matches!(sub, "rev-parse" | "branch" | "for-each-ref" | "ls-files") {
+                global_files.extend(git_metadata_paths(tail, git_start));
+                return global_files;
+            }
+            git_root = git_pathspec_root(sub, tail, &args[1..git_start], cwd);
+        }
+    }
+    let rest = args.get(1..).unwrap_or_default();
+    // Inline code is program text for the code-body checks, never a path.
+    // On Windows, `use File::Path` would otherwise refuse as stream syntax.
+    let code = outward::interpreter_family(name)
+        .filter(|family| matches!(*family, "python" | "node" | "nodejs" | "perl" | "ruby"))
+        .map(|family| outward::interpreter_code_positions(family, rest))
+        .unwrap_or_default();
+    let literal: Vec<_> = (1..args.len())
+        .map(|at| expands.is_some_and(|flags| !flags.get(at).copied().unwrap_or(true)))
+        .collect();
+    let configured = line.names_ripgrep_config();
+    if let Some(paths) = super::search_pattern::path_values(name, rest, &literal, configured) {
+        return paths
+            .into_iter()
+            .map(|(at, value, glob)| (at + 1, value, glob))
+            .collect();
+    }
+    // A parser that cannot read an option clears no argument as search text.
+    let patterns = super::search_pattern::pattern_words(name, rest, &literal, configured);
+    let mut paths: Vec<_> = rest
+        .iter()
+        .enumerate()
+        .filter(|(at, word)| {
+            !patterns.contains(at)
+                && !code.contains(at)
+                && *at >= git_start
+                && !directory_option(name, rest, *at)
+                && !git_root.as_deref().is_some_and(|root| {
+                    Path::new(word).is_absolute()
+                        && !Path::new(word).starts_with(root)
+                        && crate::portable_path::canonicalize(Path::new(word))
+                            .is_ok_and(|path| !path.starts_with(root))
+                })
+        })
+        .flat_map(|(at, word)| {
+            file_values(name, rest, at, word)
+                .into_iter()
+                .map(move |value| (at + 1, value, false))
+        })
+        .collect();
+    paths.extend(global_files);
+    paths
+}
+
+/// Whether the operand at `at` is an unquoted word whose `^` the shell
+/// may read as a zsh negation glob (TSK-1002 Fable review 17), so a
+/// refusal can tell the agent to quote a revision or a search pattern.
+fn caret_pattern(call: &outward::Unwrapped, at: usize, value: &str) -> bool {
+    value.contains('^')
+        && crate::hooks::git_guard::has_glob(value)
+        && call
+            .expands
+            .as_deref()
+            .is_none_or(|flags| flags.get(at).copied().unwrap_or(true))
+}
+
+/// Transfer file syntax has its own filename quoting and field delimiters.
+fn file_values<'a>(name: &str, args: &[String], at: usize, word: &'a str) -> Vec<&'a str> {
+    let mut values = super::arguments::argument_values(word);
+    let mut parsed_file = false;
+    if name == "curl" {
+        let files: Vec<_> = values
+            .iter()
+            .copied()
+            .filter_map(|value| curl_file_value(args, at, value))
+            .collect();
+        if !files.is_empty() {
+            values = files;
+            parsed_file = true;
+        }
+    }
+    if matches!(name, "curl" | "wget") && !parsed_file {
+        values.extend(values.clone().into_iter().filter_map(|value| {
+            value
+                .strip_prefix(['@', '<'])
+                .map(|file| file.split(';').next().unwrap_or(file))
+        }));
+    }
+    values
+}
+
+fn curl_file_value<'a>(args: &[String], at: usize, value: &'a str) -> Option<&'a str> {
+    let option = args.get(at).map(String::as_str).unwrap_or_default();
+    let previous = at
+        .checked_sub(1)
+        .and_then(|at| args.get(at))
+        .map(String::as_str);
+    let urlencode = option.starts_with("--data-urlencode") || previous == Some("--data-urlencode");
+    let form = option.starts_with("-F")
+        || option.starts_with("--form=")
+        || matches!(previous, Some("-F" | "--form"));
+    if urlencode {
+        return value.split_once('@').map(|(_, file)| file);
+    }
+    let file = if form {
+        let value = value.split_once('=').map_or(value, |(_, value)| value);
+        value.strip_prefix(['@', '<'])?
+    } else {
+        return None;
+    };
+    let (file, attributes) = if let Some(quote @ ('\'' | '"')) = file.chars().next() {
+        let Some((file, tail)) = file[1..].split_once(quote) else {
+            return Some("__unverified_transfer_input");
+        };
+        if file.contains('\\') {
+            return Some("__unverified_transfer_input");
+        }
+        (file, tail)
+    } else {
+        file.split_once(';').unwrap_or((file, ""))
+    };
+    if file.contains(',')
+        || attributes
+            .split(';')
+            .filter(|attribute| !attribute.is_empty())
+            .any(|attribute| !attribute.starts_with("type=") && !attribute.starts_with("filename="))
+    {
+        return Some("__unverified_transfer_input");
+    }
+    Some(file)
+}
+
+fn git_global_files(args: &[String], end: usize) -> Vec<(usize, &str, bool)> {
+    let mut files = Vec::new();
+    let mut at = 1;
+    while at < end {
+        let word = &args[at];
+        if matches!(word.as_str(), "-C" | "--work-tree") {
+            at += 2;
+            continue;
+        }
+        if word.starts_with("--work-tree=") || word.starts_with("-C") {
+            at += 1;
+            continue;
+        }
+        files.extend(
+            super::arguments::argument_values(word)
+                .into_iter()
+                .map(|value| (at, value, false)),
+        );
+        at += 1;
+    }
+    files
+}
+
+fn git_metadata_paths(args: &[String], start: usize) -> Vec<(usize, &str, bool)> {
+    args.iter()
+        .enumerate()
+        .filter_map(|(at, word)| {
+            // Keep explicit named paths protected under AC-6. Namespace words
+            // and unknown xargs streams remain metadata arguments.
+            (word.contains('/') || word.starts_with('.')).then_some((
+                start + at + 1,
+                word.as_str(),
+                false,
+            ))
+        })
+        .collect()
+}
+
+/// One ordinary diff operand is a repository pathspec. Two paths can
+/// implicitly enable --no-index and keep real-file judgments. Retargeted
+/// or unresolved repositories earn no exemption.
+fn git_pathspec_root(
+    sub: &str,
+    tail: &[String],
+    globals: &[String],
+    cwd: &Path,
+) -> Option<std::path::PathBuf> {
+    if sub != "diff"
+        || tail.iter().any(|arg| arg == "--no-index")
+        || tail.iter().filter(|arg| !arg.starts_with('-')).count() != 1
+        || globals.iter().any(|arg| {
+            arg == "-C"
+                || arg.starts_with("-C")
+                || arg.starts_with("--git-dir")
+                || arg.starts_with("--work-tree")
+        })
+    {
+        return None;
+    }
+    crate::hooks::repo::open(cwd)
+        .ok()
+        .flatten()
+        .and_then(|repo| repo.workdir().map(Path::to_path_buf))
+}
+
+/// A destination directory is not a source-file operand. Writer protection
+/// judges it separately; a reader's redirections remain explicit operands.
+fn directory_option(name: &str, args: &[String], at: usize) -> bool {
+    let (long, short) = match name {
+        "curl" => ("--output-dir", ""),
+        "wget" => ("--directory-prefix", "-P"),
+        "tar" | "make" | "gmake" => ("--directory", "-C"),
+        _ => return false,
+    };
+    args[at].starts_with(&format!("{long}="))
+        || (!short.is_empty() && args[at].starts_with(short) && args[at].len() > short.len())
+        || at
+            .checked_sub(1)
+            .and_then(|before| args.get(before))
+            .is_some_and(|arg| arg == long || !short.is_empty() && arg == short)
+}
+
+/// Bounded shell readings shared by leaf and ancestor comparisons.
+fn secret_pattern_readings(word: &str) -> Option<Vec<String>> {
+    let mut readings = crate::hooks::git_guard::word_readings(word)?;
+    // Keep the existing conservative singleton-brace reading too. Shell
+    // options can give braces meanings beyond the default comma grammar.
+    if word.contains('{') && !word.contains([',', '$']) {
+        readings.push(word.replace(['{', '}'], ""));
+    }
+    Some(readings)
+}
+
+/// Compare complete glob languages rather than their literal prefixes. The
+/// shared brace reader bounds alternatives; unknown pattern syntax refuses.
+fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
+    if !expands {
+        return !store.starts_with("**/")
+            && store
+                .strip_prefix(word.trim_end_matches('/'))
+                .is_some_and(|tail| tail.starts_with('/'));
+    }
+    let Some(readings) = secret_pattern_readings(word) else {
+        return true;
+    };
+    readings.iter().any(|reading| {
+        let intersects =
+            |left: &str, right: &str| super::pattern::glob_intersects(left, right).unwrap_or(true);
+        intersects(reading, store)
+            || (!store.starts_with("**/")
+                && (intersects(reading, &format!("{store}/**"))
+                    || intersects(&format!("{}/**", reading.trim_end_matches('/')), store)))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn inline_interpreter_code_keeps_its_role_before_path_mapping() {
+        let cwd = Path::new("/fixture");
+        for command in [
+            "perl -e 'use File::Path qw(remove_tree); remove_tree(\"./\")' public.txt",
+            "python3 -c 'print(\"File::Path\")' public.txt",
+            "node -e 'console.log(\"File::Path\")' public.txt",
+            "ruby -e 'puts \"File::Path\"' public.txt",
+        ] {
+            let args = crate::hooks::git_guard::command_argv(command);
+            let name = super::super::unresolved::writer_name(&args[0]);
+            let values: Vec<_> = file_operands(name, &args, None, &CommandLine::new(command), cwd)
+                .into_iter()
+                .map(|(_, value, _)| value)
+                .collect();
+            assert_eq!(values, ["public.txt"], "{command}");
+        }
+        // Only the code word leaves the operands: a directory an option
+        // changes into, or a library it loads, stays a file operand.
+        for (command, kept) in [
+            ("ruby -C ~/.codex -e 'puts 1'", "~/.codex"),
+            ("perl -x~/.codex -e 'print 1'", "~/.codex"),
+            ("ruby -r ./lib.rb -e 'puts 1'", "./lib.rb"),
+            ("node --eval 'x::y' --require ./hook.js", "./hook.js"),
+        ] {
+            let args = crate::hooks::git_guard::command_argv(command);
+            let name = super::super::unresolved::writer_name(&args[0]);
+            let values: Vec<_> = file_operands(name, &args, None, &CommandLine::new(command), cwd)
+                .into_iter()
+                .map(|(_, value, _)| value)
+                .collect();
+            assert!(values.contains(&kept), "{command}: {values:?}");
+            assert!(
+                !values.iter().any(|value| value.contains("puts")
+                    || value.contains("print")
+                    || value.contains("::")),
+                "{command}: {values:?}"
+            );
+        }
+    }
+
+    /// TSK-1002 UNC finding: a share path that ends in a protected
+    /// home-relative path refuses whatever the host or share, in every UNC
+    /// spelling. Review 01, B5: a share outside the home and the session's
+    /// directory can map a store under any name, so every file in it
+    /// refuses; the home's and the session directory's ordinary files stay
+    /// readable.
+    #[test]
+    fn unc_paths_ending_in_a_store_refuse_under_any_share() {
+        let home = Some(Path::new("//server/homes/u"));
+        let trusted = ["//server/homes/u".to_string(), "//server/proj".to_string()];
+        for text in [
+            "//server/share/project/src/main.rs",
+            "//server/share/project/.codex-notes/todo.md",
+            "//localhost/c$/Users/u/.codex/auth.json",
+            "//build-host/C$/Users/other/.codex/auth.json",
+            "//server/homes/u/.codex/auth.json",
+            "//server/u/.ssh/id_rsa",
+            "//?/UNC/server/share/.codex/auth.json",
+            "//./UNC/server/share/Users/u/.codex/auth.json",
+            "//server/share/.ssh/id_ed25519",
+            // Review 01, B5: a share can map the store itself, or reach it
+            // through a parent component.
+            "//localhost/fixture-store/auth.json",
+            "//server/share/id_rsa",
+            "//server/share/docs/../auth.json",
+        ] {
+            assert!(
+                unc_store_suffix(text, home, None, &trusted) != Ok(false),
+                "{text}"
+            );
+        }
+        // Review 04: a share outside the chosen directories refuses as
+        // cannot-verify and names the drive-letter remedy.
+        let unknown = unc_store_suffix("//localhost/fixture-store/auth.json", home, None, &trusted);
+        assert_eq!(unknown, Err(UNKNOWN_SHARE));
+        assert!(UNKNOWN_SHARE.contains("drive-letter path"));
+        for text in [
+            "//server/homes/u/notes.txt",
+            "//server/proj/src/main.rs",
+            "//SERVER/Proj/docs/config",
+            "//server/share",
+            "C:/Users/u/.codex/auth.json",
+            "//?/C:/Users/u/notes.txt",
+            "//server",
+        ] {
+            assert_eq!(
+                unc_store_suffix(text, home, None, &trusted),
+                Ok(false),
+                "{text}"
+            );
+        }
+    }
+
+    /// Hosted run 40623450157: a code literal with stream syntax is judged by
+    /// the entry it opens, so `File::Path` is the name `File`, while a stream
+    /// spelling of a store still names the store. Drives are kept.
+    #[test]
+    fn stream_spellings_name_the_entry_they_open() {
+        for (word, base) in [
+            ("File::Path", "File"),
+            ("~/.codex/auth.json::$DATA", "~/.codex/auth.json"),
+            (
+                "C:/Users/u/.codex:$I30:$INDEX_ALLOCATION/auth.json",
+                "C:/Users/u/.codex/auth.json",
+            ),
+            (
+                "//?/C:/Users/u/.codex/auth.json:x",
+                "//?/C:/Users/u/.codex/auth.json",
+            ),
+            ("notes.txt", "notes.txt"),
+        ] {
+            assert_eq!(stream_base(word), base, "{word}");
+        }
+        let home = Path::new("/fixture-home");
+        assert!(secret_path_result(
+            &stream_base("~/.codex/auth.json::$DATA"),
+            Path::new("/w"),
+            Some(home),
+            None
+        )
+        .unwrap());
+    }
+
+    /// TSK-1002 Windows repair (hosted run 40602309629): a Git revision
+    /// such as `HEAD~1` names no path, so the short-name mapper never sees
+    /// it; a short-looking word that is a path, or could be, stays an
+    /// operand.
+    #[test]
+    fn git_revisions_with_short_name_shapes_are_not_file_operands() {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = crate::portable_path::canonicalize(temp.path()).unwrap();
+        std::fs::create_dir(cwd.join("sub")).unwrap();
+        std::fs::write(cwd.join("sub/TAG~1"), "x").unwrap();
+        let revision = |command: &str, value: &str| {
+            let calls = outward::unwrapped_commands(command, &cwd, None);
+            let call = calls
+                .iter()
+                .find(|call| call.args.iter().any(|arg| arg.contains(value)))
+                .unwrap_or_else(|| panic!("{command}"));
+            let at = call
+                .args
+                .iter()
+                .position(|arg| arg.contains(value))
+                .unwrap();
+            // The call's directory holds its `-C` options, as in
+            // `secret_reads_at`.
+            let mut call = call.clone();
+            if let Some(directory) = git_repository::call_directory(&call, None) {
+                call.cwd = directory;
+            }
+            let dir = call.cwd.clone().unwrap_or_else(|| cwd.clone());
+            git_revision_word(&call, at, value, &dir)
+        };
+        for command in [
+            "git format-patch -o patches/ HEAD~1",
+            "git rebase -x 'cargo test' HEAD~3",
+            "git-rebase -x 'cargo test' HEAD~3",
+            "git -c color.ui=never diff HEAD~1",
+            "git -C sub log HEAD~2",
+            "git --git-dir=.git --work-tree=sub rebase -x 'cargo test' HEAD~3",
+            "git -c core.worktree=sub log HEAD~2",
+            // A `REV:PATH` object name is a revision (hosted run 40693120060).
+            "git show HEAD~1:README.md",
+        ] {
+            let value = command.rsplit(' ').next().unwrap();
+            assert!(revision(command, value), "{command}");
+        }
+        // On Windows the word opens a stream of `TAG~1`, which exists, so it
+        // stays a file operand; elsewhere `TAG~1:notes` names no file.
+        assert_eq!(
+            revision("git -C sub show TAG~1:notes", "TAG~1:notes"),
+            !cfg!(windows)
+        );
+        for (command, value) in [
+            ("git diff -- HEAD~1", "HEAD~1"),
+            ("git diff --no-index HEAD~1 other", "HEAD~1"),
+            ("git -C sub log TAG~1", "TAG~1"),
+            ("git --work-tree=sub log TAG~1", "TAG~1"),
+            ("git -c core.worktree=sub log TAG~1", "TAG~1"),
+            ("git --work-tree=\"$W\" log HEAD~1", "HEAD~1"),
+            ("git -C \"$D\" log HEAD~1", "HEAD~1"),
+            ("ln -s ~/.codex 'a b' && git log AB~1", "AB~1"),
+            ("cat HEAD~1", "HEAD~1"),
+            ("git log main", "main"),
+        ] {
+            assert!(!revision(command, value), "{command}");
+        }
+    }
+
+    #[test]
+    fn recursive_operands_that_cannot_be_names_are_not_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let unnameable = if cfg!(windows) {
+            "not \"a path\"".to_string()
+        } else {
+            "x".repeat(4096)
+        };
+        assert_eq!(
+            recursive_directories(vec![unnameable], temp.path(), None, &[]),
+            Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn r23_planned_public_link_refuses_at_the_recursive_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("clean")).unwrap();
+        for line in [
+            "ln -s clean alias; rg x alias",
+            "ln -s clean alias; grep -r x alias",
+        ] {
+            let findings = secret_reads(
+                line,
+                &SecuritySection::default(),
+                temp.path(),
+                Some(temp.path()),
+            );
+            assert!(
+                findings
+                    .iter()
+                    .any(|finding| finding.message.contains("declared on this line")),
+                "{line}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn review3_writer_table_sources_are_walked_or_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir(root.join("payload")).unwrap();
+        std::fs::write(root.join("payload/id_rsa"), "fake private fixture").unwrap();
+        for (name, _) in super::super::unresolved::writer_spellings("out", "dest") {
+            let line = match name {
+                "cp" | "scp" => format!("{name} -r payload out"),
+                "rsync" => "rsync -a payload out".into(),
+                "ditto" => "ditto payload out".into(),
+                "tar" | "gtar" | "bsdtar" => format!("{name} cf out payload"),
+                "zip" => "zip -r out.zip payload".into(),
+                // Extraction's options and input cannot certify directory
+                // sources here; retain the conservative recursive fallback.
+                "unzip" => "unzip -r payload out".into(),
+                // These named-source writers do not consume a directory's
+                // contents. AC-6 still protects their explicit file operand.
+                "ln" | "mv" | "install" => format!("{name} payload/id_rsa out"),
+                // Downloads and patches are not recursive tree sources.
+                "curl" | "wget" | "patch" => continue,
+                _ => panic!("classify {name}'s source role in this test"),
+            };
+            let findings = secret_reads(&line, &SecuritySection::default(), root, Some(root));
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "{line}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn review3_unread_executable_inputs_keep_the_secret_read_boundary() {
+        let temp = tempfile::tempdir().unwrap();
+        for line in [
+            "pwsh -e RwBlAHQA",
+            "pwsh -unknown value",
+            "deno eval --unknown value 'console.log(1)'",
+            "osascript -e 'do shell script commandFromElsewhere'",
+            "cat <<'E' > x.py; python3 x.py\nprint(1)\nE",
+        ] {
+            let findings = evaluate(
+                line,
+                &SecuritySection::default(),
+                PolicyLevel::Off,
+                temp.path(),
+                temp.path(),
+                Some(temp.path()),
+            );
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "{line}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tsk1002_ci1_and_or_paths_preserve_reader_verdicts() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        std::fs::create_dir(root.join("build")).unwrap();
+        std::fs::write(root.join("public.txt"), "ordinary fixture").unwrap();
+        for command in [
+            "false || D=build && find $D -delete",
+            "false || D=public.txt && cat $D",
+            "false && D=~/.codex/auth.json || D=public.txt; cat $D",
+            "D=public.txt; true || D=~/.codex/auth.json; cat $D",
+        ] {
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(findings.is_empty(), "{command}: {findings:?}");
+        }
+        for command in [
+            "false || D=~/.codex/auth.json && cat $D",
+            "D=~/.codex/auth.json; true || D=public.txt && cat $D",
+            "D=~/.codex/auth.json; unknown || D=public.txt && cat $D",
+            "D=~/.codex/auth.json; alias false=true; false || D=public.txt && cat $D",
+            "D=~/.codex/auth.json; false() { true; }; false || D=public.txt && cat $D",
+            "false || find build -files0-from ~/.codex/auth.json -delete",
+            "false || find build -exec cat ~/.codex/auth.json \\;",
+        ] {
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "input still reads: {command}: {findings:?}"
+            );
+        }
+    }
+
+    /// Every call on a line shares one read of whether the line names
+    /// `RIPGREP_CONFIG_PATH`. The read expands the whole line, so a read
+    /// per call made a long chain quadratic; the verdicts stay the same.
+    #[test]
+    fn a_long_chain_reads_the_ripgrep_config_name_once() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::fs::write(root.join("public.txt"), "ordinary fixture").unwrap();
+        let reads = |command: &str| {
+            super::super::search_pattern::RIPGREP_CONFIG_READS.with(|reads| reads.set(0));
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(findings.is_empty(), "{command}: {findings:?}");
+            super::super::search_pattern::RIPGREP_CONFIG_READS.with(std::cell::Cell::get)
+        };
+        let one = "rg needle docs && cat public.txt";
+        assert_eq!(reads(one), 1, "{one}");
+        let long = vec![one; 40].join(" && ");
+        assert_eq!(reads(&long), 1, "reads grew with the segment count");
+        let findings = secret_reads(
+            &format!("{long} && cat ~/.ssh/id_rsa"),
+            &SecuritySection::default(),
+            root,
+            Some(root),
+        );
+        assert!(
+            findings.iter().any(|v| v.rule == "security.secret_reads"),
+            "a store read at the end of the chain still refuses: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn tsk1002_ci1_removal_operands_are_not_content_reads() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        for command in [
+            "trap 'D=/' DEBUG; trap - DEBUG; D=build; rm -rf \"$D\"",
+            "ls ./build | xargs rm -rf",
+            "rm -rf ~",
+            "grm -f ~/.codex/auth.json",
+            "unlink ~/.codex/auth.json",
+            "rmdir ~/.ssh",
+        ] {
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(findings.is_empty(), "{command}: {findings:?}");
+        }
+        for command in ["cat ~/.ssh/id_rsa", "rm build < ~/.ssh/id_rsa"] {
+            let findings = secret_reads(command, &SecuritySection::default(), root, Some(root));
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "input still reads: {command}: {findings:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tsk1002_ci1_rooted_home_globs_use_the_callers_drive() {
+        let fixture = tempfile::tempdir().unwrap();
+        let rooted: PathBuf = fixture
+            .path()
+            .join("home")
+            .components()
+            .filter(|part| !matches!(part, std::path::Component::Prefix(_)))
+            .collect();
+        let forward = crate::portable_path::slashed(&rooted);
+        for home in [rooted.as_path(), Path::new(&forward)] {
+            let findings = evaluate(
+                "cat ~/.codex/auth.*",
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                fixture.path(),
+                fixture.path(),
+                Some(home),
+            );
+            assert!(
+                findings.iter().any(|v| v.rule == "security.secret_reads"),
+                "{home:?}: {findings:?}"
+            );
+            let ordinary = evaluate(
+                "cat ~/.codex/*.rs",
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                fixture.path(),
+                fixture.path(),
+                Some(home),
+            );
+            assert!(
+                !ordinary.iter().any(|v| v.rule == "security.secret_reads"),
+                "ordinary sibling: {home:?}: {ordinary:?}"
+            );
+        }
+    }
+    /// Review 01, B2: code in any attached or separate form is read as code,
+    /// so a secret it names refuses; the same code on a public path passes.
+    #[test]
+    fn code_in_every_option_form_is_judged() {
+        // Absolute directories on every host: `/fixture` has no drive on
+        // Windows, where a relative code word could not be placed (hosted
+        // run 40693120060).
+        let temp = tempfile::tempdir().unwrap();
+        let base = crate::portable_path::canonicalize(temp.path()).unwrap();
+        let (root, home) = (base.join("repo"), base.join("home"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        let levels = SecuritySection::default();
+        let judge =
+            |code: &str| evaluate(code, &levels, PolicyLevel::Block, &root, &root, Some(&home));
+        let secret_path = crate::portable_path::slashed(&home.join(".ssh/id_rsa"));
+        let public_path = crate::portable_path::slashed(&root.join("notes.md"));
+        for form in [
+            "node --print='%'",
+            "node --print '%'",
+            "node --eval='%'",
+            "node -p '%'",
+            "node -pe '%'",
+        ] {
+            let secret = form.replace(
+                '%',
+                &format!(r#"require("fs").readFileSync("{secret_path}")"#),
+            );
+            assert!(!judge(&secret).is_empty(), "allowed: {secret}");
+            let public = form.replace(
+                '%',
+                &format!(r#"require("fs").readFileSync("{public_path}")"#),
+            );
+            let found = judge(&public);
+            assert!(found.is_empty(), "{public}: {found:?}");
+        }
+    }
+
     fn check(code: &str, levels: &SecuritySection) -> Vec<Violation> {
         evaluate(
             code,
@@ -235,6 +3235,548 @@ mod tests {
             Path::new("/fixture"),
             Some(Path::new("/fixture-home")),
         )
+    }
+
+    fn glob_fixture_read(command: &str, root: &Path, home: &Path) -> bool {
+        evaluate(
+            command,
+            &SecuritySection::default(),
+            PolicyLevel::Block,
+            root,
+            root,
+            Some(home),
+        )
+        .iter()
+        .any(|v| v.rule == "security.secret_reads")
+    }
+
+    #[test]
+    fn tsk1002_review2_b02_home_ancestor_spellings_agree() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let home = temp.path().join("home");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/auth.json"), "fake secret fixture").unwrap();
+        let wrong: Vec<_> = ["grep -r token ~", "rg token ~/", "cp -r ~ out"]
+            .into_iter()
+            .filter(|command| !glob_fixture_read(command, &root, &home))
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "home ancestor reads were allowed: {wrong:?}"
+        );
+        for command in ["cat ~", "cat ~/", "cat \"$HOME/\""] {
+            assert!(
+                !glob_fixture_read(command, &root, &home),
+                "a flat directory operand does not read descendants: {command}"
+            );
+        }
+    }
+
+    /// Review 01, B1: a search selector is matched against every spelling
+    /// the tool may compare, the root included, so a selector that names
+    /// the root, a directory below it or the absolute path still selects
+    /// the secret. Selectors that match no spelling keep the search usable.
+    #[test]
+    fn search_selectors_match_the_spellings_the_tool_compares() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = crate::portable_path::canonicalize(temp.path())
+            .unwrap()
+            .join("repo");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(root.join("copies/deep")).unwrap();
+        std::fs::create_dir_all(root.join("visible")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(root.join("copies/deep/id_rsa"), "fake secret fixture").unwrap();
+        std::fs::write(root.join("visible/note.md"), "ordinary fixture").unwrap();
+        let absolute = crate::portable_path::slashed(&root.join("copies"));
+        let cases = [
+            ("rg -g 'copies/**' needle copies".to_string(), true),
+            ("rg -g 'copies/*/*' needle copies".to_string(), true),
+            ("rg -g './copies/**' needle ./copies".to_string(), true),
+            ("rg -g 'deep/*' needle copies".to_string(), true),
+            ("rg -g 'deep' needle copies".to_string(), true),
+            ("rg -g '**/copies/**' needle .".to_string(), true),
+            (
+                "rg --iglob 'COPIES/**' needle visible copies".to_string(),
+                true,
+            ),
+            (format!("rg -g '{absolute}/**' needle '{absolute}'"), true),
+            ("grep -r --include='id_*' needle copies".to_string(), true),
+            // Review 02, B1: the tool's own glob grammar, escapes included.
+            (r"rg -g 'copie\s/**' needle copies".to_string(), true),
+            (
+                r"rg -g 'c\opies/de\ep/i\d_rsa' needle copies".to_string(),
+                true,
+            ),
+            ("rg -g '[c]opies/**' needle copies".to_string(), true),
+            ("rg -g 'cop?es/**' needle copies".to_string(), true),
+            ("rg -g 'copies/**/id_*' needle copies".to_string(), true),
+            ("grep -r --include='*deep*' needle copies".to_string(), true),
+            (
+                r"rg -g 'visibl\e/**' needle visible copies".to_string(),
+                false,
+            ),
+            ("rg -g '*.md' needle copies visible".to_string(), false),
+            ("rg -g 'visible/**' needle visible".to_string(), false),
+            ("rg -g 'copies/*.md' needle copies".to_string(), false),
+            ("rg needle visible".to_string(), false),
+        ];
+        let wrong: Vec<_> = cases
+            .iter()
+            .filter(|(command, refuse)| glob_fixture_read(command, &root, &home) != *refuse)
+            .collect();
+        assert!(wrong.is_empty(), "wrong verdicts: {wrong:?}");
+    }
+
+    /// Review 01, B4: a parent component after an existing link reaches the
+    /// link target's parent, for flat operands, globs and recursive roots.
+    /// A plain directory's `..` and a file below the link stay usable.
+    #[cfg(unix)]
+    #[test]
+    fn parent_components_follow_existing_links_physically() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = crate::portable_path::canonicalize(temp.path()).unwrap();
+        let root = base.join("repo");
+        let home = base.join("home");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(home.join(".codex/child")).unwrap();
+        std::fs::write(home.join(".codex/auth.json"), "fake secret fixture").unwrap();
+        std::fs::write(home.join(".codex/child/file.txt"), "ordinary fixture").unwrap();
+        std::fs::write(root.join("notes.md"), "ordinary fixture").unwrap();
+        std::os::unix::fs::symlink(home.join(".codex/child"), root.join("alias")).unwrap();
+        let cases = [
+            ("cat alias/../auth.json", true),
+            ("cat ./alias/./../auth.json", true),
+            ("cat sub/../alias/../auth.json", true),
+            ("cat alias/../auth.*", true),
+            ("rg needle alias/..", true),
+            ("cat alias/file.txt", false),
+            ("cat sub/../notes.md", false),
+        ];
+        PHYSICAL_READS.with(|reads| reads.set(0));
+        let wrong: Vec<_> = cases
+            .iter()
+            .filter(|(command, refuse)| glob_fixture_read(command, &root, &home) != *refuse)
+            .collect();
+        assert!(wrong.is_empty(), "wrong verdicts: {wrong:?}");
+        // The seam the share test relies on counts these reads.
+        assert!(PHYSICAL_READS.with(std::cell::Cell::get) > 0);
+    }
+
+    /// Review 02, item 3: after an unknown directory change a relative word
+    /// refuses when its name or path is a secret somewhere, by the names
+    /// the absolute checks use; a name secret only because a whole
+    /// directory is denied says nothing, so ordinary names stay usable.
+    #[test]
+    fn relative_names_that_could_be_secrets() {
+        for word in [
+            "auth.json",
+            ".codex/auth.json",
+            "./auth.json",
+            "x/../auth.json",
+            "../../auth.json",
+            "id_rsa",
+            ".ssh/id_ed25519",
+            ".ssh/config",
+            ".aws/credentials",
+        ] {
+            assert!(relative_names_secret(word), "{word}");
+        }
+        for word in [
+            "README.md",
+            "tool.py",
+            "docs/README.md",
+            "..",
+            ".",
+            "/etc/hosts",
+            "~/notes.md",
+        ] {
+            assert!(!relative_names_secret(word), "{word}");
+        }
+        // Interpreter literals in an unknown directory keep the broader rule.
+        assert!(relative_may_name_secret("../anything"));
+    }
+
+    /// Review 03, ruling 6: the object path of a `REV:PATH` word keeps the
+    /// file operand's secret-name policy; the revision needs no mapping.
+    #[test]
+    fn revision_object_paths_keep_the_secret_name_policy() {
+        assert_eq!(object_path("HEAD~1:README.md"), Some("README.md"));
+        assert_eq!(object_path("HEAD@{1:2}:a/b"), Some("a/b"));
+        assert_eq!(object_path("HEAD~1"), None);
+        assert_eq!(object_path("HEAD~1:"), None);
+        let temp = tempfile::tempdir().unwrap();
+        let root = crate::portable_path::canonicalize(temp.path()).unwrap();
+        for line in [
+            "git show HEAD~1:copies/id_rsa",
+            "git show HEAD~2:.ssh/id_ed25519",
+            "git log -p HEAD~1:fixture/id_rsa",
+            // Review 04: every revision shape, not only short-name ones.
+            "git show HEAD:id_rsa",
+            "git cat-file -p main:id_rsa",
+            "git show :0:id_rsa",
+            "git show :id_rsa",
+            "git show 'HEAD^{tree}:id_rsa'",
+            "git diff HEAD:README.md v1.0:id_rsa",
+            // Review 07: an unresolved revision keeps its path.
+            "git show $(git rev-parse HEAD):id_rsa",
+            "git show `git rev-parse HEAD`:id_rsa",
+            "git show \"$(git rev-parse HEAD):id_rsa\"",
+            "git cat-file -p $REV:id_rsa",
+            // Codex review 05: any revision spelling Git accepts.
+            "git show 'fixture!ref:id_rsa'",
+            "git show 'fixture{ref:id_rsa'",
+            "git show 'HEAD^{/fix: a}:id_rsa'",
+            "git show 'a,b:.ssh/id_ed25519'",
+            "git diff 'x\\y:id_rsa' HEAD",
+        ] {
+            assert!(glob_fixture_read(line, &root, &root), "allowed: {line}");
+        }
+        for line in [
+            "git show HEAD~1:README.md",
+            "git show HEAD:README.md",
+            "git show :0:README.md",
+            "git log --format=%H:%s",
+            "git -C . show HEAD~1",
+            // Review 07: a message, a remote and a search text are not objects.
+            "git commit -m 'rotate:id_rsa'",
+            "git remote add backup host:id_rsa",
+            "git log --grep 'key:id_rsa'",
+            "git grep -e 'key:id_rsa'",
+        ] {
+            assert!(!glob_fixture_read(line, &root, &root), "refused: {line}");
+        }
+    }
+
+    /// Codex review 05: a glob the guard cannot expand completely refuses
+    /// whatever it names, since an unseen entry may be a public-named link
+    /// into a store; a complete public expansion stays allowed.
+    #[cfg(unix)]
+    #[test]
+    fn incomplete_glob_expansions_refuse_whatever_they_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = crate::portable_path::canonicalize(temp.path()).unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/auth.json"), "planted fixture").unwrap();
+        let budget = root.join("budget");
+        std::fs::create_dir(&budget).unwrap();
+        for entry in 0..=65_536 {
+            std::fs::File::create(budget.join(format!("f{entry}"))).unwrap();
+        }
+        std::os::unix::fs::symlink(home.join(".codex/auth.json"), budget.join("notes1.txt"))
+            .unwrap();
+        assert!(glob_fixture_read("cat budget/notes*.txt", &root, &home));
+        let closed = root.join("closed");
+        std::fs::create_dir(&closed).unwrap();
+        std::fs::write(closed.join("notes.txt"), "ordinary").unwrap();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let refused = glob_fixture_read("cat closed/notes*.txt", &root, &home);
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(refused);
+        let small = root.join("small");
+        std::fs::create_dir(&small).unwrap();
+        std::fs::write(small.join("notes1.txt"), "ordinary").unwrap();
+        assert!(!glob_fixture_read("cat small/notes*.txt", &root, &home));
+    }
+
+    /// Review 03, ruling 1: a bracket class grep reads (`[[:alpha:]]`) is
+    /// not modeled, so a selector holding one refuses.
+    #[test]
+    fn unmodeled_selector_classes_refuse() {
+        for pattern in [
+            "[[:alpha:]]*",
+            "[[:lower:]]d_rsa",
+            "[[=i=]]d_rsa",
+            "[[.a.]]x",
+        ] {
+            assert!(selector_matchers(pattern).is_err(), "{pattern}");
+        }
+        assert!(selector_matchers("[a-z]*.md").is_ok());
+    }
+
+    /// Review 02, item 7: a `local` declaration in a function reads nothing.
+    #[test]
+    fn a_local_declaration_is_not_a_file_operand() {
+        let temp = tempfile::tempdir().unwrap();
+        for line in [
+            "f() { local x=id_rsa; }; f",
+            "f() { local -r x=id_rsa; }; f",
+        ] {
+            assert!(!glob_fixture_read(line, temp.path(), temp.path()), "{line}");
+        }
+        // The declaration's sibling that does read stays refused.
+        assert!(glob_fixture_read(
+            "f() { cat id_rsa; }; f",
+            temp.path(),
+            temp.path()
+        ));
+    }
+
+    /// Review 02, B5: a share outside the chosen directories refuses before
+    /// any physical resolution reads metadata, even with a parent component.
+    #[cfg(windows)]
+    #[test]
+    fn an_untrusted_share_refuses_before_any_metadata_read() {
+        PHYSICAL_READS.with(|reads| reads.set(0));
+        let result = secret_path_result(
+            r"\\fixture-host\fixture-share\child\..\notes.txt",
+            Path::new("C:/repo"),
+            Some(Path::new("C:/Users/u")),
+            Some(true),
+        );
+        assert_eq!(result, Err(UNKNOWN_SHARE));
+        assert_eq!(PHYSICAL_READS.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn tsk1002_review2_b05_file_rule_siblings_remain_available() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let home = temp.path().join("home");
+        std::fs::create_dir(&root).unwrap();
+        for directory in [".claude/skills/fixture", ".claude/sessions", ".cargo/bin"] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for file in [
+            ".claude/skills/fixture/SKILL.md",
+            ".claude/sessions/fixture.jsonl",
+            ".cargo/bin/cargo-fixture",
+        ] {
+            std::fs::write(home.join(file), "ordinary or fake secret fixture").unwrap();
+        }
+        let cases = [
+            ("cat ~/.claude/skills/*/SKILL.md", false),
+            ("ls ~/.cargo/bin/*", false),
+            ("cat ~/.claude/sessions/*", true),
+        ];
+        let wrong: Vec<_> = cases
+            .into_iter()
+            .filter(|(command, refuse)| glob_fixture_read(command, &root, &home) != *refuse)
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "file and directory rules differ: {wrong:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tsk1002_review2_b08_unreadable_recursive_root_refuses_with_remedy() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let saved = std::fs::metadata(&locked).unwrap().permissions();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read_dir(&locked).is_err();
+        let violations = evaluate(
+            "rg token locked",
+            &SecuritySection::default(),
+            PolicyLevel::Block,
+            root,
+            root,
+            Some(root),
+        );
+        std::fs::set_permissions(&locked, saved).unwrap();
+        if !unreadable {
+            eprintln!("permissions do not make this directory unreadable on this host");
+            return;
+        }
+        assert!(
+            violations.iter().any(|v| v.rule == "security.secret_reads"
+                && v.remedy.to_ascii_lowercase().contains("narrow")),
+            "recursive root inspection must fail closed with a narrowing remedy: {violations:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tsk1002_review_f09_unverified_search_names_narrowing() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let saved = std::fs::metadata(&locked).unwrap().permissions();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read_dir(&locked).is_err();
+        let violations = evaluate(
+            "rg -g 'id_*' token locked",
+            &SecuritySection::default(),
+            PolicyLevel::Block,
+            root,
+            root,
+            Some(root),
+        );
+        std::fs::set_permissions(&locked, saved).unwrap();
+        if !unreadable {
+            eprintln!("permissions do not make this directory unreadable on this host");
+            return;
+        }
+        assert!(
+            violations.iter().any(|v| v.rule == "security.secret_reads"
+                && v.remedy.to_ascii_lowercase().contains("narrow")),
+            "unverified search must name the narrowing remedy: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn tsk1002_glob_expansion_uses_actual_matches() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src/public.rs"), "fixture").unwrap();
+        for pattern in ["src/*.rs", "src/[ip]*.rs", "src/*.{rs,md}"] {
+            assert!(
+                !glob_fixture_read(&format!("cat {pattern}"), root, root),
+                "ordinary {pattern}"
+            );
+        }
+        std::fs::write(root.join("src/id_rsa.rs"), "planted fixture").unwrap();
+        for pattern in ["src/*.rs", "src/[ip]*.rs", "src/*.{rs,md}"] {
+            assert!(
+                glob_fixture_read(&format!("cat {pattern}"), root, root),
+                "secret {pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn tsk1002_glob_store_directory_is_protected_when_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let home = temp.path().join("home");
+        std::fs::create_dir(&root).unwrap();
+        for store in [".ssh", ".aws", ".gnupg"] {
+            std::fs::create_dir_all(home.join(store)).unwrap();
+            let command = format!("cat $HOME/{store}/*.rs");
+            assert!(
+                glob_fixture_read(&command, &root, &home),
+                "empty store {store}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tsk1002_glob_unreadable_secret_pattern_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let saved = std::fs::metadata(&locked).unwrap().permissions();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read_dir(&locked).is_err();
+        let refused = glob_fixture_read("cat locked/[i]d_rsa*", root, root);
+        std::fs::set_permissions(&locked, saved).unwrap();
+        if !unreadable {
+            eprintln!("permissions do not make this directory unreadable on this host");
+            return;
+        }
+        assert!(refused, "unreadable intersecting glob must refuse");
+    }
+
+    #[test]
+    fn tsk1002_glob_search_options_use_search_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for dir in ["src", "other"] {
+            std::fs::create_dir(root.join(dir)).unwrap();
+            std::fs::write(root.join(dir).join("public.rs"), "fixture").unwrap();
+        }
+        let forms = [
+            "rg -g '*.rs' token",
+            "rg --glob='*.rs' token",
+            "rg --iglob '*.RS' token",
+            "grep -r --include='*.rs' token",
+        ];
+        for form in forms {
+            assert!(
+                !glob_fixture_read(&format!("{form} src"), root, root),
+                "ordinary {form}"
+            );
+        }
+        std::fs::write(root.join("src/id_rsa.rs"), "planted fixture").unwrap();
+        for form in forms {
+            assert!(
+                glob_fixture_read(&format!("{form} src"), root, root),
+                "secret {form}"
+            );
+            assert!(
+                !glob_fixture_read(&format!("{form} other"), root, root),
+                "other root {form}"
+            );
+        }
+    }
+
+    #[test]
+    fn tsk1002_secret_operands_globs_and_redirections() {
+        let fixture = tempfile::tempdir().unwrap();
+        for name in ["id_rsa", "fixture.pem", "fixture.key"] {
+            std::fs::write(fixture.path().join(name), "planted fixture").unwrap();
+        }
+        assert_secret_commands(
+            &[
+                "D=$HOME/.codex/auth.json; wc -c \"$D\"",
+                "D=~/.ssh; od \"$D/id_ed25519\"",
+                "git diff --no-index /dev/null $HOME/.codex/auth.json",
+                "xxd id_rsa",
+                "tar cf - ~/.ssh",
+                "zip -r out.zip ~/.aws",
+                "python3 -c 'print(1)' id_rsa",
+                "rg -g 'id_*' token .",
+                "rg -ug'id_*' token .",
+                "grep -nf$HOME/.codex/auth.json x",
+                "grep -r --include='id_*' token .",
+                "rg --iglob='*.PEM' token .",
+                "rg --glob='*.{pem,txt}' token .",
+                "cat {id_rsa,README.md}",
+                "cat [i]d_rsa",
+                "cat *.{pem,key}",
+                "cat ~/{.codex/auth.json,notes}",
+                "cat ~/.ss[h]/config",
+                "cat<~/.codex/auth.json",
+                "exec {fd}<~/.codex/auth.json; cat <&$fd",
+                "exec 3<~/.codex/auth.json; cat <&3",
+                "cat 0<~/.netrc",
+                "while read l; do echo \"$l\"; done<~/.netrc",
+                "base64 --input=$HOME/.codex/auth.json",
+                "grep -f$HOME/.codex/auth.json x",
+                "rg --file=$HOME/.codex/auth.json x",
+                "sort --files0-from=id_rsa",
+                "cat 'dir\nname/id_rsa'",
+            ],
+            fixture.path(),
+        );
+    }
+
+    #[test]
+    fn tsk1002_text_and_literal_paths_remain_data() {
+        for line in [
+            "rg 'id_rsa' README.md",
+            "grep -n id_rsa docs/x.md",
+            "rg -e id_rsa README.md",
+            "rg -m 1 id_rsa README.md",
+            "grep -neid_rsa README.md",
+            r"rg -n 'Read\(\*\*/id_rsa|id_rsa' assets/base/security-actions.json crates/codeflow-core/src/security/actions* | head -10",
+            "grep --regexp=id_rsa README.md",
+            "rg -g '*.rs' foo .",
+            "cat src/*.rs",
+            "cat '~somebody/.codex/auth.json'",
+            "cat < 'id_rs?'",
+            "cat > notes.txt <<'EOF'\npython3 tool.py .claude/settings.json\nEOF",
+        ] {
+            assert!(
+                check(line, &SecuritySection::default()).is_empty(),
+                "{line}"
+            );
+        }
     }
 
     #[test]
@@ -332,7 +3874,8 @@ mod tests {
             "private.key.rs",
             ".netrc-notes",
             "~/.ssh-notes/file",
-            "~/.codex/auth.json.old",
+            "~/.codex/auth.yaml",
+            "~/.codex/old.auth.json",
             "~/.password-store-notes/item",
             ".env",
             ".env.production",
@@ -354,16 +3897,76 @@ mod tests {
         }
     }
 
+    /// TSK-1002 Fable review 17: a backup copy of a named home secret
+    /// holds the same token, so it is secret; a pattern rule and a name
+    /// that only contains the secret's name are not widened.
+    #[test]
+    fn backup_copies_of_named_home_secrets_are_secret() {
+        for word in [
+            "~/.codex/auth.json~",
+            "~/.codex/auth.json.bak",
+            "~/.codex/auth.json.old",
+            "~/.codex/.auth.json.swp",
+            "~/.claude/.credentials.json.1",
+            "~/.pypirc.orig",
+            // Fable review 18: an any-depth plain rule (`**/.netrc`).
+            "~/.netrc.bak",
+            "/repo/copies/.netrc~",
+            "copies/..netrc.swp",
+        ] {
+            assert!(secret_backup(word), "{word}");
+        }
+        for word in [
+            "~/.codex/auth.json",
+            "~/.codex/auth.yaml",
+            "~/.codex/old.auth.json",
+            "~/.codex/auth.json.d/notes",
+            "~/.ssh-notes/file",
+            "~/notes/auth.json.bak",
+            "~/.codex/auth.json-notes",
+            ".netrc-notes",
+            "copies/my.netrc.bak",
+        ] {
+            assert!(!secret_backup(word), "{word}");
+        }
+    }
+
     fn assert_secret_commands(commands: &[&str], cwd: &Path) {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("home");
+        let root = fixture.path().join("repo");
+        let cwd = if let Ok(tail) = cwd.strip_prefix("/fixture-home") {
+            home.join(tail)
+        } else if cwd.exists() {
+            cwd.to_path_buf()
+        } else {
+            root.clone()
+        };
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".pypirc"), "planted fixture").unwrap();
+        std::fs::write(home.join(".codex/auth.json"), "planted fixture").unwrap();
+        for name in ["id_rsa", "fixture.pem", "fixture.key"] {
+            std::fs::write(cwd.join(name), "planted fixture").unwrap();
+        }
         for command in commands {
+            // Keep the literal absolute-cd case pointed at this fixture's
+            // HOME after replacing the old fixed /fixture-home directory.
+            let command = command.replace(
+                "cd /fixture-home",
+                &format!(
+                    "cd '{}'",
+                    crate::portable_path::slashed(&home).replace('\'', "'\\''")
+                ),
+            );
             assert!(
                 evaluate(
-                    command,
+                    &command,
                     &SecuritySection::default(),
                     PolicyLevel::Block,
-                    cwd,
-                    Path::new("/fixture"),
-                    Some(Path::new("/fixture-home"))
+                    &cwd,
+                    &root,
+                    Some(&home)
                 )
                 .iter()
                 .any(|v| v.rule == "security.secret_reads"),
@@ -451,7 +4054,7 @@ mod tests {
             "cat *.md",
             "cat src/{a,b}.rs",
             "cat ~/.codex-notes/*",
-            "cat ~/.codex/auth.json.old",
+            "cat ~/.codex/auth.yaml",
             "cat < README.md",
             "echo '< ~/.codex/auth.json'",
             "cat <<'~/.codex/auth.json'",
@@ -470,13 +4073,17 @@ mod tests {
 
     #[test]
     fn a_quoted_wildcard_is_text_and_an_unquoted_one_expands() {
+        let fixture = tempfile::tempdir().unwrap();
+        std::fs::create_dir(fixture.path().join("etc")).unwrap();
+        std::fs::write(fixture.path().join("id_rsa"), "planted fixture").unwrap();
+        std::fs::write(fixture.path().join("etc/.netrc"), "planted fixture").unwrap();
         let reads = |command: &str| {
             evaluate(
                 command,
                 &SecuritySection::default(),
                 PolicyLevel::Block,
-                Path::new("/fixture"),
-                Path::new("/fixture"),
+                fixture.path(),
+                fixture.path(),
                 Some(Path::new("/fixture-home")),
             )
             .iter()
@@ -485,14 +4092,17 @@ mod tests {
         for command in [
             "rg '^/etc/.*' docs",
             "grep -e '^/etc/.*' docs",
-            "rg --files | xargs rg '^/etc/.*'",
+            "echo docs/a.md | xargs rg '^/etc/.*'",
             "cat 'id_rs?'",
             "cat \"~/.codex/auth.*\"",
         ] {
             assert!(!reads(command), "{command}");
         }
         for command in [
-            "cat /etc/.*",
+            "cat etc/.*",
+            // F4: search text stays data, but an external filename stream
+            // cannot certify the files the child will open.
+            "rg --files | xargs rg '^/etc/.*'",
             "cat id_rs?",
             "cat ~/.codex/auth.*",
             "rg x ~/.codex/*",
@@ -789,6 +4399,22 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
+    /// Under the baseline, every finding for each command is the line's
+    /// secret-read refusal, and there is at least one: the argument rule
+    /// adds nothing.
+    fn assert_line_refuses_only_secret_reads(repo: &Repo, commands: &[&str]) {
+        let mut wrong = Vec::new();
+        for command in commands {
+            let findings = judge_in(repo, &repo.root, &repo.root, command, PolicyLevel::Block);
+            if findings.is_empty() || findings.iter().any(|v| v.rule != "security.secret_reads") {
+                wrong.push(format!(
+                    "should refuse only as a secret read: {command}: {findings:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
     fn assert_allowed(repo: &Repo, commands: &[&str]) {
         let mut wrong = Vec::new();
         for command in commands {
@@ -892,13 +4518,16 @@ mod tests {
             format!("{}\n", moved.join(".git").display()),
         )
         .unwrap();
+        // The drive spelling: a verbatim `\\?\` directory option is unknown
+        // before any access (TSK-1002 review 03, ruling 7), which would
+        // refuse for that reason instead of the checkout check under test.
         assert_refused(
             &repo,
             &repo.root,
             &repo.root,
             &[&format!(
                 "env -C '{}' python3 tool.py away/w",
-                other.root.display()
+                crate::portable_path::without_verbatim(other.root.clone()).display()
             )],
         );
     }
@@ -1124,8 +4753,9 @@ mod tests {
         );
     }
 
-    /// Large ordinary globs allow only with a safe enclosing directory;
-    /// an escape or a held checkout still reports the entry budget.
+    /// Integrity still needs a safe prefix past 4096 entries. B10's larger
+    /// secret-read budget fully verifies 5000 ordinary matches; escapes and
+    /// held checkouts retain the integrity entry-budget refusal.
     #[test]
     fn interpreter_large_glob_requires_a_safe_prefix() {
         let repo = repo();
@@ -1234,6 +4864,23 @@ mod tests {
             for root in &native_roots {
                 for suffix in ["", ".", ".."] {
                     let path = format!("{root}{suffix}");
+                    if root.starts_with(r"\\?\") && !suffix.is_empty() {
+                        // A verbatim `.` or `..` is a name Windows reads
+                        // differently in an ordinary path, so both readings
+                        // refuse rather than map it (review 01, B6).
+                        for literal in [Some(path.as_str()), None] {
+                            assert!(
+                                crate::hooks::edit_guard::is_own_checkout_location(
+                                    Path::new(&path),
+                                    cwd,
+                                    literal,
+                                )
+                                .is_err(),
+                                "verbatim {path:?} in {cwd:?}"
+                            );
+                        }
+                        continue;
+                    }
                     assert!(
                         crate::hooks::edit_guard::is_own_checkout_location(
                             Path::new(&path),
@@ -1465,6 +5112,19 @@ mod tests {
     #[test]
     fn ordinary_interpreter_arguments_stay_allowed() {
         let repo = repo();
+        let supplied = judge_in(
+            &repo,
+            &repo.root,
+            &repo.root,
+            "ls | xargs python3 edit.py",
+            PolicyLevel::Block,
+        );
+        assert!(
+            supplied
+                .iter()
+                .any(|finding| finding.rule == "security.secret_reads"),
+            "{supplied:?}"
+        );
         assert_allowed(
             &repo,
             &[
@@ -1493,7 +5153,7 @@ mod tests {
                 "find . -name '*.py' -exec python3 -m py_compile {} +",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
-                "ls | xargs python3 edit.py",
+                "echo notes.txt | xargs python3 edit.py",
                 "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
                 "cd ./src && python3 app.py notes.txt",
@@ -2161,14 +5821,21 @@ mod tests {
                 r#"disable cd; cd "$p""#,
             ],
         );
-        assert_allowed(
+        // The argument rule allows these; the line's secret-read rule
+        // (TSK-1002) refuses their run-time file operands on its own.
+        assert_line_refuses_only_secret_reads(
             &repo,
             &[
                 "rg --files | xargs rg -- x \"$HOME/x\"",
                 "rg --files | xargs -n 1 cat \"$HOME/x\"",
                 "rg --files | xargs --replace=X grep -l X \"$HOME/x\"",
-                "eval 'ls src'",
                 "rg -n pattern ./\"$D\"",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "eval 'ls src'",
                 "printf '%s\\n' \"$HOME\"",
                 "[ -f \"$HOME/x\" ] && echo yes",
                 "[[ -d \"$HOME\" ]] && echo yes",
@@ -2267,12 +5934,19 @@ mod tests {
                 "grep -rn \"$PAT\" src",
                 "printf -v p %s notes.txt; python3 x.py notes.txt",
                 "p=notes.txt; python3 x.py \"$p\"",
-                // A program with no option that runs anything, through a
-                // parsed launcher, keeps its words (round 12).
+                "! command git rebase -x 'cargo test' HEAD~3",
+            ],
+        );
+        // A program with no option that runs anything, through a parsed
+        // launcher, keeps its words (round 12): the argument rule allows
+        // them. The line's secret-read rule (TSK-1002) refuses the run-time
+        // `xargs` input on its own.
+        assert_line_refuses_only_secret_reads(
+            &repo,
+            &[
                 "rg --files | xargs grep \"$HOME/x\"",
                 "rg --files | xargs egrep \"$HOME/x\"",
                 "rg --files | xargs fgrep \"$HOME/x\"",
-                "! command git rebase -x 'cargo test' HEAD~3",
             ],
         );
         // The accepted cost of the one rule (operator decision,
@@ -2688,13 +6362,26 @@ mod tests {
                 level,
             );
             for command in [
-                "ls | xargs python3 tool.py",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "find src -exec python3 tool.py {} \\;",
             ] {
                 let findings = judge_in(&repo, &repo.root, &repo.root, command, level);
                 assert!(findings.is_empty(), "{level:?}: {command}: {findings:?}");
             }
+            let findings = judge_in(
+                &repo,
+                &repo.root,
+                &repo.root,
+                "ls | xargs python3 tool.py",
+                level,
+            );
+            assert!(findings
+                .iter()
+                .any(|finding| finding.rule == "security.secret_reads"));
+            assert!(
+                findings.iter().all(|finding| !finding.level_fixed),
+                "{findings:?}"
+            );
         }
     }
 
@@ -2737,7 +6424,13 @@ mod tests {
             authority: 0,
         };
         LINE_READS.with(|reads| reads.set(none));
-        assert!(judge_in(&repo, &repo.root, &repo.root, &line, PolicyLevel::Block).is_empty());
+        let findings = judge_in(&repo, &repo.root, &repo.root, &line, PolicyLevel::Block);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "security.secret_reads"),
+            "{findings:?}"
+        );
         // Each of the five calls asks for both readings, and one enforcement
         // reading and one authority reading answer all of them.
         assert_eq!(

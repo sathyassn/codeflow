@@ -56,6 +56,10 @@ impl Drop for RestorePermissions {
     }
 }
 
+#[allow(dead_code)]
+#[path = "support/drain_pipe.rs"]
+mod drain_pipe;
+
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -2251,7 +2255,10 @@ fn configuration_operands_and_missing_includes_allow_ordinary_git_commands() {
         for command in [
             "git commit -m 'docs: explain gitconfig includes'",
             "git commit -m 'move to HOME page'",
-            "git checkout -- .git/config-notes.md",
+            // Git restores no path under `.git`, and a checkout operand is
+            // a write, so the control names a configuration note elsewhere
+            // (TSK-1002 Fable review 15).
+            "git checkout -- docs/gitconfig-notes.md",
             "git log -1 -- docs/gitconfig.md && git push origin feat/x",
             "git push origin task/x",
             "git st",
@@ -2442,7 +2449,9 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
         "cd \"$HOME/src/x\" && git push origin task/x",
         "git commit -m \"set HOME\"",
         "printf '%s' \"${HOME}\"; git push origin task/x",
-        "git log -- HOME GIT_CONFIG_PARAMETERS; git push origin task/x",
+        // A `GIT_*` name in a Git operand is text (TSK-1002 Codex reviews
+        // 12 and 13); this control names a classified one all the same.
+        "git log -- HOME GIT_DIR; git push origin task/x",
         "getln HOME; git status",
         "export PATH=$PATH:/x",
         "read -p \"...\" answer",
@@ -8689,7 +8698,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "taskpolicy -- python3 tool.py notes.txt",
         "echo -e 'hello'",
         "cargo test -- --nocapture",
-        "cargo run -- python3 -c 'print(1)'",
+        // `cargo run -- python3 -c 'print(1)'` refuses since TSK-1002
+        // review 03 ruling 4: inline code under a launcher the guard does
+        // not model runs in an unknown directory (target_repository.rs).
         "git commit -m \"python3 x\"",
         "python3 <<< 'print(1)'",
         "echo 'print(1)' | python3",
@@ -8907,8 +8918,12 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     }
     let out = exec_guard_contract_3(&root, "python3 tool.py many/*");
     let err = String::from_utf8_lossy(&out.stderr);
-    if out.status.code() != Some(0) {
-        wrong.push(format!("should allow the contained ordinary glob: {err}"));
+    // The secret reader uses the larger search budget: 5000 ordinary
+    // matches can be verified completely without replacing them by a prefix.
+    if !out.status.success() {
+        wrong.push(format!(
+            "should allow the completely verified ordinary glob: {err}"
+        ));
     }
     let payload = serde_json::json!({
         "tool_name": "Bash", "tool_input": {"command": "python3 tool.py many/*"}, "cwd": root,
@@ -9465,9 +9480,25 @@ fn guards_read_a_search_pattern_as_text() {
     for command in &allowed {
         for hook in ["exec-guard", "git-guard"] {
             let out = run(hook, command);
-            if out.status.code() != Some(0) {
-                let err = String::from_utf8_lossy(&out.stderr);
-                wrong.push(format!("{hook} should allow: {command}: {err}"));
+            // F4 tightens unknown filename streams without turning the
+            // child's search text into a path. Literal input remains usable.
+            let unknown_files = hook == "exec-guard" && command.starts_with("rg --files | xargs ");
+            let expected = if unknown_files { 2 } else { 0 };
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(expected)
+                || unknown_files
+                    && (!err.contains("security.secret_reads") || !err.contains("cannot verify"))
+            {
+                wrong.push(format!("{hook} expected {expected}: {command}: {err}"));
+            }
+            if unknown_files {
+                let literal = command.replacen("rg --files", "printf '%s\\n' docs/a.md", 1);
+                let out = run(hook, &literal);
+                if !out.status.success() {
+                    wrong.push(format!(
+                        "{hook} literal input should allow: {literal}: {out:?}"
+                    ));
+                }
             }
         }
     }
@@ -10708,6 +10739,337 @@ fn gnu_prefixed_programs_share_the_plain_verdict() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+#[path = "support/guard_cases.rs"]
+mod guard_cases;
+
+#[path = "support/guard_review_cases.rs"]
+mod guard_review_cases;
+
+#[path = "support/guard_review2_cases.rs"]
+mod guard_review2_cases;
+
+#[path = "support/guard_review3_cases.rs"]
+mod guard_review3_cases;
+
+fn review_guard_cases(finding: u8) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    let home = tmp.path().join("home");
+    std::fs::create_dir(&root).unwrap();
+    enforced_repo(&root);
+    guard_review_cases::seed(&root, &home);
+    if finding >= 40 {
+        guard_review3_cases::seed(&root, &home);
+    }
+    if finding >= 21 {
+        guard_review2_cases::seed(finding, &root, &home);
+    }
+    if finding == 13 {
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::write(root.join(".git/hooks/pre-commit"), "# planted fixture\n").unwrap();
+    }
+    #[cfg(unix)]
+    if finding == 8 {
+        guard_review_cases::seed_links(&root, &home);
+    }
+    let mut wrong = Vec::new();
+    for &(_, owner, command, refuse) in guard_review_cases::CASES
+        .iter()
+        .chain(guard_review2_cases::CASES)
+        .chain(guard_review3_cases::CASES)
+        .filter(|c| c.0 == finding)
+    {
+        let line =
+            guard_review_cases::render(command, &root, &home).replace("@HOME@", &shell_path(&home));
+        for guard in ["git-guard", "exec-guard"] {
+            let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
+                "tool_input":{"command":line}})
+            .to_string();
+            let output = run_with_stdin(
+                expansion_codeflow()
+                    .args(["hook", guard, "--contract", "3"])
+                    .current_dir(&root)
+                    .env("HOME", &home)
+                    .env("USERPROFILE", &home)
+                    .env_remove("CDPATH"),
+                &payload,
+            );
+            let code = output.status.code();
+            if !matches!(code, Some(0 | 2))
+                || (!refuse && code != Some(0))
+                || (refuse && guard == owner && code != Some(2))
+            {
+                wrong.push(format!(
+                    "F{finding}: {guard}: expected refuse={refuse}, owner={owner}: {line:?}: {output:?}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn tsk1002_review_f01_heredoc_code_and_data() {
+    review_guard_cases(1);
+}
+
+#[test]
+fn tsk1002_review_f02_process_substitution_commands() {
+    review_guard_cases(2);
+}
+
+#[test]
+fn tsk1002_review_f03_substitution_output_expands_tilde() {
+    review_guard_cases(3);
+}
+
+#[test]
+fn tsk1002_review_f04_xargs_input_becomes_operands() {
+    review_guard_cases(4);
+}
+
+#[test]
+fn tsk1002_review_f05_transfer_data_file_prefixes() {
+    review_guard_cases(5);
+}
+
+#[test]
+fn tsk1002_review_f06_interpreter_aliases_and_bodies() {
+    review_guard_cases(6);
+}
+
+#[cfg(windows)]
+#[test]
+fn tsk1002_review_f07_windows_path_spellings() {
+    review_guard_cases(7);
+}
+
+#[cfg(unix)]
+#[test]
+fn tsk1002_review_f08_glob_and_search_symlink_targets() {
+    review_guard_cases(8);
+}
+
+#[test]
+fn tsk1002_review_f09_search_ignores_and_overrides() {
+    review_guard_cases(9);
+}
+
+#[test]
+fn tsk1002_r12_make_stdin_is_code() {
+    review_guard_cases(12);
+}
+
+#[test]
+fn tsk1002_r12_redirect_globs_use_existing_matches() {
+    review_guard_cases(13);
+}
+
+#[test]
+fn tsk1002_r12_code_data_and_operand_roles() {
+    review_guard_cases(14);
+}
+
+#[test]
+fn tsk1002_review2_b01_unquoted_heredoc_substitutions() {
+    review_guard_cases(21);
+}
+
+#[test]
+fn tsk1002_review2_b02_home_store_ancestor_spellings() {
+    review_guard_cases(22);
+}
+
+#[test]
+fn tsk1002_review2_b03_dotglob_secret_reads() {
+    review_guard_cases(23);
+}
+
+#[test]
+fn tsk1002_review2_b04_substitution_and_xargs_netrc() {
+    review_guard_cases(24);
+}
+
+#[test]
+fn tsk1002_review2_b05_file_rules_do_not_deny_public_siblings() {
+    review_guard_cases(25);
+}
+
+#[test]
+fn tsk1002_review2_b07_physical_cd_follows_same_line_links() {
+    review_guard_cases(27);
+}
+
+#[test]
+fn tsk1002_review2_b08_recursive_readers_inspect_roots() {
+    review_guard_cases(28);
+}
+
+#[test]
+fn tsk1002_review2_b09_gh_uses_action_table_rules() {
+    review_guard_cases(29);
+}
+
+#[test]
+fn tsk1002_review2_b10_flat_globs_use_search_budget() {
+    review_guard_cases(30);
+}
+
+#[test]
+fn tsk1002_review2_b11_deno_eval_code() {
+    review_guard_cases(31);
+}
+
+fn guard_classification_cases(ac: u8) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    enforced_repo(&root);
+    guard_cases::seed_glob_matches(&root);
+    let mut wrong = Vec::new();
+    for &(_, line, refuse) in guard_cases::CASES.iter().filter(|c| c.0 == ac) {
+        let mut refused = false;
+        for guard in ["git-guard", "exec-guard"] {
+            let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
+                "tool_input":{"command":line}})
+            .to_string();
+            let output = run_with_stdin(
+                expansion_codeflow()
+                    .args(["hook", guard, "--contract", "3"])
+                    .current_dir(&root)
+                    .env("HOME", tmp.path())
+                    .env_remove("CDPATH"),
+                &payload,
+            );
+            assert!(
+                matches!(output.status.code(), Some(0 | 2)),
+                "{guard}: {output:?}"
+            );
+            if guard == guard_cases::refusing_guard(ac, line) {
+                refused = output.status.code() == Some(2);
+            }
+            if !refuse {
+                assert!(
+                    output.status.success(),
+                    "ordinary command refused by {guard}: {line}: {output:?}"
+                );
+            }
+        }
+        if refused != refuse {
+            wrong.push(format!("AC-{ac}: expected refuse={refuse}: {line:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn tsk1002_ac01_guard_verdicts() {
+    guard_classification_cases(1);
+}
+
+#[test]
+fn tsk1002_ac02_guard_verdicts() {
+    guard_classification_cases(2);
+}
+
+#[test]
+fn tsk1002_ac03_guard_verdicts() {
+    guard_classification_cases(3);
+}
+
+#[test]
+fn tsk1002_ac04_guard_verdicts() {
+    guard_classification_cases(4);
+}
+
+#[test]
+fn tsk1002_ac05_guard_verdicts() {
+    guard_classification_cases(5);
+}
+
+#[test]
+fn tsk1002_ac06_guard_verdicts() {
+    guard_classification_cases(6);
+}
+
+#[test]
+fn tsk1002_ac07_guard_verdicts() {
+    guard_classification_cases(7);
+}
+
+#[test]
+fn tsk1002_ac08_guard_verdicts() {
+    guard_classification_cases(8);
+}
+
+#[test]
+fn tsk1002_ac09_guard_verdicts() {
+    guard_classification_cases(9);
+}
+
+#[test]
+fn tsk1002_ac10_guard_verdicts() {
+    guard_classification_cases(10);
+}
+
+#[test]
+fn tsk1002_ac11_guard_verdicts() {
+    guard_classification_cases(11);
+}
+
+#[test]
+fn tsk1002_ac13_guard_verdicts() {
+    guard_classification_cases(13);
+}
+
+#[test]
+fn tsk1002_glob_hook_uses_actual_files_and_search_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    for dir in ["src", "other"] {
+        std::fs::create_dir(root.join(dir)).unwrap();
+        std::fs::write(root.join(dir).join("public.rs"), "fixture").unwrap();
+    }
+    let verdict = |line: &str| {
+        let payload = serde_json::json!({"tool_name":"Bash", "cwd":root,
+            "tool_input":{"command":line}})
+        .to_string();
+        let out = run_with_stdin(
+            expansion_codeflow()
+                .args(["hook", "exec-guard", "--contract", "3"])
+                .current_dir(&root)
+                .env("HOME", tmp.path()),
+            &payload,
+        );
+        assert!(matches!(out.status.code(), Some(0 | 2)), "{out:?}");
+        out.status.code() == Some(2)
+    };
+    let forms = [
+        "cat src/*.rs",
+        "rg -g '*.rs' token src",
+        "rg --glob='*.rs' token src",
+        "rg --iglob '*.RS' token src",
+        "grep -r --include='*.rs' token src",
+    ];
+    for line in forms {
+        assert!(!verdict(line), "ordinary: {line}");
+    }
+    std::fs::write(root.join("src/id_rsa.rs"), "planted fixture").unwrap();
+    for line in forms {
+        assert!(verdict(line), "secret: {line}");
+    }
+    for line in [
+        "cat other/*.rs",
+        "rg -g '*.rs' token other",
+        "grep -r --include='*.rs' token other",
+    ] {
+        assert!(!verdict(line), "other root: {line}");
+    }
+    std::fs::create_dir(tmp.path().join(".ssh")).unwrap();
+    assert!(verdict("cat $HOME/.ssh/*.rs"), "empty secret store");
+}
+
 /// TSK-422 AC-8: `CodeFlow`'s own writes under the coordination ledger pass
 /// the guards (they happen inside `codeflow follow`), and an agent's direct
 /// edit of the ledger is refused by the built edit and git guards.
@@ -10747,6 +11109,171 @@ fn the_guards_allow_codeflow_follow_and_refuse_a_direct_ledger_edit() {
             Some(2),
             "{file}: {}",
             String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn tsk1002_review3_planned_recursive_links() {
+    review_guard_cases(40);
+}
+
+#[test]
+fn tsk1002_review3_recursive_directory_readers() {
+    review_guard_cases(41);
+}
+
+#[test]
+fn tsk1002_review3_physical_cd_components() {
+    review_guard_cases(42);
+}
+
+#[test]
+fn tsk1002_review3_ignored_secret_paths() {
+    review_guard_cases(43);
+}
+
+#[test]
+fn tsk1002_review3_same_line_executable_files() {
+    review_guard_cases(44);
+}
+
+#[test]
+fn tsk1002_review3_powershell_parameters() {
+    review_guard_cases(45);
+}
+
+#[test]
+fn tsk1002_review3_deno_parameters() {
+    review_guard_cases(46);
+}
+
+#[test]
+fn tsk1002_review3_applescript_bodies() {
+    review_guard_cases(47);
+}
+
+#[test]
+fn tsk1002_review3_curl_file_values() {
+    review_guard_cases(48);
+}
+
+#[test]
+fn tsk1002_review3_ordinary_home_metadata() {
+    review_guard_cases(49);
+}
+
+#[test]
+fn tsk1002_r23_recursive_detection_respects_argument_roles() {
+    review_guard_cases(50);
+}
+
+/// TSK-1082: on an ordinary call each guard decides well inside the
+/// deadline it refuses at and the hook timeout every harness entry
+/// carries, so the bounds stop only a stalled guard.
+#[test]
+fn each_guard_decides_well_inside_its_deadline() {
+    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_HOOK_TIMEOUT_SECS};
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let edit = format!(
+        r#"{{"tool_name":"Write","tool_input":{{"file_path":{},"content":"x"}},"cwd":{}}}"#,
+        json_string(&dir.path().join("notes.txt").to_string_lossy()),
+        json_string(&dir.path().to_string_lossy()),
+    );
+    for (guard, payload) in [
+        ("git-guard", guard_payload("git status", dir.path())),
+        ("exec-guard", guard_payload("ls", dir.path())),
+        ("edit-guard", edit),
+    ] {
+        let started = std::time::Instant::now();
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", guard, "--contract", "3"])
+                .current_dir(dir.path()),
+            &payload,
+        );
+        let took = started.elapsed();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{guard}: {stderr}");
+        assert!(
+            took < std::time::Duration::from_secs(GUARD_DEADLINE_SECS / 2),
+            "{guard} took {took:?}, near its {GUARD_DEADLINE_SECS} s deadline \
+             and {GUARD_HOOK_TIMEOUT_SECS} s hook timeout"
+        );
+        eprintln!("{guard} decided in {took:?}");
+    }
+}
+
+/// TSK-1082, and TSK-283's F3: a FIFO named by a git configuration include
+/// blocks repository discovery inside the guard process. Before the fix the
+/// guard waited until the harness killed it, and a killed guard lets the
+/// tool call through in Grok and Codex. Now each shell guard refuses on its
+/// own, with exit 2 and the reason on stderr, at its deadline and before
+/// the hook timeout.
+#[cfg(unix)]
+#[test]
+fn a_guard_stalled_on_a_fifo_include_refuses_at_its_deadline() {
+    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_HOOK_TIMEOUT_SECS};
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&repo, "feat/x");
+    let fifo = dir.path().join("include.fifo");
+    let c_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    // SAFETY: a valid NUL-terminated path; mkfifo has no other precondition.
+    assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo.join(".git/config"))
+        .unwrap();
+    writeln!(config, "[include]\n\tpath = {}", fifo.display()).unwrap();
+    drop(config);
+
+    let started = Instant::now();
+    let mut children = Vec::new();
+    for (guard, command) in [("git-guard", "git status"), ("exec-guard", "ls")] {
+        let mut child = codeflow()
+            .args(["hook", guard, "--contract", "3"])
+            .current_dir(&repo)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr = drain_pipe::drain_pipe(child.stderr.take());
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(guard_payload(command, &repo).as_bytes())
+            .unwrap();
+        children.push((guard, child, stderr));
+    }
+    let limit = Duration::from_secs(GUARD_HOOK_TIMEOUT_SECS);
+    for (guard, mut child, stderr) in children {
+        while child.try_wait().unwrap().is_none() {
+            if started.elapsed() > limit {
+                child.kill().unwrap();
+                panic!("{guard} still ran after the {GUARD_HOOK_TIMEOUT_SECS} s hook timeout");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let took = started.elapsed();
+        let status = child.wait().unwrap();
+        let stderr = String::from_utf8_lossy(&stderr.join().unwrap()).into_owned();
+        assert_eq!(status.code(), Some(2), "{guard}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "codeflow {guard}: error: BLOCKED: the guard reached no decision within {GUARD_DEADLINE_SECS} seconds"
+            )),
+            "{guard}: {stderr}"
+        );
+        assert!(stderr.contains("git-config-includes"), "{guard}: {stderr}");
+        assert!(
+            took >= Duration::from_secs(GUARD_DEADLINE_SECS),
+            "{guard} answered in {took:?}, before its deadline: {stderr}"
         );
     }
 }

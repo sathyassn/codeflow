@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "Which check inspects which surface, and which checks can fail?",
-    "idea": "The twenty-four checks fall into six groups by the surface they read, and only ten of them can fail; the other fourteen warn at most.",
-    "title": "The twenty-four checks, by what they read",
+    "idea": "The twenty-five checks fall into six groups by the surface they read, and only eleven of them can fail; the other fourteen warn at most.",
+    "title": "The twenty-five checks, by what they read",
     "kicker": "Doctor checks",
-    "caption": "A FAIL comes only from hooks, the sandbox configuration, config, permissions, the policy source, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
+    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
     "states": [
       {
         "name": "canfail",
@@ -23,12 +23,12 @@
     ],
     "facts": [
       {
-        "claim": "ten checks can fail",
+        "claim": "eleven checks can fail",
         "source": "docs/troubleshooting.md#technical",
         "derive": "the fail sentence",
         "check": {
           "kind": "contains",
-          "text": "Ten checks can fail: `hooks`, `sandbox`, `config`,"
+          "text": "Eleven checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
         },
         "value": true
       },
@@ -38,7 +38,7 @@
         "derive": "the warn sentence",
         "check": {
           "kind": "contains",
-          "text": "The other fourteen warn"
+          "text": "other fourteen warn at most"
         },
         "value": true
       },
@@ -204,12 +204,29 @@
           "id": "g1c4"
         },
         {
-          "text": "sandbox",
+          "text": "guard-timeouts",
           "x": 255,
           "y": 98,
           "style": "mono",
           "for": [
             "g1c4"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 404,
+          "cy": 93,
+          "r": 7,
+          "id": "g1c5"
+        },
+        {
+          "text": "sandbox",
+          "x": 420,
+          "y": 98,
+          "style": "mono",
+          "for": [
+            "g1c5"
           ]
         },
         {
@@ -692,18 +709,35 @@
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 160,
+          "cx": 184,
           "cy": 169,
           "r": 7,
           "id": "g1c4"
         },
         {
-          "text": "sandbox",
-          "x": 174,
+          "text": "guard-timeouts",
+          "x": 198,
           "y": 174,
           "style": "mono",
           "for": [
             "g1c4"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 262,
+          "cy": 141,
+          "r": 7,
+          "id": "g1c5"
+        },
+        {
+          "text": "sandbox",
+          "x": 276,
+          "y": 146,
+          "style": "mono",
+          "for": [
+            "g1c5"
           ]
         },
         {
@@ -1050,7 +1084,7 @@
         ],
         [
           "Harness wiring",
-          "`sandbox`",
+          "`guard-timeouts`, `sandbox`",
           "`claude`, `codex`, `grok`, `startup-files`"
         ],
         [

@@ -335,11 +335,7 @@ fn a_link_mode_policy_entry_is_unreadable() {
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
-#[path = "../support/drain_pipe.rs"]
-mod drain_pipe;
-#[cfg(unix)]
-use drain_pipe::drain_pipe;
+use super::drain_pipe::drain_pipe;
 
 /// [`exec_guard`], failing the test if the hook has not answered within a
 /// deadline instead of waiting on it.

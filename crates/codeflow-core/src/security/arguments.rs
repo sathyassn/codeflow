@@ -178,13 +178,22 @@ fn evaluate_rule(
 ) -> Vec<Reach> {
     let _scope = edit_guard::RepoFactsScope::enter();
     let calls = outward::interpreter_calls_with_home(line, payload_cwd, home);
+    let spelled = line;
+    let visible = if line.contains("<<") {
+        composed::paths::execution_text(line, payload_cwd, home)
+    } else {
+        line.to_owned()
+    };
+    let line = visible.as_str();
     let (opaque, runs) = outward::code_sources(line);
     // Strict branch: a current-shell substitution's body is code the
     // splitter does not keep whole, so every word on the line may belong to
     // a call the guard never saw (TSK-397 security review SR2-1), and the
     // lexer's possible calls are read before any early return, so its
-    // findings are never skipped (TSK-397 Codex review round 11).
-    let lexed = strict.then(|| super::shell_lex::lex(line));
+    // findings are never skipped (TSK-397 Codex review round 11). The lexer
+    // reads the line as spelled, before the heredoc rewrite, so a heredoc
+    // delimiter it does not model (`<<$'E'`, `<<$(x)`) stays opaque.
+    let lexed = strict.then(|| super::shell_lex::lex(spelled));
     let opaque = opaque
         || lexed
             .as_ref()
@@ -430,12 +439,14 @@ fn literal_paths(
 /// itself, or for an option the value written after `=` and a short
 /// option's attached value (`-o.claude/settings.json`). Stdin's `-` and
 /// `--` name none.
-fn argument_values(word: &str) -> Vec<&str> {
+pub(crate) fn argument_values(word: &str) -> Vec<&str> {
     if word.is_empty() || word == "-" || word == "--" {
         return Vec::new();
     }
     if !word.starts_with('-') {
-        return vec![word];
+        return std::iter::once(word)
+            .chain(word.split_once('=').map(|(_, value)| value))
+            .collect();
     }
     let mut values: Vec<&str> = word
         .split_once('=')
@@ -480,6 +491,7 @@ fn call_dirs(
         before,
         cwd,
         in_dir: true,
+        ..
     }) = &call.supplier
     {
         execdir_dirs(starts, before, cwd.as_deref(), line_dirs, facts.payload_cwd)
@@ -496,11 +508,15 @@ fn call_dirs(
         match outward::directory_operand(chdir, facts.home) {
             outward::DirChange::Unknown => set.unknown = true,
             outward::DirChange::To(target) if !facts.strict => {
-                set.dirs = set
+                match set
                     .dirs
                     .iter()
-                    .map(|dir| outward::lexical_join(dir, &target))
-                    .collect();
+                    .map(|dir| outward::physical_join(dir, &target))
+                    .collect::<Option<Vec<_>>>()
+                {
+                    Some(dirs) => set.dirs = dirs,
+                    None => set.unknown = true,
+                }
             }
             outward::DirChange::To(target) => {
                 // `ruby -C` changes directory physically, so `lnk/..` is the
@@ -517,6 +533,16 @@ fn call_dirs(
                         Ok(physical) if physical != logical => next.push(physical),
                         Err(_) if parent => set.unknown = true,
                         Ok(_) | Err(_) => {}
+                    }
+                    // The line's reading too: a join it cannot make (a
+                    // namespace operand, an absent or unreadable component
+                    // before a `..`) is unknown here as well.
+                    match outward::physical_join(dir, &target) {
+                        Some(joined) if joined != logical && !next.contains(&joined) => {
+                            next.push(joined);
+                        }
+                        Some(_) => {}
+                        None => set.unknown = true,
                     }
                     next.push(logical);
                 }
@@ -855,6 +881,7 @@ fn call_reaches(
             // every authority reach is judged before any enforcement one.
             found.extend(strongest_over_dirs(value, &dirs, |dir| {
                 let mut reached = value_reach(value, *pattern, dir, facts);
+                reached = strongest(reached, planned_reach(value, *pattern, dir, call, facts));
                 let paths = match composed::paths::linked_paths(
                     value,
                     dir.unwrap_or(facts.payload_cwd),
@@ -866,6 +893,8 @@ fn call_reaches(
                 for path in paths {
                     if let Some(path) = path.to_str() {
                         reached = strongest(reached, value_reach(path, *pattern, dir, facts));
+                        reached =
+                            strongest(reached, planned_reach(path, *pattern, dir, call, facts));
                     }
                 }
                 reached
@@ -888,6 +917,7 @@ fn call_reaches(
         for word in code_literal_words(code) {
             found.extend(strongest_over_dirs(&word, &dirs, |dir| {
                 let mut reached = code_reach(&word, dir, facts);
+                reached = strongest(reached, planned_reach(&word, false, dir, call, facts));
                 let paths = match composed::paths::linked_paths(
                     &word,
                     dir.unwrap_or(facts.payload_cwd),
@@ -899,6 +929,7 @@ fn call_reaches(
                 for path in paths {
                     if let Some(path) = path.to_str() {
                         reached = strongest(reached, code_reach(path, dir, facts));
+                        reached = strongest(reached, planned_reach(path, false, dir, call, facts));
                     }
                 }
                 reached
@@ -907,6 +938,34 @@ fn call_reaches(
     }
     found.extend(supplied_reach(call, facts));
     found
+}
+
+fn planned_reach(
+    value: &str,
+    pattern: bool,
+    dir: Option<&Path>,
+    call: &outward::InterpreterCall,
+    facts: &Facts<'_>,
+) -> Option<Reach> {
+    if call.checkouts.is_empty() {
+        return None;
+    }
+    let paths = literal_paths(
+        value,
+        pattern,
+        dir.unwrap_or(facts.payload_cwd),
+        facts.payload_cwd,
+        facts.home,
+    )
+    .map_err(|why| Reach::Enforcement(format!("cannot inspect prospective checkout path: {why}")));
+    match paths {
+        Ok(paths) => paths.iter().find_map(|path| {
+            git_guard::planned_path_integrity(path, &call.checkouts).map(|reached| {
+                Reach::Enforcement(format!("interpreter path `{value}` may reach {reached}"))
+            })
+        }),
+        Err(reach) => Some(reach),
+    }
 }
 
 /// The file a literal argument names from `dir`.
@@ -1482,7 +1541,7 @@ fn authority_files(root: &Path) -> Vec<PathBuf> {
 fn supplied_reach(call: &outward::InterpreterCall, facts: &mut Facts<'_>) -> Option<Reach> {
     let supplier = call.supplier.as_ref()?;
     let dir = call.cwd.as_deref();
-    if let outward::Supplier::Find { .. } = supplier {
+    if let outward::Supplier::Find { appends: false, .. } = supplier {
         // `find` hands its paths over as `{}`, or to a shell `-c` string
         // that passes them on as its positional parameters.
         if !call

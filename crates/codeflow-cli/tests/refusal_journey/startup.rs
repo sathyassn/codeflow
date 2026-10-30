@@ -127,7 +127,6 @@ const ALLOWED: &[&str] = &[
     "git -c core.fsmonitorHookVersion=2 log -p -- .envrc | head",
     "git -c clean.requireForce=yes log -p -- .envrc | head",
     "EDITOR='vim -R' git log -p -- .envrc | head",
-    "git --exec-path=/usr/bin diff -- .envrc",
     "GIT_EXTERNAL_DIFF='diff -u' git log -p -- .envrc | head",
     "C=never git --config-env color.ui=C log -p -- .envrc | head",
     "cat ~/.zshrc",
@@ -183,6 +182,14 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
             if outputs.iter().any(|o| !passes(o)) {
                 wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
             }
+        }
+        // `--exec-path=DIR` moves where Git finds the helpers it runs, so it
+        // refuses as a secret-read cannot-verify like `GIT_EXEC_PATH` since
+        // TSK-1002 Fable review 14; it is not a startup write.
+        let command = "git --exec-path=/usr/bin diff -- .envrc";
+        let outputs = project.replay(harness, "Bash", json!({"command": command}));
+        if !refused_with(&outputs, "security.secret_reads") || refused_with(&outputs, RULE) {
+            wrong.push(format!("{harness}: {command}: {outputs:?}"));
         }
         // A user-scope git key that runs a program is refused; an ordinary
         // user-scope key is not.
@@ -502,8 +509,10 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "CMD='git status'; sh -c \"$CMD\"",
     "printf '%s\\n' README | xargs ls",
     "xargs -I{} echo {}",
-    "xargs git status",
-    "git diff --name-only | xargs git add",
+    // `status` operands are judged since TSK-1002 review 11, so the
+    // names-only reader stands in for it.
+    "xargs git ls-files",
+    "echo README.md | xargs git add",
     "gtimeout 5 git status",
     "flock /tmp/l git status",
     "parallel echo ::: hi",
@@ -723,7 +732,7 @@ const ROUND_20: &[&str] = &[
 const ROUND_20_CONTROLS: &[&str] = &[
     "unzip -uod ./vendor payload.zip",
     "tar -x --no-mac-metadata -C ./vendor -f payload.tar",
-    "tar -czf/tmp/box.tar -C $HOME .",
+    "tar -czf/tmp/box.tar -C ./src .",
 ];
 
 /// Round 21: options the table called known that move files, the order of
@@ -956,6 +965,19 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if outputs.iter().any(|o| !passes(o)) {
                 wrong.push(format!("{harness}: refused control {command}"));
+            }
+        }
+        // F4 and B8 supersede the old controls for unknown xargs file
+        // input and a recursive archive of the complete home directory.
+        for command in [
+            "git diff --name-only | xargs git add",
+            "tar -czf/tmp/box.tar -C $HOME .",
+        ] {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !refused_with(&outputs, "security.secret_reads") {
+                wrong.push(format!(
+                    "{harness}: unverified or home-recursive read allowed: {command}"
+                ));
             }
         }
         // Unread shell code names no startup file, but both guards refuse it

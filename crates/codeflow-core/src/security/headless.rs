@@ -442,6 +442,13 @@ pub(crate) fn skip_assignments(args: &[String]) -> &[String] {
 /// `env`'s options and assignments up to its command; `None` for `env -S`,
 /// which splits a string this classifier does not model.
 pub(crate) fn skip_env(args: &[String]) -> Option<&[String]> {
+    match crate::hooks::git_guard::env_words(args, 0) {
+        Ok(words) if words.split.is_some() => return None,
+        Ok(words) => return Some(args.get(words.end..).unwrap_or_default()),
+        // An option env's grammar does not hold: skip option-shaped words.
+        // The directory and launcher checks refuse what they cannot read.
+        Err(_) => {}
+    }
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         if arg == "-S" || arg.starts_with("--split-string") || arg.starts_with("-S") {
