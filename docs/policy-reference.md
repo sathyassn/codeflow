@@ -1003,9 +1003,13 @@ writes B's empty bypass list back. The same route applies to C for a line.
   remote-perimeter` fails while any ruleset named as B or C has a bypass
   list that is not empty, naming the actors, the time the ruleset last
   changed and the close.
-- **Not yet proven on a host.** This route has not been exercised on a
-  hosted fixture. Until the scratch-repository fixture of TSK-1080 runs it,
-  treat it as the planned route, not a proven one.
+- **Exercised on a host.** On a scratch repository on 2026-10-30, the
+  administrator role added to B's bypass list let a red pull request that
+  was behind the default branch merge with `gh pr merge --admin
+  --match-head-commit <sha>`; `doctor` then failed, naming the window, and
+  `codeflow remote protect` emptied the list. Two cases are not yet shown
+  on a host: a write-access App refused under A, and a merge by an account
+  outside the bypass list refused while the window is open (TSK-336).
 
 ### What doctor reports
 
