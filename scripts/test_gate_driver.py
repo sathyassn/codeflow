@@ -80,9 +80,17 @@ class GateDriver(unittest.TestCase):
                                   env={**env, 'GITHUB_OUTPUT': str(output)})
             self.assertEqual(kept.returncode, 0, kept.stdout + kept.stderr)
             digests = dict(line.split('=', 1) for line in output.read_text().splitlines())
-            gate_env = {**env, 'ONLY': 'check', 'LLVM_PROFILE_FILE_NAME': 'x.profraw',
-                        'DRIVER_SHA256': digests['driver'], 'CONFIG_SHA256': digests['config']}
-            ran = subprocess.run(['bash', '-c', gate], cwd=repo, capture_output=True, text=True, env=gate_env)
+            # The runner writes the job outputs and the part's targets into
+            # the script (review 5 F2); the environment cannot replace them.
+            def filled(only):
+                return (gate.replace('${{ needs.judge-build.outputs.driver }}', digests['driver'])
+                        .replace('${{ needs.judge-build.outputs.config }}', digests['config'])
+                        .replace('${{ matrix.only }}', only))
+            self.assertNotIn('${{', filled('check'))
+            gate_env = {**env, 'LLVM_PROFILE_FILE_NAME': 'x.profraw', 'ONLY': 'unknown',
+                        'DRIVER_SHA256': '0' * 64, 'CONFIG_SHA256': '0' * 64}
+            ran = subprocess.run(['bash', '-c', filled('check')], cwd=repo, capture_output=True, text=True,
+                                 env=gate_env)
             text = ran.stdout + ran.stderr
             self.assertNotEqual(ran.returncode, 0, text)
             self.assertIn('target check: FAILED (exit 3', text)
@@ -91,14 +99,15 @@ class GateDriver(unittest.TestCase):
             # before it runs.
             (temp / 'codeflow-gate-driver/test-config.json').write_text(config('true'))
             (repo / 'base-ran.txt').unlink()
-            ran = subprocess.run(['bash', '-c', gate], cwd=repo, capture_output=True, text=True, env=gate_env)
+            ran = subprocess.run(['bash', '-c', filled('check')], cwd=repo, capture_output=True, text=True,
+                                 env=gate_env)
             self.assertNotEqual(ran.returncode, 0, ran.stdout + ran.stderr)
             self.assertIn('FAILED', ran.stdout + ran.stderr)
             self.assertFalse((repo / 'base-ran.txt').exists())
             # A target the base config lacks is reported, not run.
             (temp / 'codeflow-gate-driver/test-config.json').write_text((checkout / '.codeflow/test-config.json').read_text())
-            ran = subprocess.run(['bash', '-c', gate], cwd=repo, capture_output=True, text=True,
-                                 env={**gate_env, 'ONLY': 'added-by-the-pull-request'})
+            ran = subprocess.run(['bash', '-c', filled('added-by-the-pull-request')], cwd=repo,
+                                 capture_output=True, text=True, env=gate_env)
             self.assertNotEqual(ran.returncode, 0, ran.stdout + ran.stderr)
             self.assertIn('added-by-the-pull-request is not in the base test config', ran.stderr)
             # A base whose codeflow lacks `test --config` fails the driver job.

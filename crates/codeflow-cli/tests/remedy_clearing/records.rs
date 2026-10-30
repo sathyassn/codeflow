@@ -872,8 +872,15 @@ fn plan_epic(root: &Path, title: &str) -> String {
         .find(|word| word.contains("project-management/epics/"))
         .unwrap_or_else(|| panic!("no epic path in:\n{out}"));
     let rel = path[path.find("project-management/").unwrap()..].to_string();
-    let epic =
-        read(root, &rel).replacen("- AC-1\n", "- AC-1 When used, the system shall work.\n", 1);
+    // The Outcome line too: a planning range's docs validation (TSK-1001)
+    // refuses a new open record without one (TSK-435).
+    let epic = read(root, &rel)
+        .replacen("- AC-1\n", "- AC-1 When used, the system shall work.\n", 1)
+        .replacen(
+            "## Outcome\n",
+            "## Outcome\n\nAfter this merges, maintainers can rely on the system.\n",
+            1,
+        );
     write(root, &rel, &epic);
     commit_all(root, &format!("docs: plan {title}"));
     rel

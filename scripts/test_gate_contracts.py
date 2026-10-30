@@ -200,7 +200,7 @@ class GateContracts(unittest.TestCase):
                 break
             lines.append(line[10:])
         script = '\n'.join(lines)
-        values = {'PARTS': 'success', 'RELEASE': 'success', 'SHARDS': 'success', 'REPORT': 'success',
+        values = {'PARTS': 'success', 'JUDGES': 'success', 'RELEASE': 'success', 'SHARDS': 'success', 'REPORT': 'success',
                   'REUSE': 'skipped', 'REUSED': '', 'RELEASE_OWED': 'false', 'GITHUB_SERVER_URL': 'https://x',
                   'GITHUB_REPOSITORY': 'o/r', 'PATH': os.environ.get('PATH', '')}
         values.update(env)
@@ -224,7 +224,7 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(self.run_verdict(RELEASE='skipped').returncode, 0)
         self.assertEqual(self.run_verdict(RELEASE='success', RELEASE_OWED='true').returncode, 0)
         self.assertEqual(self.run_verdict(RELEASE='failure').returncode, 1)
-        reused = self.run_verdict(REUSE='success', REUSED='77', PARTS='skipped', RELEASE='skipped',
+        reused = self.run_verdict(REUSE='success', REUSED='77', PARTS='skipped', JUDGES='skipped', RELEASE='skipped',
                                   SHARDS='skipped', REPORT='skipped', RELEASE_OWED='true')
         self.assertEqual(reused.returncode, 0, reused.stdout)
 
@@ -429,6 +429,11 @@ class GateContracts(unittest.TestCase):
                                     'a judge script runs in isolated mode')
                     if name == 'windows-release-journey':
                         self.assertIn("      - name: Take the journey map from the base\n", body)
+                    elif name == 'gates-judges':
+                        # The base's copies, taken into the checkout before
+                        # any pull request code runs (review 5 F1).
+                        self.assertIn('git checkout "$BASE_SHA" -- scripts/gate-parity.py scripts/journey-gate.py '
+                                      'crates/codeflow-cli/tests/journey_gate.toml\n', body)
                     else:
                         self.assertEqual(use.group(1), '"$CODEFLOW_JUDGE/', 'a judge script runs from the base copy')
                         self.assertIn(PARITY.JUDGE_STEP, code(text))
@@ -555,6 +560,158 @@ class GateContracts(unittest.TestCase):
             self.assertNotEqual(ran.returncode, 0)
             self.assertEqual(found, {})
 
+    def job_step_script(self, job, step):
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        text = dict(zip(parts[1::2], parts[2::2]))[job].split(f'      - name: {step}\n', 1)[1]
+        text = text.split('        run: |\n', 1)[1]
+        lines = []
+        for line in text.splitlines():
+            if line.strip() and not line.startswith('          '):
+                break
+            lines.append(line[10:])
+        return '\n'.join(lines) + '\n'
+
+    def test_the_gates_evaluators_are_the_bases(self):
+        # Review 5 F1: the base's docs validation (the driver), parity
+        # checker, journey runner and journey map judge the pull request.
+        # The judges step runs here as written, after the runner has written
+        # the driver's digest into it, on a pull request that no-ops the
+        # checker and the runner and empties the map.
+        import hashlib
+        import shutil
+        import tempfile
+        step = self.job_step_script('gates-judges', "Judge the pull request with the base's evaluators")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, temp = root / 'repo', root / 'temp'
+            repo.mkdir(); temp.mkdir()
+            def git(*args, cwd=repo):
+                return subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false',
+                                       *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+            def put(path, text):
+                (repo / path).parent.mkdir(parents=True, exist_ok=True)
+                (repo / path).write_text(text)
+            git('init', '-q', '-b', 'main')
+            # The base's checker judges the pull request's config; its
+            # runner runs the map's Python journey in the pull request.
+            put('scripts/gate-parity.py', 'import json, pathlib, sys\n'
+                'root = pathlib.Path(__file__).resolve().parents[1]\nprint("base parity")\n'
+                'sys.exit(0 if json.loads((root / ".codeflow/test-config.json").read_text())["consistent"] else 1)\n')
+            shutil.copy2(ROOT / 'scripts/journey-gate.py', repo / 'scripts/journey-gate.py')
+            put('crates/codeflow-cli/tests/journey_gate.toml',
+                '[[journey]]\ntext = "the journey"\ncontrol = ["python scripts/test_j.py JourneyTests"]\nfault = []\n')
+            passing = ('import unittest\nclass JourneyTests(unittest.TestCase):\n'
+                       '    def test_it(self):\n        self.assertTrue(True)\n'
+                       'unittest.main()\n')
+            put('scripts/test_j.py', passing)
+            put('.codeflow/test-config.json', '{"consistent": true}\n')
+            put('.github/workflows/codeflow-ci.yml', 'name: base\n')
+            git('add', '-A'); git('commit', '-qm', 'base')
+            base = git('rev-parse', 'HEAD')
+            driver, built = temp / 'codeflow-gate-driver', temp / 'codeflow-bin'
+            driver.mkdir(); built.mkdir()
+            log = root / 'driver.log'
+            (driver / 'codeflow').write_text(f'#!/bin/sh\necho "$*" >> "{log}"\n')
+            (built / 'codeflow').write_text('#!/bin/sh\necho "the pull request\'s codeflow ran" >&2\nexit 9\n')
+            digest = hashlib.sha256((driver / 'codeflow').read_bytes()).hexdigest()
+            script = step.replace('${{ needs.judge-build.outputs.driver }}', digest)
+            self.assertNotIn('${{', script)
+            env = {**os.environ, 'EVENT': 'pull_request', 'BASE_SHA': base, 'RUNNER_TEMP': str(temp)}
+            def pull_request(name, changes):
+                git('switch', '-q', '--detach', base)
+                git('checkout', '-q', '-b', name)
+                for path, text in changes.items():
+                    put(path, text)
+                git('add', '-A'); git('commit', '-qm', name)
+                log.write_text('')
+                done = subprocess.run(['bash', '-c', script], cwd=repo, capture_output=True, text=True, env=env)
+                git('reset', '-q', '--hard')
+                return done, done.stdout + done.stderr
+            hollow = {'scripts/gate-parity.py': 'print("pull request parity")\n',
+                      'scripts/journey-gate.py': 'print("journey gate: 0 journeys")\n',
+                      'crates/codeflow-cli/tests/journey_gate.toml': 'journey = []\n'}
+            failing = passing.replace('self.assertTrue(', 'self.assertFalse(')
+            # Control: hollow judges on an honest pull request pass, and the
+            # base's ran: its parity, its map's journey, the driver's validation.
+            done, text = pull_request('honest', hollow)
+            self.assertEqual(done.returncode, 0, text)
+            self.assertIn('base parity', text)
+            self.assertNotIn('pull request parity', text)
+            self.assertIn('journey gate: 1 journeys, 1 tests', text)
+            self.assertEqual(log.read_text(), 'validate --docs\n')
+            # No-op checkers do not pass an inconsistent config.
+            done, text = pull_request('inconsistent', {**hollow, '.codeflow/test-config.json': '{"consistent": false}\n'})
+            self.assertNotEqual(done.returncode, 0, text)
+            self.assertIn('base parity', text)
+            # An emptied map and a no-op runner do not pass a failing journey.
+            done, text = pull_request('failing', {**hollow, 'scripts/test_j.py': failing})
+            self.assertNotEqual(done.returncode, 0, text)
+            self.assertIn('journey gate: FAILED', text)
+            # A driver changed after the driver job is refused before it runs.
+            (driver / 'codeflow').write_text('#!/bin/sh\nexit 0\n')
+            done, text = pull_request('tampered', hollow)
+            self.assertNotEqual(done.returncode, 0, text)
+            self.assertEqual(log.read_text(), '')
+            (driver / 'codeflow').write_text(f'#!/bin/sh\necho "$*" >> "{log}"\n')
+            # A pull request that changes codeflow-ci.yml is not judged by the
+            # base's parity rules (admission sends it to a person); the
+            # journeys and the validation still run.
+            done, text = pull_request('workflow', {**hollow, '.codeflow/test-config.json': '{"consistent": false}\n',
+                                                   '.github/workflows/codeflow-ci.yml': 'name: changed\n'})
+            self.assertEqual(done.returncode, 0, text)
+            self.assertIn('changes .github/workflows/codeflow-ci.yml', text)
+            self.assertNotIn('base parity', text)
+            self.assertIn('journey gate: 1 journeys, 1 tests', text)
+
+    def test_a_shards_filter_and_tools_come_from_the_selection_not_the_environment(self):
+        # Review 5 F2: the pull request's web build runs before the shard's
+        # test step, and a step can write later steps' environment
+        # (GITHUB_ENV) and command path (GITHUB_PATH). The step takes its
+        # filter from the selection's output, written in by the runner, and
+        # refuses Cargo tools from outside the account's Cargo home.
+        import tempfile
+        step = self.job_step_script('gates-coverage', 'cargo llvm-cov nextest (one shard)')
+        expression = "${{ fromJSON(needs.judge.outputs.shards)[format('{0}', matrix.shard)] }}"
+        self.assertEqual(step.count(expression), 1)
+        self.assertEqual(step.count('tools=/home/runner/.cargo/bin\n'), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = root / 'cargo.log'
+            planted, account = root / 'planted', root / 'home/.cargo/bin'
+            planted.mkdir(); account.mkdir(parents=True)
+            # The runner image's Cargo home stands at a scratch path here,
+            # holding recording tools; the planted directory holds others.
+            script = step.replace(expression, 'binary_id(=codeflow-core::selected)').replace(
+                'tools=/home/runner/.cargo/bin\n', f'tools={account}\n')
+            for tool in ('cargo', 'cargo-llvm-cov', 'cargo-nextest'):
+                for where, label in ((account, 'account'), (planted, 'planted')):
+                    (where / tool).write_text(f'#!/bin/sh\necho "{label} $*" >> "{record}"\n')
+                    (where / tool).chmod(0o755)
+            clean = f'{account}:/usr/bin:/bin'
+            # GITHUB_ENV: an earlier step set FILTER (and CARGO_HOME); the
+            # step ignores them and runs the selection's filter.
+            done = subprocess.run(['bash', '-c', script], capture_output=True, text=True,
+                                  env={'PATH': clean, 'FILTER': 'test(=trivial)', 'CARGO_HOME': str(planted.parent)})
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn('account llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow '
+                          '-E binary_id(=codeflow-core::selected)', record.read_text())
+            self.assertNotIn('trivial', record.read_text())
+            self.assertNotIn('planted', record.read_text())
+            # GITHUB_PATH: an earlier step put its own cargo first; refused
+            # before any tool runs.
+            record.write_text('')
+            done = subprocess.run(['bash', '-c', script], capture_output=True, text=True,
+                                  env={'PATH': f'{planted}:{clean}'})
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn('an earlier step changed the command path', done.stdout)
+            self.assertEqual(record.read_text(), '')
+            # An empty selection is refused.
+            done = subprocess.run(['bash', '-c', step.replace(expression, '')], capture_output=True, text=True,
+                                  env={'PATH': clean})
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn('gave this shard no filter', done.stdout)
+
     def test_trusted_jobs_save_no_cache_and_install_pinned_wheels_only(self):
         # Review 4 SEC-4 and install hardening: a pull_request_target job
         # restores the Rust cache but never saves one a later trusted run
@@ -604,7 +761,7 @@ class GateContracts(unittest.TestCase):
         self.assertIn("contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref)", condition)
         for event in ("github.event_name == 'schedule'", "github.event_name == 'workflow_dispatch'"):
             self.assertIn(event, condition)
-        self.assertIn('    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n',
+        self.assertIn('    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]\n',
                       jobs['gates-verdict'])
         # The local full gate keeps them: the test config still gives them a
         # full mode, since a schedule tier would change the adopter schema.

@@ -646,8 +646,12 @@ class WorkflowStructureTests(unittest.TestCase):
         steps = workflow_steps(self.jobs["windows-tests"])
         run = [s for s in steps if s.get("name", "").startswith("cargo nextest run")]
         self.assertEqual(len(run), 1)
-        self.assertTrue(run[0]["run"].endswith('-E "$FILTER"'), run[0]["run"])
-        self.assertIn("FILTER: ${{ fromJSON(needs.judge-windows.outputs.partitions)", self.jobs["windows-tests"])
+        # Written into the step by the runner, never read from the
+        # environment an earlier step can write (TSK-1001 review 5).
+        self.assertTrue(run[0]["run"].endswith(
+            "-E '${{ fromJSON(needs.judge-windows.outputs.partitions)[format('{0}', matrix.partition)] }}'"),
+            run[0]["run"])
+        self.assertNotIn("FILTER", self.jobs["windows-tests"])
 
 
 CS_SPEC = importlib.util.spec_from_file_location("coverage_shards", ROOT / "scripts" / "coverage-shards.py")

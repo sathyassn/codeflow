@@ -377,8 +377,8 @@ class GateBinaryControls(unittest.TestCase):
 
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
                 '--extract-overwrite --no-fail-fast --profile codeflow '
-                '-E "$FILTER"')
-PARTITION_FILTER = "FILTER: ${{ fromJSON(needs.judge-windows.outputs.partitions)[format('{0}', matrix.partition)] }}"
+                "-E '" + parity.PARTITION_EXPR + "'")
+PARTITION_CHECK = "run: test -n '" + parity.PARTITION_EXPR + "'"
 ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst"
 
 
@@ -428,7 +428,7 @@ class WindowsPartitionControls(unittest.TestCase):
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--archive-file target/windows-tests.tar.zst",
                                                              "--archive-file target/other.tar.zst")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--no-fail-fast ", "")),
-                         (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$FILTER"',
+                         (ARCHIVED_RUN, ARCHIVED_RUN.replace("-E '" + parity.PARTITION_EXPR + "'",
                                                              "--partition count:${{ matrix.partition }}/12"))):
             with self.subTest(new=new):
                 workflow = WORKFLOW.replace("run: " + old, "run: " + new)
@@ -442,16 +442,23 @@ class WindowsPartitionControls(unittest.TestCase):
         # computes itself, after checking out the pull request, is not the
         # base's. TSK-1063: the plan job reads the build's list as data and
         # runs only the base's planner, in isolated mode.
-        self.assertIn(PARTITION_FILTER, WORKFLOW)
+        self.assertIn(PARTITION_CHECK, WORKFLOW)
         self.assertEqual(parity.windows_plan_problems(parity.workflow_jobs(WORKFLOW)), [])
         base_ref = ("          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha "
                     "|| github.sha }}\n          persist-credentials: false\n      - name: Fetch the archive's test list")
         self.assertEqual(WORKFLOW.count(base_ref), 1)
-        for old, new in ((PARTITION_FILTER, 'FILTER: ${{ matrix.partition }}'),
-                         (PARTITION_FILTER, PARTITION_FILTER.replace("outputs.partitions", "outputs.shards")),
+        # Review 5 F2: the filter is written into each step that uses it,
+        # never read from the environment, which an earlier step can write.
+        run = "-E '" + parity.PARTITION_EXPR + "'"
+        for old, new in ((run, '-E "$FILTER"'),
+                         (run, run.replace("outputs.partitions", "outputs.shards")),
+                         (run, "-E '${{ matrix.partition }}'"),
+                         ("    timeout-minutes: 30\n    strategy:\n      fail-fast: false\n      matrix:\n"
+                          "        partition:",
+                          "    timeout-minutes: 30\n    env:\n      FILTER: x\n    strategy:\n      fail-fast: false\n"
+                          "      matrix:\n        partition:"),
                          ("    needs: [windows-build, judge-windows]\n", "    needs: windows-build\n"),
-                         ('        run: test -n "$FILTER"\n\n      - name: Fetch the test archive',
-                          '        run: true\n\n      - name: Fetch the test archive'),
+                         ("        " + PARTITION_CHECK + "\n", "        run: true\n"),
                          # The plan job checks out the pull request, skips the
                          # drift check, runs its planner outside isolated mode
                          # or plans without the build's list.
@@ -543,14 +550,17 @@ class GatePartControls(unittest.TestCase):
         self.assertIn(self.VERDICT_IF, WORKFLOW)
         self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
                             "exactly one job must be named")
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n"), self.EXACT)
         self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
                                              "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
                             self.EXACT)
-        self.assert_problem(WORKFLOW.replace('if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || '
-                                             '[ "$REPORT" != success ]; then', 'if false; then'), self.EXACT)
+        self.assert_problem(WORKFLOW.replace('if [ "$PARTS" != success ] || [ "$JUDGES" != success ] || '
+                                             '[ "$SHARDS" != success ] || [ "$REPORT" != success ]; then',
+                                             'if false; then'), self.EXACT)
+        self.assert_problem(WORKFLOW.replace(' || [ "$JUDGES" != success ]', ''), self.EXACT)
         self.assert_problem(WORKFLOW.replace(' || [ "$REPORT" != success ]; then', '; then'), self.EXACT)
 
     def test_a_verdict_that_could_pass_a_failed_part_is_refused(self):
@@ -562,12 +572,12 @@ class GatePartControls(unittest.TestCase):
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
             "continue-on-error on the verdict": WORKFLOW.replace(
-                "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
+                "    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
             "a reuse that needs no skipped part": WORKFLOW.replace(
-                '[ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]',
+                '[ "$REUSE" = success ] && [ "$PARTS $JUDGES $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped skipped" ]',
                 '[ "$REUSE" = success ]'),
             "a reuse that needs only the parts skipped": WORKFLOW.replace(
-                '[ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]', '[ "$PARTS" = skipped ]'),
+                '[ "$PARTS $JUDGES $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped skipped" ]', '[ "$PARTS" = skipped ]'),
         }
         for label, workflow in controls.items():
             with self.subTest(label):
@@ -672,7 +682,7 @@ class GatePartControls(unittest.TestCase):
         })
 
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
-        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
+        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
         self.assertNotEqual(workflow, WORKFLOW)
         self.assertEqual(self.problems(workflow), [])
 
@@ -699,9 +709,9 @@ class VerdictOutcomeControls(unittest.TestCase):
     when all succeeded or the reuse decision named a run and all were
     skipped. Each case runs the committed script in bash."""
 
-    def verdict(self, parts, shards, report, reuse="skipped", reused="", release="skipped"):
+    def verdict(self, parts, shards, report, reuse="skipped", reused="", release="skipped", judges=None):
         env = {"PATH": os.environ.get("PATH", ""), "PARTS": parts, "SHARDS": shards, "REPORT": report,
-               "RELEASE": release,
+               "RELEASE": release, "JUDGES": parts if judges is None else judges,
                "REUSE": reuse, "REUSED": reused, "GITHUB_SERVER_URL": "https://github.com",
                "GITHUB_REPOSITORY": "sathyassn/codeflow"}
         return subprocess.run(["bash", "-c", verdict_script()], env=env, capture_output=True, text=True).returncode
@@ -719,6 +729,8 @@ class VerdictOutcomeControls(unittest.TestCase):
 
     def test_a_failed_cancelled_or_skipped_job_fails_it(self):
         for outcome in ("failure", "cancelled", "skipped"):
+            with self.subTest(outcome=outcome, job="judges"):
+                self.assertEqual(self.verdict("success", "success", "success", judges=outcome), 1)
             for which in range(3):
                 results = ["success"] * 3
                 results[which] = outcome
@@ -728,7 +740,7 @@ class VerdictOutcomeControls(unittest.TestCase):
     def test_both_verdicts_fail_clearly_when_the_gates_did_not_run(self):
         env = {"PATH": os.environ.get("PATH", ""), "REUSE": "skipped", "REUSED": ""}
         env.update({key: "skipped" for key in (
-            "PARTS", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE")})
+            "PARTS", "JUDGES", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE")})
         for name in ("gates-verdict", "windows-verdict"):
             with self.subTest(verdict=name):
                 result = subprocess.run(["bash", "-c", verdict_script(name=name)], env=env,
@@ -743,6 +755,7 @@ class VerdictOutcomeControls(unittest.TestCase):
             with self.subTest(results=results):
                 self.assertEqual(self.verdict(*results, "success", "123"), 1)
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", ""), 1)
+        self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", "123", judges="success"), 1)
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "failure", "123"), 1)
 
 
@@ -839,22 +852,26 @@ class CoverageShardControls(unittest.TestCase):
                         run.replace(" -E", " --lib -E")):
             with self.subTest(changed=changed):
                 self.assert_problem(self.EXACT, WORKFLOW.replace(run, changed))
-        # The filter is the judge job's selection for this shard (TSK-1001):
-        # another slot, a filter computed here or no emptiness check is refused.
-        shard = "FILTER: ${{ fromJSON(needs.judge.outputs.shards)[format('{0}', matrix.shard)] }}"
+        # The filter is the judge job's selection for this shard, written
+        # into the step that uses it (TSK-1001, review 5 F2): another slot, a
+        # filter computed here or read from the environment, no emptiness
+        # check or no check of the Cargo tools' location is refused.
+        shard = "filter='${{ fromJSON(needs.judge.outputs.shards)[format('{0}', matrix.shard)] }}'"
         self.assertIn(shard, WORKFLOW)
         self.assert_problem(self.EXACT, WORKFLOW.replace(shard, shard.replace("matrix.shard", "'1'")))
         self.assert_problem(self.EXACT, WORKFLOW.replace(
-            shard, 'FILTER: $(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})'))
+            shard, 'filter=$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})'))
+        self.assert_problem(self.EXACT, WORKFLOW.replace(shard, 'filter="$FILTER"'))
         self.assert_problem(self.EXACT, WORKFLOW.replace("    needs: [reuse, judge]\n", "    needs: reuse\n"))
-        self.assert_problem(self.EXACT, WORKFLOW.replace('        run: test -n "$FILTER"\n      - name: Remove old',
-                                                         '        run: true\n      - name: Remove old'))
-        self.assert_problem(self.EXACT, WORKFLOW.replace("        run: cargo llvm-cov clean --workspace\n",
-                                                         "        run: true\n"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace(
+            '          test -n "$filter" || { echo "::error::the gate selection gave this shard no filter"; exit 1; }\n', ''))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("          for tool in cargo cargo-llvm-cov cargo-nextest; do\n",
+                                                         "          for tool in; do\n"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("          cargo llvm-cov clean --workspace\n", ""))
         self.assert_problem(self.EXACT, WORKFLOW.replace("          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n"
-                                                         "        run: cargo llvm-cov",
+                                                         "        run: |\n          set -euo pipefail\n          filter=",
                                                          "          LLVM_PROFILE_FILE_NAME: codeflow-%p.profraw\n"
-                                                         "        run: cargo llvm-cov"))
+                                                         "        run: |\n          set -euo pipefail\n          filter="))
 
     def test_a_shard_set_that_misses_or_exceeds_the_plan_is_refused(self):
         for matrix in ("        shard: [1]\n", "        shard: [1, 2, 3]\n", "        shard: [1, 1]\n"):
