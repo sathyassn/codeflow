@@ -1,0 +1,11 @@
+id = "TSK-1089"
+uid = "fbdf88d6-3fd7-4b2e-a4dd-d0cc743bf8f5"
+kind = "TSK"
+title = "A topic branch that carries only a line's own commits is judged as the line"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T20:00:50Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
