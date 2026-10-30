@@ -1552,6 +1552,69 @@ fn tsk1002_review13_programs_run_where_git_runs_them() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
+/// TSK-1002 Fable review 16: a caret revision is a revision, not a glob
+/// that may name a secret; `fd` hands every path under its roots to the
+/// command it runs, as `find -exec` does; and a zsh array prefix on `cd`
+/// may set `cdpath`, as a `CDPATH=` prefix does.
+#[test]
+fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
+    let f = Fixture::new();
+    let home = f.root.parent().unwrap().to_path_buf();
+    let codex = home.join(".codex");
+    std::fs::create_dir_all(&codex).unwrap();
+    std::fs::write(codex.join("auth.json"), "{}\n").unwrap();
+    std::fs::create_dir_all(f.linked.join("clean")).unwrap();
+    std::fs::write(f.linked.join("clean/notes.md"), "a\n").unwrap();
+    std::fs::create_dir_all(f.linked.join("copies")).unwrap();
+    std::fs::write(f.linked.join("copies/id_rsa"), "inert fixture\n").unwrap();
+    let refused: Vec<String> = [
+        "cat copies/id^",
+        "cat ^README.md",
+        "fd auth ~/.codex -x cat",
+        "fd . ~/.codex -x cat",
+        "fd -t f . ~/.codex --exec cat",
+        "fd . ~/.codex -X cat",
+        "fdfind . ~/.codex -x cat",
+        "fd . --search-path ~/.codex -x cat",
+        "fd -L . clean -x cat",
+        "fd --mystery . clean -x cat",
+        "cd ~ && fd auth -x cat",
+        "cdpath=(~) cd .codex; cat auth.json",
+        "cdpath=($HOME) cd .codex; cat auth.json",
+        "cdpath=(~ /tmp) cd .codex; cat auth.json",
+        "cdpath=(~) pushd .codex; cat auth.json",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let allowed: Vec<String> = [
+        "git log HEAD^",
+        "git log -1 HEAD^",
+        "git show main^",
+        "git show main^ --stat",
+        "git diff main^ main",
+        "git diff HEAD^ -- README.md",
+        "git log main^..main",
+        "git rebase -i HEAD^",
+        "git show HEAD^:README.md",
+        "git log HEAD^^",
+        "git log HEAD^2",
+        "git show HEAD^!",
+        "git log HEAD^@",
+        "git log HEAD~^",
+        "git show main^0",
+        "git checkout HEAD^",
+        "fd . clean -x cat",
+        "fd -e md . clean -x wc -l",
+        "fd notes",
+        "cd clean; cat notes.md",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    assert_pair(&f, &refused, &allowed);
+}
+
 /// TSK-1002 Codex review 07: a Git alias is judged by its expansion, the
 /// way Git prepends its value, so a `--batch` reader or an object path
 /// behind an alias refuses as it does spelled out; a case-insensitive

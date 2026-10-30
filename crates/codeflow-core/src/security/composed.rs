@@ -1622,7 +1622,7 @@ const SHELLS: &[(&str, Dialect)] = &[
 ];
 /// Programs that run the command after their own options, outside the
 /// shell's builtins.
-const LAUNCHERS: &[&str] = &[
+pub(crate) const LAUNCHERS: &[&str] = &[
     "env",
     "nice",
     "nohup",
@@ -1642,7 +1642,7 @@ const LAUNCHERS: &[&str] = &[
     "exec",
 ];
 /// Programs that add arguments of their own to the command they run.
-const SUPPLIERS: &[&str] = &["xargs", "find", "parallel", "watch"];
+pub(crate) const SUPPLIERS: &[&str] = &["xargs", "find", "parallel", "watch"];
 
 /// The identifiers in `text`, in order.
 fn identifiers(text: &str) -> impl Iterator<Item = &str> {

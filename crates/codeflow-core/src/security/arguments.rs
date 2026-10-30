@@ -392,6 +392,7 @@ fn call_dirs(
         before,
         cwd,
         in_dir: true,
+        ..
     }) = &call.supplier
     {
         execdir_dirs(starts, before, cwd.as_deref(), line_dirs, facts.payload_cwd)
@@ -1388,7 +1389,7 @@ fn authority_files(root: &Path) -> Vec<PathBuf> {
 fn supplied_reach(call: &outward::InterpreterCall, facts: &mut Facts<'_>) -> Option<Reach> {
     let supplier = call.supplier.as_ref()?;
     let dir = call.cwd.as_deref();
-    if let outward::Supplier::Find { .. } = supplier {
+    if let outward::Supplier::Find { appends: false, .. } = supplier {
         // `find` hands its paths over as `{}`, or to a shell `-c` string
         // that passes them on as its positional parameters.
         if !call

@@ -40,6 +40,7 @@ pub(crate) mod git_preflight;
 pub(crate) mod guard_forms;
 pub mod headless;
 pub(crate) mod interpreter;
+pub(crate) mod launchers;
 pub(crate) mod outward;
 pub mod pattern;
 pub mod policy;

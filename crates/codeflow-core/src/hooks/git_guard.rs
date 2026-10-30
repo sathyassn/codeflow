@@ -2557,7 +2557,7 @@ fn token_integrity_path_literal(token: &str, cwd: &Path, payload_cwd: &Path) -> 
 pub(crate) fn has_glob(word: &str) -> bool {
     #[cfg(windows)]
     let word = windows_pattern_body(word);
-    word.contains(['*', '?', '[']) || conservative_glob(word)
+    word.contains(['*', '?', '[', '^']) || conservative_glob(word)
 }
 
 /// A verbatim drive's `?` belongs to the Windows namespace marker, not a
@@ -2591,7 +2591,19 @@ fn windows_pattern_body(word: &str) -> &str {
 /// ([`word_readings`]); a Windows short name such as `RUNNER~1` stays a
 /// plain name (TSK-216 round 18).
 fn conservative_glob(word: &str) -> bool {
-    word.contains(['(', ')', '^', '#']) || word.contains("**") || numeric_range(word)
+    word.contains(['(', ')', '#'])
+        || leading_caret(word)
+        || word.contains("**")
+        || numeric_range(word)
+}
+
+/// Whether a zsh `^` negation opens a path component of `word`, where it
+/// may match any name. A `^` after a literal part of its component
+/// (`HEAD^`, `main^2`) matches only names that start with that part, read
+/// by [`shell_pattern`] as that part followed by any text (TSK-1002 Fable
+/// review 16).
+fn leading_caret(word: &str) -> bool {
+    word.split('/').any(|component| component.starts_with('^'))
 }
 
 /// Whether a word holds a zsh numeric range glob: `<`, optional digits,
@@ -2975,8 +2987,18 @@ fn shell_pattern(text: &str) -> glob::Pattern {
                 i = end;
             }
             ']' => out.push_str("[]]"),
+            // A zsh `^` negation or `~` exclusion after a part of its
+            // component matches only names that start with what that part
+            // matches, as does the literal word: that part followed by any
+            // text, to the end of the component (`HEAD^`, `HEAD~^`).
+            '^' | '~' if !out.is_empty() && !out.ends_with('/') => {
+                out.push('*');
+                while chars.get(i + 1).is_some_and(|next| *next != '/') {
+                    i += 1;
+                }
+            }
             // Extended pattern syntax (extglob groups, zsh alternation,
-            // qualifiers, `^`, `#` and `~`) matches every name.
+            // qualifiers, a leading `^`, `#` and `~`) matches every name.
             '(' | ')' | '|' | '^' | '#' | '~' => return every_name(),
             c => out.push(c),
         }
@@ -14018,7 +14040,7 @@ const GNU_PREFIXED: &[&str] = &[
 
 /// The GNU launchers among [`GNU_PREFIXED`]: the programs that run the
 /// command after them.
-const GNU_LAUNCHERS: &[&str] = &[
+pub(crate) const GNU_LAUNCHERS: &[&str] = &[
     "timeout", "nice", "nohup", "stdbuf", "time", "env", "xargs", "find",
 ];
 
@@ -14467,6 +14489,22 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-1002 Fable review 16: a `^` after a literal part of its
+    /// component matches only names that start with that part.
+    #[test]
+    fn a_caret_after_a_literal_part_reads_that_part_as_a_prefix() {
+        assert!(!conservative_glob("HEAD^"));
+        assert!(!conservative_glob("main^2"));
+        assert!(conservative_glob("^README.md"));
+        assert!(conservative_glob("docs/^x"));
+        assert!(has_glob("HEAD^"));
+        assert!(shell_pattern("id^").matches("id_rsa"));
+        assert!(!shell_pattern("HEAD^").matches("id_rsa"));
+        assert!(shell_pattern("HEAD^").matches("HEAD"));
+        assert!(!shell_pattern("HEAD~^").matches("README.md"));
+        assert!(shell_pattern("^x").matches("id_rsa"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn glob_leaf_read_failure_is_not_an_empty_expansion() {

@@ -206,6 +206,9 @@ pub(crate) enum Supplier {
         /// `-execdir` or `-okdir`: the command runs in the directory of
         /// each path `find` visits.
         in_dir: bool,
+        /// `fd -x`/`-X`: the command gets each path even with no `{}`
+        /// placeholder, which `fd` then appends.
+        appends: bool,
     },
 }
 
@@ -1612,6 +1615,7 @@ fn argv(
                         before: rest[..at].to_vec(),
                         cwd: cwd.map(Path::to_path_buf),
                         in_dir: matches!(word.as_str(), "-execdir" | "-okdir"),
+                        appends: false,
                     };
                     let outer = out.supplier.replace(supplier);
                     argv(
@@ -1623,6 +1627,29 @@ fn argv(
                     );
                     out.supplier = outer;
                 }
+            }
+            None
+        }
+        "fd" | "fdfind" => {
+            if let Some(exec) = fd_exec(rest) {
+                let tail = &rest[exec.command.start..];
+                let len = exec.command.len();
+                let supplier = Supplier::Find {
+                    starts: exec.roots,
+                    before: exec.before,
+                    cwd: cwd.map(Path::to_path_buf).filter(|_| !exec.moved),
+                    in_dir: false,
+                    appends: true,
+                };
+                let outer = out.supplier.replace(supplier);
+                argv(
+                    &tail[..len],
+                    pattern_tail(patterns, tail.len()).map(|p| &p[..len]),
+                    cwd,
+                    depth + 1,
+                    out,
+                );
+                out.supplier = outer;
             }
             None
         }
@@ -1670,8 +1697,9 @@ fn argv(
     }
 }
 
-/// The launchers `argv` unwraps, read by their bare name.
-const MODELED_LAUNCHERS: &[&str] = &[
+/// The launchers `argv` unwraps, read by their bare name; inside the
+/// closed list of [`super::launchers`].
+pub(crate) const MODELED_LAUNCHERS: &[&str] = &[
     "env",
     "command",
     "builtin",
@@ -1854,6 +1882,205 @@ fn holds_a_command_line(word: &str) -> bool {
 
 /// The starting points of a `find` call: the words before its expression,
 /// after the `-H`, `-L` and `-P` options, or `.` when there are none.
+/// What `fd` (`fdfind`) hands a command with `-x`/`--exec` or
+/// `-X`/`--exec-batch`.
+struct FdExec {
+    /// The roots it walks, `.` when it names none; an unread form stands
+    /// as `$CODEFLOW_UNREAD_ROOT`, a root the guard cannot establish.
+    roots: Vec<String>,
+    /// `-L` when it follows links.
+    before: Vec<String>,
+    /// Whether `--base-directory` moves it before it walks.
+    moved: bool,
+    /// The command's words in the arguments.
+    command: std::ops::Range<usize>,
+}
+
+/// The options of `fd` 10 that take a value (`fd --help`).
+const FD_VALUED_SHORT: &str = "etEdSojc";
+const FD_VALUED_LONG: &[&str] = &[
+    "--extension",
+    "--type",
+    "--exclude",
+    "--max-depth",
+    "--min-depth",
+    "--exact-depth",
+    "--size",
+    "--changed-within",
+    "--changed-after",
+    "--changed-before",
+    "--change-newer-than",
+    "--change-older-than",
+    "--newer",
+    "--older",
+    "--owner",
+    "--threads",
+    "--max-results",
+    "--color",
+    "--ignore-file",
+    "--format",
+    "--batch-size",
+    "--path-separator",
+    "--and",
+    "--max-buffer-time",
+];
+const FD_FLAGS_SHORT: &str = "HIusigFalLp0q1hV";
+const FD_FLAGS_LONG: &[&str] = &[
+    "--hidden",
+    "--no-hidden",
+    "--no-ignore",
+    "--ignore",
+    "--no-ignore-vcs",
+    "--ignore-vcs",
+    "--no-require-git",
+    "--require-git",
+    "--no-ignore-parent",
+    "--no-global-ignore-file",
+    "--unrestricted",
+    "--case-sensitive",
+    "--ignore-case",
+    "--glob",
+    "--regex",
+    "--fixed-strings",
+    "--absolute-path",
+    "--relative-path",
+    "--list-details",
+    "--follow",
+    "--no-follow",
+    "--full-path",
+    "--print0",
+    "--prune",
+    "--quiet",
+    "--show-errors",
+    "--one-file-system",
+    "--strip-cwd-prefix",
+    "--help",
+    "--version",
+];
+
+/// The command an `fd` call runs on each path it finds, with the roots it
+/// walks (TSK-1002 Fable review 16), read by `fd`'s own grammar: options,
+/// a pattern, then roots, `--search-path` roots included; `-x`, `--exec`,
+/// `-X` or `--exec-batch` takes every word after it up to a `;`. An
+/// option it does not know stands as a root it cannot establish. `None`
+/// when `fd` runs no command.
+#[allow(clippy::too_many_lines)] // One pass of fd's option grammar, long and short forms.
+fn fd_exec(args: &[String]) -> Option<FdExec> {
+    const UNREAD: &str = "$CODEFLOW_UNREAD_ROOT";
+    let mut positionals: Vec<String> = Vec::new();
+    let mut roots = Vec::new();
+    let mut before = Vec::new();
+    let mut moved = false;
+    let mut command = None;
+    let mut unread = false;
+    let mut at = 0;
+    let mut options = true;
+    let start_command = |at: usize| {
+        let end = args[at..]
+            .iter()
+            .position(|word| word == ";")
+            .map_or(args.len(), |end| at + end);
+        at..end
+    };
+    while at < args.len() {
+        let word = args[at].as_str();
+        if !options || !word.starts_with('-') || word == "-" {
+            positionals.push(word.to_string());
+            at += 1;
+            continue;
+        }
+        if word == "--" {
+            options = false;
+            at += 1;
+            continue;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = match long.split_once('=') {
+                Some((name, value)) => (format!("--{name}"), Some(value.to_string())),
+                None => (word.to_string(), None),
+            };
+            match name.as_str() {
+                "--exec" | "--exec-batch" => {
+                    if value.is_some() {
+                        unread = true;
+                        at += 1;
+                        continue;
+                    }
+                    let range = start_command(at + 1);
+                    at = range.end + 1;
+                    command = Some(range);
+                    continue;
+                }
+                "--search-path" | "--base-directory" => {
+                    let value = if let Some(value) = value {
+                        value
+                    } else {
+                        at += 1;
+                        args.get(at).cloned().unwrap_or_else(|| UNREAD.to_string())
+                    };
+                    if name == "--search-path" {
+                        roots.push(value);
+                    } else {
+                        moved = true;
+                    }
+                }
+                "--follow" => before.push("-L".to_string()),
+                _ if FD_VALUED_LONG.contains(&name.as_str()) => {
+                    if value.is_none() {
+                        at += 1;
+                    }
+                }
+                _ if FD_FLAGS_LONG.contains(&name.as_str()) => {}
+                _ => unread = true,
+            }
+            at += 1;
+            continue;
+        }
+        let letters: Vec<char> = word[1..].chars().collect();
+        for (index, letter) in letters.iter().enumerate() {
+            let attached = letters[index + 1..].iter().collect::<String>();
+            if matches!(letter, 'x' | 'X') {
+                if !attached.is_empty() {
+                    unread = true;
+                    break;
+                }
+                let range = start_command(at + 1);
+                at = range.end;
+                command = Some(range);
+                break;
+            }
+            if *letter == 'L' {
+                before.push("-L".to_string());
+            }
+            if FD_VALUED_SHORT.contains(*letter) {
+                if attached.is_empty() {
+                    at += 1;
+                }
+                break;
+            }
+            if !FD_FLAGS_SHORT.contains(*letter) {
+                unread = true;
+                break;
+            }
+        }
+        at += 1;
+    }
+    let command = command?;
+    roots.extend(positionals.into_iter().skip(1));
+    if roots.is_empty() {
+        roots.push(".".to_string());
+    }
+    if unread {
+        roots.push(UNREAD.to_string());
+    }
+    Some(FdExec {
+        roots,
+        before,
+        moved,
+        command,
+    })
+}
+
 fn find_starts(args: &[String]) -> Vec<String> {
     let rest = &args[args
         .iter()
@@ -3268,6 +3495,45 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fd_hands_its_roots_to_the_command_it_runs() {
+        let read = |line: &str| {
+            let words: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+            fd_exec(&words).map(|exec| {
+                (
+                    exec.roots,
+                    exec.before,
+                    exec.moved,
+                    words[exec.command].join(" "),
+                )
+            })
+        };
+        let roots = |roots: &[&str]| roots.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert!(read("auth ~/.codex").is_none());
+        let (found, before, moved, command) = read("auth ~/.codex -x cat").unwrap();
+        assert_eq!(
+            (found, before, moved, command.as_str()),
+            (roots(&["~/.codex"]), vec![], false, "cat")
+        );
+        assert_eq!(read("-t f . ~/.codex --exec cat {} ;").unwrap().3, "cat {}");
+        assert_eq!(read("-X wc -l").unwrap().0, roots(&["."]));
+        assert_eq!(
+            read("--exec-batch cat . ~/.codex").unwrap().3,
+            "cat . ~/.codex"
+        );
+        assert_eq!(
+            read(". --search-path ~/.codex -x cat").unwrap().0,
+            roots(&["~/.codex"])
+        );
+        assert_eq!(read("-L . src -x cat").unwrap().1, vec!["-L".to_string()]);
+        assert!(read("--base-directory /x . -x cat").unwrap().2);
+        assert_eq!(
+            read("--mystery . src -x cat").unwrap().0,
+            roots(&["src", "$CODEFLOW_UNREAD_ROOT"])
+        );
+        assert_eq!(read("-e md . src -x wc -l").unwrap().0, roots(&["src"]));
+    }
+
     /// TSK-1002 review 02, B4: a directory option's `..` after a link is
     /// the parent of the link's target; a missing component before `..`
     /// leaves the directory unknown; without `..` after a name the spelling

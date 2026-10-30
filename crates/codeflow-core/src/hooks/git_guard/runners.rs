@@ -116,6 +116,10 @@ pub(super) fn revision_operand(word: &str) -> bool {
     if word.is_empty() || word.starts_with(['-', '~', '^', ':']) {
         return false;
     }
+    // `REV^!` is the commit without its parents (`git help revisions`).
+    if let Some(base) = word.strip_suffix('!').filter(|base| base.ends_with('^')) {
+        return revision_operand(base);
+    }
     // These are Git revision operators, not arbitrary shell patterns. Keep
     // command substitution, globbing and brace lists out of this exception.
     let mut chars = word.chars().peekable();

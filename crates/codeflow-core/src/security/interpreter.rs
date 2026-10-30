@@ -1765,18 +1765,21 @@ fn find_given_paths(
         starts,
         before,
         cwd,
+        appends,
         ..
     }) = &call.supplier
     else {
         return None;
     };
     // `find` hands its paths over as `{}`, or to a shell `-c` string that
-    // passes them on as its positional parameters.
-    if !call
-        .args
-        .iter()
-        .skip(1)
-        .any(|word| word.contains("{}") || crate::hooks::git_guard::unresolved_word(word))
+    // passes them on as its positional parameters; `fd` hands them over
+    // either way.
+    if !appends
+        && !call
+            .args
+            .iter()
+            .skip(1)
+            .any(|word| word.contains("{}") || crate::hooks::git_guard::unresolved_word(word))
     {
         return None;
     }

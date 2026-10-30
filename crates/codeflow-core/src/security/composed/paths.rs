@@ -2127,8 +2127,14 @@ fn simple(
                 // (TSK-1002 Fable review 15).
                 let mut local = position.clone();
                 apply_prefix_environment(&mut local, &words[..words.len() - args.len() - 1]);
+                // A zsh array prefix (`cdpath=(~) cd .codex`) is not read
+                // as a value, so any array on the command counts as one
+                // that may set `cdpath` (TSK-1002 Fable review 16).
                 let cdpath = local.state.vars.contains_key("CDPATH")
-                    || local.state.vars.contains_key("cdpath");
+                    || local.state.vars.contains_key("cdpath")
+                    || tokens
+                        .iter()
+                        .any(|token| matches!(token, Tok::Array { .. }));
                 change_directory(&mut position, program, args, cdpath);
                 if let Some(real) = physical_destination {
                     if position.state.directory.is_some() {
@@ -3224,6 +3230,11 @@ mod tests {
             // A command-local CDPATH (TSK-1002 Fable review 15).
             "CDPATH=/elsewhere cd docs && probe $PWD",
             "CDPATH=/elsewhere pushd docs && probe $PWD",
+            // A zsh array prefix (TSK-1002 Fable review 16).
+            "cdpath=(/elsewhere) cd docs && probe $PWD",
+            "cdpath=(/elsewhere /other) cd docs && probe $PWD",
+            "cdpath=(/elsewhere) pushd docs && probe $PWD",
+            "CDPATH=(/elsewhere) cd docs && probe $PWD",
         ] {
             assert!(
                 probes(line)
