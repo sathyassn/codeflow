@@ -703,6 +703,21 @@ A program outside this list that moves the command it runs to another
 directory, or hands it paths it finds, is outside the text guard's
 promise; the qualified shell parser (TSK-1073, 4.0.0) owns that residual.
 
+For a recursive deletion (`security.dangerous_commands`), exec-guard reads
+the input and options of `xargs`, `parallel`, `find` and `ls` by each
+tool's grammar. Each grammar is modelled, refused as unproven, or untested,
+in the grammar table in the module documentation of
+`crates/codeflow-core/src/security/deletion.rs`. A native differential
+fixture runs the real tools on disposable files and checks that each
+modelled form removes what the guard judged (TSK-286, issue 102). Among
+the unproven forms: `xargs` input the guard cannot read (a file, or a
+producer it does not run), input longer than one 2048-byte command line,
+`xargs -L`, `-n`, `-E` and `-a`, `find` output framed by blanks or
+newlines (use `-print0` with `xargs -0`), `find -L`, a `find -execdir`
+command naming a relative path other than `{}`, and `parallel`
+replacement strings other than a whole `{}` word or more than one `:::`
+list.
+
 ### Program variables the guards judge
 
 A variable whose value is a program is judged as a command before every

@@ -114,6 +114,58 @@
 //! using it refuses as unproven. The deletions inside a sourced
 //! file, a program in another language, or a function a sourced file
 //! defines are not seen.
+//!
+//! ## Native proof of each tool's grammar
+//!
+//! The reader models how `xargs`, `parallel`, `find` and `ls` read their
+//! input and options. The native differential fixture
+//! (`deletion_native_tests.rs`, TSK-286) runs each tool on disposable
+//! files and compares what it removed with what the guard judged. The
+//! `sed` rows are proven by the script reader's own native fixture in
+//! [`super::sed_script`], which the guards use to name the files a `sed`
+//! script writes. Each grammar is *modelled* (the fixture shows the tool
+//! removes what the guard judged), *unproven* (the guard refuses a
+//! deletion through it, and the fixture shows the refusal) or *untested*
+//! (no fixture row; the guard's reading stands without native proof). A
+//! test fails when a modelled or unproven grammar has no row.
+//!
+//! | Grammar | What it covers | Status |
+//! |---|---|---|
+//! | `xargs-blanks` | default framing: blanks and newlines split, quotes and backslashes quote | modelled |
+//! | `xargs-batch` | every value in one invocation, so `$0`, `$1`, `$2` of a shell command are the values in order | modelled |
+//! | `xargs-batch-size` | input longer than one command line (2048 bytes), which `xargs` splits across invocations | unproven |
+//! | `xargs-null` | `-0`, `--null` | modelled |
+//! | `xargs-delimiter` | `-d`, `--delimiter` (GNU) | modelled |
+//! | `xargs-replace` | `-I`, `-i`, `--replace` with the token as a whole word, one line per invocation | modelled |
+//! | `xargs-replace-partial` | a replacement token inside a longer word, and BSD `-J` | unproven |
+//! | `xargs-run-control` | `-t`, `-r`, `-P`, `--verbose`, `--no-run-if-empty`, `--max-procs` | modelled |
+//! | `xargs-max-lines` | `-L`, `--max-lines` | unproven |
+//! | `xargs-max-args` | `-n`, `--max-args` | unproven |
+//! | `xargs-eof` | `-E`, `--eof` | unproven |
+//! | `xargs-arg-file` | `-a`, `--arg-file` | unproven |
+//! | `xargs-other` | `-s`, `-x`, `-p`, `-o`, `-R`, `-S` and every option not listed above | unproven |
+//! | `xargs-unread-input` | input from a file or a producer the guard does not read | unproven |
+//! | `parallel-args` | one `:::` list of values | modelled |
+//! | `parallel-stdin` | values from the standard input: newline, `-0`, `--null`, `-d` | modelled |
+//! | `parallel-replace` | `{}` as a whole word, and `-I` | modelled |
+//! | `parallel-shell` | the command's words joined and run as shell text, values quoted | modelled |
+//! | `parallel-replacement-strings` | `{.}`, `{/}`, `{//}`, `{#}`, `{1}`, `{= … =}` and every other brace form | unproven |
+//! | `parallel-sources` | a second `:::` list, `::::` files and `:::+` linked lists | unproven |
+//! | `parallel-options` | every option other than `-0`, `--null`, `-d`, `-I`, `-j`, `-P`, `-r`, `-t` | unproven |
+//! | `find-print0` | `find -print0` into `xargs -0`: each value is a start or a path below it | modelled |
+//! | `find-print-blanks` | `find` output framed by blanks, quotes or newlines, which a name below the start may hold | unproven |
+//! | `find-delete` | `-delete`: the start's tree | modelled |
+//! | `find-exec` | `-exec`, `-ok` with `;` or `+`: the command with `{}` as each start | modelled |
+//! | `find-exec-positionals` | a shell given batched paths (`{} +`) that reads `$2` or later, `$#`, `$*` or `shift` | unproven |
+//! | `find-execdir` | `-execdir`, `-okdir`: `{}` as the start's absolute path | modelled |
+//! | `find-execdir-relative` | any other relative path in an `-execdir` command, which runs in each match's directory | unproven |
+//! | `find-follow` | `-L`, `-follow`: the walk leaves its starts through links | unproven |
+//! | `find-other-output` | `-printf`, `-fprint`, `-ls`, `-exec` and the like piped on: output that is not the walk | unproven |
+//! | `ls-names` | `ls DIR` piped on: bare names read from the consumer's directory, judged with `DIR`'s entries | modelled |
+//! | `sed-w` | the files `w`, `W` and `s///w` write, named to the end of the line | modelled |
+//! | `sed-data` | a `w` inside an address, `s` or `y` operands, `a` text, a label or an `r` name, which writes nothing | modelled |
+//! | `unix-backslash` | a backslash in a Unix name is a name character, never a separator | modelled |
+//! | `windows-separators` | `\` as a separator on native Windows, where `/`-rooted paths are already unproven | untested |
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -1886,6 +1938,18 @@ mod why {
     pub const OUTPUT: &str = "the output of a shell command the guard does not resolve";
     pub const ROOTED: &str = "a `/`-rooted path, which names no fixed place on Windows: \
         the shell that runs it picks the root, and a junction can redirect any part of it";
+    pub const INPUT: &str = "`xargs` or `parallel` input the guard cannot read";
+    pub const FRAGMENT: &str = "a path below a `find` start split at blanks, quotes or a \
+        delimiter a name may hold; frame it with `-print0` and `xargs -0`";
+    pub const BATCH: &str = "more `xargs` input than one invocation is proven to hold";
+    pub const FOLLOW: &str = "a `find` walk that follows links out of its start";
+    pub const EXECDIR: &str = "a `find -execdir` command run in each match's directory";
+    pub const POSITIONALS: &str =
+        "a shell given `find`'s batched paths that reads positional parameters past `$1`";
+    pub const PARALLEL_SOURCES: &str =
+        "a `parallel` input source other than one `:::` list or the standard input";
+    pub const PARALLEL_REPLACEMENT: &str =
+        "a `parallel` replacement string other than a whole `{}` word";
 }
 
 /// A value that depends on `reason`, a construct the reader does not model
@@ -4398,6 +4462,12 @@ impl Reader<'_> {
     /// tests (`-name` selects within the tree, it never proves the tree
     /// safe), and each command it runs is judged on its own with `{}` as
     /// each start.
+    ///
+    /// A walk that follows links (`-L`, `-follow`) reaches paths outside
+    /// its starts, so a deletion in it is unproven. An `-execdir` or
+    /// `-okdir` command runs in each match's directory, which the reader
+    /// does not know: `{}` is the start's absolute path there, and any
+    /// other relative path it names is unproven.
     fn judge_find(&mut self, args: &[String], st: &State, ambiguous: bool) {
         let mut at = 0;
         while let Some(arg) = args.get(at) {
@@ -4408,6 +4478,7 @@ impl Reader<'_> {
                 _ => break,
             }
         }
+        let options = &args[..at.min(args.len())];
         let rest = args.get(at..).unwrap_or_default();
         let starts_end = rest
             .iter()
@@ -4418,23 +4489,65 @@ impl Reader<'_> {
         let starts = if starts.is_empty() { &dot[..] } else { starts };
         let bodies = exec_bodies(expression);
         let deletes = expression.iter().any(|a| a == "-delete")
-            || bodies.iter().any(|body| runs_remover(body, 0));
+            || bodies.iter().any(|body| runs_remover(&body.words, 0));
         if deletes {
             self.judge_paths(starts.iter().map(String::as_str), st, ambiguous);
             if self.done() {
                 return;
             }
+            if find_follows(options, expression) {
+                self.report(
+                    Judged::Unproven(Unproven {
+                        reason: why::FOLLOW.into(),
+                        cwd: false,
+                    }),
+                    ambiguous,
+                );
+            }
         }
         for body in bodies {
+            if body.batched && runs_remover(&body.words, 0) && batched_shell(&body.words) {
+                self.report(
+                    Judged::Unproven(Unproven {
+                        reason: why::POSITIONALS.into(),
+                        cwd: false,
+                    }),
+                    ambiguous,
+                );
+            }
             for start in starts {
-                let line: Vec<String> = body.iter().map(|w| w.replace("{}", start)).collect();
-                self.exec(&line, st, None, false, ambiguous);
+                if body.in_match_dir {
+                    let mut there = st.clone();
+                    there.set_cwd([taint(why::EXECDIR)].into());
+                    for cwd in &st.cwd {
+                        let absolute = match resolve(cwd, start) {
+                            Ok(path) if path.starts_with('/') => path,
+                            Ok(path) => self
+                                .absolute(&path)
+                                .and_then(|path| path.to_str().map(str::to_string))
+                                .unwrap_or_else(|| taint(why::EXECDIR)),
+                            Err(reason) => taint(&reason),
+                        };
+                        let line: Vec<String> = body
+                            .words
+                            .iter()
+                            .map(|w| w.replace("{}", &absolute))
+                            .collect();
+                        self.exec(&line, &there, None, false, ambiguous);
+                    }
+                } else {
+                    let line: Vec<String> =
+                        body.words.iter().map(|w| w.replace("{}", start)).collect();
+                    self.exec(&line, st, None, false, ambiguous);
+                }
             }
         }
     }
 
-    /// `xargs CMD`: the command with each input value appended, or put in
-    /// place of its `-I` token, and the command alone.
+    /// `xargs CMD`: the command alone, then the command with every input
+    /// value appended in one invocation, as GNU and BSD `xargs` run input
+    /// that fits one command line; with `-I`, once per line with the line
+    /// in place of its token.
     fn judge_xargs(&mut self, args: &[String], st: &State, input: Option<&Fed>, ambiguous: bool) {
         let options = after_xargs_options(args);
         if self.input_options_unproven(&options, ambiguous) || options.command.is_empty() {
@@ -4442,21 +4555,58 @@ impl Reader<'_> {
         }
         let inner = options.command;
         self.exec(inner, st, None, false, ambiguous);
-        for item in items(input, options.delimiter) {
-            let line: Vec<String> = match &options.replace {
-                Some(token) => inner
+        let entries = input_entries(input, options.delimiter);
+        match &options.replace {
+            Some(token) => {
+                for item in entries {
+                    let line: Vec<String> = inner
+                        .iter()
+                        .map(|word| {
+                            if word == token {
+                                item.value.clone()
+                            } else {
+                                word.clone()
+                            }
+                        })
+                        .collect();
+                    self.exec(&line, st, None, item.tree, ambiguous);
+                }
+            }
+            None if entries.is_empty() => {}
+            None => {
+                // One invocation holds every value only while the line fits
+                // the smallest command-line limit POSIX lets `xargs` use;
+                // past it the values split across invocations, and a
+                // command that reads `$2` sees a different path in each.
+                let size: usize = inner
                     .iter()
-                    .map(|word| {
-                        if word == token {
-                            item.value.clone()
-                        } else {
-                            word.clone()
-                        }
-                    })
-                    .collect(),
-                None => inner.iter().cloned().chain([item.value.clone()]).collect(),
-            };
-            self.exec(&line, st, None, item.tree, ambiguous);
+                    .chain(entries.iter().map(|item| &item.value))
+                    .map(|word| word.len() + 1)
+                    .sum();
+                if size > XARGS_LINE {
+                    // Each value alone still finds a protected one.
+                    for item in &entries {
+                        let line: Vec<String> =
+                            inner.iter().cloned().chain([item.value.clone()]).collect();
+                        self.exec(&line, st, None, item.tree, ambiguous);
+                    }
+                    self.report(
+                        Judged::Unproven(Unproven {
+                            reason: why::BATCH.into(),
+                            cwd: false,
+                        }),
+                        ambiguous,
+                    );
+                    return;
+                }
+                let tree = entries.iter().any(|item| item.tree);
+                let line: Vec<String> = inner
+                    .iter()
+                    .cloned()
+                    .chain(entries.into_iter().map(|item| item.value))
+                    .collect();
+                self.exec(&line, st, None, tree, ambiguous);
+            }
         }
     }
 
@@ -4498,47 +4648,82 @@ impl Reader<'_> {
         let rest = options.command;
         let split = rest
             .iter()
-            .position(|a| a.starts_with(":::"))
+            .position(|a| a.starts_with("::::") || a.starts_with(":::"))
             .unwrap_or(rest.len());
         let (command, sources) = rest.split_at(split);
         options.command = command;
         if self.input_options_unproven(&options, ambiguous) || command.is_empty() {
             return;
         }
-        let mut entries: Vec<Input> = sources
+        let token = options.replace.as_deref().unwrap_or("{}");
+        // One `:::` list is the input; a second list (a product of the
+        // two), `::::` (files) or `:::+` (linked lists) is not modelled.
+        let markers: Vec<&String> = sources.iter().filter(|a| a.starts_with(":::")).collect();
+        let reason = if markers.len() > 1 || markers.iter().any(|m| m.as_str() != ":::") {
+            Some(why::PARALLEL_SOURCES)
+        } else if command
             .iter()
-            .filter(|a| !a.starts_with(":::"))
-            .map(|value| Input {
-                value: value.clone(),
-                tree: false,
-            })
-            .collect();
-        if sources.is_empty() {
-            entries.extend(items(input, options.delimiter));
+            .any(|word| word != token && word.contains('{') && word.contains('}'))
+        {
+            // `{.}`, `{/}`, `{//}`, `{#}`, `{1}`, `{= … =}` and the rest
+            // each take part of a value or something else.
+            Some(why::PARALLEL_REPLACEMENT)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: reason.into(),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+            return;
         }
-        self.exec(command, st, None, false, ambiguous);
+        let entries: Vec<Input> = if sources.is_empty() {
+            input_entries(input, options.delimiter)
+        } else {
+            sources[1..]
+                .iter()
+                .map(|value| Input {
+                    value: value.clone(),
+                    tree: false,
+                })
+                .collect()
+        };
+        // GNU `parallel` joins the command's words with blanks and runs the
+        // line in a shell, with each value quoted in place of `{}` or after
+        // the line; without `-q` the command's own words are shell text.
+        let mut child = st.clone();
+        child.scopes.clear();
+        self.depth += 1;
+        self.child_script(&command.join(" "), &mut child);
         for item in entries {
-            let token = options.replace.as_deref().unwrap_or("{}");
-            let line: Vec<String> = if command.iter().any(|word| word == token) {
+            let quoted = shell_quote(&item.value);
+            let script = if command.iter().any(|word| word == token) {
                 command
                     .iter()
-                    .map(|word| {
-                        if word == token {
-                            item.value.clone()
-                        } else {
-                            word.clone()
-                        }
-                    })
-                    .collect()
+                    .map(|word| if word == token { quoted.as_str() } else { word })
+                    .collect::<Vec<_>>()
+                    .join(" ")
             } else {
-                command
+                format!("{} {quoted}", command.join(" "))
+            };
+            let mut child = st.clone();
+            child.scopes.clear();
+            self.child_script(&script, &mut child);
+            if item.tree {
+                // A remover given a whole `find` tree is judged on it.
+                let line: Vec<String> = command
                     .iter()
                     .cloned()
                     .chain([item.value.clone()])
-                    .collect()
-            };
-            self.exec(&line, st, None, item.tree, ambiguous);
+                    .collect();
+                self.exec(&line, st, None, true, ambiguous);
+            }
         }
+        self.depth -= 1;
     }
 
     /// `rsync --delete…` deletes in its destination, and
@@ -4653,6 +4838,8 @@ impl Reader<'_> {
                     continue;
                 }
             };
+            #[cfg(test)]
+            native::record(&path);
             if self.rooted_unplaced && path.starts_with('/') {
                 // Its spelling, or a name its glob may match, can still
                 // be protected; where it lands cannot be proven.
@@ -4693,6 +4880,8 @@ impl Reader<'_> {
             match self.glob_paths(&path) {
                 Some(paths) => {
                     for candidate in &paths {
+                        #[cfg(test)]
+                        native::record(candidate);
                         let (target, unplaced) = landed(candidate);
                         if let Some(target) = target {
                             return Judged::Protected(target);
@@ -5530,21 +5719,46 @@ impl Reader<'_> {
                                 tree: false,
                             });
                         }
-                        for dir in dirs {
+                        for dir in &dirs {
                             out.push(Input {
                                 value: format!("{}/*", dir.trim_end_matches('/')),
                                 tree: false,
                             });
                         }
+                        // `ls DIR` prints its entries' bare names, which a
+                        // consumer then reads from its own directory.
+                        if !dirs.is_empty() {
+                            out.push(Input {
+                                value: "*".to_string(),
+                                tree: false,
+                            });
+                        }
                     }
                     "find" => {
-                        let starts: Vec<&String> = argv[1..]
+                        let options: Vec<String> = argv[1..]
                             .iter()
-                            .skip_while(|a| matches!(a.as_str(), "-H" | "-L" | "-P"))
+                            .take_while(|a| matches!(a.as_str(), "-H" | "-L" | "-P"))
+                            .cloned()
+                            .collect();
+                        let starts: Vec<&String> = argv[1 + options.len()..]
+                            .iter()
                             .take_while(|a| {
                                 !a.starts_with('-') && !matches!(a.as_str(), "(" | "!" | ",")
                             })
                             .collect();
+                        let expression = &argv[1 + options.len() + starts.len()..];
+                        if expression
+                            .iter()
+                            .any(|a| FIND_OTHER_OUTPUT.contains(&a.as_str()))
+                        {
+                            complete = false;
+                        }
+                        if find_follows(&options, expression) {
+                            out.push(Input {
+                                value: taint(why::FOLLOW),
+                                tree: false,
+                            });
+                        }
                         if starts.is_empty() {
                             out.push(Input {
                                 value: ".".to_string(),
@@ -6366,6 +6580,39 @@ fn items(fed: Option<&Fed>, delimiter: Delimiter) -> Vec<Input> {
         .collect()
 }
 
+/// The bytes of one `xargs` command line the reader holds as a single
+/// invocation: POSIX's smallest `LINE_MAX`, below the default of GNU and
+/// BSD `xargs`.
+const XARGS_LINE: usize = 2048;
+
+/// What `xargs` or `parallel` reads as its values: the framed items, then
+/// an unproven value where the input may hold more than the reader sees,
+/// either from a producer it does not read or from a `find` walk whose
+/// names may hold the delimiter (a blank in a name splits its path, and
+/// the piece after a `/` that follows a blank is an absolute path).
+fn input_entries(fed: Option<&Fed>, delimiter: Delimiter) -> Vec<Input> {
+    let mut entries = items(fed, delimiter);
+    if !fed.is_some_and(|fed| fed.complete) {
+        entries.push(Input {
+            value: taint(why::INPUT),
+            tree: false,
+        });
+    }
+    let nul = matches!(delimiter, Delimiter::Nul | Delimiter::Char('\0'));
+    if !nul && fed.is_some_and(|fed| fed.items.iter().any(|item| item.tree)) {
+        entries.push(Input {
+            value: taint(why::FRAGMENT),
+            tree: false,
+        });
+    }
+    entries
+}
+
+/// `value` as one single-quoted shell word.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
 /// Default xargs quoting. An unfinished quoted input aborts the invocation.
 fn xargs_words(text: &str) -> Vec<String> {
     let mut words = Vec::new();
@@ -6862,28 +7109,104 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
     options
 }
 
+/// A command a `find` expression runs.
+struct ExecBody {
+    words: Vec<String>,
+    /// `-execdir` or `-okdir`: it runs in the directory of each match.
+    in_match_dir: bool,
+    /// Ended by `+`: it gets many matches at once.
+    batched: bool,
+}
+
 /// The commands a `find` expression runs with `-exec`, `-execdir`, `-ok`
 /// or `-okdir`.
-fn exec_bodies(expression: &[String]) -> Vec<Vec<String>> {
+fn exec_bodies(expression: &[String]) -> Vec<ExecBody> {
     let mut bodies = Vec::new();
     let mut at = 0;
     while at < expression.len() {
-        if matches!(
-            expression[at].as_str(),
-            "-exec" | "-execdir" | "-ok" | "-okdir"
-        ) {
+        let primary = expression[at].as_str();
+        if matches!(primary, "-exec" | "-execdir" | "-ok" | "-okdir") {
             let body = &expression[at + 1..];
             let end = body
                 .iter()
                 .position(|a| a == ";" || a == "+")
                 .unwrap_or(body.len());
-            bodies.push(body[..end].to_vec());
+            bodies.push(ExecBody {
+                words: body[..end].to_vec(),
+                in_match_dir: primary.ends_with("dir"),
+                batched: body.get(end).is_some_and(|a| a == "+"),
+            });
             at += end + 2;
         } else {
             at += 1;
         }
     }
     bodies
+}
+
+/// Whether `find`'s options and expression make it follow symbolic links
+/// below its starts: the last of `-H`, `-L` and `-P` is `-L`, or the
+/// expression holds `-follow`.
+fn find_follows(options: &[String], expression: &[String]) -> bool {
+    options.iter().rev().find_map(|a| match a.as_str() {
+        "-L" => Some(true),
+        "-H" | "-P" => Some(false),
+        _ => None,
+    }) == Some(true)
+        || expression.iter().any(|a| a == "-follow")
+}
+
+/// The `find` primaries that print something other than the matched path
+/// on its own line or record, or that write a file: their output is not
+/// the walk the reader lists.
+const FIND_OTHER_OUTPUT: &[&str] = &[
+    "-exec", "-execdir", "-ok", "-okdir", "-printf", "-fprint", "-fprint0", "-fprintf", "-fls",
+    "-ls",
+];
+
+/// Whether a `find -exec … {} +` command is a shell (or `eval`) whose
+/// script reads positional parameters past `$1`.
+fn batched_shell(words: &[String]) -> bool {
+    let Some(run) = unwrap(words) else {
+        return false;
+    };
+    let Some(first) = run.argv.first() else {
+        return false;
+    };
+    let name = program_name(first);
+    if name == "eval" {
+        return true;
+    }
+    crate::hooks::git_guard::is_shell(&name)
+        && shell_script(&run.argv[1..])
+            .is_none_or(|(script, _)| reads_later_positionals(script))
+}
+
+/// Whether a shell script reads a positional parameter past `$1`, their
+/// count, or shifts them: what it does then depends on how many paths a
+/// batched `find -exec … {} +` passes it.
+fn reads_later_positionals(script: &str) -> bool {
+    let chars: Vec<char> = script.chars().collect();
+    chars.iter().enumerate().any(|(at, &c)| {
+        if c != '$' {
+            return false;
+        }
+        let next = chars.get(at + 1).copied();
+        let after = chars.get(at + 2).copied();
+        match next {
+            Some('#' | '*') => true,
+            Some('2'..='9') => true,
+            Some('{') => match after {
+                Some('#' | '*') => true,
+                Some('1') => chars.get(at + 3).is_some_and(char::is_ascii_digit),
+                Some('2'..='9') => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }) || script
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|word| word == "shift")
 }
 
 /// Whether a command removes files: a remover, possibly behind launchers,
@@ -9247,3 +9570,7 @@ mod tests {
         assert!(super::real_prefix(std::path::Path::new("/tmp/cafe/x")).is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "deletion_native_tests.rs"]
+mod native;
