@@ -143,6 +143,7 @@ fn a_task_whose_work_landed_is_listed_as_landed_with_the_command() {
     );
     assert_eq!(find("TSK-002")["state"], "ready");
     let control = find("TSK-002").as_object().unwrap();
+    assert!(control.contains_key("suggested_command"), "{control:?}");
     assert!(control["suggested_command"].is_null(), "{control:?}");
     assert_eq!(
         control["landed_branches"],
