@@ -1,0 +1,11 @@
+id = "TSK-1088"
+uid = "3c17d277-f87e-406a-83f7-bedb7d763583"
+kind = "TSK"
+title = "The update procedure for an adapted project ships as a managed rule"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T15:21:16Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
