@@ -1613,6 +1613,12 @@ fn typed_code_and_boundary_data_are_the_default() {
             ),
         ],
     );
+}
+
+// TSK-1032: cf-develop, cf-stack and cf-reviewer apply the rule.
+#[test]
+fn typed_code_rule_is_applied_by_develop_stack_and_review() {
+    let root = repo_root();
     assert_contains_all(
         &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
         &[
@@ -1676,8 +1682,16 @@ fn typed_code_and_boundary_data_are_the_default() {
             ),
         ],
     );
-    // The wording that steered agents away from strict typing is gone from
-    // every one of the four texts.
+}
+
+// TSK-1032: the wording that steered agents away from strict typing is gone
+// from every one of the four texts.
+#[test]
+fn typed_code_texts_drop_the_retired_wording() {
+    let root = repo_root();
+    let rule = root.join(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+    );
     for (path, retired) in [
         (&rule, "language migrations merely to satisfy this rule"),
         (&rule, "where they prevent material errors"),
