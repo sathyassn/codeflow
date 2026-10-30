@@ -1,0 +1,11 @@
+id = "ADR-0089"
+uid = "20e233dc-ef8f-403f-b8e4-d046ce597ab6"
+kind = "ADR"
+title = "Local gate runs earn no selection credit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-30T15:34:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
