@@ -93,6 +93,21 @@ pub fn run(args: &HookArgs) -> i32 {
         );
         return 2;
     }
+    let guard = match args.name {
+        HookName::GitGuard => Some("git-guard"),
+        HookName::ExecGuard => Some("exec-guard"),
+        HookName::EditGuard => Some("edit-guard"),
+        _ => None,
+    };
+    if let Some(guard) = guard {
+        if let Err(error) = arm_guard_deadline(guard) {
+            eprintln!(
+                "codeflow {guard}: cannot start the guard's deadline ({error}); refusing",
+                error = shown(&error)
+            );
+            return 2;
+        }
+    }
     let stdin = if matches!(args.name, HookName::DelegateTurn) && args.state_dir.is_some() {
         match read_bounded_utf8(std::io::stdin(), MAX_SCHEMA_HOOK_INPUT_BYTES) {
             Ok(stdin) => stdin,
@@ -125,6 +140,79 @@ pub fn run(args: &HookArgs) -> i32 {
         HookName::SessionSummary => session_summary(&stdin),
         HookName::DelegateTurn => delegate_turn(args, &stdin),
     }
+}
+
+/// Refuse on the guard's own clock (TSK-1082). A harness that times a
+/// guard out lets the tool call through in Grok and Codex, and in Claude
+/// without `onFailure`, so a guard that has not decided within
+/// [`GUARD_DEADLINE_SECS`](codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS),
+/// inside the shipped hook timeout, ends its own process with exit 2 and a
+/// reason on stderr, which every harness reads as a block. The thread
+/// starts before the payload is read, so a stalled stdin counts too; a
+/// guard that decides in time exits first and the thread dies with it.
+fn arm_guard_deadline(guard: &'static str) -> std::io::Result<()> {
+    use codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS;
+    std::thread::Builder::new()
+        .name("guard-deadline".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(GUARD_DEADLINE_SECS));
+            let finding = codeflow_core::remedy::Finding::new(
+                format!(
+                    "BLOCKED: the guard reached no decision within {GUARD_DEADLINE_SECS} seconds, so it cannot show the call is allowed; refusing"
+                ),
+                codeflow_core::remedy::GUARD_DEADLINE.remedy(),
+            );
+            let line = format!("{}\n", finding.line(&format!("codeflow {guard}"), "error"));
+            // The reason goes out without std's stderr lock, which the main
+            // thread may hold, and the exit never waits on it for longer than
+            // REFUSAL_WRITE_WAIT: a stderr pipe nobody reads blocks a raw
+            // write too, and the exit has to come first.
+            write_within(line.into_bytes(), REFUSAL_WRITE_WAIT, |bytes| {
+                let _ = write_stderr_unlocked(bytes);
+            });
+            std::process::exit(2);
+        })
+        .map(drop)
+}
+
+/// How long the deadline's refusal waits for its reason to be written
+/// before it exits 2 regardless.
+const REFUSAL_WRITE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Run `write` on its own thread and wait at most `wait` for it to finish;
+/// whether it finished in time. A write that blocks keeps its thread, which
+/// the process exit ends.
+fn write_within(
+    bytes: Vec<u8>,
+    wait: std::time::Duration,
+    write: impl FnOnce(&[u8]) + Send + 'static,
+) -> bool {
+    let (done, finished) = std::sync::mpsc::channel();
+    let started = std::thread::Builder::new()
+        .name("guard-deadline-write".into())
+        .spawn(move || {
+            write(&bytes);
+            let _ = done.send(());
+        });
+    started.is_ok() && finished.recv_timeout(wait).is_ok()
+}
+
+/// Write to the process's stderr through a duplicate of its descriptor or
+/// handle, which never takes the lock `std::io::stderr()` writes hold.
+fn write_stderr_unlocked(bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let owned = {
+        use std::os::fd::AsFd as _;
+        std::io::stderr().as_fd().try_clone_to_owned()?
+    };
+    #[cfg(windows)]
+    let owned = {
+        use std::os::windows::io::AsHandle as _;
+        std::io::stderr().as_handle().try_clone_to_owned()?
+    };
+    let mut file = std::fs::File::from(owned);
+    file.write_all(bytes)?;
+    file.flush()
 }
 
 /// The advisory entry: dispatch on the payload's event. Output writes do not
@@ -751,6 +839,40 @@ fn session_summary(stdin: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-1082 review nit 3: the deadline's reason is written without the
+    /// lock `std::io::stderr()` holds, so a main thread holding that lock
+    /// cannot keep the refusal from being written.
+    #[test]
+    fn the_deadline_writes_its_reason_while_another_thread_holds_the_stderr_lock() {
+        let held = std::io::stderr().lock();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let written = super::write_stderr_unlocked(
+                b"codeflow guard-deadline test: written past a held stderr lock\n",
+            );
+            let _ = done.send(written.is_ok());
+        });
+        let result = finished.recv_timeout(std::time::Duration::from_secs(10));
+        drop(held);
+        assert_eq!(result, Ok(true));
+    }
+
+    /// TSK-1082 review nit 3: a write that never finishes, such as one to a
+    /// stderr pipe nobody reads, holds the exit back by at most the wait.
+    #[test]
+    fn a_write_that_never_finishes_holds_the_exit_back_only_for_the_wait() {
+        let (_never, blocked) = std::sync::mpsc::channel::<()>();
+        let blocked = std::sync::Mutex::new(blocked);
+        let wait = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let finished = super::write_within(b"x".to_vec(), wait, move |_| {
+            let _ = blocked.lock().unwrap().recv();
+        });
+        assert!(!finished);
+        assert!(started.elapsed() < wait + std::time::Duration::from_secs(5));
+        assert!(super::write_within(b"x".to_vec(), wait, |_| {}));
+    }
+
     #[test]
     fn r16_guard_payload_parse_errors_refuse() {
         assert_eq!(super::git_guard("{"), 2);
