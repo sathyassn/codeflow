@@ -319,7 +319,14 @@ mod starter_adr_tests {
     #[test]
     fn the_starter_adr_is_reserved_once_for_its_uid() {
         let dir = tempfile::tempdir().unwrap();
-        crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"# project\n")]);
+        let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"# project\n")]);
+        // The registry commit needs a Git identity, as `new` does. Hosted
+        // runners have none and cannot guess one, so the repository names it.
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "adopter").unwrap();
+        config
+            .set_str("user.email", "adopter@example.test")
+            .unwrap();
         let uid = crate::ids::new_uid();
         starter(dir.path(), &uid);
         let note = reserve_initial_stack_adr(dir.path()).unwrap();
