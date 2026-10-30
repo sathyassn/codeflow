@@ -5202,22 +5202,31 @@ fn node_test_fixtures_import_shipped_files_and_name_their_tests() {
         let Some(script) = package["scripts"]["test"].as_str() else {
             continue;
         };
-        let Some(pattern) = script.strip_prefix("node --test") else {
+        let Some(arguments) = script.strip_prefix("node --test") else {
             continue;
         };
         let overlay = fixture_overlay(id);
-        let (prefix, suffix) = pattern
-            .trim()
-            .split_once('*')
-            .unwrap_or_else(|| panic!("{id}: `{script}` names no test files"));
-        assert!(
-            overlay
-                .keys()
-                .any(|path| path.len() > prefix.len() + suffix.len()
-                    && path.starts_with(prefix)
-                    && path.ends_with(suffix)),
-            "{id}: `{script}` matches no fixture file"
-        );
+        // Each test argument is a file the fixture ships or a `*` pattern
+        // that matches one; options are not test files.
+        let tests: Vec<&str> = arguments
+            .split_whitespace()
+            .filter(|argument| !argument.starts_with('-'))
+            .collect();
+        assert!(!tests.is_empty(), "{id}: `{script}` names no test files");
+        for test in tests {
+            let found = match test.split_once('*') {
+                Some((prefix, suffix)) => overlay.keys().any(|path| {
+                    path.len() > prefix.len() + suffix.len()
+                        && path.starts_with(prefix)
+                        && path.ends_with(suffix)
+                }),
+                None => overlay.contains_key(test),
+            };
+            assert!(
+                found,
+                "{id}: `{test}` in `{script}` matches no fixture file"
+            );
+        }
         for (path, body) in &overlay {
             if ![".ts", ".mts", ".js", ".mjs"]
                 .iter()
