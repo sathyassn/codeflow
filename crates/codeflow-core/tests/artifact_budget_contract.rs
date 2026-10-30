@@ -1707,7 +1707,10 @@ fn typed_code_texts_drop_the_retired_wording() {
     for (path, retired) in [
         (&rule, "language migrations merely to satisfy this rule"),
         (&rule, "where they prevent material errors"),
-        (&rule, "TypeScript is the default for new projects and new files"),
+        (
+            &rule,
+            "TypeScript is the default for new projects and new files",
+        ),
         (&rule, "schemas for Rego `input` and `data`"),
         (
             &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
