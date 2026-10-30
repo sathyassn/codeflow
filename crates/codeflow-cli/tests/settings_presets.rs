@@ -575,8 +575,9 @@ fn sandbox_reallows_only_immutable_plugin_code_under_claude_state() {
 /// The extra sandbox write roots, so an agent can run these commands without
 /// a sandbox bypass: the per-user state directory `codeflow present` needs
 /// (macOS, then Linux without `XDG_STATE_HOME`), whose runtime match
-/// `present_cli` proves, and the two `CodeFlow` home directories a full gate
-/// writes (TSK-216): its machine-wide lock and its durable evidence. The rest
+/// `present_cli` proves. With them the presets grant the `CodeFlow` home's
+/// machine-wide lock directory (TSK-216), and never its durable evidence
+/// directory (TSK-1044 AC-4: full gates run outside the sandbox). The rest
 /// of the home, which holds qualification and binding state, stays out.
 const PRESENT_STATE_WRITE_ROOTS: [&str; 2] = [
     "~/Library/Application Support/codeflow/present",
