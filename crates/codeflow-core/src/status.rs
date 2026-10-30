@@ -781,7 +781,7 @@ fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
     for entry in backlog.in_state(State::Landed) {
         let _ = writeln!(
             out,
-            "  landed: {} {} ({}; run `{}`)",
+            "  landed task: {} {} ({}; run `{}`)",
             entry.task_id,
             crate::git::display_message(&entry.title),
             shown_branches(&entry.landed_branches),

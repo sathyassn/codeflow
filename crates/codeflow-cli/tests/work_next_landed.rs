@@ -124,7 +124,7 @@ fn a_task_whose_work_landed_is_listed_as_landed_with_the_command() {
 
     let status = succeeds(&cli(root, &["status"]));
     assert!(
-        status.contains("landed: TSK-001")
+        status.contains("landed task: TSK-001")
             && status.contains("codeflow task status TSK-001 complete"),
         "{status}"
     );
@@ -142,7 +142,13 @@ fn a_task_whose_work_landed_is_listed_as_landed_with_the_command() {
         "codeflow task status TSK-001 complete"
     );
     assert_eq!(find("TSK-002")["state"], "ready");
-    assert!(find("TSK-002")["suggested_command"].is_null());
+    let control = find("TSK-002").as_object().unwrap();
+    assert!(control["suggested_command"].is_null(), "{control:?}");
+    assert_eq!(
+        control["landed_branches"],
+        serde_json::json!([]),
+        "{control:?}"
+    );
 }
 
 #[test]

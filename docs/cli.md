@@ -589,7 +589,11 @@ Claims count local branches and branches on `origin`, on the target's fetch
 remote, and on any remotes in `git.claim_remotes` (empty by default). Branches on
 other remotes appear as information in `work next` and `work claim`; they neither
 make a task active nor create a conflict. `work next --json` keeps these in
-`informational_branches`, separate from the claim `branches`. Claim lists
+`informational_branches`, separate from the claim `branches`. Each task in
+`work next --json` carries its `state`; a `landed` task also carries
+`landed_branches` (the branches whose work reached the target) and
+`suggested_command` (the `codeflow task status` command that settles its
+record), and the two are an empty list and null on any other task. Claim lists
 its remotes live, so a narrow fetch cannot hide work.
 
 `codeflow follow` is described in the
