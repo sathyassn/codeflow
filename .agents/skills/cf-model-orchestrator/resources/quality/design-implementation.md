@@ -22,8 +22,11 @@ under-design and is `changes_requested`, even when the smaller diff passes;
 so is an unmarked shortcut (the discipline rules' shortcut rule).
 
 Typed code and typed boundary data are the default. New and changed code
-is fully typed: every function, method and data shape has types the
-project's type checker verifies. Every escape type or suppression (`any`,
+is fully typed: in a language with a type checker, every function, method
+and data shape has types that checker verifies. Shell has none: run
+ShellCheck, parse arguments explicitly and refuse unknown ones, and pass
+structured data to a typed language or check it against its JSON Schema
+before use. Every escape type or suppression (`any`,
 `Any`, `object` or `interface{}` used to skip a type, an unchecked cast,
 `# type: ignore`, `@ts-expect-error`, `# noqa`, `//nolint`, a ShellCheck
 `disable`, or an equivalent) carries its reason inline, on its line or the
@@ -39,9 +42,12 @@ describes a shape and accepts any value at run time. Parse with the
 typed-model library that is standard for the language, whether or not it
 ships with the language: Pydantic models in Python, zod schemas in
 TypeScript and checked JavaScript, serde types in Rust, structs decoded
-with unknown fields refused plus a validator in Go, a `type` and a
-`validation` block on each OpenTofu variable, and schemas for Rego `input`
-and `data`. Where a JSON Schema exists, generate the types from it. Handle
+with unknown fields refused plus a validator in Go, and a `type` and a
+`validation` block on each OpenTofu variable. In Rego, a rule checks
+`input` with `json.match_schema` and refuses on its errors, or the caller
+validates the document before the query; a schema given through
+`--schema` or a METADATA annotation checks the policy's references
+statically and validates nothing at run time. Where a JSON Schema exists, generate the types from it. Handle
 and test invalid, absent and unexpected values. Keep one model per shape
 and reuse it wherever that shape is read; a value already parsed into a
 model is trusted and is not validated again. Proportionality decides how
@@ -49,8 +55,10 @@ many fields and checks a boundary model holds, never whether boundary data
 is parsed or code is typed; add no wrapper layers or duplicate domain
 models for this rule.
 
-TypeScript is the default for new projects and new files. An existing
-JavaScript codebase is type-checked in place instead of rewritten: `tsc`
+A new project or new file that would otherwise be JavaScript is
+TypeScript. An existing JavaScript codebase is type-checked in place
+instead of rewritten, new files included where the project keeps them in
+JavaScript: `tsc`
 with `checkJs` (or `// @ts-check` file by file) and JSDoc types on every
 new or changed function and data shape. Adding the project's type checker,
 linter and typed-model library is in scope for the change that needs them.

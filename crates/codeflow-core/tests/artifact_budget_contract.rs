@@ -1587,7 +1587,18 @@ fn typed_code_and_boundary_data_are_the_default() {
             ("rust library", "serde types in Rust"),
             ("go library", "plus a validator in Go"),
             ("opentofu", "`validation` block on each OpenTofu variable"),
-            ("rego", "schemas for Rego `input` and `data`"),
+            (
+                "rego at run time",
+                "In Rego, a rule checks `input` with `json.match_schema` and refuses on its errors",
+            ),
+            (
+                "rego schema is static",
+                "checks the policy's references statically and validates nothing at run time",
+            ),
+            (
+                "shell route",
+                "Shell has none: run ShellCheck, parse arguments explicitly and refuse unknown ones",
+            ),
             ("generated types", "Where a JSON Schema exists, generate the types from it."),
             ("invalid input tested", "Handle and test invalid, absent and unexpected values."),
             (
@@ -1596,7 +1607,7 @@ fn typed_code_and_boundary_data_are_the_default() {
             ),
             (
                 "typescript default",
-                "TypeScript is the default for new projects and new files.",
+                "A new project or new file that would otherwise be JavaScript is TypeScript.",
             ),
             (
                 "javascript in place",
@@ -1647,8 +1658,9 @@ fn typed_code_rule_is_applied_by_develop_stack_and_review() {
             ("typed-model library", "add the typed-model library"),
             (
                 "typescript for new projects",
-                "A new project starts in TypeScript where it would use JavaScript",
+                "A new project or new file that would otherwise be JavaScript is TypeScript",
             ),
+            ("shell", "For shell, wire ShellCheck."),
             (
                 "javascript in place",
                 "checked in place with `checkJs` and JSDoc types",
@@ -1695,6 +1707,8 @@ fn typed_code_texts_drop_the_retired_wording() {
     for (path, retired) in [
         (&rule, "language migrations merely to satisfy this rule"),
         (&rule, "where they prevent material errors"),
+        (&rule, "TypeScript is the default for new projects and new files"),
+        (&rule, "schemas for Rego `input` and `data`"),
         (
             &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
             "force a stricter compiler",
