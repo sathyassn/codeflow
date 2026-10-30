@@ -103,6 +103,7 @@
     "privilege_escalation": "block",
     "headless_peer_runs": "block",
     "secret_reads": "block",
-    "outward_actions": "block"
+    "outward_actions": "block",
+    "text_guard": "relaxed"
   }
 }
