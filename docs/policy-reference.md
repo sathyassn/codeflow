@@ -889,7 +889,7 @@ The flags:
   the administrator role (`RepositoryRole` 5) updates the default branch.
   `independent-review` needs one approval, dismisses stale approvals,
   requires the last push to be approved by someone else, and lets only the
-  maintain role (`RepositoryRole` 2) update it.
+  maintain role (`RepositoryRole` 2) and the roles above it update it.
 - **`--check-app <id>`**: Mode A, where B requires the `authority:` names
   pinned to that GitHub App. Without it, Mode B: B requires the `trusted:`
   names pinned to GitHub Actions (15368). GitHub Actions' own id is
@@ -897,9 +897,11 @@ The flags:
 - **`--lines <pattern>`**: the pattern C targets, below `refs/heads/`;
   default `integration/**`.
 
-The role ids are not in GitHub's REST reference. They are the values the
-API is reported to use, and the hosted fixture confirms them before the
-operator relies on them (TSK-1080 Findings).
+The role ids are not in GitHub's REST reference. They were read from a
+scratch repository on 2026-10-30: 2 is maintain, 4 write and 5 admin, and
+an administrator can bypass a rule that names the maintain role (TSK-1080
+Findings). A bypass actor merges into the default branch with `gh pr merge
+--admin`.
 
 - **What B and C require.** B: the `trusted:` names (Mode B) or the matching
   `authority:` names (Mode A), plus `codeflow gates`, `security review` and
