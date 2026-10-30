@@ -1157,17 +1157,11 @@ fn an_unprovable_history_is_not_an_initial_adoption() {
     let (dir, root) = adoption_repo();
     adoption_commit(&root, "src/lib.rs", Some("// one\n"), "feat: one");
     let shallow = dir.path().join("shallow");
-    git_in(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "--depth",
-            "1",
-            &format!("file://{}", root.display()),
-            shallow.to_str().unwrap(),
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), &root, &shallow)
+        .depth(1)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let tip = Oid::from_str(&git_in(&shallow, &["rev-parse", "HEAD"])).unwrap();
     let error = adoption_scope(&shallow, tip, "task/TSK-001-x").unwrap_err();
     assert!(

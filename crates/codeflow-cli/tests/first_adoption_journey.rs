@@ -128,15 +128,14 @@ fn origin_with(dir: &Path, seed: impl FnOnce(&Path)) -> PathBuf {
     dir.join("origin.git")
 }
 
-/// Clone `origin` (with `clone_args`), adopt `CodeFlow` at the full tier on a
-/// task branch with its adoption task planned and started, and commit it.
-fn adopt(dir: &Path, origin: &Path, clone_args: &[&str]) -> PathBuf {
+/// Clone `origin`, adopt `CodeFlow` at the full tier on a task branch with
+/// its adoption task planned and started, and commit it.
+fn adopt(dir: &Path, origin: &Path) -> PathBuf {
     let root = dir.join("proj");
-    let url = format!("file://{}", origin.display());
-    let mut args = vec!["clone", "-q"];
-    args.extend(clone_args);
-    args.extend([url.as_str(), "proj"]);
-    git(dir, &args);
+    codeflow_fixture::clone(dir, origin, "proj")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     ok(
         &codeflow(&root, &["init", "--yes", "--full"]),
         "init --full",
@@ -208,7 +207,7 @@ fn a_first_adoption_pushes_and_completes_in_its_own_pull_request() {
     let dir = tempfile::tempdir().unwrap();
     let origin = origin_with(dir.path(), |_| {});
     let initial = git(&origin, &["rev-parse", "main"]);
-    let root = adopt(dir.path(), &origin, &[]);
+    let root = adopt(dir.path(), &origin);
 
     // Ordinary pre-push: the task branch is judged and goes through.
     let (pushed, said) = push(&root);
@@ -296,7 +295,7 @@ fn a_removed_default_branch_policy_still_refuses_the_adoption_push() {
         std::fs::remove_file(seeding.join(".codeflow/policy.json")).unwrap();
         commit(seeding, "chore: drop the policy");
     });
-    let root = adopt(dir.path(), &origin, &[]);
+    let root = adopt(dir.path(), &origin);
     let (pushed, said) = push(&root);
     assert!(
         !pushed,
@@ -319,7 +318,7 @@ fn an_unreadable_default_branch_history_still_refuses_the_adoption_push() {
     });
     // The adoption is planned in a full clone (the id registry needs its
     // history), then the clone is cut at the default branch's tip.
-    let root = adopt(dir.path(), &origin, &[]);
+    let root = adopt(dir.path(), &origin);
     git(&root, &["fetch", "-q", "--depth", "1", "origin", "main"]);
     assert_eq!(
         git(&root, &["rev-parse", "--is-shallow-repository"]),
