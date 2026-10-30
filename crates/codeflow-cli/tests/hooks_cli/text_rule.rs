@@ -334,6 +334,13 @@ fn a_link_mode_policy_entry_is_unreadable() {
     );
 }
 
+#[cfg(unix)]
+#[allow(dead_code)]
+#[path = "../support/drain_pipe.rs"]
+mod drain_pipe;
+#[cfg(unix)]
+use drain_pipe::drain_pipe;
+
 /// [`exec_guard`], failing the test if the hook has not answered within a
 /// deadline instead of waiting on it.
 #[cfg(unix)]
@@ -359,10 +366,16 @@ fn exec_guard_within(root: &Path, command: &str) -> Output {
         .unwrap()
         .write_all(payload.to_string().as_bytes())
         .unwrap();
+    let stdout = drain_pipe(child.stdout.take());
+    let stderr = drain_pipe(child.stderr.take());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
-        if child.try_wait().unwrap().is_some() {
-            return child.wait_with_output().unwrap();
+        if let Some(status) = child.try_wait().unwrap() {
+            return Output {
+                status,
+                stdout: stdout.join().unwrap(),
+                stderr: stderr.join().unwrap(),
+            };
         }
         if std::time::Instant::now() > deadline {
             let _ = child.kill();
