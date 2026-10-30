@@ -2286,3 +2286,47 @@ fn r22_prepare_branch_uses_remote_when_default_is_absent() {
         BranchStep::Created { .. }
     ));
 }
+
+/// TSK-286 AC-4 (issue 102): on Unix a backslash is a name character, so
+/// native git registers a submodule at `a\b` as that exact name. The
+/// registered `a\b` is not the unregistered nested repository at `a/b`:
+/// the walk reports `a/b`, skips the submodule, and the gitlink `a\b` is
+/// registered, not stray.
+#[cfg(unix)]
+#[test]
+fn a_backslash_in_a_submodule_path_is_a_name_character_on_unix() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = repo_with_commit(&dir.path().join("lib"));
+    let root = repo_with_commit(&dir.path().join("u"));
+    git(
+        &root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "--quiet",
+            lib.to_str().unwrap(),
+            r"a\b",
+        ],
+    );
+    git(&root, &["commit", "--quiet", "-m", "add submodule"]);
+    assert_eq!(
+        git(
+            &root,
+            &["config", "-f", ".gitmodules", "--get-regexp", "path"]
+        ),
+        r"submodule.a\b.path a\b"
+    );
+    repo_with_commit(&root.join("a").join("b"));
+    let repo = git2::Repository::open(&root).unwrap();
+    let subs = submodule_paths(&repo).unwrap();
+    assert_eq!(subs, [GitName::from_text(r"a\b")].into());
+    assert!(stray_gitlinks(&repo, &subs).is_empty());
+    let nested: Vec<String> = nested_repositories(&repo)
+        .unwrap()
+        .iter()
+        .map(|found| found.path.clone())
+        .collect();
+    assert_eq!(nested, ["a/b"]);
+}

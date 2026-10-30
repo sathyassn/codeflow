@@ -911,7 +911,9 @@ fn submodule_paths(repo: &git2::Repository) -> Result<BTreeSet<GitName>, String>
     while let Some(entry) = entries.next() {
         let entry = entry.map_err(|error| format!("cannot read submodule path: {error}"))?;
         // OS text rule (issue 79): a registered path is kept as its exact
-        // bytes, so it is compared with an index path byte for byte.
+        // bytes, so it is compared with an index path byte for byte. On
+        // Unix a backslash is a name character, so `a\b` and `a/b` are two
+        // paths (TSK-286); only Windows reads it as a separator.
         {
             let mut value = entry.value_bytes();
             while let Some(trimmed) = value.strip_suffix(b"/") {
@@ -919,7 +921,13 @@ fn submodule_paths(repo: &git2::Repository) -> Result<BTreeSet<GitName>, String>
             }
             let value: Vec<u8> = value
                 .iter()
-                .map(|byte| if *byte == b'\\' { b'/' } else { *byte })
+                .map(|byte| {
+                    if cfg!(windows) && *byte == b'\\' {
+                        b'/'
+                    } else {
+                        *byte
+                    }
+                })
                 .collect();
             paths.insert(GitName::from_vec(value));
         }

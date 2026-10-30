@@ -211,20 +211,26 @@ fn copies_on_refs(git: &Git) -> Result<BTreeMap<RegId, Vec<Found>>, IdsError> {
     let mut found: BTreeMap<RegId, Vec<Found>> = BTreeMap::new();
     let mut intro_cache: HashMap<String, BTreeMap<RegId, String>> = HashMap::new();
     let mut uid_cache: HashMap<String, Vec<inventory::Copy>> = HashMap::new();
+    let remotes = inventory::remote_names(git)?;
     let mut refs = inventory::code_refs(git)?;
     // Landing lines first, so a record's introduction is read from the line
     // it landed on when several refs hold it.
-    refs.sort_by_key(|(name, _)| (!is_landing_branch(branch_name(name)), name.clone()));
+    refs.sort_by_key(|(name, _)| {
+        (
+            !is_landing_branch(branch_name(name, &remotes)),
+            name.clone(),
+        )
+    });
     for (refname, sha) in &refs {
         if !intro_cache.contains_key(sha) {
             intro_cache.insert(sha.clone(), inventory::introductions(git, sha)?);
             uid_cache.insert(sha.clone(), inventory::copies_at(git, sha)?);
         }
-        let landing = is_landing_branch(branch_name(refname));
+        let landing = is_landing_branch(branch_name(refname, &remotes));
         for (id, intro) in &intro_cache[sha] {
             let copy = uid_cache[sha].iter().find(|copy| &copy.id == id);
             found.entry(id.clone()).or_default().push(Found {
-                refname: branch_name(refname).to_string(),
+                refname: branch_name(refname, &remotes).to_string(),
                 intro: intro.clone(),
                 landing,
                 at_tip: copy.is_some(),
@@ -548,8 +554,9 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
             "{from} has no uid; run `codeflow ids backfill` first"
         ))
     })?;
+    let remotes = inventory::remote_names(&git)?;
     for (refname, sha) in inventory::code_refs(&git)? {
-        if !is_landing_branch(branch_name(&refname)) {
+        if !is_landing_branch(branch_name(&refname, &remotes)) {
             continue;
         }
         if inventory::copies_at(&git, &sha)?
@@ -558,7 +565,7 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         {
             return Err(IdsError::Invalid(format!(
                 "{from} has landed on {}; a landed record is never renumbered",
-                branch_name(&refname)
+                branch_name(&refname, &remotes)
             )));
         }
     }

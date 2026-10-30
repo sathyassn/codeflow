@@ -28,15 +28,46 @@ pub struct RefRecords {
 
 /// The branch name a ref stands for: `main` for `refs/heads/main` and for
 /// `refs/remotes/origin/main`.
+///
+/// A remote's name may hold a slash, so a remote-tracking ref is split at
+/// the longest configured remote name it starts with (`remotes`, from
+/// [`remote_names`]): `refs/remotes/team/a/main` is branch `main` of the
+/// remote `team/a`. A ref under no configured remote splits at its first
+/// slash, the default fetch layout (TSK-286, issue 102).
 #[must_use]
-pub fn branch_name(refname: &str) -> &str {
+pub fn branch_name<'r>(refname: &'r str, remotes: &[String]) -> &'r str {
     if let Some(name) = refname.strip_prefix("refs/heads/") {
         return name;
     }
-    refname
-        .strip_prefix("refs/remotes/")
-        .and_then(|rest| rest.split_once('/'))
-        .map_or(refname, |(_, name)| name)
+    let Some(rest) = refname.strip_prefix("refs/remotes/") else {
+        return refname;
+    };
+    remotes
+        .iter()
+        .filter_map(|remote| {
+            rest.strip_prefix(remote.as_str())?
+                .strip_prefix('/')
+                .map(|name| (remote.len(), name))
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, name)| name)
+        .or_else(|| rest.split_once('/').map(|(_, name)| name))
+        .unwrap_or(refname)
+}
+
+/// The configured remote names, as `git remote` lists them.
+///
+/// # Errors
+///
+/// Returns an error when git fails.
+pub fn remote_names(git: &Git) -> Result<Vec<String>, IdsError> {
+    Ok(git
+        .run(&["remote"])?
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// Whether a branch is a landing line: `main`, `master` or `integration/*`.
@@ -52,10 +83,11 @@ pub fn is_landing_branch(name: &str) -> bool {
 ///
 /// Returns an error when git fails.
 pub fn code_refs(git: &Git) -> Result<Vec<(String, String)>, IdsError> {
+    let remotes = remote_names(git)?;
     Ok(git
         .branch_refs()?
         .into_iter()
-        .filter(|(name, _)| branch_name(name) != REGISTRY_BRANCH)
+        .filter(|(name, _)| branch_name(name, &remotes) != REGISTRY_BRANCH)
         .collect())
 }
 
@@ -523,8 +555,9 @@ pub fn landed_for(git: &Git, id: &RegId, intro: &str) -> Result<Option<String>, 
 /// Returns an error when git fails.
 pub(crate) fn landing_tips(git: &Git) -> Result<Vec<String>, IdsError> {
     let mut tips: Vec<String> = Vec::new();
+    let remotes = remote_names(git)?;
     for (name, sha) in code_refs(git)? {
-        if is_landing_branch(branch_name(&name)) && !tips.contains(&sha) {
+        if is_landing_branch(branch_name(&name, &remotes)) && !tips.contains(&sha) {
             tips.push(sha);
         }
     }
@@ -731,11 +764,17 @@ mod tests {
 
     #[test]
     fn branch_names_strip_heads_and_remotes() {
-        assert_eq!(branch_name("refs/heads/main"), "main");
+        let origin = ["origin".to_string()];
+        assert_eq!(branch_name("refs/heads/main", &origin), "main");
         assert_eq!(
-            branch_name("refs/remotes/origin/codeflow/registry"),
+            branch_name("refs/remotes/origin/codeflow/registry", &origin),
             "codeflow/registry"
         );
+        // A remote whose name holds a slash, beside one it starts with.
+        let remotes = ["team".to_string(), "team/a".to_string()];
+        assert_eq!(branch_name("refs/remotes/team/a/main", &remotes), "main");
+        assert_eq!(branch_name("refs/remotes/team/b/main", &remotes), "b/main");
+        assert_eq!(branch_name("refs/remotes/gone/x/main", &remotes), "x/main");
         assert!(is_landing_branch("integration/EPC-020-delivery-system"));
         assert!(!is_landing_branch("task/TSK-101-id-registry"));
     }
@@ -806,6 +845,33 @@ mod tests {
         fn handle(&self) -> Git {
             Git::new(self.dir.path())
         }
+    }
+
+    /// TSK-286 AC-4 (issue 102): native git keeps a remote named `team/a`
+    /// and fetches its `main` to `refs/remotes/team/a/main`. That ref is
+    /// the landing line `main` of that remote, so its tip is a landing tip;
+    /// a split at the first slash read it as branch `a/main`.
+    #[test]
+    fn a_remote_name_with_a_slash_keeps_its_landing_line() {
+        let repo = Repo::new();
+        let remote = tempfile::tempdir().unwrap();
+        repo.git(&["init", "-q", "--bare", remote.path().to_str().unwrap()]);
+        repo.git(&["remote", "add", "team/a", remote.path().to_str().unwrap()]);
+        repo.git(&["checkout", "-q", "-b", "side"]);
+        repo.write("side.txt", "side\n");
+        let side = repo.commit("side");
+        repo.git(&["push", "-q", "team/a", "side:main"]);
+        repo.git(&["checkout", "-q", "main"]);
+        repo.git(&["branch", "-q", "-D", "side"]);
+        repo.git(&["fetch", "-q", "team/a"]);
+        assert_eq!(repo.git(&["rev-parse", "refs/remotes/team/a/main"]), side);
+        let git = repo.handle();
+        assert_eq!(remote_names(&git).unwrap(), ["team/a"]);
+        assert_eq!(
+            branch_name("refs/remotes/team/a/main", &remote_names(&git).unwrap()),
+            "main"
+        );
+        assert!(landing_tips(&git).unwrap().contains(&side));
     }
 
     const TASK: &str = "project-management/tasks/TSK-001.md";
