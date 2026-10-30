@@ -1,0 +1,143 @@
+---
+id: ADR-0090
+uid: f7e927fa-bfdb-42ca-ae24-da0d2d02dc5c
+title: "Retained release bases and a sparse pack replace the baseline tree and the manifest digest"
+date: 2026-10-30
+status: accepted          # proposed | accepted | superseded
+superseded_by: null       # ADR id, set on supersession; a dated Note may also be appended
+architecture_impact: The Ownership classes row names the base source, the binary's retained releases and `.codeflow/bases/`, in place of `.codeflow/.baseline/` and the manifest hash
+---
+
+<!-- ADRs are append-only: written at the moment of decision. Never rewrite
+     existing content; you may set superseded_by, or append a clearly-dated
+     Note. Warranted at Tier-3 decision
+     points only (new dependency, schema change, boundary change), not one
+     per task. If architecture_impact is not none, update docs/architecture.md
+     in the same PR. -->
+
+# ADR-0090: Retained release bases and a sparse pack replace the baseline tree and the manifest digest
+
+## Context
+
+`codeflow update` decides what to do with a managed file by comparing it
+with the pristine copy the project installed. Today that copy is tracked in
+the project twice: as a file under `.codeflow/.baseline/<dest>`
+(`crates/codeflow-core/src/scaffold/state.rs:21`, `:565-602`) and as its
+digest in `.codeflow/manifest.json` (`InstalledFile.sha256`,
+`state.rs:512`). Every release changes both for every changed file, and the
+digest is one line per file that every pull request touching that file
+rewrites, so two pull requests that change the same managed file in
+different places conflict in the manifest even when the file itself merges
+(issue 119: six of ten open pull requests on 2026-10-08). This repository
+carries 317 such copies (about 7 MB) and relabels every one on each resync.
+
+The design that resolves this was approved by a Codex reviewer on
+2026-10-15 after five rounds (`design-baseline-05.md`); it lived only in a
+worktree's build output and is lost. The decisions the operator took on it
+survive in the workspace `RELEASE-PLAN.md` and are the inputs here:
+
+| Decision | Date | Content |
+|---|---|---|
+| Option A | 2026-10-15 | An incompatible manifest and a major release, shipped as 4.0.0 |
+| Sparse pack | 2026-10-15 | A tracked sparse pack beside the manifest is accepted |
+| Retention | 2026-10-17 | The binary keeps the shipped bases of every published release (about 0.6 MB then); an advisory 2 MB budget triggers a review when crossed |
+| Version | 2026-10-28 | The current line ships as 4.0.0 and absorbs the replacement, so adopters migrate once |
+
+## Decision
+
+The shipped bases move into the binary. The binary carries the scaffold
+assets of every published release (v2.0.0, v2.1.0, v3.0.0, v3.1.0, v3.1.1,
+then each release from 4.0.0 on) as one deduplicated, solid zstd stream with
+a TOML index under `assets/releases/`, and the release step adds the release
+being prepared and refuses one whose bases are missing. `.codeflow/manifest.json`
+moves to schema 2: an entry records `src`, `ownership`, `exec` and the
+`version` its base is read at, and no digest; the top-level
+`scaffold_version` stamp is dropped, since `.codeflow/project.toml` already
+carries it. What the binary cannot reproduce lives in a tracked sparse pack,
+`.codeflow/bases/<dest>`: the rendered copy of every `template = true`
+managed or managed-region entry, and every file installed by a development
+build (a binary whose assets are not a retained release's). The base of a
+file is looked up in the pack first, then in the retained release the entry
+names, then it is absent; every decision that compared a hash with the
+record compares bytes with that base. `codeflow update` migrates a 3.x
+project in one run: it derives each entry's base from the old baseline copy
+and digest, writes the pack entries it needs, writes the schema 2 manifest,
+and removes `.codeflow/.baseline/` last, following no link and writing
+nothing outside `.codeflow/`. A 3.x binary cannot read the result: it fails
+closed on the missing `sha256` field (`state.rs:512`, read at `:548-550`),
+or earlier on the raised `scaffold_version` pin for `update` and `init`
+(`crates/codeflow-core/src/scaffold/version.rs:108-121`). The change ships
+as 4.0.0 with one migration step. `SPC-015` pins the formats, the outcome of
+every decision arm and the edge cases; TSK-1086 builds the retained bases,
+TSK-1087 the switch and the migration, TSK-247 the read-only preview.
+
+Displaced alternatives:
+
+- Keeping `.codeflow/.baseline/` and the per-file digest (the status quo):
+  every release relabels every changed file twice in the project, and the
+  digest line is the conflict issue 119 reports.
+- TSK-258's schema 2 (draft PR 125): dropped the digest and kept the baseline
+  directory, so the tree still changed on every release and this repository
+  kept its 317 copies; the 2026-10-18 release order ruled it out as an
+  intervening format, and TSK-258 is cancelled as superseded.
+- A content-addressed pack with one compressed blob per file: write-once and
+  simple to extend, but 1.35 MB today against the 2 MB budget (measured in
+  `SPC-015`), so the budget would be crossed within a release or two; the
+  solid stream is 0.60 MB.
+- Keeping the bases of the current release only: a project that skipped a
+  release, or that kept a file at an older base after a conflict, would have
+  no base to merge from; the operator chose every published release.
+
+## Consequences
+
+- Two pull requests that change different managed files no longer meet in
+  the manifest or a baseline tree, and a resync changes only the entries of
+  the files it changed; a shared stamp no longer moves on a resync. The
+  remaining shared stamps are the live `scaffold=` markers in `AGENTS.md`
+  and `CLAUDE.md` and the version fields of `Cargo.toml` and
+  `.codeflow/project.toml`, which this decision does not touch.
+- The project tracks about 3 files in the pack instead of 317 (the rendered
+  `AGENTS.md`, `CLAUDE.md` and `.codeflow/rules/worktrees.md` bases at a
+  tier), and nothing under `.codeflow/.baseline/`. This repository tracks
+  more while a release is in development: a development build writes the
+  base of every file it installs to the pack, and the first update by the
+  published binary removes each entry it can reproduce.
+- The trust surface shrinks: a base read from the binary cannot be edited by
+  an agent session, where a committed baseline copy could be. The pack and
+  the pending resolution records stay protected paths, as the baseline was
+  (`crates/codeflow-core/src/security/policy.rs:48`).
+- The binary grows by the compressed pack, 0.60 MB today, and by at most the
+  changed assets of each future release. The advisory budget is 2 MB; the
+  build or release check warns, never fails, when it is passed, and the
+  crossing is a review, not a refusal.
+- `zstd`, already linked through rust-embed's `compression` feature
+  (`Cargo.toml:38`, `:53-62`), becomes a direct dependency of the engine for
+  decoding the stream. No other dependency is added.
+- A 3.x binary cannot read a 4.0.0 project. Adopters upgrade every checkout
+  and CI pin to 4.0.0 together, run `codeflow update` once and commit the
+  manifest and the baseline removal (TSK-1087's migration text). A project
+  installed by a development build keeps its bases in the pack until the
+  published binary updates it.
+- The release step gains a duty: a release cannot be prepared without its
+  bases in the index, and `check-state` refuses a version whose retained
+  files differ from `assets/base` at the release commit. The typed repair
+  rules lose their baseline rows (`docs/releasing.md` "Typed repair rule",
+  `scripts/release.py:1491-1572`): a repair no longer touches the manifest
+  or a baseline.
+- Every reader of `.codeflow/.baseline/` changes in TSK-1087: the policy
+  default, the model catalog scan, the eval kit scrub, the release scripts,
+  the tests and the docs that name it; `SPC-015` lists them.
+- The 2.1.0 stand-in copies for a missing baseline
+  (`crates/codeflow-core/src/scaffold/prior_release.rs`, TSK-171) are kept
+  as they are; the retained 2.1.0 release could replace them later, as a
+  separate change.
+
+## Architecture impact
+
+The Ownership classes row of `docs/architecture.md` names where the merge
+base comes from. It read "refresh by hash and 3-way merge from
+`.codeflow/.baseline/`"; it now says the comparison is by bytes against the
+shipped base, which is the committed copy and digest until TSK-1087 lands
+and the binary's retained releases with the sparse pack `.codeflow/bases/`
+from then on, and names this record. TSK-1086 and TSK-1087 update the row
+again when they land.
