@@ -2089,7 +2089,11 @@ fn fd_exec(args: &[String]) -> Option<FdExec> {
     // An exec option with no command word, or an empty attached value,
     // runs a command the guard cannot read: it stands as an unresolved
     // word in the option's place, and the walk is judged with it.
-    if command.is_empty() || first.as_deref().is_some_and(|word| word.trim().is_empty()) {
+    if command.is_empty()
+        || first
+            .as_deref()
+            .is_some_and(|word| word.chars().all(crate::hooks::git_guard::shell_blank))
+    {
         let option = command.start.saturating_sub(1).min(args.len() - 1);
         if command.is_empty() {
             command = option..option + 1;
