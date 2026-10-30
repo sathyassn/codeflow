@@ -1129,6 +1129,38 @@ fn written_fields(ruleset: &Value) -> Value {
     })
 }
 
+/// A ruleset body as the host answers it. The host leaves
+/// `update_allows_fetch_and_merge` out of an `update` rule when it is off,
+/// so a rule written with it set to `false` reads back as `{"type":
+/// "update"}` (read on a scratch repository, 2026-10-30). Both sides of the
+/// comparison are put in that form, so an unchanged ruleset is not written
+/// again.
+fn host_form(body: &Value) -> Value {
+    let mut body = body.clone();
+    for rule in body
+        .get_mut("rules")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if rule.get("type").and_then(Value::as_str) != Some("update") {
+            continue;
+        }
+        let Some(rule) = rule.as_object_mut() else {
+            continue;
+        };
+        if let Some(parameters) = rule.get_mut("parameters").and_then(Value::as_object_mut) {
+            if parameters.get("update_allows_fetch_and_merge") == Some(&Value::Bool(false)) {
+                parameters.remove("update_allows_fetch_and_merge");
+            }
+            if parameters.is_empty() {
+                rule.remove("parameters");
+            }
+        }
+    }
+    body
+}
+
 /// Raise `current`'s parameters to at least `intended`'s, in place.
 fn strengthen(current: &mut Value, intended: &Value) -> Result<(), String> {
     let kind = intended
@@ -1558,7 +1590,7 @@ impl GithubProvider {
                 let body = owned
                     .update_body(&live)
                     .map_err(|why| format!("ruleset '{}' ({id}) was not written: {why}", owned.name))?;
-                if written_fields(&live) == body {
+                if host_form(&written_fields(&live)) == host_form(&body) {
                     return Ok(format!(
                         "ruleset '{}' ({id}) on {} already as intended, nothing written: {}",
                         owned.name,
@@ -2773,6 +2805,27 @@ jobs:
                     };
                     body["id"] = json!(id);
                     body["source_type"] = json!("Repository");
+                    // As the scratch repository stored a write on
+                    // 2026-10-30: an `update` rule loses its parameter when
+                    // it is off, and a `pull_request` rule gains defaults.
+                    for rule in body["rules"].as_array_mut().into_iter().flatten() {
+                        let kind = rule["type"].as_str().unwrap_or_default().to_string();
+                        if kind == "update"
+                            && rule["parameters"]["update_allows_fetch_and_merge"] == json!(false)
+                        {
+                            rule.as_object_mut().unwrap().remove("parameters");
+                            continue;
+                        }
+                        if let ("pull_request", Some(p)) =
+                            (kind.as_str(), rule["parameters"].as_object_mut())
+                        {
+                            p.entry("required_reviewers").or_insert(json!([]));
+                            p.entry("require_extra_approval_for_unattributed_changes")
+                                .or_insert(json!(true));
+                            p.entry("allowed_merge_methods")
+                                .or_insert(json!(["merge", "squash", "rebase"]));
+                        }
+                    }
                     self.rulesets.borrow_mut().insert(id, body.clone());
                     if let Some(bypass) = &self.answer_bypass {
                         body["bypass_actors"] = bypass.clone();

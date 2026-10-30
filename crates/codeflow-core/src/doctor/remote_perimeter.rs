@@ -528,7 +528,9 @@ fn update_gaps(ruleset: &Value, profile: Profile, out: &mut Perimeter) -> Vec<St
     let mut lacks = Vec::new();
     match rules_of(ruleset, "update").next() {
         None => lacks.push("it has no update rule".to_string()),
-        Some(rule) if rule["parameters"]["update_allows_fetch_and_merge"] != false => {
+        // The host leaves the parameter out when it is off, so only an
+        // explicit `true` lets fetch and merge through.
+        Some(rule) if rule["parameters"]["update_allows_fetch_and_merge"] == true => {
             lacks.push("its update rule allows fetch and merge".to_string());
         }
         Some(_) => {}
@@ -1924,7 +1926,9 @@ jobs:
                     "enforcement": "active",
                     "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
                     "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }],
-                    "rules": [{ "type": "update", "parameters": { "update_allows_fetch_and_merge": false } }]
+                    // As the host answers it: the parameter is left out
+                    // when it is off (scratch repository, 2026-10-30).
+                    "rules": [{ "type": "update" }]
                 }),
                 checked(2, "codeflow authority checks", "~DEFAULT_BRANCH", &trusted),
                 checked(
@@ -1966,6 +1970,25 @@ jobs:
     fn the_rulesets_protect_writes_pass_for_their_profile() {
         let result = judge(protected_world(), Some("solo-administrator"));
         assert_eq!(result.status, Status::Pass, "{}", result.message);
+        // The host answers A's update rule without its parameter when it is
+        // off; only an explicit `true` is a gap.
+        let mut world = protected_world();
+        ruleset_mut(&mut world, "codeflow authority updates")["rules"] = serde_json::json!([
+            { "type": "update", "parameters": { "update_allows_fetch_and_merge": true } }
+        ]);
+        let result = judge(world, Some("solo-administrator"));
+        assert!(
+            matches!(result.status, Status::Warn(_)),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("its update rule allows fetch and merge"),
+            "{}",
+            result.message
+        );
     }
 
     /// AC-3: a non-empty bypass list on B or C fails, naming the actors and
