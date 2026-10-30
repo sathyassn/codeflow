@@ -5,8 +5,10 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+// Public so `hooks_cli` reaches the one copy of this module through its
+// `line_adoption_fixture` instead of loading the file a second time.
 #[path = "git_isolation.rs"]
-mod git_isolation;
+pub mod git_isolation;
 use git_isolation::strip_host_git_state;
 
 pub const LINE: &str = "integration/EPC-001-outcome";

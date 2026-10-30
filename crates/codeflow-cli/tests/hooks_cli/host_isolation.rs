@@ -12,9 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-#[path = "../support/git_isolation.rs"]
-mod git_isolation;
-use git_isolation::{names_host_state, strip_host_git_state};
+use super::line_adoption_fixture::git_isolation::{names_host_state, strip_host_git_state};
 
 /// An empty home shared by the tests of this process, so a run never reads
 /// the developer's `~/.gitconfig` or `~/.config/git/config`.
