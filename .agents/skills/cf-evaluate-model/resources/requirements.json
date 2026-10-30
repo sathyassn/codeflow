@@ -3140,14 +3140,14 @@
     {
       "id": "CF-QA-018",
       "level": "hard",
-      "statement": "New and changed code is fully typed, and every escape type or suppression carries an inline reason. Data crossing any boundary is parsed into a typed model that also validates it, with the typed-model library that is standard for the language; a typed representation alone, such as a plain dataclass, a TypedDict, an interface or a cast, does not validate. A builder adds the project's missing type checker and typed-model library as part of the change, TypeScript is the default for new projects and files, and existing JavaScript is type-checked in place. A project opts out only by stating its reason in its own AGENTS.md. Review returns changes_requested for untyped new code, an unexplained escape type, untyped boundary data, or a hand-written validator where a standard or schema-generated model fits.",
+      "statement": "New and changed code is fully typed, and every escape type or suppression carries an inline reason. Data crossing any boundary is parsed into a typed model that also validates it, with the typed-model library that is standard for the language; a typed representation alone, such as a plain dataclass, a TypedDict, an interface or a cast, does not validate. A builder adds the project's missing type checker and typed-model library as part of the change. A new project or file that would otherwise be JavaScript is TypeScript, and existing JavaScript is type-checked in place. Shell runs ShellCheck and parses its arguments explicitly, and Rego checks input at run time with json.match_schema, since a Rego schema annotation is static only. A project opts out only by stating its reason in its own AGENTS.md. Review returns changes_requested for untyped new code, an unexplained escape type, untyped boundary data, or a hand-written validator where a standard or schema-generated model fits.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
           "markers": [
             "Typed code and typed boundary data are the default.",
             "A typed representation alone does not validate its input",
-            "TypeScript is the default for new projects and new files.",
+            "A new project or new file that would otherwise be JavaScript is TypeScript.",
             "only by stating the reason in the project-owned Stack standards of its `AGENTS.md`"
           ]
         },

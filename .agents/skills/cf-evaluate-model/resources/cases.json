@@ -9097,7 +9097,7 @@
         "references": [
           "CHANGE.md",
           "README.md",
-          "vendor/events.d.ts",
+          "vendor/events/index.d.ts",
           "src/schemas.ts"
         ],
         "must_not": [

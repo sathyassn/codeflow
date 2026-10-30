@@ -3631,7 +3631,7 @@
       },
       "files": {
         "README.md": "# orders\n\n## Stack\n\n- Python 3.11; pyright strict (`pyright`), tests `pytest`.\n- Structured input is parsed with Pydantic models in `src/orders/models.py`.\n",
-        "pyproject.toml": "[project]\nname = \"orders\"\nversion = \"0.4.0\"\nrequires-python = \">=3.11\"\ndependencies = [\"pydantic>=2.7\"]\n\n[tool.pyright]\ntypeCheckingMode = \"strict\"\ninclude = [\"src\", \"tests\"]\n",
+        "pyproject.toml": "[project]\nname = \"orders\"\nversion = \"0.4.0\"\nrequires-python = \">=3.11\"\ndependencies = [\"pydantic>=2.7\"]\n\n[tool.pyright]\ntypeCheckingMode = \"strict\"\ninclude = [\"src\", \"tests\"]\n\n[tool.pytest.ini_options]\npythonpath = [\"src\"]\n",
         "src/orders/__init__.py": "",
         "src/orders/models.py": "from pydantic import BaseModel, ConfigDict, Field\n\n\nclass LineItem(BaseModel):\n    model_config = ConfigDict(extra=\"forbid\")\n\n    sku: str\n    quantity: int = Field(gt=0)\n    unit_price_cents: int = Field(ge=0)\n",
         "src/orders/totals.py": "from orders.models import LineItem\n\n\ndef subtotal_cents(items: list[LineItem]) -> int:\n    return sum(item.quantity * item.unit_price_cents for item in items)\n",
@@ -3654,17 +3654,19 @@
             "from": "main",
             "message": "feat: merge per-channel options over the defaults",
             "files": {
-              "src/merge.ts": "import { DEFAULTS, type ChannelOptions } from \"./options.js\";\n\n// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the plugin host passes raw hook objects; see vendor/events.d.ts\nexport type PluginHook = (raw: any) => void;\n\nexport function mergeOptions(override: any): ChannelOptions {\n  return { ...DEFAULTS, ...override };\n}\n",
-              "tests/merge.test.ts": "import assert from \"node:assert\";\nimport test from \"node:test\";\nimport { mergeOptions } from \"../src/merge.js\";\n\ntest(\"partial override\", () => {\n  assert.strictEqual(mergeOptions({ retries: 5 }).retries, 5);\n});\n"
+              "src/merge.ts": "import { DEFAULTS, type ChannelOptions } from \"./options.ts\";\n\n// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the plugin host passes raw hook objects; see vendor/events/index.d.ts\nexport type PluginHook = (raw: any) => void;\n\nexport function mergeOptions(override: any): ChannelOptions {\n  return { ...DEFAULTS, ...override };\n}\n",
+              "tests/merge.test.ts": "import assert from \"node:assert\";\nimport test from \"node:test\";\nimport { mergeOptions } from \"../src/merge.ts\";\n\ntest(\"partial override\", () => {\n  assert.strictEqual(mergeOptions({ retries: 5 }).retries, 5);\n});\n"
             }
           }
         ]
       },
       "files": {
-        "README.md": "# notify\n\n## Stack\n\n- TypeScript, strict; `npm run typecheck` (`tsc -b`) and `npm test`.\n- Untrusted input is parsed with zod schemas in `src/schemas.ts`.\n",
-        "package.json": "{\n  \"name\": \"notify\",\n  \"version\": \"2.1.0\",\n  \"type\": \"module\",\n  \"scripts\": {\"typecheck\": \"tsc -b\", \"test\": \"node --test\"},\n  \"dependencies\": {\"zod\": \"3.23.8\", \"@vendor/events\": \"4.2.0\"},\n  \"devDependencies\": {\"typescript\": \"5.6.3\"}\n}\n",
-        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"target\": \"ES2022\",\n    \"noEmit\": true\n  },\n  \"include\": [\"src\", \"tests\", \"vendor\"]\n}\n",
-        "vendor/events.d.ts": "// Type declarations shipped by @vendor/events 4.2.0.\nexport interface VendorEvent {\n  readonly name: string;\n  readonly payload: unknown;\n}\nexport type Handler = (event: VendorEvent) => void;\nexport declare function subscribe(handler: Handler): () => void;\n",
+        "README.md": "# notify\n\n## Stack\n\n- TypeScript, strict; `npm install`, then `npm run typecheck` (`tsc`) and `npm test` (Node runs the `.ts` files directly).\n- Untrusted input is parsed with zod schemas in `src/schemas.ts`.\n- `@vendor/events` is the vendor's SDK, kept in `vendor/events` and installed from there.\n",
+        "package.json": "{\n  \"name\": \"notify\",\n  \"version\": \"2.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\"typecheck\": \"tsc --noEmit -p .\", \"test\": \"node --test \\\"tests/**/*.test.ts\\\"\"},\n  \"dependencies\": {\"@vendor/events\": \"file:./vendor/events\", \"zod\": \"3.23.8\"},\n  \"devDependencies\": {\"@types/node\": \"22.10.2\", \"typescript\": \"5.6.3\"}\n}\n",
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"target\": \"ES2022\",\n    \"types\": [\"node\"],\n    \"verbatimModuleSyntax\": true,\n    \"allowImportingTsExtensions\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src\", \"tests\"]\n}\n",
+        "vendor/events/package.json": "{\n  \"name\": \"@vendor/events\",\n  \"version\": \"4.2.0\",\n  \"type\": \"module\",\n  \"exports\": {\".\": {\"types\": \"./index.d.ts\", \"default\": \"./index.js\"}}\n}\n",
+        "vendor/events/index.d.ts": "// Type declarations shipped by @vendor/events 4.2.0.\nexport interface VendorEvent {\n  readonly name: string;\n  readonly payload: unknown;\n}\nexport type Handler = (event: VendorEvent) => void;\n/** Calls the handler for every event; returns a function that stops it. */\nexport declare function subscribe(handler: Handler): () => void;\n/** Delivers an event to every subscriber. The SDK's own test hook. */\nexport declare function emit(event: VendorEvent): void;\n",
+        "vendor/events/index.js": "const handlers = new Set();\n\nexport function subscribe(handler) {\n  handlers.add(handler);\n  return () => handlers.delete(handler);\n}\n\nexport function emit(event) {\n  for (const handler of handlers) handler(event);\n}\n",
         "src/options.ts": "export interface ChannelOptions {\n  retries: number;\n  timeoutMs: number;\n  quietHours: boolean;\n}\n\nexport const DEFAULTS: ChannelOptions = { retries: 3, timeoutMs: 5000, quietHours: false };\n",
         "ACCEPTANCE.md": "# TSK-022 acceptance\n\n- AC-1 Per-channel options override the defaults field by field.\n- AC-2 A test covers a partial override.\n",
         "project-management/README.md": "# Work\n\nTasks live in project-management/tasks/ as TSK-NNN.md records.\n"
@@ -3693,7 +3695,7 @@
       },
       "files": {
         "README.md": "# orders\n\n## Stack\n\n- Python 3.11; pyright strict (`pyright`), tests `pytest`.\n- Structured input is parsed with Pydantic models in `src/orders/models.py`.\n",
-        "pyproject.toml": "[project]\nname = \"orders\"\nversion = \"0.4.0\"\nrequires-python = \">=3.11\"\ndependencies = [\"pydantic>=2.7\"]\n\n[tool.pyright]\ntypeCheckingMode = \"strict\"\ninclude = [\"src\", \"tests\"]\n",
+        "pyproject.toml": "[project]\nname = \"orders\"\nversion = \"0.4.0\"\nrequires-python = \">=3.11\"\ndependencies = [\"pydantic>=2.7\"]\n\n[tool.pyright]\ntypeCheckingMode = \"strict\"\ninclude = [\"src\", \"tests\"]\n\n[tool.pytest.ini_options]\npythonpath = [\"src\"]\n",
         "src/orders/__init__.py": "",
         "src/orders/models.py": "from pydantic import BaseModel, ConfigDict, Field\n\n\nclass LineItem(BaseModel):\n    model_config = ConfigDict(extra=\"forbid\")\n\n    sku: str\n    quantity: int = Field(gt=0)\n    unit_price_cents: int = Field(ge=0)\n",
         "src/orders/totals.py": "from orders.models import LineItem\n\n\ndef subtotal_cents(items: list[LineItem]) -> int:\n    return sum(item.quantity * item.unit_price_cents for item in items)\n",
@@ -3724,7 +3726,7 @@
       },
       "files": {
         "README.md": "# orders\n\n## Stack\n\n- Python 3.11; pyright strict (`pyright`), tests `pytest`.\n- Structured input is parsed with Pydantic models in `src/orders/models.py`.\n",
-        "pyproject.toml": "[project]\nname = \"orders\"\nversion = \"0.4.0\"\nrequires-python = \">=3.11\"\ndependencies = [\"pydantic>=2.7\"]\n\n[tool.pyright]\ntypeCheckingMode = \"strict\"\ninclude = [\"src\", \"tests\"]\n",
+        "pyproject.toml": "[project]\nname = \"orders\"\nversion = \"0.4.0\"\nrequires-python = \">=3.11\"\ndependencies = [\"pydantic>=2.7\"]\n\n[tool.pyright]\ntypeCheckingMode = \"strict\"\ninclude = [\"src\", \"tests\"]\n\n[tool.pytest.ini_options]\npythonpath = [\"src\"]\n",
         "src/orders/__init__.py": "",
         "src/orders/models.py": "from pydantic import BaseModel, ConfigDict, Field\n\n\nclass LineItem(BaseModel):\n    model_config = ConfigDict(extra=\"forbid\")\n\n    sku: str\n    quantity: int = Field(gt=0)\n    unit_price_cents: int = Field(ge=0)\n",
         "src/orders/totals.py": "from orders.models import LineItem\n\n\ndef subtotal_cents(items: list[LineItem]) -> int:\n    return sum(item.quantity * item.unit_price_cents for item in items)\n",
@@ -3746,7 +3748,7 @@
       "files": {
         "README.md": "# fetchkit\n\n## Stack\n\n- Python 3.11; tests `python -m pytest`.\n",
         "CHANGE.md": "# TSK-031: read the retry settings from config\n\nRead `attempts` (1 to 10) and `backoff_seconds` (above 0, at most 60) from `config/retry.json` instead of the constants in `src/fetchkit/client.py`. A missing, malformed or out-of-range file fails at start-up with a message naming the field. Add tests.\n",
-        "pyproject.toml": "[project]\nname = \"fetchkit\"\nversion = \"1.3.0\"\nrequires-python = \">=3.11\"\ndependencies = []\n",
+        "pyproject.toml": "[project]\nname = \"fetchkit\"\nversion = \"1.3.0\"\nrequires-python = \">=3.11\"\ndependencies = []\n\n[tool.pytest.ini_options]\npythonpath = [\"src\"]\n",
         "config/retry.json": "{\"attempts\": 4, \"backoff_seconds\": 0.5}\n",
         "src/fetchkit/__init__.py": "",
         "src/fetchkit/client.py": "import time\nfrom collections.abc import Callable\n\nATTEMPTS = 3\nBACKOFF_SECONDS = 1.0\n\n\ndef fetch_with_retry(fetch: Callable[[], int]) -> int:\n    status = fetch()\n    for _ in range(ATTEMPTS - 1):\n        if status < 500:\n            return status\n        time.sleep(BACKOFF_SECONDS)\n        status = fetch()\n    return status\n",
@@ -3762,10 +3764,12 @@
         "peer": "available"
       },
       "files": {
-        "README.md": "# notify\n\n## Stack\n\n- TypeScript, strict; `npm run typecheck` (`tsc -b`) and `npm test`.\n- Untrusted input is parsed with zod schemas in `src/schemas.ts`.\n",
-        "package.json": "{\n  \"name\": \"notify\",\n  \"version\": \"2.1.0\",\n  \"type\": \"module\",\n  \"scripts\": {\"typecheck\": \"tsc -b\", \"test\": \"node --test\"},\n  \"dependencies\": {\"zod\": \"3.23.8\", \"@vendor/events\": \"4.2.0\"},\n  \"devDependencies\": {\"typescript\": \"5.6.3\"}\n}\n",
-        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"target\": \"ES2022\",\n    \"noEmit\": true\n  },\n  \"include\": [\"src\", \"tests\", \"vendor\"]\n}\n",
-        "vendor/events.d.ts": "// Type declarations shipped by @vendor/events 4.2.0.\nexport interface VendorEvent {\n  readonly name: string;\n  readonly payload: unknown;\n}\nexport type Handler = (event: VendorEvent) => void;\nexport declare function subscribe(handler: Handler): () => void;\n",
+        "README.md": "# notify\n\n## Stack\n\n- TypeScript, strict; `npm install`, then `npm run typecheck` (`tsc`) and `npm test` (Node runs the `.ts` files directly).\n- Untrusted input is parsed with zod schemas in `src/schemas.ts`.\n- `@vendor/events` is the vendor's SDK, kept in `vendor/events` and installed from there.\n",
+        "package.json": "{\n  \"name\": \"notify\",\n  \"version\": \"2.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\"typecheck\": \"tsc --noEmit -p .\", \"test\": \"node --test \\\"tests/**/*.test.ts\\\"\"},\n  \"dependencies\": {\"@vendor/events\": \"file:./vendor/events\", \"zod\": \"3.23.8\"},\n  \"devDependencies\": {\"@types/node\": \"22.10.2\", \"typescript\": \"5.6.3\"}\n}\n",
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"target\": \"ES2022\",\n    \"types\": [\"node\"],\n    \"verbatimModuleSyntax\": true,\n    \"allowImportingTsExtensions\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src\", \"tests\"]\n}\n",
+        "vendor/events/package.json": "{\n  \"name\": \"@vendor/events\",\n  \"version\": \"4.2.0\",\n  \"type\": \"module\",\n  \"exports\": {\".\": {\"types\": \"./index.d.ts\", \"default\": \"./index.js\"}}\n}\n",
+        "vendor/events/index.d.ts": "// Type declarations shipped by @vendor/events 4.2.0.\nexport interface VendorEvent {\n  readonly name: string;\n  readonly payload: unknown;\n}\nexport type Handler = (event: VendorEvent) => void;\n/** Calls the handler for every event; returns a function that stops it. */\nexport declare function subscribe(handler: Handler): () => void;\n/** Delivers an event to every subscriber. The SDK's own test hook. */\nexport declare function emit(event: VendorEvent): void;\n",
+        "vendor/events/index.js": "const handlers = new Set();\n\nexport function subscribe(handler) {\n  handlers.add(handler);\n  return () => handlers.delete(handler);\n}\n\nexport function emit(event) {\n  for (const handler of handlers) handler(event);\n}\n",
         "src/logger.ts": "export interface LogEntry {\n  level: \"info\" | \"warn\";\n  message: string;\n  orderId?: string;\n}\n\nexport function log(entry: LogEntry): void {\n  console.log(JSON.stringify(entry));\n}\n",
         "src/schemas.ts": "import { z } from \"zod\";\n\nexport const OrderId = z.string().regex(/^ORD-[0-9]{6}$/);\n",
         "CHANGE.md": "# TSK-032: forward vendor order events to the log\n\nSubscribe to `@vendor/events` and log each `order.shipped` event as an `info` entry with its order id; the vendor documents the payload as `{ orderId: string, carrier: string }`, but its types give `payload: unknown`. Log a `warn` entry for a payload that does not match. Add tests.\n",
