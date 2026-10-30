@@ -701,20 +701,25 @@ fn run_owed_target(
             &super::delivery::digest(target.name.as_bytes())[..16]
         )
     };
-    let destination = run_dir.join(directory);
-    std::fs::create_dir_all(&destination)?;
+    // Every write below goes through the anchored walk from the build-output
+    // root, never following a link or junction, so a link another target
+    // planted in the run folder is refused rather than written through
+    // (TSK-1044).
+    let (tree, run) = run_anchor(run_dir)?;
+    let destination = run_dir.join(&directory);
+    let saved_at = format!("{run}/{directory}");
+    tree.create_dir_all(&saved_at)
+        .map_err(|error| super::delivery::evidence_refused(tree.path(), &saved_at, &error))?;
     if let Some(path) = &result.report_path {
         if path.exists() {
-            let saved = destination.join("junit.xml");
-            save_redacted_report(path, &saved, declared)?;
-            result.report_path = Some(saved);
+            save_redacted_report(path, &tree, &format!("{saved_at}/junit.xml"), declared)?;
+            result.report_path = Some(destination.join("junit.xml"));
         }
     }
     if let Some(path) = &result.coverage_path {
         if path.exists() {
-            let saved = destination.join("coverage");
-            save_redacted_report(path, &saved, declared)?;
-            result.coverage_path = Some(saved);
+            save_redacted_report(path, &tree, &format!("{saved_at}/coverage"), declared)?;
+            result.coverage_path = Some(destination.join("coverage"));
         }
     }
     if target.heavy == Some(true) {
@@ -728,17 +733,53 @@ fn run_owed_target(
     }
     result.stdout = super::evidence::redact(declared, &result.stdout);
     result.stderr = super::evidence::redact(declared, &result.stderr);
-    std::fs::write(destination.join("stdout.log"), &result.stdout)?;
-    std::fs::write(destination.join("stderr.log"), &result.stderr)?;
+    for (name, text) in [
+        ("stdout.log", &result.stdout),
+        ("stderr.log", &result.stderr),
+    ] {
+        let log = format!("{saved_at}/{name}");
+        tree.write(&log, text.as_bytes())
+            .map_err(|error| super::delivery::evidence_refused(tree.path(), &log, &error))?;
+    }
     Ok(result)
 }
 
+/// The anchored build-output root two folders above `run_dir`
+/// (`<target>/codeflow-gate/<run id>`) and the run folder's path beneath it.
+fn run_anchor(run_dir: &Path) -> Result<(crate::contained::Tree, String), TestingError> {
+    let unsupported = || {
+        TestingError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "gate run folder {} has no build-output root or is not valid UTF-8",
+                run_dir.display()
+            ),
+        ))
+    };
+    let root = run_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(unsupported)?;
+    let relative = crate::contained::relative_to(root, run_dir).map_err(|_| unsupported())?;
+    Ok((crate::contained::Tree::open(root)?, relative))
+}
+
+/// Copy a target's report into the run folder with environment inputs
+/// redacted. The report is opened without following a link at its own name
+/// and must be a regular file with one name, so a link or hard link planted
+/// at the report path cannot copy another file into the evidence.
 fn save_redacted_report(
     source: &Path,
-    destination: &Path,
+    tree: &crate::contained::Tree,
+    destination: &str,
     target: &TargetConfig,
 ) -> Result<(), TestingError> {
-    let bytes = std::fs::read(source)?;
+    let bytes = read_report(source).map_err(|error| {
+        TestingError::Io(std::io::Error::new(
+            error.kind(),
+            format!("report {} refused: {error}", source.display()),
+        ))
+    })?;
     let text = String::from_utf8(bytes).map_err(|_| {
         super::delivery::invalid(
             source,
@@ -746,8 +787,50 @@ fn save_redacted_report(
         )
     })?;
     let redacted = super::evidence::redact(target, &text);
-    std::fs::write(destination, redacted)?;
+    tree.write(destination, redacted.as_bytes())
+        .map_err(|error| super::delivery::evidence_refused(tree.path(), destination, &error))?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn read_report(source: &Path) -> std::io::Result<Vec<u8>> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(source)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not a regular file with one name",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// On Windows the name is checked for a reparse point before it is read;
+/// a swap between the check and the read is not closed here.
+#[cfg(not(unix))]
+fn read_report(source: &Path) -> std::io::Result<Vec<u8>> {
+    if crate::contained::is_link_at(source)? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "a symbolic link or junction",
+        ));
+    }
+    let mut file = std::fs::File::open(source)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not a regular file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// Returns `true` when the process is running inside a CI environment.

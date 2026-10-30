@@ -10,6 +10,9 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
 
+#[cfg(unix)]
+#[path = "test_gate_cli/containment.rs"]
+mod containment;
 #[path = "support/drain_pipe.rs"]
 mod drain_pipe;
 #[path = "test_gate_cli/evidence.rs"]
@@ -71,57 +74,40 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
 }
 
+/// TSK-1044: quick runs no longer compare with the task line, since no
+/// record earns selection credit; each control names why every target runs.
 #[test]
-fn default_comparison_names_the_task_line_and_explicit_controls_override_it() {
+fn every_selection_control_names_why_every_target_runs() {
     let dir = repo(
         r#"{"schema_version":"1.0","targets":[{"name":"check","runner":"custom","modes":{"quick":{"command":"echo checked"}}}]}"#,
     );
     let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
-    std::fs::write(
-        dir.path().join("project-management/tasks/TSK-001.md"),
-        "---\nid: TSK-001\nintegration_target: integration/test-line\n---\n",
-    )
-    .unwrap();
     std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
     git(dir.path(), &["add", "."]);
-    git(dir.path(), &["commit", "-qm", "test: declare task line"]);
-    git(dir.path(), &["branch", "integration/test-line"]);
-    git(dir.path(), &["switch", "-c", "task/TSK-001-selection"]);
-    let base = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    let base = String::from_utf8(base.stdout).unwrap();
-    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains(base.trim()), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("TSK-001 integration target integration/test-line"),
-        "{}",
-        stderr(&output)
-    );
-    let output = run(
-        dir.path(),
-        home.path(),
-        &["test", "--mode", "quick", "--since", "HEAD"],
-    );
-    assert!(
-        stderr(&output).contains("explicit --since HEAD"),
-        "{}",
-        stderr(&output)
-    );
-    let output = run(
-        dir.path(),
-        home.path(),
-        &["test", "--mode", "quick", "--all"],
-    );
-    assert!(
-        stderr(&output).contains("--all: every target"),
-        "{}",
-        stderr(&output)
-    );
+    git(dir.path(), &["commit", "-qm", "test: one check"]);
+    for (args, reason) in [
+        (
+            vec!["test", "--mode", "quick"],
+            "every target: no local run record earns selection credit (ADR-0089)",
+        ),
+        (
+            vec!["test", "--mode", "quick", "--since", "HEAD"],
+            "every target: --since HEAD narrows nothing",
+        ),
+        (
+            vec!["test", "--mode", "quick", "--all"],
+            "--all: every target",
+        ),
+    ] {
+        let output = run(dir.path(), home.path(), &args);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).contains(reason), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("starting target 'check'"),
+            "{}",
+            stderr(&output)
+        );
+    }
 }
 
 /// What a spawned gate has written to stdout, read to the end on its own
@@ -695,27 +681,7 @@ fn unavailable_gate_lock_refuses_before_start() {
 }
 
 #[cfg(unix)]
-struct SelectionHome {
-    path: std::path::PathBuf,
-    evidence: std::path::PathBuf,
-}
-
-#[cfg(unix)]
-impl SelectionHome {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-#[cfg(unix)]
-impl Drop for SelectionHome {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.evidence).unwrap();
-    }
-}
-
-#[cfg(unix)]
-fn selection_repo() -> (tempfile::TempDir, SelectionHome, String) {
+fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
     let dir = repo(
         r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2,"run_everything":["crates/**","assets/**","Cargo.*",".codeflow/**"]},"targets":[
       {"name":"producer","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo producer >> runs"}}},
@@ -752,11 +718,11 @@ fn selection_repo() -> (tempfile::TempDir, SelectionHome, String) {
         .output()
         .unwrap();
     let base = String::from_utf8(base.stdout).unwrap().trim().to_owned();
-    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    let home = tempfile::tempdir().unwrap();
     git(dir.path(), &["branch", "fixture-base"]);
     let output = evidence::run(
         dir.path(),
-        &home,
+        home.path(),
         &["integrate", "main", "--into", "fixture-base"],
     );
     assert!(output.status.success(), "{}", stderr(&output));
@@ -769,25 +735,15 @@ fn selection_repo() -> (tempfile::TempDir, SelectionHome, String) {
     assert_eq!(raw["clean"], true, "{raw}");
     assert_eq!(raw["complete"], true, "{raw}");
     std::fs::remove_file(dir.path().join("runs")).unwrap();
-    let evidence = Path::new(artifact)
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_owned();
-    (
-        dir,
-        SelectionHome {
-            path: home,
-            evidence,
-        },
-        base,
-    )
+    (dir, home, base)
 }
 
+/// TSK-1044 AC-3: a green full record of the base used to narrow this run
+/// to `producer` and `docs`, skipping `present` and `release`. No record
+/// earns that credit now, so every target runs.
 #[cfg(unix)]
 #[test]
-fn selection_narrows_only_with_green_base_and_keeps_prerequisite_closure() {
+fn a_green_base_record_no_longer_narrows_a_since_run() {
     let (dir, home, base) = selection_repo();
     std::fs::write(dir.path().join("docs/guide.md"), "changed\n").unwrap();
     let output = evidence::run(
@@ -797,8 +753,10 @@ fn selection_narrows_only_with_green_base_and_keeps_prerequisite_closure() {
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
-    assert_eq!(runs, "producer\ndocs\n", "{}", stderr(&output));
-    assert!(stderr(&output).contains("skipped present"));
+    for target in ["producer", "docs", "present", "release"] {
+        assert!(runs.lines().any(|line| line == target), "{runs}");
+    }
+    assert!(!stderr(&output).contains("skipped "), "{}", stderr(&output));
     let isolated = tempfile::tempdir().unwrap();
     let output = evidence::run(dir.path(), isolated.path(), &["test", "--all"]);
     assert!(output.status.success(), "{}", stderr(&output));

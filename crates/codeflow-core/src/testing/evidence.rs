@@ -502,26 +502,6 @@ pub(super) fn redact(target: &TargetConfig, text: &str) -> String {
     text
 }
 
-pub(super) fn mismatch(before: &Identity, now: &Identity) -> Option<&'static str> {
-    if before.tools != now.tools {
-        Some("tool identity changed")
-    } else if before.platform != now.platform {
-        Some("platform changed")
-    } else if before.architecture != now.architecture {
-        Some("architecture changed")
-    } else if before.environment != now.environment {
-        Some("declared environment changed")
-    } else if before.membership != now.membership {
-        Some("test membership changed")
-    } else if before.producers != now.producers {
-        Some("producer output changed")
-    } else if before.inputs != now.inputs {
-        Some("declared inputs changed")
-    } else {
-        None
-    }
-}
-
 /// Values inserted by the runner have no stable selection identity.
 pub(super) fn generated_environment(name: &str) -> bool {
     matches!(

@@ -59,7 +59,7 @@
 use crate::bounded_file::FileIdentity;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -227,23 +227,24 @@ pub fn unwritable_gate_dirs(
         }
     }
     if let Some(home) = home {
-        let dir = home.join(HOME_EVIDENCE_DIR);
-        let probe = dir.join(format!(".write-probe-{}", std::process::id()));
-        let result = std::fs::create_dir_all(&dir).and_then(|()| {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&probe)
-                .map(drop)
-        });
-        match result {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&probe);
-            }
-            Err(error) => unwritable.push((dir, error)),
+        if let Err(error) = probe_evidence_dir(home) {
+            unwritable.push((home.join(HOME_EVIDENCE_DIR), error));
         }
     }
     unwritable
+}
+
+/// Whether a gate could store durable evidence under `home`: the evidence
+/// folder is created and a disposable file created and removed in it,
+/// through the anchored walk the durable copy uses, so a link or junction
+/// at the folder or at the probe's name is refused, never followed
+/// (TSK-1044). `home` itself is the trusted root.
+fn probe_evidence_dir(home: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(home)?;
+    let tree = crate::contained::Tree::open(home)?;
+    let probe = format!("{HOME_EVIDENCE_DIR}/.write-probe-{}", std::process::id());
+    tree.create_new(&probe, b"")?;
+    tree.remove(&probe)
 }
 
 /// Whether a gate could use the lock folder `dir`: it needs the lock file
@@ -1371,6 +1372,45 @@ mod tests {
             found,
             [blocker.join(HOME_LOCK_DIR), blocker.join(HOME_EVIDENCE_DIR)]
         );
+    }
+
+    /// TSK-1044 AC-2: a link planted at the evidence folder, or at the
+    /// probe's own name, is refused; the probe writes and removes nothing
+    /// where it points.
+    #[cfg(unix)]
+    #[test]
+    fn the_evidence_probe_never_follows_a_planted_link() {
+        for at_probe in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("victim"), "victim").unwrap();
+            let home = tmp.path().join("home");
+            std::fs::create_dir_all(&home).unwrap();
+            if at_probe {
+                std::fs::create_dir(home.join(HOME_EVIDENCE_DIR)).unwrap();
+                std::os::unix::fs::symlink(
+                    outside.path().join("victim"),
+                    home.join(HOME_EVIDENCE_DIR)
+                        .join(format!(".write-probe-{}", std::process::id())),
+                )
+                .unwrap();
+            } else {
+                std::os::unix::fs::symlink(outside.path(), home.join(HOME_EVIDENCE_DIR)).unwrap();
+            }
+            let error = probe_evidence_dir(&home).unwrap_err();
+            if !at_probe {
+                assert!(error.to_string().contains("is a symbolic link"), "{error}");
+            }
+            let names: Vec<_> = std::fs::read_dir(outside.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(names, ["victim"]);
+            assert_eq!(
+                std::fs::read(outside.path().join("victim")).unwrap(),
+                b"victim"
+            );
+        }
     }
 
     /// TSK-1003: a sandboxed seat that may write a lock folder must not be

@@ -117,7 +117,7 @@ impl Tree {
                 error.kind(),
                 format!(
                     "{link} is a symbolic link or junction; CodeFlow never reads or writes \
-                     repository files through one"
+                     files through one"
                 ),
             ),
             None => error,
@@ -285,6 +285,22 @@ impl Tree {
         bytes: &[u8],
         permissions: Option<&std::fs::Permissions>,
     ) -> io::Result<()> {
+        self.create_new_with(relative, permissions, |file| file.write_all(bytes))
+    }
+
+    /// [`Tree::create_new_keeping`], where `write` fills the new file through
+    /// its own descriptor, so a large file can be streamed in rather than
+    /// held in memory.
+    ///
+    /// # Errors
+    ///
+    /// As [`Tree::create_new`], and whatever `write` returns.
+    pub(crate) fn create_new_with(
+        &self,
+        relative: &str,
+        permissions: Option<&std::fs::Permissions>,
+        write: impl FnOnce(&mut File) -> io::Result<()>,
+    ) -> io::Result<()> {
         self.explained(relative, || {
             let (parent, name) = self.parent(relative, true)?;
             let mut file = platform::create_file(&parent, &name, true)?;
@@ -298,7 +314,7 @@ impl Tree {
                 Ok(())
             };
             let written = kept
-                .and_then(|()| file.write_all(bytes))
+                .and_then(|()| write(&mut file))
                 .and_then(|()| file.sync_all());
             #[cfg(test)]
             let written = written.and_then(|()| fault::check(fault::Point::AfterCreate, relative));
