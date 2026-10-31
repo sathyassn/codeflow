@@ -1643,10 +1643,15 @@ jobs:
           chmod +x "$tool/osv-scanner"
 
           # With the project exception hook the scan reports JSON on stdout and
-          # its messages on stderr; without it the run is unchanged.
+          # its log on stderr; without it the run is unchanged. osv-scanner
+          # exits 1 for advisories even when it logged an error, such as a
+          # lockfile it could not read, and it sends every log level to stderr
+          # when the format is JSON. --verbosity error keeps only the errors,
+          # so any text on stderr means the scan may be incomplete and the hook
+          # is not run.
           set +e
           if [ -n "$hook_mode" ]; then
-            out=$("$tool/osv-scanner" scan -r --no-ignore --format json . 2>"$tool/scan.err"); rc=$?
+            out=$("$tool/osv-scanner" scan -r --no-ignore --verbosity error --format json . 2>"$tool/scan.err"); rc=$?
             diag=$(cat "$tool/scan.err")
           else
             out=$("$tool/osv-scanner" scan -r --no-ignore . 2>&1); rc=$?
@@ -1671,7 +1676,9 @@ jobs:
             if printf '%s' "$out" | jq -r --arg here "$PWD/" '.results[]? | .source.path as $s | .packages[]? | .package as $p | .vulnerabilities[]? | [.id, $p.name, $p.version, $p.ecosystem, ($s | ltrimstr($here)), ((.aliases // []) | join(","))] | @tsv' >"$tool/findings.raw"; then
               LC_ALL=C sort -u "$tool/findings.raw" >"$findings"
             fi
-            if [ ! -s "$findings" ]; then
+            if [ -s "$tool/scan.err" ]; then
+              echo "::error::osv-scanner logged errors, so its scan may be incomplete; no project exception applies"
+            elif [ ! -s "$findings" ]; then
               echo "::error::osv-scanner reported advisories but none could be listed from its JSON report; no project exception applies"
             elif ! { mkdir "$tree" && git archive -o "$tool/trusted.tar" "$TRUSTED_SHA" && tar -xf "$tool/trusted.tar" -C "$tree" && [ -f "$tree/$hook" ]; }; then
               echo "::error::cannot export ${hook} and the project files from the trusted commit ${TRUSTED_SHA}; no project exception applies"
