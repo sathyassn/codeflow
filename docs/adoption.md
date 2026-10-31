@@ -11,8 +11,8 @@ much working method comes with it.
   programs whose work outlives sessions.
 - No tier changes how strictly the floor is enforced, and no tier installs remote branch protection.
   Remote rules need the host's permissions and are your decision; `codeflow
-  remote protect` applies them when you choose to. It requires the checks in
-  `git.required_checks` on a branch that is up to date with its base,
+  remote protect` applies them when you choose to, as rulesets it owns. It
+  requires the checks on a branch that is up to date with its base,
   because a check tests the merge with the base as it was when the run
   started: two pull requests each green on an older base can merge and leave
   the branch red. `codeflow doctor --check remote-perimeter` reads the live
