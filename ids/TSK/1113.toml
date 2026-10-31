@@ -1,0 +1,11 @@
+id = "TSK-1113"
+uid = "00e5a1a0-b150-475f-a4f3-6b3eb8806ea3"
+kind = "TSK"
+title = "Stat tiles, titled callouts, labelled code and disclosure chips are catalog blocks"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:20:02Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
