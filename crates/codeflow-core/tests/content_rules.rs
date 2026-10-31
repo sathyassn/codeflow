@@ -92,7 +92,7 @@ impl Fixture {
 
     fn rules(&self, authority: Oid, git: &serde_json::Value) -> ContentRules {
         let git: GitPolicy = serde_json::from_value(git.clone()).unwrap();
-        ContentRules::at(&self.repo, &git, &[authority], None).unwrap()
+        ContentRules::at(&self.repo, &git, Some(authority), None).unwrap()
     }
 
     /// The staged verdict and the verdict on the commit made from it.
@@ -453,5 +453,208 @@ fn an_unreadable_ignore_file_is_reported_at_the_rule_level() {
         let [staged, _] = f.judge(authority, &git);
         assert_eq!(levels(&staged, "git.ignored_files"), [level], "{staged:?}");
         assert!(format!("{:?}", staged.violations).contains("sub/.gitignore is not UTF-8"));
+    }
+}
+
+/// Review 01, finding 1: a clean automatic merge can record a blob neither
+/// parent holds, and that blob is sized like any other new file.
+#[test]
+fn a_clean_merge_that_produces_an_oversized_file_is_refused() {
+    let f = Fixture::new();
+    let line = |byte: u8, len: usize| {
+        let mut line = vec![byte; len - 1];
+        line.push(b'\n');
+        line
+    };
+    // 8 MiB of 1 KiB lines; each side widens one line far from the other.
+    let mut lines: Vec<Vec<u8>> = (0..8192).map(|_| line(b'x', 1024)).collect();
+    f.stage("data.txt", &lines.concat());
+    let authority = f.authority("", true, &json!({}));
+    let wide = MIB + MIB / 2;
+    lines[10] = line(b'a', wide);
+    f.stage("data.txt", &lines.concat());
+    let ours = f.commit(&[authority]);
+    lines[10] = line(b'x', 1024);
+    lines[8000] = line(b'b', wide);
+    f.stage("data.txt", &lines.concat());
+    let theirs = f.commit(&[authority]);
+    let (ours_commit, theirs_commit) = (
+        f.repo.find_commit(ours).unwrap(),
+        f.repo.find_commit(theirs).unwrap(),
+    );
+    let mut merged = f
+        .repo
+        .merge_commits(&ours_commit, &theirs_commit, None)
+        .unwrap();
+    assert!(!merged.has_conflicts());
+    let tree = f
+        .repo
+        .find_tree(merged.write_tree_to(&f.repo).unwrap())
+        .unwrap();
+    let sig = git2::Signature::now("Tester", "test@example.invalid").unwrap();
+    let merge = f
+        .repo
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "chore(merge): join both widenings",
+            &tree,
+            &[&ours_commit, &theirs_commit],
+        )
+        .unwrap();
+    let size = tree
+        .get_name("data.txt")
+        .unwrap()
+        .to_object(&f.repo)
+        .unwrap();
+    let size = size.as_blob().unwrap().size();
+    assert!(size > 10 * MIB, "the merged file is {size} bytes");
+    let rules = f.rules(authority, &json!({}));
+    let paths = PathPolicy::from_git(&GitPolicy::default()).unwrap();
+    let report = path_policy::range_with(
+        f.dir.path(),
+        Some(&authority.to_string()),
+        &merge.to_string(),
+        &paths,
+        Some(&rules),
+    )
+    .unwrap();
+    // Each parent warns; the merge's own blob is over the limit.
+    let mut found = levels(&report, "git.max_file_bytes");
+    found.sort_by_key(|level| format!("{level:?}"));
+    assert_eq!(
+        found,
+        [PolicyLevel::Block, PolicyLevel::Warn, PolicyLevel::Warn],
+        "{report:?}"
+    );
+    assert!(format!("{:?}", report.violations).contains("file too large: data.txt"));
+}
+
+/// Review 01, finding 2: git skips a leading byte order mark, and patterns
+/// compare in the same composed (NFC) spelling as paths.
+#[test]
+fn a_byte_order_mark_and_decomposed_patterns_match_as_git_reads_them() {
+    for (path, ignored) in [
+        ("build/out.o", true),
+        ("BUILD/x.o", true),
+        ("sub/caf\u{e9}.dat", true),
+        ("sub/cafe\u{301}.dat", true),
+        ("sub/draft.tmp", true),
+        ("sub/\u{e9}t\u{e9}.tmp", false),
+        ("sub/e\u{301}te\u{301}.tmp", false),
+        ("sub/other.dat", false),
+    ] {
+        let f = Fixture::new();
+        f.stage(
+            "sub/.gitignore",
+            "\u{feff}cafe\u{301}.dat\n*.tmp\n!e\u{301}te\u{301}.tmp\n".as_bytes(),
+        );
+        let authority = f.authority("\u{feff}build/\n", false, &json!({}));
+        f.stage(path, b"x");
+        for report in f.judge(authority, &json!({})) {
+            assert_eq!(
+                !levels(&report, "git.ignored_files").is_empty(),
+                ignored,
+                "{path}: {report:?}"
+            );
+        }
+    }
+}
+
+/// Review 01, finding 3: with no remote HEAD both `main` and `master` are
+/// read; each tree's ignore rules are judged whole, and the stricter
+/// settings of the two policies apply.
+#[test]
+fn with_main_and_master_assumed_each_tree_and_the_stricter_settings_judge() {
+    let f = Fixture::new();
+    f.repo
+        .remote("origin", "https://example.invalid/adopter.git")
+        .unwrap();
+    let main = f.authority(
+        "*.bin\n",
+        false,
+        &json!({"ignored_files": {"level": "block"},
+            "max_file_bytes": {"limit": 5 * MIB}}),
+    );
+    f.stage("sub/.gitignore", b"!payload.bin\n");
+    let master = f.authority(
+        "",
+        false,
+        &json!({"ignored_files": {"level": "warn"},
+            "max_file_bytes": {"limit": 3 * MIB}}),
+    );
+    for (name, id) in [("main", main), ("master", master)] {
+        f.repo
+            .reference(&format!("refs/remotes/origin/{name}"), id, true, "fixture")
+            .unwrap();
+    }
+    f.repo
+        .reference("refs/heads/feat/content", main, true, "fixture")
+        .unwrap();
+    let mut index = f.repo.index().unwrap();
+    index
+        .read_tree(&f.repo.find_commit(main).unwrap().tree().unwrap())
+        .unwrap();
+    index.write().unwrap();
+    f.stage("sub/payload.bin", &big(4 * MIB));
+    let (paths, rules) =
+        codeflow_core::hooks::landed_policy::staged_rules(f.dir.path(), &GitPolicy::default())
+            .unwrap();
+    let report = path_policy::staged_with(&f.repo, &paths, Some(&rules)).unwrap();
+    assert_eq!(
+        levels(&report, "git.ignored_files"),
+        [PolicyLevel::Block],
+        "{report:?}"
+    );
+    assert_eq!(
+        levels(&report, "git.max_file_bytes"),
+        [PolicyLevel::Block],
+        "{report:?}"
+    );
+}
+
+/// Review 01, finding 4: `codeflow ci` reads the policy keys at the
+/// authority commit itself, and the shipped defaults where it has none.
+#[test]
+fn the_authority_commits_own_policy_or_the_defaults_judge() {
+    let f = Fixture::new();
+    f.stage(".codeflow/project.toml", b"file_size_rule = \"refuse\"\n");
+    f.stage("readme.md", b"no policy file here");
+    let bare = f.commit(&[]);
+    let rules = ContentRules::at_authority(f.dir.path(), &bare.to_string()).unwrap();
+    assert!(rules.refuses());
+    let authority = f.authority("", true, &json!({"max_file_bytes": {"limit": 2 * MIB}}));
+    f.stage("data/three.bin", &big(3 * MIB));
+    let paths = PathPolicy::from_git(&GitPolicy::default()).unwrap();
+    for (at, expected) in [(bare, PolicyLevel::Warn), (authority, PolicyLevel::Block)] {
+        let rules = ContentRules::at_authority(f.dir.path(), &at.to_string()).unwrap();
+        let report = path_policy::staged_with(&f.repo, &paths, Some(&rules)).unwrap();
+        assert_eq!(
+            levels(&report, "git.max_file_bytes"),
+            [expected],
+            "{report:?}"
+        );
+    }
+}
+
+/// Review 01, finding 6: `except_under` names directories; a prefix that is
+/// a file's own path does not exempt that file.
+#[test]
+fn except_under_exempts_directories_and_never_one_named_file() {
+    let git = json!({"max_file_bytes": {"except_under": ["models/weights.bin", "Media"]}});
+    let f = Fixture::new();
+    let authority = f.authority("", false, &git);
+    f.stage("models/weights.bin", &big(10 * MIB + 1));
+    f.stage("media/film.mov", &big(10 * MIB + 1));
+    for report in f.judge(authority, &git) {
+        let text = format!("{:?}", report.violations);
+        assert_eq!(
+            levels(&report, "git.max_file_bytes"),
+            [PolicyLevel::Block],
+            "{text}"
+        );
+        assert!(text.contains("models/weights.bin"), "{text}");
+        assert!(!text.contains("film.mov"), "{text}");
     }
 }

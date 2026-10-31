@@ -586,4 +586,233 @@ mod content_rules {
         }
         println!("updated project: {}", said(&commit));
     }
+
+    /// Review 01, finding 1: a clean automatic merge that records a file
+    /// over the limit, though neither parent holds one, fails in CI.
+    #[test]
+    fn ci_refuses_a_clean_merge_that_produces_an_oversized_file() {
+        let mut f = adopter(true);
+        let line = |byte: u8, len: usize| {
+            let mut line = vec![byte; len - 1];
+            line.push(b'\n');
+            line
+        };
+        let mut lines: Vec<Vec<u8>> = (0..8192).map(|_| line(b'x', 1024)).collect();
+        f.stage("data.txt", 0o100_644, &lines.concat());
+        f.base = f.commit(&[f.base]);
+        let wide = MIB + MIB / 2;
+        lines[10] = line(b'a', wide);
+        f.stage("data.txt", 0o100_644, &lines.concat());
+        let ours = f.repo.find_commit(f.commit(&[f.base])).unwrap();
+        lines[10] = line(b'x', 1024);
+        lines[8000] = line(b'b', wide);
+        f.stage("data.txt", 0o100_644, &lines.concat());
+        let theirs = f.repo.find_commit(f.commit(&[f.base])).unwrap();
+        let mut merged = f.repo.merge_commits(&ours, &theirs, None).unwrap();
+        assert!(!merged.has_conflicts());
+        let tree = f
+            .repo
+            .find_tree(merged.write_tree_to(&f.repo).unwrap())
+            .unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let merge = f
+            .repo
+            .commit(
+                None,
+                &sig,
+                &sig,
+                "chore(merge): join both widenings",
+                &tree,
+                &[&ours, &theirs],
+            )
+            .unwrap();
+        let ci = f.ci(merge);
+        let text = said(&ci);
+        assert!(!ci.status.success(), "{text}");
+        assert!(
+            text.contains("BLOCKED — policy rule git.max_file_bytes (block)")
+                && text.contains("file too large: data.txt"),
+            "{text}"
+        );
+    }
+
+    /// Review 01, finding 4: where the authority commit has no policy file,
+    /// the shipped defaults judge, never a weaker working copy.
+    #[test]
+    fn ci_never_takes_the_size_rules_from_the_working_copy() {
+        let mut f = adopter(true);
+        f.delete(".codeflow/policy.json");
+        f.base = f.commit(&[f.base]);
+        f.head(f.base);
+        f.repo
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        std::fs::write(
+            f.dir.path().join(".codeflow/policy.json"),
+            json!({"git": {"ignored_files": {"level": "off"},
+                "max_file_bytes": {"limit": 1_000_000_000_u64}}})
+            .to_string(),
+        )
+        .unwrap();
+        f.stage("assets/eleven.bin", 0o100_644, &vec![b'x'; 11 * MIB]);
+        f.stage("build/app.o", 0o100_644, b"object");
+        let ci = f.ci(f.commit(&[f.base]));
+        let text = said(&ci);
+        assert!(!ci.status.success(), "{text}");
+        assert!(text.contains("file too large: assets/eleven.bin"), "{text}");
+        assert!(text.contains("ignored file changed: build/app.o"), "{text}");
+    }
+
+    /// Run `program` in the adopter with this build first on `PATH`.
+    fn run(f: &Adopter, path: &std::ffi::OsStr, program: &str, args: &[&str]) -> Output {
+        let output = f
+            .command(program)
+            .env("PATH", path)
+            .args(args)
+            .output()
+            .unwrap();
+        println!("$ {program} {}\n{}", args.join(" "), said(&output));
+        output
+    }
+
+    /// A scratch project made by `codeflow init`, its scaffold on the
+    /// origin's `main` as a merged pull request leaves it (so origin/main is
+    /// the authority), checked out on a new feature branch.
+    fn real_scaffold() -> (Adopter, std::ffi::OsString, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init_opts(
+            dir.path(),
+            git2::RepositoryInitOptions::new().initial_head("main"),
+        )
+        .unwrap();
+        repo.config().unwrap().set_str("user.name", "Test").unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("user.email", "test@example.invalid")
+            .unwrap();
+        let f = Adopter {
+            dir,
+            repo,
+            base: git2::Oid::ZERO_SHA1,
+        };
+        let root = f.dir.path().to_path_buf();
+        std::fs::write(root.join(".gitignore"), "build/\n").unwrap();
+        let exe = std::path::PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+        let path = std::env::join_paths(
+            exe.parent()
+                .map(std::path::Path::to_path_buf)
+                .into_iter()
+                .chain(std::env::split_paths(
+                    &std::env::var_os("PATH").unwrap_or_default(),
+                )),
+        )
+        .unwrap();
+        let run = |program: &str, args: &[&str]| run(&f, &path, program, args);
+        let init = run(
+            env!("CARGO_BIN_EXE_codeflow"),
+            &["init", "--minimal", "--yes"],
+        );
+        assert!(init.status.success(), "{}", said(&init));
+        let project = std::fs::read_to_string(root.join(".codeflow/project.toml")).unwrap();
+        assert!(project.contains("file_size_rule = \"refuse\""), "{project}");
+        if !said(&run("git", &["status", "--porcelain"]))
+            .trim()
+            .is_empty()
+        {
+            assert!(run("git", &["add", "-A"]).status.success());
+            let commit = run("git", &["commit", "-m", "chore: adopt codeflow"]);
+            assert!(commit.status.success(), "{}", said(&commit));
+        }
+        let remote = tempfile::tempdir().unwrap();
+        let origin = remote.path().join("origin.git");
+        let origin_text = origin.to_str().unwrap();
+        let root_text = root.to_str().unwrap();
+        for args in [
+            &["init", "-q", "--bare", origin_text][..],
+            &[
+                "--git-dir",
+                origin_text,
+                "fetch",
+                "-q",
+                root_text,
+                "+main:main",
+            ],
+            &["remote", "add", "origin", origin_text],
+            &["fetch", "-q", "origin"],
+            &["remote", "set-head", "origin", "main"],
+            &["switch", "-q", "-c", "feat/large-files"],
+        ] {
+            let output = run("git", args);
+            assert!(output.status.success(), "{}", said(&output));
+        }
+        (f, path, remote)
+    }
+
+    /// AC-5 through the real commands: `codeflow init` makes the scaffold,
+    /// git commits through the hooks it installs, and `codeflow ci` judges
+    /// the branch against the origin's default branch.
+    #[test]
+    fn a_real_init_scaffold_judges_large_and_ignored_files() {
+        let (f, path, _remote) = real_scaffold();
+        let root = f.dir.path().to_path_buf();
+        let run = |program: &str, args: &[&str]| run(&f, &path, program, args);
+        let write = |name: &str, size: usize| {
+            let file = root.join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, vec![b'x'; size]).unwrap();
+            assert!(run("git", &["add", "-f", "--", name]).status.success());
+        };
+        write("assets/two.bin", 2 * MIB);
+        let two = run("git", &["commit", "-m", "feat: add a two mebibyte asset"]);
+        assert!(two.status.success(), "{}", said(&two));
+        assert!(
+            said(&two).contains("large file: assets/two.bin"),
+            "{}",
+            said(&two)
+        );
+        write("assets/eleven.bin", 11 * MIB);
+        let eleven = run(
+            "git",
+            &["commit", "-m", "feat: add an eleven mebibyte asset"],
+        );
+        let text = said(&eleven);
+        assert!(!eleven.status.success(), "{text}");
+        assert!(
+            text.contains("file too large: assets/eleven.bin")
+                && text.contains("Git LFS")
+                && text.contains("admitted row"),
+            "{text}"
+        );
+        assert!(run("git", &["rm", "-q", "--cached", "assets/eleven.bin"])
+            .status
+            .success());
+        write("build/app.o", 10);
+        let ignored = run("git", &["commit", "-m", "feat: add a build artefact"]);
+        assert!(ignored.status.success(), "{}", said(&ignored));
+        assert!(
+            said(&ignored).contains("ignored file changed: build/app.o"),
+            "{}",
+            said(&ignored)
+        );
+        let ci = run(
+            env!("CARGO_BIN_EXE_codeflow"),
+            &[
+                "ci",
+                "--base",
+                "origin/main",
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/large-files",
+            ],
+        );
+        let text = said(&ci);
+        assert!(ci.status.success(), "{text}");
+        assert!(
+            text.contains("large file: assets/two.bin")
+                && text.contains("ignored file changed: build/app.o")
+                && !text.contains("eleven.bin"),
+            "{text}"
+        );
+    }
 }

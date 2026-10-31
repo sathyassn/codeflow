@@ -684,14 +684,29 @@ pub fn staged_rules(
         &super::path_policy::PathPolicy::from_git(local)?,
         PathPolicySource::WorkingCopy,
     );
-    let content = match super::repo::open(root)? {
-        Some(repo) => super::path_policy::ContentRules::at(
+    let Some(repo) = super::repo::open(root)? else {
+        return Err("the repository cannot be opened".into());
+    };
+    // Each default-branch commit is read whole, with its own policy, project
+    // settings and ignore rules, and the stricter rules win. A declared
+    // integration line supplies none of them.
+    let mut content: Option<super::path_policy::ContentRules> = None;
+    for commit in &landed.commits {
+        let (policy, _) = at(&repo, &commit.to_string())?;
+        let rules = super::path_policy::ContentRules::at(&repo, &policy.git, Some(*commit), None)?;
+        content = Some(match content {
+            Some(kept) => kept.stricter(rules),
+            None => rules,
+        });
+    }
+    let content = match content {
+        Some(content) => content,
+        None => super::path_policy::ContentRules::at(
             &repo,
             &landed.policy.git,
-            &landed.commits,
+            None,
             landed.project.as_ref(),
         )?,
-        None => return Err("the repository cannot be opened".into()),
     };
     Ok((paths, content))
 }

@@ -296,6 +296,58 @@ fn check_entry(
     Ok(())
 }
 
+fn check_content(
+    repo: &Repository,
+    content: &ContentRules,
+    report: &mut Report,
+    entry: &Entry<'_>,
+) -> Result<(), String> {
+    let shown = crate::git::GitName::from_bytes(entry.raw)
+        .display()
+        .to_string();
+    content.check(repo, report, &shown, normalize(entry.raw).as_deref(), entry)
+}
+
+/// The files a merge commit records that no parent holds at that path with
+/// that content and mode: every blob the merge itself introduced, whether
+/// a hand resolution or the automatic merge produced it.
+fn merge_introduced(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    parents: &[git2::Oid],
+) -> Result<Vec<(Vec<u8>, u32, git2::Oid)>, String> {
+    let mut introduced: Option<std::collections::BTreeMap<Vec<u8>, (u32, git2::Oid)>> = None;
+    for parent in parents {
+        let parent = repo
+            .find_commit(*parent)
+            .and_then(|c| c.tree())
+            .map_err(|e| e.to_string())?;
+        let mut options = git2::DiffOptions::new();
+        options.include_typechange(true);
+        let diff = repo
+            .diff_tree_to_tree(Some(&parent), Some(tree), Some(&mut options))
+            .map_err(|e| e.to_string())?;
+        let mut changed = std::collections::BTreeMap::new();
+        for delta in diff.deltas().filter(|d| d.status() != Delta::Deleted) {
+            let file = delta.new_file();
+            let raw = file.path_bytes().ok_or("diff has no path")?.to_vec();
+            changed.insert(raw, (u32::from(file.mode()), file.id()));
+        }
+        introduced = Some(match introduced {
+            None => changed,
+            Some(mut kept) => {
+                kept.retain(|path, _| changed.contains_key(path));
+                kept
+            }
+        });
+    }
+    Ok(introduced
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(raw, (mode, id))| (raw, mode, id))
+        .collect())
+}
+
 fn check_path(
     repo: &Repository,
     policy: &PathPolicy,
@@ -495,9 +547,26 @@ pub fn range_with(
         let tree = commit.tree().map_err(|e| e.to_string())?;
         let parents = history::parents(&repo, &commit).map_err(|e| e.to_string())?;
         if parents.len() > 1 {
-            match read_merge(&repo, &commit) {
-                MergeReading::Clean => {}
-                MergeReading::Unknown(error) => return Err(error),
+            let reading = read_merge(&repo, &commit);
+            if let MergeReading::Unknown(error) = &reading {
+                return Err(error.clone());
+            }
+            // Content is judged wherever the merge records a file no parent
+            // holds, which a clean automatic merge can produce too.
+            if let Some(content) = content {
+                for (raw, mode, id) in merge_introduced(&repo, &tree, &parents)? {
+                    let entry = Entry {
+                        raw: &raw,
+                        deleted: false,
+                        mode,
+                        id,
+                    };
+                    check_content(&repo, content, &mut report, &entry)?;
+                }
+            }
+            match reading {
+                MergeReading::Clean | MergeReading::Unknown(_) => {}
+                MergeReading::Changed(_) if !policy.level.is_active() => {}
                 MergeReading::Changed(paths) => {
                     let mut index = git2::Index::new().map_err(|e| e.to_string())?;
                     index.read_tree(&tree).map_err(|e| e.to_string())?;
@@ -511,7 +580,7 @@ pub fn range_with(
                             mode: found.map_or(0, |e| e.mode),
                             id: found.map_or(git2::Oid::ZERO_SHA1, |e| e.id),
                         };
-                        check_entry(&repo, policy, content, &mut report, &entry)?;
+                        check_entry(&repo, policy, None, &mut report, &entry)?;
                     }
                 }
             }
@@ -619,7 +688,7 @@ impl MaxFileBytes {
     }
 }
 
-/// The `.gitignore` files of the authority's trees, by the directory that
+/// The `.gitignore` files of one authority tree, by the directory that
 /// holds each, in the comparison spelling ("" for the root).
 #[derive(Default)]
 struct IgnoreRules {
@@ -627,30 +696,25 @@ struct IgnoreRules {
 }
 
 impl IgnoreRules {
-    fn read(repo: &Repository, commits: &[git2::Oid]) -> Result<Self, String> {
+    fn read(repo: &Repository, commit: git2::Oid) -> Result<Self, String> {
         let mut rules = Self::default();
-        for commit in commits {
-            let tree = repo
-                .find_commit(*commit)
-                .and_then(|c| c.tree())
-                .map_err(|e| format!("cannot read the authority tree {commit}: {e}"))?;
-            let mut failure = None;
-            crate::git::walk_tree(repo, &tree, &mut |name, entry| {
-                let regular = matches!(entry.filemode(), 0o100_644 | 0o100_755 | 0o100_664);
-                if regular && entry.name_bytes().eq_ignore_ascii_case(b".gitignore") {
-                    if let Err(error) = rules.add(repo, name, entry.id()) {
-                        failure = Some(error);
-                        return crate::git::Walk::Stop;
-                    }
-                }
-                crate::git::Walk::Continue
-            })
+        let tree = repo
+            .find_commit(commit)
+            .and_then(|c| c.tree())
             .map_err(|e| format!("cannot read the authority tree {commit}: {e}"))?;
-            if let Some(error) = failure {
-                return Err(error);
+        let mut failure = None;
+        crate::git::walk_tree(repo, &tree, &mut |name, entry| {
+            let regular = matches!(entry.filemode(), 0o100_644 | 0o100_755 | 0o100_664);
+            if regular && entry.name_bytes().eq_ignore_ascii_case(b".gitignore") {
+                if let Err(error) = rules.add(repo, name, entry.id()) {
+                    failure = Some(error);
+                    return crate::git::Walk::Stop;
+                }
             }
-        }
-        Ok(rules)
+            crate::git::Walk::Continue
+        })
+        .map_err(|e| format!("cannot read the authority tree {commit}: {e}"))?;
+        failure.map_or(Ok(rules), Err)
     }
 
     fn add(
@@ -667,6 +731,8 @@ impl IgnoreRules {
             .map_err(|e| format!("cannot read {shown}: {e}"))?;
         let text =
             std::str::from_utf8(blob.content()).map_err(|_| format!("{shown} is not UTF-8"))?;
+        // Git skips a byte order mark at the start of the file.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         // Matched case-insensitively, so a case variant of an excluded name
         // is excluded too. Paths are passed relative to `dir`.
         let mut builder = ignore::gitignore::GitignoreBuilder::new("");
@@ -674,10 +740,14 @@ impl IgnoreRules {
             .case_insensitive(true)
             .map_err(|e| format!("{shown}: {e}"))?;
         // Lines end at a line feed; a carriage return before it is dropped.
+        // Each line is composed (NFC) to match the paths it is compared with.
         for line in text.split('\n') {
             let line = line.strip_suffix('\r').unwrap_or(line);
             builder
-                .add_line(Some(std::path::PathBuf::from(&shown)), line)
+                .add_line(
+                    Some(std::path::PathBuf::from(&shown)),
+                    &line.nfc().collect::<String>(),
+                )
                 .map_err(|e| format!("{shown}: {e}"))?;
         }
         let matcher = builder.build().map_err(|e| format!("{shown}: {e}"))?;
@@ -687,7 +757,8 @@ impl IgnoreRules {
 
     /// The nearest `.gitignore` with a line matching `components`, as git
     /// reads them: `Some(Ok(rule))` excludes, `Some(Err(()))` re-includes.
-    /// Where two authority trees disagree at one level, exclusion wins.
+    /// Where two files at one level disagree (case variants of the name),
+    /// exclusion wins.
     fn decide(&self, components: &[&str], is_dir: bool) -> Option<Result<String, ()>> {
         for depth in (0..components.len()).rev() {
             let Some(matchers) = self.dirs.get(&components[..depth].join("/")) else {
@@ -734,40 +805,38 @@ impl IgnoreRules {
 pub struct ContentRules {
     ignored_level: PolicyLevel,
     ignored_allow: Vec<String>,
-    ignore: Result<IgnoreRules, String>,
+    /// One rule set per authority tree; any tree's exclusion counts.
+    ignore: Vec<Result<IgnoreRules, String>>,
     limit: u64,
     except_under: Vec<String>,
     refuse: bool,
 }
 
 impl ContentRules {
-    /// Read the rules at the authority's `commits`. With no commit (an
-    /// unborn repository), `project` is the project settings the authority
-    /// holds and no ignore rule applies.
+    /// Read the rules at the authority `commit`, whose policy is `git`.
+    /// With no commit (an unborn repository), `project` is the project
+    /// settings the authority holds and no ignore rule applies.
     ///
     /// # Errors
-    /// A declaration is invalid, or an authority commit or its project
+    /// A declaration is invalid, or the authority commit or its project
     /// settings cannot be read. An unreadable `.gitignore` is reported at
     /// the `git.ignored_files` level instead.
     pub fn at(
         repo: &Repository,
         git: &GitPolicy,
-        commits: &[git2::Oid],
+        commit: Option<git2::Oid>,
         project: Option<&toml::Value>,
     ) -> Result<Self, String> {
         let ignored = git.ignored_files.clone().unwrap_or_default();
         let (limit, except_under) = git.max_file_bytes.clone().unwrap_or_default().resolved()?;
-        let mut refuse = git.max_file_bytes.is_some();
-        if commits.is_empty() {
-            refuse |= new_scaffold(project);
-        }
-        for commit in commits {
-            refuse |= new_scaffold(project_at(repo, *commit)?.as_ref());
-        }
-        let ignore = if ignored.level.is_active() {
-            IgnoreRules::read(repo, commits)
-        } else {
-            Ok(IgnoreRules::default())
+        let refuse = git.max_file_bytes.is_some()
+            || match commit {
+                Some(commit) => new_scaffold(project_at(repo, commit)?.as_ref()),
+                None => new_scaffold(project),
+            };
+        let ignore = match commit {
+            Some(commit) if ignored.level.is_active() => vec![IgnoreRules::read(repo, commit)],
+            _ => Vec::new(),
         };
         Ok(Self {
             ignored_level: ignored.level,
@@ -779,24 +848,68 @@ impl ContentRules {
         })
     }
 
-    /// [`ContentRules::at`] with the one authority commit `rev` names, as
-    /// `codeflow ci` reads it.
+    /// The rules at the authority commit `rev`, with the policy that commit
+    /// holds and the shipped defaults where it holds none, as `codeflow ci`
+    /// reads them. Nothing is read from the working copy.
+    ///
+    /// # Errors
+    /// The repository, `rev` or its policy cannot be read, or as
+    /// [`ContentRules::at`].
+    pub fn at_authority(root: &Path, rev: &str) -> Result<Self, String> {
+        let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+        let commit = Self::commit(&repo, rev)?;
+        let shown = crate::git::display_text(rev);
+        let git = match super::landed_policy::policy_text_at(root, &commit.to_string())? {
+            Some(text) => {
+                serde_json::from_str::<super::Policy>(&text)
+                    .map_err(|e| format!("invalid policy at {shown}: {e}"))?
+                    .git
+            }
+            None => GitPolicy::default(),
+        };
+        Self::at(&repo, &git, Some(commit), None)
+    }
+
+    /// [`ContentRules::at`] at the commit `rev` names with the policy `git`,
+    /// as `codeflow ci` reads it when no authority commit resolves.
     ///
     /// # Errors
     /// The repository or `rev` cannot be read, or as [`ContentRules::at`].
     pub fn at_rev(root: &Path, git: &GitPolicy, rev: &str) -> Result<Self, String> {
         let repo = Repository::discover(root).map_err(|e| e.to_string())?;
-        let commit = repo
-            .revparse_single(rev)
+        let commit = Self::commit(&repo, rev)?;
+        Self::at(&repo, git, Some(commit), None)
+    }
+
+    fn commit(repo: &Repository, rev: &str) -> Result<git2::Oid, String> {
+        repo.revparse_single(rev)
             .and_then(|o| o.peel_to_commit())
+            .map(|c| c.id())
             .map_err(|e| {
                 format!(
                     "cannot read the authority commit {}: {e}",
                     crate::git::display_text(rev)
                 )
-            })?
-            .id();
-        Self::at(&repo, git, &[commit], None)
+            })
+    }
+
+    /// The stricter of two authorities' rules, as when the default branch
+    /// is assumed to be `main` or `master` and both exist: the higher
+    /// ignored-file level, the allowances and exceptions both grant, the
+    /// lower limit, and refusal if either refuses. Each tree's ignore rules
+    /// are kept whole, so an exclusion in one is never undone by a
+    /// re-inclusion in the other.
+    #[must_use]
+    pub fn stricter(mut self, other: Self) -> Self {
+        if self.ignored_level.lower(other.ignored_level) == self.ignored_level {
+            self.ignored_level = other.ignored_level;
+        }
+        self.ignored_allow = overlap(&self.ignored_allow, &other.ignored_allow);
+        self.ignore.extend(other.ignore);
+        self.limit = self.limit.min(other.limit);
+        self.except_under = overlap(&self.except_under, &other.except_under);
+        self.refuse |= other.refuse;
+        self
     }
 
     /// Whether a file over the limit is refused, rather than reported.
@@ -806,7 +919,10 @@ impl ContentRules {
     }
 
     fn preamble(&self, report: &mut Report) {
-        if let (Err(error), true) = (&self.ignore, self.ignored_level.is_active()) {
+        if !self.ignored_level.is_active() {
+            return;
+        }
+        for error in self.ignore.iter().filter_map(|rules| rules.as_ref().err()) {
             report.violations.push(Violation::new(
                 "git.ignored_files",
                 self.ignored_level,
@@ -820,15 +936,18 @@ impl ContentRules {
         if !self.ignored_level.is_active() {
             return;
         }
-        let finding = match (path, &self.ignore) {
-            (Err(error), _) => Some(format!(
+        let finding = match path {
+            Err(error) => Some(format!(
                 "{shown}: {error}; the ignore rules cannot judge it"
             )),
-            (Ok(path), Ok(rules)) if !self.ignored_allow.iter().any(|a| under(path, a)) => rules
-                .excludes(path)
+            Ok(path) if !self.ignored_allow.iter().any(|a| under(path, a)) => self
+                .ignore
+                .iter()
+                // An unreadable rule set is reported once, by the preamble.
+                .filter_map(|rules| rules.as_ref().ok())
+                .find_map(|rules| rules.excludes(path))
                 .map(|rule| format!("ignored file changed: {shown} matches {rule}")),
-            // An unreadable rule set is reported once, by the preamble.
-            (Ok(_), _) => None,
+            Ok(_) => None,
         };
         if let Some(message) = finding {
             report.violations.push(Violation::new(
@@ -854,7 +973,12 @@ impl ContentRules {
             return Ok(());
         }
         self.ignored(report, shown, path);
-        if path.is_ok_and(|p| self.except_under.iter().any(|e| under(p, e))) {
+        // `except_under` names directories: a file beneath one is exempt,
+        // and a prefix that is the file's own path exempts nothing.
+        let beneath = |p: &str, e: &str| {
+            e.is_empty() || p.strip_prefix(e).is_some_and(|s| s.starts_with('/'))
+        };
+        if path.is_ok_and(|p| self.except_under.iter().any(|e| beneath(p, e))) {
             return Ok(());
         }
         // The blob git records: for a Git LFS path, the pointer. An empty
@@ -906,6 +1030,27 @@ pub const ROUTES: &str = "admit it by tracking the path with Git LFS (the gate s
 
 /// Why a size finding is only a report line in an updated project.
 const REPORTED: &str = "reported only, since git.max_file_bytes is not set on the default branch; set it there to refuse such files";
+
+/// The prefixes both lists cover: for each pair where one lies under the
+/// other, the narrower one.
+fn overlap(left: &[String], right: &[String]) -> Vec<String> {
+    let mut both = Vec::new();
+    for a in left {
+        for b in right {
+            let narrower = if under(a, b) {
+                a
+            } else if under(b, a) {
+                b
+            } else {
+                continue;
+            };
+            if !both.contains(narrower) {
+                both.push(narrower.clone());
+            }
+        }
+    }
+    both
+}
 
 fn bytes(size: u64) -> String {
     let tenths = size.saturating_mul(10) / (1 << 20);

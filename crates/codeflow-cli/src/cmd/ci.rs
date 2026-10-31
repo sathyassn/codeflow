@@ -1976,17 +1976,23 @@ struct Judging {
 /// any authority is known), the change class widens the authority's product
 /// and watched paths with the working copy's (neither side can narrow them),
 /// and the work-record baseline has its own source (`--baseline-from`).
-/// The size and ignored-file rules (TSK-323), read with the project kind
-/// and the `.gitignore` files at the commit whose policy judges the range,
-/// never the range itself; at the head only when no authority resolves.
+/// The size and ignored-file rules (TSK-323), read with their policy keys,
+/// the project kind and the `.gitignore` files at the authority commit,
+/// never the range or the working copy; a policy that commit lacks gives
+/// the shipped defaults. At the head with `git` only when no authority
+/// resolves.
 fn content_rules(
     root: &Path,
     authority: Option<&Authority>,
     head: &str,
     git: &codeflow_core::hooks::policy::GitPolicy,
 ) -> Result<codeflow_core::hooks::path_policy::ContentRules, String> {
-    let at = authority.map_or(head, Authority::sha);
-    codeflow_core::hooks::path_policy::ContentRules::at_rev(root, git, at)
+    match authority {
+        Some(authority) => {
+            codeflow_core::hooks::path_policy::ContentRules::at_authority(root, authority.sha())
+        }
+        None => codeflow_core::hooks::path_policy::ContentRules::at_rev(root, git, head),
+    }
 }
 
 fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -> Option<Judging> {

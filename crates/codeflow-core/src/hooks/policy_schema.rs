@@ -764,9 +764,9 @@ pub const SCHEMA: [KeySpec; 76] = [
     },
     KeySpec {
         path: "git.max_file_bytes", kind: KeyKind::ContentRule,
-        valid: "{limit: bytes, at least 1 (default 10485760), except_under: [root-relative prefix]}",
+        valid: "{limit: bytes, at least 1 (default 10485760), except_under: [root-relative directory]}",
         purpose: "Refuse a new or changed file larger than the limit; one over 1 MiB warns.",
-        notes: "Absent: a file over 1 MiB warns and one over 10 MiB is refused where the authority's project settings hold file_size_rule, which a fresh `codeflow init` writes; elsewhere, as in a project `codeflow update` brought forward, both are report lines. Setting either field opts in and replaces that part of the default. Sizes are of the blob git records, so a Git LFS path is sized by its pointer. A refusal names the admission routes. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key.",
+        notes: "Absent: a file over 1 MiB warns and one over 10 MiB is refused where the authority's project settings hold file_size_rule, which a fresh `codeflow init` writes; elsewhere, as in a project `codeflow update` brought forward, both are report lines. Setting either field opts in and replaces that part of the default; except_under exempts files beneath a directory, never one named file. Sizes are of the blob git records, so a Git LFS path is sized by its pointer. A refusal names the admission routes. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.secret_scan",
