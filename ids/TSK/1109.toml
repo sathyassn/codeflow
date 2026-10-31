@@ -1,0 +1,11 @@
+id = "TSK-1109"
+uid = "3045bfbf-3299-406c-88cb-4de9f01f0885"
+kind = "TSK"
+title = "The display scale is a root scale and nothing renders under the floor"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:19:35Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
