@@ -210,8 +210,8 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow test` | | Run the test gate (configured targets or runtime stack detection) |
 | | `--mode <MODE>` | Full (default) and essential hold the shared heavy-work lock for the run. Undeclared quick targets use `execution.quick_default_class` (light by default). Quick runs light targets beside gates; heavy targets wait up to `execution.heavy_wait_seconds` (default zero), then refuse if still held. With no quick targets, quick uses essential targets, heavy unless declared light. Both the `CodeFlow` home and git common directory use `full-gate.lock`, also excluding full gates from 3.1. Essential gates from 3.1 take no lock. These locks do not make the rest of the machine quiet. One of `full`, `quick`, `essential`. Default `full`. |
 | | `--lock-status` | Read recorded lock holders and their start times without running targets. Records are snapshots; admission still checks the OS lock and live target groups. |
-| | `--strict` | Exit non-zero when no targets executed or candidate evidence skipped a target. Explicit --only and mode exclusions are not skips. Use for scripted callers that require execution evidence. |
-| | `--since <SINCE>` | Compare the entire candidate delta with a recorded green base. Without --since, full mode executes every target. Default: the merge base of HEAD and the task's declared integration target. An unproven base conservatively runs every target. |
+| | `--strict` | Exit non-zero when no targets executed or a requested target was skipped. Explicit --only and mode exclusions are not skips. Use for scripted callers that require execution evidence. |
+| | `--since <SINCE>` | Accepted and narrows nothing: no local run record earns selection credit (ADR-0089), so every eligible target runs. |
 | | `--all` | Run every target, including the binary determinism check at epic close. With `--only`, the named targets keep that full-strength check. |
 | | `--only <TARGET>...` | Run only these targets and their prerequisites, comma separated or repeated, to split one gate across parallel CI jobs. A limited run is never recorded as complete evidence, and an unknown name is refused before any target starts. |
 | | `--config <PATH>` | Read the targets from this test config file instead of `.codeflow/test-config.json`, with no fallback to it or to stack detection; targets still run in this repository. A missing path, a symbolic link or a file that is not regular or readable is refused before any target starts. |
@@ -238,9 +238,9 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
 | | `--profile <PROFILE>` | With `--check remote-perimeter`: compare the rulesets `codeflow remote protect` owns with this profile (solo-administrator or independent-review). A non-empty bypass list on the authority or line checks fails with or without it. One of `solo-administrator`, `independent-review`. |
-| `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
+| `codeflow work next` | | List ready tasks first, then landed (work merged), waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
-| | `--json` | Print the same facts as JSON. |
+| | `--json` | Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`. |
 | `codeflow work claim <TASK_ID>` | | Fetch, check the task is ready and unclaimed on its target tip, then create and push `task/<id>-<slug>` from that tip. The pushed branch is an advisory mark others can see |
 | | `<TASK_ID>` | Stable task id. |
 | | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. |
@@ -519,7 +519,7 @@ and CI runs it again.
 | Test case | Behavior |
 |---|---|
 | No stack detected | Loud no-op, exit 0; `--strict` makes it non-zero for scripted callers |
-| Skipped targets | Summaries name executed and skipped counts and say "not complete"; `--strict` fails if no target executed or candidate evidence skipped a requested target; caller exclusions through `--only` or mode membership are not skips |
+| Skipped targets | Summaries name executed and skipped counts and say "not complete"; `--strict` fails if no target executed or a requested target was skipped; caller exclusions through `--only` or mode membership are not skips |
 | Coverage | File and aggregate thresholds count toward the verdict; `changed_files` rules are rejected until an explicit comparison base exists (ADR-0021) |
 | Captured output | Bounded, with truncation reported |
 | `test setup` | Detects only at the repository root; monorepos declare package `cwd` targets; never automatically replaces populated or malformed config |
