@@ -4172,6 +4172,53 @@ mod tests {
             );
         }
 
+        /// The official pinned binary where the words of gitleaks' abort
+        /// event appear only as data: a staged file and its ignore
+        /// fingerprint named `command aborted`, and a checkout under a
+        /// folder of that name. Both are completed scans, on both routes.
+        #[test]
+        fn test_pinned_gitleaks_reads_its_abort_event_never_its_data() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let policy = engine_policy(PolicyLevel::Block);
+            let parent = tempfile::tempdir().unwrap();
+            let named = parent.path().join("command aborted").join("ERR");
+            let plain = tempfile::tempdir().unwrap();
+            for (root, ignored) in [(named.as_path(), false), (plain.path(), true)] {
+                std::fs::create_dir_all(root).unwrap();
+                init_repo(root, "feat/x");
+                if ignored {
+                    stage(
+                        root,
+                        "docs/command aborted.json",
+                        &format!("{{\n{HASH_LINE}}}\n"),
+                    );
+                    stage(
+                        root,
+                        ".gitleaksignore",
+                        "docs/command aborted.json:generic-api-key:2\n",
+                    );
+                } else {
+                    stage(root, "ok.txt", "nothing sensitive\n");
+                }
+                let merge = root.join(".git/MERGE_MSG");
+                std::fs::write(&merge, "chore: merge side\n").unwrap();
+                for report in [
+                    pre_commit_engine(root, &policy, false, false, &engine).unwrap(),
+                    commit_msg_secret_scan_engine(root, &policy, &merge, &engine).unwrap(),
+                ] {
+                    assert!(
+                        secret_findings(&report).is_empty(),
+                        "{}: {report:?}",
+                        root.display()
+                    );
+                }
+            }
+        }
+
         /// A disguise of the hash line: its name, the staged files,
         /// repository settings and where the findings are expected.
         type Disguise<'a> = (

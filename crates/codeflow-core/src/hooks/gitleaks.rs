@@ -380,26 +380,61 @@ impl Engine {
 /// unreadable object), and the managed CI scan reads its log for the same
 /// reason. Debug lines can quote scanned text, so only an error line is
 /// ever shown.
+///
+/// A record is `<time> <level> <message> <fields>`, as gitleaks' console
+/// log writes it. Only a line that starts with a time is a record, and only
+/// its level and the start of its message are read: a path, fingerprint or
+/// other field that happens to hold `ERR` or `command aborted` is data, not
+/// an event.
 fn logged_failure(stderr: &[u8]) -> Option<String> {
     let mut aborted = false;
     for raw in stderr.split(|byte| *byte == b'\n') {
         let line = without_colour(raw);
-        // `<time> <level> <message>`
-        let mut fields = line.split(|byte| *byte == b' ').filter(|f| !f.is_empty());
-        let _time = fields.next();
-        match fields.next() {
-            Some(level) if level == b"ERR" || level == b"FTL" => {
-                return Some(String::from_utf8_lossy(&line).into_owned());
-            }
-            Some(level) if level == b"DBG" => {
-                aborted |= line
-                    .windows(b"command aborted".len())
-                    .any(|window| window == b"command aborted");
-            }
-            _ => {}
+        let Some((time, rest)) = split_field(&line) else {
+            continue;
+        };
+        if !is_log_time(time) {
+            continue;
+        }
+        let Some((level, message)) = split_field(rest) else {
+            continue;
+        };
+        if level == b"ERR" || level == b"FTL" {
+            return Some(String::from_utf8_lossy(&line).into_owned());
+        }
+        // The event gitleaks logs when the git command it waits on fails.
+        if level == b"DBG"
+            && (message == b"command aborted" || message.starts_with(b"command aborted "))
+        {
+            aborted = true;
         }
     }
     aborted.then(|| "gitleaks aborted the git command it ran".to_string())
+}
+
+/// The first space-separated field of `line` and what follows it.
+fn split_field(line: &[u8]) -> Option<(&[u8], &[u8])> {
+    let at = line.iter().position(|byte| *byte == b' ')?;
+    Some((&line[..at], &line[at + 1..]))
+}
+
+/// Whether `field` is the console log's time, such as `9:05AM` or `12:03PM`.
+fn is_log_time(field: &[u8]) -> bool {
+    let Some(clock) = field
+        .strip_suffix(b"AM")
+        .or_else(|| field.strip_suffix(b"PM"))
+    else {
+        return false;
+    };
+    match clock.iter().position(|byte| *byte == b':') {
+        Some(colon) => {
+            let (hours, minutes) = (&clock[..colon], &clock[colon + 1..]);
+            (1..=2).contains(&hours.len())
+                && minutes.len() == 2
+                && hours.iter().chain(minutes).all(u8::is_ascii_digit)
+        }
+        None => false,
+    }
 }
 
 /// `line` without ANSI colour sequences (`ESC [ ... m`).
@@ -708,6 +743,33 @@ mod tests {
             expected,
         };
         assert_eq!(engine.verify(), Err(Unusable::Unpinned));
+    }
+
+    #[test]
+    fn only_log_events_count_as_a_failure_never_their_data() {
+        // Real events.
+        for log in [
+            "11:17AM ERR [git] fatal: unable to read files to diff",
+            "9:05PM FTL failed to load config",
+            "\u{1b}[90m11:17AM\u{1b}[0m \u{1b}[31mFTL\u{1b}[0m failed",
+            "11:17AM DBG command aborted error=\"exit status 128\" cmd=\"git diff\"",
+        ] {
+            assert!(logged_failure(log.as_bytes()).is_some(), "{log}");
+        }
+        // The same words in a path, fingerprint, field or other message.
+        for log in [
+            "12:03PM DBG skipping finding: global fingerprint finding=REDACTED \
+             fingerprint=\"docs/command aborted.json:generic-api-key:2\"",
+            "12:03PM DBG executing: git -C /tmp/command aborted diff --staged .",
+            "12:03PM DBG found .gitleaksignore file path=\"ERR/command aborted\"",
+            "12:03PM INF command aborted",
+            "12:03PM DBG commands aborted",
+            "ERR at the start of a line that is not a record",
+            "command aborted",
+            "x 11:17AM ERR shifted",
+        ] {
+            assert_eq!(logged_failure(log.as_bytes()), None, "{log}");
+        }
     }
 
     #[test]
