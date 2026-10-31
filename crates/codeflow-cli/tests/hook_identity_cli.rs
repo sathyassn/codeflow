@@ -68,4 +68,26 @@ fn stale_sources_warn_twice_and_matching_inputs_clear_the_warning() {
     .unwrap();
     let stale = judging_identity(root, "3", "unavailable", "true", &before);
     assert!(stale[1].contains("built from different hook or policy sources"));
+    // The policy authority is chosen through these files (TSK-1077), so an
+    // edit to any one of them alone is a stale binary, and a rebuild from
+    // the edited sources clears the warning.
+    for input in [
+        "crates/codeflow-core/src/git/mod.rs",
+        "crates/codeflow-core/src/git/remote_query.rs",
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+    ] {
+        let before = source_identity::input_digest(root).unwrap();
+        std::fs::write(root.join(input), format!("edit of {input}")).unwrap();
+        let stale = judging_identity(root, "3", "unavailable", "true", &before);
+        assert!(
+            stale[1].contains("built from different hook or policy sources"),
+            "{input}"
+        );
+        let rebuilt = source_identity::input_digest(root).unwrap();
+        assert_eq!(
+            judging_identity(root, "3", "unavailable", "true", &rebuilt).len(),
+            1,
+            "{input}"
+        );
+    }
 }
