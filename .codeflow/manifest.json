@@ -299,7 +299,7 @@
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "506b92afa2d706f23e042c9c633672f4c38b10ab2f27997ad4830ea381f93ebc",
+      "sha256": "2454e41f6ea2200e2d511f6bf2ab24498d31d4d743e46a18df04d61634fcd445",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -1145,7 +1145,7 @@
     ".claude/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "506b92afa2d706f23e042c9c633672f4c38b10ab2f27997ad4830ea381f93ebc",
+      "sha256": "2454e41f6ea2200e2d511f6bf2ab24498d31d4d743e46a18df04d61634fcd445",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -1841,7 +1841,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "8823b34af09e44316e1f49bba5083e795274157298c2e429a6bd9a9882c4fc98",
+      "sha256": "611a39322aebf31e6f25a6dcb8ea0fd04a49bd13e5bfc1337f44d93184ea7137",
       "exec": false
     },
     "CLAUDE.md": {

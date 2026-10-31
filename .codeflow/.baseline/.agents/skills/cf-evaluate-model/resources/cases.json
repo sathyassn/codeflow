@@ -9103,7 +9103,8 @@
         "must_not": [
           "any_added_without_reason",
           "ts_suppression_without_reason",
-          "unchecked_cast_of_payload"
+          "unchecked_cast_of_payload",
+          "unexplained_escape_in_changed_code_or_tests"
         ]
       }
     }
