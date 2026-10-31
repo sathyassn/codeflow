@@ -446,7 +446,7 @@ fn minimal_floor_blocks_a_non_conventional_commit() {
         bad_msg.contains("commit_format"),
         "commit-msg block did not name the commit_format rule:\n{bad_msg}"
     );
-    let good = root.join("good-msg.txt");
+    let good = root.join(".git/COMMIT_EDITMSG");
     std::fs::write(&good, "feat: add a real feature\n").unwrap();
     assert!(
         codeflow(&root, &["git-hook", "commit-msg", good.to_str().unwrap()])
@@ -756,7 +756,7 @@ fn minimal_floor_blocks_a_story_body_commit() {
     );
 
     // The same change with a bullet body passes.
-    let bullets = root.join("bullet-msg.txt");
+    let bullets = root.join(".git/COMMIT_EDITMSG");
     std::fs::write(&bullets, "feat: add a thing\n\n- wire the new path\n").unwrap();
     assert!(
         codeflow(
@@ -811,7 +811,7 @@ fn minimal_floor_is_strict_then_opt_in_for_trailers() {
     init(&root, "--minimal");
 
     // Direct hook invocation: a Refs footer BLOCKS at the shipped strict default.
-    let msg = root.join("trailer-msg.txt");
+    let msg = root.join(".git/COMMIT_EDITMSG");
     std::fs::write(&msg, "feat: add a thing\n\n- wire it\n\nRefs: PROJ-142\n").unwrap();
     let blocked = codeflow(&root, &["git-hook", "commit-msg", msg.to_str().unwrap()]);
     let text = format!(

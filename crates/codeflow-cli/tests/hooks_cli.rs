@@ -3628,7 +3628,8 @@ fn commit_msg_blocks_attribution_and_malformed_subject() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
 
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(
         &msg,
         "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
@@ -3667,7 +3668,8 @@ fn commit_msg_blocks_attribution_and_malformed_subject() {
 fn commit_msg_requires_a_blank_line_after_the_subject() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     let run = |text: &str| {
         std::fs::write(&msg, text).unwrap();
         run_with_stdin(
@@ -3707,7 +3709,8 @@ fn commit_msg_blocks_on_invalid_policy_value() {
         dir.path(),
         r#"{"schema_version":1,"git":{"commit_ticket_required":"worn"}}"#,
     );
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(&msg, "feat: x\n").unwrap();
     let out = run_with_stdin(
         codeflow()
@@ -3749,7 +3752,8 @@ fn commit_msg_warn_level_proceeds() {
         r#"{"schema_version":1,"git":{"commit_format":"warn"}}"#,
     );
 
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(&msg, "freestyle subject\n").unwrap();
     let out = run_with_stdin(
         codeflow()
@@ -6826,7 +6830,8 @@ fn commit_msg_on_a_watched_path_notes_the_release_impact_fields() {
     std::fs::create_dir_all(dir.path().join("api")).unwrap();
     std::fs::write(dir.path().join("api/v1.rs"), "pub fn f() {}\n").unwrap();
     git(dir.path(), &["add", "api/v1.rs"]);
-    let msg = dir.path().join("MSG");
+    // Git's own message file: commit-msg refuses any other (TSK-412).
+    let msg = dir.path().join(".git/COMMIT_EDITMSG");
     std::fs::write(&msg, "feat: add the v1 api\n").unwrap();
     let out = codeflow()
         .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
@@ -11043,4 +11048,357 @@ fn a_guard_stalled_on_a_fifo_include_refuses_at_its_deadline() {
             "{guard} answered in {took:?}, before its deadline: {stderr}"
         );
     }
+}
+
+// TSK-412: the staged secret scan's gitleaks engine and the automatic merge.
+
+/// A fixture key the built-in AWS pattern matches, built at run time so
+/// this file adds no line the scan would refuse.
+#[cfg(unix)]
+fn fixture_key() -> String {
+    format!("AKIA{}", "Q3ZWJ2X5LMN8RT4V")
+}
+
+/// Write Git's own commit message file for `dir` and return its path, as
+/// Git passes it to `commit-msg` for a plain commit.
+fn commit_editmsg(dir: &Path, message: &str) -> std::path::PathBuf {
+    let out = git_out(dir, &["rev-parse", "--git-path", "COMMIT_EDITMSG"]);
+    let path = dir.join(String::from_utf8_lossy(&out.stdout).trim());
+    std::fs::write(&path, message).unwrap();
+    path
+}
+
+/// A folder holding only a `gitleaks` file that is not the pinned binary.
+/// It writes `ran` beside itself if anything runs it.
+#[cfg(unix)]
+fn unpinned_gitleaks() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let script = bin.path().join("gitleaks");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ntouch '{}'\necho 8.30.1\n",
+            bin.path().join("ran").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// Run the pre-commit stage with `PATH` set to `bin` and the system folders,
+/// which hold git and no gitleaks.
+#[cfg(unix)]
+fn pre_commit_with_path(dir: &Path, bin: &Path) -> Output {
+    codeflow()
+        .args(["git-hook", "pre-commit"])
+        .current_dir(dir)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn engine_policy(level: &str) -> String {
+    format!(
+        r#"{{"schema_version":1,"git":{{"secret_scan":"{level}","secret_scan_engine":"gitleaks","root_checkout_commits":"off"}}}}"#
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn gitleaks_engine_refuses_at_block_when_the_binary_is_missing_or_unpinned() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(dir.path(), &engine_policy("block"));
+    std::fs::write(dir.path().join("ok.txt"), "nothing sensitive\n").unwrap();
+    git(dir.path(), &["add", "ok.txt"]);
+
+    let empty = tempfile::tempdir().unwrap();
+    let out = pre_commit_with_path(dir.path(), empty.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("git.secret_scan_engine"), "{stderr}");
+    assert!(stderr.contains("gitleaks is not on PATH"), "{stderr}");
+    assert!(stderr.contains("gitleaks 8.30.1"), "{stderr}");
+    assert!(
+        stderr.contains("codeflow doctor --check secret-engine"),
+        "{stderr}"
+    );
+
+    let fake = unpinned_gitleaks();
+    let out = pre_commit_with_path(dir.path(), fake.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("is not the pinned binary"), "{stderr}");
+    assert!(stderr.contains("gitleaks 8.30.1"), "{stderr}");
+    assert!(
+        !fake.path().join("ran").exists(),
+        "a binary that is not the pinned one must never run"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn gitleaks_engine_warns_at_warn_and_the_builtin_scan_still_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(dir.path(), &engine_policy("warn"));
+    std::fs::write(dir.path().join("leak.txt"), format!("{}\n", fixture_key())).unwrap();
+    git(dir.path(), &["add", "leak.txt"]);
+
+    let empty = tempfile::tempdir().unwrap();
+    let fake = unpinned_gitleaks();
+    for bin in [empty.path(), fake.path()] {
+        let out = pre_commit_with_path(dir.path(), bin);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{stderr}");
+        assert_eq!(
+            stderr.matches("git.secret_scan_engine").count(),
+            1,
+            "one warning for the engine: {stderr}"
+        );
+        assert!(
+            stderr.contains("possible secret (AWS access key id) staged at leak.txt:1"),
+            "{stderr}"
+        );
+    }
+    assert!(!fake.path().join("ran").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_reports_where_it_looked_for_gitleaks_and_the_pin() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let fake = unpinned_gitleaks();
+    let doctor = |dir: &Path| {
+        codeflow()
+            .args(["doctor", "--check", "secret-engine"])
+            .current_dir(dir)
+            .env("PATH", format!("{}:/usr/bin:/bin", fake.path().display()))
+            .output()
+            .unwrap()
+    };
+
+    let out = doctor(dir.path());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("builtin"), "{stdout}");
+
+    write_policy(dir.path(), &engine_policy("block"));
+    let out = doctor(dir.path());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{stdout}");
+    let found = codeflow_core::hooks::gitleaks::file_sha256(&fake.path().join("gitleaks")).unwrap();
+    for expected in [
+        "FAIL  secret-engine",
+        &format!("searched {}, /usr/bin, /bin", fake.path().display()),
+        &format!("sha256 {found}"),
+        "gitleaks 8.30.1 for",
+        "binary sha256",
+    ] {
+        assert!(stdout.contains(expected), "{expected}: {stdout}");
+    }
+    assert!(!fake.path().join("ran").exists(), "doctor never runs it");
+
+    write_policy(dir.path(), &engine_policy("warn"));
+    let out = doctor(dir.path());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("warn  secret-engine"), "{stdout}");
+}
+
+/// Wire the pre-commit and commit-msg hooks to this binary under the
+/// built-in engine.
+#[cfg(unix)]
+fn wire_scan_hooks(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let hooks = dir.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    for stage in ["pre-commit", "commit-msg"] {
+        let hook = hooks.join(stage);
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\nexec '{}' git-hook {stage} \"$@\"\n",
+                env!("CARGO_BIN_EXE_codeflow")
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// Two branches from one base that change `planted.txt` differently, so a
+/// merge needs its merge driver: `feat/x` (checked out) and `feat/side`.
+/// The `plant` driver writes `content` as the merge result.
+#[cfg(unix)]
+fn merge_fixture(dir: &Path, content: &str) {
+    init_repo(dir, "feat/x");
+    std::fs::write(dir.join("planted.txt"), "base\n").unwrap();
+    std::fs::write(dir.join(".gitattributes"), "planted.txt merge=plant\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "chore: base"]);
+    git(dir, &["checkout", "-q", "-b", "feat/side"]);
+    std::fs::write(dir.join("planted.txt"), "side\n").unwrap();
+    git(dir, &["commit", "-q", "-am", "feat: side"]);
+    git(dir, &["checkout", "-q", "feat/x"]);
+    std::fs::write(dir.join("planted.txt"), "main\n").unwrap();
+    git(dir, &["commit", "-q", "-am", "feat: main"]);
+    let result = dir.join("merge-result.txt");
+    std::fs::write(&result, content).unwrap();
+    git(
+        dir,
+        &[
+            "config",
+            "merge.plant.driver",
+            &format!("cp '{}' %A", result.display()),
+        ],
+    );
+    wire_scan_hooks(dir);
+}
+
+#[cfg(unix)]
+fn secret_refusals(out: &Output) -> usize {
+    String::from_utf8_lossy(&out.stderr)
+        .matches("possible secret")
+        .count()
+}
+
+#[cfg(unix)]
+#[test]
+fn an_automatic_merge_is_scanned_in_commit_msg() {
+    // A merge driver writes a key neither clean parent holds; Git runs no
+    // pre-commit for the automatic merge, so commit-msg scans it.
+    let dir = tempfile::tempdir().unwrap();
+    merge_fixture(dir.path(), &format!("token {}\n", fixture_key()));
+    let out = run_wired_git(dir.path(), &["merge", "--no-edit", "feat/side"], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("possible secret (AWS access key id) staged at planted.txt:1"),
+        "{stderr}"
+    );
+    assert_eq!(secret_refusals(&out), 1, "{stderr}");
+    git(dir.path(), &["merge", "--abort"]);
+
+    // Control: the same merge whose result holds no key lands.
+    std::fs::write(dir.path().join("merge-result.txt"), "merged\n").unwrap();
+    let out = run_wired_git(dir.path(), &["merge", "--no-edit", "feat/side"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_automatic_merge_in_a_linked_worktree_is_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    merge_fixture(dir.path(), &format!("token {}\n", fixture_key()));
+    git(dir.path(), &["checkout", "-q", "--detach"]);
+    let tree = dir.path().join("linked");
+    git(
+        dir.path(),
+        &["worktree", "add", "-q", tree.to_str().unwrap(), "feat/x"],
+    );
+    let out = run_wired_git(&tree, &["merge", "--no-edit", "feat/side"], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("planted.txt:1"), "{stderr}");
+    assert_eq!(secret_refusals(&out), 1, "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn plain_and_hand_concluded_commits_are_scanned_once_in_pre_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    merge_fixture(dir.path(), "unused\n");
+    git(dir.path(), &["config", "--unset", "merge.plant.driver"]);
+    std::fs::write(dir.path().join(".gitattributes"), "").unwrap();
+    git(dir.path(), &["commit", "-q", "-am", "chore: plain merges"]);
+
+    // A plain commit with a key: pre-commit refuses, once.
+    std::fs::write(dir.path().join("leak.txt"), format!("{}\n", fixture_key())).unwrap();
+    git(dir.path(), &["add", "leak.txt"]);
+    let out = run_wired_git(dir.path(), &["commit", "-m", "feat: leak"], None);
+    assert!(!out.status.success());
+    assert_eq!(
+        secret_refusals(&out),
+        1,
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(dir.path(), &["rm", "-q", "--cached", "leak.txt"]);
+    std::fs::remove_file(dir.path().join("leak.txt")).unwrap();
+
+    // A clean plain commit lands.
+    std::fs::write(dir.path().join("ok.txt"), "fine\n").unwrap();
+    git(dir.path(), &["add", "ok.txt"]);
+    let out = run_wired_git(dir.path(), &["commit", "-m", "feat: fine"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // A conflicted merge concluded by hand with a key: pre-commit refuses
+    // it and commit-msg does not scan it again.
+    let out = run_wired_git(dir.path(), &["merge", "--no-edit", "feat/side"], None);
+    assert!(!out.status.success(), "the merge conflicts");
+    std::fs::write(
+        dir.path().join("planted.txt"),
+        format!("{}\n", fixture_key()),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "planted.txt"]);
+    let out = run_wired_git(dir.path(), &["commit", "--no-edit"], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert_eq!(secret_refusals(&out), 1, "{stderr}");
+
+    // Concluded clean, it lands.
+    std::fs::write(dir.path().join("planted.txt"), "resolved\n").unwrap();
+    git(dir.path(), &["add", "planted.txt"]);
+    let out = run_wired_git(dir.path(), &["commit", "--no-edit"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn commit_msg_refuses_a_message_file_git_does_not_use() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let msg = dir.path().join("elsewhere.txt");
+    std::fs::write(&msg, "feat: fine\n").unwrap();
+    let out = codeflow()
+        .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("neither MERGE_MSG nor COMMIT_EDITMSG"),
+        "{stderr}"
+    );
+
+    let msg = commit_editmsg(dir.path(), "feat: fine\n");
+    let out = codeflow()
+        .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

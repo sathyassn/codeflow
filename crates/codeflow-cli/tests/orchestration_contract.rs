@@ -937,7 +937,7 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
         "the orchestrator skill must expose independent discovery in its description"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("twenty-four health checks"),
+        normalize_whitespace(&capabilities).contains("twenty-five health checks"),
         "CAP-008 must count the policy-source doctor check"
     );
     let readme = normalize_whitespace(&read("README.md"));
