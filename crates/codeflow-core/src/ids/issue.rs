@@ -823,7 +823,9 @@ fn clash_message(git: &Git, clashes: &[Entry]) -> Result<String, IdsError> {
     let landing: Vec<(String, String)> = git
         .branch_refs()?
         .into_iter()
-        .filter(|(name, _)| name.starts_with("refs/heads/") && is_landing_branch(branch_name(name)))
+        .filter(|(name, _)| {
+            name.starts_with("refs/heads/") && is_landing_branch(branch_name(name, &[]))
+        })
         .collect();
     for entry in clashes {
         let mut landed_on = None;
@@ -832,7 +834,7 @@ fn clash_message(git: &Git, clashes: &[Entry]) -> Result<String, IdsError> {
                 .iter()
                 .any(|copy| copy.id == entry.id && copy.uid.as_deref() == Some(entry.uid.as_str()))
             {
-                landed_on = Some(branch_name(name).to_string());
+                landed_on = Some(branch_name(name, &[]).to_string());
                 break;
             }
         }

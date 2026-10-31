@@ -93,7 +93,6 @@ const REFUSED: &[&str] = &[
     "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; awk -fa.awk",
     "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; gawk -i a.awk /dev/null",
     "printf 'w src/.envrc\\n' > s.sed; sed -nfs.sed README.md",
-    "echo 'echo x >> src/.envrc' > r.sh; find . -exec sh r.sh \\;",
     "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; flock /tmp/l awk -f a.awk",
     "echo 'echo x >> src/.envrc' > r.sh; env -S 'sh r.sh'",
     "printf 'w src/.envrc\\n' > s.vim; vim -S s.vim",
@@ -182,6 +181,14 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
             if outputs.iter().any(|o| !o.status.success()) {
                 wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
             }
+        }
+        // The deletion floor refuses a `find` body that is not a plain
+        // remover or a read-only program before the startup check runs
+        // (TSK-286).
+        let command = "echo 'echo x >> src/.envrc' > r.sh; find . -exec sh r.sh \\;";
+        let outputs = project.replay(harness, "Bash", json!({"command": command}));
+        if !refused_with(&outputs, "security.dangerous_commands") {
+            wrong.push(format!("{harness}: allowed {command}"));
         }
         // `--exec-path=DIR` moves where Git finds the helpers it runs, so it
         // refuses as a secret-read cannot-verify like `GIT_EXEC_PATH` since
