@@ -1,0 +1,11 @@
+id = "ADR-0092"
+uid = "c96c6d5c-4dbb-4d3a-a00c-90c2754e835d"
+kind = "ADR"
+title = "The ignored-file rule matches with the ignore crate"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T05:41:39Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
