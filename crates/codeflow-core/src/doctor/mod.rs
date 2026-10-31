@@ -2329,11 +2329,9 @@ fn check_permissions(opts: &Options) -> CheckResult {
     let in_codex = opts
         .env("CODEX_SANDBOX")
         .is_some_and(|value| !value.is_empty());
-    let by_design = if in_codex {
-        codex_evidence_by_design(opts.codeflow_home.as_deref(), &mut unwritable)
-    } else {
-        String::new()
-    };
+    let by_design = evidence_seat(opts, in_codex).map_or_else(String::new, |seat| {
+        evidence_by_design(opts.codeflow_home.as_deref(), &mut unwritable, seat)
+    });
     if !unwritable.is_empty() {
         let paths: Vec<String> = unwritable
             .iter()
@@ -2378,13 +2376,26 @@ fn check_permissions(opts: &Options) -> CheckResult {
     }
 }
 
-/// No Codex seat writes the gate evidence folder (TSK-337 AC-5): full gates
-/// and their evidence stay with the primary. So inside a Codex sandbox an
-/// unwritable evidence folder under `home` is taken out of `unwritable` and
-/// reported instead, as this note; nothing when it was writable.
-fn codex_evidence_by_design(
+/// The sandbox this runs in where the evidence folder is unwritable by
+/// design: a Codex seat, else the Claude Code sandbox; `None` outside both.
+fn evidence_seat(opts: &Options, in_codex: bool) -> Option<&'static str> {
+    if in_codex {
+        Some("a Codex seat")
+    } else {
+        sandboxed(opts).then_some("the Claude Code sandbox")
+    }
+}
+
+/// No Codex seat (TSK-337 AC-5) and no sandboxed Claude session (TSK-1044
+/// AC-4) writes the gate evidence folder: full gates and their evidence
+/// stay with the primary, run outside the sandbox. So inside either sandbox
+/// an unwritable evidence folder under `home` is taken out of `unwritable`
+/// and reported instead, as this note naming `seat`; nothing when it was
+/// writable.
+fn evidence_by_design(
     home: Option<&Path>,
     unwritable: &mut Vec<(PathBuf, std::io::Error)>,
+    seat: &str,
 ) -> String {
     let Some(evidence) = home.map(|home| home.join(crate::testing::gate_guard::HOME_EVIDENCE_DIR))
     else {
@@ -2395,7 +2406,7 @@ fn codex_evidence_by_design(
     }
     unwritable.retain(|(dir, _)| *dir != evidence);
     format!(
-        "; `{}` is not writable in a Codex seat, by design: full gates and their evidence stay with the primary",
+        "; `{}` is not writable in {seat}, by design: full gates and their evidence stay with the primary, run outside the sandbox",
         crate::git::display_path(&evidence)
     )
 }
@@ -6575,11 +6586,21 @@ mod tests {
         let Status::Warn(remedy) = &result.status else {
             panic!("{:?} {}", result.status, result.message);
         };
-        for dir in [blocked.join("locks"), blocked.join("gate-runs")] {
-            let shown = dir.display().to_string();
-            assert!(result.message.contains(&shown), "{}", result.message);
-            assert!(remedy.to_string().contains(&shown), "{remedy}");
-        }
+        let locks = blocked.join("locks").display().to_string();
+        assert!(result.message.contains(&locks), "{}", result.message);
+        assert!(remedy.to_string().contains(&locks), "{remedy}");
+        // TSK-1044 AC-4: no shipped preset grants the evidence folder, so
+        // in the Claude sandbox it is unwritable by design and never asked
+        // for in the remedy.
+        let evidence = blocked.join("gate-runs").display().to_string();
+        assert!(!remedy.to_string().contains(&evidence), "{remedy}");
+        assert!(
+            result
+                .message
+                .contains("not writable in the Claude Code sandbox, by design"),
+            "{}",
+            result.message
+        );
         assert!(result.message.contains(SANDBOX_NOTE), "{}", result.message);
         assert!(remedy.to_string().contains("allowWrite"), "{remedy}");
     }

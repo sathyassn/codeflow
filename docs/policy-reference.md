@@ -63,11 +63,11 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.product_paths` | string list | `null` | an array of path globs (e.g. src/**) | The project's product code extends the adopter-facing paths requiring a journey criterion (SPC-013 R-114); every PR names its task or epic (R-70). | `codeflow init` writes the default for the detected stack and `codeflow update` adds it once; a value the project sets is kept. Absent, the binary assumes the stack default. The shared adopter-facing paths continue to require journey coverage. |
 | `git.document_indexes` | string list | `[]` | an array of exact repository-relative documentation files (.md, .mdx, .rst or .adoc; case-insensitive extension), without globs or dot components | Document index files a planning amendment may update alongside records and plans. | Empty by default. Declare the files in a prior task pull request. The hosted check reads the target policy. On a re-push of a plan/ branch, pre-push can fall back to the earlier pushed tip; with an advertised work target it judges from the merge base with that target. The hosted check enforces the target-policy boundary. A declaration is a reviewed policy change on the target and must not name a file a harness or build tool loads. Product and watched paths, hidden paths and non-regular files stay excluded. Index file names beginning AGENT., AGENTS., CLAUDE., GEMINI., WARP., QWEN. or CRUSH., and SKILL.md, CONVENTIONS.md and llms*.md, are excluded without case. A file name stem containing a tilde followed by a digit is refused as a possible short-name alias. Root AGENTS.md keeps its separate project-section exception. The shipped policy file omits this key. |
 | `git.direct_changes` | enum | `allow` | allow \| forbid | Not supported, has no effect. Retired compatibility key; accepted and ignored. | Every pull request names its task or epic (R-70), regardless of this retained key. |
-| `git.release_branch_pattern` | string | `absent` | a branch glob (e.g. release/*); absent means integration/release-* | Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120). | Read only from the policy at the default target's tip at the destination, so a pushed branch or a pull request cannot set its own scope; a change takes effect once it lands on the default target. A pattern that could match a protected branch or an epic line name (`integration/EPC-*`) is refused, so the default target and epic lines keep their own rules. |
+| `git.release_branch_pattern` | string | `absent` | a branch glob (e.g. release/*); absent means integration/release-* | Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120). | Read only from the policy at the default target's tip at the destination, so a pushed branch or a pull request cannot set its own scope; a change takes effect once it lands on the default target. A default target with no policy uses the built-in pattern only when no commit in its history has carried one (a first adoption); a removed policy, or history that cannot prove the absence, refuses. A pattern that could match a protected branch or an epic line name (`integration/EPC-*`) is refused, so the default target and epic lines keep their own rules. |
 | `git.branch_naming` | Level | `block` | off \| warn \| allow \| block | Branch names must match `{prefix}/{kebab-name}` with a sanctioned prefix. | Protected branches are exempt (governed by the protection rules, not naming); prefixes come from branch_prefixes. |
 | `git.branch_prefixes` | string list | `["feat/","fix/","docs/","refactor/","test/","chore/","ci/","hotfix/","plan/","task/","spike/","experiment/","integration/"]` | an array of prefixes, each ending with `/` (e.g. feat/) | The sanctioned branch-name prefixes. | A prefix missing its trailing `/` never matches a `{prefix}/{name}` branch. |
 | `git.path_policy` | Level | `block` | off \| warn \| allow \| block | Refuse blocked names and protected prefixes in staged changes and introduced commits. | Reads landed policy for pre-commit and target policy for CI. Off removes only this gate; the secret scan remains separate. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.blocked_names` | path rule list | `[".env",".env.*","*.env","*.pem","*.key","*.p12","*.pfx","*.jks","*.keystore","id_rsa*","id_dsa*","id_ecdsa*","id_ed25519*",".netrc",".pgpass","*.tfstate","*.tfstate.*","kubeconfig",".kube/config",".aws/credentials","application_default_credentials.json"]` | strings or {pattern, except_under: [root-relative prefix], reason} | Block final-component globs or component sequences at any depth. | Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.blocked_names` | path rule list | `[".env",".env.*","*.env","*.pem","*.key","*.p12","*.pfx","*.jks","*.keystore","id_rsa*","id_dsa*","id_ecdsa*","id_ed25519*",".netrc",".pgpass","*.tfstate","*.tfstate.*","kubeconfig",".kube/config",".aws/credentials","application_default_credentials.json","credentials.json",".credentials.json"]` | strings or {pattern, except_under: [root-relative prefix], reason} | Block final-component globs or component sequences at any depth. | Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.protected_paths` | path rule list | `[]` | {prefix, allow: [{path, reason}]} entries | Refuse every change under root-anchored component prefixes. | Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. |
 | `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
@@ -133,8 +133,9 @@ policy sources and local differences.
 The shipped names are `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`,
 `*.pfx`, `*.jks`, `*.keystore`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`,
 `id_ed25519*`, `.netrc`, `.pgpass`, `*.tfstate`, `*.tfstate.*`, `kubeconfig`,
-`.kube/config`, `.aws/credentials` and
-`application_default_credentials.json`. Omitting them keeps them active.
+`.kube/config`, `.aws/credentials`,
+`application_default_credentials.json`, `credentials.json` and
+`.credentials.json`. Omitting them keeps them active.
 A public certificate fixture can use this declaration in the target's
 `.codeflow/policy.json`:
 
@@ -155,8 +156,9 @@ A public certificate fixture can use this declaration in the target's
 Blocked names refuse additions, content changes, type changes and renames
 into a matching path. Deletions pass with a history note. Protected prefixes
 refuse every change, deletions included. Gitlinks are judged at their path;
-symlinks are judged at their path and their normalized target. Absolute or
-parent-traversing targets refuse. Neither kind of link is followed.
+symlinks are judged at their path and their normalized target. Absolute
+targets, including a Windows drive target such as `C:/x` or the
+drive-relative `C:x`, and parent-traversing targets refuse. Neither kind of link is followed.
 
 CI reads each ordinary commit against its parent and each two-parent merge
 against the automatic remerge of its parents. Unchanged inherited content
@@ -168,7 +170,10 @@ The gate exempts its own inputs, in the same normalized spelling:
 `.codeflow/bootstrap.ps1`, `.codeflow/ci-setup.sh`, files directly under
 `.codeflow/git-hooks/`, `.github/workflows/codeflow-policy.yml`,
 `.github/workflows/codeflow-ci.yml`, and every `.gitignore`.
-Other rules still apply to those files. `git.secret_scan` continues to own
+The exemption covers a regular file only, so blocked names and protected
+prefixes never lock a gate input. A symlink at a gate input is still
+judged by its target, as above, and a gitlink or any other entry type
+there refuses. Other rules still apply to those files. `git.secret_scan` continues to own
 both the existing environment-file check and the content secret scan;
 `git.path_policy: off` disables only the new path gate.
 
