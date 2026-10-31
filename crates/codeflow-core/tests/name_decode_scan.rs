@@ -356,6 +356,30 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:secret-scan-lines",
     ),
+    // The first line gitleaks wrote to stderr at the error level, escaped and shown in the incomplete-scan message; any output has already failed the scan and nothing is decided from its text (TSK-412).
+    (
+        "codeflow-core/src/hooks/gitleaks.rs",
+        "first_line",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
+    // The output of `gitleaks version`, compared whole with the pinned ASCII version; a replaced byte can only make it differ, which refuses (TSK-412).
+    (
+        "codeflow-core/src/hooks/gitleaks.rs",
+        "Engine::verify",
+        "from_utf8_lossy",
+        1,
+        "ascii-marker",
+    ),
+    // `git version` and `git hash-object` output: an ASCII version read for its numbers, which refuses when it does not parse, and a hex object id (TSK-412).
+    (
+        "codeflow-core/src/hooks/gitleaks.rs",
+        "TextAttributes::for_repository",
+        "from_utf8_lossy",
+        1,
+        "ascii-marker",
+    ),
     // an object id or fixed ASCII word git prints, compared with ASCII only (`hooks 3`)
     (
         "codeflow-core/src/hooks/orient.rs",
@@ -2770,6 +2794,29 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "lines",
         1,
         "framing:git-commit-message-lines",
+    ),
+    // TSK-412: `gitleaks version` output trimmed, then compared whole with the pinned ASCII version; any other output refuses.
+    (
+        "crates/codeflow-core/src/hooks/gitleaks.rs",
+        "Engine::verify",
+        "trim",
+        1,
+        "grammar:gitleaks-version",
+    ),
+    // TSK-412: `git version` and `git hash-object` output, an ASCII version line and a hex object id; a version that does not parse refuses.
+    (
+        "crates/codeflow-core/src/hooks/gitleaks.rs",
+        "TextAttributes::for_repository",
+        "trim",
+        1,
+        "grammar:git-version",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/gitleaks.rs",
+        "git_version",
+        "split_whitespace",
+        1,
+        "grammar:git-version",
     ),
     // Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
@@ -6751,6 +6798,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/hooks/gitleaks.rs", "Engine::locate", "is_file", 1,"A PATH folder whose gitleaks is not a file is skipped; when no folder has one the engine is Missing, a git.secret_scan_engine finding that refuses at block, and a found file still runs only after its checksum matches the pin (TSK-412)."),
     ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),

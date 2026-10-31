@@ -161,7 +161,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 74] = [
+pub const SCHEMA: [KeySpec; 75] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -760,7 +760,25 @@ pub const SCHEMA: [KeySpec; 74] = [
         valid: LEVEL_VALID,
         purpose: "Pre-commit scan for staged secrets and .env files.",
         notes: "Never suspended by bootstrap grace, but off/allow HERE does \
-                disable the scan (it is policy, not hardcoded); leave at block.",
+                disable the scan (it is policy, not hardcoded); leave at block. \
+                A merge Git concludes itself runs no pre-commit, so commit-msg \
+                scans it when Git passes MERGE_MSG; a commit-msg message file \
+                other than MERGE_MSG or COMMIT_EDITMSG is refused at this level.",
+    },
+    KeySpec {
+        path: "git.secret_scan_engine",
+        kind: KeyKind::Enum(&["builtin", "gitleaks"]),
+        valid: "builtin | gitleaks",
+        purpose: "The engine the commit-time secret scan runs beside the built-in patterns.",
+        notes: "builtin runs the built-in patterns only. gitleaks also runs the gitleaks \
+                release the managed CI scan pins over the staged diff, after the built-in \
+                patterns, reading the working tree's .gitleaksignore and .gitleaks.toml. \
+                A gitleaks binary that is missing, not the pinned version or not the \
+                pinned checksum is a finding at the git.secret_scan level, so at block it \
+                refuses the commit; `codeflow doctor --check secret-engine` reports where \
+                it looked. The hook never downloads it. \
+                The shipped policy file does not list it, so an older binary \
+                never meets the key.",
     },
     KeySpec {
         path: "git.secret_scan_inline_allow",
