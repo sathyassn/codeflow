@@ -1,0 +1,11 @@
+id = "TSK-1102"
+uid = "6d8e0109-5f51-4960-903c-761e8f7418c4"
+kind = "TSK"
+title = "The qualification runner accepts a peer in a registered fixture worktree"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T12:33:14Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
