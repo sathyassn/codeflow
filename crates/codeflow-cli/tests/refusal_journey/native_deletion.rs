@@ -355,6 +355,18 @@ const BYPASSES: &[(&str, &[&str], Native)] = &[
         &[],
         Native::Python,
     ),
+    // Review 04 of PR 425: a reader that writes the walk to a file, and
+    // the standard output opened read-write.
+    (
+        r#"find {dir} -name sentinel | cat > {dir}/list; perl -ne 'chomp; system("rm", "-rf", $_)' {dir}/list"#,
+        &[],
+        Native::Any,
+    ),
+    (
+        r#"find {dir} -name sentinel 1<> {dir}/list; perl -ne 'chomp; system("rm", "-rf", $_)' {dir}/list"#,
+        &[],
+        Native::Any,
+    ),
     // F5: a relative start, read from the payload's directory; the hooks
     // run from an unrelated directory, so the process's own would hold
     // no protected path.

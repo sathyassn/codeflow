@@ -558,6 +558,20 @@ fn rows() -> Vec<Row> {
             ),
             Needs::Python,
         ),
+        // Review 04: a reader that writes the walk to a file, and the
+        // standard output opened read-write.
+        row(
+            "find-walk-out",
+            GUARDED_BELOW,
+            r#"find sub -name guarded | cat > list; perl -ne 'chomp; system("rm", "-rf", $_)' list"#,
+            Unproven,
+        ),
+        row(
+            "find-walk-out",
+            GUARDED_BELOW,
+            r#"find sub -name guarded 1<> list; perl -ne 'chomp; system("rm", "-rf", $_)' list"#,
+            Unproven,
+        ),
         row("find-pipe-reader", TREE, "find sub | sort | wc -l", Exact),
         row(
             "find-print-blanks",

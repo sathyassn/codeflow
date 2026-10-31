@@ -159,7 +159,7 @@
 //! | `find-print0-consumer` | a `find` list that `xargs` or `parallel` gives to anything else: an interpreter, `mv`, a shell, a launcher, other operands | unproven |
 //! | `find-read` | a `find` walk read by `read` or `mapfile`, whose values are every path below its starts | unproven |
 //! | `find-pipe-reader` | a `find` list piped into a program that only reads and prints (`grep`, `wc`, `head`, `cut`, `tr`, and `sort` with flags that take no value), which removes nothing | modelled |
-//! | `find-walk-out` | a `find` walk given by a pipe, a substitution (`$(…)`, `<(…)`), a file (`>`, `exec >`, `-fprint`, `-fls`) or a coprocess to anything but `xargs`, `parallel`, a plain remover or a program that only reads: an interpreter, `awk`, `sed`, a shell, `tee` | unproven |
+//! | `find-walk-out` | a `find` walk given by a pipe, a substitution (`$(…)`, `<(…)`), a file (`>`, `exec >`, `-fprint`, `-fls`) or a coprocess to anything but `xargs`, `parallel`, a plain remover or a program that only reads: an interpreter, `awk`, `sed`, a shell, `tee`; and any command, a reader included, that writes a walk it is given to a file (`cat > list`, `1<> list`) | unproven |
 //! | `find-print-blanks` | `find` output framed by blanks, quotes or newlines, which a name below the start may hold | unproven |
 //! | `find-delete` | `-delete`: the start's tree, and a protected directory at or below a start is refused | modelled |
 //! | `find-exec` | `-exec`, `-ok` with `;` or `{} +` running a plain remover (`rm`, `rmdir`, `unlink`, `shred`, `srm` by that bare name) whose other words are options and `{}`: each match is judged as the start's tree, and a protected directory at or below a start is refused | modelled |
@@ -454,16 +454,20 @@ struct Redir {
 
 impl Redir {
     /// Whether this sends the standard output somewhere other than
-    /// `/dev/null`: `>`, `>>`, `>|`, `>&` on descriptor 1, and `&>`.
+    /// `/dev/null`: an output operator on the default descriptor (`>`,
+    /// `>>`, `>|`, `>&`, `&>`, `&>>`), or any operator on descriptor 1,
+    /// such as `1<>file` or `1<&3`.
     fn stdout_away(&self) -> bool {
-        let writes = matches!(self.op.as_str(), ">" | ">>" | ">|" | ">&" | "&>" | "&>>");
-        let stdout = self.fd.is_none_or(|fd| fd == 1);
+        let moved = match self.fd {
+            Some(fd) => fd == 1 && self.body.is_none() && !self.op.starts_with("<<"),
+            None => matches!(self.op.as_str(), ">" | ">>" | ">|" | ">&" | "&>" | "&>>"),
+        };
         let null = self
             .target
             .as_ref()
             .and_then(Word::plain)
             .is_some_and(|target| target == "/dev/null");
-        writes && stdout && !null
+        moved && !null
     }
 }
 
@@ -3518,6 +3522,25 @@ impl Reader<'_> {
             }
             return;
         };
+        // A builtin that prints a walk into a file (`echo "$(find …)" >
+        // list`) hands it to any later command; `read` and `mapfile` only
+        // take it in.
+        if self.stdout_away && !matches!(program, "read" | "mapfile" | "readarray") {
+            let fed = self.pipe_input.clone().or_else(|| call.input.cloned());
+            if argvs
+                .iter()
+                .any(|argv| walk_given(fed.as_ref(), argv.get(1..).unwrap_or_default()))
+            {
+                self.report(
+                    Judged::Unproven(Unproven {
+                        reason: why::WALK_OUT.into(),
+                        cwd: false,
+                    }),
+                    call.ambiguous,
+                );
+                return;
+            }
+        }
         // A builtin sees its prefix assignments, and they may persist (a
         // special builtin in POSIX mode).
         let before: Vec<(String, Values)> = call
@@ -4512,13 +4535,10 @@ impl Reader<'_> {
         };
         let ambiguous = ambiguous || st.cwd.len() > 1;
         // A `find` walk on the input or among the arguments reaches only
-        // a program proven to remove exactly what it is given or to read.
-        let walk_in = input.is_some_and(|fed| {
-            fed.items
-                .iter()
-                .any(|item| item.tree || walk_value(&item.value))
-        }) || argv[1..].iter().any(|word| walk_value(word));
-        if walk_in && !walk_reader(&argv) {
+        // a program proven to remove exactly what it is given or to read,
+        // and one that writes its output to a file hands the walk to any
+        // later command.
+        if walk_given(input, &argv[1..]) && (self.stdout_away || !walk_reader(&argv)) {
             self.report(
                 Judged::Unproven(Unproven {
                     reason: why::WALK_OUT.into(),
@@ -7389,6 +7409,16 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
 /// The `find` primaries that write the walk to a file.
 const FIND_FILE_OUTPUT: &[&str] = &["-fprint", "-fprint0", "-fprintf", "-fls"];
 
+/// Whether a command is given a `find` walk, on its input or among its
+/// arguments.
+fn walk_given(input: Option<&Fed>, args: &[String]) -> bool {
+    input.is_some_and(|fed| {
+        fed.items
+            .iter()
+            .any(|item| item.tree || walk_value(&item.value))
+    }) || args.iter().any(|word| walk_value(word))
+}
+
 /// Whether `value` came from a `find` walk the reader does not list, by
 /// any of the constructs it depends on.
 fn walk_value(value: &str) -> bool {
@@ -9371,6 +9401,16 @@ mod tests {
             "find /fixture/a -name b | uniq - list",
             "python3 x.py <<< \"$(find /fixture/a -name b)\"",
             "l=$(find /fixture/a -name b); python3 x.py \"$l\"",
+            "find /fixture/a -name b | cat > list",
+            "{ find /fixture/a -name b | wc -l; } > count",
+            "find /fixture/a -name b | sort -u > list",
+            "find /fixture/a -name b | grep b >> list",
+            "cat < <(find /fixture/a -name b) > list",
+            "find /fixture/a -name b 1<> list",
+            "find /fixture/a -name b 1<&3",
+            "echo \"$(find /fixture/a -name b)\" > list",
+            "find /fixture/a -name b | while read f; do echo \"$f\"; done > list",
+            "find /fixture/a -name b -print0 | xargs -0 grep -l x > list",
             "find /fixture/a -name b > list",
             "find /fixture/a -name b 1> list",
             "find /fixture/a -name b &> list",
@@ -9392,7 +9432,6 @@ mod tests {
             "find /fixture/a -name b > /dev/null",
             "find /fixture/a -name b | while read f; do echo \"$f\"; done",
             "echo $(find /fixture/a -name b | wc -l)",
-            "{ find /fixture/a -name b | wc -l; } > count",
             "cat notes | python3 x.py",
         ] {
             assert!(composed_deletion_in(command, base).is_none(), "{command}");

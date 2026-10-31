@@ -743,8 +743,11 @@ any filter), a substitution (`$(…)`, `<(…)`) or a file (`>`, `exec >`,
 `-fprint`, `-fls`) or a coprocess, is unproven unless it only reads and
 prints (`grep`, `cat`, `head`, `tail`, `wc`, `cut`, `tr`, and `sort` with
 flags that take no value): an interpreter such as `python3`, `awk`, `sed`,
-a shell or `tee` may delete any path the walk lists. A walk sent to
-`/dev/null`, or its error output sent anywhere, is not limited.
+a shell or `tee` may delete any path the walk lists. Any command, a reader
+included, that writes a walk it is given to a file (`find . | cat > list`,
+`find . 1<> list`) is unproven too, since a later command may read that
+file. A walk sent to `/dev/null`, or its error output sent anywhere, is
+not limited.
 
 Also unproven: a `find` walk read by `read` or `mapfile`, whose values are
 every path below its starts, `xargs` input the guard cannot read (a file,
