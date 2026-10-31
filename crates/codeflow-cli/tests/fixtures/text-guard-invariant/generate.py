@@ -4,9 +4,11 @@ nothing in a row runs).
     python3 generate.py <codeflow> line          # fill rows.json's `line`
     python3 generate.py <codeflow> measure OUT   # both outcomes; the sample to OUT
 
-`line` records the decision of the 3.2.0 line binary (5f2fe3827) for each
-row: the baseline column `text_guard_invariant.rs` checks against. It also
-writes that binary's `--version` and SHA-256 to `line-binary.txt`.
+`line` records the decision of the line binary, built from the integration
+line this branch last merged, for each row: the column
+`text_guard_invariant.rs` checks against. Rerun it after each merge of the
+line. It also writes that binary's `--version` and SHA-256 to
+`line-binary.txt`.
 `measure` records a head binary's decisions in the baseline and the
 tightened outcome (AC-6). The fixture is the tree `tree.json` describes,
 rebuilt under a temporary folder exactly as the Rust test rebuilds it.
@@ -114,7 +116,7 @@ def main():
             version = subprocess.run([binary, '--version'], text=True, capture_output=True).stdout.strip()
             digest = hashlib.sha256(open(binary, 'rb').read()).hexdigest()
             open(os.path.join(HERE, 'line-binary.txt'), 'w').write(
-                f'{version}\nsha256 {digest}\nbuilt at 5f2fe3827 in its own target directory\n')
+                f'{version}\nsha256 {digest}\nbuilt from the line in its own target directory\n')
         else:
             def both(row):
                 base, base_err = judge(binary, t, row, False)

@@ -5,9 +5,11 @@
 //! and security round probes of PR 331 as the round 15 replay assembled
 //! them, the 49-line everyday sample, the two shell review fixtures and the
 //! three directory-change rows of the Fable review. Its `line` column is the
-//! decision of the line binary at `5f2fe3827`, built in its own target
-//! directory and run by `generate.py` on the fixture tree this test
-//! rebuilds; `line-binary.txt` records that binary's version and digest.
+//! decision of the binary built from the integration line this branch last
+//! merged, built in its own target directory and run by `generate.py` on
+//! the fixture tree this test rebuilds; `line-binary.txt` records that
+//! binary's version, source and digest. A merge of the line regenerates
+//! it, since the relaxed outcome is the line's rule.
 //! Each row is judged twice by this build: in the relaxed outcome (a Claude
 //! payload in a checkout whose origin's landed policy sets
 //! `security.text_guard: relaxed`; the column is still named `baseline`) and

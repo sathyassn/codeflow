@@ -207,7 +207,7 @@
   "source": "history.json:29",
   "cwd": "@T@/repo",
   "command": "for f in x.py; do python3 \"$f\" settings.json; done",
-  "line": 2
+  "line": 0
  },
  {
   "set": "codex-rounds",
@@ -228,7 +228,7 @@
   "source": "history.json:32",
   "cwd": "@T@/repo",
   "command": "if true; then python3 x.py settings.json; fi",
-  "line": 2
+  "line": 0
  },
  {
   "set": "codex-rounds",
@@ -277,21 +277,21 @@
   "source": "history.json:39",
   "cwd": "@T@/repo",
   "command": "trap \"cd ./hidden\" RETURN; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:40",
   "cwd": "@T@/repo",
   "command": "trap \"cd ./hidden\" ERR; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:41",
   "cwd": "@T@/repo",
   "command": "trap \"cd ./hidden\" EXIT; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3140,7 +3140,7 @@
   "source": "history.json:448",
   "cwd": "@T@/repo",
   "command": "xargs  z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3154,7 +3154,7 @@
   "source": "history.json:450",
   "cwd": "@T@/repo",
   "command": "xargs -- z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3182,7 +3182,7 @@
   "source": "history.json:454",
   "cwd": "@T@/repo",
   "command": "xargs -I 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3196,7 +3196,7 @@
   "source": "history.json:456",
   "cwd": "@T@/repo",
   "command": "xargs -I1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3210,7 +3210,7 @@
   "source": "history.json:458",
   "cwd": "@T@/repo",
   "command": "xargs -I 1 -I 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3308,7 +3308,7 @@
   "source": "history.json:472",
   "cwd": "@T@/repo",
   "command": "xargs -P 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3322,7 +3322,7 @@
   "source": "history.json:474",
   "cwd": "@T@/repo",
   "command": "xargs -P1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3336,7 +3336,7 @@
   "source": "history.json:476",
   "cwd": "@T@/repo",
   "command": "xargs -P 1 -P 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3392,7 +3392,7 @@
   "source": "history.json:484",
   "cwd": "@T@/repo",
   "command": "xargs -d 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3406,7 +3406,7 @@
   "source": "history.json:486",
   "cwd": "@T@/repo",
   "command": "xargs -d1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3420,7 +3420,7 @@
   "source": "history.json:488",
   "cwd": "@T@/repo",
   "command": "xargs -d 1 -d 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3560,7 +3560,7 @@
   "source": "history.json:508",
   "cwd": "@T@/repo",
   "command": "xargs --delimiter 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3574,7 +3574,7 @@
   "source": "history.json:510",
   "cwd": "@T@/repo",
   "command": "xargs --delimiter=1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3588,7 +3588,7 @@
   "source": "history.json:512",
   "cwd": "@T@/repo",
   "command": "xargs --delimiter 1 --delimiter 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3728,7 +3728,7 @@
   "source": "history.json:532",
   "cwd": "@T@/repo",
   "command": "xargs --max-procs 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3742,7 +3742,7 @@
   "source": "history.json:534",
   "cwd": "@T@/repo",
   "command": "xargs --max-procs=1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3756,7 +3756,7 @@
   "source": "history.json:536",
   "cwd": "@T@/repo",
   "command": "xargs --max-procs 1 --max-procs 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3812,7 +3812,7 @@
   "source": "history.json:544",
   "cwd": "@T@/repo",
   "command": "xargs --replace 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3826,7 +3826,7 @@
   "source": "history.json:546",
   "cwd": "@T@/repo",
   "command": "xargs --replace=1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3840,7 +3840,7 @@
   "source": "history.json:548",
   "cwd": "@T@/repo",
   "command": "xargs --replace 1 --replace 1 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3896,7 +3896,7 @@
   "source": "history.json:556",
   "cwd": "@T@/repo",
   "command": "xargs -0 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3910,7 +3910,7 @@
   "source": "history.json:558",
   "cwd": "@T@/repo",
   "command": "xargs -0 -0 z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3924,7 +3924,7 @@
   "source": "history.json:560",
   "cwd": "@T@/repo",
   "command": "xargs -r z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3938,7 +3938,7 @@
   "source": "history.json:562",
   "cwd": "@T@/repo",
   "command": "xargs -r -r z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3952,7 +3952,7 @@
   "source": "history.json:564",
   "cwd": "@T@/repo",
   "command": "xargs -t z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -3966,7 +3966,7 @@
   "source": "history.json:566",
   "cwd": "@T@/repo",
   "command": "xargs -t -t z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -4036,7 +4036,7 @@
   "source": "history.json:576",
   "cwd": "@T@/repo",
   "command": "xargs --null z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -4050,7 +4050,7 @@
   "source": "history.json:578",
   "cwd": "@T@/repo",
   "command": "xargs --null --null z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -4064,7 +4064,7 @@
   "source": "history.json:580",
   "cwd": "@T@/repo",
   "command": "xargs --no-run-if-empty z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -4078,7 +4078,7 @@
   "source": "history.json:582",
   "cwd": "@T@/repo",
   "command": "xargs --no-run-if-empty --no-run-if-empty z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -4092,7 +4092,7 @@
   "source": "history.json:584",
   "cwd": "@T@/repo",
   "command": "xargs --verbose z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -4106,7 +4106,7 @@
   "source": "history.json:586",
   "cwd": "@T@/repo",
   "command": "xargs --verbose --verbose z; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5044,28 +5044,28 @@
   "source": "history.json:720",
   "cwd": "@T@/repo",
   "command": "z; builtin command ${P:-python3} @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:721",
   "cwd": "@T@/repo",
   "command": "z; builtin command \"$P\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:722",
   "cwd": "@T@/repo",
   "command": "z; env -S \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:723",
   "cwd": "@T@/repo",
   "command": "z; env --split-string=\"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5086,14 +5086,14 @@
   "source": "history.json:726",
   "cwd": "@T@/repo",
   "command": "z; env env -S \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:727",
   "cwd": "@T@/repo",
   "command": "z; command env -S \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5303,7 +5303,7 @@
   "source": "history.json:757",
   "cwd": "@T@/repo",
   "command": "for x do z; done; python3 x.py settings.json",
-  "line": 2
+  "line": 0
  },
  {
   "set": "codex-rounds",
@@ -5317,14 +5317,14 @@
   "source": "history.json:759",
   "cwd": "@T@/repo",
   "command": "z; builtin command ${P:-python3} @T@/read_dir.py \"$PWD/src/..\"; python3 -V",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:760",
   "cwd": "@T@/repo",
   "command": "z; env -S \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"; python3 -V",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5338,14 +5338,14 @@
   "source": "history.json:762",
   "cwd": "@T@/repo",
   "command": "z; env env -S \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"; python3 -V",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:763",
   "cwd": "@T@/repo",
   "command": "z; command env -S \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"; python3 -V",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5359,7 +5359,7 @@
   "source": "history.json:765",
   "cwd": "@T@/repo",
   "command": "z; find . -prune -exec \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\" \\;",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5401,7 +5401,7 @@
   "source": "history.json:771",
   "cwd": "@T@/repo",
   "command": "z; arch -arm64 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5415,7 +5415,7 @@
   "source": "history.json:773",
   "cwd": "@T@/repo",
   "command": "z; /usr/bin/arch -arm64 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5429,7 +5429,7 @@
   "source": "history.json:775",
   "cwd": "@T@/repo",
   "command": "z; taskpolicy -b \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5443,7 +5443,7 @@
   "source": "history.json:777",
   "cwd": "@T@/repo",
   "command": "z; /usr/sbin/taskpolicy -b \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5457,7 +5457,7 @@
   "source": "history.json:779",
   "cwd": "@T@/repo",
   "command": "z; script -q @T@/typescript \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5471,14 +5471,14 @@
   "source": "history.json:781",
   "cwd": "@T@/repo",
   "command": "z; exec -a fixture \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:782",
   "cwd": "@T@/repo",
   "command": "z; time -p \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5492,7 +5492,7 @@
   "source": "history.json:784",
   "cwd": "@T@/repo",
   "command": "z; nohup \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5506,14 +5506,14 @@
   "source": "history.json:786",
   "cwd": "@T@/repo",
   "command": "z; xargs -I@ python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:787",
   "cwd": "@T@/repo",
   "command": "z; xargs -I@ \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5534,7 +5534,7 @@
   "source": "history.json:790",
   "cwd": "@T@/repo",
   "command": "z; myrun \"$P\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5548,7 +5548,7 @@
   "source": "history.json:792",
   "cwd": "@T@/repo",
   "command": "z; chrt -o 0 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5562,7 +5562,7 @@
   "source": "history.json:794",
   "cwd": "@T@/repo",
   "command": "z; taskset -c 0 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5576,7 +5576,7 @@
   "source": "history.json:796",
   "cwd": "@T@/repo",
   "command": "z; flock @T@/lock \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5590,7 +5590,7 @@
   "source": "history.json:798",
   "cwd": "@T@/repo",
   "command": "z; setpriv -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5604,7 +5604,7 @@
   "source": "history.json:800",
   "cwd": "@T@/repo",
   "command": "z; firejail --noprofile \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5618,7 +5618,7 @@
   "source": "history.json:802",
   "cwd": "@T@/repo",
   "command": "z; unshare -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5632,7 +5632,7 @@
   "source": "history.json:804",
   "cwd": "@T@/repo",
   "command": "z; nsenter -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5660,7 +5660,7 @@
   "source": "history.json:808",
   "cwd": "@T@/repo",
   "command": "z; watch -n 1 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5674,7 +5674,7 @@
   "source": "history.json:810",
   "cwd": "@T@/repo",
   "command": "z; script -q @T@/transcript2 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5716,7 +5716,7 @@
   "source": "history.json:816",
   "cwd": "@T@/repo",
   "command": "z; /usr/bin/time -p \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5751,42 +5751,42 @@
   "source": "history.json:821",
   "cwd": "@T@/repo",
   "command": "z; xargs -I{} python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:822",
   "cwd": "@T@/repo",
   "command": "z; xargs -I{} \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:823",
   "cwd": "@T@/repo",
   "command": "z; xargs --replace={} -- python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:824",
   "cwd": "@T@/repo",
   "command": "z; xargs --replace={} -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:825",
   "cwd": "@T@/repo",
   "command": "z; xargs -0 -- python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:826",
   "cwd": "@T@/repo",
   "command": "z; xargs -0 -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5800,7 +5800,7 @@
   "source": "history.json:828",
   "cwd": "@T@/repo",
   "command": "z; genv -S \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5814,7 +5814,7 @@
   "source": "history.json:830",
   "cwd": "@T@/repo",
   "command": "z; env --split-string \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5856,7 +5856,7 @@
   "source": "history.json:836",
   "cwd": "@T@/repo",
   "command": "z; setsid -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5870,7 +5870,7 @@
   "source": "history.json:838",
   "cwd": "@T@/repo",
   "command": "z; unbuffer \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5884,14 +5884,14 @@
   "source": "history.json:840",
   "cwd": "@T@/repo",
   "command": "z; find . -exec \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\" \\;",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:841",
   "cwd": "@T@/repo",
   "command": "z; myrun \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -5933,7 +5933,7 @@
   "source": "history.json:847",
   "cwd": "@T@/repo",
   "command": "cargo test -p \"$CRATE\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6129,7 +6129,7 @@
   "source": "history.json:875",
   "cwd": "@T@/repo",
   "command": "CDPATH=$SEARCH cd src && python3 tool.py ../settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6143,7 +6143,7 @@
   "source": "history.json:877",
   "cwd": "@T@/repo",
   "command": "cdpath=.claude && cd src && python3 tool.py ../settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6206,21 +6206,21 @@
   "source": "history.json:886",
   "cwd": "@T@/repo/src/lnk",
   "command": "cd .. && python3 .claude/settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:887",
   "cwd": "@T@/repo/src/lnk",
   "command": "cd .. && python3 .codex/config.toml",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:888",
   "cwd": "@T@/repo/src/lnk",
   "command": "cd -P .. && python3 .claude/settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6248,7 +6248,7 @@
   "source": "history.json:892",
   "cwd": "@T@/repo",
   "command": "ruby -C safe/lnk/.. .claude/settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6591,7 +6591,7 @@
   "source": "history.json:941",
   "cwd": "@T@/repo",
   "command": "ruby -Csafe/lnk/.. .codex/config.toml",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6668,7 +6668,7 @@
   "source": "history.json:952",
   "cwd": "@T@/repo",
   "command": "x=$(cd ./hidden); python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6682,14 +6682,14 @@
   "source": "history.json:954",
   "cwd": "@T@/repo",
   "command": "trap 'builtin cd ./hidden' DEBUG; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:955",
   "cwd": "@T@/repo",
   "command": "trap 'builtin cd ./hidden' ERR; false; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6717,7 +6717,7 @@
   "source": "history.json:959",
   "cwd": "@T@/repo",
   "command": "alias up='builtin cd ./hidden'\nup\npython3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6843,7 +6843,7 @@
   "source": "history.json:977",
   "cwd": "@T@/repo",
   "command": "ruby -C bridge/.. x.rb settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -6941,7 +6941,7 @@
   "source": "history.json:991",
   "cwd": "@T@/repo",
   "command": "while python3 x.py settings.json; do jump || break; done",
-  "line": 2
+  "line": 0
  },
  {
   "set": "codex-rounds",
@@ -6955,7 +6955,7 @@
   "source": "history.json:993",
   "cwd": "@T@/repo",
   "command": "${X:-cd} .claude && python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -7158,7 +7158,7 @@
   "source": "history.json:1022",
   "cwd": "@T@/repo",
   "command": "python3 x.py settings.json $(cd ./hidden)",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -8348,7 +8348,7 @@
   "source": "history.json:1192",
   "cwd": "@T@/repo",
   "command": "python3 x.py settings.json <<EOF\n'\nEOF\npython3 x.py settings.json \"$\\\n{ cd ./hidden; }\"",
-  "line": 2
+  "line": 0
  },
  {
   "set": "codex-rounds",
@@ -8390,14 +8390,14 @@
   "source": "history.json:1198",
   "cwd": "@T@/repo",
   "command": "\"$@\"; python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "history.json:1199",
   "cwd": "@T@/repo",
   "command": "python3 x.py settings.json \"$(cd ./hidden)\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -8810,7 +8810,7 @@
   "source": "options.json:12",
   "cwd": "@T@/repo",
   "command": "z; xargs --replace python3 @T@/read_last.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -8831,7 +8831,7 @@
   "source": "options.json:15",
   "cwd": "@T@/repo",
   "command": "z; xargs --replace=foo python3 @T@/read_last.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -8852,14 +8852,14 @@
   "source": "options.json:18",
   "cwd": "@T@/repo",
   "command": "z; xargs -Ifoo python3 @T@/read_last.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "options.json:19",
   "cwd": "@T@/repo",
   "command": "z; xargs -I foo python3 @T@/read_last.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9244,7 +9244,7 @@
   "source": "controls.json:5",
   "cwd": "@T@/repo",
   "command": "cargo test -p \"$CRATE\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9258,14 +9258,14 @@
   "source": "controls.json:7",
   "cwd": "@T@/repo",
   "command": "rg --files | xargs rg \"$HOME/x\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:8",
   "cwd": "@T@/repo",
   "command": "rg --files | xargs grep \"$HOME/x\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9384,7 +9384,7 @@
   "source": "controls.json:25",
   "cwd": "@T@/repo",
   "command": "z; env -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9412,7 +9412,7 @@
   "source": "controls.json:29",
   "cwd": "@T@/repo",
   "command": "z; env -u X \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9440,7 +9440,7 @@
   "source": "controls.json:33",
   "cwd": "@T@/repo",
   "command": "z; env -uX \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9468,7 +9468,7 @@
   "source": "controls.json:37",
   "cwd": "@T@/repo",
   "command": "z; env --unset=X \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9496,7 +9496,7 @@
   "source": "controls.json:41",
   "cwd": "@T@/repo",
   "command": "z; command -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9524,7 +9524,7 @@
   "source": "controls.json:45",
   "cwd": "@T@/repo",
   "command": "z; command -p \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9552,7 +9552,7 @@
   "source": "controls.json:49",
   "cwd": "@T@/repo",
   "command": "z; nice -n5 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9580,7 +9580,7 @@
   "source": "controls.json:53",
   "cwd": "@T@/repo",
   "command": "z; nice -n 5 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9608,7 +9608,7 @@
   "source": "controls.json:57",
   "cwd": "@T@/repo",
   "command": "z; timeout -- 5 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9636,7 +9636,7 @@
   "source": "controls.json:61",
   "cwd": "@T@/repo",
   "command": "z; exec -a custom \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9664,63 +9664,63 @@
   "source": "controls.json:65",
   "cwd": "@T@/repo",
   "command": "z; nohup \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:66",
   "cwd": "@T@/repo",
   "command": "z; xargs -I@ python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:67",
   "cwd": "@T@/repo",
   "command": "z; xargs -I@ \"python3\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:68",
   "cwd": "@T@/repo",
   "command": "z; xargs -I@ /opt/homebrew/bin/python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:69",
   "cwd": "@T@/repo",
   "command": "z; xargs -I@ \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:70",
   "cwd": "@T@/repo",
   "command": "z; xargs --replace=@ python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:71",
   "cwd": "@T@/repo",
   "command": "z; xargs --replace=@ \"python3\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:72",
   "cwd": "@T@/repo",
   "command": "z; xargs --replace=@ /opt/homebrew/bin/python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:73",
   "cwd": "@T@/repo",
   "command": "z; xargs --replace=@ \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9755,28 +9755,28 @@
   "source": "controls.json:78",
   "cwd": "@T@/repo",
   "command": "z; xargs -0 -- python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:79",
   "cwd": "@T@/repo",
   "command": "z; xargs -0 -- \"python3\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:80",
   "cwd": "@T@/repo",
   "command": "z; xargs -0 -- /opt/homebrew/bin/python3 @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "controls.json:81",
   "cwd": "@T@/repo",
   "command": "z; xargs -0 -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9804,7 +9804,7 @@
   "source": "controls.json:85",
   "cwd": "@T@/repo",
   "command": "z; arch -arm64 \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9832,7 +9832,7 @@
   "source": "controls.json:89",
   "cwd": "@T@/repo",
   "command": "z; time -p \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9860,7 +9860,7 @@
   "source": "controls.json:93",
   "cwd": "@T@/repo",
   "command": "z; time -p -- \"${P:-python3}\" @T@/read_dir.py \"$PWD/src/..\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9888,14 +9888,14 @@
   "source": "closure.json:3",
   "cwd": "@T@/repo",
   "command": "x=$(cd ./hidden); python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "closure.json:4",
   "cwd": "@T@/repo",
   "command": "python3 x.py settings.json $(cd ./hidden)",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -9923,14 +9923,14 @@
   "source": "closure.json:8",
   "cwd": "@T@/repo",
   "command": "x=$(cd ./hidden); python3 x.py settings.json",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
   "source": "closure.json:9",
   "cwd": "@T@/repo",
   "command": "python3 x.py settings.json $(cd ./hidden)",
-  "line": 0
+  "line": 2
  },
  {
   "set": "codex-rounds",
@@ -10007,21 +10007,21 @@
   "source": "row 2",
   "cwd": "@T@/repo",
   "command": "git commit -m \"$MSG\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 3",
   "cwd": "@T@/repo",
   "command": "git diff \"$BASE\"...HEAD",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 4",
   "cwd": "@T@/repo",
   "command": "git show \"$SHA\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
@@ -10042,7 +10042,7 @@
   "source": "row 7",
   "cwd": "@T@/repo",
   "command": "mkdir -p \"$TMPDIR/x\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
@@ -10056,7 +10056,7 @@
   "source": "row 9",
   "cwd": "@T@/repo",
   "command": "cp \"$A\" \"$B\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
@@ -10077,7 +10077,7 @@
   "source": "row 12",
   "cwd": "@T@/repo",
   "command": "cargo build --target-dir \"$TMPDIR/t\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
@@ -10098,14 +10098,14 @@
   "source": "row 15",
   "cwd": "@T@/repo",
   "command": "npm run build -- --out \"$OUT\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 16",
   "cwd": "@T@/repo",
   "command": "make -C \"$DIR\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
@@ -10126,35 +10126,35 @@
   "source": "row 19",
   "cwd": "@T@/repo",
   "command": "[ -f \"$f\" ] && echo yes",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 20",
   "cwd": "@T@/repo",
   "command": "[[ -n \"$X\" ]] && echo yes",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 21",
   "cwd": "@T@/repo",
   "command": "test -d \"$D\" || mkdir \"$D\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 22",
   "cwd": "@T@/repo",
   "command": "[ \"$#\" -gt 0 ] && echo args",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 23",
   "cwd": "@T@/repo",
   "command": "if [ -z \"$X\" ]; then echo empty; fi",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
@@ -10182,21 +10182,21 @@
   "source": "row 27",
   "cwd": "@T@/repo",
   "command": "ls -la \"$D\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 28",
   "cwd": "@T@/repo",
   "command": "cat \"$f\" | head -5",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 29",
   "cwd": "@T@/repo",
   "command": "wc -l \"$f\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
@@ -10217,7 +10217,7 @@
   "source": "row 32",
   "cwd": "@T@/repo",
   "command": "rg -n pattern \"$D\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
@@ -10231,84 +10231,84 @@
   "source": "row 34",
   "cwd": "@T@/repo",
   "command": "sort \"$f\" | uniq -c",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 35",
   "cwd": "@T@/repo",
   "command": "find \"$D\" -name \"*.rs\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 36",
   "cwd": "@T@/repo",
   "command": "find . -name \"*.rs\" | xargs wc -l",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 37",
   "cwd": "@T@/repo",
   "command": "jq \".x\" \"$f\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 38",
   "cwd": "@T@/repo",
   "command": "sed -n \"1,5p\" \"$f\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 39",
   "cwd": "@T@/repo",
   "command": "awk \"{print \\$1}\" \"$f\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 40",
   "cwd": "@T@/repo",
   "command": "diff \"$A\" \"$B\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 41",
   "cwd": "@T@/repo",
   "command": "curl -s \"$URL\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 42",
   "cwd": "@T@/repo",
   "command": "gh pr view \"$N\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 43",
   "cwd": "@T@/repo",
   "command": "du -sh \"$D\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 44",
   "cwd": "@T@/repo",
   "command": "tail -n 20 \"$LOG\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
   "source": "row 45",
   "cwd": "@T@/repo",
   "command": "which \"$P\"",
-  "line": 0
+  "line": 2
  },
  {
   "set": "everyday-sample",
@@ -11372,7 +11372,7 @@
   "source": "147",
   "cwd": "@T@/repo",
   "command": "$CMD args",
-  "line": 0
+  "line": 2
  },
  {
   "set": "shell-ordinary-review",
@@ -11400,7 +11400,7 @@
   "source": "151",
   "cwd": "@T@/repo",
   "command": "$TOOL < data/in.txt",
-  "line": 0
+  "line": 2
  },
  {
   "set": "shell-ordinary-review",
@@ -11680,7 +11680,7 @@
   "source": "36",
   "cwd": "@T@/repo",
   "command": "printf 'rm -rf .worktrees/w' > s.sh && chmod +x s.sh && ./s.sh",
-  "line": 0
+  "line": 2
  },
  {
   "set": "shell-round-four-review",
@@ -13724,14 +13724,14 @@
   "source": "328",
   "cwd": "@T@/repo",
   "command": "busybox cp -l .claude/settings.json H && dd if=/dev/null of=H",
-  "line": 0
+  "line": 2
  },
  {
   "set": "shell-round-four-review",
   "source": "329",
   "cwd": "@T@/repo",
   "command": "env busybox cp -al .claude/settings.json H && dd if=/dev/null of=H",
-  "line": 0
+  "line": 2
  },
  {
   "set": "shell-round-four-review",
