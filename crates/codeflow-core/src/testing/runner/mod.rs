@@ -2158,6 +2158,10 @@ mod tests {
             dir.path(),
             out.path(),
         );
+        // The wait reports an exit only once it sees one, so let the helper
+        // finish first; a helper still running with its pid written is
+        // correctly answered with that pid.
+        gate.child().wait().unwrap();
         let message = wait_for_target_pid(
             gate.child(),
             &dir.path().join("pid.txt"),

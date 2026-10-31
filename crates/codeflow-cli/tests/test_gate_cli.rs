@@ -580,6 +580,10 @@ fn a_gate_that_exits_after_its_pid_reports_the_pid_and_its_stderr() {
         .current_dir(dir.path());
     let (child, rx, _stdout) = spawn(cmd);
     let mut gate = EndGate(child);
+    // The wait reports an exit only once it sees one, so let the gate finish
+    // first; a gate still running with its pid written is correctly answered
+    // with that pid.
+    gate.0.wait().unwrap();
     let message = target_pid(
         &mut gate.0,
         &rx,
