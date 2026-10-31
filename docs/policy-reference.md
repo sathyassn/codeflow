@@ -732,10 +732,16 @@ A `find` call that acts on its matches (`-delete`, `-exec`, `-execdir`,
 - Each command it runs is `rm`, `rmdir`, `unlink`, `shred` or `srm` by
   that bare name, with options and `{}` as its only other words, or a
   read-only program by its bare name (`grep`, `cat`, `head`, `tail`,
-  `wc`, `ls`, `stat`, `du`, the checksum tools, `echo`, `printf`) with
-  `{}` only as a whole word. Any other command is unproven: an
-  interpreter, `mv`, a shell, a launcher such as `env`, a path to a
-  program, `{}/x`, or a `+` that does not follow `{}`.
+  `wc`, `ls`, `stat`, `du`, the checksum tools, `echo`, `printf`,
+  `basename`, `dirname`) with `{}` only as a whole word. `rg`, `ag` and
+  `git grep` count as read-only when every option is one the guard knows
+  and none runs another program: `rg --pre`, `--pre-glob`, `-z` and
+  `--hostname-bin`, `ag --pager` and `-z`, and `git grep -O` and
+  `--textconv` are unproven, as are a `git` global option such as `-c`
+  and `rg` without `--no-config` on a line that names
+  `RIPGREP_CONFIG_PATH`. Any other command is unproven: an interpreter,
+  `mv`, a shell, a launcher such as `env`, a path to a program, `{}/x`,
+  or a `+` that does not follow `{}`.
 
 The same rule holds for a `find -print0` list piped to `xargs -0` or
 `parallel -0`. Any other program a `find` walk reaches, by a pipe (through

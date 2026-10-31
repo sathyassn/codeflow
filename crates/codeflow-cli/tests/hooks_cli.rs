@@ -9301,12 +9301,14 @@ fn guards_read_a_search_pattern_as_text() {
             }
         }
     }
-    // TSK-286 keeps TSK-380's promise: the deletion floor proves `rg` and
+    // TSK-286 keeps TSK-380's promise: the deletion floor proves `rg`, `ag` and
     // `git grep` only read the matches `find -exec` hands them, unless an
-    // option runs another program (`--pre`, `-z`, `-O`, `--textconv`).
+    // option runs another program (`--pre`, `-z`, `--pager`, `-O`,
+    // `--textconv`).
     for command in [
         "find docs -exec rg -l '.claude/settings.json' {} +",
         "find docs -exec git grep '/CHANGELOG.md$' {} +",
+        "find docs -exec ag -l '/etc/hosts' {} +",
     ] {
         for hook in ["exec-guard", "git-guard"] {
             let out = run(hook, command);
@@ -9319,6 +9321,7 @@ fn guards_read_a_search_pattern_as_text() {
     for command in [
         "find docs -exec rg -z x {} +",
         "find docs -exec git grep -O x {} +",
+        "find docs -exec ag --pager rm x {} +",
         "find docs -exec git grep --textconv x {} +",
     ] {
         let out = run("exec-guard", command);

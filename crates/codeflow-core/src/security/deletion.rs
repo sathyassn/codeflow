@@ -163,8 +163,8 @@
 //! | `find-print-blanks` | `find` output framed by blanks, quotes or newlines, which a name below the start may hold | unproven |
 //! | `find-delete` | `-delete`: the start's tree, and a protected directory at or below a start is refused | modelled |
 //! | `find-exec` | `-exec`, `-ok` with `;` or `{} +` running a plain remover (`rm`, `rmdir`, `unlink`, `shred`, `srm` by that bare name) whose other words are options and `{}`: each match is judged as the start's tree, and a protected directory at or below a start is refused | modelled |
-//! | `find-exec-read` | `-exec`, `-execdir` running a read-only program by its bare name, with `{}` only as a whole word | modelled |
-//! | `find-exec-other` | any other command `find` runs: an interpreter, `mv`, a shell, a launcher, a path to a program, `{}` inside a longer word, another operand, or a `+` that does not follow `{}` | unproven |
+//! | `find-exec-read` | `-exec`, `-execdir` running a read-only program by its bare name, with `{}` only as a whole word; `rg`, `ag` and `git grep` count with every option known and none that runs a program (TSK-380) | modelled |
+//! | `find-exec-other` | any other command `find` runs: an interpreter, `mv`, a shell, a launcher, a path to a program, `{}` inside a longer word, another operand, a `+` that does not follow `{}`, or a search tool given `--pre`, `--pre-glob`, `-z`, `--hostname-bin`, `--pager`, `-O`, `--textconv`, an option it does not know, a `git` global option, or an `rg` on a line naming `RIPGREP_CONFIG_PATH` without `--no-config` | unproven |
 //! | `find-execdir` | `-execdir`, `-okdir` running a plain remover whose operands are only `{}`, judged as `find-exec` | modelled |
 //! | `find-follow` | `-L`, `-follow`: the walk leaves its starts through links | unproven |
 //! | `find-other-output` | `-printf`, `-fprint`, `-ls`, `-exec` and the like piped on: output that is not the walk | unproven |
@@ -7690,7 +7690,7 @@ fn plain_remover(words: &[String], token: Option<&str>) -> bool {
 }
 
 /// The programs that never remove or write a file, by their bare names,
-/// whatever their arguments. `rg` and `git grep` read only under
+/// whatever their arguments. `rg`, `ag` and `git grep` read only under
 /// [`reads_only`].
 const READERS: &[&str] = &[
     "grep",
@@ -7714,7 +7714,7 @@ const READERS: &[&str] = &[
 ];
 
 /// Whether `program` with `args` never removes or writes a file and runs
-/// no other program: one of [`READERS`], or `rg` or `git grep` (`git`
+/// no other program: one of [`READERS`], or `rg`, `ag` or `git grep` (`git`
 /// with `grep` as its first argument, so no global option such as `-c`)
 /// given no option that runs a program and none their grammar does not
 /// know ([`runs_no_program`]). TSK-380 promised these searches; `--pre`
@@ -7722,6 +7722,7 @@ const READERS: &[&str] = &[
 fn reads_only(program: &str, args: &[String], line: &CommandLine) -> bool {
     match program {
         "rg" => runs_no_program("rg", args, line.names_ripgrep_config()),
+        "ag" => runs_no_program("ag", args, false),
         "git" => args
             .split_first()
             .is_some_and(|(sub, rest)| sub == "grep" && runs_no_program("git grep", rest, false)),
@@ -9544,10 +9545,10 @@ mod tests {
         );
     }
 
-    /// TSK-286 after TSK-380 and TSK-1002: `rg` and `git grep` handed
+    /// TSK-286 after TSK-380 and TSK-1002: `rg`, `ag` and `git grep` handed
     /// `find` matches only read them, and so do `basename` and `dirname`,
     /// unless an option runs another program (`--pre`, `-z`,
-    /// `--hostname-bin`, `-O`, `--textconv`), an option is one the grammar
+    /// `--hostname-bin`, `--pager`, `-O`, `--textconv`), an option is one the grammar
     /// does not know, `git` carries a global option, or the line may set
     /// a ripgrep configuration without `--no-config`.
     #[test]
@@ -9561,6 +9562,7 @@ mod tests {
             "find . -exec git grep -n -e x --no-textconv -- {} \\;",
             "find . -exec basename {} \\;",
             "find . -exec dirname {} +",
+            "find . -exec ag -l x {} +",
             "find . -name '*.rs' -print0 | xargs -0 rg -l x",
             "find . -name '*.rs' | xargs git grep -l x --",
             "find . -name '*.rs' | xargs basename",
@@ -9580,6 +9582,8 @@ mod tests {
             "find . -exec rg --search-zip x {} +",
             "find . -exec rg --hostname-bin=rm x {} +",
             "find . -exec rg --pr cat x {} +",
+            "find . -exec ag --pager rm x {} +",
+            "find . -exec ag -z x {} +",
             "find . -exec git grep -O x {} +",
             "find . -exec git grep -Orm x {} +",
             "find . -exec git grep --open-files-in-pager=rm x {} +",

@@ -736,7 +736,9 @@ fn own_roots(args: &[String], literal: &[bool], configured: bool) -> Option<Vec<
 /// The options that make a search tool run another program: ripgrep's
 /// `--pre` and `--pre-glob` (a program on every file it searches),
 /// `-z` and `--search-zip` (a decompression program found on `PATH`) and
-/// `--hostname-bin` (a program that prints the host name); `git grep`'s
+/// `--hostname-bin` (a program that prints the host name); `ag`'s
+/// `--pager`, and its `-z` and `--search-zip`, kept out with ripgrep's
+/// although `ag` decompresses in process; `git grep`'s
 /// `-O` and `--open-files-in-pager` (a pager given the matching files)
 /// and `--textconv` (the conversion program a file's attributes name).
 /// `git grep` honours no textconv setting without `--textconv`.
@@ -751,10 +753,11 @@ const RUNS_PROGRAM: &[(&str, &[&str])] = &[
             "--hostname-bin",
         ],
     ),
+    ("ag", &["--pager", "-z", "--search-zip"]),
     ("git grep", &["-O", "--open-files-in-pager", "--textconv"]),
 ];
 
-/// Whether a call of the search tool `program` (`rg` or `git grep`,
+/// Whether a call of the search tool `program` (`rg`, `ag` or `git grep`,
 /// without its `git`) with `args` runs no other program (TSK-286, after
 /// TSK-380): every option is one the tool's grammar knows, none is in
 /// [`RUNS_PROGRAM`], and for ripgrep either `--no-config` is given or the
