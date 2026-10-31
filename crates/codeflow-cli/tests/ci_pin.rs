@@ -1371,29 +1371,39 @@ const HOOK: &str = ".codeflow/audit-exceptions.sh";
 /// register, which it reads from the exported trusted commit.
 const ACCEPTING_HOOK: &str = "awk -F'\\t' 'NR==FNR { ok[$1] = 1; next } ($1 in ok)' docs/register.txt \"$CODEFLOW_AUDIT_FINDINGS\"\n";
 
-/// sathyassn/codeflow#149: a project exception hook on the trusted commit
-/// accepts findings from a trusted register, and a pull request cannot
-/// accept its own.
+const REGISTER: (&str, &str) = ("docs/register.txt", "GHSA-a\nGHSA-b\n");
+const ACCEPTING: (&str, &str) = (HOOK, ACCEPTING_HOOK);
+const ONE: [(&str, &str); 1] = [("OSV_FAKE_IDS", "GHSA-a")];
+const TWO: [(&str, &str); 1] = [("OSV_FAKE_IDS", "GHSA-a GHSA-c")];
+
+/// Run the audit step at the `block` level on a repository whose base
+/// holds `base` and whose head adds `head`; returns whether it passed and
+/// its output.
+fn run_exception_step(
+    base: &[(&str, &str)],
+    head: &[(&str, &str)],
+    fake: &[(&str, &str)],
+) -> (bool, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    let trusted = exception_repo(&work, &levels("warn", "block"), base, head);
+    let out = run_audit_step(&work, &trusted, fake);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), text)
+}
+
+/// sathyassn/codeflow#149 AC-1: a project exception hook on the trusted
+/// commit accepts findings from a trusted register, and the step passes
+/// only when it accepts every finding.
 #[test]
 fn the_project_exception_hook_accepts_findings_from_the_trusted_commit() {
-    let block = levels("warn", "block");
-    let run = |base: &[(&str, &str)], head: &[(&str, &str)], fake: &[(&str, &str)]| {
-        let dir = tempfile::tempdir().unwrap();
-        let work = dir.path().join("repo");
-        std::fs::create_dir_all(&work).unwrap();
-        let trusted = exception_repo(&work, &block, base, head);
-        let out = run_audit_step(&work, &trusted, fake);
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        (out.status.success(), text)
-    };
-    let register = ("docs/register.txt", "GHSA-a\nGHSA-b\n");
-    let accepting = (HOOK, ACCEPTING_HOOK);
-    let one = [("OSV_FAKE_IDS", "GHSA-a")];
-    let two = [("OSV_FAKE_IDS", "GHSA-a GHSA-c")];
+    let run = run_exception_step;
+    let (register, accepting, one) = (REGISTER, ACCEPTING, ONE);
 
     // AC-1: every finding is a register row, so the step passes and lists
     // each accepted finding; the hook runs from the exported trusted commit.
@@ -1419,6 +1429,14 @@ fn the_project_exception_hook_accepts_findings_from_the_trusted_commit() {
         text.contains("hook: GHSA-a\tdemo") && text.contains("hook: GHSA-b\tdemo"),
         "{text}"
     );
+}
+
+/// AC-1: findings the hook does not accept fail the step, and a hook that
+/// fails or prints what is no finding accepts nothing.
+#[test]
+fn the_project_exception_hook_fails_the_step_for_findings_it_does_not_accept() {
+    let run = run_exception_step;
+    let (register, accepting, one, two) = (REGISTER, ACCEPTING, ONE, TWO);
 
     // AC-1: one finding the register lacks fails the step, which still
     // lists the accepted one and the one that is not accepted.
@@ -1446,6 +1464,14 @@ fn the_project_exception_hook_accepts_findings_from_the_trusted_commit() {
         assert!(text.contains("not accepted: GHSA-a\t"), "{hook}: {text}");
         assert!(text.contains(expect), "{hook}: {text}");
     }
+}
+
+/// AC-2: the hook and the register it reads come from the trusted commit,
+/// so a pull request cannot accept its own findings.
+#[test]
+fn a_pull_request_cannot_accept_its_own_audit_findings() {
+    let run = run_exception_step;
+    let (register, accepting, one, two) = (REGISTER, ACCEPTING, ONE, TWO);
 
     // AC-2: a head that adds the hook and its register gets neither: the
     // trusted commit has none, so the audit fails and says why.
@@ -1480,6 +1506,14 @@ fn the_project_exception_hook_accepts_findings_from_the_trusted_commit() {
     assert!(ok, "{text}");
     let (ok, text) = run(&[accepting, register], &[("docs/register.txt", "")], &one);
     assert!(ok, "{text}");
+}
+
+/// AC-3: the failure advice names the hook when the trusted commit holds it
+/// and is the 3.1.0 text otherwise; the hook never judges a scan error.
+#[test]
+fn the_audit_failure_advice_names_the_hook_only_when_it_exists() {
+    let run = run_exception_step;
+    let (register, accepting, one) = (REGISTER, ACCEPTING, ONE);
 
     // AC-3: the failure advice names the hook when the trusted commit holds
     // it, and the v3.1.0 `osv-scanner.toml` route otherwise.
