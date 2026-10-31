@@ -1554,66 +1554,208 @@ fn uncertainty_guidance_keeps_its_rules_in_their_homes() {
     );
 }
 
+// TSK-1032 (issue #275): typed code and typed boundary data are the
+// default. The rule has one home in the quality contract; cf-develop,
+// cf-stack and cf-reviewer apply it, and none keeps the wording that told
+// agents to resist a type checker or a validating model.
 #[test]
-fn typed_contracts_are_proportionate_and_runtime_aware() {
+fn typed_code_and_boundary_data_are_the_default() {
     let root = repo_root();
+    let rule = root.join(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+    );
     assert_contains_all(
-        &root.join(
-            "assets/base/agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
-        ),
+        &rule,
         &[
-            ("existing type system", "existing stack's type system"),
-            ("material bypasses", "unchecked casts, broad escape types"),
+            ("default", "Typed code and typed boundary data are the default."),
+            ("fully typed", "New and changed code is fully typed"),
             (
-                "runtime validation",
-                "Static types do not validate external or runtime data",
+                "inline reason",
+                "Every escape type or suppression",
+            ),
+            ("reason placement", "carries its reason inline"),
+            (
+                "every boundary",
+                "Data crossing any boundary is parsed into a typed model that also validates it.",
             ),
             (
-                "trusted internal values",
-                "Trusted internal values do not need redundant",
+                "representation versus parse",
+                "A typed representation alone does not validate its input",
+            ),
+            ("python library", "Pydantic models in Python"),
+            ("typescript library", "zod schemas in TypeScript"),
+            ("rust library", "serde types in Rust"),
+            ("go library", "plus a validator in Go"),
+            ("opentofu", "`validation` block on each OpenTofu variable"),
+            (
+                "rego at run time",
+                "In Rego, a rule checks `input` with `json.match_schema` and refuses on its errors",
             ),
             (
-                "no stack migration",
-                "language migrations merely to satisfy this rule",
+                "rego schema is static",
+                "checks the policy's references statically and validates nothing at run time",
+            ),
+            (
+                "shell route",
+                "Shell has none: run ShellCheck, parse arguments explicitly and refuse unknown ones",
+            ),
+            ("generated types", "Where a JSON Schema exists, generate the types from it."),
+            ("invalid input tested", "Handle and test invalid, absent and unexpected values."),
+            (
+                "proportionality scope",
+                "Proportionality decides how many fields and checks a boundary model holds, never whether boundary data is parsed or code is typed",
+            ),
+            (
+                "typescript default",
+                "A new project or new file that would otherwise be JavaScript is TypeScript.",
+            ),
+            (
+                "javascript in place",
+                "An existing JavaScript codebase is type-checked in place instead of rewritten",
+            ),
+            ("checkJs", "`checkJs`"),
+            (
+                "missing tools added",
+                "A change that needs a type checker, linter or validating-model library the project lacks adds it to the project: the dependency in the project's manifest, its configuration, and the command that runs it.",
+            ),
+            (
+                "ad hoc run is not adding",
+                "Running a tool once outside the project does not add it.",
+            ),
+            (
+                "opt-out route",
+                "only by stating the reason in the project-owned Stack standards of its `AGENTS.md`",
             ),
         ],
     );
+}
+
+// TSK-1032: cf-develop, cf-stack and cf-reviewer apply the rule.
+#[test]
+fn typed_code_rule_is_applied_by_develop_stack_and_review() {
+    let root = repo_root();
     assert_contains_all(
         &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
         &[
+            ("rule pointer", "typed-code and typed-boundary-data rule"),
             (
-                "implementation route",
-                "typed-interface and runtime trust-boundary rule",
+                "rule home",
+                "cf-model-orchestrator/resources/quality/design-implementation.md",
             ),
             (
                 "invalid-input evidence",
-                "test accepted invalid-input behavior",
+                "accepted invalid-input behavior tested",
             ),
-            ("no forced migration", "force a stricter compiler"),
-        ],
-    );
-    assert_contains_all(
-        &root.join("assets/base/claude/agents/cf-reviewer.md"),
-        &[
-            ("review bypasses", "material type-check bypasses"),
             (
-                "review runtime validation",
-                "external/runtime data is parsed and validated",
+                "missing tools added",
+                "When the project lacks its type checker, linter or typed-model library, this change adds it to the project (dependency, configuration and the command that runs it)",
             ),
-            ("consequence not style", "Require a concrete consequence"),
         ],
     );
     assert_contains_all(
         &root.join("assets/base/agents/skills/cf-stack/SKILL.md"),
         &[
             (
-                "native type checker",
-                "existing stack supports a compiler or type checker",
+                "default setup",
+                "Set up typed code and typed boundary data by default",
             ),
-            ("dynamic stack", "dynamic stacks keep their native checks"),
-            ("no language mandate", "Do not mandate TypeScript"),
+            ("typed-model library", "add the typed-model library"),
+            (
+                "typescript for new projects",
+                "A new project or new file that would otherwise be JavaScript is TypeScript",
+            ),
+            ("shell", "For shell, wire ShellCheck."),
+            (
+                "javascript in place",
+                "checked in place with `checkJs` and JSDoc types",
+            ),
+            (
+                "opt-out recorded",
+                "any opt-out from typed code or typed boundary data with its scope and reason",
+            ),
         ],
     );
+    assert_contains_all(
+        &root.join("assets/base/claude/agents/cf-reviewer.md"),
+        &[
+            ("rule pointer", "typed-code and typed-boundary-data rule"),
+            (
+                "blocking",
+                "Return `changes_requested`, with one major finding at its file:line for each of these",
+            ),
+            ("untyped code", "new or changed code without types"),
+            (
+                "unexplained escape",
+                "an escape type or suppression without an inline reason",
+            ),
+            (
+                "untyped boundary data",
+                "data crossing a boundary used without being parsed into a validating typed model",
+            ),
+            (
+                "hand-written validator",
+                "a hand-written validator where a model from the language's standard typed-model library",
+            ),
+        ],
+    );
+    // Native trials showed builders going from the orchestrator straight to
+    // the code without opening cf-develop, so the map's build row makes
+    // opening the code defaults a required step in every tier's kernel. Later
+    // quality topics add their names to the same clause.
+    for agents in [
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+    ] {
+        let text = std::fs::read_to_string(root.join(agents)).expect("read AGENTS template");
+        let build = text
+            .lines()
+            .find(|line| line.starts_with("| build |"))
+            .unwrap_or_else(|| panic!("{agents}: no build row"));
+        for (label, needle) in [
+            ("code defaults", "before writing code, open the quality contract's code defaults and apply each one (typed code and validating boundary models)"),
+            ("rule pointer", "MUST OPEN `.agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md` before writing code (the code defaults)"),
+        ] {
+            assert!(build.contains(needle), "{agents} build row lacks {label}: {needle}");
+        }
+    }
+}
+
+// TSK-1032: the wording that steered agents away from strict typing is gone
+// from every one of the four texts.
+#[test]
+fn typed_code_texts_drop_the_retired_wording() {
+    let root = repo_root();
+    let rule = root.join(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+    );
+    for (path, retired) in [
+        (&rule, "language migrations merely to satisfy this rule"),
+        (&rule, "where they prevent material errors"),
+        (
+            &rule,
+            "TypeScript is the default for new projects and new files",
+        ),
+        (&rule, "schemas for Rego `input` and `data`"),
+        (&rule, "typed-model library is in scope for the change"),
+        (
+            &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
+            "force a stricter compiler",
+        ),
+        (
+            &root.join("assets/base/agents/skills/cf-stack/SKILL.md"),
+            "Do not mandate TypeScript",
+        ),
+        (
+            &root.join("assets/base/claude/agents/cf-reviewer.md"),
+            "never mandates a dependency, stricter compiler",
+        ),
+    ] {
+        assert!(
+            !normalized(&read_text(path)).contains(retired),
+            "{} still carries the retired wording {retired:?}",
+            path.display()
+        );
+    }
 }
 
 /// Every shipped text file under `dir`, keyed by its path under `base`.

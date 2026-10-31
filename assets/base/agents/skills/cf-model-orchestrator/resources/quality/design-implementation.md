@@ -21,16 +21,58 @@ swallowed errors, or missing accepted edge/error handling is brittle
 under-design and is `changes_requested`, even when the smaller diff passes;
 so is an unmarked shortcut (the discipline rules' shortcut rule).
 
-Use the existing stack's type system and checking tools to make domain states
-and interface contracts explicit where they prevent material errors; justify
-unchecked casts, broad escape types, suppressed checks, or equivalent bypasses
-at the affected boundary. Static types do not validate external or runtime
-data: parse and validate untrusted inputs at trust boundaries with reused
-schemas and parsers, and handle invalid, absent, and unexpected values
-explicitly. Do not add wrapper layers, duplicate domain models, validation
-everywhere, dependencies, stricter-compiler or language migrations merely to
-satisfy this rule. Trusted internal values do not need redundant runtime
-validation when their invariant is evidenced.
+Typed code and typed boundary data are the default. New and changed code
+is fully typed: in a language with a type checker, every function, method
+and data shape has types that checker verifies. Shell has none: run
+ShellCheck, parse arguments explicitly and refuse unknown ones, and pass
+structured data to a typed language or check it against its JSON Schema
+before use. Every escape type or suppression (`any`,
+`Any`, `object` or `interface{}` used to skip a type, an unchecked cast,
+`# type: ignore`, `@ts-expect-error`, `# noqa`, `//nolint`, a ShellCheck
+`disable`, or an equivalent) carries its reason inline, on its line or the
+line above, scoped to one rule where the tool allows.
+
+Data crossing any boundary is parsed into a typed model that also
+validates it. Boundaries are files and configuration, network requests and
+responses, process arguments, standard input and subprocess output,
+environment variables, database rows, user input, and another module's
+untyped output. A typed representation alone does not validate its input:
+a plain Python dataclass, a `TypedDict`, a TypeScript `interface` or a cast
+describes a shape and accepts any value at run time. Parse with the
+typed-model library that is standard for the language, whether or not it
+ships with the language: Pydantic models in Python, zod schemas in
+TypeScript and checked JavaScript, serde types in Rust, structs decoded
+with unknown fields refused plus a validator in Go, and a `type` and a
+`validation` block on each OpenTofu variable. In Rego, a rule checks
+`input` with `json.match_schema` and refuses on its errors, or the caller
+validates the document before the query; a schema given through
+`--schema` or a METADATA annotation checks the policy's references
+statically and validates nothing at run time. Where a JSON Schema
+exists, generate the types from it. Handle and test invalid, absent and
+unexpected values. Keep one model per shape and reuse it wherever that
+shape is read; a value already parsed into a model is trusted and is not
+validated again. Proportionality decides how many fields and checks a
+boundary model holds, never whether boundary data is parsed or code is
+typed; add no wrapper layers or duplicate domain models for this rule.
+
+A new project or new file that would otherwise be JavaScript is
+TypeScript. An existing JavaScript codebase is type-checked in place
+instead of rewritten, new files included where the project keeps them in
+JavaScript: `tsc`
+with `checkJs` (or `// @ts-check` file by file) and JSDoc types on every
+new or changed function and data shape.
+
+A change that needs a type checker, linter or validating-model library the
+project lacks adds it to the project: the dependency in the project's
+manifest, its configuration, and the command that runs it. Running a tool
+once outside the project does not add it. Reuse a tool the project already
+has; the strictest settings per tool and the gate targets belong to the
+project's stack setup (`/cf-stack`).
+
+Until CodeFlow's relaxation register ships (planned for 4.2.0), a project
+opts out of this default, whole or for one language or path, only by
+stating the reason in the project-owned Stack standards of its
+`AGENTS.md`; the default holds everywhere that statement does not name.
 
 Both seats grade design proportionality before approval. Each actual executor
 first-verifies its implementation for necessity, clarity, idiomatic structure,

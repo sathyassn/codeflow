@@ -8901,6 +8901,214 @@
           "behaviour_changed_to_fit_a_name"
         ]
       }
+    },
+    {
+      "id": "review-flags-untyped-new-code",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "orders-branch-untyped-function",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Review the current branch against main for TSK-021, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "changes_requested_verdict",
+          "untyped_function_flagged_with_file_line",
+          "typed_neighbour_code_not_flagged"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "pyproject.toml"
+        ],
+        "must_not": [
+          "untyped_function_approved",
+          "typing_finding_graded_minor",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "review-flags-unexplained-escape-type",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "notify-branch-unexplained-any",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Review the current branch against main for TSK-022, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "changes_requested_verdict",
+          "unexplained_any_flagged_with_file_line",
+          "reasoned_escape_accepted",
+          "partial_type_suggested"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "tsconfig.json"
+        ],
+        "must_not": [
+          "unexplained_any_approved",
+          "reasoned_escape_flagged_as_major",
+          "typing_finding_graded_minor",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "review-flags-unvalidated-boundary-data",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "orders-branch-dataclass-config",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Review the current branch against main for TSK-023, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "changes_requested_verdict",
+          "dataclass_load_flagged_as_unvalidated_with_file_line",
+          "validating_model_requested",
+          "malformed_file_test_requested"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "src/orders/models.py"
+        ],
+        "must_not": [
+          "dataclass_accepted_as_validation",
+          "typing_finding_graded_minor",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "review-flags-hand-written-validator",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "orders-branch-hand-validator",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Review the current branch against main for TSK-024, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "changes_requested_verdict",
+          "hand_written_validator_flagged_with_file_line",
+          "schema_generated_model_named",
+          "existing_tests_kept_as_evidence"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "schemas/refund-request.schema.json",
+          "Makefile"
+        ],
+        "must_not": [
+          "hand_written_validator_approved",
+          "typeddict_accepted_as_validation",
+          "typing_finding_graded_minor",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "builder-adds-type-checker-and-config-model",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "retry-client-without-type-checker",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Do TSK-031 from CHANGE.md: make the change with its tests and commit it on this branch.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "type_checker_added_to_project",
+          "retry_json_parsed_into_validating_model",
+          "range_and_missing_field_tests_added",
+          "new_code_fully_typed",
+          "change_committed"
+        ],
+        "references": [
+          "CHANGE.md",
+          "README.md",
+          "config/retry.json",
+          "src/fetchkit/client.py"
+        ],
+        "must_not": [
+          "raw_dict_used_after_json_load",
+          "plain_dataclass_or_typeddict_as_validation",
+          "hand_written_isinstance_validator",
+          "type_checker_declined_as_out_of_scope"
+        ]
+      }
+    },
+    {
+      "id": "builder-narrows-unknown-without-any",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "notify-forward-vendor-events",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Do TSK-032 from CHANGE.md: make the change with its tests and commit it on this branch.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "payload_parsed_with_zod_schema",
+          "documented_payload_accepted_with_any_string_order_id",
+          "mismatched_payload_logged_as_warn",
+          "mismatch_test_added",
+          "typecheck_run_and_cited",
+          "change_committed"
+        ],
+        "references": [
+          "CHANGE.md",
+          "README.md",
+          "vendor/events/index.d.ts",
+          "src/schemas.ts"
+        ],
+        "must_not": [
+          "any_added_without_reason",
+          "ts_suppression_without_reason",
+          "unchecked_cast_of_payload",
+          "unexplained_escape_in_changed_code_or_tests",
+          "documented_payload_rejected_by_a_stricter_local_format"
+        ]
+      }
     }
   ]
 }

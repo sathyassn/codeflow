@@ -348,9 +348,10 @@ key = "build"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "build"
-action = "planned work moves at speed, at least one task per lane per hour; the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
+action = "planned work moves at speed, at least one task per lane per hour; the smallest durable change with its tests; before writing code, open the quality contract's code defaults and apply each one (typed code and validating boundary models); a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
 see = [
   { target = "cf-develop", must_open = true, reason = "the build and verify loop; its naming step for every string a reader sees" },
+  { target = "cf-model-orchestrator/resources/quality/design-implementation.md", note = "before writing code", must_open = true, reason = "the code defaults" },
   { target = "cf-method/references/workflow-lifecycle.md", section = "Planned work moves at speed" },
 ]
 
