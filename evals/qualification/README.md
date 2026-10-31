@@ -322,7 +322,7 @@ proven by the release harness, with one of these sets of rows under it:
 | the branch row with the editor hint, then the mode row | with input only |
 | the status line, the mode row, then the editor hint on its own row | with input only |
 
-- The mode row is manual, auto or bypass mode.
+- The mode row is manual, auto or bypass mode, or `paste again to expand`.
 - A context row is `codeflow-qualify`, Claude Code's own branch row, or
   CodeFlow's shipped status line. The branch row must name the signed
   fixture record's branch and may show the known effort label.
@@ -337,9 +337,9 @@ proven by the release harness, with one of these sets of rows under it:
   and ends it with `…`; a cut row counts only when the cut falls after the
   branch, so a pane too narrow to show the whole branch refuses.
 - The editor hint is `ctrl+g to edit in Nvim` (or `VS Code`). It is
-  transient and Claude Code may draw it above the editor instead, so a
-  frame with input shows it or not. With an empty or placeholder editor it
-  refuses.
+  transient, so a frame with input shows it or not. Under the editor it
+  refuses with an empty or placeholder editor. Claude Code may draw it above
+  the editor instead; that is outside the frame and is not checked.
 
 Any other set of rows refuses and no key is sent: another branch, model or
 folder, the status line's `jq not found` form, rows out of order or
