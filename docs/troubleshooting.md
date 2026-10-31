@@ -7,7 +7,7 @@
 
 ## Concept
 
-`codeflow doctor` runs twenty-four health checks against a repository and the tools around it.
+`codeflow doctor` runs twenty-five health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
 `codeflow update` or after a harness change.
@@ -19,7 +19,7 @@ It is for someone whose setup misbehaves after `codeflow init`, after
 
 ## Architecture
 
-The twenty-four checks fall into six groups by the surface each one reads.
+The twenty-five checks fall into six groups by the surface each one reads.
 
 - **Git hooks, CI and host rules.** `hooks`, `ci-perimeter` and
   `remote-perimeter` read the hook subcommands of the installed binary, git's
@@ -35,7 +35,8 @@ The twenty-four checks fall into six groups by the surface each one reads.
 - **Policy and config.** `config`, `permissions`, `policy-source` and
   `adopter-fit` read the `.codeflow/` directory, including `policy.json` and
   `project.toml`, whether it is writable, and which git ref the agent guards
-  read policy from.
+  read policy from. `secret-engine` reports the gitleaks binary the
+  commit-time secret scan runs when the policy chooses it.
   `git-config-includes` names included Git configuration files that may be
   writable and reports a configuration it cannot verify. The operator
   inspects `git config --show-origin --includes --list` and repairs or
@@ -63,11 +64,12 @@ failed check never hides the others. Each line starts with a status badge.
 - `FAIL` means the check found a broken state.
 
 Doctor exits 0 when no check failed, with or without warnings, and 1 when any
-check failed. Nine checks can fail: `hooks`, `config`, `permissions`,
-`policy-source`, `model-bindings`, `delegate-roundtrip`, `repo-integrity`,
-`id-registry` and `adopter-fit`. The other fifteen warn at most.
+check failed. Ten checks can fail: `hooks`, `config`, `permissions`,
+`policy-source`, `secret-engine`, `model-bindings`, `delegate-roundtrip`,
+`repo-integrity`, `id-registry` and `adopter-fit`. The other fifteen warn at
+most.
 
-- `codeflow doctor --list` prints the twenty-four names and exits 0.
+- `codeflow doctor --list` prints the twenty-five names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an
   error to stderr and exits 1.
 
@@ -84,6 +86,7 @@ Each row below is one check, in the order doctor prints it.
 | `config` | Every `.json` file under `.codeflow/`, parsed recursively | Warn: `.codeflow/` does not exist. Fail: a listed file does not parse, or the directory could not be scanned | Run `codeflow init` when the directory is missing. Repair the JSON in each listed file |
 | `permissions` | The owner write bit on `.codeflow/`, on Unix only, then whether this process can write the directories essential and full gates write outside the worktree: the lock directories (`locks/` under the CodeFlow home and `codeflow/` under the git common directory) and `gate-runs/` under the CodeFlow home. Says so when it runs inside the Claude Code sandbox (`SANDBOX_RUNTIME` set). Also reports what the `cf-builder` and `cf-guard` profiles in `.codex/config.toml` grant on `~/.codeflow/locks` and `~/.codeflow/gate-runs`, following `extends` and counting a grant on a covering folder; that report reads configuration and never changes the result. Inside a Codex seat (`CODEX_SANDBOX` set), an unwritable `gate-runs/` is reported as by design, since full gates stay with the primary | Fail: `.codeflow/` is not writable. Warn: a named gate directory is not writable, so `codeflow test --mode essential` or `--mode full` refuses with `gate lock unavailable` or fails to keep its evidence | Give the owner write permission on `.codeflow/`. For a gate directory, inside the Claude sandbox the operator adds it to `sandbox.filesystem.allowWrite` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs the gate outside the sandbox. Inside a Codex seat (`CODEX_SANDBOX` set), a review seat writes neither folder by design, so `codeflow reserve` and quick-mode heavy targets run in a builder seat relaunched with the builder launch in cf-model-orchestrator's `resources/routing/transport.md`; `codeflow doctor --preflight` checks that launch |
 | `policy-source` | Where the agent guards read `.codeflow/policy.json` and `.codeflow/project.toml`: the remote's default branch and declared target as last fetched, `HEAD` before any tracking ref exists, or the working copy on an unborn `HEAD`. It never fetches | Fail: the source cannot be read, such as several remotes without an `origin`, a missing authority ref or a dangling remote HEAD. Ok names the source and any local policy drift | Run `git fetch`. For an unset or custom default branch, the operator runs `git remote set-head <remote> --auto` ([enforcement planes](architecture/enforcement-planes.md#in-session-guards)) |
+| `secret-engine` | `git.secret_scan_engine` and `git.secret_scan` in the effective policy; with `gitleaks`, the absolute folders on PATH in order, the first `gitleaks` found, its SHA-256, and its version when the checksum is the pinned one. It runs only a binary whose checksum matches | Fail at `block`, warn at `warn`: no binary is pinned for this platform, gitleaks is not on PATH, the file found is not the pinned binary (it is never run), or the pinned binary reports another version. Ok with `builtin`, with the scan off, or with the pinned binary; each message names the folders searched and the pin | Download the gitleaks 8.30.1 release archive for this platform, check it against the release's checksums file and put its binary on PATH; a package manager's build has another checksum. Or set `git.secret_scan_engine` back to `builtin` ([policy reference](policy-reference.md#the-commit-time-gitleaks-engine)) |
 | `network` | Whether `host` is on PATH, then a two-second lookup of github.com. When `SANDBOX_RUNTIME` is set, as in the Claude Code sandbox, which has no direct DNS and carries traffic through its proxy, an HTTPS request to github.com with `curl` instead, which passes only on an HTTP 2xx or 3xx answer | Warn: the probe tool is missing so the probe was skipped, or the probe failed; the message quotes the error or the HTTP status, such as a 403 from a proxy that refuses the host | Nothing is required. Install the probe tool to enable the probe, or restore the connection |
 | `delegates` | `codex` and `claude` on PATH, `codex login status`, `codex mcp list`, `claude mcp list`, `claude plugin list --json` for an enabled `codex@openai-codex` plugin, and `tmux` on PATH | Warn: cross-vendor delegation is partly unavailable. It is optional, and the message lists each gap | Apply the step each gap names: `codex login`, run the named list command, install `codex@openai-codex` in Claude Code and run `/codex:setup`, or put the missing tool on PATH. Then confirm access with an interactive canary, since status output alone does not prove it. When `SANDBOX_RUNTIME` is set, the presets deny sandboxed commands the Codex auth file, so a failed `codex login status` that does not say it is signed out is a note that quotes the failure and leaves the sign-in unconfirmed: run `codeflow doctor --check delegates` outside the sandbox to check it. An explicit "Not logged in" is a sign-in to fix there too |
 | `model-bindings` | Approved binding records in `~/.codeflow/qualified-bindings/` (or under `CODEFLOW_HOME`), `.codeflow/model-selection.json`, each harness's version probe and the recorded settings digests. It also lists the managed worker routes without launching a model | Fail: a binding record or the project selection is invalid, or a selected binding drifted, in which case no override applies. Warn: a binding that is not selected drifted, or a harness version has no external probe. Ok with no local bindings | Requalify a drifted binding with `/cf-evaluate-model`, or correct `.codeflow/model-selection.json`. Leave that file absent or empty to use the shipped ensemble ([model upgrades](model-upgrades.md)) |
@@ -166,6 +169,29 @@ Work one check at a time, starting with the `FAIL` lines.
 The fix worked when that check prints `ok`, or when a full run exits 0 with no
 `FAIL` line. After a completed trust step the `codex` and `grok` checks
 report a note, since doctor cannot see a live harness run.
+
+## A commit is refused by the gitleaks engine
+
+With `git.secret_scan_engine: gitleaks`, a commit can be refused for two
+reasons.
+
+- **`git.secret_scan_engine`: the engine cannot run.** The message says
+  what was found and names the pin. Run `codeflow doctor --check
+  secret-engine` to see the folders searched and the checksum found, install
+  the pinned release binary as its row above says, then commit again. At
+  `warn` the commit goes ahead with the built-in patterns only.
+- **`git.secret_scan`: a possible secret, named by its gitleaks rule.**
+  Reword or remove the line, or unstage the file. For a file that is a known
+  false positive, such as a list of file digests recorded under their path
+  names, allowlist its path in `.gitleaks.toml`, which the hook and the CI
+  scan both read. A `.gitleaksignore` fingerprint from CI names a commit, so
+  it never covers a staged finding ([policy
+  reference](policy-reference.md#the-commit-time-gitleaks-engine)).
+
+A merge Git concludes itself is scanned in `commit-msg`, since Git runs no
+`pre-commit` for it. The refusal then appears while `git merge` runs; fix the
+merge driver or resolve the merge by hand, and the hand-concluded commit is
+scanned in `pre-commit`.
 
 ## A cancelled standalone task has no planning anchor
 
