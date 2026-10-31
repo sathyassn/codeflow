@@ -1,0 +1,11 @@
+id = "TSK-1099"
+uid = "fd0305e0-ac14-4f26-afd9-0f6c35a4d01f"
+kind = "TSK"
+title = "A cf-report skill answers every status request from the progress report in any adopting project"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T00:19:31Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
