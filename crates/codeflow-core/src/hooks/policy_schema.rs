@@ -413,10 +413,12 @@ pub const SCHEMA: [KeySpec; 76] = [
         purpose: "Status checks a protected branch requires before merging, on a branch that is up to date with its base.",
         notes: "Defaults to the shipped CI job names: codeflow gates, secret scan, \
                 security review and commit standards. `codeflow remote protect` \
-                requires them with up-to-date branches, and `codeflow doctor \
-                --check remote-perimeter` warns when the live rules do not. The \
-                shipped policy file does not list it, so an older binary never \
-                meets the key.",
+                requires them, on an up-to-date branch, on each protected branch \
+                other than the default branch, whose own rulesets require the \
+                names its policy workflow declares; `codeflow doctor --check \
+                remote-perimeter` warns when the default branch's live rules do \
+                not require them. The shipped policy file does not list it, so an \
+                older binary never meets the key.",
     },
     // ---- git: commit format ----------------------------------------------
     KeySpec {
