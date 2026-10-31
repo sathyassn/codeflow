@@ -1,0 +1,11 @@
+id = "TSK-1123"
+uid = "b314d288-9b2d-4b8e-a917-63aab759d7a5"
+kind = "TSK"
+title = "A completion that reaches a task range unchanged through a merge is not bound at the range head"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T23:10:08Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
