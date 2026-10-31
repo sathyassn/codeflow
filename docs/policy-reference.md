@@ -911,11 +911,17 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   no conversion whatever a configuration file or include sets; a submodule
   shows as its commit line. gitleaks exits 0 with an empty report when git
   fails part way through, so the hook does not read its log. gitleaks runs
-  at the error level, and any output it writes is a failed scan. Git's own
-  trace of the run (`GIT_TRACE2_EVENT`, one JSON event per line) must show
-  the staged diff and every other git that gitleaks started exiting with 0;
-  a git that failed or was killed is a failed scan. No path, file content
-  or configuration value can forge or hide either check.
+  at the error level, and any output it writes to stderr, even a blank line,
+  is a failed scan. Git's own trace of the run (`GIT_TRACE2_EVENT`, one JSON
+  event per line) must show the staged diff and every other git that
+  gitleaks started exiting with 0; a git that failed or was killed is a
+  failed scan. No path, file content or configuration value can forge or
+  hide either check. The trace and the scan's attributes file sit in a
+  folder only the committing user can open: on Unix it is created with mode
+  0700 and the trace file with 0600, whatever the umask, and a trace file
+  replaced during the run is a failed scan. On Windows both take the access
+  list of the user's own temporary folder, which is private to that user by
+  default.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,

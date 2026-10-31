@@ -66,6 +66,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "a test re-running its own binary with an isolated process environment",
     ),
     (
+        "codeflow-core/src/hooks/git_hook.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "a test re-running its own binary so one probe can set umask 000 in a process of its own (TSK-412)",
+    ),
+    (
         "codeflow-core/src/hooks/ref_authority.rs",
         "std::env::current_exe().unwrap()",
         1,

@@ -3839,13 +3839,14 @@ mod tests {
         /// prints `report` and exits with `exit`.
         #[cfg(unix)]
         fn pinned_engine(bin: &Path, version: &str, report: &str, exit: i32) -> Engine {
-            stand_in(bin, version, report, exit, "", "git")
+            stand_in(bin, version, report, exit, "", "git", "")
         }
 
         /// [`pinned_engine`] that also writes `log` to stderr, as gitleaks
         /// writes its log, and runs the staged diff with `git`, a shell
         /// command word: `git`, or one that fails or runs nothing. Like
-        /// gitleaks, it drops what that git writes to stderr.
+        /// gitleaks, it drops what that git writes to stderr. `after` is
+        /// shell lines it runs once that git is done.
         #[cfg(unix)]
         fn stand_in(
             bin: &Path,
@@ -3854,6 +3855,7 @@ mod tests {
             exit: i32,
             log: &str,
             git: &str,
+            after: &str,
         ) -> Engine {
             use std::os::unix::fs::PermissionsExt;
             let script = bin.join("gitleaks");
@@ -3869,7 +3871,7 @@ mod tests {
                      pwd > '{dir}/pwd'\nprintf '%s\\n' \"$@\" > '{dir}/args'\nenv > '{dir}/env'\n\
                      for a; do src=$a; done\n\
                      {git} -C \"$src\" diff -U0 --no-ext-diff --staged . >/dev/null 2>&1\n\
-                     {log}cat <<'REPORT'\n{report}\nREPORT\nexit {exit}\n",
+                     {after}\n{log}cat <<'REPORT'\n{report}\nREPORT\nexit {exit}\n",
                     dir = bin.display()
                 ),
             )
@@ -4550,7 +4552,7 @@ mod tests {
             stage(dir.path(), "ok.txt", "nothing sensitive\n");
             let scan = |log: &str, git: &str| {
                 let bin = tempfile::tempdir().unwrap();
-                let engine = stand_in(bin.path(), gitleaks::VERSION, "[]", 0, log, git);
+                let engine = stand_in(bin.path(), gitleaks::VERSION, "[]", 0, log, git, "");
                 pre_commit_engine(
                     dir.path(),
                     &engine_policy(PolicyLevel::Block),
@@ -4577,6 +4579,11 @@ mod tests {
                     "gitleaks reported an error: anything",
                 ),
                 (
+                    "  ",
+                    "git",
+                    "gitleaks reported an error: output with no visible text",
+                ),
+                (
                     "",
                     "GIT_DIR=/nonexistent git",
                     "gitleaks did not read the whole staged diff: the staged diff exited with ",
@@ -4600,6 +4607,108 @@ mod tests {
             }
             let report = scan("", "git");
             assert!(secret_findings(&report).is_empty(), "{report:?}");
+        }
+
+        /// A trace replaced after git failed, with a forged clean run of
+        /// the staged diff, as another user could under a shared temporary
+        /// folder: the events are read through the hook's own handle and
+        /// the replaced path fails the scan.
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_refuses_a_replaced_trace() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            let forge = "printf '%s\\n' \
+                 '{\"event\":\"start\",\"sid\":\"forged\",\"argv\":[\"git\",\"-C\",\"src\",\"diff\",\"-U0\",\"--no-ext-diff\",\"--staged\",\".\"]}' \
+                 '{\"event\":\"exit\",\"sid\":\"forged\",\"code\":0}' > \"$GIT_TRACE2_EVENT.new\"\n\
+                 mv -f \"$GIT_TRACE2_EVENT.new\" \"$GIT_TRACE2_EVENT\"";
+            let bin = tempfile::tempdir().unwrap();
+            let engine = stand_in(
+                bin.path(),
+                gitleaks::VERSION,
+                "[]",
+                0,
+                "",
+                "GIT_DIR=/nonexistent git",
+                forge,
+            );
+            let report = pre_commit_engine(
+                dir.path(),
+                &engine_policy(PolicyLevel::Block),
+                false,
+                false,
+                &engine,
+            )
+            .unwrap();
+            let findings = secret_findings(&report);
+            assert_eq!(findings.len(), 1, "{report:?}");
+            assert_eq!(
+                findings[0].message,
+                "staged secret scan incomplete: git's trace of the scan was replaced while it ran"
+            );
+        }
+
+        /// The trace folder and file are owner-only under a permissive
+        /// umask. The umask is process-wide, so the scan runs in a child
+        /// test process of its own (`umask_probe_trace_modes`).
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_trace_is_private_under_a_permissive_umask() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "hooks::git_hook::tests::engine::umask_probe_trace_modes",
+                    "--exact",
+                    "--ignored",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env("CODEFLOW_TEST_UMASK_PROBE", "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "{stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        /// Run only by [`test_gitleaks_trace_is_private_under_a_permissive_umask`]:
+        /// under umask 000, a stand-in records the modes of the trace folder
+        /// and file while the scan runs.
+        #[cfg(unix)]
+        #[test]
+        #[ignore = "runs in its own process under umask 000"]
+        fn umask_probe_trace_modes() {
+            assert!(std::env::var_os("CODEFLOW_TEST_UMASK_PROBE").is_some());
+            // SAFETY: umask only sets this process's file mode mask; this
+            // test runs alone in its own process.
+            unsafe { libc::umask(0) };
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            let bin = tempfile::tempdir().unwrap();
+            let modes = bin.path().join("modes");
+            let record = format!(
+                "ls -ld \"$(dirname \"$GIT_TRACE2_EVENT\")\" | cut -c1-10 > '{0}'\n\
+                 ls -l \"$GIT_TRACE2_EVENT\" | cut -c1-10 >> '{0}'\n\
+                 ls -l \"$(dirname \"$GIT_TRACE2_EVENT\")\" | grep attributes | cut -c1-10 >> '{0}'",
+                modes.display()
+            );
+            let engine = stand_in(bin.path(), gitleaks::VERSION, "[]", 0, "", "git", &record);
+            let report = pre_commit_engine(
+                dir.path(),
+                &engine_policy(PolicyLevel::Block),
+                false,
+                false,
+                &engine,
+            )
+            .unwrap();
+            assert!(secret_findings(&report).is_empty(), "{report:?}");
+            let modes = std::fs::read_to_string(&modes).unwrap();
+            let modes: Vec<&str> = modes.lines().collect();
+            assert_eq!(modes, ["drwx------", "-rw-------", "-rw-------"]);
         }
 
         // -- the automatic merge's scan in commit-msg (TSK-412 AC-7) --

@@ -317,18 +317,18 @@ impl Engine {
     ///
     /// # Errors
     /// Returns why the scan is incomplete: a staged path gitleaks cannot
-    /// read, a git too old to pin attributes, a failed binary, any error
-    /// gitleaks wrote, a git it ran that did not exit with 0, or a report
+    /// read, a git too old to pin attributes, a failed binary, any output
+    /// gitleaks wrote to stderr, a git it ran that did not exit with 0, or a report
     /// that could not be read.
     pub fn scan_staged(&self, verified: &Verified, root: &Path) -> Result<Vec<Finding>, String> {
-        let attributes = TextAttributes::for_repository(root)?;
+        let trace = GitTrace::new()?;
+        let attributes = TextAttributes::for_repository(root, trace.folder.path())?;
         if let Some(path) = unreadable_staged_path(root)? {
             return Err(format!(
                 "gitleaks cannot read a path with a backslash, double quote or \
                  control character reliably, and {path} has one; rename it"
             ));
         }
-        let trace = GitTrace::new()?;
         let mut command = Command::new(&verified.path);
         command
             .current_dir(root)
@@ -363,8 +363,12 @@ impl Engine {
                 first_line(&out.stderr).map_or_else(String::new, |line| format!(": {line}"))
             ));
         }
-        if let Some(line) = first_line(&out.stderr) {
-            return Err(format!("gitleaks reported an error: {line}"));
+        if !out.stderr.is_empty() {
+            return Err(format!(
+                "gitleaks reported an error: {}",
+                first_line(&out.stderr)
+                    .unwrap_or_else(|| "output with no visible text".to_string())
+            ));
         }
         if let Some(why) = git_run_failure(&trace.events()?) {
             return Err(format!(
@@ -379,9 +383,9 @@ impl Engine {
     }
 }
 
-/// The first line gitleaks wrote to stderr, with control characters
-/// escaped, to name what failed. Nothing is decided from its text: any
-/// output at all has already failed the scan.
+/// The first line with visible text that gitleaks wrote to stderr, with
+/// control characters escaped, to name what failed. Nothing is decided from
+/// its text: any output at all, blank or not, has already failed the scan.
 fn first_line(stderr: &[u8]) -> Option<String> {
     let line = stderr
         .split(|byte| *byte == b'\n')
@@ -394,24 +398,42 @@ fn first_line(stderr: &[u8]) -> Option<String> {
 const STAGED_DIFF_ARGS: [&str; 5] = ["diff", "-U0", "--no-ext-diff", "--staged", "."];
 
 /// Git's own record of the git processes gitleaks starts: its trace2 event
-/// stream, written to a file in a private temporary folder.
+/// stream, written to a file only this user can open, in a folder that
+/// also holds the scan's attributes file.
 ///
 /// gitleaks exits 0 with an empty report when the git it runs fails part
 /// way through, and reports that only in a debug log whose lines can hold
 /// unescaped paths and configuration values. Each trace2 event is one JSON
 /// object written by git itself, so no path, file content or message can
 /// forge one, and a git that dies before it exits leaves no exit event.
+///
+/// The trace is evidence the scan completed, so its storage is private. The
+/// folder is created owner-only (mode 0700 given to `mkdir`, which a umask
+/// can only narrow), and the event file inside it is created exclusively,
+/// owner read and write only, before any git opens it; git then appends to
+/// that file. The events are read back through the handle made here, so a
+/// file put in its place is never read, and a replaced path fails the scan.
+/// On Windows the folder and file take the access list of the user's own
+/// temporary folder, which is private to that user by default.
 struct GitTrace {
     folder: tempfile::TempDir,
+    file: std::fs::File,
 }
 
 impl GitTrace {
     fn new() -> Result<Self, String> {
-        let folder = tempfile::Builder::new()
-            .prefix("codeflow-gitleaks-trace")
-            .tempdir()
-            .map_err(|error| format!("cannot make a folder for git's trace: {error}"))?;
-        Ok(Self { folder })
+        let unmade =
+            |error: std::io::Error| format!("cannot make a private file for git's trace: {error}");
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("codeflow-gitleaks-trace");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let folder = builder.tempdir().map_err(unmade)?;
+        let file = create_private(&folder.path().join("events")).map_err(unmade)?;
+        Ok(Self { folder, file })
     }
 
     fn path(&self) -> std::path::PathBuf {
@@ -419,23 +441,54 @@ impl GitTrace {
     }
 
     /// Send the events of every git under `command` to this trace, and no
-    /// other trace2 output: an inherited `GIT_TRACE2_*` setting is removed.
+    /// other trace2 output: an inherited `GIT_TRACE2_*` setting is removed,
+    /// and the normal and performance targets are turned off (`0`), which
+    /// outranks a target a configuration file sets.
     fn apply(&self, command: &mut Command) {
         for (name, _) in std::env::vars_os() {
             if name.as_encoded_bytes().starts_with(b"GIT_TRACE2") {
                 command.env_remove(&name);
             }
         }
-        command.env("GIT_TRACE2_EVENT", self.path());
+        command
+            .env("GIT_TRACE2_EVENT", self.path())
+            .env("GIT_TRACE2", "0")
+            .env("GIT_TRACE2_PERF", "0");
     }
 
+    /// The events in the file made by [`GitTrace::new`], read through its
+    /// own handle. On Unix the path must still name that file.
     fn events(&self) -> Result<Vec<u8>, String> {
-        match std::fs::read(self.path()) {
-            Ok(events) => Ok(events),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(format!("cannot read git's trace of the scan: {error}")),
+        let unreadable =
+            |error: std::io::Error| format!("cannot read git's trace of the scan: {error}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let held = self.file.metadata().map_err(unreadable)?;
+            let named = std::fs::symlink_metadata(self.path()).map_err(unreadable)?;
+            if (held.dev(), held.ino()) != (named.dev(), named.ino()) {
+                return Err("git's trace of the scan was replaced while it ran".to_string());
+            }
         }
+        let mut file = &self.file;
+        let mut events = Vec::new();
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(0)).map_err(unreadable)?;
+        std::io::Read::read_to_end(&mut file, &mut events).map_err(unreadable)?;
+        Ok(events)
     }
+}
+
+/// Create `path` for this user only: never an existing file or link, and on
+/// Unix with mode 0600.
+fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 /// Why the git processes gitleaks ran did not read the whole staged diff,
@@ -634,14 +687,15 @@ const MIN_GIT: (u32, u32) = (2, 41);
 /// instead of the working tree, and a temporary attributes file sets `diff`
 /// on every path, which makes git show even a file holding a NUL byte as
 /// text. The clone's own `info/attributes` still applies: nothing committed
-/// or staged can change it.
+/// or staged can change it. The file is made in the scan's private folder
+/// (see [`GitTrace`]), so no other user can put a file in its place.
 struct TextAttributes {
     empty_tree: String,
     file: tempfile::NamedTempFile,
 }
 
 impl TextAttributes {
-    fn for_repository(root: &Path) -> Result<Self, String> {
+    fn for_repository(root: &Path, private: &Path) -> Result<Self, String> {
         let git = |args: &[&str]| -> Result<String, String> {
             let out = crate::git::command()
                 .args(args)
@@ -672,7 +726,7 @@ impl TextAttributes {
             |error: std::io::Error| format!("cannot write an attributes file: {error}");
         let mut file = tempfile::Builder::new()
             .prefix("codeflow-gitleaks-attributes")
-            .tempfile()
+            .tempfile_in(private)
             .map_err(unwritable)?;
         std::io::Write::write_all(&mut file, b"* diff\n").map_err(unwritable)?;
         Ok(Self { empty_tree, file })
@@ -842,6 +896,37 @@ mod tests {
             let found = read(&lines).unwrap_or_default();
             assert!(found.contains(why), "{lines:?}: {found}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_trace_is_created_private_and_never_over_an_existing_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let trace = GitTrace::new().unwrap();
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(trace.folder.path()), 0o700);
+        assert_eq!(mode(&trace.path()), 0o600);
+        // A file or link already at the path is never opened.
+        let error = create_private(&trace.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        let link = trace.folder.path().join("link");
+        std::os::unix::fs::symlink(trace.folder.path().join("absent"), &link).unwrap();
+        assert!(create_private(&link).is_err());
+        // Events git appends are read back through the handle.
+        let mut appender = std::fs::OpenOptions::new()
+            .append(true)
+            .open(trace.path())
+            .unwrap();
+        std::io::Write::write_all(&mut appender, b"{}\n").unwrap();
+        assert_eq!(trace.events().unwrap(), b"{}\n");
+        // A file put in its place fails the scan.
+        let other = trace.folder.path().join("other");
+        std::fs::write(&other, b"forged\n").unwrap();
+        std::fs::rename(&other, trace.path()).unwrap();
+        assert_eq!(
+            trace.events().unwrap_err(),
+            "git's trace of the scan was replaced while it ran"
+        );
     }
 
     #[test]
