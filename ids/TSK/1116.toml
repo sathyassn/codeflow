@@ -1,0 +1,11 @@
+id = "TSK-1116"
+uid = "27b304af-a5ef-46a0-b87e-ab3cdbec5c93"
+kind = "TSK"
+title = "New files meet the strict profile at once against a recorded boundary"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:20:21Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
