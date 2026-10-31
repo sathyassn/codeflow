@@ -1,11 +1,12 @@
-//! `codeflow remote protect [--provider github] [--dry-run]` — apply the
-//! `policy.json` protected-branch list to the remote (charter §6.1 plane 3).
+//! `codeflow remote protect [--provider github] [--dry-run] [--profile
+//! <name>] [--check-app <id>] [--lines <pattern>]` — write the rulesets this
+//! command owns to the remote (charter §6.1 plane 3, TSK-1080).
 
 use anyhow::Context;
 use clap::{Args, Subcommand};
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::registry;
-use codeflow_core::remote::{provider_for, ProtectionPlan};
+use codeflow_core::remote::{provider_for, AuthorityPlan, Profile, ProtectionPlan, DEFAULT_LINES};
 
 /// Arguments for `codeflow remote`.
 #[derive(Debug, Args)]
@@ -17,7 +18,19 @@ pub struct RemoteArgs {
 /// Remote subcommands.
 #[derive(Debug, Subcommand)]
 pub enum RemoteCommand {
-    /// Apply protected-branch policy to the remote provider.
+    /// Write the rulesets codeflow owns: "codeflow authority updates" and
+    /// "codeflow authority checks" on the default branch, "codeflow line
+    /// checks" on the integration lines, and `codeflow protect <pattern>`
+    /// for each other protected branch in policy.json.
+    ///
+    /// Only rulesets with these names are written; every other ruleset is
+    /// left as it is. An update never lowers an approval count, removes a
+    /// rule, changes which app produces a check or widens a bypass list.
+    /// The authority and line checks are written with an empty bypass
+    /// list, which closes a recovery window. To reduce a rule, edit it on
+    /// the host as an administrator; there is no command for it. The checks
+    /// are refused until the default branch's policy workflow declares the
+    /// names they require.
     Protect {
         /// Remote provider (only `github` has an adapter; others print the
         /// manual checklist).
@@ -27,6 +40,25 @@ pub enum RemoteCommand {
         /// Print the intended rules without applying anything.
         #[arg(long)]
         dry_run: bool,
+
+        /// Who reviews and who moves the default branch:
+        /// solo-administrator (no approval; only the administrator role
+        /// updates the default branch) or independent-review (one
+        /// approval, stale approvals dismissed, the last push approved by
+        /// someone else; only the maintain role updates it).
+        #[arg(long, default_value = "solo-administrator", value_parser = Profile::NAMES.to_vec())]
+        profile: String,
+
+        /// The id of the GitHub App that creates the authority: checks
+        /// (Mode A). Without it, the trusted: checks are pinned to GitHub
+        /// Actions (Mode B).
+        #[arg(long, value_name = "APP_ID")]
+        check_app: Option<u64>,
+
+        /// The integration-line branch pattern "codeflow line checks"
+        /// targets.
+        #[arg(long, value_name = "PATTERN", default_value = DEFAULT_LINES)]
+        lines: String,
     },
 }
 
@@ -42,7 +74,20 @@ pub enum RemoteCommand {
 /// when the policy file fails the schema (before anything is planned or
 /// sent), or for environment problems such as a missing gh outside dry-run.
 pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
-    let RemoteCommand::Protect { provider, dry_run } = &args.command;
+    let RemoteCommand::Protect {
+        provider,
+        dry_run,
+        profile,
+        check_app,
+        lines,
+    } = &args.command;
+    // The flags are judged before any file or host is read.
+    let authority = AuthorityPlan::new(
+        Profile::parse(profile).map_err(anyhow::Error::msg)?,
+        *check_app,
+        lines,
+    )
+    .map_err(|error| anyhow::anyhow!("remote protect: {error}"))?;
 
     let cwd = std::env::current_dir().context("cannot resolve current directory")?;
     let root = registry::find_repo_root(&cwd)
@@ -87,6 +132,7 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     if tracked {
         plan = plan.with_registry_profile();
     }
+    plan = plan.with_authority(authority);
 
     let report = if *dry_run {
         plan.dry_run_report(provider)
@@ -102,7 +148,7 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         && report
             .lines
             .iter()
-            .any(|line| line.contains(&format!("for {registry}:")))
+            .any(|line| line.contains(&format!("'codeflow protect {registry}'")))
     {
         let git = codeflow_core::ids::Git::new(&root);
         let today = codeflow_core::ids::today();

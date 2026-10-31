@@ -115,7 +115,7 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "codeflow-core/src/remote.rs",
-        "&self.gh",
+        "gh",
         1,
         "the gh client",
     ),
