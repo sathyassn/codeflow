@@ -3658,7 +3658,7 @@ impl Reader<'_> {
                     at += 1;
                 }
                 let name = argv.get(at).map_or("MAPFILE", String::as_str);
-                let mut values: Values = match &fed {
+                let values: Values = match &fed {
                     Some(fed) if fed.complete && modelled => fed
                         .items
                         .iter()
@@ -3678,13 +3678,9 @@ impl Reader<'_> {
                         .collect(),
                     _ => [taint(why::MAPFILE)].into(),
                 };
-                // A walk's start stands for every path below it, which
-                // the reader does not list.
-                if fed.is_some_and(|fed| fed.items.iter().any(|item| item.tree)) {
-                    values.insert(taint(why::WALK_READ));
-                }
+                let walk = fed.is_some_and(|fed| fed.items.iter().any(|item| item.tree));
                 st.arrays.insert(name.to_string());
-                st.set(name, values);
+                st.set(name, walk_values(values, walk));
             }
             "getopts" => {
                 for name in argv
@@ -4351,9 +4347,6 @@ impl Reader<'_> {
             return;
         }
         let items = fed.map(|f| f.items).unwrap_or_default();
-        // A walk's value is a start, which `read` gives first, and stands
-        // for every path below it, which `read` gives one line at a time
-        // and the reader does not list.
         let walk = items.iter().any(|item| item.tree);
         let mut per_name: Vec<Values> = vec![Values::new(); names.len()];
         let mut elements = Values::new();
@@ -4377,20 +4370,14 @@ impl Reader<'_> {
             if values.is_empty() {
                 values.insert(String::new());
             }
-            if walk {
-                values.insert(taint(why::WALK_READ));
-            }
-            st.set(name, values);
+            st.set(name, walk_values(values, walk));
         }
         if let Some(array) = array {
             if elements.is_empty() {
                 elements.insert(String::new());
             }
-            if walk {
-                elements.insert(taint(why::WALK_READ));
-            }
             st.arrays.insert(array.clone());
-            st.set(&array, elements);
+            st.set(&array, walk_values(elements, walk));
         }
     }
 
@@ -7263,6 +7250,16 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
     }
     options.command = args.get(at..).unwrap_or_default();
     options
+}
+
+/// What `read` or `mapfile` gives from its input: a `find` walk's value is
+/// a start, given as it is, and stands for every path below it, which they
+/// give one line at a time and the reader does not list.
+fn walk_values(mut values: Values, walk: bool) -> Values {
+    if walk {
+        values.insert(taint(why::WALK_READ));
+    }
+    values
 }
 
 /// A `find` call read by the option grammar BSD and GNU `find` share.
