@@ -9033,9 +9033,11 @@ fn push_tree_review_epic_integration_from_ahead_plan_worktree() {
         "HEAD:refs/heads/main",
     );
     // TSK-1077: the clone records the destination's default branch, the
-    // only policy authority, as a fetch on git 2.48 or later does.
-    git(dir.path(), &["fetch", "-q", "origin"]);
-    git(dir.path(), &["remote", "set-head", "origin", "-a"]);
+    // only policy authority, as a fetch on git 2.48 or later does. Both
+    // update refs, so they run the installed reference-transaction hook and
+    // need this build on PATH, as every other git step here does.
+    ok("git", dir.path(), &["fetch", "-q", "origin"]);
+    ok("git", dir.path(), &["remote", "set-head", "origin", "-a"]);
     let plan = dir.path().join(".worktrees/plan-probe");
     ok(
         "git",
