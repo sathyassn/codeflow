@@ -1615,8 +1615,12 @@ fn typed_code_and_boundary_data_are_the_default() {
             ),
             ("checkJs", "`checkJs`"),
             (
-                "tools in scope",
-                "Adding the project's type checker, linter and typed-model library is in scope",
+                "missing tools added",
+                "A change that needs a type checker, linter or validating-model library the project lacks adds it to the project: the dependency in the project's manifest, its configuration, and the command that runs it.",
+            ),
+            (
+                "ad hoc run is not adding",
+                "Running a tool once outside the project does not add it.",
             ),
             (
                 "opt-out route",
@@ -1643,8 +1647,8 @@ fn typed_code_rule_is_applied_by_develop_stack_and_review() {
                 "accepted invalid-input behavior tested",
             ),
             (
-                "tools in scope",
-                "When the project lacks its type checker, linter or typed-model library, adding it is part of this change",
+                "missing tools added",
+                "When the project lacks its type checker, linter or typed-model library, this change adds it to the project (dependency, configuration and the command that runs it)",
             ),
         ],
     );
@@ -1732,6 +1736,7 @@ fn typed_code_texts_drop_the_retired_wording() {
             "TypeScript is the default for new projects and new files",
         ),
         (&rule, "schemas for Rego `input` and `data`"),
+        (&rule, "typed-model library is in scope for the change"),
         (
             &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
             "force a stricter compiler",

@@ -60,8 +60,15 @@ TypeScript. An existing JavaScript codebase is type-checked in place
 instead of rewritten, new files included where the project keeps them in
 JavaScript: `tsc`
 with `checkJs` (or `// @ts-check` file by file) and JSDoc types on every
-new or changed function and data shape. Adding the project's type checker,
-linter and typed-model library is in scope for the change that needs them.
+new or changed function and data shape.
+
+A change that needs a type checker, linter or validating-model library the
+project lacks adds it to the project: the dependency in the project's
+manifest, its configuration, and the command that runs it. Running a tool
+once outside the project does not add it. Reuse a tool the project already
+has; the strictest settings per tool and the gate targets belong to the
+project's stack setup (`/cf-stack`).
+
 Until CodeFlow's relaxation register ships (planned for 4.2.0), a project
 opts out of this default, whole or for one language or path, only by
 stating the reason in the project-owned Stack standards of its

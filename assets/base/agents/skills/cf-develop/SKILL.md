@@ -43,8 +43,9 @@ records the required interactive seat unavailable and the reduced assurance.
       new and changed code fully typed, an inline reason on every escape
       type and suppression, data at every boundary parsed into a validating
       typed model, and accepted invalid-input behavior tested. When the
-      project lacks its type checker, linter or typed-model library, adding
-      it is part of this change, unless the project's `AGENTS.md` states an
+      project lacks its type checker, linter or typed-model library, this
+      change adds it to the project (dependency, configuration and the
+      command that runs it), unless the project's `AGENTS.md` states an
       opt-out with its reason. When the change fixes a defect, apply Repair in
       `cf-model-orchestrator/resources/quality/findings.md`: state the
       evidenced mechanism and add a regression test that fails before the fix

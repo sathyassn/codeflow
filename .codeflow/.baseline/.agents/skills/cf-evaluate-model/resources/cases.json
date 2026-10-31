@@ -9089,6 +9089,7 @@
         ],
         "signals": [
           "payload_parsed_with_zod_schema",
+          "documented_payload_accepted_with_any_string_order_id",
           "mismatched_payload_logged_as_warn",
           "mismatch_test_added",
           "typecheck_run_and_cited",
@@ -9104,7 +9105,8 @@
           "any_added_without_reason",
           "ts_suppression_without_reason",
           "unchecked_cast_of_payload",
-          "unexplained_escape_in_changed_code_or_tests"
+          "unexplained_escape_in_changed_code_or_tests",
+          "documented_payload_rejected_by_a_stricter_local_format"
         ]
       }
     }

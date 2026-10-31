@@ -3154,7 +3154,7 @@
         {
           "path": ".agents/skills/cf-develop/SKILL.md",
           "markers": [
-            "When the project lacks its type checker, linter or typed-model library, adding it is part of this change"
+            "When the project lacks its type checker, linter or typed-model library, this change adds it to the project"
           ]
         },
         {
