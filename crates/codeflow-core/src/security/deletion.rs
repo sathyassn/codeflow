@@ -158,8 +158,8 @@
 //! | `find-print0-reader` | `find -print0` into a read-only program (`grep`, `cat`, `wc`, `ls` and the like), which removes nothing | modelled |
 //! | `find-print0-consumer` | a `find` list that `xargs` or `parallel` gives to anything else: an interpreter, `mv`, a shell, a launcher, other operands | unproven |
 //! | `find-read` | a `find` walk read by `read` or `mapfile`, whose values are every path below its starts | unproven |
-//! | `find-pipe-reader` | a `find` list piped into a program that only reads and prints (`grep`, `wc`, `head`, `sort`, `uniq`, `cut`, `tr`), which removes nothing | modelled |
-//! | `find-walk-out` | a `find` walk given by a pipe, a substitution (`$(…)`, `<(…)`) or a file (`>`, `exec >`, `-fprint`, `-fls`) to anything but `xargs`, `parallel`, a plain remover or a program that only reads: an interpreter, `awk`, `sed`, a shell, `tee` | unproven |
+//! | `find-pipe-reader` | a `find` list piped into a program that only reads and prints (`grep`, `wc`, `head`, `cut`, `tr`, and `sort` with flags that take no value), which removes nothing | modelled |
+//! | `find-walk-out` | a `find` walk given by a pipe, a substitution (`$(…)`, `<(…)`), a file (`>`, `exec >`, `-fprint`, `-fls`) or a coprocess to anything but `xargs`, `parallel`, a plain remover or a program that only reads: an interpreter, `awk`, `sed`, a shell, `tee` | unproven |
 //! | `find-print-blanks` | `find` output framed by blanks, quotes or newlines, which a name below the start may hold | unproven |
 //! | `find-delete` | `-delete`: the start's tree, and a protected directory at or below a start is refused | modelled |
 //! | `find-exec` | `-exec`, `-ok` with `;` or `{} +` running a plain remover (`rm`, `rmdir`, `unlink`, `shred`, `srm` by that bare name) whose other words are options and `{}`: each match is judged as the start's tree, and a protected directory at or below a start is refused | modelled |
@@ -228,6 +228,7 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
         depth: 0,
         pipe_input: None,
         stdout_away: false,
+        walks: 0,
         jumps: Vec::new(),
         expanding: Vec::new(),
         traps: Vec::new(),
@@ -2658,6 +2659,10 @@ struct Reader<'a> {
     /// file (a redirection, or an earlier `exec >file`), not to a pipe,
     /// a substitution or the terminal.
     stdout_away: bool,
+    /// How many `find` calls the reader has run, so a stage or a
+    /// substitution that runs one (directly, in a function, an alias or a
+    /// shell it starts) is known to print a walk.
+    walks: usize,
     jumps: Vec<Frame>,
     /// Aliases being expanded, which are not expanded again inside.
     expanding: Vec<String>,
@@ -2989,7 +2994,10 @@ impl Reader<'_> {
             Node::Coproc(name, body) => {
                 self.apply_traps(st);
                 let mut child = st.clone();
+                // A coprocess writes to a pipe any later command may read.
+                let away = std::mem::replace(&mut self.stdout_away, true);
                 self.frame(FrameKind::Child, body, &mut child);
+                self.stdout_away = away;
                 // The coprocess's descriptors and process ID are numbers.
                 st.set(name, [format!("${{{name}}}")].into());
                 st.set(&format!("{name}_PID"), [format!("${{{name}_PID}}")].into());
@@ -3149,8 +3157,10 @@ impl Reader<'_> {
             };
             // Each stage but the last writes to the pipe.
             self.stdout_away = away && at + 1 == stages.len();
+            let walks = self.walks;
             let mut child = st.clone();
             self.frame(FrameKind::Child, stage, &mut child);
+            walk |= self.walks > walks;
             last = child;
         }
         self.stdout_away = away;
@@ -4508,7 +4518,7 @@ impl Reader<'_> {
                 .iter()
                 .any(|item| item.tree || walk_value(&item.value))
         }) || argv[1..].iter().any(|word| walk_value(word));
-        if walk_in && !walk_reader(&program_name(first)) {
+        if walk_in && !walk_reader(&argv) {
             self.report(
                 Judged::Unproven(Unproven {
                     reason: why::WALK_OUT.into(),
@@ -4579,6 +4589,7 @@ impl Reader<'_> {
     /// A walk that follows links (`-L`, `-follow`) reaches paths outside
     /// its starts, so a deletion in it is unproven.
     fn judge_find(&mut self, args: &[String], st: &State, ambiguous: bool) {
+        self.walks += 1;
         // A walk written to a file may be read by any later program.
         if self.stdout_away || args.iter().any(|a| FIND_FILE_OUTPUT.contains(&a.as_str())) {
             self.report(
@@ -5569,16 +5580,16 @@ impl Reader<'_> {
             }
             Part::Subst { script, quoted } => {
                 let kind = if *quoted { Kind::Quoted } else { Kind::Split };
-                match self.substitution(script, st) {
+                let walks = self.walks;
+                let output = self.substitution(script, st);
+                // A substitution that runs `find` prints its walk, wherever
+                // the call is: directly, in a function or in a shell.
+                if self.walks > walks {
+                    return vec![(taint(why::WALK_OUT), Kind::Quoted)];
+                }
+                match output {
                     Output::Known(outputs) => outputs.into_iter().map(|v| (v, kind)).collect(),
-                    Output::External | Output::Unknown => {
-                        let reason = if lists_walk(script) {
-                            why::WALK_OUT
-                        } else {
-                            why::OUTPUT
-                        };
-                        vec![(taint(reason), Kind::Quoted)]
-                    }
+                    Output::External | Output::Unknown => vec![(taint(why::OUTPUT), Kind::Quoted)],
                 }
             }
             Part::Array(elements) => {
@@ -7386,42 +7397,26 @@ fn walk_value(value: &str) -> bool {
         .any(|reason| value.contains(&taint(reason)))
 }
 
-/// Whether `program` may be given a `find` walk: `xargs` and `parallel`
-/// (judged on what they run), a plain remover (judged on its operands) and
-/// a program that only reads and prints.
-fn walk_reader(program: &str) -> bool {
-    matches!(
-        program,
-        "xargs"
-            | "parallel"
-            | "rm"
-            | "rmdir"
-            | "unlink"
-            | "shred"
-            | "srm"
-            | "sort"
-            | "uniq"
-            | "cut"
-            | "tr"
-            | "basename"
-            | "dirname"
-    ) || READERS.contains(&program)
-}
-
-/// Whether a substitution's script runs `find`, whose walk it then prints.
-fn lists_walk(script: &str) -> bool {
-    let mut simples = Vec::new();
-    collect_simples(&Parser::parse(script), &mut simples);
-    simples.iter().any(|(words, _)| {
-        let argv: Vec<String> = words
-            .iter()
-            .skip_while(|w| w.assignment().is_some())
-            .map(word_text)
-            .collect();
-        unwrap(&argv)
-            .and_then(|run| run.argv.first().map(|first| program_name(first) == "find"))
-            .unwrap_or(false)
-    })
+/// Whether the command `argv` may be given a `find` walk: `xargs` and
+/// `parallel` (judged on what they run), a plain remover (judged on its
+/// operands) and a program that only reads and prints. `sort` counts only
+/// with flags that take no value, since `-o` writes a file and
+/// `--compress-program` runs one.
+fn walk_reader(argv: &[String]) -> bool {
+    let Some(first) = argv.first() else {
+        return false;
+    };
+    let program = program_name(first);
+    match program.as_str() {
+        "xargs" | "parallel" | "rm" | "rmdir" | "unlink" | "shred" | "srm" | "cut" | "tr"
+        | "basename" | "dirname" => true,
+        "sort" => argv[1..].iter().all(|word| {
+            word.len() > 1
+                && word.starts_with('-')
+                && word[1..].bytes().all(|b| b"bdfghMnrRsuVz".contains(&b))
+        }),
+        name => READERS.contains(&name),
+    }
 }
 
 /// What `read` or `mapfile` gives from its input: a `find` walk's value is
@@ -8740,6 +8735,7 @@ mod tests {
                 depth: 0,
                 pipe_input: None,
                 stdout_away: false,
+                walks: 0,
                 jumps: vec![],
                 expanding: vec![],
                 traps: vec![],
@@ -9062,6 +9058,7 @@ mod tests {
             depth: 0,
             pipe_input: None,
             stdout_away: false,
+            walks: 0,
             jumps: Vec::new(),
             expanding: Vec::new(),
             traps: Vec::new(),
@@ -9115,6 +9112,7 @@ mod tests {
             depth: 0,
             pipe_input: None,
             stdout_away: false,
+            walks: 0,
             jumps: Vec::new(),
             expanding: Vec::new(),
             traps: Vec::new(),
@@ -9167,6 +9165,7 @@ mod tests {
             depth: 0,
             pipe_input: None,
             stdout_away: false,
+            walks: 0,
             jumps: Vec::new(),
             expanding: Vec::new(),
             traps: Vec::new(),
@@ -9362,6 +9361,16 @@ mod tests {
             "find /fixture/a -name b | while read f; do python3 x.py; done",
             "read -r f < <(find /fixture/a -name b); python3 x.py \"$f\"",
             "find /fixture/a -name b > >(python3 x.py)",
+            "f() { find /fixture/a -name b; }; f | python3 x.py",
+            "f() { find /fixture/a -name b; }; python3 x.py $(f)",
+            "sh -c 'find /fixture/a -name b' | python3 x.py",
+            "coproc find /fixture/a -name b",
+            "exec 3> list; find /fixture/a -name b >&3",
+            "find /fixture/a -name b | sort -o list",
+            "find /fixture/a -name b | sort --compress-program=sh",
+            "find /fixture/a -name b | uniq - list",
+            "python3 x.py <<< \"$(find /fixture/a -name b)\"",
+            "l=$(find /fixture/a -name b); python3 x.py \"$l\"",
             "find /fixture/a -name b > list",
             "find /fixture/a -name b 1> list",
             "find /fixture/a -name b &> list",
@@ -9377,7 +9386,7 @@ mod tests {
         }
         for command in [
             "find /fixture/a -name b | wc -l",
-            "find /fixture/a -name b | sort | uniq | head -n 3",
+            "find /fixture/a -name b | sort -rn | head -n 3",
             "find /fixture/a -name b 2>/dev/null | grep x",
             "find /fixture/a -name b 2> errors | cut -c1-9",
             "find /fixture/a -name b > /dev/null",

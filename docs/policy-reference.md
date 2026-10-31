@@ -740,11 +740,11 @@ A `find` call that acts on its matches (`-delete`, `-exec`, `-execdir`,
 The same rule holds for a `find -print0` list piped to `xargs -0` or
 `parallel -0`. Any other program a `find` walk reaches, by a pipe (through
 any filter), a substitution (`$(…)`, `<(…)`) or a file (`>`, `exec >`,
-`-fprint`, `-fls`), is unproven unless it only reads and prints (`grep`,
-`cat`, `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr` and the like): an
-interpreter such as `python3`, `awk`, `sed`, a shell or `tee` may delete
-any path the walk lists. A walk sent to `/dev/null`, or its error output
-sent anywhere, is not limited.
+`-fprint`, `-fls`) or a coprocess, is unproven unless it only reads and
+prints (`grep`, `cat`, `head`, `tail`, `wc`, `cut`, `tr`, and `sort` with
+flags that take no value): an interpreter such as `python3`, `awk`, `sed`,
+a shell or `tee` may delete any path the walk lists. A walk sent to
+`/dev/null`, or its error output sent anywhere, is not limited.
 
 Also unproven: a `find` walk read by `read` or `mapfile`, whose values are
 every path below its starts, `xargs` input the guard cannot read (a file,
