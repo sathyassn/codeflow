@@ -1821,8 +1821,8 @@ working copy in a few places: the git hook stages take their levels from it,
 the bootstrap flag `policy_armed` is read there, the guards compare the local
 files with the policy authority, and the advisory hooks read the tier.
 
-When that read or its parse fails and the index holds unmerged entries
-(stages 1 to 3) for the file, the copy committed at `HEAD`, read as git
+When that read or its parse fails, or the file is absent, and the index
+holds unmerged entries (stages 1 to 3) for it, the copy committed at `HEAD`, read as git
 data, replaces the working copy for that file only, and the hooks print one
 note naming it. This never changes which policy the guards enforce: the
 authority, its protected refs, root branch and levels are selected as they
@@ -1834,6 +1834,12 @@ are with parsed settings, and only the local read is replaced.
   conflict and the recovery: `HEAD` has no commit, holds no copy, or holds
   a copy that does not parse. Defaults are never used in its place.
 - An authority that cannot be read refuses as before, naming the source.
+- A merge writes `AUTO_MERGE` before its index records the conflict. So the
+  `reference-transaction` stage judges a transaction that writes only Git's
+  own state refs (`AUTO_MERGE`, `ORIG_HEAD`, `MERGE_HEAD`,
+  `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `REBASE_HEAD`, named exactly) at the
+  shipped levels when the settings cannot be read, instead of cancelling
+  the merge. None of these names is a branch.
 - A Bash write to a settings file is refused as before (`git.hook_integrity`),
   `git checkout --ours` or `--theirs` on it included, so the operator
   resolves its content; `git status`, `git add`, `git commit` and

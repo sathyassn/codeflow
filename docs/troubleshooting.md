@@ -192,8 +192,9 @@ While `.codeflow/policy.json` or `.codeflow/project.toml` has an unresolved
 merge conflict, the hooks read that file's copy at `HEAD` in place of the
 working copy and print one note naming it. The guards still judge with the
 policy authority they always use, so every command gets the verdict it gets
-with parsed settings. `git status`, `git diff`, `git add`, the concluding
-`git commit`, `git merge --abort` and `git rebase --abort` pass. A write to
+with parsed settings: `git status`, `git diff`, `git add`, the concluding
+`git commit`, `git merge --abort` and `git rebase --abort` pass on a task
+branch, and a commit on a protected branch is still refused. A write to
 the settings file, `git checkout --ours` or `--theirs` on it included, stays
 refused by `git.hook_integrity`, so the operator resolves its content
 outside the session, and `git add` and `git commit` then conclude the merge.
