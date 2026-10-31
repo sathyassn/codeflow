@@ -163,6 +163,34 @@ pub const SAFE_PROTOCOLS: &str = "file:http:https:ssh";
 /// configuration file and never prompting.
 const HERMETIC_SSH: &str = "ssh -F none -o BatchMode=yes";
 
+/// The only inherited variables [`advertises_any_ref`] passes on: program
+/// lookup, the home that holds SSH keys and known hosts, the SSH agent,
+/// temporary space, the Windows system variables, and network proxies,
+/// which name a host, never a command.
+pub const KEPT_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "SystemRoot",
+    "SYSTEMROOT",
+    "COMSPEC",
+    "PATHEXT",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SSH_AUTH_SOCK",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+];
+
 /// Whether the repository at `url` advertises any ref. The guards and the
 /// commit hooks ask it on every command while a remote's tracking
 /// namespace is empty, to tell a remote that holds nothing yet from one
@@ -171,7 +199,8 @@ const HERMETIC_SSH: &str = "ssh -F none -o BatchMode=yes";
 /// with no global or system configuration (so no credential helper,
 /// `core.sshCommand`, `insteadOf` or upload command applies), plain `ssh`
 /// that reads no configuration file, only [`SAFE_PROTOCOLS`] and git's own
-/// upload command, and no git, SSH or proxy command from the environment.
+/// upload command, and a clean environment ([`KEPT_ENVIRONMENT`]), so no
+/// inherited git, SSH or proxy-command variable applies.
 /// A remote that needs credentials or a configured SSH setup therefore
 /// cannot be asked, and the caller refuses with the fetch route.
 ///
@@ -202,16 +231,16 @@ pub fn advertises_any_ref(root: &Path, url: &str) -> Result<bool, String> {
     let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
     let args = ["ls-remote", "--upload-pack=git-upload-pack"];
     let answer = ls_remote_attempts(&args, 0, || {
+        // A clean environment: no inherited git, SSH or proxy-command
+        // variable (`GIT_NAMESPACE` would select which refs a local remote
+        // advertises, review round 02 F4); only what finding the programs,
+        // the user's SSH agent and keys, and a network proxy need passes.
         let mut command = crate::git::judging_command();
-        for name in [
-            "GIT_SSH",
-            "GIT_SSH_VARIANT",
-            "GIT_PROXY_COMMAND",
-            "GIT_EXEC_PATH",
-            "GIT_CONFIG",
-            "GIT_ALLOW_PROTOCOL",
-        ] {
-            command.env_remove(name);
+        command.env_clear();
+        for name in KEPT_ENVIRONMENT {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
         }
         command
             .current_dir(outside.path())

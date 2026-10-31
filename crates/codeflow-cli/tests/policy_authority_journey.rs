@@ -270,3 +270,51 @@ fn the_bootstrap_states_refuse_or_are_labelled() {
     println!("no remote:\n{text}");
     assert!(text.contains("local only: no remote"), "{text}");
 }
+
+/// Review round 02 F4: an inherited `GIT_NAMESPACE` would make a local
+/// remote that holds branches advertise none, and the empty tracking
+/// namespace would read as initialization, judged by `HEAD`. The question
+/// to the remote ignores the variable, so doctor and the guard still name
+/// the fetch route.
+#[test]
+fn an_inherited_git_namespace_cannot_fabricate_initialization() {
+    let (a, _) = Adopter::with_line();
+    for branch in ["HEAD", "main", "integration/line"] {
+        a.git(&[
+            "update-ref",
+            "--no-deref",
+            "-d",
+            &format!("refs/remotes/origin/{branch}"),
+        ]);
+    }
+    let doctor = a
+        .command(&binary())
+        .args(["doctor", "--check", "policy-source"])
+        .env("GIT_NAMESPACE", "tsk1077-review-empty")
+        .output()
+        .unwrap();
+    let text = said(&doctor);
+    println!("doctor with GIT_NAMESPACE:\n{text}");
+    assert!(text.contains("run git fetch origin"), "{text}");
+    assert!(!text.contains("initialization"), "{text}");
+    let payload = json!({"tool_name":"Bash","cwd":a.work(),"tool_input":{"command":"git commit -m 'chore: x'"}});
+    let mut child = a
+        .command(&binary())
+        .args(["hook", "git-guard"])
+        .env("GIT_NAMESPACE", "tsk1077-review-empty")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    let guard = child.wait_with_output().unwrap();
+    let text = said(&guard);
+    assert_eq!(guard.status.code(), Some(2), "{text}");
+    assert!(text.contains("run git fetch origin"), "{text}");
+}

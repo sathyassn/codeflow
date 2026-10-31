@@ -105,10 +105,10 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 ### Blocked names and protected paths
 
 `git.path_policy` defaults to `block`. Path exceptions and denials come
-from the default branch at one commit (ADR-0091). The guards and the
-path checks of pre-commit and pre-merge-commit read it at the commit
-`refs/remotes/<remote>/HEAD` names; pre-commit also keeps any stricter
-working-copy denials, and a working copy adds no exception. Pre-push
+from the default branch at one commit (ADR-0091). The guards and
+pre-commit's path checks read it at the commit `refs/remotes/<remote>/HEAD`
+names; pre-commit also keeps any stricter working-copy denials, and a
+working copy adds no exception. Pre-merge-commit runs no path check. Pre-push
 judges with the default branch the destination advertises, and `codeflow
 ci` with the commit it is given (`--policy-from`, else `--base`; the hosted
 jobs pass the pull request's target). CI judges all commits the range

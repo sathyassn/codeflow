@@ -73,8 +73,8 @@ After TSK-1057 lands, no remote is labelled local only when its
 baseline holds no record for the repository; otherwise the baseline's
 policy is enforced and `doctor` names the removed remote.
 
-What TSK-1077 delivers: the guards and the path checks of the commit hooks
-read the local authority above; pre-push judges with the default branch the
+What TSK-1077 delivers: the guards and pre-commit's path checks read the
+local authority above (pre-merge-commit runs no path check); pre-push judges with the default branch the
 destination advertises; `codeflow ci` judges with the commit it is given
 (`--policy-from`, else `--base`). The commit hooks' levels move to the
 authority in TSK-1078, and the hosted jobs in TSK-336.
@@ -167,8 +167,8 @@ file added and later deleted included.
 
 ## Consequences
 
-- One source on every surface: pre-commit, pre-merge-commit, pre-push,
-  the guards and `codeflow ci` agree with the hosted job. Records on a
+- One source on every surface once TSK-1078 and TSK-336 land: pre-commit,
+  pre-push, the guards and `codeflow ci` agree with the hosted job. Records on a
   line can no longer refuse every command, as two disagreeing
   `integration_target` values did on 2026-10-30, because records are not
   read for policy.
