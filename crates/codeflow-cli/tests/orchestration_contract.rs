@@ -943,12 +943,12 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
     let readme = normalize_whitespace(&read("README.md"));
     let architecture = normalize_whitespace(&read("docs/architecture.md"));
     assert!(
-        readme.contains("Health checks (24): hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config"),
+        readme.contains("Health checks (25): hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config"),
         "README must list the grok doctor check"
     );
     assert!(
         architecture.contains(
-            "24 checks: hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config"
+            "25 checks: hooks, claude, codex, grok, guard-timeouts, startup-files, git-config-includes, config"
         ),
         "architecture must list the grok doctor check"
     );

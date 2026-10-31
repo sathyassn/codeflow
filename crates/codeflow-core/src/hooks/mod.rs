@@ -191,9 +191,12 @@ impl Violation {
 }
 
 /// The `git` rules whose levels enclosing planes cannot lower (R-80):
-/// secret and path scans, protected branches and hook integrity.
+/// secret and path scans (the gitleaks engine finding included: it prints at
+/// the `secret_scan` level and has no key of its own), protected branches and
+/// hook integrity.
 const ALWAYS_BLOCKING_GIT: &[&str] = &[
     "secret_scan",
+    "secret_scan_engine",
     "path_policy",
     "commit_to_protected",
     "push_to_protected",

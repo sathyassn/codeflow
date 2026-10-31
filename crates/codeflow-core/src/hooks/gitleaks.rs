@@ -1120,9 +1120,16 @@ mod tests {
 
     #[test]
     fn relative_path_entries_are_not_searched() {
-        let path = std::env::join_paths(["", ".", "bin", "/usr/bin"]).unwrap();
+        let absolute = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([
+            PathBuf::new(),
+            PathBuf::from("."),
+            PathBuf::from("bin"),
+            absolute.path().to_path_buf(),
+        ])
+        .unwrap();
         let engine = Engine::with_path(Some(&path));
-        assert_eq!(engine.search, [PathBuf::from("/usr/bin")]);
+        assert_eq!(engine.search, [absolute.path().to_path_buf()]);
     }
 
     #[test]
