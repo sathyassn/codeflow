@@ -549,7 +549,14 @@ pub fn run(args: &CiArgs) -> i32 {
     );
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
-        codeflow_core::hooks::path_policy::range(&root, range.base_sha.as_deref(), &head, &paths)
+        let size_and_ignore = content_rules(&root, authority.as_ref(), &head, configured)?;
+        codeflow_core::hooks::path_policy::range_with(
+            &root,
+            range.base_sha.as_deref(),
+            &head,
+            &paths,
+            Some(&size_and_ignore),
+        )
     }) {
         Ok(paths) => {
             for note in paths.notes {
@@ -567,6 +574,7 @@ pub fn run(args: &CiArgs) -> i32 {
             if configured.path_policy.is_active() {
                 ran.push("path-policy");
             }
+            ran.push("size-and-ignore");
         }
         Err(error) => tagged.push(TaggedViolation {
             sha: None,
@@ -1968,6 +1976,25 @@ struct Judging {
 /// any authority is known), the change class widens the authority's product
 /// and watched paths with the working copy's (neither side can narrow them),
 /// and the work-record baseline has its own source (`--baseline-from`).
+/// The size and ignored-file rules (TSK-323), read with their policy keys,
+/// the project kind and the `.gitignore` files at the authority commit,
+/// never the range or the working copy; a policy that commit lacks gives
+/// the shipped defaults. At the head with `git` only when no authority
+/// resolves.
+fn content_rules(
+    root: &Path,
+    authority: Option<&Authority>,
+    head: &str,
+    git: &codeflow_core::hooks::policy::GitPolicy,
+) -> Result<codeflow_core::hooks::path_policy::ContentRules, String> {
+    match authority {
+        Some(authority) => {
+            codeflow_core::hooks::path_policy::ContentRules::at_authority(root, authority.sha())
+        }
+        None => codeflow_core::hooks::path_policy::ContentRules::at_rev(root, git, head),
+    }
+}
+
 fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -> Option<Judging> {
     let from_working = |working: Policy| {
         print_source_banner(root);
