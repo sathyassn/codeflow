@@ -344,9 +344,9 @@ or a detected stack.
   into a non-zero exit for unattended callers.
 - With a stack it is a real gate, re-run in CI. Coverage thresholds count toward
   the verdict (ADR-0021).
-- The task's declared line supplies the default comparison base. Only content
-  targets with matching candidate evidence can be skipped; missing evidence runs
-  the target. The [test-gate reference](test-gate.md) defines the fields.
+- Every run executes every eligible target: no local run record earns
+  selection credit (ADR-0089). The [test-gate reference](test-gate.md)
+  defines the fields a record holds.
 - `codeflow test setup` fills absent configs and never auto-replaces populated
   ones.
 
@@ -362,13 +362,13 @@ or a detected stack.
 | Full gate | Behaviour |
 |---|---|
 | Scheduling | a target may declare `requires`, `outputs`, `narrow` inputs and `exclusive`: producers and prerequisites run first, targets with no producer and consumer relation run in parallel up to `max_parallel`, a dependent of a red target reports "not run: prerequisite failed", and a missing or cyclic prerequisite fails the run before any target starts. The run names its candidate tree after the producers ran and fails when generation changed tracked bytes |
-| Change-aware selection | quick and essential compare with the task line's merge base by default; only content checks with matching per-target evidence from a clean, complete full run of the base tree can be skipped. Unknown evidence runs the check and names the reason. Skip credit is local convenience; full landing gates execute every target and integration refuses incomplete runs. `--all` executes every eligible target, and summaries distinguish executed and skipped counts |
+| Change-aware selection | withdrawn: every run executes every eligible target, since no local run record can prove a check passed when an agent session or the candidate's tests can write it (ADR-0089); `--since` narrows nothing and says so. Integration refuses incomplete runs, and summaries distinguish executed and skipped counts |
 | Split across runners | `--only` runs the named targets and their prerequisites, so one gate can run as parallel CI jobs; a limited run is recorded as not complete, so no single part serves as a green base, and a name that is not an enabled target of the mode is refused before any target starts. CodeFlow's own CI runs its full gate as such parts behind one `codeflow gates` check: two landing parts on every gated event, and a release-tier job (the exhaustive prose oracle, the read benchmark and the present browser and binary-delta checks) on the release candidate, pushes to main or master, the schedule and manual runs; `scripts/gate-parity.py` refuses a full-mode target that both paths leave out |
 | Preflight | refuses before targets when the temp directory is not writable or a required tool is missing. Essential and full also refuse before targets when a lock cannot be taken; quick reports heavy refusals alongside its light results |
 | Concurrency | essential and full gates share the machine and repository locks; a second refuses with the holder's process, mode and directory. Quick runs light targets beside a gate; heavy targets wait up to the configured bound, then refuse. Projects can choose the default class of undeclared quick targets; pre-push runs no quick target. `codeflow test --lock-status` reads holder records without starting work. `codeflow reserve -- <command>` admits direct heavy work through the same locks. An optional `execution.worker_budget` divides nested workers among concurrent heavy targets |
 | Cargo | a gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the worktree |
 | Progress | each target prints a start line and a completion line on stderr |
-| Result artifact | a full run writes a result bound to its revision, tree hash and config digest and copies it to `~/.codeflow/gate-runs/<repo>/<run-id>/`, outside any worktree, for pull request bodies to cite. CodeFlow's own gate runs the Rust suite once, instrumented, and its journey check reads that run's results |
+| Result artifact | a full run writes a result bound to its revision, tree hash and config digest and copies it to `~/.codeflow/gate-runs/<repo>/<run-id>/`, outside any worktree, for pull request bodies to cite; every evidence write refuses links, junctions and planted names, and the copy refuses links, hard links and special files in the run folder (TSK-1044). CodeFlow's own gate runs the Rust suite once, instrumented, and its journey check reads that run's results |
 | Killed gate on Unix | the lock stays held until the target's process group exits, so no second gate runs beside the target |
 | Killed gate on Windows | the target's job object ends its process tree with the gate; if Windows cannot put a suspended target in that job, it ends the target and reports a failed test before the target command runs |
 
