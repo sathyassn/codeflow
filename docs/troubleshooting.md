@@ -186,6 +186,25 @@ pre-push refuses only a new cancelled record without its reason or scope,
 or a path a planning amendment cannot carry; the pull request check judges
 the rest.
 
+## A settings file has a merge conflict
+
+While `.codeflow/policy.json` or `.codeflow/project.toml` has an unresolved
+merge conflict, the hooks read that file's copy at `HEAD` in place of the
+working copy and print one note naming it. The guards still judge with the
+policy authority they always use, so every command gets the verdict it gets
+with parsed settings. `git status`, `git diff`, `git add`, the concluding
+`git commit`, `git merge --abort` and `git rebase --abort` pass. A write to
+the settings file, `git checkout --ours` or `--theirs` on it included, stays
+refused by `git.hook_integrity`, so the operator resolves its content
+outside the session, and `git add` and `git commit` then conclude the merge.
+
+The hooks refuse every command, naming the file, when the conflict cannot be
+read this way: `HEAD` has no commit, holds no copy of the file, or holds a
+copy that does not parse. Resolve the file outside the session, or abandon
+the merge there with `git merge --abort` (`git rebase --abort` during a
+rebase). A settings file that does not parse with no conflict in the index,
+conflict marker text included, refuses as before; repair the file.
+
 ## A push is blocked by a quick target
 
 A `git.test_gate_on_push` failure names each failed target and its cause:
