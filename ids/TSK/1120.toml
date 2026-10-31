@@ -1,0 +1,11 @@
+id = "TSK-1120"
+uid = "35e018c1-32d4-41d2-a834-61c2195ddd09"
+kind = "TSK"
+title = "cf-present documents open in a dashboard shell with a side menu, tabs and drill-down views"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T17:08:03Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
