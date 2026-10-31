@@ -1538,6 +1538,16 @@ jobs:
       # new suppression takes effect once its own pull request lands.
       # osv-scanner runs with --no-ignore, so a .gitignore the change edits
       # cannot hide a lockfile from the audit.
+      #
+      # A project that records audit exceptions in its own reviewed register
+      # commits .codeflow/audit-exceptions.sh. When the trusted commit holds
+      # it, the scan reports JSON and, if it finds advisories, the step lists
+      # them in a file, exports the trusted commit's files to a folder outside
+      # the checkout and runs the hook there with bash. The hook prints the
+      # findings it accepts, one per line, unchanged; the step passes only when
+      # every finding is accepted, and a hook that fails or prints nothing
+      # accepts nothing. The hook and the files it reads are the trusted
+      # commit's, so a pull request cannot accept its own findings.
       - name: dependency audit (osv-scanner)
         env:
           TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
@@ -1597,6 +1607,23 @@ jobs:
                   out.write(data)
               print(f"osv-scanner suppressions from trusted commit: {shown}")
           ' "$TRUSTED_SHA"
+          # The project exception hook counts only when the trusted commit
+          # holds it as a regular file.
+          hook=.codeflow/audit-exceptions.sh
+          if ! entry=$(git ls-tree "$TRUSTED_SHA" -- "$hook"); then
+            echo "::error::cannot read the tree of the trusted commit ${TRUSTED_SHA}; failing closed"
+            exit 1
+          fi
+          hook_mode=${entry%% *}
+          case $hook_mode in
+            '') ;;
+            100644|100755) ;;
+            *) echo "::error::${hook} on trusted commit ${TRUSTED_SHA} is not a regular file; failing closed"
+               exit 1 ;;
+          esac
+          if [ -z "$hook_mode" ] && { [ -e "$hook" ] || [ -L "$hook" ]; }; then
+            echo "::notice::this change holds ${hook}, but the trusted commit does not; it takes effect once the change lands."
+          fi
           if [ "$sr" = "block" ] || [ "$da" = "block" ]; then
             level=block
           elif [ "$sr" = "off" ] && [ "$da" = "off" ]; then
@@ -1615,10 +1642,55 @@ jobs:
           printf '%s  %s\n' "$OSV_SHA256" "$tool/osv-scanner" | sha256sum -c -
           chmod +x "$tool/osv-scanner"
 
+          # With the project exception hook the scan reports JSON on stdout and
+          # its messages on stderr; without it the run is unchanged.
           set +e
-          out=$("$tool/osv-scanner" scan -r --no-ignore . 2>&1); rc=$?
+          if [ -n "$hook_mode" ]; then
+            out=$("$tool/osv-scanner" scan -r --no-ignore --format json . 2>"$tool/scan.err"); rc=$?
+            diag=$(cat "$tool/scan.err")
+          else
+            out=$("$tool/osv-scanner" scan -r --no-ignore . 2>&1); rc=$?
+            diag=$out
+          fi
           set -e
-          printf '%s\n' "$out"
+          printf '%s\n' "$diag"
+
+          # The project exception hook judges the findings of a scan that
+          # found advisories (exit 1) and nothing else. It runs from the
+          # trusted commit's files, outside the checkout.
+          accepted_all=
+          if [ "$rc" -eq 1 ] && [ -n "$hook_mode" ]; then
+            findings="$tool/findings.tsv"
+            accepted="$tool/accepted.tsv"
+            valid="$tool/valid.tsv"
+            tree="$tool/trusted-tree"
+            : >"$findings"; : >"$accepted"; : >"$valid"
+            # One line per finding: id, package, version, ecosystem, lockfile
+            # and the advisory's aliases, tab separated. @tsv escapes tabs and
+            # line breaks, so a name the change chooses stays on its line.
+            if printf '%s' "$out" | jq -r --arg here "$PWD/" '.results[]? | .source.path as $s | .packages[]? | .package as $p | .vulnerabilities[]? | [.id, $p.name, $p.version, $p.ecosystem, ($s | ltrimstr($here)), ((.aliases // []) | join(","))] | @tsv' >"$tool/findings.raw"; then
+              LC_ALL=C sort -u "$tool/findings.raw" >"$findings"
+            fi
+            if [ ! -s "$findings" ]; then
+              echo "::error::osv-scanner reported advisories but none could be listed from its JSON report; no project exception applies"
+            elif ! { mkdir "$tree" && git archive -o "$tool/trusted.tar" "$TRUSTED_SHA" && tar -xf "$tool/trusted.tar" -C "$tree" && [ -f "$tree/$hook" ]; }; then
+              echo "::error::cannot export ${hook} and the project files from the trusted commit ${TRUSTED_SHA}; no project exception applies"
+            else
+              hook_rc=0
+              (cd "$tree" && CODEFLOW_AUDIT_FINDINGS="$findings" CODEFLOW_TRUSTED_SHA="$TRUSTED_SHA" CODEFLOW_TRUSTED_ROOT="$tree" bash "$hook" </dev/null) >"$accepted" || hook_rc=$?
+              if [ "$hook_rc" -ne 0 ]; then
+                echo "::error::the project exception hook ${hook} failed (exit ${hook_rc}); it accepts nothing"
+                : >"$accepted"
+              fi
+              grep -Fxf "$findings" "$accepted" >"$valid" || true
+              sed 's/^/accepted by the project exception hook: /' "$valid"
+              grep -vFxf "$valid" "$findings" >"$tool/remaining.tsv" || true
+              sed 's/^/not accepted: /' "$tool/remaining.tsv"
+              if [ ! -s "$tool/remaining.tsv" ]; then
+                accepted_all=1
+              fi
+            fi
+          fi
 
           # The verdict comes from osv-scanner's exit status (0 no advisories,
           # 1 advisories, 127 error, 128 no package sources), never from its
@@ -1626,10 +1698,17 @@ jobs:
           # also reports a file it could not extract is a scan error.
           if [ "$rc" -eq 0 ]; then
             echo "No known advisories."
-          elif [ "$rc" -eq 128 ] && ! printf '%s' "$out" | grep -qi 'error during extraction'; then
+          elif [ "$rc" -eq 128 ] && ! printf '%s\n%s' "$diag" "$out" | grep -qi 'error during extraction'; then
             echo "No scannable manifests found — nothing to audit."
+          elif [ -n "$accepted_all" ]; then
+            echo "Every dependency advisory is accepted by the project exception hook ${hook}."
           elif [ "$level" = "block" ]; then
-            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or record a justified suppression in an osv-scanner.toml beside the lockfile."
+            if [ -n "$hook_mode" ]; then
+              advice="accept a justified finding through the project exception hook ${hook}"
+            else
+              advice="record a justified suppression in an osv-scanner.toml beside the lockfile"
+            fi
+            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or ${advice}."
             exit 1
           else
             echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
