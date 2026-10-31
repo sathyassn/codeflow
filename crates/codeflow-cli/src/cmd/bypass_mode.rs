@@ -19,9 +19,9 @@ use serde_json::{Map, Value};
 pub struct Paths {
     /// The person's Claude Code user settings file (read only).
     pub user: PathBuf,
-    /// Managed settings files that can disable bypass mode, in the order
-    /// they are checked.
-    pub managed: Vec<PathBuf>,
+    /// The managed settings directory: its `managed-settings.json` and the
+    /// `.json` files of its `managed-settings.d` drop-in directory.
+    pub managed_dir: PathBuf,
 }
 
 impl Paths {
@@ -35,7 +35,7 @@ impl Paths {
         };
         Some(Self {
             user: config_dir.join("settings.json"),
-            managed: managed_files(&managed_dir()),
+            managed_dir: managed_dir(),
         })
     }
 }
@@ -59,20 +59,34 @@ fn managed_dir() -> PathBuf {
 }
 
 /// `managed-settings.json` in `dir`, then each `.json` file of its
-/// `managed-settings.d` drop-in directory in name order.
-#[must_use]
-pub fn managed_files(dir: &Path) -> Vec<PathBuf> {
+/// `managed-settings.d` drop-in directory in name order. A drop-in
+/// directory or entry that cannot be read refuses, since a file there could
+/// turn bypass mode off.
+///
+/// # Errors
+///
+/// Returns [`Refusal::Unreadable`] when the drop-in directory exists but
+/// cannot be listed, or an entry in it cannot be read.
+pub fn managed_files(dir: &Path) -> Result<Vec<PathBuf>, Refusal> {
     let mut files = vec![dir.join("managed-settings.json")];
-    if let Ok(entries) = std::fs::read_dir(dir.join("managed-settings.d")) {
-        let mut drop_ins: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-            .collect();
-        drop_ins.sort();
-        files.extend(drop_ins);
+    let drop_in_dir = dir.join("managed-settings.d");
+    let unreadable =
+        |err: std::io::Error| Refusal::Unreadable(drop_in_dir.clone(), err.to_string());
+    let entries = match std::fs::read_dir(&drop_in_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(files),
+        Err(err) => return Err(unreadable(err)),
+    };
+    let mut drop_ins = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(unreadable)?.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            drop_ins.push(path);
+        }
     }
-    files
+    drop_ins.sort();
+    files.extend(drop_ins);
+    Ok(files)
 }
 
 /// Why bypass mode is not offered.
@@ -140,7 +154,8 @@ fn disables_bypass(settings: &Map<String, Value>) -> bool {
 ///
 /// Returns the refusal when a file disables bypass mode or cannot be read.
 pub fn check_allowed(paths: &Paths) -> Result<(), Refusal> {
-    for path in paths.managed.iter().chain(std::iter::once(&paths.user)) {
+    let managed = managed_files(&paths.managed_dir)?;
+    for path in managed.iter().chain(std::iter::once(&paths.user)) {
         if let Some(settings) = read_object(path)? {
             if disables_bypass(&settings) {
                 return Err(Refusal::Disabled(path.clone()));
@@ -169,7 +184,7 @@ mod tests {
         }
         let paths = Paths {
             user: user_path,
-            managed: managed_files(&managed_dir),
+            managed_dir,
         };
         (dir, paths)
     }
@@ -207,6 +222,29 @@ mod tests {
         let (_dir, paths) = fixture(Some(r#"{"theme": "dark"}"#), &[]);
         assert_eq!(check_allowed(&paths), Ok(()));
         let (_dir, paths) = fixture(None, &[]);
+        assert_eq!(check_allowed(&paths), Ok(()));
+    }
+
+    /// A drop-in directory that cannot be listed refuses: a file in it
+    /// could turn bypass mode off.
+    #[cfg(unix)]
+    #[test]
+    fn refuses_an_unlistable_drop_in_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, paths) = fixture(Some("{}"), &[]);
+        let drop_in = paths.managed_dir.join("managed-settings.d");
+        std::fs::set_permissions(&drop_in, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let listed = std::fs::read_dir(&drop_in).is_ok();
+        let verdict = check_allowed(&paths);
+        std::fs::set_permissions(&drop_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if listed {
+            return; // running as root: the directory stays readable
+        }
+        assert!(
+            matches!(verdict, Err(Refusal::Unreadable(..))),
+            "{verdict:?}"
+        );
+        std::fs::remove_dir(&drop_in).unwrap();
         assert_eq!(check_allowed(&paths), Ok(()));
     }
 }

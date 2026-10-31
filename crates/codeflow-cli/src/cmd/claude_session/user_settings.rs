@@ -322,11 +322,17 @@ fn read_user(path: &Path) -> Result<(Value, bool), String> {
     }
 }
 
-fn read_record(path: &Path) -> Record {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+/// The record of what was added: empty when there is none yet, an error
+/// when it exists but cannot be read or parsed, so nothing it tracks is
+/// lost or overwritten.
+fn read_record(path: &Path) -> Result<Record, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
+        Err(err) => return Err(format!("cannot read {} ({err})", path.display())),
+    };
+    serde_json::from_str(&text)
+        .map_err(|err| format!("{} is not a valid record ({err})", path.display()))
 }
 
 /// Copy the user file to a new backup next to it; returns the backup path.
@@ -363,6 +369,15 @@ pub fn offer(
                 "  Your Claude Code user settings are not offered: {why}. Nothing written there."
             );
             return 0;
+        }
+    };
+    let mut record = match read_record(record_path) {
+        Ok(record) => record,
+        Err(why) => {
+            println!(
+                "  Your Claude Code user settings are not offered: {why}. Fix or remove it first."
+            );
+            return 1;
         }
     };
     let mut accepted: Vec<RecordedItem> = Vec::new();
@@ -419,7 +434,6 @@ pub fn offer(
         println!("  Cannot write {}: {err}", user.display());
         return 1;
     }
-    let mut record = read_record(record_path);
     record.file = Some(user.to_path_buf());
     record.items.extend(accepted);
     let text = serde_json::to_string_pretty(&record).unwrap_or_default() + "\n";
@@ -438,7 +452,13 @@ pub fn offer(
 /// Remove exactly the recorded entries from the user file. Returns the
 /// exit code.
 pub fn remove(record_path: &Path) -> i32 {
-    let record = read_record(record_path);
+    let record = match read_record(record_path) {
+        Ok(record) => record,
+        Err(why) => {
+            println!("  Kept the additions to your user settings: {why}.");
+            return 1;
+        }
+    };
     let Some(user) = record.file.clone() else {
         return 0;
     };
@@ -642,6 +662,33 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&user).unwrap(), "{ not json");
         assert!(!record.exists());
+    }
+
+    /// A damaged record refuses both the offer and the removal, so the
+    /// entries it tracks are never forgotten.
+    #[test]
+    fn a_damaged_record_refuses_and_keeps_the_user_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("settings.json");
+        let record = dir.path().join("record.json");
+        std::fs::write(&user, r#"{"model": "opus"}"#).unwrap();
+        std::fs::write(&record, "{ not json").unwrap();
+        assert_eq!(
+            offer(
+                &mut "yes\nyes\nyes\nyes\n".as_bytes(),
+                &user,
+                &record,
+                &preset(),
+                ALL
+            ),
+            1
+        );
+        assert_eq!(remove(&record), 1);
+        assert_eq!(
+            std::fs::read_to_string(&user).unwrap(),
+            r#"{"model": "opus"}"#
+        );
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), "{ not json");
     }
 
     #[test]

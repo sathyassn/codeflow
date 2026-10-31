@@ -166,7 +166,7 @@ fn union(shipped: &[Value], existing: &Value) -> Value {
 /// removed by the person's answer.
 #[must_use]
 pub fn session_settings(existing: Option<&Value>, bypass: bool) -> Value {
-    let preset: Value = serde_json::from_str(PRESET).unwrap_or_default();
+    let preset = preset();
     let sandbox = &preset["sandbox"];
     let old = existing.cloned().unwrap_or_else(|| json!({}));
     let mut out = match old {
@@ -271,14 +271,37 @@ fn sha(bytes: &[u8]) -> String {
     codeflow_core::scaffold::sha256_hex(bytes)
 }
 
-fn read_manifest(layout: &Layout) -> Manifest {
-    std::fs::read_to_string(&layout.manifest)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+/// The install record: empty when there is none yet, an error when it
+/// exists but cannot be read or parsed, so what it tracks is never lost.
+fn read_manifest(layout: &Layout) -> Result<Manifest, String> {
+    let text = match std::fs::read_to_string(&layout.manifest) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Manifest::default()),
+        Err(err) => return Err(format!("cannot read {} ({err})", layout.manifest.display())),
+    };
+    serde_json::from_str(&text).map_err(|err| {
+        format!(
+            "{} is not a valid record ({err})",
+            layout.manifest.display()
+        )
+    })
 }
 
+/// The embedded preset. A test parses it, so it is always valid JSON.
+fn preset() -> Value {
+    serde_json::from_str(PRESET).expect("the embedded preset is valid JSON")
+}
+
+/// Replace `path` with `text` through a temporary file. A link, such as a
+/// startup file kept in a dotfiles directory, is followed so the file it
+/// points at is written and the link stays.
 fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let resolved = match std::fs::canonicalize(path) {
+        Ok(target) => target,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(err) => return Err(err),
+    };
+    let path = resolved.as_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -408,7 +431,13 @@ fn write_wrapper(layout: &Layout, manifest: &mut Manifest) -> bool {
 /// and the startup-file line, each only on a typed yes. Returns the exit
 /// code.
 pub fn install(input: &mut impl BufRead, layout: &Layout) -> i32 {
-    let mut manifest = read_manifest(layout);
+    let mut manifest = match read_manifest(layout) {
+        Ok(manifest) => manifest,
+        Err(why) => {
+            println!("{why}; fix or remove it first. Nothing written.");
+            return 1;
+        }
+    };
     let existing: Option<Value> = match std::fs::read_to_string(&layout.session) {
         Ok(text) => match serde_json::from_str(&text) {
             Ok(value) => Some(value),
@@ -420,7 +449,14 @@ pub fn install(input: &mut impl BufRead, layout: &Layout) -> i32 {
                 return 1;
             }
         },
-        Err(_) => None,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            println!(
+                "Cannot read {} ({err}); nothing written.",
+                layout.session.display()
+            );
+            return 1;
+        }
     };
     let had_bypass = existing
         .as_ref()
@@ -471,7 +507,7 @@ pub fn install(input: &mut impl BufRead, layout: &Layout) -> i32 {
         println!("Cannot write {}: {err}", layout.manifest.display());
         return 1;
     }
-    let preset: Value = serde_json::from_str(PRESET).unwrap_or_default();
+    let preset = preset();
     let code = user_settings::offer(
         input,
         &layout.bypass.user,
@@ -486,7 +522,13 @@ pub fn install(input: &mut impl BufRead, layout: &Layout) -> i32 {
 /// Uninstall: remove the startup-file lines the manifest records, and the
 /// script and session file when they are unchanged since written.
 pub fn uninstall(layout: &Layout) -> i32 {
-    let manifest = read_manifest(layout);
+    let manifest = match read_manifest(layout) {
+        Ok(manifest) => manifest,
+        Err(why) => {
+            println!("{why}; nothing removed.");
+            return 1;
+        }
+    };
     let mut code = 0;
     for entry in &manifest.rc {
         match remove_line(&entry.file, &entry.line) {
@@ -507,7 +549,11 @@ pub fn uninstall(layout: &Layout) -> i32 {
         (&layout.session, &manifest.session),
     ] {
         match std::fs::read(path) {
-            Err(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                println!("  Cannot read {}: {err}", path.display());
+                code = 1;
+            }
             Ok(bytes) if recorded.as_deref() == Some(sha(&bytes).as_str()) => {
                 if let Err(err) = std::fs::remove_file(path) {
                     println!("  Cannot remove {}: {err}", path.display());
@@ -561,8 +607,13 @@ pub fn run(args: &ClaudeSessionArgs) -> i32 {
             "absent"
         }
     );
-    for entry in read_manifest(&layout).rc {
-        println!("  Sourced from: {}", entry.file.display());
+    match read_manifest(&layout) {
+        Ok(manifest) => {
+            for entry in manifest.rc {
+                println!("  Sourced from: {}", entry.file.display());
+            }
+        }
+        Err(why) => println!("  Install record: {why}"),
     }
     println!("  Install or refresh: codeflow claude-session --install");
     println!("  One session without it: command claude");
@@ -584,7 +635,7 @@ mod tests {
             None,
             bypass_mode::Paths {
                 user: home.join(".claude/settings.json"),
-                managed: bypass_mode::managed_files(&managed),
+                managed_dir: managed,
             },
         );
         layout.host = user_settings::Host {
@@ -884,5 +935,43 @@ mod tests {
         assert!(layout.rc_files.is_empty());
         assert_eq!(install(&mut "no\n".as_bytes(), &layout), 0);
         assert!(layout.script.exists());
+    }
+
+    /// A startup file kept as a link (a dotfiles directory) is written
+    /// through the link, which stays a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_startup_file_keeps_its_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("dotfiles/zshrc");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "export A=1\n").unwrap();
+        let link = dir.path().join(".zshrc");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        append_line(&link, "# added").unwrap();
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "export A=1\n# added\n"
+        );
+        assert_eq!(remove_line(&link, "# added").unwrap(), 1);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "export A=1\n");
+    }
+
+    /// A damaged install record refuses install and uninstall, so what it
+    /// tracks is never overwritten or forgotten.
+    #[test]
+    fn a_damaged_install_record_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = layout(dir.path(), "/bin/zsh");
+        std::fs::create_dir_all(layout.manifest.parent().unwrap()).unwrap();
+        std::fs::write(&layout.manifest, "{ not json").unwrap();
+        assert_eq!(install(&mut "yes\nyes\n".as_bytes(), &layout), 1);
+        assert!(!layout.session.exists());
+        assert_eq!(uninstall(&layout), 1);
+        assert!(layout.manifest.exists());
     }
 }
