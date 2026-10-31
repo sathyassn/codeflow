@@ -237,6 +237,8 @@ fn every_emitted_git_rule_reads_its_own_level_key() {
     let fixed = [
         "git.secret_scan",
         "git.path_policy",
+        "git.ignored_files",
+        "git.max_file_bytes",
         "git.commit_to_protected",
         "git.push_to_protected",
         "git.merge_to_protected",

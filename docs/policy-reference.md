@@ -69,6 +69,8 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.path_policy` | Level | `block` | off \| warn \| allow \| block | Refuse blocked names and protected prefixes in staged changes and introduced commits. | Reads landed policy for pre-commit and target policy for CI. Off removes only this gate; the secret scan remains separate. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.blocked_names` | path rule list | `[".env",".env.*","*.env","*.pem","*.key","*.p12","*.pfx","*.jks","*.keystore","id_rsa*","id_dsa*","id_ecdsa*","id_ed25519*",".netrc",".pgpass","*.tfstate","*.tfstate.*","kubeconfig",".kube/config",".aws/credentials","application_default_credentials.json","credentials.json",".credentials.json"]` | strings or {pattern, except_under: [root-relative prefix], reason} | Block final-component globs or component sequences at any depth. | Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.protected_paths` | path rule list | `[]` | {prefix, allow: [{path, reason}]} entries | Refuse every change under root-anchored component prefixes. | Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.ignored_files` | object | `absent` | {level: off \| warn \| allow \| block, allow: [{path, reason}]} | Report or refuse a new or changed file that the policy authority's .gitignore files exclude. | Absent means level warn. Read with the policy and the .gitignore files of the authority's tree, never the working tree or the change: a .gitignore edit in the change admits nothing, and a tracked file is still judged. Matching follows git, with ASCII case ignored. An allow entry names a root-relative prefix with a reason. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.max_file_bytes` | object | `absent` | {limit: bytes, at least 1 (default 10485760), except_under: [root-relative directory]} | Refuse a new or changed file larger than the limit; one over 1 MiB warns. | Absent: a file over 1 MiB warns and one over 10 MiB is refused where the authority's project settings hold file_size_rule, which a fresh `codeflow init` writes; elsewhere, as in a project `codeflow update` brought forward, both are report lines. Setting either field opts in and replaces that part of the default; except_under exempts files beneath a directory, never one named file. Sizes are of the blob git records, so a Git LFS path is sized by its pointer. A refusal names the admission routes. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. |
 | `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
@@ -176,6 +178,81 @@ judged by its target, as above, and a gitlink or any other entry type
 there refuses. Other rules still apply to those files. `git.secret_scan` continues to own
 both the existing environment-file check and the content secret scan;
 `git.path_policy: off` disables only the new path gate.
+
+### Ignored files and large files
+
+Two more rules judge the same new and changed files, staged and in every
+commit a range introduces, merges included: a merge is judged on every
+file it records that no parent holds, so a clean automatic merge that
+grows a file over the limit is refused too (TSK-323). Each reads its key,
+the project kind and the `.gitignore` files at the policy authority: for
+pre-commit, the default branch's tracking ref (`HEAD` before the first
+fetch), and for `codeflow ci`, the commit whose policy judges the range,
+with the shipped defaults where that commit has no policy file. Where
+remote `HEAD` is not set and both `main` and `master` are read, each
+branch's ignore rules are judged whole and the stricter of their settings
+applies. Neither reads the working tree or the change being judged, so a
+`.gitignore` or policy edit in a change admits nothing until it lands.
+Neither judges a gate input, deleted files or gitlinks, and both run when
+`git.path_policy` is off.
+
+- **`git.ignored_files`** (default level `warn`): a file the authority's
+  ignore rules exclude is reported, or refused at `block`. Matching follows
+  git: the nearest `.gitignore` decides, `!` re-includes, and a file under
+  an excluded directory stays excluded, and a byte order mark at the start
+  of a file is skipped. ASCII case is ignored, and patterns and paths
+  compare in composed Unicode (NFC). A tracked
+  file is still judged, since git's own ignore check skips tracked files.
+  `allow: [{path, reason}]` admits a root-relative prefix.
+- **`git.max_file_bytes`**: sizes the blob git records for the path.
+
+What a file over each threshold gets depends on the project:
+
+- **New scaffold** (`file_size_rule` in the authority's
+  `.codeflow/project.toml`, written by a fresh `codeflow init`): a warning
+  over 1 MiB, a refusal over 10 MiB.
+- **Updated project** with no `git.max_file_bytes`: a report line for each,
+  never a refusal.
+- **`git.max_file_bytes` set on the authority**: a warning over 1 MiB, a
+  refusal over `limit`.
+
+`codeflow update` never writes either key or the project kind, and its
+report says how an updated project opts in. Setting `limit` or
+`except_under` opts in and replaces that part of the default:
+
+```json
+{
+  "git": {
+    "max_file_bytes": {
+      "limit": 20971520,
+      "except_under": ["tests/fixtures/large"]
+    }
+  }
+}
+```
+
+Set the key only once every binary that judges the repository, the CI pin
+included, is 4.0.0 or later; an older binary refuses the key (see "Where a
+new key goes").
+
+A size refusal names the file, its size, the limit and three admission
+routes:
+
+1. **Git LFS.** For a path `.gitattributes` gives `filter=lfs`, git records
+   the pointer (about 130 bytes), so the file passes with no policy change.
+   Without `git lfs install` git records the payload, and the rule sizes
+   that.
+2. **A policy change on the default branch.** A `limit` or
+   `except_under` change to `git.max_file_bytes` in `.codeflow/policy.json`,
+   through a reviewed pull request. `except_under` names directories: a
+   file beneath one is exempt, and an entry naming the file itself exempts
+   nothing, so there is no single-file exception in 4.0.0.
+3. **From 4.2.0, a per-path `admitted` row** in the exemption register.
+
+Legitimate large files have homes outside ordinary git objects: model
+weights, datasets and fixtures, media, vendored binaries and installers
+belong in Git LFS, or in a release asset or package registry that the
+repository references by digest.
 
 ## Unsupported policy keys
 
