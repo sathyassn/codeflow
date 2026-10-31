@@ -340,8 +340,10 @@ One readiness core judges a task for `work next`, `work claim`, `work start`,
 A pin that YAML reads as a number or as null is refused with the quote remedy.
 A pin left out keeps the edge unmet.
 
-- `work next` lists ready, then waiting and blocked tasks, with reasons from
-  the refs as last fetched.
+- `work next` lists ready, then landed, waiting and blocked tasks, with
+  reasons from the refs as last fetched. A task whose branch has landed with
+  work beyond its own record while the record is open is `landed`, never
+  `ready` (TSK-1038).
 - `work claim` fetches, refuses a task a visible branch already carries, and
   pushes `task/TSK-NNN-<slug>` as an advisory claim.
 - `work claim` and `work start` accept a code predecessor that is reviewed but
