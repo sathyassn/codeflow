@@ -10,6 +10,7 @@
 //! `TSK330_TEST_BINARY` runs the scenarios with another binary, such as an
 //! installed release, for the fail-before record.
 use serde_json::json;
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -433,7 +434,7 @@ fn stage_unmerged(repo: &Repo, file: &str, sides: [&str; 3]) {
     for (stage, text) in sides.iter().enumerate() {
         repo.write("blob.tmp", text);
         let id = repo.git(&["hash-object", "-w", "blob.tmp"]);
-        info.push_str(&format!("100644 {id} {}\t{file}\n", stage + 1));
+        let _ = writeln!(info, "100644 {id} {}\t{file}", stage + 1);
     }
     std::fs::remove_file(repo.work().join("blob.tmp")).unwrap();
     repo.git(&["update-index", "--force-remove", "--", file]);

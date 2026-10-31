@@ -157,6 +157,7 @@ fn note(relative: &str) {
 #[cfg(test)]
 mod tests {
     use super::super::policy::{local_project_toml, read_project_toml, Policy};
+    use std::fmt::Write as _;
     use std::path::Path;
 
     const PROJECT: &str = ".codeflow/project.toml";
@@ -203,7 +204,7 @@ mod tests {
         for (stage, text) in ["a = 1\n", "a = 2\n", "a = 3\n"].iter().enumerate() {
             write(dir, "blob.tmp", text);
             let id = git(dir, &["hash-object", "-w", "blob.tmp"]);
-            info.push_str(&format!("100644 {id} {}\t{path}\n", stage + 1));
+            let _ = writeln!(info, "100644 {id} {}\t{path}", stage + 1);
         }
         std::fs::remove_file(dir.join("blob.tmp")).unwrap();
         git(dir, &["update-index", "--force-remove", "--", path]);
