@@ -1,0 +1,11 @@
+id = "ADR-0091"
+uid = "b46da4ae-5968-48d1-b884-991a71c44836"
+kind = "ADR"
+title = "The default branch at one commit is the only policy authority"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T05:21:13Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
