@@ -1,0 +1,11 @@
+id = "TSK-1105"
+uid = "9c0222d2-91ca-4fd3-a558-728cf9f9ef97"
+kind = "TSK"
+title = "A builder creates its task worktree and claims under its harness sandbox"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:19:09Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
