@@ -11,6 +11,18 @@ line, or wants to set the reasoning effort for Claude Code or Codex.
   one, and the context used out of the window with a percentage: green below
   50, yellow below 80, red from 80. It needs `jq`. Without `jq` it prints the
   folder and branch followed by `jq not found`, and exits 0.
+  It also shows four fields when Claude Code supplies them, and leaves each
+  out entirely when it does not:
+
+  | Shown | From the status JSON | Absent when |
+  |---|---|---|
+  | the effort level beside the model, after `·` | `effort.level` | the model has no effort parameter |
+  | `PR <n>` and its review state, coloured by state | `pr.number`, `pr.review_state` | no open pull request for the branch; the state can be absent alone |
+  | `5h <n>%` and `7d <n>%`, rounded and coloured like the context | `rate_limits.five_hour` and `.seven_day` `used_percentage` | not a claude.ai subscription, before the first response, or a window has reset |
+  | `wt:<name>` after the branch, after `·` | `workspace.git_worktree` | the main working tree |
+
+  The line makes no network or `gh` call; the pull request comes from
+  Claude Code itself.
 - **Effort.** Nothing. The shared files set no `effortLevel` and no
   `model_reasoning_effort` (CodeFlow ADR-0087). Seat launches through
   `cf-herdr` pass their own effort, so this does not change a seat's effort.
