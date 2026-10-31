@@ -371,8 +371,12 @@ impl Engine {
 /// Git settings that change how `git diff` names paths or colours output,
 /// pinned for the gitleaks run as the managed CI scan pins them, so a
 /// finding names the file a path allowlist matches. They are added after
-/// any the environment already carries, so they win.
-const GIT_OUTPUT_PINS: [(&str, &str); 8] = [
+/// any the environment already carries, so they win. Rename detection is
+/// off, as in the staged-path check, so the diff gitleaks reads names only
+/// the paths that check read: a rename from a name the parser cannot read
+/// would otherwise put that name in a header and hide the added lines.
+const GIT_OUTPUT_PINS: [(&str, &str); 9] = [
+    ("diff.renames", "false"),
     ("core.quotePath", "true"),
     ("diff.noprefix", "false"),
     ("diff.mnemonicPrefix", "false"),

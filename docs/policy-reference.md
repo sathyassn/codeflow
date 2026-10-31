@@ -900,7 +900,9 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   with a backslash, double quote or control character reliably (it skips a
   name ending in a backslash), so a staged path with one is a failed scan
   before gitleaks runs, whatever `git.policy_characters` says and in an
-  automatic merge too, as the CI scan refuses such a path.
+  automatic merge too, as the CI scan refuses such a path. Rename detection
+  is off for the scan, so a file renamed from such a name is read as a new
+  file under its new name, and deleting one is not refused.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,

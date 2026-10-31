@@ -3949,6 +3949,7 @@ mod tests {
                 "{env}"
             );
             assert!(env.contains("=core.attributesFile\n"), "{env}");
+            assert!(env.contains("=diff.renames\n"), "{env}");
         }
 
         /// A staged name gitleaks' parser cannot read is refused before
@@ -4031,6 +4032,48 @@ mod tests {
                     .iter()
                     .any(|v| v.message.starts_with(expected));
                 assert!(found, "{name:?}: {report:?}");
+            }
+        }
+
+        /// The official pinned binary over a rename from a name the parser
+        /// cannot read to a safe one, with the hash line added: with Git's
+        /// rename detection the old name would sit in the patch header and
+        /// gitleaks would skip the added line. Both routes refuse it.
+        #[cfg(unix)]
+        #[test]
+        fn test_pinned_gitleaks_reads_a_rename_from_an_unreadable_name() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            let notes = "a line of the legacy notes\n".repeat(100);
+            stage(dir.path(), "before/trailing\\", &notes);
+            git(dir.path(), &["commit", "-q", "-m", "chore: legacy name"]);
+            std::fs::create_dir_all(dir.path().join("after")).unwrap();
+            git(
+                dir.path(),
+                &["mv", "before/trailing\\", "after/renamed.json"],
+            );
+            stage(
+                dir.path(),
+                "after/renamed.json",
+                &format!("{notes}{HASH_LINE}"),
+            );
+            let merge = dir.path().join(".git/MERGE_MSG");
+            std::fs::write(&merge, "Merge branch 'side'\n").unwrap();
+            let policy = engine_policy(PolicyLevel::Block);
+            for report in [
+                pre_commit_engine(dir.path(), &policy, false, false, &engine).unwrap(),
+                commit_msg_secret_scan_engine(dir.path(), &policy, &merge, &engine).unwrap(),
+            ] {
+                let found = secret_findings(&report).iter().any(|v| {
+                    v.message
+                        == "possible secret (gitleaks rule generic-api-key) staged at after/renamed.json:101"
+                });
+                assert!(found, "{report:?}");
             }
         }
 
