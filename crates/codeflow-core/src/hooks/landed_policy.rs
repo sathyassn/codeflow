@@ -273,6 +273,27 @@ pub fn policy_text_at(root: &Path, rev: &str) -> Result<Option<String>, String> 
     read_at(&repo, rev, ".codeflow/policy.json")
 }
 
+/// The policy an authority commit holds, checked against the schema before
+/// it is read, or the shipped defaults when the commit has no policy file.
+/// The size and ignored-file rules read their keys here, so a value the
+/// schema refuses, such as `null` for a rule object, stops the check
+/// instead of reading as an absent key.
+///
+/// # Errors
+/// The commit or its policy cannot be read, or the policy is invalid.
+pub fn checked_policy_at(repo: &Repository, commit: git2::Oid) -> Result<Policy, String> {
+    let rev = commit.to_string();
+    let Some(text) = read_at(repo, &rev, ".codeflow/policy.json")? else {
+        return Ok(Policy::default());
+    };
+    let short = &rev[..rev.len().min(9)];
+    policy_schema::validate_policy_str(&text).map_err(|errors| {
+        let shown: Vec<_> = errors.iter().map(ToString::to_string).collect();
+        format!("invalid policy at {short}: {}", shown.join("; "))
+    })?;
+    serde_json::from_str(&text).map_err(|e| format!("invalid policy at {short}: {e}"))
+}
+
 fn read_at(repo: &Repository, reference: &str, path: &str) -> Result<Option<String>, String> {
     let tree = repo
         .revparse_single(reference)
@@ -692,7 +713,7 @@ pub fn staged_rules(
     // integration line supplies none of them.
     let mut content: Option<super::path_policy::ContentRules> = None;
     for commit in &landed.commits {
-        let (policy, _) = at(&repo, &commit.to_string())?;
+        let policy = checked_policy_at(&repo, *commit)?;
         let rules = super::path_policy::ContentRules::at(&repo, &policy.git, Some(*commit), None)?;
         content = Some(match content {
             Some(kept) => kept.stricter(rules),

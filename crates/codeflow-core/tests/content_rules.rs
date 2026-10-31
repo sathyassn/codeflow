@@ -658,3 +658,80 @@ fn except_under_exempts_directories_and_never_one_named_file() {
         assert!(!text.contains("film.mov"), "{text}");
     }
 }
+
+/// Review 02, N1: a hand resolution that takes one parent's blob is judged,
+/// though that parent holds it, whether the path gate is on or off.
+#[test]
+fn a_hand_resolution_that_restores_a_parents_blob_is_judged() {
+    for level in ["block", "off"] {
+        let git = json!({"path_policy": level});
+        let f = Fixture::new();
+        // The ancestor holds an 11 MiB file and an ignored log.
+        f.stage("data.bin", &big(11 * MIB));
+        f.stage("app.log", b"log");
+        let ancestor = f.authority("*.log\n", true, &git);
+        // The authority shrinks the file and deletes the log.
+        f.stage("data.bin", &big(MIB));
+        f.delete("app.log");
+        let authority = f.commit(&[ancestor]);
+        // A side branch from the ancestor changes only its readme.
+        let mut index = f.repo.index().unwrap();
+        index
+            .read_tree(&f.repo.find_commit(ancestor).unwrap().tree().unwrap())
+            .unwrap();
+        index.write().unwrap();
+        f.stage("README.md", b"side");
+        let side = f.commit(&[ancestor]);
+        // The merge records the side's tree: the old file and the log.
+        let merge = f.commit(&[authority, side]);
+        let rules = f.rules(authority, &git);
+        let paths = PathPolicy::from_git(&serde_json::from_value(git.clone()).unwrap()).unwrap();
+        let report = path_policy::range_with(
+            f.dir.path(),
+            Some(&authority.to_string()),
+            &merge.to_string(),
+            &paths,
+            Some(&rules),
+        )
+        .unwrap();
+        let text = format!("{:?}", report.violations);
+        assert_eq!(
+            levels(&report, "git.max_file_bytes"),
+            [PolicyLevel::Block],
+            "{level}: {text}"
+        );
+        assert!(text.contains("file too large: data.bin"), "{level}: {text}");
+        assert_eq!(
+            levels(&report, "git.ignored_files"),
+            [PolicyLevel::Warn],
+            "{level}: {text}"
+        );
+        assert!(text.contains("app.log"), "{level}: {text}");
+    }
+}
+
+/// Review 02, N2: a content setting the schema refuses at the authority
+/// stops the check in pre-commit and CI, never reading as an absent key.
+#[test]
+fn a_schema_invalid_authority_setting_stops_the_check() {
+    for git in [
+        json!({"max_file_bytes": null}),
+        json!({"ignored_files": null}),
+        json!({"max_file_byte": {"limit": 5}}),
+        json!({"ignored_files": {"level": "block", "alow": []}}),
+    ] {
+        let f = Fixture::new();
+        let authority = f.authority("", false, &git);
+        f.stage("data/eleven.bin", &big(11 * MIB));
+        let error = ContentRules::at_authority(f.dir.path(), &authority.to_string())
+            .err()
+            .unwrap_or_else(|| panic!("{git} was read as valid"));
+        assert!(error.contains("invalid policy at"), "{git}: {error}");
+        // Before the first fetch pre-commit reads HEAD, the same commit.
+        let error =
+            codeflow_core::hooks::landed_policy::staged_rules(f.dir.path(), &GitPolicy::default())
+                .err()
+                .unwrap_or_else(|| panic!("{git} was read as valid in pre-commit"));
+        assert!(error.contains("invalid policy at"), "{git}: {error}");
+    }
+}

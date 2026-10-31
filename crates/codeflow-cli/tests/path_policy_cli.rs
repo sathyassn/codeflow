@@ -663,6 +663,55 @@ mod content_rules {
         assert!(text.contains("ignored file changed: build/app.o"), "{text}");
     }
 
+    /// Review 02, N1: CI judges a merge that hand-picks a side branch's
+    /// oversized file and ignored file over the base's shrink and delete.
+    #[test]
+    fn ci_judges_a_hand_resolution_that_restores_a_parents_blob() {
+        let mut f = adopter(true);
+        f.stage("assets/data.bin", 0o100_644, &vec![b'x'; 11 * MIB]);
+        f.stage("build/app.o", 0o100_644, b"object");
+        let ancestor = f.commit(&[f.base]);
+        f.stage("assets/data.bin", 0o100_644, &vec![b'x'; MIB]);
+        f.delete("build/app.o");
+        f.base = f.commit(&[ancestor]);
+        let mut index = f.repo.index().unwrap();
+        index
+            .read_tree(&f.repo.find_commit(ancestor).unwrap().tree().unwrap())
+            .unwrap();
+        index.write().unwrap();
+        f.stage("README.md", 0o100_644, b"side");
+        let side = f.commit(&[ancestor]);
+        let merge = f.commit(&[f.base, side]);
+        let ci = f.ci(merge);
+        let text = said(&ci);
+        assert!(!ci.status.success(), "{text}");
+        assert!(
+            text.contains("file too large: assets/data.bin")
+                && text.contains("ignored file changed: build/app.o"),
+            "{text}"
+        );
+    }
+
+    /// Review 02, N2: a content setting the schema refuses at the authority
+    /// stops the installed pre-commit hook, though the working policy is
+    /// valid.
+    #[test]
+    fn the_hook_refuses_when_the_authority_content_setting_is_invalid() {
+        let f = Adopter::new(&json!({"max_file_bytes": null}));
+        f.install_hook();
+        std::fs::write(f.dir.path().join(".codeflow/policy.json"), "{\"git\": {}}").unwrap();
+        let file = f.dir.path().join("assets/eleven.bin");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, vec![b'x'; 11 * MIB]).unwrap();
+        assert!(git(&f, &["add", "--", "assets/eleven.bin"])
+            .status
+            .success());
+        let commit = git(&f, &["commit", "-m", "feat: add a fixture file"]);
+        let text = said(&commit);
+        assert!(!commit.status.success(), "{text}");
+        assert!(text.contains("invalid policy at"), "{text}");
+    }
+
     /// Run `program` in the adopter with this build first on `PATH`.
     fn run(f: &Adopter, path: &std::ffi::OsStr, program: &str, args: &[&str]) -> Output {
         let output = f

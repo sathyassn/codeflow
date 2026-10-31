@@ -315,7 +315,7 @@ fn merge_introduced(
     repo: &Repository,
     tree: &git2::Tree<'_>,
     parents: &[git2::Oid],
-) -> Result<Vec<(Vec<u8>, u32, git2::Oid)>, String> {
+) -> Result<std::collections::BTreeMap<Vec<u8>, (u32, git2::Oid)>, String> {
     let mut introduced: Option<std::collections::BTreeMap<Vec<u8>, (u32, git2::Oid)>> = None;
     for parent in parents {
         let parent = repo
@@ -341,11 +341,7 @@ fn merge_introduced(
             }
         });
     }
-    Ok(introduced
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(raw, (mode, id))| (raw, mode, id))
-        .collect())
+    Ok(introduced.unwrap_or_default())
 }
 
 fn check_path(
@@ -551,37 +547,45 @@ pub fn range_with(
             if let MergeReading::Unknown(error) = &reading {
                 return Err(error.clone());
             }
-            // Content is judged wherever the merge records a file no parent
-            // holds, which a clean automatic merge can produce too.
-            if let Some(content) = content {
-                for (raw, mode, id) in merge_introduced(&repo, &tree, &parents)? {
+            // Content is judged on every file the merge records that no
+            // parent holds, which a clean automatic merge can produce too,
+            // and on every path a hand resolution chose, even where it took
+            // one parent's blob.
+            let mut judged = if content.is_some() {
+                merge_introduced(&repo, &tree, &parents)?
+            } else {
+                std::collections::BTreeMap::new()
+            };
+            if let MergeReading::Changed(paths) = reading {
+                let mut index = git2::Index::new().map_err(|e| e.to_string())?;
+                index.read_tree(&tree).map_err(|e| e.to_string())?;
+                let entries: std::collections::BTreeMap<_, _> =
+                    index.iter().map(|e| (e.path.clone(), e)).collect();
+                for path in paths {
+                    let found = entries.get(&path);
                     let entry = Entry {
-                        raw: &raw,
-                        deleted: false,
-                        mode,
-                        id,
+                        raw: &path,
+                        deleted: found.is_none(),
+                        mode: found.map_or(0, |e| e.mode),
+                        id: found.map_or(git2::Oid::ZERO_SHA1, |e| e.id),
                     };
-                    check_content(&repo, content, &mut report, &entry)?;
-                }
-            }
-            match reading {
-                MergeReading::Clean | MergeReading::Unknown(_) => {}
-                MergeReading::Changed(_) if !policy.level.is_active() => {}
-                MergeReading::Changed(paths) => {
-                    let mut index = git2::Index::new().map_err(|e| e.to_string())?;
-                    index.read_tree(&tree).map_err(|e| e.to_string())?;
-                    let entries: std::collections::BTreeMap<_, _> =
-                        index.iter().map(|e| (e.path.clone(), e)).collect();
-                    for path in paths {
-                        let found = entries.get(&path);
-                        let entry = Entry {
-                            raw: &path,
-                            deleted: found.is_none(),
-                            mode: found.map_or(0, |e| e.mode),
-                            id: found.map_or(git2::Oid::ZERO_SHA1, |e| e.id),
-                        };
+                    if policy.level.is_active() {
                         check_entry(&repo, policy, None, &mut report, &entry)?;
                     }
+                    if let Some(found) = found {
+                        judged.insert(path.clone(), (found.mode, found.id));
+                    }
+                }
+            }
+            if let Some(content) = content {
+                for (raw, (mode, id)) in &judged {
+                    let entry = Entry {
+                        raw,
+                        deleted: false,
+                        mode: *mode,
+                        id: *id,
+                    };
+                    check_content(&repo, content, &mut report, &entry)?;
                 }
             }
         } else {
@@ -853,20 +857,12 @@ impl ContentRules {
     /// reads them. Nothing is read from the working copy.
     ///
     /// # Errors
-    /// The repository, `rev` or its policy cannot be read, or as
-    /// [`ContentRules::at`].
+    /// The repository, `rev` or its policy cannot be read, the policy fails
+    /// the schema, or as [`ContentRules::at`].
     pub fn at_authority(root: &Path, rev: &str) -> Result<Self, String> {
         let repo = Repository::discover(root).map_err(|e| e.to_string())?;
         let commit = Self::commit(&repo, rev)?;
-        let shown = crate::git::display_text(rev);
-        let git = match super::landed_policy::policy_text_at(root, &commit.to_string())? {
-            Some(text) => {
-                serde_json::from_str::<super::Policy>(&text)
-                    .map_err(|e| format!("invalid policy at {shown}: {e}"))?
-                    .git
-            }
-            None => GitPolicy::default(),
-        };
+        let git = super::landed_policy::checked_policy_at(&repo, commit)?.git;
         Self::at(&repo, &git, Some(commit), None)
     }
 
