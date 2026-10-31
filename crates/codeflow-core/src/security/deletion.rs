@@ -177,6 +177,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use super::search_pattern::{runs_no_program, CommandLine};
+
 use super::dangerous::{
     dangerous_rm_target, normalize_path, program_name, protected_names, recursive_rm_operands,
 };
@@ -223,6 +225,7 @@ pub(super) fn composed_deletion_in(command: &str, base: Option<&Path>) -> Option
 fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> Option<Found> {
     let mut reader = Reader {
         base,
+        line: CommandLine::new(command),
         rooted_unplaced,
         found: None,
         depth: 0,
@@ -2683,6 +2686,8 @@ struct Away {
 
 struct Reader<'a> {
     base: Option<&'a Path>,
+    /// The whole line, read for whether it names `RIPGREP_CONFIG_PATH`.
+    line: CommandLine<'a>,
     /// Set on native Windows: a `/`-rooted path names no fixed place.
     rooted_unplaced: bool,
     found: Option<Found>,
@@ -4571,7 +4576,7 @@ impl Reader<'_> {
         // and one that writes its output to a file hands the walk to any
         // later command.
         if walk_given(input, &argv[1..])
-            && (self.away.stdout || self.away.other || !walk_reader(&argv))
+            && (self.away.stdout || self.away.other || !walk_reader(&argv, &self.line))
         {
             self.report(
                 Judged::Unproven(Unproven {
@@ -4697,7 +4702,8 @@ impl Reader<'_> {
         // interpreter, `mv`, a shell, a launcher, an unknown program) may
         // reach any of them, or past them.
         if bodies.iter().any(|body| {
-            !plain_remover(&body.words, Some("{}")) && !read_only(&body.words, Some("{}"))
+            !plain_remover(&body.words, Some("{}"))
+                && !read_only(&body.words, Some("{}"), &self.line)
         }) {
             self.report(
                 Judged::Unproven(Unproven {
@@ -4810,7 +4816,7 @@ impl Reader<'_> {
         let remover = self.walk_consumer(
             &entries,
             plain_remover(inner, replace),
-            read_only(inner, replace),
+            read_only(inner, replace, &self.line),
             ambiguous,
         );
         let starts = tree_starts(&entries);
@@ -5005,7 +5011,7 @@ impl Reader<'_> {
         let remover = self.walk_consumer(
             &entries,
             inert && plain_remover(command, Some(token)),
-            inert && read_only(command, Some(token)),
+            inert && read_only(command, Some(token), &self.line),
             ambiguous,
         );
         let starts = tree_starts(&entries);
@@ -7463,10 +7469,10 @@ fn walk_value(value: &str) -> bool {
 
 /// Whether the command `argv` may be given a `find` walk: `xargs` and
 /// `parallel` (judged on what they run), a plain remover (judged on its
-/// operands) and a program that only reads and prints. `sort` counts only
-/// with flags that take no value, since `-o` writes a file and
-/// `--compress-program` runs one.
-fn walk_reader(argv: &[String]) -> bool {
+/// operands) and a program that only reads and prints ([`reads_only`]).
+/// `sort` counts only with flags that take no value, since `-o` writes a
+/// file and `--compress-program` runs one.
+fn walk_reader(argv: &[String], line: &CommandLine) -> bool {
     let Some(first) = argv.first() else {
         return false;
     };
@@ -7479,7 +7485,7 @@ fn walk_reader(argv: &[String]) -> bool {
                 && word.starts_with('-')
                 && word[1..].bytes().all(|b| b"bdfghMnrRsuVz".contains(&b))
         }),
-        name => READERS.contains(&name),
+        name => reads_only(name, &argv[1..], line),
     }
 }
 
@@ -7683,7 +7689,9 @@ fn plain_remover(words: &[String], token: Option<&str>) -> bool {
     proven_body(words, token, &["rm", "rmdir", "unlink", "shred", "srm"])
 }
 
-/// The programs that never remove or write a file, by their bare names.
+/// The programs that never remove or write a file, by their bare names,
+/// whatever their arguments. `rg` and `git grep` read only under
+/// [`reads_only`].
 const READERS: &[&str] = &[
     "grep",
     "egrep",
@@ -7701,17 +7709,35 @@ const READERS: &[&str] = &[
     "shasum",
     "echo",
     "printf",
+    "basename",
+    "dirname",
 ];
+
+/// Whether `program` with `args` never removes or writes a file and runs
+/// no other program: one of [`READERS`], or `rg` or `git grep` (`git`
+/// with `grep` as its first argument, so no global option such as `-c`)
+/// given no option that runs a program and none their grammar does not
+/// know ([`runs_no_program`]). TSK-380 promised these searches; `--pre`
+/// and the other program-running options stay refused.
+fn reads_only(program: &str, args: &[String], line: &CommandLine) -> bool {
+    match program {
+        "rg" => runs_no_program("rg", args, line.names_ripgrep_config()),
+        "git" => args
+            .split_first()
+            .is_some_and(|(sub, rest)| sub == "grep" && runs_no_program("git grep", rest, false)),
+        name => READERS.contains(&name),
+    }
+}
 
 /// Whether a command only reads what it is given: its first word is
 /// exactly a program that never removes or writes a file (no path, no
-/// launcher), and every other word is `token` itself or holds no brace,
-/// so no match is spliced into a longer word.
-fn read_only(words: &[String], token: Option<&str>) -> bool {
+/// launcher) under [`reads_only`], and every other word is `token` itself
+/// or holds no brace, so no match is spliced into a longer word.
+fn read_only(words: &[String], token: Option<&str>, line: &CommandLine) -> bool {
     let Some((first, rest)) = words.split_first() else {
         return false;
     };
-    READERS.contains(&first.as_str())
+    reads_only(first, rest, line)
         && rest
             .iter()
             .all(|word| token.is_some_and(|token| word == token) || !word.contains('{'))
@@ -8794,6 +8820,7 @@ mod tests {
         if std::env::var_os(CHILD).is_some() {
             let reader = super::Reader {
                 base: None,
+                line: super::CommandLine::new(""),
                 rooted_unplaced: false,
                 found: None,
                 depth: 0,
@@ -9117,6 +9144,7 @@ mod tests {
     fn r18_echo_producer_preserves_newline() {
         let mut reader = super::Reader {
             base: None,
+            line: super::CommandLine::new(""),
             rooted_unplaced: false,
             found: None,
             depth: 0,
@@ -9171,6 +9199,7 @@ mod tests {
     fn r15_owned_mapfile_preserves_record_bytes() {
         let mut reader = super::Reader {
             base: None,
+            line: super::CommandLine::new(""),
             rooted_unplaced: false,
             found: None,
             depth: 0,
@@ -9224,6 +9253,7 @@ mod tests {
     fn arithmetic_does_not_erase_unicode_between_name_and_assignment() {
         let mut reader = super::Reader {
             base: None,
+            line: super::CommandLine::new(""),
             rooted_unplaced: false,
             found: None,
             depth: 0,
@@ -9512,6 +9542,66 @@ mod tests {
             found.unproven.map(|u| u.reason).as_deref(),
             Some(super::why::FIND_PLACE)
         );
+    }
+
+    /// TSK-286 after TSK-380 and TSK-1002: `rg` and `git grep` handed
+    /// `find` matches only read them, and so do `basename` and `dirname`,
+    /// unless an option runs another program (`--pre`, `-z`,
+    /// `--hostname-bin`, `-O`, `--textconv`), an option is one the grammar
+    /// does not know, `git` carries a global option, or the line may set
+    /// a ripgrep configuration without `--no-config`.
+    #[test]
+    fn search_tools_read_find_matches_unless_an_option_runs_a_program() {
+        let here = std::env::current_dir().unwrap();
+        let base = Some(here.as_path());
+        for command in [
+            "find . -exec rg -l '.claude/settings.json' {} +",
+            "find . -name '*.md' -exec rg -n -e x -- {} \\;",
+            "find . -exec git grep '/CHANGELOG.md$' {} +",
+            "find . -exec git grep -n -e x --no-textconv -- {} \\;",
+            "find . -exec basename {} \\;",
+            "find . -exec dirname {} +",
+            "find . -name '*.rs' -print0 | xargs -0 rg -l x",
+            "find . -name '*.rs' | xargs git grep -l x --",
+            "find . -name '*.rs' | xargs basename",
+            "find . -name '*.rs' | xargs dirname",
+            "find . -name '*.rs' | rg x",
+            "RIPGREP_CONFIG_PATH=cfg find . -exec rg --no-config x {} +",
+        ] {
+            let found = composed_deletion_in(command, base);
+            assert!(found.is_none(), "{command}: {found:?}");
+        }
+        for command in [
+            "find . -exec rg --pre cat x {} +",
+            "find . -exec rg --pre=cat x {} +",
+            "find . -exec rg --pre-glob '*' x {} +",
+            "find . -exec rg -z x {} +",
+            "find . -exec rg -iz x {} +",
+            "find . -exec rg --search-zip x {} +",
+            "find . -exec rg --hostname-bin=rm x {} +",
+            "find . -exec rg --pr cat x {} +",
+            "find . -exec git grep -O x {} +",
+            "find . -exec git grep -Orm x {} +",
+            "find . -exec git grep --open-files-in-pager=rm x {} +",
+            "find . -exec git grep --textconv x {} +",
+            "find . -exec git -c core.pager=rm grep x {} +",
+            "find . -exec git --no-pager grep x {} +",
+            "find . -exec git rm {} +",
+            "RIPGREP_CONFIG_PATH=cfg find . -exec rg x {} +",
+            "export RIPGREP_CONFIG_PATH=cfg; find . -exec rg x {} +",
+            "find . -name '*.rs' | xargs rg --pre rm x",
+            "find . -name '*.rs' | xargs rg -z x",
+            "find . -name '*.rs' | xargs git grep -O x",
+            "find . -name '*.rs' | xargs git grep --textconv x",
+            "find . -name '*.rs' | git rm --pathspec-from-file=-",
+            "find . -name '*.rs' | rg --pre rm x",
+        ] {
+            let found = composed_deletion_in(command, base);
+            assert!(
+                found.as_ref().is_some_and(|f| f.unproven.is_some()),
+                "{command}: {found:?}"
+            );
+        }
     }
 
     /// Native Windows places a `/`-rooted path nowhere, so a recursive

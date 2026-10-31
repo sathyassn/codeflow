@@ -9301,17 +9301,26 @@ fn guards_read_a_search_pattern_as_text() {
             }
         }
     }
-    // TSK-286: the deletion floor does not prove `rg` or `git grep` only
-    // read (`--pre` and a pager run other programs), so `find -exec`
-    // handing them its matches refuses there; git-guard still reads the
-    // pattern as text.
+    // TSK-286 keeps TSK-380's promise: the deletion floor proves `rg` and
+    // `git grep` only read the matches `find -exec` hands them, unless an
+    // option runs another program (`--pre`, `-z`, `-O`, `--textconv`).
     for command in [
         "find docs -exec rg -l '.claude/settings.json' {} +",
         "find docs -exec git grep '/CHANGELOG.md$' {} +",
     ] {
-        if !run("git-guard", command).status.success() {
-            wrong.push(format!("git-guard should allow: {command}"));
+        for hook in ["exec-guard", "git-guard"] {
+            let out = run(hook, command);
+            if !out.status.success() {
+                let err = String::from_utf8_lossy(&out.stderr);
+                wrong.push(format!("{hook} should allow: {command}: {err}"));
+            }
         }
+    }
+    for command in [
+        "find docs -exec rg -z x {} +",
+        "find docs -exec git grep -O x {} +",
+        "find docs -exec git grep --textconv x {} +",
+    ] {
         let out = run("exec-guard", command);
         let err = String::from_utf8_lossy(&out.stderr);
         if out.status.code() != Some(2) || !err.contains("unproven deletion target") {
@@ -9359,7 +9368,7 @@ fn guards_read_a_search_pattern_as_text() {
     ] {
         let out = run("exec-guard", command);
         let err = String::from_utf8_lossy(&out.stderr);
-        // TSK-286: the deletion floor refuses every `find -exec rg` first.
+        // TSK-286: the deletion floor refuses `find -exec rg --pre` first.
         let floor = command.starts_with("find ") && err.contains("unproven deletion target");
         if out.status.code() != Some(2) || !(floor || err.contains("security.shell_startup")) {
             wrong.push(format!("exec-guard should refuse: {command}: {err}"));
