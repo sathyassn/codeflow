@@ -206,11 +206,15 @@ Neither judges a gate input, deleted files or gitlinks, and both run when
   `allow: [{path, reason}]` admits a root-relative prefix.
 - **`git.max_file_bytes`**: sizes the blob git records for the path.
 
-| Project | Over 1 MiB | Over 10 MiB |
-|---|---|---|
-| New scaffold (`file_size_rule` in the authority's `.codeflow/project.toml`, written by a fresh `codeflow init`) | warning | refused |
-| Updated project, no `git.max_file_bytes` | report line | report line |
-| `git.max_file_bytes` set on the authority | warning | refused above `limit` |
+What a file over each threshold gets depends on the project:
+
+- **New scaffold** (`file_size_rule` in the authority's
+  `.codeflow/project.toml`, written by a fresh `codeflow init`): a warning
+  over 1 MiB, a refusal over 10 MiB.
+- **Updated project** with no `git.max_file_bytes`: a report line for each,
+  never a refusal.
+- **`git.max_file_bytes` set on the authority**: a warning over 1 MiB, a
+  refusal over `limit`.
 
 `codeflow update` never writes either key or the project kind, and its
 report says how an updated project opts in. Setting `limit` or
