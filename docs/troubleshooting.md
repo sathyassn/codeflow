@@ -172,7 +172,7 @@ report a note, since doctor cannot see a live harness run.
 
 ## A commit is refused by the gitleaks engine
 
-With `git.secret_scan_engine: gitleaks`, a commit can be refused for two
+With `git.secret_scan_engine: gitleaks`, a commit can be refused for three
 reasons.
 
 - **`git.secret_scan_engine`: the engine cannot run.** The message says
@@ -187,6 +187,11 @@ reasons.
   scan both read. A `.gitleaksignore` fingerprint from CI names a commit, so
   it never covers a staged finding ([policy
   reference](policy-reference.md#the-commit-time-gitleaks-engine)).
+  An inline `gitleaks:allow` comment on a staged line does not exempt it.
+- **`git.secret_scan`: the staged secret scan is incomplete.** gitleaks
+  failed, its report could not be read, or git is older than 2.41 and cannot
+  stop a `.gitattributes` entry from hiding staged lines. The message names
+  which; upgrade git or fix the cause, then commit again.
 
 A merge Git concludes itself is scanned in `commit-msg`, since Git runs no
 `pre-commit` for it. The refusal then appears while `git merge` runs; fix the

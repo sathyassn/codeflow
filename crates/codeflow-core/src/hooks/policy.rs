@@ -99,7 +99,7 @@ pub enum SecretScanEngine {
     /// The built-in patterns only.
     Builtin,
     /// The built-in patterns, then the gitleaks binary the managed CI scan
-    /// pins (`hooks::secret_engine`).
+    /// pins (`hooks::gitleaks`).
     Gitleaks,
 }
 

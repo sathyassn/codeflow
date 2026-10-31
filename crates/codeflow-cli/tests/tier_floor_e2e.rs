@@ -108,6 +108,11 @@ fn codeflow_command(dir: &Path, args: &[&str]) -> Command {
         .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+    // The fixtures play a human; a marker the test run inherits from an
+    // agent session would apply the agent-only rules.
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
     command
 }
 
@@ -124,7 +129,11 @@ fn git_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    Command::new("git")
+    let mut command = Command::new("git");
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
+    command
         .args(args)
         .current_dir(dir)
         .env("PATH", path)

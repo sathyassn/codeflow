@@ -3937,9 +3937,135 @@ mod tests {
             assert_eq!(std::fs::canonicalize(lines.last().unwrap()).unwrap(), root);
             let pwd = std::fs::read_to_string(bin.path().join("pwd")).unwrap();
             assert_eq!(std::fs::canonicalize(pwd.trim()).unwrap(), root);
+            assert!(lines.contains(&"--ignore-gitleaks-allow"), "{args}");
             let env = std::fs::read_to_string(bin.path().join("env")).unwrap();
             assert!(!env.contains("GITLEAKS_CONFIG"), "{env}");
             assert!(env.contains("GIT_CONFIG_KEY_"), "{env}");
+            // Attributes come from the empty tree and a file that shows
+            // every path as text, never from the staged .gitattributes.
+            assert!(
+                env.lines()
+                    .any(|l| l == "GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+                "{env}"
+            );
+            assert!(env.contains("=core.attributesFile\n"), "{env}");
+        }
+
+        /// A disguise of the hash line: its name, the staged files,
+        /// repository settings and where the findings are expected.
+        type Disguise<'a> = (
+            &'a str,
+            Vec<(&'a str, &'a str)>,
+            &'a [(&'a str, &'a str)],
+            &'a [&'a str],
+        );
+
+        /// The official pinned binary over real staged content, when
+        /// `CODEFLOW_TEST_GITLEAKS_DIR` names the folder holding it; without
+        /// it the test checks nothing. Each case is a fresh repository with
+        /// the hash line staged in a different disguise.
+        #[test]
+        fn test_pinned_gitleaks_reads_every_staged_line() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            assert!(engine.verify().is_ok(), "{:?}", engine.verify());
+            let hashes = format!("{{\n{HASH_LINE}}}\n");
+            let allowed = format!("{{\n{} // gitleaks:allow\n}}\n", HASH_LINE.trim_end());
+            let with_nul = format!("\u{0}\u{1}{{\n{HASH_LINE}}}\n");
+            let cases: [Disguise; 7] = [
+                (
+                    "the plain line",
+                    vec![("docs/hashes.json", &hashes)],
+                    &[],
+                    &["docs/hashes.json:2"],
+                ),
+                (
+                    "an inline gitleaks:allow",
+                    vec![("docs/allowed.json", &allowed)],
+                    &[],
+                    &["docs/allowed.json:2"],
+                ),
+                (
+                    "a -diff attribute",
+                    vec![
+                        (".gitattributes", "docs/hidden.json -diff\n"),
+                        ("docs/hidden.json", &hashes),
+                    ],
+                    &[],
+                    &["docs/hidden.json:2"],
+                ),
+                (
+                    "a textconv filter",
+                    vec![
+                        (".gitattributes", "docs/conv.json diff=hide\n"),
+                        ("docs/conv.json", &hashes),
+                    ],
+                    &[("diff.hide.textconv", "true")],
+                    &["docs/conv.json:2"],
+                ),
+                (
+                    "a NUL byte",
+                    vec![("docs/nul.json", &with_nul)],
+                    &[],
+                    &["docs/nul.json:2"],
+                ),
+                (
+                    "a commit-bound ignore entry",
+                    vec![
+                        (
+                            ".gitleaksignore",
+                            "0123456789abcdef0123456789abcdef01234567:docs/hashes.json:generic-api-key:2\n",
+                        ),
+                        ("docs/hashes.json", &hashes),
+                    ],
+                    &[],
+                    &["docs/hashes.json:2"],
+                ),
+                (
+                    "a path allowlist",
+                    vec![
+                        (
+                            ".gitleaks.toml",
+                            "[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = ['''^docs/legacy\\.json$''']\n",
+                        ),
+                        ("docs/legacy.json", &hashes),
+                    ],
+                    &[],
+                    &[],
+                ),
+            ];
+            for (name, files, config, expected) in cases {
+                let dir = tempfile::tempdir().unwrap();
+                init_repo(dir.path(), "feat/x");
+                for (key, value) in config {
+                    git(dir.path(), &["config", key, value]);
+                }
+                for (file, content) in files {
+                    stage(dir.path(), file, content);
+                }
+                let report = pre_commit_engine(
+                    dir.path(),
+                    &engine_policy(PolicyLevel::Block),
+                    false,
+                    false,
+                    &engine,
+                )
+                .unwrap();
+                let found: Vec<String> = secret_findings(&report)
+                    .iter()
+                    .map(|v| v.message.clone())
+                    .collect();
+                let want: Vec<String> = expected
+                    .iter()
+                    .map(|at| {
+                        format!("possible secret (gitleaks rule generic-api-key) staged at {at}")
+                    })
+                    .collect();
+                assert_eq!(found, want, "{name}: {report:?}");
+            }
         }
 
         #[cfg(unix)]

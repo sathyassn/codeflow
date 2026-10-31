@@ -18,8 +18,12 @@
 //! copies before a commit exists, so gitleaks reads them there; the CI scan
 //! reads its own from the trusted commit, so a commit cannot weaken it. A
 //! staged finding's fingerprint is `<file>:<rule>:<line>`, with no commit,
-//! so a commit-bound `.gitleaksignore` entry never covers it.
+//! so a commit-bound `.gitleaksignore` entry never covers it. An inline
+//! `gitleaks:allow` on a staged line is ignored, and git attributes come from
+//! the empty tree with `diff` set everywhere, so staged content can neither
+//! exempt itself nor hide from the scan.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -315,10 +319,15 @@ impl Engine {
     /// Returns why the scan is incomplete: the binary failed, or its report
     /// could not be read.
     pub fn scan_staged(&self, verified: &Verified, root: &Path) -> Result<Vec<Finding>, String> {
+        let attributes = TextAttributes::for_repository(root)?;
         let mut command = Command::new(&verified.path);
         command
             .current_dir(root)
             .args(["git", "--staged", "--no-banner", "--redact"])
+            // A gitleaks:allow comment on a staged line is new content. The
+            // CI scan counts only one the trusted commit already holds, so
+            // here it never hides a finding.
+            .arg("--ignore-gitleaks-allow")
             .args(["--log-level", "error"])
             .args(["--report-format", "json", "--report-path", "-"])
             .args(["--exit-code", &FINDINGS_EXIT.to_string()])
@@ -329,7 +338,8 @@ impl Engine {
             // defaults, as in CI, never from a variable of this shell.
             .env_remove("GITLEAKS_CONFIG")
             .env_remove("GITLEAKS_CONFIG_TOML");
-        pin_git_output(&mut command);
+        attributes.apply(&mut command);
+        pin_git_output(&mut command, &attributes.config());
         let out = command
             .output()
             .map_err(|error| format!("gitleaks did not run: {error}"))?;
@@ -366,21 +376,108 @@ const GIT_OUTPUT_PINS: [(&str, &str); 8] = [
     ("color.diff", "false"),
 ];
 
-fn pin_git_output(command: &mut Command) {
+fn pin_git_output(command: &mut Command, extra: &[(&str, OsString)]) {
     let start = std::env::var("GIT_CONFIG_COUNT")
         .ok()
         .and_then(|count| count.parse::<usize>().ok())
         .unwrap_or(0);
-    for (offset, (key, value)) in GIT_OUTPUT_PINS.iter().enumerate() {
-        let n = start + offset;
+    let pins = GIT_OUTPUT_PINS
+        .iter()
+        .map(|(key, value)| (*key, OsString::from(value)))
+        .chain(extra.iter().cloned());
+    let mut n = start;
+    for (key, value) in pins {
         command
             .env(format!("GIT_CONFIG_KEY_{n}"), key)
             .env(format!("GIT_CONFIG_VALUE_{n}"), value);
+        n += 1;
     }
-    command.env(
-        "GIT_CONFIG_COUNT",
-        (start + GIT_OUTPUT_PINS.len()).to_string(),
-    );
+    command.env("GIT_CONFIG_COUNT", n.to_string());
+}
+
+/// The oldest git that reads attributes from a named tree
+/// (`GIT_ATTR_SOURCE`), the version the managed CI scan requires too.
+const MIN_GIT: (u32, u32) = (2, 41);
+
+/// Git attributes for the gitleaks run, so the staged diff it reads shows
+/// every staged line as text, as the CI scan's `--text --no-textconv` does.
+///
+/// gitleaks reads `git diff --staged`, which leaves out a file git judges
+/// binary and runs a file's `textconv` filter. A committed or staged
+/// `.gitattributes` could use either (`-diff`, `binary`, `diff=<driver>`)
+/// to hide a line from the scan. So attributes are read from the empty tree
+/// instead of the working tree, and a temporary attributes file sets `diff`
+/// on every path, which makes git show even a file holding a NUL byte as
+/// text. The clone's own `info/attributes` still applies: nothing committed
+/// or staged can change it.
+struct TextAttributes {
+    empty_tree: String,
+    file: tempfile::NamedTempFile,
+}
+
+impl TextAttributes {
+    fn for_repository(root: &Path) -> Result<Self, String> {
+        let git = |args: &[&str]| -> Result<String, String> {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .map_err(|error| format!("git did not run: {error}"))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "`git {}` exited with {}",
+                    args.join(" "),
+                    out.status
+                ));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        let version = git(&["version"])?;
+        if git_version(&version).is_none_or(|found| found < MIN_GIT) {
+            return Err(format!(
+                "{version} cannot read attributes from a named tree, so a \
+                 .gitattributes entry could hide staged lines from gitleaks; \
+                 upgrade git to {}.{} or later",
+                MIN_GIT.0, MIN_GIT.1
+            ));
+        }
+        let empty_tree = git(&["hash-object", "-t", "tree", "--stdin"])?;
+        let unwritable =
+            |error: std::io::Error| format!("cannot write an attributes file: {error}");
+        let mut file = tempfile::Builder::new()
+            .prefix("codeflow-gitleaks-attributes")
+            .tempfile()
+            .map_err(unwritable)?;
+        std::io::Write::write_all(&mut file, b"* diff\n").map_err(unwritable)?;
+        Ok(Self { empty_tree, file })
+    }
+
+    fn apply(&self, command: &mut Command) {
+        command
+            .env("GIT_ATTR_SOURCE", &self.empty_tree)
+            .env("GIT_ATTR_NOSYSTEM", "1");
+    }
+
+    fn config(&self) -> [(&'static str, OsString); 1] {
+        [(
+            "core.attributesFile",
+            self.file.path().as_os_str().to_os_string(),
+        )]
+    }
+}
+
+/// The major and minor version in `git version` output, such as
+/// `git version 2.45.1.windows.1` or `git version 2.39.5 (Apple Git-154)`.
+fn git_version(output: &str) -> Option<(u32, u32)> {
+    let number = output
+        .strip_prefix("git version ")?
+        .split_whitespace()
+        .next()?;
+    let mut parts = number.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
 }
 
 /// The findings of a gitleaks JSON report.
@@ -471,6 +568,20 @@ mod tests {
             expected,
         };
         assert_eq!(engine.verify(), Err(Unusable::Unpinned));
+    }
+
+    #[test]
+    fn git_versions_are_read_from_each_platform_format() {
+        assert_eq!(git_version("git version 2.53.0"), Some((2, 53)));
+        assert_eq!(
+            git_version("git version 2.39.5 (Apple Git-154)"),
+            Some((2, 39))
+        );
+        assert_eq!(git_version("git version 2.45.1.windows.1"), Some((2, 45)));
+        assert_eq!(git_version("hub version 2.53"), None);
+        assert!(git_version("git version 2.40.9").unwrap() < MIN_GIT);
+        assert!(git_version("git version 2.41.0").unwrap() >= MIN_GIT);
+        assert!(git_version("git version 3.0.0").unwrap() >= MIN_GIT);
     }
 
     #[test]

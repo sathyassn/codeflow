@@ -889,6 +889,14 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   exists. `GITLEAKS_CONFIG` and `GITLEAKS_CONFIG_TOML` from the shell are
   not passed to it. The CI scan reads its own copies from the trusted
   commit, so a commit cannot weaken it.
+- **Every staged line is read.** An inline `gitleaks:allow` comment on a
+  staged line is ignored, as the CI scan ignores one the trusted commit does
+  not hold yet. Git attributes come from the empty tree, with `diff` set on
+  every path, so a `.gitattributes` entry (`-diff`, `binary` or a `textconv`
+  driver) cannot hide a staged line and a file holding a NUL byte is read as
+  text. This needs git 2.41 or later, as the CI scan does; an older git is a
+  failed scan. The clone's own `.git/info/attributes` still applies, since
+  nothing committed or staged can change it.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,
