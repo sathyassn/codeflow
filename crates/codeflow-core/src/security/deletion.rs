@@ -159,7 +159,7 @@
 //! | `find-print0-consumer` | a `find` list that `xargs` or `parallel` gives to anything else: an interpreter, `mv`, a shell, a launcher, other operands | unproven |
 //! | `find-read` | a `find` walk read by `read` or `mapfile`, whose values are every path below its starts | unproven |
 //! | `find-pipe-reader` | a `find` list piped into a program that only reads and prints (`grep`, `wc`, `head`, `cut`, `tr`, and `sort` with flags that take no value), which removes nothing | modelled |
-//! | `find-walk-out` | a `find` walk given by a pipe, a substitution (`$(…)`, `<(…)`), a file (`>`, `exec >`, `-fprint`, `-fls`) or a coprocess to anything but `xargs`, `parallel`, a plain remover or a program that only reads: an interpreter, `awk`, `sed`, a shell, `tee`; and any command, a reader included, that writes a walk it is given to a file (`cat > list`, `1<> list`) | unproven |
+//! | `find-walk-out` | a `find` walk given by a pipe, a substitution (`$(…)`, `<(…)`), a file (`>`, `exec >`, `-fprint`, `-fls`) or a coprocess to anything but `xargs`, `parallel`, a plain remover or a program that only reads: an interpreter, `awk`, `sed`, a shell, `tee`; and any command, a reader included, that writes a walk it is given to a file on any descriptor (`cat > list`, `1<> list`, `xargs -t … 2> list`) | unproven |
 //! | `find-print-blanks` | `find` output framed by blanks, quotes or newlines, which a name below the start may hold | unproven |
 //! | `find-delete` | `-delete`: the start's tree, and a protected directory at or below a start is refused | modelled |
 //! | `find-exec` | `-exec`, `-ok` with `;` or `{} +` running a plain remover (`rm`, `rmdir`, `unlink`, `shred`, `srm` by that bare name) whose other words are options and `{}`: each match is judged as the start's tree, and a protected directory at or below a start is refused | modelled |
@@ -228,6 +228,7 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
         depth: 0,
         pipe_input: None,
         stdout_away: false,
+        other_away: false,
         walks: 0,
         jumps: Vec::new(),
         expanding: Vec::new(),
@@ -468,6 +469,25 @@ impl Redir {
             .and_then(Word::plain)
             .is_some_and(|target| target == "/dev/null");
         moved && !null
+    }
+
+    /// Whether this sends an output descriptor other than 1 to a file:
+    /// `2>list`, `3>>list`, `2>&3`, and not `/dev/null` or a copy of the
+    /// standard output or error (`2>&1`).
+    fn other_away(&self) -> bool {
+        let Some(fd) = self.fd else {
+            return false;
+        };
+        if fd == 1 || self.body.is_some() || self.op.starts_with("<<") {
+            return false;
+        }
+        let output = matches!(self.op.as_str(), ">" | ">>" | ">|" | ">&" | "<>")
+            || (self.op == "<&" && fd != 0);
+        let target = self.target.as_ref().and_then(Word::plain);
+        let harmless = target.is_some_and(|target| {
+            target == "/dev/null" || (self.op.ends_with('&') && matches!(target, "1" | "2" | "-"))
+        });
+        output && !harmless
     }
 }
 
@@ -2663,6 +2683,9 @@ struct Reader<'a> {
     /// file (a redirection, or an earlier `exec >file`), not to a pipe,
     /// a substitution or the terminal.
     stdout_away: bool,
+    /// Whether another output descriptor of the command being read (the
+    /// standard error, `3>`) writes to a file.
+    other_away: bool,
     /// How many `find` calls the reader has run, so a stage or a
     /// substitution that runs one (directly, in a function, an alias or a
     /// shell it starts) is known to print a walk.
@@ -3021,10 +3044,11 @@ impl Reader<'_> {
                 if fed.is_some() {
                     self.pipe_input = fed;
                 }
-                let away = self.stdout_away;
+                let away = (self.stdout_away, self.other_away);
                 self.stdout_away |= redirs.iter().any(Redir::stdout_away);
+                self.other_away |= redirs.iter().any(Redir::other_away);
                 self.run(body, st);
-                self.stdout_away = away;
+                (self.stdout_away, self.other_away) = away;
                 self.pipe_input = outer;
             }
             Node::Unknown(reason, inner) => {
@@ -3255,8 +3279,9 @@ impl Reader<'_> {
     /// and also as written, since bash does not expand an alias defined on
     /// the same line.
     fn simple(&mut self, words: &[Word], redirs: &[Redir], st: &mut State) {
-        let outer = self.stdout_away;
+        let outer = (self.stdout_away, self.other_away);
         self.stdout_away |= redirs.iter().any(Redir::stdout_away);
+        self.other_away |= redirs.iter().any(Redir::other_away);
         let expanded = self.expand_alias(words, redirs, st);
         self.simple_plain(words, redirs, st);
         if let Some(expanded) = expanded {
@@ -3270,7 +3295,7 @@ impl Reader<'_> {
             .map(Word::plain)
             .eq([Some("exec")]);
         if !bare_exec {
-            self.stdout_away = outer;
+            (self.stdout_away, self.other_away) = outer;
         }
     }
 
@@ -3525,7 +3550,9 @@ impl Reader<'_> {
         // A builtin that prints a walk into a file (`echo "$(find …)" >
         // list`) hands it to any later command; `read` and `mapfile` only
         // take it in.
-        if self.stdout_away && !matches!(program, "read" | "mapfile" | "readarray") {
+        if (self.stdout_away || self.other_away)
+            && !matches!(program, "read" | "mapfile" | "readarray")
+        {
             let fed = self.pipe_input.clone().or_else(|| call.input.cloned());
             if argvs
                 .iter()
@@ -4538,7 +4565,9 @@ impl Reader<'_> {
         // a program proven to remove exactly what it is given or to read,
         // and one that writes its output to a file hands the walk to any
         // later command.
-        if walk_given(input, &argv[1..]) && (self.stdout_away || !walk_reader(&argv)) {
+        if walk_given(input, &argv[1..])
+            && (self.stdout_away || self.other_away || !walk_reader(&argv))
+        {
             self.report(
                 Judged::Unproven(Unproven {
                     reason: why::WALK_OUT.into(),
@@ -8765,6 +8794,7 @@ mod tests {
                 depth: 0,
                 pipe_input: None,
                 stdout_away: false,
+                other_away: false,
                 walks: 0,
                 jumps: vec![],
                 expanding: vec![],
@@ -9088,6 +9118,7 @@ mod tests {
             depth: 0,
             pipe_input: None,
             stdout_away: false,
+            other_away: false,
             walks: 0,
             jumps: Vec::new(),
             expanding: Vec::new(),
@@ -9142,6 +9173,7 @@ mod tests {
             depth: 0,
             pipe_input: None,
             stdout_away: false,
+            other_away: false,
             walks: 0,
             jumps: Vec::new(),
             expanding: Vec::new(),
@@ -9195,6 +9227,7 @@ mod tests {
             depth: 0,
             pipe_input: None,
             stdout_away: false,
+            other_away: false,
             walks: 0,
             jumps: Vec::new(),
             expanding: Vec::new(),
@@ -9411,6 +9444,10 @@ mod tests {
             "echo \"$(find /fixture/a -name b)\" > list",
             "find /fixture/a -name b | while read f; do echo \"$f\"; done > list",
             "find /fixture/a -name b -print0 | xargs -0 grep -l x > list",
+            "find /fixture/a -name b -print0 | xargs -0 -t echo 2> list",
+            "find /fixture/a -name b | grep b 3> list",
+            "exec 2> list; find /fixture/a -name b | xargs -t echo",
+            "{ find /fixture/a -name b | xargs -t echo; } 2> list",
             "find /fixture/a -name b > list",
             "find /fixture/a -name b 1> list",
             "find /fixture/a -name b &> list",
@@ -9429,6 +9466,8 @@ mod tests {
             "find /fixture/a -name b | sort -rn | head -n 3",
             "find /fixture/a -name b 2>/dev/null | grep x",
             "find /fixture/a -name b 2> errors | cut -c1-9",
+            "find /fixture/a -name b | grep b 2>/dev/null",
+            "find /fixture/a -name b | grep b 2>&1",
             "find /fixture/a -name b > /dev/null",
             "find /fixture/a -name b | while read f; do echo \"$f\"; done",
             "echo $(find /fixture/a -name b | wc -l)",

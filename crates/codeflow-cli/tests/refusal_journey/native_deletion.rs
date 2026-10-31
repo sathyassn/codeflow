@@ -367,6 +367,11 @@ const BYPASSES: &[(&str, &[&str], Native)] = &[
         &[],
         Native::Any,
     ),
+    (
+        r#"find {dir} -name sentinel -print0 | xargs -0 -t true 2> {dir}/list; perl -ne 'chomp; s/^true //; system("rm", "-rf", $_)' {dir}/list"#,
+        &[],
+        Native::Any,
+    ),
     // F5: a relative start, read from the payload's directory; the hooks
     // run from an unrelated directory, so the process's own would hold
     // no protected path.

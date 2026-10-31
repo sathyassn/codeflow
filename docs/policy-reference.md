@@ -744,10 +744,10 @@ any filter), a substitution (`$(…)`, `<(…)`) or a file (`>`, `exec >`,
 prints (`grep`, `cat`, `head`, `tail`, `wc`, `cut`, `tr`, and `sort` with
 flags that take no value): an interpreter such as `python3`, `awk`, `sed`,
 a shell or `tee` may delete any path the walk lists. Any command, a reader
-included, that writes a walk it is given to a file (`find . | cat > list`,
-`find . 1<> list`) is unproven too, since a later command may read that
-file. A walk sent to `/dev/null`, or its error output sent anywhere, is
-not limited.
+included, that writes a walk it is given to a file, on any descriptor
+(`find . | cat > list`, `find . 1<> list`, `xargs -t … 2> list`), is
+unproven too, since a later command may read that file. A walk sent to
+`/dev/null`, or the error output of `find` itself, is not limited.
 
 Also unproven: a `find` walk read by `read` or `mapfile`, whose values are
 every path below its starts, `xargs` input the guard cannot read (a file,
