@@ -322,11 +322,35 @@ API — see CodeFlow ADR-0017.
 A pull request's checks test the merge of its branch with the base as it was
 when the run started, and a later landing does not run them again. Two pull
 requests each green on an older base can therefore both merge and leave the
-base red. Close that on the host: `codeflow remote protect` requires the
-checks in `git.required_checks` on a branch that is up to date with its base,
-and `codeflow doctor --check remote-perimeter` warns when the live rules do
-not. Without that host rule, whoever merges updates the branch from the base
-and waits for the fresh run first.
+base red. Close that on the host: `codeflow remote protect` writes rulesets
+it owns that require the checks on a branch that is up to date with its
+base, and `codeflow doctor --check remote-perimeter` warns when the live
+rules do not. Without that host rule, whoever merges updates the branch from
+the base and waits for the fresh run first.
+
+`remote protect` writes three rulesets on GitHub, by name:
+
+- "codeflow authority updates" on the default branch: only the
+  administrator role (`--profile solo-administrator`, the default) or the
+  maintain role (`--profile independent-review`) moves it.
+- "codeflow authority checks" on the default branch: a pull request with
+  the profile's approvals, and strict checks pinned to the identity that
+  must produce them: the GitHub App given by `--check-app <id>` for the
+  `authority:` names (Mode A), else GitHub Actions for the `trusted:` names
+  (Mode B). No force push, no deletion, no bypass.
+- "codeflow line checks" on the integration lines (`--lines`, default
+  `integration/**`): a pull request, the `trusted:` names and the test
+  verdicts pinned to GitHub Actions and strict, no force push, no deletion,
+  no bypass, and line creation left open.
+
+It never writes a ruleset with another name, and an update never lowers an
+approval count, removes a rule or widens a bypass list; reducing a rule is
+an administrator's edit on the host. It refuses the checks rulesets until
+the default branch's `codeflow-policy.yml` declares the `trusted:` names,
+then the operator retires any older ruleset that requires the old names
+(`commit standards`, `secret scan`, `release impact`), which `doctor`
+names. The Mode A App and environment setup, the enablement order and the
+recovery window are in the policy reference's "Remote protection" section.
 
 ## Optional external add-ons
 
