@@ -26,7 +26,7 @@ use std::path::Path;
 use crate::scaffold::rule_map::{is_skill_pointer, Kernel, Moment, KERNEL};
 use crate::scaffold::{ScaffoldManifest, Tier};
 
-use super::policy::{read_project_toml, Policy};
+use super::policy::{local_project_toml, Policy};
 
 /// The size one prompt reminder line aims for, since it recurs on every
 /// prompt; a guideline the tests print against, not a cap.
@@ -340,7 +340,7 @@ pub fn guidance_block(kernel: &Kernel, inventory: &Inventory, tier: Tier) -> cra
 /// # Errors
 /// The project settings cannot be read or their tier is invalid.
 pub fn project_tier(root: &Path) -> Result<Option<Tier>, String> {
-    let project = read_project_toml(root)?;
+    let project = local_project_toml(root)?;
     let Some(value) = project.as_ref().and_then(|p| p.get("tier")) else {
         return Ok(None);
     };
@@ -448,7 +448,7 @@ pub fn payload_prompt(payload: &str) -> Option<String> {
 /// means no reminder.
 #[must_use]
 pub fn prompt_reminder_with(root: &Path, payload: &str, kernel: &str) -> Option<String> {
-    let policy = match Policy::load(root) {
+    let policy = match Policy::load_local(root) {
         Ok(policy) => policy,
         Err(error) => return Some(format!("cannot read reminder policy: {error}")),
     };

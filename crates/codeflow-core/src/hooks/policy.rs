@@ -929,7 +929,33 @@ impl Policy {
         }
     }
 
+    /// [`Policy::load`] as the hooks read the working copy: while the index
+    /// holds unmerged entries for `.codeflow/policy.json` and the working
+    /// copy does not read or parse, its copy committed at `HEAD` stands in
+    /// and one note names the file (TSK-330). This is a local read only; the
+    /// guards take their authority from `landed_policy`.
+    /// # Errors
+    /// As [`Policy::load`], or the file is unmerged and `HEAD` holds no
+    /// readable copy.
+    pub fn load_local(root: &Path) -> Result<Self, String> {
+        let path = root.join(".codeflow").join("policy.json");
+        super::settings_conflict::read_local(root, ".codeflow/policy.json", |data| {
+            serde_json::from_str(data).map_err(|error| {
+                format!(
+                    "cannot parse policy {}: {}",
+                    path.display(),
+                    crate::scaffold::json_error(&error)
+                )
+            })
+        })
+        .map(Option::unwrap_or_default)
+    }
+
     /// Load the policy as the enforcement planes should apply it.
+    ///
+    /// Both settings files are read as [`Policy::load_local`] and
+    /// [`local_project_toml`] read them, so a file with an unresolved merge
+    /// conflict is read at `HEAD` until it is resolved (TSK-330).
     ///
     /// Bootstrap grace (`policy_armed = false` in `.codeflow/project.toml`,
     /// charter AC #1) suspends every rule except `secret_scan` — but ONLY for
@@ -942,7 +968,7 @@ impl Policy {
     /// # Errors
     /// Policy or project configuration cannot be read.
     pub fn load_effective(root: &Path) -> Result<(Self, bool), String> {
-        let mut policy = Self::load(root)?;
+        let mut policy = Self::load_local(root)?;
         for warning in super::policy_schema::deprecation_warnings(root)
             .into_iter()
             .filter(|warning| super::policy_schema::first_unsupported_warning(&warning.text))
@@ -968,7 +994,7 @@ impl Policy {
 /// agent flipping the flag via Bash; this makes the flip inert however it is
 /// written (e.g. via a non-Bash editor the git-guard never sees).
 fn effective_armed(root: &Path) -> Result<bool, String> {
-    Ok(policy_armed(root)? || repo_has_commit(root)?)
+    Ok(armed_flag(local_project_toml(root)?.as_ref())? || repo_has_commit(root)?)
 }
 
 /// `true` when the repository containing `root` has at least one commit.
@@ -1033,8 +1059,11 @@ impl GitPolicy {
 /// # Errors
 /// Existing project settings or an explicitly supplied flag are invalid.
 pub fn policy_armed(root: &Path) -> Result<bool, String> {
-    let project = read_project_toml(root)?;
-    match project.as_ref().and_then(|value| value.get("policy_armed")) {
+    armed_flag(read_project_toml(root)?.as_ref())
+}
+
+fn armed_flag(project: Option<&toml::Value>) -> Result<bool, String> {
+    match project.and_then(|value| value.get("policy_armed")) {
         None => Ok(true),
         Some(value) => value
             .as_bool()
@@ -1059,12 +1088,29 @@ pub(crate) fn optional_text(path: &Path) -> Result<Option<String>, String> {
 /// Existing settings cannot be read or parsed.
 pub fn read_project_toml(root: &Path) -> Result<Option<toml::Value>, String> {
     optional_text(&root.join(".codeflow/project.toml"))?
-        .map(|text| {
-            toml::from_str(&text).map_err(|error: toml::de::Error| {
-                format!("cannot parse project settings: {}", error.message())
-            })
-        })
+        .as_deref()
+        .map(parse_project_toml)
         .transpose()
+}
+
+/// [`read_project_toml`] as the hooks read the working copy: while the
+/// index holds unmerged entries for `.codeflow/project.toml` and the working
+/// copy does not read or parse, its copy committed at `HEAD` stands in and
+/// one note names the file (TSK-330).
+/// # Errors
+/// As [`read_project_toml`], or the file is unmerged and `HEAD` holds no
+/// readable copy.
+pub fn local_project_toml(root: &Path) -> Result<Option<toml::Value>, String> {
+    super::settings_conflict::read_local(root, ".codeflow/project.toml", parse_project_toml)
+}
+
+fn parse_project_toml(text: &str) -> Result<toml::Value, String> {
+    toml::from_str(text).map_err(|error: toml::de::Error| {
+        format!(
+            "cannot parse project settings .codeflow/project.toml: {}",
+            error.message()
+        )
+    })
 }
 
 #[cfg(test)]

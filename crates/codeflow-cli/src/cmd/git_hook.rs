@@ -304,6 +304,13 @@ fn run_reference_transaction_with_reader(
 
     let (policy, _armed) = match Policy::load_effective(root) {
         Ok(value) => value,
+        // A merge that stops on a conflict writes `AUTO_MERGE` before its
+        // index records the conflict, so a settings file the merge has just
+        // filled with conflict markers cannot be read yet (TSK-330). A
+        // transaction that writes only Git's own state refs names no branch,
+        // and is judged at the shipped levels, where both rules this stage
+        // applies are at their strictest, block.
+        Err(_) if writes_only_state_refs(&stdin) => (Policy::default(), true),
         Err(error) => return policy_unreadable(&error),
     };
     let token = super::integrate_token_present();
@@ -312,6 +319,29 @@ fn run_reference_transaction_with_reader(
         Ok(report) => super::render_stage("reference-transaction", root, &report, 1),
         Err(e) => refuse_reference_transaction(&e),
     }
+}
+
+/// Whether every line of a transaction writes one of the refs Git keeps for
+/// an operation in progress, named exactly: none is a branch, and each folds
+/// only onto its own lower-case spelling.
+fn writes_only_state_refs(stdin: &str) -> bool {
+    const STATE_REFS: [&str; 6] = [
+        "AUTO_MERGE",
+        "ORIG_HEAD",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "REBASE_HEAD",
+    ];
+    let mut names = stdin
+        .split('\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| line.splitn(3, ' ').nth(2));
+    let mut any = false;
+    names.all(|name| {
+        any = true;
+        name.is_some_and(|name| STATE_REFS.contains(&name))
+    }) && any
 }
 
 fn refuse_reference_transaction(error: impl std::fmt::Display) -> i32 {
@@ -516,6 +546,31 @@ mod tests {
     }
 
     use super::*;
+
+    /// TSK-330: only exact state ref names qualify, never a branch, `HEAD`,
+    /// another spelling or an empty transaction.
+    #[test]
+    fn only_git_state_refs_are_state_refs() {
+        let z = "0".repeat(40);
+        let line = |name: &str| format!("{z} {z} {name}\n");
+        assert!(writes_only_state_refs(&line("AUTO_MERGE")));
+        assert!(writes_only_state_refs(&format!(
+            "{}{}",
+            line("ORIG_HEAD"),
+            line("MERGE_HEAD")
+        )));
+        for refused in [
+            line("HEAD"),
+            line("refs/heads/main"),
+            line("auto_merge"),
+            line("AUTO_MERGE ") + &line("refs/heads/main"),
+            format!("{}{}", line("AUTO_MERGE"), line("refs/heads/main")),
+            String::new(),
+            "AUTO_MERGE\n".into(),
+        ] {
+            assert!(!writes_only_state_refs(&refused), "{refused:?}");
+        }
+    }
 
     #[cfg(unix)]
     #[test]

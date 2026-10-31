@@ -321,6 +321,35 @@ fn clears_hook_integrity() {
     run_printed(&root, &step, &[], &[]);
 }
 
+/// TSK-330: a settings file with an unresolved merge conflict is read at
+/// `HEAD` with a note; the printed `git merge --abort` ends the conflict and
+/// the note with it.
+#[test]
+fn clears_settings_conflict() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    let settings = ".codeflow/project.toml";
+    write(root, settings, "tier = \"standard\"\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "chore: settings"]);
+    git(root, &["switch", "-q", "-c", "side"]);
+    write(root, settings, "tier = \"full\"\n");
+    git(root, &["commit", "-q", "-am", "chore: side settings"]);
+    git(root, &["switch", "-q", "feat/x"]);
+    write(root, settings, "tier = \"minimal\"\n");
+    git(root, &["commit", "-q", "-am", "chore: our settings"]);
+    assert!(!run("git", root, &["merge", "-q", "side"]).status.success());
+    prove(
+        "SETTINGS_CONFLICT",
+        ".codeflow/project.toml has an unresolved merge conflict",
+        || guard(root, "git-guard", "git status"),
+        |printed| {
+            let step = printed_command(printed, "SETTINGS_CONFLICT", None);
+            run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
 /// TSK-302: the interpreter argument refusal names the read route, which
 /// passes, and the update step, which runs.
 #[test]

@@ -127,6 +127,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("BASELINE_REVIEW", Runs),
     ("POLICY_DEPRECATED", Runs),
     ("POLICY_UNSUPPORTED", Runs),
+    ("SETTINGS_CONFLICT", Runs),
     ("PROTECTED_BRANCH", Runs),
     ("PROTECTED_DELETE", Runs),
     ("PROTECTED_REWRITE", Runs),
