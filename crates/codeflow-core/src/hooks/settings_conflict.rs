@@ -10,8 +10,9 @@
 //! or abandon the conflict.
 //!
 //! [`read_local`] keeps the working-copy read and changes one case: when that
-//! read fails and the index holds unmerged entries (stages 1 to 3) for the
-//! file, the copy committed at `HEAD`, read as git data, stands in for that
+//! read fails, or finds the file absent, and the index holds unmerged entries
+//! (stages 1 to 3) for the file, the copy committed at `HEAD`, read as git
+//! data, stands in for that
 //! one input, and one note naming the file is printed. It never chooses the
 //! policy authority (`landed_policy` does, from git refs), never falls back
 //! to defaults, and conflict marker text alone is not evidence of a
@@ -27,11 +28,13 @@ use git2::Repository;
 static NOTED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 /// Read the settings file at `relative` under `root` and parse it with
-/// `parse`; `Ok(None)` only when the working copy proves the file absent.
+/// `parse`; `Ok(None)` only when the working copy proves the file absent
+/// and the index holds no unmerged entry for it.
 ///
-/// When reading or parsing the working copy fails and the index holds
-/// unmerged entries for the file, the copy committed at `HEAD` is parsed
-/// instead and a note naming the file is printed once per process.
+/// When the working copy fails to read or parse, or is absent, and the
+/// index holds unmerged entries for the file, the copy committed at `HEAD`
+/// is parsed instead and a note naming the file is printed once per
+/// process.
 ///
 /// # Errors
 /// The working copy fails and the index holds no unmerged entry for the
@@ -42,14 +45,18 @@ pub(crate) fn read_local<T>(
     relative: &str,
     parse: impl Fn(&str) -> Result<T, String>,
 ) -> Result<Option<T>, String> {
-    let error = match super::policy::optional_text(&root.join(relative))
+    // A working copy that parses is used as it is. One that fails, or one
+    // that is absent, is checked against the index: absence must not turn
+    // an unmerged file into the shipped defaults.
+    let failed = match super::policy::optional_text(&root.join(relative))
         .and_then(|text| text.as_deref().map(&parse).transpose())
     {
-        Ok(value) => return Ok(value),
-        Err(error) => error,
+        Ok(Some(value)) => return Ok(Some(value)),
+        Ok(None) => None,
+        Err(error) => Some(error),
     };
     let Some(conflict) = unmerged(root, relative) else {
-        return Err(error);
+        return failed.map_or(Ok(None), Err);
     };
     let text = committed_copy(&conflict).map_err(|why| refusal(relative, &why))?;
     let value = parse(&text).map_err(|why| {
@@ -307,6 +314,34 @@ mod tests {
             let error = Policy::load_effective(dir.path()).unwrap_err();
             assert!(error.contains(why), "{error}");
         }
+    }
+
+    /// Review finding F1: an unmerged file whose working copy is absent is
+    /// read at `HEAD` too, never as the shipped defaults, and refuses when
+    /// `HEAD` holds no copy.
+    #[test]
+    fn an_absent_unmerged_file_never_reads_as_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        unmerged(
+            dir.path(),
+            POLICY,
+            Some(r#"{"git":{"protected_branches":["release"]}}"#),
+        );
+        std::fs::remove_file(dir.path().join(POLICY)).unwrap();
+        assert_eq!(
+            Policy::load(dir.path()).unwrap().git.protected_branches,
+            Policy::default().git.protected_branches,
+            "the plain read takes absence as the defaults"
+        );
+        let policy = Policy::load_local(dir.path()).unwrap();
+        assert_eq!(policy.git.protected_branches, vec!["release".to_string()]);
+
+        let absent = tempfile::tempdir().unwrap();
+        unmerged(absent.path(), POLICY, None);
+        std::fs::remove_file(absent.path().join(POLICY)).unwrap();
+        let error = Policy::load_local(absent.path()).unwrap_err();
+        assert!(error.contains("HEAD holds no copy of it"), "{error}");
+        assert!(local_project_toml(absent.path()).unwrap().is_none());
     }
 
     #[test]

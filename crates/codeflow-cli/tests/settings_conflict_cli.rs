@@ -808,3 +808,43 @@ fn the_merge_state_ref_passes_before_the_index_records_the_conflict() {
         said(&branch)
     );
 }
+
+/// Review finding F1: an unmerged `policy.json` whose working copy is gone
+/// (a modify/delete conflict or a removal) is read at `HEAD`, so a branch
+/// only `HEAD`'s policy protects keeps its pre-push refusal; the shipped
+/// defaults protect only `main` and `master`.
+#[test]
+fn an_absent_unmerged_policy_keeps_a_custom_protected_branch() {
+    let repo = Repo::new(true);
+    repo.git(&["checkout", "-q", "-b", "task/TSK-001-fix"]);
+    let release =
+        r#"{"git":{"protected_branches":["main","release"],"root_checkout_commits":"off"}}"#;
+    repo.conflict(&[(POLICY, release, r#"{"git":{"push_to_protected":"warn"}}"#)]);
+    std::fs::remove_file(repo.work().join(POLICY)).unwrap();
+    let head = repo.git(&["rev-parse", "HEAD"]);
+    let url = repo.git(&["remote", "get-url", "origin"]);
+    let push = format!(
+        "refs/heads/task/TSK-001-fix {head} refs/heads/release {}\n",
+        "0".repeat(40)
+    );
+    let pre_push = |repo: &Repo| repo.codeflow(&["git-hook", "pre-push", "origin", &url], &push);
+    let absent = pre_push(&repo);
+    let head_copy = repo.git(&["show", &format!("HEAD:{POLICY}")]);
+    repo.write(POLICY, &format!("{head_copy}\n"));
+    let parsed = pre_push(&repo);
+    assert_eq!(
+        Verdict::of(&absent),
+        Verdict::of(&parsed),
+        "{}",
+        said(&absent)
+    );
+    assert_eq!(absent.status.code(), Some(1), "{}", said(&absent));
+    assert!(
+        Verdict::of(&absent)
+            .rules
+            .contains(&"git.push_to_protected".into()),
+        "{}",
+        said(&absent)
+    );
+    assert_eq!(notes_for(&said(&absent), POLICY), 1, "{}", said(&absent));
+}
