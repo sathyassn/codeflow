@@ -6,9 +6,7 @@
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
-#[cfg(unix)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 #[path = "test_gate_cli/containment.rs"]
@@ -462,6 +460,157 @@ fn still_runs(pid: u32) -> bool {
     }
 }
 
+/// A spawned gate that the test ends on every exit path, a panic included, so
+/// a failed wait leaves no gate running (on Windows its target tree ends with
+/// it).
+struct EndGate(Child);
+
+impl Drop for EndGate {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// How long [`wait_for_target_pid`] waits for the target to record its pid.
+/// It is a backstop: the wait ends sooner when the gate exits.
+const TARGET_PID_BOUND: Duration = Duration::from_secs(60);
+
+/// The stderr lines still arriving from a gate that has exited, read until
+/// its drain thread ends (or, at most, a few seconds without a line).
+fn stderr_after_exit(rx: &Receiver<String>) -> String {
+    let mut lines = Vec::new();
+    while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
+        lines.push(line);
+    }
+    lines.join("\n")
+}
+
+/// Wait for the target of `gate` to record its pid in `pid_file`. A gate that
+/// exits first fails the wait at once with its status, whether a pid had
+/// been recorded, and its stderr; the bound fails it with what was not
+/// observed.
+fn target_pid(
+    gate: &mut Child,
+    rx: &Receiver<String>,
+    pid_file: &Path,
+    bound: Duration,
+) -> Result<u32, String> {
+    let started = Instant::now();
+    loop {
+        // The exit is read first, so the pid file read after it is final.
+        let exited = gate.try_wait().map_err(|error| error.to_string())?;
+        let held = std::fs::read_to_string(pid_file);
+        let pid = held
+            .as_ref()
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok());
+        if let Some(status) = exited {
+            let recorded = pid.map_or_else(
+                || "before its target recorded a pid".to_string(),
+                |pid| format!("after its target recorded pid {pid}"),
+            );
+            return Err(format!(
+                "the gate ended ({status}) {recorded}; {} held {held:?}; its stderr:\n{}",
+                pid_file.display(),
+                stderr_after_exit(rx)
+            ));
+        }
+        if let Some(pid) = pid {
+            return Ok(pid);
+        }
+        if started.elapsed() >= bound {
+            let stderr: Vec<String> = rx.try_iter().collect();
+            return Err(format!(
+                "no pid after {bound:?} and the gate was still running; {} held {held:?}; its stderr so far:\n{}\nnot observed: whether the target's start or PowerShell's start was the slow step",
+                pid_file.display(),
+                stderr.join("\n")
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_target_pid(gate: &mut Child, rx: &Receiver<String>, pid_file: &Path) -> u32 {
+    target_pid(gate, rx, pid_file, TARGET_PID_BOUND).unwrap_or_else(|message| panic!("{message}"))
+}
+
+/// Ends the recorded target (its process group on Unix, its process tree on
+/// Windows) when a test fails after the pid was read, unless the test saw it
+/// end.
+struct EndTarget(Option<u32>);
+
+impl Drop for EndTarget {
+    fn drop(&mut self) {
+        let Some(pid) = self.0.take() else { return };
+        let _ = if cfg!(windows) {
+            Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .output()
+        } else {
+            Command::new("kill")
+                .args(["-KILL", "--", &format!("-{pid}")])
+                .output()
+        };
+    }
+}
+
+/// A gate that writes a pid, one stderr line and exits at once is reported
+/// with that pid and that line, never as ended before the pid.
+#[cfg(unix)]
+#[test]
+fn a_gate_that_exits_after_its_pid_reports_the_pid_and_its_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "echo 4242 > pid.txt; echo gate-said-boom >&2; exit 3"])
+        .current_dir(dir.path());
+    let (child, rx, _stdout) = spawn(cmd);
+    let mut gate = EndGate(child);
+    // The wait reports an exit only once it sees one, so let the gate finish
+    // first; a gate still running with its pid written is correctly answered
+    // with that pid.
+    gate.0.wait().unwrap();
+    let message = target_pid(
+        &mut gate.0,
+        &rx,
+        &dir.path().join("pid.txt"),
+        Duration::from_secs(120),
+    )
+    .unwrap_err();
+    assert!(
+        message.contains("after its target recorded pid 4242"),
+        "{message}"
+    );
+    assert!(message.contains("4242"), "the pid file text: {message}");
+    assert!(message.contains("gate-said-boom"), "{message}");
+    assert!(message.contains("exit status: 3"), "{message}");
+}
+
+/// A gate that exits before any pid fails the wait at once, with its stderr.
+#[cfg(unix)]
+#[test]
+fn a_gate_that_exits_before_a_pid_fails_the_wait_with_its_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "echo gate-said-boom >&2; exit 3"])
+        .current_dir(dir.path());
+    let (child, rx, _stdout) = spawn(cmd);
+    let mut gate = EndGate(child);
+    let message = target_pid(
+        &mut gate.0,
+        &rx,
+        &dir.path().join("pid.txt"),
+        Duration::from_secs(120),
+    )
+    .unwrap_err();
+    assert!(
+        message.contains("before its target recorded a pid"),
+        "{message}"
+    );
+    assert!(message.contains("gate-said-boom"), "{message}");
+    assert!(!message.contains("still running"), "{message}");
+}
+
 /// TSK-142 AC-5 (journey): in a freshly scaffolded project driven by the
 /// real binary, a full gate killed during a long target never lets a second
 /// full gate run beside that target. On Windows the target's tree ends with
@@ -478,22 +627,14 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
     assert!(init.status.success(), "init: {}", stderr(&init));
     std::fs::write(root.join(".codeflow/test-config.json"), LONG_TARGET).unwrap();
 
-    let (mut gate, rx, _stdout) = spawn(command(&root, home.path(), &["test", "--mode", "full"]));
+    let (gate, rx, _stdout) = spawn(command(&root, home.path(), &["test", "--mode", "full"]));
+    let mut gate = EndGate(gate);
     wait_for(&rx, "starting target 'long'");
-    let pid_file = root.join("pid.txt");
-    let pid = (0..1200)
-        .find_map(|_| {
-            let text = std::fs::read_to_string(&pid_file).unwrap_or_default();
-            let parsed = text.trim().parse::<u32>().ok();
-            if parsed.is_none() {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            parsed
-        })
-        .expect("the target recorded its pid");
+    let pid = wait_for_target_pid(&mut gate.0, &rx, &root.join("pid.txt"));
+    let mut target = EndTarget(Some(pid));
     assert!(still_runs(pid), "the target runs under its gate");
-    gate.kill().unwrap();
-    gate.wait().unwrap();
+    gate.0.kill().unwrap();
+    gate.0.wait().unwrap();
 
     let other = repo(QUICK_PASS);
     if cfg!(unix) {
@@ -519,6 +660,7 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
         !alive
     });
     assert!(gone, "the target ended");
+    target.0 = None;
 
     // The next full gate takes the lock, from the scaffold and elsewhere.
     std::fs::write(root.join(".codeflow/test-config.json"), QUICK_PASS).unwrap();

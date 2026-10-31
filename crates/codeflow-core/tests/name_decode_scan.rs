@@ -4853,6 +4853,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // An unreadable tip or parent ends the walk with false: the branch is not counted as landed work, so the task keeps the state it had before the landed check (ready), never a landed claim.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "adds_work_beyond_record",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // An unreadable target commit gives None, so no branch is counted as landed work and the task stays in the state it had before the landed check.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "first_parent_line",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
     // An unreadable tip is recorded as the zero id, which landed never proves, so it stays an open claim and claim_on refuses.
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
