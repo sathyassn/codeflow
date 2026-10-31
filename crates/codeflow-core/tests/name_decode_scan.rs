@@ -2833,14 +2833,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-version",
     ),
-    // TSK-412: an unset or unreadable inherited GIT_CONFIG_COUNT starts the gitleaks child's pinned settings at index 0 and sets the count to cover them, so the pins always apply; only the caller's own numbered settings can be dropped, and they never steer the scan.
-    (
-        "crates/codeflow-core/src/hooks/gitleaks.rs",
-        "pin_git_output",
-        "obtain-absent:var",
-        1,
-        "grammar:git-config-count",
-    ),
     // Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
         "crates/codeflow-core/src/hooks/git_hook.rs",

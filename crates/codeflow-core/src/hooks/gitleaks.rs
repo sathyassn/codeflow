@@ -370,11 +370,11 @@ impl Engine {
 
 /// Git settings that change how `git diff` names paths or colours output,
 /// pinned for the gitleaks run as the managed CI scan pins them, so a
-/// finding names the file a path allowlist matches. They are added after
-/// any the environment already carries, so they win. Rename detection is
-/// off, as in the staged-path check, so the diff gitleaks reads names only
-/// the paths that check read: a rename from a name the parser cannot read
-/// would otherwise put that name in a header and hide the added lines.
+/// finding names the file a path allowlist matches. Rename and copy
+/// detection is off, as in the staged-path check, so every added line in
+/// the diff gitleaks reads sits under a path that check read: a rename from
+/// a name the parser cannot read would otherwise put that name in the
+/// header of the added lines and hide them.
 const GIT_OUTPUT_PINS: [(&str, &str); 9] = [
     ("diff.renames", "false"),
     ("core.quotePath", "true"),
@@ -387,16 +387,37 @@ const GIT_OUTPUT_PINS: [(&str, &str); 9] = [
     ("color.diff", "false"),
 ];
 
+/// Give a git process of the scan a configuration this hook controls.
+///
+/// Command-line configuration a caller passes down (`git -c`, which git
+/// hands on as `GIT_CONFIG_PARAMETERS`) outranks the numbered
+/// `GIT_CONFIG_*` settings, so it is removed, with any inherited numbered
+/// settings, before the pins are set; `diff.renames=copies` from a caller
+/// would otherwise turn rename detection back on. `GIT_DIFF_OPTS` and
+/// `GIT_EXTERNAL_DIFF` would change the diff itself, and replace refs would
+/// change what HEAD holds, so neither reaches the scan. The pins then
+/// outrank every configuration file. The variables that choose the
+/// repository, worktree and index are kept, so the scan reads the commit
+/// being made, and the configuration files stay in scope for everything
+/// the pins do not set, such as `safe.directory`.
 fn pin_git_output(command: &mut Command, extra: &[(&str, OsString)]) {
-    let start = std::env::var("GIT_CONFIG_COUNT")
-        .ok()
-        .and_then(|count| count.parse::<usize>().ok())
-        .unwrap_or(0);
+    command
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_DIFF_OPTS")
+        .env_remove("GIT_EXTERNAL_DIFF")
+        .env("GIT_NO_REPLACE_OBJECTS", "1");
+    for (name, _) in std::env::vars_os() {
+        let bytes = name.as_encoded_bytes();
+        if bytes.starts_with(b"GIT_CONFIG_KEY_") || bytes.starts_with(b"GIT_CONFIG_VALUE_") {
+            command.env_remove(&name);
+        }
+    }
     let pins = GIT_OUTPUT_PINS
         .iter()
         .map(|(key, value)| (*key, OsString::from(value)))
         .chain(extra.iter().cloned());
-    let mut n = start;
+    let mut n = 0;
     for (key, value) in pins {
         command
             .env(format!("GIT_CONFIG_KEY_{n}"), key)
@@ -414,7 +435,10 @@ fn pin_git_output(command: &mut Command, extra: &[(&str, OsString)]) {
 /// gitleaks is not shown them. This check holds whatever the path policy
 /// says, and for an automatic merge, whose staged paths no path check reads.
 fn unreadable_staged_path(root: &Path) -> Result<Option<String>, String> {
-    let out = crate::git::command()
+    let mut command = crate::git::command();
+    // The same configuration as the gitleaks child, so both read one diff.
+    pin_git_output(&mut command, &[]);
+    let out = command
         .args([
             "diff",
             "--cached",

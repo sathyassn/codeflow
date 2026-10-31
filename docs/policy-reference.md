@@ -902,7 +902,11 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   before gitleaks runs, whatever `git.policy_characters` says and in an
   automatic merge too, as the CI scan refuses such a path. Rename detection
   is off for the scan, so a file renamed from such a name is read as a new
-  file under its new name, and deleting one is not refused.
+  file under its new name, and deleting one is not refused. The scan's git
+  ignores configuration a caller passes down (`git -c`, inherited numbered
+  `GIT_CONFIG_*` settings, `GIT_DIFF_OPTS`, `GIT_EXTERNAL_DIFF`, replace
+  refs), so none of it can turn rename detection back on or change the
+  diff.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,

@@ -11402,3 +11402,67 @@ fn commit_msg_refuses_a_message_file_git_does_not_use() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// The official pinned binary (`CODEFLOW_TEST_GITLEAKS_DIR`; without it the
+/// test checks nothing) through the installed hook stages, with command
+/// configuration a caller passes down turning rename or copy detection back
+/// on. A file committed under a name gitleaks' parser cannot read is
+/// renamed to a safe name with a secret-shaped line added; pre-commit and
+/// the automatic-merge scan in commit-msg both refuse it.
+#[cfg(unix)]
+#[test]
+fn caller_configuration_cannot_hide_a_rename_from_gitleaks() {
+    let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+        eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+        return;
+    };
+    let path = std::env::join_paths(std::iter::once(std::path::PathBuf::from(&bin)).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let hash_line = "  \"src/auth/token.rs\": \"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\"\n";
+    let notes = "a line of the legacy notes\n".repeat(100);
+    for setting in ["'diff.renames=copies'", "'diff.renames=true'"] {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_policy(dir.path(), &engine_policy("block"));
+        std::fs::create_dir_all(dir.path().join("before")).unwrap();
+        std::fs::write(dir.path().join("before/trailing\\"), &notes).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "chore: legacy name"]);
+        std::fs::create_dir_all(dir.path().join("after")).unwrap();
+        git(
+            dir.path(),
+            &["mv", "before/trailing\\", "after/renamed.json"],
+        );
+        std::fs::write(
+            dir.path().join("after/renamed.json"),
+            format!("{notes}{hash_line}"),
+        )
+        .unwrap();
+        git(dir.path(), &["add", "after/renamed.json"]);
+        std::fs::write(dir.path().join(".git/MERGE_MSG"), "Merge branch 'side'\n").unwrap();
+        // The automatic-merge route first: no path check of its own reads
+        // the old name, so only the scan stands between it and the commit.
+        for stage in [
+            &["git-hook", "commit-msg", ".git/MERGE_MSG"][..],
+            &["git-hook", "pre-commit"][..],
+        ] {
+            let out = codeflow()
+                .args(stage)
+                .current_dir(dir.path())
+                .env("PATH", &path)
+                .env("GIT_CONFIG_PARAMETERS", setting)
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(1), "{setting} {stage:?}: {stderr}");
+            assert!(
+                stderr.contains(
+                    "possible secret (gitleaks rule generic-api-key) staged at after/renamed.json:101"
+                ),
+                "{setting} {stage:?}: {stderr}"
+            );
+        }
+    }
+}
