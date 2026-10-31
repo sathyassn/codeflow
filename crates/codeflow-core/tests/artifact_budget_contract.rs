@@ -1695,8 +1695,9 @@ fn typed_code_rule_is_applied_by_develop_stack_and_review() {
         ],
     );
     // Native trials showed builders going from the orchestrator straight to
-    // the code without opening cf-develop, so the map's build row carries the
-    // defaults and points at their home in every tier's kernel.
+    // the code without opening cf-develop, so the map's build row makes
+    // opening the code defaults a required step in every tier's kernel. Later
+    // quality topics add their names to the same clause.
     for agents in [
         "assets/base/AGENTS.md.tmpl",
         "assets/base/AGENTS.full.md.tmpl",
@@ -1707,8 +1708,8 @@ fn typed_code_rule_is_applied_by_develop_stack_and_review() {
             .find(|line| line.starts_with("| build |"))
             .unwrap_or_else(|| panic!("{agents}: no build row"));
         for (label, needle) in [
-            ("code defaults", "code meets the quality contract's code defaults (typed code, a validating typed model for data at every boundary, an inline reason for each escape type or suppression; adding a missing checker or model library is in scope)"),
-            ("rule pointer", "`.agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md` (the code defaults)"),
+            ("code defaults", "before writing code, open the quality contract's code defaults and apply each one (typed code and validating boundary models)"),
+            ("rule pointer", "MUST OPEN `.agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md` before writing code (the code defaults)"),
         ] {
             assert!(build.contains(needle), "{agents} build row lacks {label}: {needle}");
         }
