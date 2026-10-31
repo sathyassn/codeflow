@@ -1,0 +1,11 @@
+id = "TSK-1122"
+uid = "e80213f9-1c20-4b25-ad08-bf44b1cfc358"
+kind = "TSK"
+title = "The operator approves the status dashboard design on a clickable prototype with real data before the build starts"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T17:15:43Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
