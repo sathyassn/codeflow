@@ -147,8 +147,9 @@ def compare(before: dict, after: dict) -> dict:
 
 
 # Whole-frame grammar from release-qualification/lib.sh at 97f714b61,
-# plus the observed branch/effort row only for the registered fixture branch,
-# CodeFlow's shipped status line row for this fixture (`status_row`)
+# plus the observed rows under the editor that `footer_rows` lists: the
+# branch/effort row only for the registered fixture branch, CodeFlow's shipped
+# status line row for this fixture (`status_row`), the editor hint with input,
 # and the auto-mode footer (`--permission-mode auto`, the evaluation runs' mode).
 # Empty is accepted only before pasting. It is never proof for a second Enter.
 FOOTER = re.compile(r"  (?:⏸ manual mode on|⏵⏵ (?:bypass permissions|auto mode) on \(shift\+tab to cycle\)|paste again to expand)(?: · (?:\? for shortcuts|← for agents))*")
@@ -186,11 +187,53 @@ def status_row(line: str, branch: str | None, status: dict | None) -> bool:
     return re.fullmatch(head + prefixes, line[:-1]) is not None
 
 
+# Claude Code's transient external-editor hint, with the editor names seen
+# live from 2.1.314 (a trial showed Nvim; a Herdr pane outside a trial, VS Code).
+EDITOR_HINT = r"ctrl\+g to edit in (?:Nvim|VS Code)"
+
+
+def footer_rows(footer: list[str], branch: str | None, status: dict | None) -> str | None:
+    """Which known set of rows under the editor this is, or None.
+
+    Claude Code shows, below the editor's bottom rule:
+
+      [mode]                         any frame
+      [context, mode]                any frame
+      [branch + hint, mode]          only with input in the editor
+      [status line, mode, hint]      only with input in the editor
+
+    `mode` is a `FOOTER` row (manual, auto or bypass mode). `context` is
+    `codeflow-qualify`, Claude Code's own branch row for the fixture branch
+    (optionally with its effort label), or CodeFlow's shipped status line for
+    this fixture (`status_row`). The editor hint (`EDITOR_HINT`) shares the
+    branch row, or takes its own right-aligned row under the mode row when
+    the status line holds the first row. The hint is transient and Claude
+    Code may draw it above the editor's top rule instead, outside the frame,
+    so a frame with input shows it or not. Returns "any" or "input" for the
+    frames each set may appear in; any other set of rows refuses.
+    """
+    branch_row = branch is not None and re.fullmatch(
+        r"  " + re.escape(branch) + r"(?: +● (?:low|medium|high|xhigh|max) · /effort)?", footer[0] if footer else "")
+    if len(footer) == 1:
+        return "any" if FOOTER.fullmatch(footer[0]) else None
+    if len(footer) == 2 and FOOTER.fullmatch(footer[1]):
+        if footer[0] == "  codeflow-qualify" or branch_row or status_row(footer[0], branch, status):
+            return "any"
+        if branch is not None and re.fullmatch(r"  " + re.escape(branch) + r" +" + EDITOR_HINT, footer[0]):
+            return "input"
+    if (len(footer) == 3 and status_row(footer[0], branch, status) and FOOTER.fullmatch(footer[1])
+            and re.fullmatch(r" +" + EDITOR_HINT, footer[2])):
+        return "input"
+    return None
+
+
 def editor(screen: str, branch: str | None = None, status: dict | None = None) -> str | None:
     """The text in a verified Claude editor frame, or None for any other frame.
 
     `status` names the requested model and the fixture folder, for the
-    shipped status line row (see `status_row`).
+    shipped status line row (see `status_row`). The rows under the editor
+    must be a set `footer_rows` knows; a set seen only with input refuses an
+    empty or placeholder editor.
     """
     raw = screen.splitlines()
     lines = [line.rstrip() for line in raw]
@@ -199,11 +242,8 @@ def editor(screen: str, branch: str | None = None, status: dict | None = None) -
         return None
     top, bottom = rules[-2:]
     body = lines[top + 1:bottom]
-    footer = [line for line in lines[bottom + 1:] if line]
-    if len(footer) == 2 and (footer[0] == "  codeflow-qualify" or status_row(footer[0], branch, status) or (
-            branch is not None and re.fullmatch(r"  " + re.escape(branch) + r"(?: +(?:● (?:low|medium|high|xhigh|max) · /effort|ctrl\+g to edit in Nvim))?", footer[0]))):
-        footer = footer[1:]
-    if len(footer) != 1 or not FOOTER.fullmatch(footer[0]) or not body:
+    frame = footer_rows([line for line in lines[bottom + 1:] if line], branch, status)
+    if frame is None or not body:
         return None
     # rstrip removes the blank separator in an empty editor.
     if body[0] == "❯":
@@ -221,7 +261,10 @@ def editor(screen: str, branch: str | None = None, status: dict | None = None) -
         if re.match(r"^[\s│]*[❯>]", line) or (line and not line.startswith("  ")):
             return None
         rest.append(line[2:] if line else "")
-    return "\n".join([first, *rest]).strip()
+    text = "\n".join([first, *rest]).strip()
+    if frame == "input" and (not text or PLACEHOLDER.fullmatch(text)):
+        return None
+    return text
 
 
 def visible(pane: str, branch: str | None = None, evidence: Path | None = None,

@@ -5977,6 +5977,63 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual(1, runner.deliver_claude("owned", "trial prompt", {}, 1, branch, None, status))
         self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
 
+    def test_claude_rows_under_the_editor_are_a_known_set(self):
+        runner = self.runner()
+        # Captured from live trial 3 of TSK-1033 on 2026-10-30, after the paste:
+        # the status line, the mode row, then the editor hint on its own row.
+        pending = (ROOT / "evals/qualification/screens/claude-status-line-pending-input.txt").read_text(encoding="utf-8")
+        branch = "feat/escalate-failed-jobs"
+        status = {"model": "claude-sonnet-5-5", "folder": "repository"}
+        prompt = "Make the change in CHANGE.md with its tests, then say which files you changed.\n"
+        self.assertTrue(runner.holds(runner.editor(pending, branch, status), prompt))
+        row, mode, hint = pending.splitlines()[-3:]
+        self.assertEqual(("  ⏵⏵ auto mode on (shift+tab to cycle)", "ctrl+g to edit in Nvim"), (mode, hint.strip()))
+        prefix = pending[:pending.index(row)]
+        draft = "❯ Make the change in CHANGE.md with its tests, then say which files you changed."
+        self.assertIn(draft, prefix)
+
+        def frame(rows, editor_line=draft):
+            return prefix.replace(draft, editor_line) + "\n".join(rows) + "\n"
+
+        manual = "  ⏸ manual mode on"
+        cut = row[:row.index(" | ctx:")] + " | c…"
+        placeholder = '❯ Try "fix lint errors"'
+        # Known sets: with input, the hint row may follow; without it, it never does.
+        for rows in [[row, mode, hint], [row, manual, hint], [row, mode], [row, manual], [cut, mode, hint],
+                     [row, mode, hint.replace("Nvim", "VS Code")]]:
+            self.assertTrue(runner.holds(runner.editor(frame(rows), branch, status), prompt), rows)
+        for rows in [[row, mode], [row, manual], [cut, mode]]:
+            self.assertEqual('Try "fix lint errors"', runner.editor(frame(rows, placeholder), branch, status), rows)
+        self.assertEqual("", runner.editor(frame([row, mode], "❯ "), branch, status))
+        # Live probe: the transient hint can sit above the top rule instead, outside the frame.
+        rule = next(line for line in prefix.splitlines() if set(line) == {"─"})
+        above = frame([row, mode]).replace(rule, " " * 94 + "ctrl+g to edit in VS Code\n" + rule, 1)
+        self.assertTrue(runner.holds(runner.editor(above, branch, status), prompt))
+        # Anything else refuses: the hint without input, out of order, repeated or
+        # reworded, under another row, or under a status line for another fixture.
+        for rows, editor_line in [([row, mode, hint], placeholder), ([row, mode, hint], "❯ "),
+                                  ([row, hint, mode], draft), ([row, mode, hint, hint], draft),
+                                  ([row, mode, hint.replace("Nvim", "Vim")], draft),
+                                  ([row, mode, hint.replace("ctrl+g to edit in Nvim", "allow import")], draft),
+                                  ([row, mode, "ctrl+g to edit in Nvim"], draft),
+                                  ([mode, hint], draft), (["  " + branch, mode, hint], draft),
+                                  (["  codeflow-qualify", mode, hint], draft),
+                                  ([row.replace(branch, "feat/other"), mode, hint], draft),
+                                  ([row.replace("claude-sonnet-5-5", "claude-opus-5-5"), mode, hint], draft),
+                                  ([row, mode + " · PR #436", hint], draft), ([row, mode, hint, "  unknown"], draft),
+                                  ([row, mode, "  unknown"], draft)]:
+            self.assertIsNone(runner.editor(frame(rows, editor_line), branch, status), (rows, editor_line))
+        # Claude Code's own branch row carries the hint only with input, too.
+        hinted = "  " + branch + "       ctrl+g to edit in Nvim"
+        self.assertTrue(runner.holds(runner.editor(frame([hinted, mode]), branch), prompt))
+        self.assertIsNone(runner.editor(frame([hinted, mode], placeholder), branch))
+        # Delivery: the ready frame, then this captured pending frame, then one Enter.
+        ready = frame([row, mode], placeholder)
+        with patch.object(runner, "herdr", side_effect=[ready, "sent", pending, "sent"]) as transport, \
+             patch.object(runner, "started", return_value=True), patch.object(runner.time, "sleep"):
+            self.assertEqual(1, runner.deliver_claude("owned", prompt, {}, 1, branch, None, status))
+        self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+
     def test_claude_readiness_waits_for_renderer_then_verified_editor(self):
         runner = self.runner(); events = []; displays = []
         screen = self.renderer_screen(); selected = self.renderer_screen(True)

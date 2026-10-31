@@ -313,22 +313,37 @@ before taking the `before.json` baseline, then delivering the prompt.
 Startup writes before readiness are not counted. If startup refuses before
 readiness, no baseline exists and `finish` flags incomplete observation.
 Claude delivery recognizes only the complete editor frame
-proven by the release harness, plus the observed branch status row only
-when its branch equals the signed fixture record. That row may show the
-known effort label or `ctrl+g to edit in Nvim` hint. A fixture whose
-`.claude/settings.json` carries CodeFlow's shipped status line shows that
-line in the same place instead:
-`<name> (<model id>) | v<version> | <style> | <folder> (<branch>) |
-ctx:<used>k/<window>k (<percent>%)`. The runner accepts that row only when
-the model id equals the requested `--model` exactly, the folder is the
-fixture's repository folder and the branch equals the signed fixture
-record's branch. Pass the full model id, such as `claude-opus-5-5`: an alias
-such as `opus` does not match the id the line prints. In a narrow pane
-Claude Code cuts the row and ends it with `…`; a cut row is accepted only
-when the cut falls after the branch, so a pane too narrow to show the whole
-branch refuses. A row naming another branch, model or folder, the line's
-`jq not found` form and any other row under the editor refuse, and no key is
-sent. Editor captures retain
+proven by the release harness, with one of these sets of rows under it:
+
+| Rows under the editor | Frames |
+|---|---|
+| the mode row | any |
+| a context row, then the mode row | any |
+| the branch row with the editor hint, then the mode row | with input only |
+| the status line, the mode row, then the editor hint on its own row | with input only |
+
+- The mode row is manual, auto or bypass mode.
+- A context row is `codeflow-qualify`, Claude Code's own branch row, or
+  CodeFlow's shipped status line. The branch row must name the signed
+  fixture record's branch and may show the known effort label.
+- The status line appears when the fixture's `.claude/settings.json`
+  carries CodeFlow's `statusLine`:
+  `<name> (<model id>) | v<version> | <style> | <folder> (<branch>) |
+  ctx:<used>k/<window>k (<percent>%)`. It counts only when the model id
+  equals the requested `--model` exactly, the folder is the fixture's
+  repository folder and the branch is the fixture record's branch. Pass the
+  full model id, such as `claude-opus-5-5`: an alias such as `opus` does not
+  match the id the line prints. In a narrow pane Claude Code cuts the row
+  and ends it with `…`; a cut row counts only when the cut falls after the
+  branch, so a pane too narrow to show the whole branch refuses.
+- The editor hint is `ctrl+g to edit in Nvim` (or `VS Code`). It is
+  transient and Claude Code may draw it above the editor instead, so a
+  frame with input shows it or not. With an empty or placeholder editor it
+  refuses.
+
+Any other set of rows refuses and no key is sent: another branch, model or
+folder, the status line's `jq not found` form, rows out of order or
+repeated, or an unknown row. Editor captures retain
 the actual before-paste and pending-input screens in the evidence folder.
 It sends at most two Enters, the second only when that frame still holds
 this trial's unsent prompt. An empty editor is never evidence of pending
