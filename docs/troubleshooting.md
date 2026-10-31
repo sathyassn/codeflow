@@ -189,9 +189,11 @@ reasons.
   reference](policy-reference.md#the-commit-time-gitleaks-engine)).
   An inline `gitleaks:allow` comment on a staged line does not exempt it.
 - **`git.secret_scan`: the staged secret scan is incomplete.** gitleaks
-  failed, its report could not be read, or git is older than 2.41 and cannot
-  stop a `.gitattributes` entry from hiding staged lines. The message names
-  which; upgrade git or fix the cause, then commit again.
+  failed, its report could not be read, a staged path holds a backslash,
+  double quote or control character that gitleaks cannot read, or git is
+  older than 2.41 and cannot stop a `.gitattributes` entry from hiding
+  staged lines. The message names which; rename the path, upgrade git or
+  fix the cause, then commit again.
 
 A merge Git concludes itself is scanned in `commit-msg`, since Git runs no
 `pre-commit` for it. The refusal then appears while `git merge` runs; fix the

@@ -316,10 +316,17 @@ impl Engine {
     /// `root`, reading `.gitleaksignore` and `.gitleaks.toml` from there.
     ///
     /// # Errors
-    /// Returns why the scan is incomplete: the binary failed, or its report
-    /// could not be read.
+    /// Returns why the scan is incomplete: a staged path gitleaks cannot
+    /// read, a git too old to pin attributes, a failed binary or a report
+    /// that could not be read.
     pub fn scan_staged(&self, verified: &Verified, root: &Path) -> Result<Vec<Finding>, String> {
         let attributes = TextAttributes::for_repository(root)?;
+        if let Some(path) = unreadable_staged_path(root)? {
+            return Err(format!(
+                "gitleaks cannot read a path with a backslash, double quote or \
+                 control character reliably, and {path} has one; rename it"
+            ));
+        }
         let mut command = Command::new(&verified.path);
         command
             .current_dir(root)
@@ -395,6 +402,49 @@ fn pin_git_output(command: &mut Command, extra: &[(&str, OsString)]) {
     command.env("GIT_CONFIG_COUNT", n.to_string());
 }
 
+/// The first staged path gitleaks' patch parser cannot read reliably: one
+/// holding a backslash, a double quote or a control character, which git
+/// quotes in a diff header. The pinned parser skips a file whose name ends
+/// in a backslash without an error, so its lines would go unscanned. The CI
+/// scan refuses the same characters. Deleted files are left out, since
+/// gitleaks is not shown them. This check holds whatever the path policy
+/// says, and for an automatic merge, whose staged paths no path check reads.
+fn unreadable_staged_path(root: &Path) -> Result<Option<String>, String> {
+    let out = crate::git::command()
+        .args([
+            "diff",
+            "--cached",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--diff-filter=d",
+        ])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|error| format!("git did not run: {error}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "cannot list the staged paths: `git diff --cached` exited with {}",
+            out.status
+        ));
+    }
+    Ok(out
+        .stdout
+        .split(|byte| *byte == 0)
+        .find(|path| {
+            path.iter()
+                .any(|byte| matches!(byte, b'\\' | b'"') || byte.is_ascii_control())
+        })
+        .map(|path| {
+            let name = crate::git::name::GitName::from_bytes(path);
+            match name.rule_text() {
+                Ok(text) => text.to_string(),
+                Err(not_utf8) => not_utf8.display().to_string(),
+            }
+        }))
+}
+
 /// The oldest git that reads attributes from a named tree
 /// (`GIT_ATTR_SOURCE`), the version the managed CI scan requires too.
 const MIN_GIT: (u32, u32) = (2, 41);
@@ -418,7 +468,7 @@ struct TextAttributes {
 impl TextAttributes {
     fn for_repository(root: &Path) -> Result<Self, String> {
         let git = |args: &[&str]| -> Result<String, String> {
-            let out = Command::new("git")
+            let out = crate::git::command()
                 .args(args)
                 .current_dir(root)
                 .stdin(std::process::Stdio::null())

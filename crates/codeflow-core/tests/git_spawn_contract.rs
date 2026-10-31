@@ -168,6 +168,18 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "this codeflow binary",
     ),
     (
+        "codeflow-core/src/hooks/gitleaks.rs",
+        "&path",
+        1,
+        "the gitleaks binary, run for its version only after its checksum matched the pin (TSK-412)",
+    ),
+    (
+        "codeflow-core/src/hooks/gitleaks.rs",
+        "&verified.path",
+        1,
+        "the verified gitleaks binary over the staged diff; the git diff it starts runs no hook (TSK-412)",
+    ),
+    (
         "codeflow-present/src/platform.rs",
         "executable",
         2,

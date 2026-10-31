@@ -3951,6 +3951,89 @@ mod tests {
             assert!(env.contains("=core.attributesFile\n"), "{env}");
         }
 
+        /// A staged name gitleaks' parser cannot read is refused before
+        /// gitleaks runs, in pre-commit and in an automatic merge, whatever
+        /// the path policy says: a name ending in a backslash would
+        /// otherwise be skipped without an error.
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_refuses_a_path_it_cannot_read() {
+            for name in [
+                "docs/trailing\\",
+                "docs/quote\".json",
+                "docs/tab\there.json",
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                init_repo(dir.path(), "feat/x");
+                stage(dir.path(), name, &format!("{{\n{HASH_LINE}}}\n"));
+                let merge = dir.path().join(".git/MERGE_MSG");
+                std::fs::write(&merge, "Merge branch 'side'\n").unwrap();
+                let bin = tempfile::tempdir().unwrap();
+                let engine = pinned_engine(bin.path(), gitleaks::VERSION, "[]", 0);
+                let policy = GitPolicy {
+                    policy_characters: PolicyLevel::Off,
+                    ..engine_policy(PolicyLevel::Block)
+                };
+                for report in [
+                    pre_commit_engine(dir.path(), &policy, false, false, &engine).unwrap(),
+                    commit_msg_secret_scan_engine(dir.path(), &policy, &merge, &engine).unwrap(),
+                ] {
+                    let refused = secret_findings(&report).iter().any(|v| {
+                        v.level == PolicyLevel::Block
+                            && v.message.starts_with(
+                                "staged secret scan incomplete: gitleaks cannot read a path",
+                            )
+                    });
+                    assert!(refused, "{name:?}: {report:?}");
+                }
+                assert!(
+                    !bin.path().join("args").exists(),
+                    "{name:?}: gitleaks never ran"
+                );
+            }
+        }
+
+        /// The official pinned binary on the automatic-merge route, when
+        /// `CODEFLOW_TEST_GITLEAKS_DIR` names it: commit-msg with Git's
+        /// `MERGE_MSG` refuses the hash line and a name ending in a
+        /// backslash.
+        #[test]
+        fn test_pinned_gitleaks_scans_an_automatic_merge() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let mut cases = vec![(
+                "docs/merged.json",
+                "possible secret (gitleaks rule generic-api-key) staged at docs/merged.json:2",
+            )];
+            if cfg!(unix) {
+                cases.push((
+                    "docs/trailing\\",
+                    "staged secret scan incomplete: gitleaks cannot read a path",
+                ));
+            }
+            for (name, expected) in cases {
+                let dir = tempfile::tempdir().unwrap();
+                init_repo(dir.path(), "feat/x");
+                stage(dir.path(), name, &format!("{{\n{HASH_LINE}}}\n"));
+                let merge = dir.path().join(".git/MERGE_MSG");
+                std::fs::write(&merge, "Merge branch 'side'\n").unwrap();
+                let report = commit_msg_secret_scan_engine(
+                    dir.path(),
+                    &engine_policy(PolicyLevel::Block),
+                    &merge,
+                    &engine,
+                )
+                .unwrap();
+                let found = secret_findings(&report)
+                    .iter()
+                    .any(|v| v.message.starts_with(expected));
+                assert!(found, "{name:?}: {report:?}");
+            }
+        }
+
         /// A disguise of the hash line: its name, the staged files,
         /// repository settings and where the findings are expected.
         type Disguise<'a> = (

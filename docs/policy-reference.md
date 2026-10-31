@@ -896,7 +896,11 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   driver) cannot hide a staged line and a file holding a NUL byte is read as
   text. This needs git 2.41 or later, as the CI scan does; an older git is a
   failed scan. The clone's own `.git/info/attributes` still applies, since
-  nothing committed or staged can change it.
+  nothing committed or staged can change it. gitleaks cannot read a path
+  with a backslash, double quote or control character reliably (it skips a
+  name ending in a backslash), so a staged path with one is a failed scan
+  before gitleaks runs, whatever `git.policy_characters` says and in an
+  automatic merge too, as the CI scan refuses such a path.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,
