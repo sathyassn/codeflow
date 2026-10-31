@@ -1,0 +1,11 @@
+id = "TSK-1118"
+uid = "8dd7c699-2778-453f-b0a7-807d0d29bc03"
+kind = "TSK"
+title = "Generated models match their schemas in the gate"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:20:35Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
