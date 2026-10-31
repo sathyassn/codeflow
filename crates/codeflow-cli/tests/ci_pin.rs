@@ -1137,7 +1137,10 @@ esac
 if [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi
 case " $* " in
   *' --format json '*)
-    echo 'Scanned 1 file' >&2
+    # as osv-scanner does with a JSON format: every log level goes to stderr
+    # unless --verbosity error keeps only the errors
+    case " $* " in *' --verbosity error '*) ;; *) echo 'Scanned 1 file' >&2 ;; esac
+    if [ -n "${OSV_FAKE_LOG:-}" ]; then echo "$OSV_FAKE_LOG" >&2; fi
     printf '{"results":[{"source":{"path":"%s/%s","type":"lockfile"},"packages":[{"package":{"name":"demo","version":"1.0.0","ecosystem":"crates.io"},"vulnerabilities":[' "$PWD" "${OSV_FAKE_SOURCE:-Cargo.lock}"
     sep=
     for id in ${OSV_FAKE_IDS:-GHSA-test}; do
@@ -1448,6 +1451,28 @@ fn the_project_exception_hook_fails_the_step_for_findings_it_does_not_accept() {
     );
     assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
     assert!(!text.contains("Every dependency advisory"), "{text}");
+
+    // osv-scanner exits 1 for advisories even when it logged an error, such
+    // as a lockfile it could not read. The scan may be incomplete, so an
+    // accepting hook is not run and the step fails.
+    let (ok, text) = run(
+        &[accepting, register],
+        &[],
+        &[
+            ("OSV_FAKE_IDS", "GHSA-a"),
+            (
+                "OSV_FAKE_LOG",
+                "Error during extraction: other/Cargo.lock: could not extract",
+            ),
+        ],
+    );
+    assert!(!ok, "{text}");
+    assert!(text.contains("logged errors"), "{text}");
+    assert!(text.contains("could not extract"), "{text}");
+    assert!(
+        !text.contains("accepted by the project exception hook"),
+        "{text}"
+    );
 
     // AC-1: a hook that accepts nothing, prints a line that is no finding,
     // or fails (even after printing a real finding) accepts nothing.
