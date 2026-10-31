@@ -924,7 +924,10 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   opened folder with 0600, whatever the umask, and a folder or trace file
   replaced during the run is a failed scan. On Windows both files take the
   git directory's access list; the hook makes no Unix mode or replacement
-  check there.
+  check there. The folder is removed when the scan ends, but a scan that is
+  force-killed can leave its `codeflow-gitleaks-*` folder behind in the git
+  directory; a later scan makes a new folder and never reads an old one, so
+  such a folder is safe to delete.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,
