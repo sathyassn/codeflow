@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-29-outcome-first-catalog-routing-visual-doctrine-and-process-round-v2",
+  "cases_version": "2026-10-26-anchored-documents-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -6967,7 +6967,7 @@
           "cf-present"
         ],
         "signals": [
-          "governing_comparison_is_first_block",
+          "anchor_then_governing_comparison",
           "comparison_carries_downtime_cost_and_evidence",
           "one_ask",
           "unverified_peak_load_stated"
@@ -6978,6 +6978,45 @@
         ],
         "must_not": [
           "narrative_first_text_cards_ask_last",
+          "question_form_section_title",
+          "more_than_one_ask",
+          "fact_invented"
+        ]
+      }
+    },
+    {
+      "id": "retry-review-opens-with-the-whole",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "job-retry-mechanism-review",
+      "requirements": [
+        "CF-METH-004",
+        "CF-PRES-004"
+      ],
+      "prompt": "Open a review page that explains how our job retries work, so I can sign off on the design.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-present"
+        ],
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "one_ask",
+          "unmeasured_outage_stated"
+        ],
+        "references": [
+          "RETRY.md",
+          "DECISION.md"
+        ],
+        "must_not": [
+          "definitions_paragraph_before_any_figure",
+          "question_form_section_title",
+          "table_as_main_carrier",
           "more_than_one_ask",
           "fact_invented"
         ]

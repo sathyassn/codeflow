@@ -231,6 +231,10 @@ specimen per family, when authoring a figure. In brief:
 - Facts derived from a named source; no text boxes as the form; no text over
   text or over a mark; one-sentence caption; `--cf-fig-*` tokens only; a
   description and a table twin.
+- Draw the mechanism, not its name; draw the difference when comparing;
+  label arrows with verbs; ground the figure in the subject's real names and
+  numbers; draw the governing path in the accent-bearing marks
+  (`figure-grammar.md`, "Composing a figure").
 - A labelled stage is one flow-family form, not the default; ASCII `text`
   figures draw the same families in plain-text chat.
 
@@ -250,6 +254,11 @@ specimen per family, when authoring a figure. In brief:
 12. An inner mark under the 9 px floor inside a cell that passes
 13. Overprint: text on text or on a mark, with nothing overflowing
 14. Elongation by reflow: a narrow render that grows instead of recomposing
+15. A paragraph that defines several terms at once where one figure should
+    draw them (`cf-present`, `how-presentation-works.md` section 3)
+16. A section or block title written as a question, or a bare identifier
+17. A table as the main carrier of a concept instead of reference detail
+    after its figure
 
 ### Review rubric
 

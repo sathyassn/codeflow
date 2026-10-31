@@ -602,3 +602,85 @@ primary closes peer tabs the subject left open, as it closes the trial tab.
 [grok-welcome]: https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/src/views/welcome/mod.rs
 [claude-onboarding]: https://github.com/anthropics/claude-code/issues/67149
 [codex-trust]: https://github.com/openai/codex/blob/main/codex-rs/tui/src/onboarding/trust_directory.rs
+
+## Grading anchored present documents
+
+`anchored/check.py` grades the present document a subject opened for the
+`retry-review-opens-with-the-whole` and
+`migration-review-leads-with-the-picture` cases (TSK-445). Grading has two
+parts, and the fixture's grading note states both:
+
+- **Exact, by `check.py`:** structure (the anchor, sections, figure order,
+  one ask counted through nested blocks, no question titles, code left out)
+  and the presence of the drawn elements the retry mechanism names at both
+  widths (its labelled states and transitions, at least one label with a
+  duration, a label with a failure count). That the backoff wait itself is
+  drawn and labelled is judged. It reads durations to seconds and
+  failure counts for the judge, and judges no meaning with them.
+- **Judged, by the rubric in the fixture's grading note:** whether the
+  backoff wait is drawn and labelled, whether each value, count and
+  transition matches the source, any negation or added
+  claim (`fact_invented`), and whether the right thing is stated as not
+  measured (`unmeasured_outage_stated`). The evaluator applies it to every
+  trial; the committed controls in
+  `evals/model-artifacts/method-controls/controls.json` record which part
+  fails each faulty answer (`caught_by`).
+
+`check.py` parses Markdown with markdown-it-py and mdurl, pure Python and
+pinned by version and wheel SHA-256 in `anchored/requirements.txt` (the
+source packages' hashes are kept for audit only in
+`anchored/requirements-sdist-audit.txt`). There is no venv and no install
+step. Run the grader isolated and it fetches what it needs:
+
+```sh
+python3 -I -S -B evals/qualification/anchored/check.py \
+  retry-review-opens-with-the-whole <document.json>
+```
+
+`-I` ignores every `PYTHON*` variable, the user site and the script's own
+directory; `-S` skips `site`, so no `.pth` file, `sitecustomize` or
+`usercustomize` is read. The grader refuses any other start. `-B` is
+optional: the helper turns bytecode writing off before it imports the
+verified packages, so no `.pyc` lands beside them. Wheel entries are read
+under both POSIX and Windows path rules: a drive, colon, backslash, rooted or
+climbing name, an entry resolving outside `lib`, or a duplicate entry is
+refused. `markdown_env.py`
+fetches each pinned wheel from the package index by its SHA-256, checks it,
+unpacks it with `zipfile` into `target/anchored/<requirements hash>/lib` (in a
+private directory moved into place with one rename, with a stamp recording
+every file's SHA-256), verifies it, and puts that directory first on
+`sys.path`. The root is fixed; `CODEFLOW_ANCHORED_VENV`, which once moved it,
+is refused if set. The helper never deletes anything: a pin change gets a new
+directory and the old one stays unused, and a path at the managed name that
+is not a valid build is refused and left as it is. Remove old builds under
+`target/anchored/` by hand after checking what they hold.
+
+Threat model: the helper is a developer and evaluator convenience, not a
+security boundary.
+
+- Trusted bootstrap: the interpreter that runs `check.py` and its standard
+  library, like any system tool, and this repository's own source. Only the
+  downloaded code is the helper's to verify.
+- In scope: other users, accidental collisions at the managed name, stale or
+  mismatched builds, and tampering with the unpacked files.
+- The chain rule, checked before the parser is imported: every path from
+  the repository root to the `lib` directory, the stamp, and every directory
+  and file under `lib` must be owned by you, not writable by group or
+  others, and not a symlink. On POSIX each is opened without following a
+  link and checked on the open file. On Windows each path's resolved real
+  path must lie inside the repository and none may be a reparse point. Every
+  file must also match the SHA-256 recorded from its verified wheel, and no
+  file may be added.
+- Checked cheaply during a build: before each step the staging directory
+  must still be the one the helper created (same device and inode, symlinks
+  not followed), or the build stops.
+- Out of scope: a concurrent process running as the same user, which can
+  already write these files directly.
+- Residual: the final `os.rename` replaces an empty directory created at the
+  managed name in the instant before the move; a directory with content, a
+  file or a symlink there makes it fail with nothing removed.
+
+The `model-eval-kit` test target, which CI runs, runs the checker tests and
+the helper tests isolated, and the suite test runs `check.py` isolated with
+no inherited environment. `check.py` prints the parser versions it ran
+with. A failed fetch or check stops the run.

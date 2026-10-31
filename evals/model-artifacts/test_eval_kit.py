@@ -304,6 +304,8 @@ EXPLANATION_METHOD_INVENTORY = {
         "CF-METH-003", ("figure_for_unrelated_facts",),
         ("answer_is_three_bullets_only", "no_lead_sentence", "formatting_choice_not_explained")),
     "migration-review-leads-with-the-picture": ("CF-METH-004", ("narrative_first_text_cards_ask_last",), ()),
+    # TSK-445: a mechanism review opens with an anchor and a figure of the whole.
+    "retry-review-opens-with-the-whole": ("CF-METH-004", ("definitions_paragraph_before_any_figure",), ()),
     # The existing present case, registered in the pack unchanged.
     "complex-review-uses-declarative-presentation": (
         "CF-PRES-004", ("visuals_as_decorative_text_cards", "same_chat_answer_repackaged_in_panels"), ()),
@@ -1797,19 +1799,36 @@ class SuiteContractTests(unittest.TestCase):
                          for b in config["figures"] if b.get("anchor") == "first-paint"]
                 self.assertEqual(paint == ["sequence"], "first_paint_drawn_in_sequence_family" in signals)
 
+        # TSK-445: the anchor comes first, so the order signals are read by
+        # the checker the qualification grades with. It runs as its own
+        # isolated process (-I -S, no inherited environment), which unpacks
+        # and verifies its pinned parser when it is missing.
+        def anchored_check(case_id: str, answer: Path) -> dict:
+            result = subprocess.run(
+                [sys.executable, "-I", "-S", "-B", str(ROOT / "evals/qualification/anchored/check.py"), case_id,
+                 str(answer)],
+                capture_output=True, text=True, check=False, env={})
+            self.assertEqual(0, result.returncode, result.stderr)
+            read = json.loads(result.stdout)
+            # The parser it ran with is the pinned one, whatever this
+            # interpreter has installed.
+            requirements = (ROOT / "evals/qualification/anchored/requirements.txt").read_text(encoding="utf-8")
+            self.assertEqual(dict(re.findall(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)", requirements, re.M)), read["parser"])
+            return read
+
         for entry in controls["cases"]["migration-review-leads-with-the-picture"]:
             document = json.loads((directory / entry["answer"]).read_text(encoding="utf-8"))
             blocks = document["blocks"]
             signals = set(entry["signals"])
             asks = [block for block in blocks if block["type"] == "feedback_prompt"]
-            first = blocks[0]
+            read = anchored_check("migration-review-leads-with-the-picture", directory / entry["answer"])
             with self.subTest(answer=entry["answer"]):
-                self.assertEqual(
-                    (first["type"] == "figure" and first["declaration"]["figure"]["family"] in ("extent", "coverage"))
-                    or first["type"] == "table", "governing_comparison_is_first_block" in signals)
+                self.assertEqual("anchor_then_governing_comparison" in read["signals"],
+                                 "anchor_then_governing_comparison" in signals)
                 self.assertEqual(len(asks) == 1 and blocks[-1] is asks[0], "one_ask" in signals)
                 self.assertEqual(len(asks) > 1, "more_than_one_ask" in signals)
-                self.assertEqual(first["type"] == "narrative", "narrative_first_text_cards_ask_last" in signals)
+                self.assertEqual("narrative_first_text_cards_ask_last" in read["violations"],
+                                 "narrative_first_text_cards_ask_last" in signals)
                 self.assertEqual("peak load" in json.dumps(blocks), "unverified_peak_load_stated" in signals)
 
     def test_visual_doctrine_fixtures_ship_the_defect_their_case_grades(self) -> None:
@@ -6270,6 +6289,9 @@ class ProcessRepairTests(unittest.TestCase):
                 self.assertEqual(str(host / ".codeflow-eval" / harness), env[key])
             self.assertEqual([str(trial / "bin"), "/usr/bin"], env["PATH"].split(os.pathsep))
             self.assertEqual("1", env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
+            # The harness version a trial records is the one it runs: no
+            # update is installed into the disposable home mid-trial.
+            self.assertEqual("1", env["DISABLE_AUTOUPDATER"])
             self.assertEqual("0", env["GROK_MEMORY"])
             self.assertFalse(any("personal" in value for value in env.values()))
             for name in [".claude", ".claude.json", ".codex", ".grok"]:

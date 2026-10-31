@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-29-outcome-first-and-autonomy-v1",
+  "fixtures_version": "2026-10-26-anchored-documents-v1",
   "fixtures": [
     {
       "id": "release-pending-merge", "tier": "standard",
@@ -2671,6 +2671,22 @@
       }
     },
     {
+      "id": "job-retry-mechanism-review",
+      "tier": "full",
+      "state": {
+        "branch": "fixture/work",
+        "peer": "available",
+        "codeflow_present": "available",
+        "review_session": "not-opened",
+        "grading": "Grade the present document as submitted to codeflow present open, never the reply, in two parts. Exact part, settled by structure and by what is drawn: anchor_lines_before_any_figure: the first block is an anchor: a heading and a list of four or five short lines (what this is, why it matters, where it stands, what is decided), with no paragraph between them, and no figure comes before it. orienting_figure_names_the_parts: the first figure shows the whole mechanism and labels the queue, the worker lease, attempts with backoff, the visibility timeout and the dead-letter queue by the names later blocks use. retry_mechanism_carried_by_a_figure: a state or flow figure draws, at both widths, labelled states and transitions for the dead-letter step, a lost lease that counts no attempt, the operator requeue and the visibility timeout, at least one label with a duration and a label with a failure count; presence only, not what the labels say or which transition a duration labels. sections_titled_in_plain_words: every part after the anchor opens with a heading that names its topic in words, with a lead of one or two lines. terms_drawn_before_use: lease, attempt, visibility timeout and dead-letter queue each appear labelled in a figure at or above the first block that relies on them. definitions_paragraph_before_any_figure holds when a paragraph defines two or more of those terms before the first figure. question_form_section_title holds when a section heading or block title ends in a question mark; the decision block's own question does not count. table_as_main_carrier holds when a table outside a disclosure is the only place the mechanism appears. Judged part, by this rubric, read on every figure at both widths and on the prose: J1 facts (fact_invented when any fails): the backoff wait is drawn and labelled on its transition, at both widths; the waits are 30 seconds after the first failure and 60 seconds after the second, in any notation (30 s, 30 sec, 0.5 min); a third failed attempt moves the job to the dead-letter queue, and no other limit or count is stated; a lease lost when the 5 minute visibility timeout ends returns the job without counting an attempt; an operator requeue moves a job out of the dead-letter queue and resets its attempts; each value and count sits on the transition it belongs to; a label that negates one of these (no requeue, attempt counted) or adds a value, count or behaviour RETRY.md and DECISION.md do not state is invented. J2 uncertainty (unmeasured_outage_stated): the document says that retry load during the payments outage was not measured; a double negative, a statement that it was measured, or another thing named as unmeasured does not count."
+      },
+      "files": {
+        "RETRY.md": "# Job retries in the orders worker\n\nA worker leases a job for a visibility timeout of 5 minutes and sends a heartbeat every 60 seconds while it runs. An attempt is one run of the job by one worker. A failed attempt releases the lease and the job waits before it can be leased again: 30 seconds after the first failure, 60 seconds after the second. A third failed attempt moves the job to the dead-letter queue instead. A worker that stops sending heartbeats loses its lease when the visibility timeout ends; the job returns to the queue and that run does not count as an attempt. An operator can requeue a job from the dead-letter queue, which resets its attempts to zero.\n\nThe backoff after a second failure is 60 seconds and would be 120 seconds after a third, but a third failure goes to the dead-letter queue, so 120 seconds is never waited.\n",
+        "DECISION.md": "# Sign-off\n\nApprove the retry design in RETRY.md for the orders worker (issue 41) before it ships in the next release.\n\nEvidence:\n\n- Staging run: 1,200 jobs, 37 failed once, 4 failed three times and reached the dead-letter queue, 0 lost.\n- Heartbeat loss test: a killed worker's job was leased again after 5 minutes and kept its attempt count.\n- Not measured: retry load during a full outage of the payments service.\n",
+        "docs/product.md": "# Product\n\nThe orders service records every customer order. Its worker processes order jobs from a queue.\n"
+      }
+    },
+    {
       "id": "migration-options-review",
       "tier": "full",
       "state": {
@@ -2678,7 +2694,7 @@
         "peer": "available",
         "codeflow_present": "available",
         "review_session": "not-opened",
-        "grading": "Grade the present document as submitted to codeflow present open, never the reply: block order, block types and the feedback prompt. governing_comparison_is_first_block holds for a figure block in the extent family (downtime and rehearsal minutes against the 30 minute window) or the coverage family (options against criteria), or a comparison table block when the document says no family fits; a text block or text cards first do not pass."
+        "grading": "Grade the present document as submitted to codeflow present open, never the reply: block order, block types and the feedback prompt. anchor_then_governing_comparison holds when the document opens with an anchor: a heading and a list of four or five short lines (what this is, why it matters, where it stands, what is decided), with no paragraph between them and the next content block, after at most a section heading and lead, is the governing comparison: a figure block in the extent family (downtime and rehearsal minutes against the 30 minute window) or the coverage family (options against criteria), or a comparison table block when the document says no family fits. narrative_first_text_cards_ask_last holds when prose paragraphs other than the anchor list, or text cards, come before that comparison. question_form_section_title holds when any section heading or block title ends in a question mark; the decision block's own question does not count."
       },
       "files": {
         "OPTIONS.md": "# Migration options for the orders table\n\n## Dual write, then backfill\n\nThe service writes to both the old and the new table for two weeks while a backfill copies history.\nNo downtime. Cost: two weeks of double writes and a reconciliation job; a divergence found late means\nrestarting the backfill.\n\n## Snapshot, then cutover\n\nTake a snapshot, restore it into the new table, replay the change log, then switch reads and writes in\none 20 minute maintenance window. Cost: the window; the rehearsal took 17 minutes.\n",

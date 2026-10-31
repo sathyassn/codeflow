@@ -1,15 +1,40 @@
-# The feedback loop: wait, act, acknowledge
+# The feedback loop: follow, act, acknowledge
 
 Use this reference when a present session is open and the reviewer may send
 notes, answers, amendments, reopens or deletions while you keep working. It follows SPC-014 B7
 through B12.
 
-## Wait without polling the model
+## Follow the stream under a host monitor
 
-`codeflow present feedback <session-id> --wait --format v2` blocks until an
-event is pending. It prints every pending event as one JSON line, marks each
-one delivered, and exits. Each line already shows `"status": "delivered"`,
-a `kind` of `review`, `answer`, `amendment`, `reopen` or `tombstone`, and `"untrusted": true`.
+Keep one stream open for the whole session, and run it under the host's
+monitor so each event wakes you as it arrives:
+
+```sh
+codeflow present feedback "$ID" --follow --format v2
+```
+
+The command prints every event as one JSON line the moment it is stored,
+marks it delivered, and keeps running until the session closes; then it
+exits 0. Each line already shows `"status": "delivered"`, a `kind` of
+`review`, `answer`, `amendment`, `reopen` or `tombstone`, and
+`"untrusted": true`. A review is one event whose `notes` array holds every
+note of that review.
+
+- **Claude Code:** run it with the Monitor tool, which hands you each line
+  as it is printed.
+- **Grok Build:** run it as a background task.
+- **Re-arm only on expiry.** The stream does not end on an event. Start it
+  again only when the host's monitor itself expires while the session is
+  still open, and before that read `codeflow present responses list "$ID"
+  --status delivered` for anything delivered but not yet acknowledged.
+- **Always `--format v2`.** The v1 stream carries review envelopes only: it
+  never delivers an answer and only names pending ones on stderr.
+
+Where the host has a monitor, never use a one-shot listener for a live
+session: a `--wait` loop exits after the first batch, and anything the
+reviewer sends after it sits unread until someone re-arms it, as a review
+with notes and a palette answer once did. Never start another model or
+agent to listen for you.
 
 Lines come in the order they were stored: by time, a review before any other
 kind at the same second, then by sequence. `responses list` uses the same
@@ -17,43 +42,27 @@ order.
 
 | Exit | Meaning | What to do |
 |---|---|---|
-| 0 | events printed | read them, act, acknowledge, start the loop again |
-| 6 | `--timeout` passed with nothing pending | re-arm; do not wake the model |
-| 7 | the session closed with nothing pending | stop the loop |
+| 0 | `--follow`: the session closed and every event was printed; `--wait`: events printed | `--follow`: stop; `--wait`: read them, act, acknowledge |
+| 6 | `--wait --timeout` passed with nothing pending | run the bounded wait again at the next pause |
+| 7 | `--wait`: the session closed with nothing pending | stop |
 | 2 | usage error | fix the command |
 | 3 | unknown session | check `codeflow present list` |
 | 5 | unsafe path or corrupt state | stop and report; do not retry blindly |
 | 1 | any other failure | report it with the stderr line |
 
-In Claude Code, run the wait as a background shell task, and in Grok Build
-as a background task, so only an event, a close or an error wakes you:
+## A harness with no monitor
 
-```sh
-while :; do
-  codeflow present feedback "$ID" --wait --timeout 540 --format v2
-  rc=$?
-  [ "$rc" -eq 6 ] || exit "$rc"
-done
-```
+Codex CLI is a harness without background tasks or a monitor: nothing wakes
+the model on an event. There, run one bounded wait at a natural pause:
+`codeflow present feedback "$ID" --wait --timeout 540 --format v2`. It
+blocks until an event is pending, prints every pending event, and exits. An
+answer, a correction or a review is stored at once and delivered on the
+agent's next turn, and until then an answer's page state stays "Stored,
+waiting for agent". Tell the reviewer when answers are read: at the agent's
+next turn. Event-driven model wake waits on upstream Codex CLI
+background-task support.
 
-After each turn that handled events, start the loop again. In a harness
-without background tasks, run one bounded wait at a natural pause instead.
-Never start another model or agent to listen for you.
-
-Codex CLI is a harness without background tasks: nothing wakes the model
-on an event. With Codex, an answer, a correction or a review is stored at
-once and delivered on the agent's next turn, when it runs a bounded wait,
-and until then an answer's page state stays "Stored, waiting for agent".
-Tell the reviewer when answers are read: at the agent's next turn. Event-driven
-model wake waits on upstream Codex CLI background-task support; the route
-until then is this bounded wait in the current agent's next turn.
-
-`--wait` and `--follow` together are a usage error. `--follow` still
-streams v1 review envelopes until the session closes, for a consumer that
-reads a stream rather than waking per event. The v1 stream (no
-`--format`, or `--format v1`) prints review envelopes only. When answers or
-other v2 events are pending, it says so on stderr and never delivers them,
-so a v1 consumer must switch to `--format v2` to receive answers.
+`--wait` and `--follow` together are a usage error.
 
 ## Read without consuming
 

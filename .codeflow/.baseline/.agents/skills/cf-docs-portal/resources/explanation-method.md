@@ -57,7 +57,13 @@ Choose the altitudes the deliverable carries and their order.
 - A portal explanatory page carries Concept, Architecture and Technical in
   that order, and a how-to section wherever the reader acts.
 - A present document walks the same altitudes as a path, with Architecture
-  only when a second structural view is needed, and ends with one ask.
+  only when a second structural view is needed. It opens with an anchor and
+  a picture of the whole, then takes the order understanding grows: the
+  familiar problem, the new model, how it behaves, the decision. Each part
+  opens with a titled section that ties it to the picture
+  (`how-presentation-works.md` section 3 in `cf-present`).
+- A portal page opens the same way: a lead that ties the page to what the
+  reader came with, then the Concept figure as the picture of the whole.
 - A reply, a pull request body or a README usually carries one or two
   altitudes; lead with the one its reader came for.
 
@@ -113,7 +119,9 @@ notes of stages 1 to 3.
 
 | Part | Drafted for | What it is |
 |---|---|---|
+| Anchor | a present document or a portal page | four or five short lines before any figure, one fact each: what this is in the reader's words, why it matters with one concrete instance, where it stands, what the reader decides, and at most one line of context; it defines no terms |
 | Declaration | a figure on the portal or in present | the stage 1 question is the figure's `question` and its one-sentence answer the `idea`; states, facts with their sources, the narrow composition and the twin follow `figure-grammar.md` section 6 |
+| Section | a present document or a portal page | a heading wherever the topic changes, naming the topic in plain words, never as a question, with identifiers only after the thing is named; the lead under it ties the part to the anchor or to a part of the picture |
 | Lead | an answer with a carrier | one sentence saying what the reader is looking at, above the carrier |
 | Figure | a figure | drawn in the stage 3 family, one idea, every mark keyed |
 | Caption | a figure or a screenshot | one sentence saying what the reader takes from it |
@@ -140,6 +148,9 @@ every answer; the figure checks hold only for a figure.
 | Policy characters | every answer | no em or en dash and no emoji; a chat form is also printable ASCII and under 78 columns |
 | Masked title | a figure | with kicker, title, caption and legend masked, an observer names the idea in five seconds and decodes every keyed pair |
 | Removal | a figure | with every sentence removed, the carrier still states the relationship |
+| Cold-reader walk | an answer of more than one block | at each block, a reader who has seen only the request and the blocks above it can follow it: every block's purpose is clear from its lead, every term is drawn above or on it, and each block adds one thing that can be said in a sentence; a failure moves a block or adds a figure, never a paragraph |
+| Visual weight | a present document or a portal page | every concept, mechanism, lifecycle, ownership model or comparison is a figure in its family, its governing path in accent-bearing marks; text is the anchor, a lead of one or two lines per section, captions and short bullets; no narrative block over three sentences; a table is reference detail after the figures, in a disclosure in present, never the carrier of a concept |
+| Titles | a present document or a portal page | every title names its topic in plain words and none is a question; the document title is a name, its purpose in the summary |
 | State channels | a figure | a drawn SVG: every pair of states differs on two channels that are not hue, in light and in dark; a chat form: every pair of marks differs in glyph and each is keyed in the legend line |
 
 An answer with no figure, a table lookup included, passes on the universal
