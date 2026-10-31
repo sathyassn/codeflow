@@ -1,0 +1,11 @@
+id = "TSK-1101"
+uid = "e0f951e8-d328-4d86-afcc-93271cd0855f"
+kind = "TSK"
+title = "The present export sizes each stage frame from its content and waits for stages to paint"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T04:50:36Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
