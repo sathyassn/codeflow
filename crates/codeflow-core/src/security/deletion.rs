@@ -227,8 +227,7 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
         found: None,
         depth: 0,
         pipe_input: None,
-        stdout_away: false,
-        other_away: false,
+        away: Away::default(),
         walks: 0,
         jumps: Vec::new(),
         expanding: Vec::new(),
@@ -2671,6 +2670,17 @@ impl Output {
     }
 }
 
+/// Which outputs of the command being read go to a file (a redirection,
+/// or an earlier `exec >file`), not to a pipe, a substitution or the
+/// terminal.
+#[derive(Debug, Clone, Copy, Default)]
+struct Away {
+    /// The standard output.
+    stdout: bool,
+    /// Another output descriptor: the standard error, `3>`.
+    other: bool,
+}
+
 struct Reader<'a> {
     base: Option<&'a Path>,
     /// Set on native Windows: a `/`-rooted path names no fixed place.
@@ -2679,13 +2689,8 @@ struct Reader<'a> {
     depth: usize,
     /// What the pipeline stage being read receives on its input.
     pipe_input: Option<Fed>,
-    /// Whether the command being read writes its standard output to a
-    /// file (a redirection, or an earlier `exec >file`), not to a pipe,
-    /// a substitution or the terminal.
-    stdout_away: bool,
-    /// Whether another output descriptor of the command being read (the
-    /// standard error, `3>`) writes to a file.
-    other_away: bool,
+    /// Where the output of the command being read goes.
+    away: Away,
     /// How many `find` calls the reader has run, so a stage or a
     /// substitution that runs one (directly, in a function, an alias or a
     /// shell it starts) is known to print a walk.
@@ -3022,9 +3027,9 @@ impl Reader<'_> {
                 self.apply_traps(st);
                 let mut child = st.clone();
                 // A coprocess writes to a pipe any later command may read.
-                let away = std::mem::replace(&mut self.stdout_away, true);
+                let away = std::mem::replace(&mut self.away.stdout, true);
                 self.frame(FrameKind::Child, body, &mut child);
-                self.stdout_away = away;
+                self.away.stdout = away;
                 // The coprocess's descriptors and process ID are numbers.
                 st.set(name, [format!("${{{name}}}")].into());
                 st.set(&format!("{name}_PID"), [format!("${{{name}_PID}}")].into());
@@ -3044,11 +3049,11 @@ impl Reader<'_> {
                 if fed.is_some() {
                     self.pipe_input = fed;
                 }
-                let away = (self.stdout_away, self.other_away);
-                self.stdout_away |= redirs.iter().any(Redir::stdout_away);
-                self.other_away |= redirs.iter().any(Redir::other_away);
+                let away = self.away;
+                self.away.stdout |= redirs.iter().any(Redir::stdout_away);
+                self.away.other |= redirs.iter().any(Redir::other_away);
                 self.run(body, st);
-                (self.stdout_away, self.other_away) = away;
+                self.away = away;
                 self.pipe_input = outer;
             }
             Node::Unknown(reason, inner) => {
@@ -3163,7 +3168,7 @@ impl Reader<'_> {
 
     fn pipe(&mut self, stages: &[Node], st: &mut State) {
         let outer = self.pipe_input.take();
-        let away = self.stdout_away;
+        let away = self.away.stdout;
         let mut last = st.clone();
         // Once a stage lists a `find` walk, every later stage reads what
         // came of it: a filter passes it on, `xargs grep -l` names its
@@ -3184,14 +3189,14 @@ impl Reader<'_> {
                 Some(fed)
             };
             // Each stage but the last writes to the pipe.
-            self.stdout_away = away && at + 1 == stages.len();
+            self.away.stdout = away && at + 1 == stages.len();
             let walks = self.walks;
             let mut child = st.clone();
             self.frame(FrameKind::Child, stage, &mut child);
             walk |= self.walks > walks;
             last = child;
         }
-        self.stdout_away = away;
+        self.away.stdout = away;
         self.pipe_input = outer;
         // Under zsh (or bash `lastpipe`) the last stage runs in this shell.
         st.join(&last);
@@ -3279,9 +3284,9 @@ impl Reader<'_> {
     /// and also as written, since bash does not expand an alias defined on
     /// the same line.
     fn simple(&mut self, words: &[Word], redirs: &[Redir], st: &mut State) {
-        let outer = (self.stdout_away, self.other_away);
-        self.stdout_away |= redirs.iter().any(Redir::stdout_away);
-        self.other_away |= redirs.iter().any(Redir::other_away);
+        let outer = self.away;
+        self.away.stdout |= redirs.iter().any(Redir::stdout_away);
+        self.away.other |= redirs.iter().any(Redir::other_away);
         let expanded = self.expand_alias(words, redirs, st);
         self.simple_plain(words, redirs, st);
         if let Some(expanded) = expanded {
@@ -3295,7 +3300,7 @@ impl Reader<'_> {
             .map(Word::plain)
             .eq([Some("exec")]);
         if !bare_exec {
-            (self.stdout_away, self.other_away) = outer;
+            self.away = outer;
         }
     }
 
@@ -3550,7 +3555,7 @@ impl Reader<'_> {
         // A builtin that prints a walk into a file (`echo "$(find …)" >
         // list`) hands it to any later command; `read` and `mapfile` only
         // take it in.
-        if (self.stdout_away || self.other_away)
+        if (self.away.stdout || self.away.other)
             && !matches!(program, "read" | "mapfile" | "readarray")
         {
             let fed = self.pipe_input.clone().or_else(|| call.input.cloned());
@@ -4566,7 +4571,7 @@ impl Reader<'_> {
         // and one that writes its output to a file hands the walk to any
         // later command.
         if walk_given(input, &argv[1..])
-            && (self.stdout_away || self.other_away || !walk_reader(&argv))
+            && (self.away.stdout || self.away.other || !walk_reader(&argv))
         {
             self.report(
                 Judged::Unproven(Unproven {
@@ -4640,7 +4645,7 @@ impl Reader<'_> {
     fn judge_find(&mut self, args: &[String], st: &State, ambiguous: bool) {
         self.walks += 1;
         // A walk written to a file may be read by any later program.
-        if self.stdout_away || args.iter().any(|a| FIND_FILE_OUTPUT.contains(&a.as_str())) {
+        if self.away.stdout || args.iter().any(|a| FIND_FILE_OUTPUT.contains(&a.as_str())) {
             self.report(
                 Judged::Unproven(Unproven {
                     reason: why::WALK_OUT.into(),
@@ -5667,9 +5672,9 @@ impl Reader<'_> {
         });
         self.depth += 1;
         // A substitution's output is its value, never a file.
-        let away = std::mem::replace(&mut self.stdout_away, false);
+        let away = std::mem::replace(&mut self.away.stdout, false);
         let out = self.output_of(&node, &mut child);
-        self.stdout_away = away;
+        self.away.stdout = away;
         self.depth -= 1;
         self.jumps.pop();
         self.status = status;
@@ -8793,8 +8798,7 @@ mod tests {
                 found: None,
                 depth: 0,
                 pipe_input: None,
-                stdout_away: false,
-                other_away: false,
+                away: super::Away::default(),
                 walks: 0,
                 jumps: vec![],
                 expanding: vec![],
@@ -9117,8 +9121,7 @@ mod tests {
             found: None,
             depth: 0,
             pipe_input: None,
-            stdout_away: false,
-            other_away: false,
+            away: super::Away::default(),
             walks: 0,
             jumps: Vec::new(),
             expanding: Vec::new(),
@@ -9172,8 +9175,7 @@ mod tests {
             found: None,
             depth: 0,
             pipe_input: None,
-            stdout_away: false,
-            other_away: false,
+            away: super::Away::default(),
             walks: 0,
             jumps: Vec::new(),
             expanding: Vec::new(),
@@ -9226,8 +9228,7 @@ mod tests {
             found: None,
             depth: 0,
             pipe_input: None,
-            stdout_away: false,
-            other_away: false,
+            away: super::Away::default(),
             walks: 0,
             jumps: Vec::new(),
             expanding: Vec::new(),
