@@ -185,7 +185,7 @@ fn default_sources(repo: &Repository, remote: &str) -> Result<(Vec<String>, bool
 fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
     Ok(LandedPolicy {
         policy: Policy::load_effective(root)?.0,
-        project: super::policy::read_project_toml(root)?,
+        project: super::policy::local_project_toml(root)?,
         source: source.into(),
         local_differs: false,
         remote_head_advice: None,
@@ -198,8 +198,10 @@ fn finish(
     project: Option<toml::Value>,
     source: String,
 ) -> Result<LandedPolicy, String> {
-    let local_differs = !same_inputs(&Policy::load(root)?, &policy)?
-        || super::policy::read_project_toml(root)? != project;
+    // The local files are compared, never enforced; while one has an
+    // unresolved merge conflict its copy at `HEAD` is compared (TSK-330).
+    let local_differs = !same_inputs(&Policy::load_local(root)?, &policy)?
+        || super::policy::local_project_toml(root)? != project;
     Ok(LandedPolicy {
         policy,
         project,
@@ -496,7 +498,7 @@ pub fn diagnostic(root: &Path) -> Result<String, String> {
     };
     let paths = compose_paths(
         super::path_policy::PathPolicy::from_git(&authority.policy.git)?,
-        &super::path_policy::PathPolicy::from_git(&Policy::load(root)?.git)?,
+        &super::path_policy::PathPolicy::from_git(&Policy::load_local(root)?.git)?,
         PathPolicySource::WorkingCopy,
     );
     let waivers = paths.waivers();

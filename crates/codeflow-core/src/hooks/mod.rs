@@ -47,6 +47,7 @@ pub mod ref_authority;
 pub mod repo;
 pub mod scan;
 pub mod session_summary;
+mod settings_conflict;
 pub mod source_identity;
 pub mod standards;
 
