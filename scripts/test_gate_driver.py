@@ -118,6 +118,88 @@ class GateDriver(unittest.TestCase):
             self.assertNotEqual(kept.returncode, 0)
             self.assertIn('the base needs TSK-1020', kept.stdout + kept.stderr)
 
+    def test_the_shipped_gate_step_runs_quick_only_targets_when_the_mode_has_none(self):
+        # TSK-1001 AC-14 (Codex round 06, finding 1): the `codeflow test` step
+        # of the shipped adopter workflow, run as written with this tree's
+        # codeflow. A valid config whose enabled targets define only `quick`
+        # has no target in the hosted mode, and `test --strict` exits 2 on
+        # that, so the step must run the quick targets instead of stopping
+        # before them. A failing check, a malformed config and a config with
+        # nothing to run stay refused.
+        import shutil
+        import tempfile
+        binary = os.environ.get('CODEFLOW_BIN', '')
+        self.assertTrue(binary and Path(binary).is_file(), 'CODEFLOW_BIN must name this tree\'s codeflow')
+        text = read('assets/base/ci/codeflow-ci.yml').split('      - name: codeflow test\n', 1)[1]
+        text = text.split('        run: |\n', 1)[1]
+        lines = []
+        for line in text.splitlines():
+            if line.strip() and not line.startswith('          '):
+                break
+            lines.append(line[10:])
+        step = '\n'.join(lines) + '\n'
+        def target(name, **modes):
+            return {'name': name, 'runner': 'custom',
+                    'modes': {mode: {'command': command} for mode, command in modes.items()}}
+        def marker(name):
+            return f'echo ran > {name}.txt'
+        cases = {
+            'quick only': ([target('lint', quick=marker('lint'))], 0, ['lint'], []),
+            'quick only, failing': ([target('lint', quick=marker('lint') + '; exit 3')], 1, ['lint'], []),
+            'mixed quick and full': ([target('lint', quick=marker('lint')),
+                                      target('unit', quick=marker('unit-quick'), full=marker('unit'))],
+                                     0, ['lint', 'unit'], ['unit-quick']),
+            'full and quick only': ([target('lint', quick=marker('lint')), target('slow', full=marker('slow'))],
+                                    0, ['lint', 'slow'], []),
+            'failing full stops before quick': ([target('lint', quick=marker('lint')),
+                                                 target('slow', full=marker('slow') + '; exit 3')],
+                                                1, ['slow'], ['lint']),
+            'essential and quick only': ([target('lint', quick=marker('lint')),
+                                          target('unit', essential=marker('unit'), full=marker('unit-full'))],
+                                         0, ['lint', 'unit'], ['unit-full']),
+            'no target': ([], 2, [], []),
+            'only disabled targets': ([{**target('off', quick=marker('off')), 'enabled': False}], 2, [], ['off']),
+        }
+        for label, (targets, code, ran, not_ran) in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repo, home, bin_dir = root / 'repo', root / 'home', root / 'bin'
+                for folder in (repo, home, bin_dir):
+                    folder.mkdir()
+                shutil.copy2(binary, bin_dir / 'codeflow')
+                subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=repo, check=True)
+                (repo / '.codeflow').mkdir()
+                (repo / '.codeflow/test-config.json').write_text(json.dumps({'schema_version': '1.0', 'targets': targets}))
+                env = {**os.environ, 'CODEFLOW_HOME': str(home), 'EVENT': 'pull_request',
+                       'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}'}
+                env.pop('CARGO_TARGET_DIR', None)
+                done = subprocess.run(['bash', '-c', step], cwd=repo, capture_output=True, text=True, env=env,
+                                      timeout=300)
+                output = done.stdout + done.stderr
+                if code == 0:
+                    self.assertEqual(done.returncode, 0, output)
+                else:
+                    self.assertNotEqual(done.returncode, 0, output)
+                for name in ran:
+                    self.assertTrue((repo / f'{name}.txt').exists(), f'{name} did not run: {output}')
+                for name in not_ran:
+                    self.assertFalse((repo / f'{name}.txt').exists(), f'{name} ran: {output}')
+        # A malformed config is refused by the gate, never skipped.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, home, bin_dir = root / 'repo', root / 'home', root / 'bin'
+            for folder in (repo, home, bin_dir):
+                folder.mkdir()
+            shutil.copy2(binary, bin_dir / 'codeflow')
+            subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=repo, check=True)
+            (repo / '.codeflow').mkdir()
+            (repo / '.codeflow/test-config.json').write_text('{"schema_version": "1.0", "targets": [')
+            env = {**os.environ, 'CODEFLOW_HOME': str(home), 'EVENT': 'pull_request',
+                   'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}'}
+            env.pop('CARGO_TARGET_DIR', None)
+            done = subprocess.run(['bash', '-c', step], cwd=repo, capture_output=True, text=True, env=env, timeout=300)
+            self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

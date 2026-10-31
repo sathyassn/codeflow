@@ -27,7 +27,10 @@ records its selection with an empty `skipped` list; a target CI skips
 
 The shipped CI workflow runs the targets that define `quick` but not the
 mode it runs, after its gate, so a quick-only target keeps an automatic run
-(TSK-1001). This repository's own hosted gate runs the base revision's
+(TSK-1001). When no enabled target defines the mode it runs, as in a config
+with only `quick` targets, it runs the quick targets instead of the gate. A
+failing check, a config it cannot read and a config with nothing to run
+still fail the step. This repository's own hosted gate runs the base revision's
 `codeflow` with the base's test config through `--config`, so a pull
 request's config edits take effect only once it lands.
 

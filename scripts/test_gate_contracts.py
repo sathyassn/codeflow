@@ -268,13 +268,21 @@ class GateContracts(unittest.TestCase):
         # quick gate; the shipped workflow runs exactly those after the gate.
         import tempfile
         workflow = read('assets/base/ci/codeflow-ci.yml')
-        line = re.search(r"^          codeflow_quick_only=\$\(python3 -I -c '(.+)' \"\$codeflow_mode\" 2>/dev/null \|\| true\)$",
+        line = re.search(r"^          codeflow_plan=\$\(python3 -I -c '(.+)' \"\$codeflow_mode\" 2>/dev/null \|\| true\)$",
                          workflow, re.M)
         self.assertIsNotNone(line)
         self.assertIn('          if [ -n "$codeflow_quick_only" ]; then\n'
                       '            "$codeflow_bin" test --strict --mode quick --only "$codeflow_quick_only"\n', workflow)
+        # The plan is read before anything runs; the strict run in the mode
+        # is skipped only when the mode has no enabled target and quick-only
+        # targets exist; the quick-only run follows it.
+        self.assertIn('          if [ "$codeflow_in_mode" != 0 ] || [ -z "$codeflow_quick_only" ]; then\n'
+                      '            "$codeflow_bin" test --strict --mode "$codeflow_mode"\n', workflow)
+        self.assertEqual(workflow.count('"$codeflow_bin" test --strict --mode "$codeflow_mode"'), 1)
+        self.assertLess(workflow.index('codeflow_plan='),
+                        workflow.index('"$codeflow_bin" test --strict --mode "$codeflow_mode"'))
         self.assertLess(workflow.index('"$codeflow_bin" test --strict --mode "$codeflow_mode"'),
-                        workflow.index('codeflow_quick_only='))
+                        workflow.index('"$codeflow_bin" test --strict --mode quick --only'))
         self.assertEqual(read('.codeflow/.baseline/.github/workflows/codeflow-ci.yml'), workflow)
         config = {'targets': [
             {'name': 'lint', 'modes': {'quick': {}}},
@@ -288,8 +296,14 @@ class GateContracts(unittest.TestCase):
             def names(mode):
                 return subprocess.run(['python3', '-I', '-c', line.group(1), mode], cwd=directory,
                                       capture_output=True, text=True, check=True).stdout.strip()
-            self.assertEqual(names('essential'), 'lint,smoke')
-            self.assertEqual(names('full'), 'lint')
+            # "<enabled targets in the mode>:<the quick-only targets>"
+            self.assertEqual(names('essential'), '1:lint,smoke')
+            self.assertEqual(names('full'), '3:lint')
+            Path(directory, '.codeflow/test-config.json').write_text(json.dumps(
+                {'targets': [{'name': 'lint', 'modes': {'quick': {}}}]}))
+            self.assertEqual(names('full'), '0:lint')
+            Path(directory, '.codeflow/test-config.json').write_text(json.dumps({'targets': []}))
+            self.assertEqual(names('full'), '0:')
 
     def test_release_impact_judges_the_candidate_with_the_targets_definitions(self):
         # TSK-1001: `release impact (trusted)` runs on pull_request_target

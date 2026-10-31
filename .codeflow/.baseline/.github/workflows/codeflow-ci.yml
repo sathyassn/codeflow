@@ -194,13 +194,28 @@ jobs:
             cd "$codeflow_root"
           fi
           codeflow_gated=1
-          "$codeflow_bin" test --strict --mode "$codeflow_mode"
           # Targets that define `quick` but not the mode above ran only in
           # the pre-push quick gate, which no longer runs targets (TSK-449),
           # so they run here and keep an automatic enforcement point
-          # (TSK-1001). A config that cannot be read runs none here; the run
-          # above already refused it.
-          codeflow_quick_only=$(python3 -I -c 'import json, sys; c = json.load(open(".codeflow/test-config.json")); print(",".join(t["name"] for t in c.get("targets", []) if t.get("enabled", True) and "quick" in (t.get("modes") or {}) and sys.argv[1] not in (t.get("modes") or {})))' "$codeflow_mode" 2>/dev/null || true)
+          # (TSK-1001). The plan is "<enabled targets in the mode>:<those
+          # quick-only targets>", read before anything runs. A config that
+          # cannot be read gives no plan, and the run below refuses it.
+          codeflow_plan=$(python3 -I -c 'import json, sys; c = json.load(open(".codeflow/test-config.json")); ts = [t for t in c.get("targets", []) if t.get("enabled", True)]; m = sys.argv[1]; print("%d:%s" % (sum(1 for t in ts if m in (t.get("modes") or {})), ",".join(t["name"] for t in ts if "quick" in (t.get("modes") or {}) and m not in (t.get("modes") or {}))))' "$codeflow_mode" 2>/dev/null || true)
+          codeflow_in_mode=${codeflow_plan%%:*}
+          codeflow_quick_only=${codeflow_plan#*:}
+          if [ -z "$codeflow_plan" ]; then
+            codeflow_in_mode=1
+            codeflow_quick_only=
+          fi
+          # A mode with no enabled target exits 2 under --strict, which would
+          # stop the step before the quick-only run; skip it only then. A
+          # failing run still fails the step, and a config with nothing at
+          # all to run still reaches the strict run and is refused.
+          if [ "$codeflow_in_mode" != 0 ] || [ -z "$codeflow_quick_only" ]; then
+            "$codeflow_bin" test --strict --mode "$codeflow_mode"
+          else
+            echo "codeflow: no enabled target defines the ${codeflow_mode} mode; running the quick-only targets"
+          fi
           if [ -n "$codeflow_quick_only" ]; then
             "$codeflow_bin" test --strict --mode quick --only "$codeflow_quick_only"
           fi
