@@ -5,6 +5,12 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+// Public so `hooks_cli` reaches the one copy of this module through its
+// `line_adoption_fixture` instead of loading the file a second time.
+#[path = "git_isolation.rs"]
+pub mod git_isolation;
+use git_isolation::strip_host_git_state;
+
 pub const LINE: &str = "integration/EPC-001-outcome";
 pub const EPIC_PATH: &str = "project-management/epics/EPC-001.md";
 pub const ZERO: &str = "0000000000000000000000000000000000000000";
@@ -95,10 +101,9 @@ impl Line {
     }
     pub fn command(&self, program: &str) -> Command {
         let mut c = Command::new(program);
+        strip_host_git_state(&mut c);
         c.current_dir(self.root())
-            .env("CODEFLOW_HOME", self.home.path())
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+            .env("CODEFLOW_HOME", self.home.path());
         for key in [
             "GIT_DIR",
             "GIT_WORK_TREE",
