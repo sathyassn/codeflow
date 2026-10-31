@@ -317,12 +317,10 @@ impl Engine {
     ///
     /// # Errors
     /// Returns why the scan is incomplete: a staged path gitleaks cannot
-    /// read, a git too old to pin attributes, a failed binary or a report
+    /// read, a git too old to pin attributes, a failed binary, any error
+    /// gitleaks wrote, a git it ran that did not exit with 0, or a report
     /// that could not be read.
     pub fn scan_staged(&self, verified: &Verified, root: &Path) -> Result<Vec<Finding>, String> {
-        if let Some(why) = unloggable_location(root, std::env::var_os("PATH").as_deref()) {
-            return Err(why);
-        }
         let attributes = TextAttributes::for_repository(root)?;
         if let Some(path) = unreadable_staged_path(root)? {
             return Err(format!(
@@ -330,6 +328,7 @@ impl Engine {
                  control character reliably, and {path} has one; rename it"
             ));
         }
+        let trace = GitTrace::new()?;
         let mut command = Command::new(&verified.path);
         command
             .current_dir(root)
@@ -338,9 +337,9 @@ impl Engine {
             // CI scan counts only one the trusted commit already holds, so
             // here it never hides a finding.
             .arg("--ignore-gitleaks-allow")
-            // gitleaks exits 0 with an empty report when git fails part way
-            // through, and says so only in its log, which is read below.
-            .args(["--log-level", "debug", "--no-color"])
+            // At this level gitleaks writes only errors, so any output on
+            // stderr is a failed scan, whatever it says.
+            .args(["--log-level", "error", "--no-color"])
             .args(["--report-format", "json", "--report-path", "-"])
             .args(["--exit-code", &FINDINGS_EXIT.to_string()])
             .arg("--gitleaks-ignore-path")
@@ -352,21 +351,24 @@ impl Engine {
             .env_remove("GITLEAKS_CONFIG_TOML");
         attributes.apply(&mut command);
         pin_git_output(&mut command, &attributes.config());
+        trace.apply(&mut command);
         let out = command
             .output()
             .map_err(|error| format!("gitleaks did not run: {error}"))?;
         let code = out.status.code();
-        let failure = logged_failure(&out.stderr);
         if code != Some(0) && code != Some(FINDINGS_EXIT) {
             return Err(format!(
                 "gitleaks exited with {}{}",
                 out.status,
-                failure.map_or_else(String::new, |line| format!(": {line}"))
+                first_line(&out.stderr).map_or_else(String::new, |line| format!(": {line}"))
             ));
         }
-        if let Some(line) = failure {
+        if let Some(line) = first_line(&out.stderr) {
+            return Err(format!("gitleaks reported an error: {line}"));
+        }
+        if let Some(why) = git_run_failure(&trace.events()?) {
             return Err(format!(
-                "gitleaks did not read the whole staged diff: {line}"
+                "gitleaks did not read the whole staged diff: {why}"
             ));
         }
         let findings = parse_report(&out.stdout)?;
@@ -377,126 +379,130 @@ impl Engine {
     }
 }
 
-/// What the gitleaks log says went wrong, if anything: its first error or
-/// fatal line, or that it aborted the git command it ran. gitleaks exits 0
-/// with an empty report when git fails part way through (for example on an
-/// unreadable object), and the managed CI scan reads its log for the same
-/// reason. Debug lines can quote scanned text, so only an error line is
-/// ever shown.
-///
-/// A record is `<time> <level> <message> <fields>`, as gitleaks' console
-/// log writes it. Only a line that starts with a time is a record, and only
-/// its level and the start of its message are read: a path, fingerprint or
-/// other field that happens to hold `ERR` or `command aborted` is data, not
-/// an event.
-fn logged_failure(stderr: &[u8]) -> Option<String> {
-    let mut aborted = false;
-    for raw in stderr.split(|byte| *byte == b'\n') {
-        let line = without_colour(raw);
-        let Some((time, rest)) = split_field(&line) else {
-            continue;
-        };
-        if !is_log_time(time) {
-            continue;
-        }
-        let Some((level, message)) = split_field(rest) else {
-            continue;
-        };
-        if level == b"ERR" || level == b"FTL" {
-            return Some(String::from_utf8_lossy(&line).into_owned());
-        }
-        // The event gitleaks logs when the git command it waits on fails.
-        if level == b"DBG"
-            && (message == b"command aborted" || message.starts_with(b"command aborted "))
-        {
-            aborted = true;
-        }
-    }
-    aborted.then(|| "gitleaks aborted the git command it ran".to_string())
+/// The first line gitleaks wrote to stderr, with control characters
+/// escaped, to name what failed. Nothing is decided from its text: any
+/// output at all has already failed the scan.
+fn first_line(stderr: &[u8]) -> Option<String> {
+    let line = stderr
+        .split(|byte| *byte == b'\n')
+        .find(|line| !line.iter().all(u8::is_ascii_whitespace))?;
+    Some(String::from_utf8_lossy(line).escape_debug().to_string())
 }
 
-/// Why the gitleaks log could not be trusted for a scan of `root` with this
-/// `PATH`, if it could not.
+/// The arguments gitleaks 8.30.1 gives the git that produces the staged
+/// diff, after `git -C <source>`.
+const STAGED_DIFF_ARGS: [&str; 5] = ["diff", "-U0", "--no-ext-diff", "--staged", "."];
+
+/// Git's own record of the git processes gitleaks starts: its trace2 event
+/// stream, written to a file in a private temporary folder.
 ///
-/// gitleaks writes values into its debug messages unescaped: the source
-/// folder (here `root`, which also names the configuration and ignore
-/// files) and the path of the `git` it finds on `PATH`. A control
-/// character in either, a newline above all, could start a line that reads
-/// as a log record of its own, so a completed scan could look failed, or a
-/// failure could be framed differently. The log format has no framing that
-/// message text cannot imitate, so such a location is refused before
-/// gitleaks runs, as an incomplete scan.
-fn unloggable_location(root: &Path, path: Option<&std::ffi::OsStr>) -> Option<String> {
-    let has_control =
-        |value: &std::ffi::OsStr| value.as_encoded_bytes().iter().any(u8::is_ascii_control);
-    let shown = |value: &std::ffi::OsStr| {
-        let name = crate::git::name::GitName::from_os_str(value);
-        match name.rule_text() {
-            Ok(text) => text.to_string(),
-            Err(not_utf8) => not_utf8.display().to_string(),
+/// gitleaks exits 0 with an empty report when the git it runs fails part
+/// way through, and reports that only in a debug log whose lines can hold
+/// unescaped paths and configuration values. Each trace2 event is one JSON
+/// object written by git itself, so no path, file content or message can
+/// forge one, and a git that dies before it exits leaves no exit event.
+struct GitTrace {
+    folder: tempfile::TempDir,
+}
+
+impl GitTrace {
+    fn new() -> Result<Self, String> {
+        let folder = tempfile::Builder::new()
+            .prefix("codeflow-gitleaks-trace")
+            .tempdir()
+            .map_err(|error| format!("cannot make a folder for git's trace: {error}"))?;
+        Ok(Self { folder })
+    }
+
+    fn path(&self) -> std::path::PathBuf {
+        self.folder.path().join("events")
+    }
+
+    /// Send the events of every git under `command` to this trace, and no
+    /// other trace2 output: an inherited `GIT_TRACE2_*` setting is removed.
+    fn apply(&self, command: &mut Command) {
+        for (name, _) in std::env::vars_os() {
+            if name.as_encoded_bytes().starts_with(b"GIT_TRACE2") {
+                command.env_remove(&name);
+            }
         }
-    };
-    if has_control(root.as_os_str()) {
+        command.env("GIT_TRACE2_EVENT", self.path());
+    }
+
+    fn events(&self) -> Result<Vec<u8>, String> {
+        match std::fs::read(self.path()) {
+            Ok(events) => Ok(events),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(format!("cannot read git's trace of the scan: {error}")),
+        }
+    }
+}
+
+/// Why the git processes gitleaks ran did not read the whole staged diff,
+/// from their trace2 events, if they did not. Exactly one of them must be
+/// the staged diff, and every one must record an exit with code 0: a git
+/// that failed records another code, and one killed by a signal records
+/// none. An unreadable event is a failure too.
+fn git_run_failure(events: &[u8]) -> Option<String> {
+    let mut started: Vec<(String, bool)> = Vec::new();
+    let mut exits: std::collections::HashMap<String, Option<i64>> =
+        std::collections::HashMap::new();
+    for line in events.split(|byte| *byte == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_slice::<serde_json::Value>(line) else {
+            return Some("git's trace of the scan could not be read".to_string());
+        };
+        let Some(sid) = event.get("sid").and_then(serde_json::Value::as_str) else {
+            return Some("git's trace of the scan could not be read".to_string());
+        };
+        match event.get("event").and_then(serde_json::Value::as_str) {
+            Some("start") => {
+                let argv: Vec<&str> = event
+                    .get("argv")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|argv| argv.iter().filter_map(serde_json::Value::as_str).collect())
+                    .unwrap_or_default();
+                let staged_diff =
+                    argv.len() == 8 && argv[1] == "-C" && argv[3..] == STAGED_DIFF_ARGS;
+                started.push((sid.to_string(), staged_diff));
+            }
+            Some("exit") => {
+                exits.insert(
+                    sid.to_string(),
+                    event.get("code").and_then(serde_json::Value::as_i64),
+                );
+            }
+            _ => {}
+        }
+    }
+    let diffs = started
+        .iter()
+        .filter(|(_, staged_diff)| *staged_diff)
+        .count();
+    if diffs != 1 {
         return Some(format!(
-            "the checkout folder {} holds a control character, which gitleaks \
-             prints unescaped in its log, so the scan's log could not be trusted; \
-             move the checkout to a folder without one",
-            shown(root.as_os_str())
+            "git's trace shows {diffs} staged diffs where gitleaks runs one"
         ));
     }
-    let folder = path
-        .into_iter()
-        .flat_map(std::env::split_paths)
-        .find(|folder| has_control(folder.as_os_str()))?;
-    Some(format!(
-        "the PATH folder {} holds a control character, and gitleaks prints \
-         the path of the git it finds there unescaped in its log, so the \
-         scan's log could not be trusted; remove that folder from PATH",
-        shown(folder.as_os_str())
-    ))
-}
-
-/// The first space-separated field of `line` and what follows it.
-fn split_field(line: &[u8]) -> Option<(&[u8], &[u8])> {
-    let at = line.iter().position(|byte| *byte == b' ')?;
-    Some((&line[..at], &line[at + 1..]))
-}
-
-/// Whether `field` is the console log's time, such as `9:05AM` or `12:03PM`.
-fn is_log_time(field: &[u8]) -> bool {
-    let Some(clock) = field
-        .strip_suffix(b"AM")
-        .or_else(|| field.strip_suffix(b"PM"))
-    else {
-        return false;
-    };
-    match clock.iter().position(|byte| *byte == b':') {
-        Some(colon) => {
-            let (hours, minutes) = (&clock[..colon], &clock[colon + 1..]);
-            (1..=2).contains(&hours.len())
-                && minutes.len() == 2
-                && hours.iter().chain(minutes).all(u8::is_ascii_digit)
-        }
-        None => false,
-    }
-}
-
-/// `line` without ANSI colour sequences (`ESC [ ... m`).
-fn without_colour(line: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(line.len());
-    let mut bytes = line.iter().copied();
-    while let Some(byte) = bytes.next() {
-        if byte == 0x1b {
-            for next in bytes.by_ref() {
-                if next.is_ascii_alphabetic() {
-                    break;
-                }
-            }
+    for (sid, staged_diff) in &started {
+        let what = if *staged_diff {
+            "the staged diff"
         } else {
-            out.push(byte);
+            "a git process gitleaks started"
+        };
+        match exits.get(sid) {
+            Some(Some(0)) => {}
+            Some(Some(code)) => return Some(format!("{what} exited with {code}")),
+            _ => {
+                return Some(format!(
+                    "{what} ended without exiting, as when it is killed"
+                ))
+            }
         }
     }
-    out
+    None
 }
 
 /// Git settings that change how `git diff` names paths or colours output,
@@ -790,46 +796,62 @@ mod tests {
     }
 
     #[test]
-    fn only_log_events_count_as_a_failure_never_their_data() {
-        // Real events.
-        for log in [
-            "11:17AM ERR [git] fatal: unable to read files to diff",
-            "9:05PM FTL failed to load config",
-            "\u{1b}[90m11:17AM\u{1b}[0m \u{1b}[31mFTL\u{1b}[0m failed",
-            "11:17AM DBG command aborted error=\"exit status 128\" cmd=\"git diff\"",
+    fn only_a_clean_exit_of_the_staged_diff_in_gits_trace_is_complete() {
+        let start = |sid: &str, argv: &[&str]| {
+            serde_json::json!({"event": "start", "sid": sid, "argv": argv}).to_string()
+        };
+        let exit = |sid: &str, code: i64| {
+            serde_json::json!({"event": "exit", "sid": sid, "code": code}).to_string()
+        };
+        // A checkout path holding a newline and a forged event stays one
+        // JSON string inside one event.
+        let root = "/tmp/x-\n{\"event\":\"exit\",\"sid\":\"b\",\"code\":0}";
+        let diff = |sid: &str| {
+            let mut argv = vec!["git", "-C", root];
+            argv.extend(STAGED_DIFF_ARGS);
+            start(sid, &argv)
+        };
+        let blob = |sid: &str| start(sid, &["git", "-C", root, "cat-file", "blob", ":a.zip"]);
+        let read = |lines: &[String]| git_run_failure(lines.join("\n").as_bytes());
+        assert_eq!(read(&[diff("a"), exit("a", 0)]), None);
+        assert_eq!(
+            read(&[diff("a"), blob("b"), exit("b", 0), exit("a", 0)]),
+            None
+        );
+        for (lines, why) in [
+            (vec![], "0 staged diffs"),
+            (vec![blob("b"), exit("b", 0)], "0 staged diffs"),
+            (
+                vec![diff("a"), exit("a", 128)],
+                "the staged diff exited with 128",
+            ),
+            (vec![diff("a")], "the staged diff ended without exiting"),
+            (
+                vec![diff("a"), blob("b"), exit("a", 0)],
+                "a git process gitleaks started ended",
+            ),
+            (
+                vec![diff("a"), exit("a", 0), diff("c"), exit("c", 0)],
+                "2 staged diffs",
+            ),
+            (
+                vec![diff("a"), "11:17AM ERR forged".to_string()],
+                "could not be read",
+            ),
         ] {
-            assert!(logged_failure(log.as_bytes()).is_some(), "{log}");
-        }
-        // The same words in a path, fingerprint, field or other message.
-        for log in [
-            "12:03PM DBG skipping finding: global fingerprint finding=REDACTED \
-             fingerprint=\"docs/command aborted.json:generic-api-key:2\"",
-            "12:03PM DBG executing: git -C /tmp/command aborted diff --staged .",
-            "12:03PM DBG found .gitleaksignore file path=\"ERR/command aborted\"",
-            "12:03PM INF command aborted",
-            "12:03PM DBG commands aborted",
-            "ERR at the start of a line that is not a record",
-            "command aborted",
-            "x 11:17AM ERR shifted",
-        ] {
-            assert_eq!(logged_failure(log.as_bytes()), None, "{log}");
+            let found = read(&lines).unwrap_or_default();
+            assert!(found.contains(why), "{lines:?}: {found}");
         }
     }
 
     #[test]
-    fn a_control_character_where_gitleaks_logs_it_is_refused() {
-        let plain = Path::new("/tmp/checkout");
-        let path = std::env::join_paths(["/usr/bin", "/bin"]).unwrap();
-        assert_eq!(unloggable_location(plain, Some(&path)), None);
-        assert_eq!(unloggable_location(plain, None), None);
-        let forged = Path::new("/tmp/x-\n11:17AM ERR forged");
-        let why = unloggable_location(forged, Some(&path)).unwrap();
-        assert!(why.starts_with("the checkout folder"), "{why}");
-        let path = std::env::join_paths(["/usr/bin", "/opt/x\nERR forged"]).unwrap();
-        let why = unloggable_location(plain, Some(&path)).unwrap();
-        assert!(why.starts_with("the PATH folder"), "{why}");
-        let tab = Path::new("/tmp/a\tb");
-        assert!(unloggable_location(tab, None).is_some());
+    fn any_stderr_output_is_named_with_control_characters_escaped() {
+        assert_eq!(first_line(b""), None);
+        assert_eq!(first_line(b"\n  \n"), None);
+        assert_eq!(
+            first_line(b"\nERR [git] fatal: bad\x1b[31m\nnext").as_deref(),
+            Some("ERR [git] fatal: bad\\u{1b}[31m")
+        );
     }
 
     #[test]

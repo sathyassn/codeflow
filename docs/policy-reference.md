@@ -910,10 +910,12 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   which attributes do not reach, so the scan pins that driver to text with
   no conversion whatever a configuration file or include sets; a submodule
   shows as its commit line. gitleaks exits 0 with an empty report when git
-  fails part way through, so the hook reads its log and a logged git
-  failure is a failed scan. gitleaks prints the checkout folder and the
-  path of the `git` it finds on `PATH` unescaped in that log, so a control
-  character in either is a failed scan before gitleaks runs.
+  fails part way through, so the hook does not read its log. gitleaks runs
+  at the error level, and any output it writes is a failed scan. Git's own
+  trace of the run (`GIT_TRACE2_EVENT`, one JSON event per line) must show
+  the staged diff and every other git that gitleaks started exiting with 0;
+  a git that failed or was killed is a failed scan. No path, file content
+  or configuration value can forge or hide either check.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,
