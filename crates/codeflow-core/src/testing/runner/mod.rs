@@ -627,12 +627,24 @@ fn run_owed_target(
     run_dir: &Path,
     declarations: &[TargetConfig],
 ) -> Result<TargetRunResult, TestingError> {
+    // Paths a target names are reached through the anchored walk, never
+    // following a link or junction at any component (TSK-1044).
+    let (anchor, output) = super::delivery::target_anchor(root)?;
+    let locate = |path: &Path| super::delivery::locate(root, &anchor, &output, path);
     if let Some(report) = &target.report {
-        let path = root
-            .join(target.cwd.as_deref().unwrap_or("."))
-            .join(&report.path);
-        if path.exists() && target.modes[mode].command.contains("nextest") {
-            std::fs::remove_file(path)?;
+        if target.modes[mode].command.contains("nextest") {
+            let path = resolve_cwd(root, target.cwd.as_deref())?.join(&report.path);
+            locate(&path)
+                .and_then(|(tree, relative)| tree.remove(&relative))
+                .map_err(|error| {
+                    TestingError::Io(std::io::Error::new(
+                        error.kind(),
+                        format!(
+                            "stale report {} refused: {error}; nothing was removed through it",
+                            path.display()
+                        ),
+                    ))
+                })?;
         }
     }
     let declared = declarations
@@ -676,11 +688,18 @@ fn run_owed_target(
             );
         }
         for output in &target.outputs {
-            if !root.join(output).exists() {
-                failures.push(format!("producer output missing: {output}"));
-                result.exit_code = 1;
-                let _ = write!(result.stderr, "\nproducer output missing: {output}");
-            }
+            let failure = match locate(&root.join(output))
+                .and_then(|(tree, relative)| tree.metadata(&relative))
+            {
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    format!("producer output missing: {output}")
+                }
+                Err(error) => format!("producer output refused: {output}: {error}"),
+            };
+            result.exit_code = 1;
+            let _ = write!(result.stderr, "\n{failure}");
+            failures.push(failure);
         }
         if !failures.is_empty() {
             result.error = Some(super::evidence::redact(declared, &failures.join("; ")));
@@ -701,20 +720,25 @@ fn run_owed_target(
             &super::delivery::digest(target.name.as_bytes())[..16]
         )
     };
-    let destination = run_dir.join(directory);
-    std::fs::create_dir_all(&destination)?;
+    // Every write below goes through the anchored walk the gate made the run
+    // folder with, never following a link or junction, so a link another
+    // target planted in the run folder is refused rather than written
+    // through (TSK-1044).
+    let (tree, run) = run_anchor(root, &anchor, &output, run_dir)?;
+    let destination = run_dir.join(&directory);
+    let saved_at = format!("{run}/{directory}");
+    tree.create_dir_all(&saved_at)
+        .map_err(|error| super::delivery::evidence_refused(tree.path(), &saved_at, &error))?;
     if let Some(path) = &result.report_path {
-        if path.exists() {
-            let saved = destination.join("junit.xml");
-            save_redacted_report(path, &saved, declared)?;
-            result.report_path = Some(saved);
+        let saved = format!("{saved_at}/junit.xml");
+        if save_redacted_report(&locate, path, &tree, &saved, declared)? {
+            result.report_path = Some(destination.join("junit.xml"));
         }
     }
     if let Some(path) = &result.coverage_path {
-        if path.exists() {
-            let saved = destination.join("coverage");
-            save_redacted_report(path, &saved, declared)?;
-            result.coverage_path = Some(saved);
+        let saved = format!("{saved_at}/coverage");
+        if save_redacted_report(&locate, path, &tree, &saved, declared)? {
+            result.coverage_path = Some(destination.join("coverage"));
         }
     }
     if target.heavy == Some(true) {
@@ -728,17 +752,60 @@ fn run_owed_target(
     }
     result.stdout = super::evidence::redact(declared, &result.stdout);
     result.stderr = super::evidence::redact(declared, &result.stderr);
-    std::fs::write(destination.join("stdout.log"), &result.stdout)?;
-    std::fs::write(destination.join("stderr.log"), &result.stderr)?;
+    for (name, text) in [
+        ("stdout.log", &result.stdout),
+        ("stderr.log", &result.stderr),
+    ] {
+        let log = format!("{saved_at}/{name}");
+        tree.write(&log, text.as_bytes())
+            .map_err(|error| super::delivery::evidence_refused(tree.path(), &log, &error))?;
+    }
     Ok(result)
 }
 
+/// The evidence anchor of the project at `root` and the run folder's path
+/// beneath it (`<build output>/codeflow-gate/<run id>`), as the gate made it.
+fn run_anchor(
+    root: &Path,
+    anchor: &Path,
+    target: &str,
+    run_dir: &Path,
+) -> Result<(crate::contained::Tree, String), TestingError> {
+    let run_id = run_dir
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| {
+            super::delivery::invalid(
+                root,
+                format!("gate run folder {} is not valid UTF-8", run_dir.display()),
+            )
+        })?;
+    Ok((
+        crate::contained::Tree::open(anchor)?,
+        format!("{target}/codeflow-gate/{run_id}"),
+    ))
+}
+
+/// Copy a target's report into the run folder with environment inputs
+/// redacted; `false` when the report is absent.
 fn save_redacted_report(
+    locate: &impl Fn(&Path) -> std::io::Result<(crate::contained::Tree, String)>,
     source: &Path,
-    destination: &Path,
+    tree: &crate::contained::Tree,
+    destination: &str,
     target: &TargetConfig,
-) -> Result<(), TestingError> {
-    let bytes = std::fs::read(source)?;
+) -> Result<bool, TestingError> {
+    let refused = |error: std::io::Error| {
+        TestingError::Io(std::io::Error::new(
+            error.kind(),
+            format!("report {} refused: {error}", source.display()),
+        ))
+    };
+    let Some(mut file) = open_report(locate(source).map_err(refused)?).map_err(refused)? else {
+        return Ok(false);
+    };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(refused)?;
     let text = String::from_utf8(bytes).map_err(|_| {
         super::delivery::invalid(
             source,
@@ -746,8 +813,28 @@ fn save_redacted_report(
         )
     })?;
     let redacted = super::evidence::redact(target, &text);
-    std::fs::write(destination, redacted)?;
-    Ok(())
+    tree.write(destination, redacted.as_bytes())
+        .map_err(|error| super::delivery::evidence_refused(tree.path(), destination, &error))?;
+    Ok(true)
+}
+
+/// Open a target's report, located by [`super::delivery::locate`] beneath
+/// the build-output folder or the project, through an anchored walk that
+/// never follows a link or junction at any component (TSK-1044). The opened
+/// file must be a regular file with one name, read from its handle on every
+/// platform, so a link or hard link planted at the report path or above it
+/// cannot copy another file into the evidence. A missing report is `None`.
+fn open_report(
+    (tree, relative): (crate::contained::Tree, String),
+) -> std::io::Result<Option<std::fs::File>> {
+    match tree.open_regular(&relative) {
+        Ok(file) => {
+            crate::contained::single_name(&file)?;
+            Ok(Some(file))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Returns `true` when the process is running inside a CI environment.
@@ -2329,5 +2416,86 @@ mod tests {
             !dir.path().join("marker.txt").exists(),
             "the command never ran"
         );
+    }
+}
+
+/// TSK-1044 review 1: a report is opened through the anchored walk, so a
+/// link or junction at any component, a link at the report itself, or a
+/// hard link never copies an outside file into the evidence.
+#[cfg(test)]
+mod report_open_tests {
+    use std::path::Path;
+
+    fn open_report(root: &Path, path: &Path) -> std::io::Result<Option<std::fs::File>> {
+        super::open_report(crate::testing::delivery::locate(
+            root, root, "target", path,
+        )?)
+    }
+
+    #[test]
+    fn a_plain_report_opens_and_a_missing_one_is_absent() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("reports")).unwrap();
+        std::fs::write(root.path().join("reports/junit.xml"), "<testsuites/>").unwrap();
+        let path = root.path().join("reports/junit.xml");
+        assert!(open_report(root.path(), &path).unwrap().is_some());
+        let missing = root.path().join("absent/junit.xml");
+        assert!(open_report(root.path(), &missing).unwrap().is_none());
+        let outside = tempfile::tempdir().unwrap();
+        let elsewhere = outside.path().join("junit.xml");
+        std::fs::write(&elsewhere, "<testsuites/>").unwrap();
+        assert!(open_report(root.path(), &elsewhere).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_above_or_at_the_report_and_hard_links_are_refused() {
+        for planted in ["ancestor", "leaf", "hard"] {
+            let root = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("junit.xml"), "victim").unwrap();
+            let reports = root.path().join("reports");
+            match planted {
+                "ancestor" => std::os::unix::fs::symlink(outside.path(), &reports).unwrap(),
+                "leaf" => {
+                    std::fs::create_dir(&reports).unwrap();
+                    std::os::unix::fs::symlink(
+                        outside.path().join("junit.xml"),
+                        reports.join("junit.xml"),
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    std::fs::create_dir(&reports).unwrap();
+                    let near = root.path().join("victim");
+                    std::fs::write(&near, "victim").unwrap();
+                    std::fs::hard_link(&near, reports.join("junit.xml")).unwrap();
+                }
+            }
+            let result = open_report(root.path(), &reports.join("junit.xml"));
+            assert!(result.is_err(), "{planted}: opened");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_above_the_report_and_a_hard_link_are_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("junit.xml"), "victim").unwrap();
+        let reports = root.path().join("reports");
+        std::fs::create_dir(&reports).unwrap();
+        let redirect =
+            crate::bounded_file::confined::windows::tests::junction(&reports, outside.path())
+                .unwrap();
+        assert!(open_report(root.path(), &reports.join("junit.xml")).is_err());
+        drop(redirect);
+        let other = root.path().join("other");
+        std::fs::create_dir(&other).unwrap();
+        let near = root.path().join("victim");
+        std::fs::write(&near, "victim").unwrap();
+        std::fs::hard_link(&near, other.join("junit.xml")).unwrap();
+        let error = open_report(root.path(), &other.join("junit.xml")).unwrap_err();
+        assert!(error.to_string().contains("hard link"), "{error}");
     }
 }

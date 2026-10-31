@@ -272,15 +272,7 @@ fn run_configured(
 ) -> Result<GateOutcome, TestingError> {
     delivery::check_only(project_dir, &targets, &effective_mode, &options.only)?;
     let home = crate::registry::codeflow_home();
-    let selection = delivery::select(
-        project_dir,
-        &targets,
-        &execution,
-        &effective_mode,
-        options,
-        home.as_deref(),
-        config_digest,
-    );
+    let selection = delivery::select(&targets, &effective_mode, options);
     for target in &targets {
         let reason = selection.reasons.get(&target.name).map_or_else(
             || selection.reason.clone(),
@@ -322,8 +314,7 @@ fn run_configured(
         }
     }
     // A target CI skips is still owed locally: a run without it is not
-    // complete, so a later local run never takes it as a green base for
-    // that target (TSK-184 AC-5).
+    // complete evidence (TSK-184 AC-5).
     let ci_skipped: Vec<String> = targets
         .iter()
         .filter(|t| crate::testing::runner::is_ci_environment() && t.ci_skip == Some(true))
@@ -343,11 +334,15 @@ fn run_configured(
         }
     }
     let run_id = uuid::Uuid::new_v4().to_string();
-    let target_dir = delivery::target_dir(project_dir);
-    std::fs::create_dir_all(&target_dir)?;
-    let target_dir = target_dir.canonicalize()?;
-    let run_dir = target_dir.join("codeflow-gate").join(&run_id);
-    create_run_directory(&target_dir, &run_id)?;
+    // Every evidence write walks from this anchor and never follows a link
+    // or junction, the build-output folder itself included (TSK-1044).
+    let (anchor, target_relative) = delivery::target_anchor(project_dir)?;
+    std::fs::create_dir_all(&anchor)?;
+    let run_relative = format!("{target_relative}/codeflow-gate/{run_id}");
+    let anchor = create_run_directory(&anchor, &run_relative)
+        .map_err(|error| delivery::evidence_refused(&anchor, &run_relative, &error))?;
+    let target_dir = anchor.join(&target_relative);
+    let run_dir = anchor.join(&run_relative);
     configure_run_targets(
         &mut targets,
         project_dir,
@@ -495,10 +490,14 @@ fn run_configured(
         "environment": {"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"target_dir":target_dir},
         "tools": tools
     });
-    std::fs::write(
-        run_dir.join("run.json"),
-        serde_json::to_vec_pretty(&artifact)?,
-    )?;
+    // The targets have run and could have planted a link or file at this
+    // name, so the record is created exclusively through the anchored walk
+    // that made the run folder (TSK-1044).
+    let record = format!("{run_relative}/run.json");
+    let bytes = serde_json::to_vec_pretty(&artifact)?;
+    crate::contained::Tree::open(&anchor)
+        .and_then(|tree| tree.create_new(&record, &bytes))
+        .map_err(|error| delivery::evidence_refused(&anchor, &record, &error))?;
     progress!(
         "[codeflow test] artifact: {}",
         run_dir.join("run.json").display()
@@ -510,11 +509,11 @@ fn run_configured(
                 "CodeFlow home unavailable for durable full-run evidence",
             )
         })?;
-        let destination = delivery::durable_root(project_dir, &home).join(&run_id);
-        copy_evidence(&run_dir, &destination)?;
+        let destination = format!("{}/{run_id}", delivery::durable_relative(project_dir));
+        copy_evidence(&anchor, &run_relative, &home, &destination)?;
         progress!(
             "[codeflow test] durable artifact: {}",
-            destination.join("run.json").display()
+            home.join(&destination).join("run.json").display()
         );
     }
     Ok(GateOutcome::Completed {
@@ -528,10 +527,14 @@ fn run_configured(
     })
 }
 
-// The build-output root is caller-owned. Each run owns its leaf exclusively
-// before any producer writes there, even when a link was planted at that name.
-fn create_run_directory(target_dir: &Path, run_id: &str) -> std::io::Result<()> {
-    crate::contained::Tree::open(target_dir)?.mkdir(&format!("codeflow-gate/{run_id}"))
+// Each run owns its folder exclusively before any producer writes there.
+// The walk from `anchor` creates the build-output and `codeflow-gate`
+// folders and refuses a link planted at any of them or at the run's own
+// name. Returns the anchor's canonical path, which the other writes reuse.
+fn create_run_directory(anchor: &Path, run_relative: &str) -> std::io::Result<std::path::PathBuf> {
+    let tree = crate::contained::Tree::open(anchor)?;
+    tree.mkdir(run_relative)?;
+    Ok(tree.path().to_path_buf())
 }
 
 fn configure_run_targets(
@@ -626,15 +629,88 @@ fn resolve_output(output: &str, root: &Path, target_dir: &Path) -> std::path::Pa
         .map_or_else(|| root.join(output), |p| target_dir.join(p))
 }
 
-fn copy_evidence(from: &Path, to: &Path) -> Result<(), TestingError> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            copy_evidence(&entry.path(), &to.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(entry.path(), to.join(entry.file_name()))?;
+/// The largest file and the most names in one folder that the durable copy
+/// takes; a run folder beyond either is refused, never truncated.
+const EVIDENCE_FILE_LIMIT: u64 = 1 << 30;
+const EVIDENCE_ENTRY_LIMIT: usize = 100_000;
+
+/// Copy the run folder `from`, beneath the evidence anchor `anchor`, to the
+/// new folder `to` beneath the `CodeFlow` home (TSK-1044). Both sides walk
+/// from a held root handle (the anchor, and the home's parent) and never
+/// follow a link or junction at any component, the home folder included. A
+/// link, a special file or a file with more than one name in the run folder
+/// is refused; the destination folder and every file in it are created
+/// exclusively, so a name planted there, a link or a hard link included, is
+/// refused rather than written through. The folders above `to` are created
+/// by the same walk. A refusal leaves what was already copied inside `to`.
+fn copy_evidence(anchor: &Path, from: &str, home: &Path, to: &str) -> Result<(), TestingError> {
+    // The home folder is entered from its parent, so a link at the home
+    // itself is refused too.
+    let (parent, leaf) = crate::contained::split_leaf(home)?;
+    std::fs::create_dir_all(parent)?;
+    let to = format!("{leaf}/{to}");
+    let source = crate::contained::Tree::open(anchor)?;
+    let destination = crate::contained::Tree::open(parent)?;
+    destination
+        .mkdir(&to)
+        .map_err(|error| delivery::evidence_refused(parent, &to, &error))?;
+    copy_folder(&source, from, &destination, &to).map_err(|(side, relative, error)| {
+        delivery::evidence_refused(if side { parent } else { anchor }, &relative, &error)
+    })
+}
+
+/// One folder of [`copy_evidence`]; an error carries whether it was on the
+/// destination side and the path it names.
+fn copy_folder(
+    source: &crate::contained::Tree,
+    from: &str,
+    destination: &crate::contained::Tree,
+    to: &str,
+) -> Result<(), (bool, String, std::io::Error)> {
+    use std::io::Read as _;
+    let read_side = |relative: &str| {
+        let relative = relative.to_string();
+        move |error| (false, relative, error)
+    };
+    for name in source
+        .entries(from, EVIDENCE_ENTRY_LIMIT)
+        .map_err(read_side(from))?
+    {
+        let Some(name) = name.to_str() else {
+            return Err((
+                false,
+                from.to_string(),
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "an evidence file name is not valid UTF-8",
+                ),
+            ));
+        };
+        let (child, target) = (format!("{from}/{name}"), format!("{to}/{name}"));
+        // The type is read without following: a link or special file fails here.
+        let metadata = source.metadata(&child).map_err(read_side(&child))?;
+        if metadata.is_dir() {
+            destination
+                .mkdir(&target)
+                .map_err(|error| (true, target.clone(), error))?;
+            copy_folder(source, &child, destination, &target)?;
+            continue;
         }
+        let file = source.open_regular(&child).map_err(read_side(&child))?;
+        crate::contained::single_name(&file).map_err(read_side(&child))?;
+        let mut limited = file.take(EVIDENCE_FILE_LIMIT + 1);
+        destination
+            .create_new_with(&target, None, |out| {
+                let copied = std::io::copy(&mut limited, out)?;
+                if copied > EVIDENCE_FILE_LIMIT {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("{child} is larger than {EVIDENCE_FILE_LIMIT} bytes"),
+                    ));
+                }
+                Ok(())
+            })
+            .map_err(|error| (true, target.clone(), error))?;
     }
     Ok(())
 }
@@ -1403,7 +1479,7 @@ mod temporary_directory_tests {
         let path = root.path().join("codeflow-gate/run-id");
         std::fs::create_dir(path.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(outside.path(), &path).unwrap();
-        assert!(super::create_run_directory(root.path(), "run-id").is_err());
+        assert!(super::create_run_directory(root.path(), "codeflow-gate/run-id").is_err());
         assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
         assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
     }
@@ -1414,8 +1490,305 @@ mod temporary_directory_tests {
         let outside = tempfile::tempdir().unwrap();
         let path = root.path().join("codeflow-gate");
         std::os::unix::fs::symlink(outside.path(), &path).unwrap();
-        assert!(super::create_run_directory(root.path(), "run-id").is_err());
+        assert!(super::create_run_directory(root.path(), "codeflow-gate/run-id").is_err());
         assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
         assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
+    }
+}
+
+/// TSK-1044 AC-2: the durable copy writes only inside the evidence folder,
+/// whatever links, hard links or special files are planted on either side.
+#[cfg(all(test, unix))]
+mod evidence_containment_tests {
+    use super::{copy_evidence, copy_folder};
+    use crate::contained::Tree;
+    use std::path::Path;
+
+    /// A build-output root with a two-file run folder, a home, and an
+    /// outside folder holding the victim file.
+    struct Setup {
+        target: tempfile::TempDir,
+        home: tempfile::TempDir,
+        outside: tempfile::TempDir,
+    }
+
+    impl Setup {
+        fn new() -> Self {
+            let setup = Self {
+                target: tempfile::tempdir().unwrap(),
+                home: tempfile::tempdir().unwrap(),
+                outside: tempfile::tempdir().unwrap(),
+            };
+            let run = setup.target.path().join("codeflow-gate/run");
+            std::fs::create_dir_all(run.join("check")).unwrap();
+            std::fs::write(run.join("run.json"), "{\"passed\":true}").unwrap();
+            std::fs::write(run.join("check/stdout.log"), "output").unwrap();
+            std::fs::write(setup.outside.path().join("victim"), "victim").unwrap();
+            setup
+        }
+
+        fn copy(&self) -> Result<(), crate::testing::error::TestingError> {
+            copy_evidence(
+                self.target.path(),
+                "codeflow-gate/run",
+                self.home.path(),
+                "gate-runs/repo/run",
+            )
+        }
+
+        fn victim(&self) -> &Path {
+            self.outside.path()
+        }
+
+        /// The outside folder still holds only the unchanged victim file.
+        fn outside_unchanged(&self) {
+            let names: Vec<_> = std::fs::read_dir(self.victim())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(names, ["victim"], "something was written outside");
+            assert_eq!(
+                std::fs::read(self.victim().join("victim")).unwrap(),
+                b"victim"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_run_folder_is_copied_byte_for_byte() {
+        let setup = Setup::new();
+        setup.copy().unwrap();
+        let copied = setup.home.path().join("gate-runs/repo/run");
+        assert_eq!(
+            std::fs::read(copied.join("run.json")).unwrap(),
+            b"{\"passed\":true}"
+        );
+        assert_eq!(
+            std::fs::read(copied.join("check/stdout.log")).unwrap(),
+            b"output"
+        );
+    }
+
+    /// The original finding: a link at a destination ancestor or at the
+    /// run's own destination folder redirected the copy outside.
+    #[test]
+    fn a_link_at_any_destination_folder_is_refused_and_named() {
+        for planted in ["gate-runs", "gate-runs/repo", "gate-runs/repo/run"] {
+            let setup = Setup::new();
+            let link = setup.home.path().join(planted);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(setup.victim(), &link).unwrap();
+            let error = setup.copy().unwrap_err().to_string();
+            assert!(
+                error.contains("gate evidence refused at"),
+                "{planted}: {error}"
+            );
+            assert!(error.contains(planted), "{planted}: {error}");
+            setup.outside_unchanged();
+            assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        }
+    }
+
+    /// A name raced in at a final file after its folder was made: a link or
+    /// a hard link to the victim is refused, never written through.
+    #[test]
+    fn a_raced_link_or_hard_link_at_a_final_file_is_never_written_through() {
+        for hard in [false, true] {
+            let setup = Setup::new();
+            let destination = setup.home.path().join("gate-runs/repo/run");
+            std::fs::create_dir_all(&destination).unwrap();
+            let victim = setup.victim().join("victim");
+            if hard {
+                std::fs::hard_link(&victim, destination.join("run.json")).unwrap();
+            } else {
+                std::os::unix::fs::symlink(&victim, destination.join("run.json")).unwrap();
+            }
+            let source = Tree::open(setup.target.path()).unwrap();
+            let home = Tree::open(setup.home.path()).unwrap();
+            let (_, path, error) =
+                copy_folder(&source, "codeflow-gate/run", &home, "gate-runs/repo/run").unwrap_err();
+            assert_eq!(path, "gate-runs/repo/run/run.json", "{error}");
+            assert_eq!(std::fs::read(&victim).unwrap(), b"victim", "hard {hard}");
+        }
+    }
+
+    /// A link, a hard link or a special file a target planted in the run
+    /// folder is refused, so nothing outside is copied into the evidence.
+    #[test]
+    fn links_hard_links_and_special_files_in_the_run_folder_are_refused() {
+        for planted in ["link", "folder-link", "hard-link", "fifo"] {
+            let setup = Setup::new();
+            let path = setup.target.path().join("codeflow-gate/run/check/planted");
+            let victim = setup.victim().join("victim");
+            match planted {
+                "link" => std::os::unix::fs::symlink(&victim, &path).unwrap(),
+                "folder-link" => std::os::unix::fs::symlink(setup.victim(), &path).unwrap(),
+                "hard-link" => {
+                    // The victim must share the run folder's file system.
+                    let local = setup.target.path().join("victim");
+                    std::fs::write(&local, "victim").unwrap();
+                    std::fs::hard_link(&local, &path).unwrap();
+                }
+                _ => {
+                    let name = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(
+                        path.as_os_str(),
+                    ))
+                    .unwrap();
+                    // SAFETY: valid NUL-terminated fixture path.
+                    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+                }
+            }
+            let error = setup.copy().unwrap_err().to_string();
+            assert!(
+                error.contains("codeflow-gate/run/check/planted"),
+                "{planted}: {error}"
+            );
+            setup.outside_unchanged();
+            let copied = setup.home.path().join("gate-runs/repo/run/check/planted");
+            assert!(
+                std::fs::symlink_metadata(copied).is_err(),
+                "{planted} copied"
+            );
+        }
+    }
+}
+
+/// TSK-1044 AC-2 on Windows: a junction at a destination folder is refused
+/// and nothing is written where it points.
+#[cfg(all(test, windows))]
+mod evidence_containment_windows_tests {
+    #[test]
+    fn a_junction_at_any_destination_folder_is_refused() {
+        for planted in ["gate-runs", "gate-runs/repo"] {
+            let target = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let run = target.path().join("codeflow-gate/run");
+            std::fs::create_dir_all(&run).unwrap();
+            std::fs::write(run.join("run.json"), "{}").unwrap();
+            let link = home.path().join(planted);
+            std::fs::create_dir_all(&link).unwrap();
+            let redirect =
+                crate::bounded_file::confined::windows::tests::junction(&link, outside.path())
+                    .unwrap();
+            let error = super::copy_evidence(
+                target.path(),
+                "codeflow-gate/run",
+                home.path(),
+                "gate-runs/repo/run",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("gate evidence refused at"),
+                "{planted}: {error}"
+            );
+            assert_eq!(
+                std::fs::read_dir(outside.path()).unwrap().count(),
+                0,
+                "{planted}: nothing outside"
+            );
+            drop(redirect);
+        }
+    }
+
+    #[test]
+    fn a_junction_in_the_run_folder_is_refused() {
+        let target = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("victim"), "victim").unwrap();
+        let planted = target.path().join("codeflow-gate/run/planted");
+        std::fs::create_dir_all(&planted).unwrap();
+        let redirect =
+            crate::bounded_file::confined::windows::tests::junction(&planted, outside.path())
+                .unwrap();
+        assert!(super::copy_evidence(
+            target.path(),
+            "codeflow-gate/run",
+            home.path(),
+            "gate-runs/repo/run",
+        )
+        .is_err());
+        assert!(!home
+            .path()
+            .join("gate-runs/repo/run/planted/victim")
+            .exists());
+        drop(redirect);
+    }
+}
+
+/// TSK-1044 review 1: a link planted at the build-output folder or at the
+/// `CodeFlow` home itself is refused before any write, never trusted as a
+/// root, so the folder it points at stays unchanged.
+#[cfg(all(test, unix))]
+mod evidence_root_link_tests {
+    #[test]
+    fn a_link_at_the_build_output_folder_is_refused_before_any_write() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            project.path().join(".codeflow/test-config.json"),
+            r#"{"schema_version":"1.0","targets":[{"name":"t","runner":"custom","modes":{"full":{"command":"true"}}}]}"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), project.path().join("target")).unwrap();
+        let error = super::run_gate(project.path(), "full")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("gate evidence refused at"), "{error}");
+        assert!(error.contains("target is a symbolic link"), "{error}");
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_link_at_the_home_folder_is_refused_by_the_durable_copy() {
+        let target = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(target.path().join("codeflow-gate/run")).unwrap();
+        std::fs::write(target.path().join("codeflow-gate/run/run.json"), "{}").unwrap();
+        let home = parent.path().join(".codeflow");
+        std::os::unix::fs::symlink(outside.path(), &home).unwrap();
+        let error = super::copy_evidence(
+            target.path(),
+            "codeflow-gate/run",
+            &home,
+            "gate-runs/repo/run",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(".codeflow is a symbolic link"), "{error}");
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+}
+
+/// TSK-1044 review 1 on Windows: a hard-linked file in the run folder is
+/// refused by its link count, read from the opened handle.
+#[cfg(all(test, windows))]
+mod evidence_hard_link_windows_tests {
+    #[test]
+    fn a_hard_link_in_the_run_folder_is_refused() {
+        let target = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let run = target.path().join("codeflow-gate/run");
+        std::fs::create_dir_all(&run).unwrap();
+        let victim = target.path().join("victim");
+        std::fs::write(&victim, "victim").unwrap();
+        std::fs::hard_link(&victim, run.join("leak")).unwrap();
+        let error = super::copy_evidence(
+            target.path(),
+            "codeflow-gate/run",
+            &home.path().join(".codeflow"),
+            "gate-runs/repo/run",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("hard link"), "{error}");
+        assert!(!home
+            .path()
+            .join(".codeflow/gate-runs/repo/run/leak")
+            .exists());
     }
 }
