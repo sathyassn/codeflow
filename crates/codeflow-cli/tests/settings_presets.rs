@@ -2145,3 +2145,297 @@ fn status_line_keeps_backslashes_and_escapes_literal() {
     }
     let _ = std::fs::remove_dir_all(slashed);
 }
+
+// ---- The richer status line (TSK-1070, issue 402) -----------------------
+
+/// TSK-1028's base status JSON with the given extra top-level fields merged
+/// in; `worktree` goes into `workspace.git_worktree`.
+#[cfg(unix)]
+fn rich_json(folder: &Path, extra: &serde_json::Value, worktree: Option<&str>) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(&status_json(folder, 120_000)).unwrap();
+    for (key, field) in extra.as_object().unwrap() {
+        value[key] = field.clone();
+    }
+    if let Some(name) = worktree {
+        value["workspace"]["git_worktree"] = serde_json::json!(name);
+    }
+    value.to_string()
+}
+
+/// AC-6's separator rule: no `null`, empty brackets or doubled separator.
+#[cfg(unix)]
+fn assert_clean(line: &str, case: &str) {
+    for bad in ["null", "()", "[]", "| |", "||", "  "] {
+        assert!(!line.contains(bad), "{case}: {bad:?} in {line:?}");
+    }
+}
+
+#[cfg(unix)]
+fn has_jq(path: &std::ffi::OsStr) -> bool {
+    std::env::split_paths(path).any(|dir| dir.join("jq").is_file())
+}
+
+/// The visible line for `json`, from every preset, asserted identical.
+#[cfg(unix)]
+fn line_for(folder: &Path, json: &str, path: &std::ffi::OsStr) -> String {
+    let mut seen: Option<String> = None;
+    for preset in preset_files() {
+        let (out, code) = run_status_line(&preset, folder, json, path);
+        assert_eq!(code, 0, "{preset}");
+        let out = visible(&out);
+        if let Some(first) = &seen {
+            assert_eq!(&out, first, "{preset} differs from the other presets");
+        }
+        seen = Some(out);
+    }
+    seen.unwrap()
+}
+
+/// AC-2: the effort prints beside the model at each documented level, and
+/// nothing prints for it when `effort` is absent.
+#[cfg(unix)]
+#[test]
+fn status_line_shows_effort_beside_the_model() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("levels", true);
+    for level in ["low", "medium", "high", "xhigh", "max"] {
+        let json = rich_json(
+            &repo,
+            &serde_json::json!({"effort": {"level": level}}),
+            None,
+        );
+        let line = line_for(&repo, &json, &path);
+        assert!(
+            line.starts_with(&format!("Opus 5.5 (claude-opus-5-5) · {level} | v2.3.1")),
+            "{line}"
+        );
+        assert_clean(&line, level);
+    }
+    let line = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert!(
+        line.starts_with("Opus 5.5 (claude-opus-5-5) | v2.3.1"),
+        "{line}"
+    );
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-3: the pull request number and review state, the number alone, and
+/// nothing when `pr` is absent.
+#[cfg(unix)]
+#[test]
+fn status_line_shows_the_pull_request_and_its_review_state() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("pr", true);
+    for (state, shown) in [
+        ("approved", "approved"),
+        ("pending", "pending"),
+        ("changes_requested", "changes requested"),
+        ("draft", "draft"),
+    ] {
+        let json = rich_json(
+            &repo,
+            &serde_json::json!({"pr": {
+                "number": 451,
+                "url": "https://example.invalid/451",
+                "review_state": state
+            }}),
+            None,
+        );
+        let line = line_for(&repo, &json, &path);
+        assert!(
+            line.contains(&format!(" | PR 451 {shown} | ctx:")),
+            "{line}"
+        );
+        assert_clean(&line, state);
+    }
+    let json = rich_json(&repo, &serde_json::json!({"pr": {"number": 7}}), None);
+    let line = line_for(&repo, &json, &path);
+    assert!(line.contains(" | PR 7 | ctx:"), "{line}");
+    assert_clean(&line, "number only");
+    let line = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert!(!line.contains("PR"), "{line}");
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-4: each usage window with its percentage, either alone, none, a
+/// fractional value, 100, and a present 0, which prints.
+#[cfg(unix)]
+#[test]
+fn status_line_shows_plan_usage_windows() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("usage", true);
+    let window = |pct: serde_json::Value| serde_json::json!({"used_percentage": pct, "resets_at": 1_738_425_600});
+    for (limits, shown) in [
+        (
+            serde_json::json!({"five_hour": window(23.5.into()), "seven_day": window(41.into())}),
+            Some("| 5h 24% · 7d 41%"),
+        ),
+        (
+            serde_json::json!({"five_hour": window(100.into())}),
+            Some("| 5h 100%"),
+        ),
+        (
+            serde_json::json!({"seven_day": window(0.into())}),
+            Some("| 7d 0%"),
+        ),
+        (serde_json::json!({}), None),
+    ] {
+        let json = rich_json(&repo, &serde_json::json!({"rate_limits": limits}), None);
+        let line = line_for(&repo, &json, &path);
+        match shown {
+            Some(text) => assert!(line.trim_end().ends_with(text), "{line}"),
+            None => assert!(line.trim_end().ends_with("(12%)"), "{line}"),
+        }
+        assert_clean(&line, &limits.to_string());
+    }
+    let line = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert!(!line.contains("5h ") && !line.contains("7d "), "{line}");
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-5: the linked worktree's name, and nothing for it in the main tree.
+#[cfg(unix)]
+#[test]
+fn status_line_shows_the_linked_worktree() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("worktree", true);
+    let folder = repo.file_name().unwrap().to_str().unwrap().to_string();
+    let json = rich_json(&repo, &serde_json::json!({}), Some("tsk-1070"));
+    let line = line_for(&repo, &json, &path);
+    assert!(
+        line.contains(&format!("| {folder} (feature-x) · wt:tsk-1070 | ctx:")),
+        "{line}"
+    );
+    let line = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert!(!line.contains("wt:"), "{line}");
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-6: with none of the new fields the line is TSK-1028's exactly, and
+/// all sixteen combinations of the four groups keep the separator rule.
+#[cfg(unix)]
+#[test]
+fn status_line_keeps_the_existing_text_and_clean_separators() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("combos", true);
+    let folder = repo.file_name().unwrap().to_str().unwrap().to_string();
+    let base = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert_eq!(
+        base,
+        format!(
+            "Opus 5.5 (claude-opus-5-5) | v2.3.1 | Explanatory | {folder} (feature-x) | ctx:120k/1000k (12%)\n"
+        )
+    );
+    for mask in 0u8..16 {
+        let mut extra = serde_json::Map::new();
+        if mask & 1 != 0 {
+            extra.insert("effort".into(), serde_json::json!({"level": "high"}));
+        }
+        if mask & 2 != 0 {
+            extra.insert(
+                "pr".into(),
+                serde_json::json!({"number": 12, "review_state": "pending"}),
+            );
+        }
+        if mask & 4 != 0 {
+            extra.insert(
+                "rate_limits".into(),
+                serde_json::json!({
+                    "five_hour": {"used_percentage": 23.5},
+                    "seven_day": {"used_percentage": 81}
+                }),
+            );
+        }
+        let worktree = (mask & 8 != 0).then_some("wt");
+        let json = rich_json(&repo, &serde_json::Value::Object(extra), worktree);
+        let line = line_for(&repo, &json, &path);
+        assert_clean(&line, &format!("mask {mask}"));
+        assert_eq!(
+            line.contains("(claude-opus-5-5) · high |"),
+            mask & 1 != 0,
+            "{mask}: {line}"
+        );
+        assert_eq!(
+            line.contains("| PR 12 pending |"),
+            mask & 2 != 0,
+            "{mask}: {line}"
+        );
+        assert_eq!(
+            line.contains("| 5h 24% · 7d 81%"),
+            mask & 4 != 0,
+            "{mask}: {line}"
+        );
+        assert_eq!(line.contains("· wt:wt |"), mask & 8 != 0, "{mask}: {line}");
+        assert!(
+            line.ends_with('\n') && line.matches('\n').count() == 1,
+            "{mask}: {line:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-7: without `jq` the line still prints the folder and branch, whatever
+/// new fields the status JSON carries.
+#[cfg(unix)]
+#[test]
+fn status_line_without_jq_ignores_the_new_fields() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let find = |tool: &str| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(tool))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("{tool} not on PATH"))
+    };
+    let bin = status_folder("bin-rich", false);
+    for tool in ["cat", "basename", "git"] {
+        std::os::unix::fs::symlink(find(tool), bin.join(tool)).unwrap();
+    }
+    let repo = status_folder("rich-nojq", true);
+    let folder = repo.file_name().unwrap().to_str().unwrap().to_string();
+    let json = rich_json(
+        &repo,
+        &serde_json::json!({
+            "effort": {"level": "max"},
+            "pr": {"number": 3, "review_state": "draft"},
+            "rate_limits": {"five_hour": {"used_percentage": 50}}
+        }),
+        Some("wt"),
+    );
+    for preset in preset_files() {
+        let (out, code) = run_status_line(&preset, &repo, &json, bin.as_os_str());
+        assert_eq!(code, 0, "{preset}");
+        assert_eq!(
+            out,
+            format!("{folder} (feature-x) | jq not found\n"),
+            "{preset}"
+        );
+    }
+    for folder in [bin, repo] {
+        let _ = std::fs::remove_dir_all(folder);
+    }
+}
