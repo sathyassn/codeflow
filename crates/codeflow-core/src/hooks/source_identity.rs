@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 /// The files whose edit makes an installed binary judge with other rules.
 /// The policy authority is chosen through the git helpers and the remote
-/// question (`git/mod.rs`, `git/remote_query.rs`) and, at pre-push, through
-/// `cmd/push_set.rs` (TSK-1077 review round 04 F6).
+/// question (`git/mod.rs`, `git/remote_query.rs`), at pre-push through
+/// `cmd/push_set.rs`, and in the `codeflow ci` run pre-push starts through
+/// `cmd/ci/judging.rs` (TSK-1077 review rounds 04 and 05, F6).
 pub const INPUT_ROOTS: &[&str] = &[
     "crates/codeflow-core/src/hooks",
     "crates/codeflow-core/src/security",
@@ -14,6 +15,7 @@ pub const INPUT_ROOTS: &[&str] = &[
     "crates/codeflow-core/src/git/mod.rs",
     "crates/codeflow-core/src/git/remote_query.rs",
     "crates/codeflow-cli/src/cmd/push_set.rs",
+    "crates/codeflow-cli/src/cmd/ci/judging.rs",
     "assets/base/policy.json",
     "assets/base/git-hooks",
 ];

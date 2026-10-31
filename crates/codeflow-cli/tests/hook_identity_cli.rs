@@ -70,18 +70,26 @@ fn stale_sources_warn_twice_and_matching_inputs_clear_the_warning() {
     assert!(stale[1].contains("built from different hook or policy sources"));
     // The policy authority is chosen through these files (TSK-1077), so an
     // edit to any one of them alone is a stale binary, and a rebuild from
-    // the edited sources clears the warning.
+    // the edited sources clears the warning. The probe is written whether
+    // or not the file is a digest input, so a missing input fails the
+    // warning assertion itself.
     for input in [
         "crates/codeflow-core/src/git/mod.rs",
         "crates/codeflow-core/src/git/remote_query.rs",
         "crates/codeflow-cli/src/cmd/push_set.rs",
+        "crates/codeflow-cli/src/cmd/ci/judging.rs",
     ] {
+        let probe = root.join(input);
+        std::fs::create_dir_all(probe.parent().unwrap()).unwrap();
+        std::fs::write(&probe, "base").unwrap();
         let before = source_identity::input_digest(root).unwrap();
-        std::fs::write(root.join(input), format!("edit of {input}")).unwrap();
+        std::fs::write(&probe, format!("edit of {input}")).unwrap();
         let stale = judging_identity(root, "3", "unavailable", "true", &before);
         assert!(
-            stale[1].contains("built from different hook or policy sources"),
-            "{input}"
+            stale
+                .get(1)
+                .is_some_and(|line| line.contains("built from different hook or policy sources")),
+            "an edit to {input} alone gave no stale-binary warning: {stale:?}"
         );
         let rebuilt = source_identity::input_digest(root).unwrap();
         assert_eq!(
