@@ -164,15 +164,13 @@ pub const SAFE_PROTOCOLS: &str = "file:http:https:ssh";
 const HERMETIC_SSH: &str = "ssh -F none -o BatchMode=yes";
 
 /// The only inherited variables [`advertises_any_ref`] passes on: program
-/// lookup, the home that holds SSH keys and known hosts, the SSH agent,
-/// temporary space, the Windows system variables, and network proxies,
-/// which name a host, never a command.
+/// lookup, the SSH agent, temporary space, the Windows system variables,
+/// and network proxies, which name a host, never a command. The home is
+/// not passed on: git's HTTP transport reads a `.netrc` there whatever its
+/// configuration says (review round 03 F5), so the question runs with an
+/// empty one.
 pub const KEPT_ENVIRONMENT: &[&str] = &[
     "PATH",
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
     "SystemRoot",
     "SYSTEMROOT",
     "COMSPEC",
@@ -199,10 +197,12 @@ pub const KEPT_ENVIRONMENT: &[&str] = &[
 /// with no global or system configuration (so no credential helper,
 /// `core.sshCommand`, `insteadOf` or upload command applies), plain `ssh`
 /// that reads no configuration file, only [`SAFE_PROTOCOLS`] and git's own
-/// upload command, and a clean environment ([`KEPT_ENVIRONMENT`]), so no
-/// inherited git, SSH or proxy-command variable applies.
-/// A remote that needs credentials or a configured SSH setup therefore
-/// cannot be asked, and the caller refuses with the fetch route.
+/// upload command, a clean environment ([`KEPT_ENVIRONMENT`]), so no
+/// inherited git, SSH or proxy-command variable applies, and an empty home,
+/// so no stored HTTP credential (`.netrc` or `_netrc`) is sent. Only SSH
+/// keys, which prove possession without disclosing a secret, still apply.
+/// A remote that needs other credentials or a configured SSH setup
+/// therefore cannot be asked, and the caller refuses with the fetch route.
 ///
 /// `url` is the remote's configured URL; a relative local path is resolved
 /// against `root`, as git resolves it there. A URL git could read as an
@@ -235,6 +235,8 @@ pub fn advertises_any_ref(root: &Path, url: &str) -> Result<bool, String> {
         // variable (`GIT_NAMESPACE` would select which refs a local remote
         // advertises, review round 02 F4); only what finding the programs,
         // the user's SSH agent and keys, and a network proxy need passes.
+        // The home is the empty directory, so libcurl finds no `.netrc`
+        // (review round 03 F5); OpenSSH finds keys through the account.
         let mut command = crate::git::judging_command();
         command.env_clear();
         for name in KEPT_ENVIRONMENT {
@@ -244,6 +246,8 @@ pub fn advertises_any_ref(root: &Path, url: &str) -> Result<bool, String> {
         }
         command
             .current_dir(outside.path())
+            .env("HOME", outside.path())
+            .env("USERPROFILE", outside.path())
             .args(args)
             .arg(&resolved)
             .env("GIT_CEILING_DIRECTORIES", &ceiling)

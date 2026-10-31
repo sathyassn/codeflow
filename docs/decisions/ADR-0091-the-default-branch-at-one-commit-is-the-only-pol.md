@@ -67,8 +67,11 @@ The guards may ask it on every command, so the question runs no command
 any configuration names: it runs outside the repository with no global or
 system configuration, at the remote's one configured URL, over the file,
 http, https and ssh transports only, with plain `ssh` that reads no
-configuration file and git's own upload command. A remote that needs
-credentials cannot be asked this way, and the result is the fetch route.
+configuration file, git's own upload command, a clean environment and an
+empty home, so no stored HTTP credential such as a `.netrc` is sent; only
+SSH keys, which prove possession without disclosing a secret, apply. A
+remote that needs other credentials cannot be asked this way, and the
+result is the fetch route.
 After TSK-1057 lands, no remote is labelled local only when its
 baseline holds no record for the repository; otherwise the baseline's
 policy is enforced and `doctor` names the removed remote.

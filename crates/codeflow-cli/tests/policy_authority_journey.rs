@@ -318,3 +318,88 @@ fn an_inherited_git_namespace_cannot_fabricate_initialization() {
     assert_eq!(guard.status.code(), Some(2), "{text}");
     assert!(text.contains("run git fetch origin"), "{text}");
 }
+
+/// A loopback HTTP server that answers every request with a Basic
+/// authentication challenge and records each request's headers.
+fn challenging_server() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead as _, BufReader};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = std::sync::Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { return };
+            let log = std::sync::Arc::clone(&log);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = stream;
+                loop {
+                    let mut request = String::new();
+                    loop {
+                        let mut line = String::new();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => return,
+                            Ok(_) => {}
+                        }
+                        if line == "\r\n" {
+                            break;
+                        }
+                        request.push_str(&line);
+                    }
+                    log.lock().unwrap().push(request);
+                    let answer = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"x\"\r\nContent-Length: 0\r\n\r\n";
+                    if writer.write_all(answer.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// Review round 03 F5: git's HTTP transport reads a `.netrc` in the
+/// inherited home whatever its configuration says, so a remote URL that
+/// names a host the attacker controls would receive those credentials
+/// when the empty tracking namespace makes the guards ask it. The question
+/// runs with an empty home, so neither a matching `machine` entry nor a
+/// `default` entry is sent, and the result is the fetch route.
+#[test]
+fn asking_the_remote_sends_no_stored_http_credentials() {
+    for entry in [
+        "machine 127.0.0.1 login synthetic password not-a-secret\n",
+        "default login synthetic password not-a-secret\n",
+    ] {
+        let (a, _) = Adopter::with_line();
+        let (port, seen) = challenging_server();
+        a.git(&[
+            "remote",
+            "set-url",
+            "origin",
+            &format!("http://127.0.0.1:{port}/remote.git"),
+        ]);
+        for branch in ["HEAD", "main", "integration/line"] {
+            a.git(&[
+                "update-ref",
+                "--no-deref",
+                "-d",
+                &format!("refs/remotes/origin/{branch}"),
+            ]);
+        }
+        std::fs::write(a.temp.path().join(".netrc"), entry).unwrap();
+        std::fs::write(a.temp.path().join("_netrc"), entry).unwrap();
+        let text = a.doctor();
+        println!("doctor with a .netrc {entry:?}:\n{text}");
+        let requests = seen.lock().unwrap().clone();
+        assert!(!requests.is_empty(), "the remote was not asked: {text}");
+        for request in &requests {
+            assert!(
+                !request.to_ascii_lowercase().contains("authorization:"),
+                "credentials were sent: {request}"
+            );
+        }
+        assert!(text.contains("run git fetch origin"), "{text}");
+        assert!(!text.contains("initialization"), "{text}");
+    }
+}
