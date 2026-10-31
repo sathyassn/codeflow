@@ -26,7 +26,9 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+#[cfg(unix)]
 use std::path::{Component, Path, PathBuf};
+#[cfg(unix)]
 use std::process::Command;
 
 thread_local! {
@@ -58,6 +60,7 @@ pub(super) fn record(path: &str) {
 
 /// The guard's verdict on `command` started in `base`, and every path it
 /// judged for a deletion.
+#[cfg(unix)]
 fn judge(
     command: &str,
     base: &Path,
@@ -100,8 +103,10 @@ enum Needs {
 }
 
 /// The native tools this host has, beyond POSIX ones.
+#[cfg(unix)]
 struct Host(Vec<Needs>);
 
+#[cfg(unix)]
 impl Host {
     fn probe() -> Self {
         let answers = |command: &mut Command, mark: &str| {
@@ -141,7 +146,9 @@ impl Host {
 struct Row {
     /// The grammar key, as the table in `deletion.rs` names it.
     grammar: &'static str,
-    /// Entries to create: `dir/`, `file`, or `link -> target`.
+    /// Entries to create: `dir/`, `file`, or `link -> target`; only the
+    /// native run, which is Unix-only, reads them.
+    #[cfg_attr(not(unix), allow(dead_code))]
     setup: &'static [&'static str],
     command: String,
     expect: Expect,
@@ -437,14 +444,18 @@ fn rows() -> Vec<Row> {
         row(
             "find-print0-consumer",
             GUARDED_BELOW,
-            "find sub -name guarded -print0 | xargs -0 command rm -rf",
+            // A launcher before the remover; `env` is a program on every host,
+            // where `command` is one only on macOS.
+            "find sub -name guarded -print0 | xargs -0 env rm -rf",
             Unproven,
         ),
         needing(
             row(
                 "find-print0-consumer",
                 GUARDED_BELOW,
-                "find sub -name guarded -print0 | parallel -0 perl -MFile::Path=remove_tree -e 'remove_tree(@ARGV)'",
+                // GNU `parallel` joins its command into shell text, so the body
+                // holds no character the shell would read.
+                "find sub -name guarded -print0 | parallel -0 find {} -delete",
                 Unproven,
             ),
             Needs::Parallel,
@@ -767,6 +778,7 @@ fn rows() -> Vec<Row> {
 }
 
 /// Create the row's entries under `base`.
+#[cfg(unix)]
 fn build(base: &Path, setup: &[&str]) {
     for entry in setup {
         if let Some((link, target)) = entry.split_once(" -> ") {
@@ -783,6 +795,7 @@ fn build(base: &Path, setup: &[&str]) {
 }
 
 /// Every entry below `base`, relative, without following links.
+#[cfg(unix)]
 fn listing(base: &Path) -> BTreeSet<PathBuf> {
     fn walk(base: &Path, dir: &Path, out: &mut BTreeSet<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -803,6 +816,7 @@ fn listing(base: &Path) -> BTreeSet<PathBuf> {
 
 /// A judged path relative to `base`, with `.` and `..` folded; `None` for
 /// a path outside it.
+#[cfg(unix)]
 fn relative(base: &Path, judged: &str) -> Option<PathBuf> {
     let path = Path::new(judged);
     let path = if path.is_absolute() {
@@ -830,6 +844,7 @@ fn relative(base: &Path, judged: &str) -> Option<PathBuf> {
 /// everything below it. A final `*`, which the reader keeps for the
 /// protected classification, stands for every entry of its directory
 /// whose name does not start with a dot.
+#[cfg(unix)]
 fn predicted(base: &Path, judged: &[String], before: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
     let roots: Vec<PathBuf> = judged.iter().filter_map(|j| relative(base, j)).collect();
     let covers = |root: &PathBuf, path: &PathBuf| {
@@ -852,6 +867,7 @@ fn predicted(base: &Path, judged: &[String], before: &BTreeSet<PathBuf>) -> BTre
 }
 
 /// Run `command` with `sh` in `base`.
+#[cfg(unix)]
 fn run_native(base: &Path, command: &str) -> std::process::Output {
     Command::new("sh")
         .args(["-c", command])
@@ -863,6 +879,7 @@ fn run_native(base: &Path, command: &str) -> std::process::Output {
 
 /// A fresh fixture directory under the build's `target/` folder, so no
 /// temp-root rule applies to the paths the rows delete.
+#[cfg(unix)]
 fn fixture_dir() -> tempfile::TempDir {
     let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
     std::fs::create_dir_all(&target).unwrap();
@@ -873,6 +890,7 @@ fn fixture_dir() -> tempfile::TempDir {
 }
 
 /// Run one row; `Err` holds why it disagrees, `Ok(None)` a skip.
+#[cfg(unix)]
 fn check(row: &Row, host: &Host) -> Result<Option<String>, String> {
     let dir = fixture_dir();
     let base = dir.path().canonicalize().unwrap();

@@ -9382,17 +9382,20 @@ mod tests {
 
     /// A `find` walk read line by line names every path below its
     /// starts, so a deletion of what `read` or `mapfile` gives is
-    /// unproven; the same loop on known values is still read.
+    /// unproven; the same loop on known values is still read. The paths
+    /// are placed as on Unix on every host: on native Windows a
+    /// `/`-rooted path is unproven before the walk is read.
     #[test]
     fn a_find_walk_read_by_read_or_mapfile_is_unproven() {
         let base = Some(std::path::Path::new("/fixture"));
+        let read = |command: &str| super::read_deletion(command, base, false);
         for command in [
             r#"find /fixture/a -name b | while read f; do rm -rf "$f"; done"#,
             r#"find /fixture/a -name b | while IFS= read -r f; do rm -rf "$f"; done"#,
             r#"find /fixture/a -name b | { mapfile -t list; rm -rf "${list[@]}"; }"#,
             r#"while read f; do rm -rf "$f"; done < <(find /fixture/a -name b)"#,
         ] {
-            let found = composed_deletion_in(command, base);
+            let found = read(command);
             assert_eq!(
                 found.and_then(|f| f.unproven).map(|u| u.reason).as_deref(),
                 Some(super::why::WALK_READ),
@@ -9400,7 +9403,7 @@ mod tests {
             );
         }
         let known = r#"printf '%s\n' /fixture/a/b | while read f; do rm -rf "$f"; done"#;
-        assert!(composed_deletion_in(known, base).is_none(), "{known}");
+        assert!(read(known).is_none(), "{known}");
     }
 
     /// TSK-286 review 03 (F6): a `find` walk reaches only `xargs`,
