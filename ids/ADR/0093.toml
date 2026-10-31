@@ -1,0 +1,11 @@
+id = "ADR-0093"
+uid = "7e2eb263-2728-4fa5-a6ca-81d1eba1d024"
+kind = "ADR"
+title = "Bypass permission mode is a host mode the person sets outside the repository"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T19:47:25Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
