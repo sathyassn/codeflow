@@ -365,6 +365,10 @@ catalog! {
     /// TSK-451).
     REVIEW_ROW_BINDING = Step::Codeflow("codeflow ci"),
         "name the reviewed commit in a Reviews row as `whole unit at {sha}` with the full 40-character commit, for example `| reviewer | whole unit at {sha} | approved |`; the verdict cell is only `approved` or `approve`, so a shorter sha or any further words in that cell do not count; review that commit first when no review covered it; or leave the section out or point it at the task's acceptance block, from which `codeflow ci` derives the row (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
+    /// A ready pull request whose task has no acceptance block yet, so no
+    /// reviewed commit is bound to its code (TSK-1001).
+    UNFINISHED_READY = Step::Codeflow("codeflow task status"),
+        "get the whole-unit review of the head {sha}, then record it with `codeflow task status <id> complete --acceptance <file>` in this pull request, which binds that reviewed commit; until then the pull request is not landable, and it may stay ready for its review or go back to draft";
     /// An epic's own acceptance block that does not bind to its review or
     /// whose waiver is no planning amendment the review saw (R-33, R-60).
     EPIC_ACCEPTANCE_BINDING = Step::Edit("{path}"),

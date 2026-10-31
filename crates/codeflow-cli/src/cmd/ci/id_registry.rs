@@ -10,7 +10,6 @@ use std::path::Path;
 
 use codeflow_core::hooks::{PolicyLevel, Violation};
 use codeflow_core::ids::{check, Git};
-use codeflow_core::workgraph::durable_work_tracking_enabled;
 
 const RULE: &str = "work.id_registry";
 
@@ -22,18 +21,6 @@ pub(super) fn dispatch(
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
-    match durable_work_tracking_enabled(root) {
-        Ok(true) => {}
-        Ok(false) => return,
-        Err(error) => {
-            tagged.push(super::TaggedViolation {
-                sha: None,
-                violation: super::tracking_state_violation(error),
-            });
-            ran.push("id-registry");
-            return;
-        }
-    }
     let resolved_base = match super::resolve_base(root, base_candidates) {
         Ok(value) => value,
         Err(error) => {
@@ -44,6 +31,21 @@ pub(super) fn dispatch(
             return;
         }
     };
+    // TSK-1001: tracking is on when the checkout, the base or the head
+    // commits it, so a target checkout without tracking still enforces the
+    // registry on a range that adds the first record.
+    match super::tracking_active(root, resolved_base.as_deref(), head) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(violation) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation,
+            });
+            ran.push("id-registry");
+            return;
+        }
+    }
     let Some(base) = resolved_base else {
         return;
     };

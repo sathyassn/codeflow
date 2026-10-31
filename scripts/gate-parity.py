@@ -92,11 +92,18 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
 # The plan itself gives every test exactly one partition, and the Windows
 # journeys job checks each run's results against the archive's test list.
 ARCHIVE = re.compile(r"^cargo nextest archive --workspace --profile codeflow --archive-file (\S+)$")
+# TSK-1001: the filter is the base's plan, computed by the `judge-windows`
+# job from the base revision's planner and data with the build's test list
+# as data (TSK-1063), and handed over as a job output. Each step that uses
+# it has the runner write the output into its script, never reads it from
+# the environment an earlier step can write, and an empty one is refused.
+PARTITION_EXPR = "${{ fromJSON(needs.judge-windows.outputs.partitions)[format('{0}', matrix.partition)] }}"
 ARCHIVED_RUN = re.compile(
     r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
     r"--no-fail-fast --profile codeflow "
-    r'-E "\$\(python -B scripts/windows-partitions\.py filter \$\{\{ matrix\.partition \}\} '
-    r'--list "\$RUNNER_TEMP/windows-test-list/windows-tests\.json"\)"$')
+    + "-E '" + re.escape(PARTITION_EXPR) + "'$")
+PARTITION_NEEDS = "    needs: [windows-build, judge-windows]"
+FILTER_CHECK = "run: test -n '" + PARTITION_EXPR + "'"
 PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
 
 
@@ -119,7 +126,9 @@ def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
     (every job whose id starts with `windows`). An archive build runs no
     test; the archived partitions stand for the suite they cover."""
     out = set()
-    jobs = {name: text for name, text in workflow_jobs(workflow).items() if name.startswith("windows")}
+    every = workflow_jobs(workflow)
+    jobs = {name: text for name, text in every.items() if name.startswith("windows")}
+    plan_problems = windows_plan_problems(every)
     archives = {match.group(1) for text in jobs.values()
                 for run in re.finditer(r"^\s*run:\s*(.+?)\s*$", text, re.M)
                 if (match := ARCHIVE.match(norm(run.group(1))))}
@@ -132,7 +141,13 @@ def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
             archived = ARCHIVED_RUN.match(cmd)
             if archived:
                 count = planned_partitions() if planned is None else planned
-                if archived.group(1) not in archives:
+                lines = norm_job(text)
+                if (PARTITION_NEEDS not in lines or "FILTER" in "\n".join(lines)
+                        or not any(line.strip() == FILTER_CHECK for line in lines)):
+                    cmd = f"{cmd} (the filter is not the judge-windows job's plan for this partition)"
+                elif plan_problems:
+                    cmd = f"{cmd} ({plan_problems[0]})"
+                elif archived.group(1) not in archives:
                     cmd = f"{cmd} (no windows job builds the archive {archived.group(1)})"
                 elif partitions != list(range(1, count + 1)):
                     cmd = f"{cmd} (partitions {partitions} do not cover the planned 1 to {count})"
@@ -144,8 +159,11 @@ def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
 
 # TSK-203: the Linux full gate runs as matrix parts, each
 # `codeflow test --mode full --strict --all --only <targets>`, behind one
-# aggregate check named `codeflow gates`.
-PART_RUN = "codeflow test --mode full --strict --all --only ${{ matrix.only }}"
+# aggregate check named `codeflow gates`. TSK-1001: the command is the base's
+# driver with the base's test config, and `$only` is the part's targets that
+# config defines.
+PART_RUN = '"$driver/codeflow" test --mode full --strict --all --only "$only" --config "$driver/test-config.json"'
+PART_LINE_RUN = re.compile(r'^\s*(?:run:\s*)?((?:codeflow|"\$driver/codeflow") test .+?)\s*$', re.M)
 VERDICT = "codeflow gates"
 
 
@@ -168,7 +186,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
     jobs = workflow_jobs(workflow)
     gate = jobs.get("gates", "")
     problems: list[str] = []
-    runs = [norm(r) for r in re.findall(r"^\s*run:\s*(codeflow test .+?)\s*$", gate, re.M)]
+    runs = [norm(r) for r in PART_LINE_RUN.findall(gate)]
     if runs != [PART_RUN]:
         problems.append(f"the gates job must run exactly `{PART_RUN}` once; it runs {runs}")
     release = jobs.get("gates-release", "")
@@ -221,12 +239,15 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
                 "coverage jobs, and fail unless each of them succeeded or the reuse decision named a "
                 "run and all of them were skipped; any other form could let a skipped, failed or "
                 "cancelled part read as passed. Expected:\n" + expected)
-    if "    needs: [reuse, gates-build]" not in [l.rstrip() for l in gate.splitlines()]:
+    if "    needs: [reuse, gates-build, judge-build]" not in [l.rstrip() for l in gate.splitlines()]:
         problems.append("the gates job must need exactly the reuse job, whose output its condition reads, "
-                        "and the build job (`needs: [reuse, gates-build]`)")
+                        "the build job and the driver job (`needs: [reuse, gates-build, judge-build]`)")
     problems.extend(build_job_problems(jobs, gate))
     problems.extend(reuse_job_problems(jobs))
     line = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
+    problems.extend(selection_job_problems(jobs, line.group(1) if line else "<the gates job's condition>"))
+    problems.extend(driver_job_problems(jobs, line.group(1) if line else "<the gates job's condition>"))
+    problems.extend(judges_job_problems(jobs, line.group(1) if line else "<the gates job's condition>"))
     guarded = GATES_IF.match(line.group(1)) if line else None
     problems.extend(coverage_job_problems(cfg, jobs, guarded.group(1) if guarded else ""))
     return problems
@@ -244,12 +265,42 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
 # the planner's (scripts/test_windows_partitions.py) cover the rest.
 COVERAGE_TARGETS = ("rust-coverage", "journey-gate")
 SHARD_DATA = ROOT / "scripts" / "coverage-test-times.json"
-SHARD_FILTER = '-E "$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})"'
+# TSK-1001: bound in the consuming step from the gate selection's output,
+# never read from the environment. The shard job runs pull request code,
+# so this catches drift; the pull request can still steer that job.
+SHARD_FILTER = '-E "$filter"'
 COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
+# TSK-1001: every gate job that selects tests or judges floors takes these
+# judge files from the base revision first, so a pull request cannot narrow
+# its own gate.
+JUDGE_FILES = (".codeflow/test-config.json", ".github/workflows/codeflow-ci.yml",
+               "crates/codeflow-cli/tests/journey_gate.toml",
+               "scripts/coverage-merge.py", "scripts/coverage-shards.py", "scripts/coverage-test-times.json",
+               "scripts/journey-gate.py", "scripts/windows-partitions.py", "scripts/windows-test-times.json",
+               "scripts/test_coverage_merge.py", "scripts/test_journey_gate.py", "scripts/test_windows_partitions.py",
+               "scripts/fixtures/coverage-merge")
+JUDGE_STEP = """\
+      - name: Take the gate's judge files from the base
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = pull_request ]; then
+            judge="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/codeflow-judge"
+            rm -rf "$judge" && mkdir -p "$judge"
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            git archive "$BASE_SHA" -- .codeflow/test-config.json .github/workflows/codeflow-ci.yml crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py scripts/fixtures/coverage-merge | tar -x -C "$judge"
+          else
+            judge="$(pwd)"
+          fi
+          echo "CODEFLOW_JUDGE=${judge}" >> "$GITHUB_ENV"
+"""
 COVERAGE_JOB = """\
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (@CONDITION@) }}
     name: codeflow gates (coverage ${{ matrix.shard }} of @COUNT@)
-    needs: reuse
+    needs: [reuse, judge]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -272,6 +323,7 @@ COVERAGE_JOB = """\
           cache: npm
           cache-dependency-path: crates/codeflow-present/web/package-lock.json
       - name: Install exact npm for the owned presentation renderer
+        working-directory: ${{ runner.temp }}
         run: npm install --global npm@11.17.0
       - name: Install nextest and llvm-cov
         uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
@@ -280,13 +332,16 @@ COVERAGE_JOB = """\
       - name: present-web-build
         shell: bash
         run: @WEB_BUILD@
-      - name: Remove old coverage profiles
-        run: cargo llvm-cov clean --workspace
       - name: cargo llvm-cov nextest (one shard)
         shell: bash
         env:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
-        run: @SHARD_RUN@
+        run: |
+          set -euo pipefail
+          filter='${{ fromJSON(needs.judge.outputs.shards)[format('{0}', matrix.shard)] }}'
+          test -n "$filter" || { echo "::error::the gate selection gave this shard no filter"; exit 1; }
+          cargo llvm-cov clean --workspace
+          @SHARD_RUN@
       - name: Export this shard's coverage and list its tests
         shell: bash
         run: |
@@ -320,7 +375,7 @@ COVERAGE_REPORT_JOB = """\
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Begin journey check
+@JUDGE@      - name: Begin journey check
         shell: bash
         run: |
           rm -rf target/coverage
@@ -337,7 +392,7 @@ COVERAGE_REPORT_JOB = """\
           path: target/coverage/results
       - name: Line coverage of the whole suite
         shell: bash
-        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards @COUNT@ target/coverage/data
+        run: env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B "$CODEFLOW_JUDGE/scripts/test_coverage_merge.py" && env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B "$CODEFLOW_JUDGE/scripts/coverage-merge.py" --floor-from "$CODEFLOW_JUDGE/.codeflow/test-config.json" --shards @COUNT@ target/coverage/data
       - name: journey gate
         if: ${{ !cancelled() }}
         shell: bash
@@ -347,8 +402,17 @@ COVERAGE_REPORT_JOB = """\
       - name: Every test ran in exactly one shard
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list @LISTS@ --results target/coverage/results
+        run: env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B "$CODEFLOW_JUDGE/scripts/test_windows_partitions.py" && env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B "$CODEFLOW_JUDGE/scripts/coverage-shards.py" check --list @LISTS@ --results target/coverage/results
 """
+
+
+def judged(command: str) -> str:
+    """`command` with each `scripts/<name>.py` it runs taken from the base's
+    judge directory, as the coverage report runs the journey gate: from an
+    absolute interpreter under `env -i`, keeping only the gate's start time."""
+    judged = re.sub(r'(?<![\w/"$])scripts/([\w-]+\.py)', r'"$CODEFLOW_JUDGE/scripts/\1"', command)
+    return judged.replace('python3 -B "$CODEFLOW_JUDGE/', 'env -i HOME=/home/runner PATH=/usr/bin:/bin '
+                          'CODEFLOW_GATE_STARTED_AT="$CODEFLOW_GATE_STARTED_AT" /usr/bin/python3 -I -B "$CODEFLOW_JUDGE/')
 
 
 def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, list[str]]:
@@ -372,9 +436,9 @@ def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, lis
                  + " " + SHARD_FILTER)
     numbers = range(1, shards + 1)
     lists = " ".join(f"target/coverage/results/coverage-shard-{n}/tests.json" for n in numbers)
-    fill = {"@CONDITION@": condition, "@COUNT@": str(shards), "@SHARDS@": ", ".join(map(str, numbers)),
+    fill = {"@JUDGE@": JUDGE_STEP, "@CONDITION@": condition, "@COUNT@": str(shards), "@SHARDS@": ", ".join(map(str, numbers)),
             "@WEB_BUILD@": full.get("present-web-build", ""), "@SHARD_RUN@": shard_run,
-            "@JOURNEY@": full.get("journey-gate", ""), "@LISTS@": lists}
+            "@JOURNEY@": judged(full.get("journey-gate", "")), "@LISTS@": lists}
     jobs = []
     for template in (COVERAGE_JOB, COVERAGE_REPORT_JOB):
         for marker, value in fill.items():
@@ -402,7 +466,7 @@ def coverage_job_problems(cfg: dict, jobs: dict[str, str], condition: str,
 # (scripts/test_ci_reuse.py) cover each condition.
 GATES_IF = re.compile(r"^\$\{\{ !cancelled\(\) && needs\.reuse\.outputs\.run == '' && \((.+)\) \}\}$")
 REUSE_JOB = """\
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.pull_request.draft && github.event.changes.base.ref.from == ''
     name: reuse a pull request verdict
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -426,11 +490,27 @@ REUSE_JOB = """\
           PUSHED_REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: >-
-          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
-          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
-          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
-          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT" \\
+              --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF" \\
+              --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}" \\
+              --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          elif python3 -m venv "${RUNNER_TEMP}/admission" \\
+            && "${RUNNER_TEMP}/admission/bin/pip" install --quiet --disable-pip-version-check --require-hashes \\
+              --no-deps --only-binary=:all: -r scripts/requirements-admission.txt; then
+            "${RUNNER_TEMP}/admission/bin/python" -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" \\
+              --pull "$PR_NUMBER" --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" \\
+              --run-id "$GITHUB_RUN_ID" --trusted-file .github/workflows/codeflow-ci.yml \\
+              --trusted-file scripts/ci-reuse.py --trusted-file scripts/requirements-admission.txt \\
+              --require "codeflow gates" --require windows
+          else
+            echo "ci-reuse edit: every job runs: the provenance verifier did not install"
+          fi
 """
 
 
@@ -518,6 +598,230 @@ def build_job_problems(jobs: dict[str, str], gate: str) -> list[str]:
     return problems
 
 
+# TSK-1001: the gate's selection is computed in a job that runs no pull
+# request code: it checks out the base revision (a pull request's base, any
+# other event's own commit), runs only that revision's selection script in
+# isolated mode under `env -i` and hands each shard's filter to the shard
+# jobs as a job output, which no step of those jobs can rewrite. Those jobs
+# run pull request code, so they can still run something else; the clean
+# report job judges what they report.
+SELECTION_JOB = """\
+    if: {condition}
+    name: gate selection
+    needs: reuse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      shards: ${{{{ steps.select.outputs.shards }}}}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{{{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}}}
+          persist-credentials: false
+      - name: Select the shards from the base
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, re, subprocess
+          script = "scripts/coverage-shards.py"
+          count = int(json.load(open("scripts/coverage-test-times.json"))["partitions"])
+          found = {{str(n): subprocess.run(["python3", "-I", "-B", script, "filter", str(n)], check=True,
+                                          capture_output=True, text=True).stdout.strip() for n in range(1, count + 1)}}
+          assert count > 0 and all(found.values()), f"{{script}} selected nothing for a slot"
+          assert all(re.fullmatch(r"[A-Za-z0-9_ :()/&=|!.~+-]+", f) for f in found.values()), \\
+              f"{{script}} selected a filter the shard jobs cannot take inline"
+          print(f"shards={{json.dumps(found, sort_keys=True)}}")
+          PY
+"""
+
+
+# TSK-1001 and TSK-1063: the Windows partition plan reads the build's test
+# list, so it runs after the build, in a job that runs no pull request
+# code: it checks out the base revision, fetches the list as data, runs the
+# base's planner in isolated mode (its drift check first) and hands each
+# partition's filter to the partition jobs as a job output. It runs under
+# the partition jobs' own condition.
+WINDOWS_PLAN_JOB = """\
+    if: {condition}
+    name: windows partition plan
+    needs: windows-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      partitions: ${{{{ steps.select.outputs.partitions }}}}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{{{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}}}
+          persist-credentials: false
+      - name: Fetch the archive's test list
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-test-list
+          path: ${{{{ runner.temp }}}}/windows-test-list
+      - name: Plan the partitions from the base
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          list="$RUNNER_TEMP/windows-test-list/windows-tests.json"
+          env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B scripts/windows-partitions.py drift --list "$list"
+          env -i HOME=/home/runner PATH=/usr/bin:/bin LIST="$list" /usr/bin/python3 -I -B - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, os, re, subprocess
+          script = "scripts/windows-partitions.py"
+          count = int(json.load(open("scripts/windows-test-times.json"))["partitions"])
+          found = {{str(n): subprocess.run(["python3", "-I", "-B", script, "filter", str(n), "--list", os.environ["LIST"]],
+                                          check=True, capture_output=True, text=True).stdout.strip()
+                   for n in range(1, count + 1)}}
+          assert count > 0 and all(found.values()), f"{{script}} selected nothing for a partition"
+          assert all(re.fullmatch(r"[A-Za-z0-9_ :()/&=|!.~+-]+", f) for f in found.values()), \\
+              f"{{script}} selected a filter the partition jobs cannot take inline"
+          print(f"partitions={{json.dumps(found, sort_keys=True)}}")
+          PY
+"""
+PLAN_GATE = " && needs.judge-windows.result == 'success'"
+
+
+# TSK-1001 review 5 F1: the gate's evaluators are the base's. The base's
+# driver validates the records and docs, and the base's parity checker,
+# journey runner and journey map, taken into the checkout before any pull
+# request code runs in the job, judge the pull request; the Python
+# journeys, the code under test, run last on the pull request's build.
+# The validation and parity check start under `env -i` from absolute
+# paths. The base's parity rules judge every pull request, including one
+# that changes codeflow-ci.yml (review 6).
+JUDGES_JOB = """\
+    if: {condition}
+    name: codeflow gates (judges)
+    needs: [reuse, gates-build, judge-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch the gate driver
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeflow-gate-driver
+          path: ${{{{ runner.temp }}}}/codeflow-gate-driver
+      - name: Fetch the codeflow build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeflow-release
+          path: ${{{{ runner.temp }}}}/codeflow-bin
+      - name: Judge the pull request with the base's evaluators
+        shell: bash
+        env:
+          EVENT: ${{{{ github.event_name }}}}
+          BASE_SHA: ${{{{ github.event.pull_request.base.sha }}}}
+        run: |
+          set -euo pipefail
+          driver="$RUNNER_TEMP/codeflow-gate-driver"
+          printf '%s  %s\\n' '${{{{ needs.judge-build.outputs.driver }}}}' "$driver/codeflow" | sha256sum -c --quiet -
+          chmod 755 "$driver/codeflow" "$RUNNER_TEMP/codeflow-bin/codeflow"
+          env -i HOME=/home/runner PATH=/usr/bin:/bin "$driver/codeflow" validate --docs
+          if [ "$EVENT" = pull_request ]; then
+            git checkout "$BASE_SHA" -- scripts/gate-parity.py scripts/journey-gate.py crates/codeflow-cli/tests/journey_gate.toml
+          fi
+          env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B scripts/gate-parity.py
+          CODEFLOW_BIN="$RUNNER_TEMP/codeflow-bin/codeflow" python3 -I -B scripts/journey-gate.py --part python
+"""
+
+
+def judges_job_problems(jobs: dict[str, str], condition: str) -> list[str]:
+    expected = JUDGES_JOB.format(condition=condition)
+    if norm_job(jobs.get("gates-judges", "")) != norm_job(expected):
+        return ["the `gates-judges` job must be exactly this, so the base's docs validation, parity checker, "
+                "journey runner and journey map judge the pull request before any of its code runs in the "
+                "job:\n" + expected]
+    return []
+
+
+def windows_plan_problems(jobs: dict[str, str]) -> list[str]:
+    """Why the `judge-windows` job is not exactly the base-run partition
+    plan, under the partition jobs' condition less its own result."""
+    tests = re.search(r"^ {4}if:\s*(.+?)\s*$", jobs.get("windows-tests", ""), re.M)
+    if not tests or PLAN_GATE not in tests.group(1):
+        return ["the windows-tests job must run only when the partition plan succeeded "
+                f"(`{PLAN_GATE.strip(' &')}` in its condition)"]
+    expected = WINDOWS_PLAN_JOB.format(condition=tests.group(1).replace(PLAN_GATE, "", 1))
+    if norm_job(jobs.get("judge-windows", "")) != norm_job(expected):
+        return ["the `judge-windows` job must be exactly this, so the Windows partition plan comes from the "
+                "base revision in a job that runs no pull request code:\n" + expected]
+    return []
+
+
+# TSK-1001 and TSK-1020: the gate parts run the base revision's codeflow
+# with the base's test config (`codeflow test --config`). This job builds
+# that driver from the base checkout with no cache a pull request run could
+# have written, under `env -i` from the runner image's Cargo and rustup
+# homes, and reports the driver's and the config's digests, which the gate
+# step checks before it runs them.
+DRIVER_JOB = """\
+    if: {condition}
+    name: gate driver
+    needs: reuse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      driver: ${{{{ steps.keep.outputs.driver }}}}
+      config: ${{{{ steps.keep.outputs.config }}}}
+    steps:
+      # A pull request's base commit; any other event's own, protected commit.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{{{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}}}
+          persist-credentials: false
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build the base's codeflow
+        run: env -i HOME=/home/runner PATH=/home/runner/.cargo/bin:/usr/bin:/bin CARGO_HOME=/home/runner/.cargo RUSTUP_HOME=/home/runner/.rustup /home/runner/.cargo/bin/cargo build --locked -p codeflow-cli
+      - name: Keep the driver and the base's test config
+        id: keep
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! target/debug/codeflow test --help | grep -q -- '--config <PATH>'; then
+            echo "::error::the base's codeflow has no \\`codeflow test --config\\`, so it cannot run the base's test config against this pull request; the base needs TSK-1020"
+            exit 1
+          fi
+          driver="$RUNNER_TEMP/codeflow-gate-driver"
+          mkdir -p "$driver"
+          cp target/debug/codeflow "$driver/codeflow"
+          cp .codeflow/test-config.json "$driver/test-config.json"
+          echo "driver=$(sha256sum "$driver/codeflow" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "config=$(sha256sum "$driver/test-config.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Keep the driver for the gate parts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-gate-driver
+          path: ${{{{ runner.temp }}}}/codeflow-gate-driver
+          retention-days: 1
+          if-no-files-found: error
+
+"""
+
+
+def driver_job_problems(jobs: dict[str, str], condition: str) -> list[str]:
+    expected = DRIVER_JOB.format(condition=condition)
+    if norm_job(jobs.get("judge-build", "")) != norm_job(expected):
+        return ["the `judge-build` job must be exactly this, so the gate's driver and test config come from "
+                "the base revision in a job that runs no pull request code:\n" + expected]
+    return []
+
+
+def selection_job_problems(jobs: dict[str, str], condition: str) -> list[str]:
+    expected = SELECTION_JOB.format(condition=condition)
+    if norm_job(jobs.get("judge", "")) != norm_job(expected):
+        return ["the `judge` job must be exactly this, so the gate's selection comes from the base revision "
+                "in a job that runs no pull request code:\n" + expected]
+    return []
+
+
 def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
     if norm_job(jobs.get("reuse", "")) != norm_job(REUSE_JOB):
         return ["the `reuse` job must be exactly this, so only a push can reuse a verdict, its token stays "
@@ -533,7 +837,7 @@ def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
 VERDICT_JOB = """\
     if: ${{{{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}}}
     name: codeflow gates
-    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]
+    needs: [reuse, gates, gates-judges, gates-release, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -541,22 +845,28 @@ VERDICT_JOB = """\
         shell: bash
         env:
           PARTS: ${{{{ needs.gates.result }}}}
+          JUDGES: ${{{{ needs.gates-judges.result }}}}
           RELEASE: ${{{{ needs.gates-release.result }}}}
           SHARDS: ${{{{ needs.gates-coverage.result }}}}
           REPORT: ${{{{ needs.gates-coverage-report.result }}}}
           REUSE: ${{{{ needs.reuse.result }}}}
           REUSED: ${{{{ needs.reuse.outputs.run }}}}
+          RELEASE_OWED: ${{{{ github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' && contains(fromJSON('["refs/heads/main","refs/heads/master"]'), github.ref) || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}}}
         run: |
-          if [ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+          if [ "$REUSE" = success ] && [ "$PARTS $JUDGES $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
             exit 0
           fi
-          if [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]; then
+          if [ "$PARTS $JUDGES $SHARDS $REPORT" = "skipped skipped skipped skipped" ]; then
             echo "::error::the Linux gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
             exit 1
           fi
-          if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
-            echo "::error::the full gate concluded parts=${{PARTS}} coverage shards=${{SHARDS}} coverage report=${{REPORT}}; see the codeflow gates jobs"
+          if [ "$PARTS" != success ] || [ "$JUDGES" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
+            echo "::error::the full gate concluded parts=${{PARTS}} judges=${{JUDGES}} coverage shards=${{SHARDS}} coverage report=${{REPORT}}; see the codeflow gates jobs"
+            exit 1
+          fi
+          if [ "$RELEASE_OWED" = true ] && [ "$RELEASE" != success ]; then
+            echo "::error::this event owes the release parts, and they concluded ${{RELEASE}}; see the codeflow gates (release) jobs"
             exit 1
           fi
           if [ "$RELEASE" != success ] && [ "$RELEASE" != skipped ]; then
@@ -584,7 +894,7 @@ def norm_job(text: str) -> list[str]:
 # inherits) is refused rather than read past. This catches drift in a
 # reviewed edit; it is not a boundary against someone who also edits this
 # script in the same change.
-TOP_KEYS = ("name", "on", "concurrency", "permissions", "jobs")
+TOP_KEYS = ("name", "run-name", "on", "concurrency", "permissions", "jobs")
 GATES_KEYS = ("if", "name", "needs", "runs-on", "timeout-minutes", "strategy", "steps")
 STRATEGY_HEAD = ["    strategy:", "      fail-fast: false", "      matrix:", "        include:"]
 PART_LINE = re.compile(r"^          - part: [a-z0-9-]+$")
@@ -594,7 +904,21 @@ GATE_STEP = """\
         shell: bash
         env:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
-        run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
+        run: |
+          set -euo pipefail
+          driver="$RUNNER_TEMP/codeflow-gate-driver"
+          printf '%s  %s\\n%s  %s\\n' '${{ needs.judge-build.outputs.driver }}' "$driver/codeflow" '${{ needs.judge-build.outputs.config }}' "$driver/test-config.json" | sha256sum -c --quiet -
+          chmod 755 "$driver/codeflow"
+          ONLY='${{ matrix.only }}'
+          only=$(python3 -I -B -c 'import json, sys
+          known = {t["name"] for t in json.load(open(sys.argv[1]))["targets"]}
+          wanted = sys.argv[2].split(",")
+          for name in wanted:
+              if name not in known:
+                  print(f"::notice::{name} is not in the base test config, so this gate does not run it", file=sys.stderr)
+          print(",".join(name for name in wanted if name in known))' "$driver/test-config.json" "$ONLY")
+          test -n "$only" || { echo "::error::no target of this part is in the base test config"; exit 1; }
+          "$driver/codeflow" test --mode full --strict --all --only "$only" --config "$driver/test-config.json"
 """
 
 
@@ -619,8 +943,8 @@ def release_job_problems(release: str, gate: str, workflow: str, released: list[
     if not condition or condition.group(1) != RELEASE_IF:
         problems.append(f"the gates-release job's condition must be exactly `if: {RELEASE_IF}`, so it runs on "
                         "the release path and never on a pull request into integration/**")
-    if "    needs: [reuse, gates-build]" not in [line.rstrip() for line in release.splitlines()]:
-        problems.append("the gates-release job must need exactly `[reuse, gates-build]`")
+    if "    needs: [reuse, gates-build, judge-build]" not in [line.rstrip() for line in release.splitlines()]:
+        problems.append("the gates-release job must need exactly `[reuse, gates-build, judge-build]`")
     if sorted(released) != sorted(RELEASE_TARGETS):
         problems.append(f"the gates-release parts must name exactly {sorted(RELEASE_TARGETS)}; found {sorted(released)}")
     landing = re.findall(r"^\s*only:\s*(\S+)\s*$", gate, re.M)
@@ -703,7 +1027,7 @@ def shared_install_problems(cfg: dict) -> list[str]:
 WITH_NODE = re.compile(r'^python3 -B scripts/with-node\.py (\S+) "([^"]+)"$')
 RUNS_NODE = re.compile(r"(^|[\s;&|(])(npm|npx|node)\s")
 EXACT_VERSION = re.compile(r"^v?(\d+\.\d+\.\d+)$")
-FULL_GATE = re.compile(r"^\s*run:\s*codeflow test --mode full\b", re.M)
+FULL_GATE = re.compile(r'^\s*(?:run:\s*)?(?:codeflow|"\$driver/codeflow") test --mode full\b', re.M)
 
 
 def with_node_parts(cmd: str) -> tuple[str | None, str]:

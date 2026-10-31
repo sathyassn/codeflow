@@ -1,5 +1,7 @@
 //! The CI entry point judges a fix range and both task-landing provenances.
-use super::{combined, git, planned_task, run_in};
+#[cfg(unix)]
+use super::installed_push;
+use super::{codeflow, combined, git, planned_task, run_in};
 use std::path::Path;
 
 const TASK: &str = "project-management/tasks/TSK-001.md";
@@ -176,6 +178,220 @@ fn a_completion_derives_its_review_row_and_warns_on_a_different_one() {
             );
         }
     }
+}
+
+/// `codeflow ci` for TSK-001 with the given environment, such as the draft
+/// state.
+fn ci_with(root: &Path, reviews: &str, env: &[(&str, &str)]) -> std::process::Output {
+    let body = format!(
+        "## Summary\nRepair work.\n\n- repair\n\nTask: TSK-001\n## Changes\n- repair\n\n## Testing\n- fixture\n{reviews}"
+    );
+    let mut command = codeflow();
+    // Named one by one: a fixture never sets a variable it does not name.
+    for (key, value) in env {
+        match *key {
+            "CODEFLOW_PR_IS_DRAFT" => command.env("CODEFLOW_PR_IS_DRAFT", value),
+            "GITHUB_EVENT_PATH" => command.env("GITHUB_EVENT_PATH", value),
+            "CODEFLOW_PR_DRAFT" => command.env("CODEFLOW_PR_DRAFT", value),
+            other => panic!("unexpected variable {other}"),
+        };
+    }
+    command
+        .args([
+            "ci",
+            "--base",
+            LINE,
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-work",
+            "--pr-body",
+            &body,
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap()
+}
+
+const NOT_LANDABLE: &str = "TSK-001 is not complete (status";
+
+/// TSK-1001 AC-5: a code pull request for a task with no acceptance block
+/// is refused once it is known to be ready, from the variable or the
+/// host's event; a draft, and a run that cannot tell (a push, a local
+/// lint), pass, so the review of a ready pull request and durability
+/// pushes go on. A docs-only range is not refused.
+#[test]
+fn an_unfinished_task_is_not_landable_once_ready() {
+    let dir = fixture();
+    let root = dir.path();
+    // A policy on the target, which the pre-push hook reads at the
+    // destination's default branch.
+    git(root, &["switch", "-q", "main"]);
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(root.join(".codeflow/policy.json"), "{\"git\": {}}\n").unwrap();
+    commit(root, "chore: add the policy");
+    git(root, &["switch", "-q", LINE]);
+    git(root, &["merge", "-q", "--ff-only", "main"]);
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    std::fs::write(root.join("work.rs"), "// work\n").unwrap();
+    commit(root, "feat: work");
+    let pending = "\n## Reviews\n\nNone: pending\n";
+    let events = tempfile::tempdir().unwrap();
+    let event = events.path().join("event.json");
+    std::fs::write(&event, r#"{"pull_request":{"draft":false}}"#).unwrap();
+    let event = event.to_str().unwrap();
+    // A rerun of an old draft event: the pinned live readiness, passed as
+    // the variable, wins over the event file (TSK-1001 review 2).
+    let draft_event = events.path().join("draft-event.json");
+    std::fs::write(&draft_event, r#"{"pull_request":{"draft":true}}"#).unwrap();
+    let draft_event = draft_event.to_str().unwrap();
+    for (env, refused) in [
+        (
+            vec![
+                ("GITHUB_EVENT_PATH", draft_event),
+                ("CODEFLOW_PR_IS_DRAFT", "false"),
+            ],
+            true,
+        ),
+        (vec![("GITHUB_EVENT_PATH", draft_event)], false),
+        (vec![("CODEFLOW_PR_IS_DRAFT", "false")], true),
+        (vec![("GITHUB_EVENT_PATH", event)], true),
+        (vec![("CODEFLOW_PR_IS_DRAFT", "true")], false),
+        (
+            vec![
+                ("GITHUB_EVENT_PATH", event),
+                ("CODEFLOW_PR_IS_DRAFT", "true"),
+            ],
+            false,
+        ),
+        (vec![], false),
+        (vec![("CODEFLOW_PR_IS_DRAFT", "/tmp/body.md")], false),
+    ] {
+        let out = ci_with(root, pending, &env);
+        let text = combined(&out);
+        assert_eq!(!out.status.success(), refused, "{env:?}: {text}");
+        assert_eq!(text.contains(NOT_LANDABLE), refused, "{env:?}: {text}");
+    }
+    // AC-15: a real `git push` through the installed hook is not refused,
+    // since a push cannot tell readiness.
+    #[cfg(unix)]
+    {
+        let remote = events.path().join("remote.git");
+        git(
+            root,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                remote.to_str().unwrap(),
+            ],
+        );
+        git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        // Fixture setup, before the hook is installed.
+        git(root, &["push", "-q", "origin", "main", LINE]);
+        let pushed = installed_push(root, "task/TSK-001-work");
+        let text = combined(&pushed);
+        assert!(!text.contains(NOT_LANDABLE), "{text}");
+        assert!(pushed.status.success(), "{text}");
+    }
+    // The former name is the release preflight's body path, never a draft
+    // state (TSK-1001 AC-10).
+    let out = ci_with(root, pending, &[("CODEFLOW_PR_DRAFT", "false")]);
+    assert!(out.status.success(), "{}", combined(&out));
+    // A docs-only range is not refused.
+    git(root, &["switch", "-q", LINE]);
+    git(root, &["switch", "-qc", "task/TSK-001-docs"]);
+    std::fs::write(root.join("README.md"), "# Notes\n").unwrap();
+    commit(root, "docs: notes");
+    let mut command = codeflow();
+    let out = command
+        .env("CODEFLOW_PR_IS_DRAFT", "false")
+        .args([
+            "ci",
+            "--base",
+            LINE,
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-docs",
+            "--pr-body",
+            "## Summary\nNotes.\n\n- notes\n\nTask: TSK-001\n## Changes\n- notes\n\n## Reviews\n\nNone: pending\n",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(!combined(&out).contains(NOT_LANDABLE), "{}", combined(&out));
+}
+
+/// TSK-1001 AC-8: under a policy that requires Reviews at block level, a
+/// completed task's derived row lets the section be left out or empty; a
+/// task with no acceptance block still needs it.
+#[test]
+fn a_derived_review_row_satisfies_a_required_reviews_section() {
+    let dir = fixture();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        r#"{"git":{"pr_sections":"block","pr_required_sections":["Summary","Changes","Reviews"]}}"#,
+    )
+    .unwrap();
+    commit(root, "chore: require reviews");
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    std::fs::write(root.join("work.rs"), "// work\n").unwrap();
+    let reviewed = commit(root, "feat: work");
+    let missing = "PR body is missing required section '## Reviews'";
+    let open = ci_reviewed(root, "task/TSK-001-work", true, "");
+    assert!(!open.status.success(), "{}", combined(&open));
+    assert!(combined(&open).contains(missing), "{}", combined(&open));
+    task(root, "complete", &block(&reviewed));
+    commit(root, "docs: complete task");
+    for section in ["", "\n## Reviews\n\n"] {
+        let out = ci_reviewed(root, "task/TSK-001-work", true, section);
+        let text = combined(&out);
+        assert!(out.status.success(), "{section:?}: {text}");
+        assert!(!text.contains(missing), "{text}");
+        assert!(
+            !text.contains("'## Reviews' is present but empty"),
+            "{text}"
+        );
+    }
+}
+
+/// TSK-1001 review finding 4: an unfinished task with a parseable
+/// acceptance block naming an earlier commit is still refused once ready,
+/// and its block derives no Reviews row, under a policy that requires one.
+#[test]
+fn a_todo_task_with_a_parseable_block_is_still_not_landable() {
+    let dir = fixture();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        r#"{"git":{"pr_sections":"block","pr_required_sections":["Summary","Changes","Reviews"]}}"#,
+    )
+    .unwrap();
+    commit(root, "chore: require reviews");
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    std::fs::write(root.join("work.rs"), "// first\n").unwrap();
+    let stale = commit(root, "feat: first pass");
+    // The block stays in a todo record while product code moves on.
+    task(root, "todo", &block(&stale));
+    commit(root, "docs: paste an acceptance block");
+    std::fs::write(root.join("work.rs"), "// later\n").unwrap();
+    commit(root, "feat: later work");
+    let out = ci_with(root, "", &[("CODEFLOW_PR_IS_DRAFT", "false")]);
+    let text = combined(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains(NOT_LANDABLE), "{text}");
+    assert!(text.contains("(status todo)"), "{text}");
+    assert!(
+        text.contains("PR body is missing required section '## Reviews'"),
+        "an unfinished task's block derives no Reviews row: {text}"
+    );
+    assert!(!text.contains("row derived from"), "{text}");
 }
 
 #[test]

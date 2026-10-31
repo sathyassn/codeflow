@@ -112,6 +112,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ID_REGISTRY_UID", Runs),
     ("ACCEPTANCE_BINDING", Runs),
     ("REVIEW_ROW_BINDING", Runs),
+    ("UNFINISHED_READY", Runs),
     ("EPIC_ACCEPTANCE_BINDING", Runs),
     ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
     ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),
@@ -337,6 +338,8 @@ fn command(program: &str, dir: &Path) -> Command {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .env_remove("BITBUCKET_PR_ID")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("CODEX_HOME")

@@ -22,6 +22,8 @@ fn codeflow() -> Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("GITHUB_BASE_REF")
@@ -617,9 +619,12 @@ fn naming_the_completed_task_with_only_another_description_runs_the_preflight() 
 }
 
 /// AC-4: a description edit of the completed task is a change to its
-/// record, so the range still starts no work and skips the preflight.
+/// record, so the range still starts no work and skips the preflight. It
+/// is no criteria-text correction, so the ownership check refuses it
+/// (TSK-1001 AC-6); wording that must leave a completed record goes by
+/// the redaction route.
 #[test]
-fn a_description_edit_of_the_completed_task_skips_the_preflight() {
+fn a_description_edit_of_the_completed_task_is_refused_without_the_preflight() {
     let dir = repo();
     let root = dir.path();
     git(root, &["switch", "-C", PLAN, "main"]);
@@ -632,10 +637,13 @@ fn a_description_edit_of_the_completed_task_skips_the_preflight() {
     .unwrap();
     commit(root, "docs(records): reword the description");
     let result = ci(root, PLAN, "Task: TSK-003");
-    assert_passes(
+    assert_blocks(
         &result,
         "a description edit of the completed task",
-        &["starts no work"],
+        &[
+            "starts no work",
+            "TSK-003 changes more than the text of its criteria",
+        ],
     );
     assert!(
         !result.1.contains("work.stable_planning_anchor"),
@@ -1049,4 +1057,60 @@ fn a_reopen_behind_main_stays_frozen_and_names_only_its_own_task() {
         "{}",
         result.1
     );
+}
+
+/// TSK-1001 AC-6: the correction route keeps the record-ownership check.
+/// Beside a valid text correction, an epic edit, or an edit to the
+/// corrected task outside its criteria (its description or dependencies),
+/// is refused, whether the pull request names the completed task or its
+/// follow-up.
+#[test]
+fn a_correction_changes_nothing_but_the_criteria_text() {
+    type Edit = fn(&Path);
+    let epic: Edit = |root| {
+        let path = root.join("project-management/epics/EPC-001.md");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, text.replace("An outcome.", "A different outcome.")).unwrap();
+    };
+    let description: Edit = |root| {
+        let path = root.join(record_path("TSK-003"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, text.replace("Work.\n", "Different work.\n")).unwrap();
+    };
+    let dependencies: Edit = |root| {
+        let path = root.join(record_path("TSK-003"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            path,
+            text.replace("depends_on: []", "depends_on: [TSK-006]"),
+        )
+        .unwrap();
+    };
+    for (what, edit, needle) in [
+        ("an epic edit", epic, "EPC-001 changes its record in"),
+        (
+            "the corrected task's description",
+            description,
+            "TSK-003 changes more than the text of its criteria",
+        ),
+        (
+            "the corrected task's dependencies",
+            dependencies,
+            "TSK-003 changes more than the text of its criteria",
+        ),
+    ] {
+        for named in ["Task: TSK-003", "Task: TSK-005"] {
+            let dir = repo();
+            let root = dir.path();
+            git(root, &["switch", "-C", PLAN, "main"]);
+            rewrite(root, "TSK-003", CORRECTED);
+            edit(root);
+            commit(root, "docs(records): correct a criterion and more");
+            assert_blocks(
+                &ci(root, PLAN, named),
+                &format!("{what} named by {named}"),
+                &["work.criteria_frozen", needle],
+            );
+        }
+    }
 }

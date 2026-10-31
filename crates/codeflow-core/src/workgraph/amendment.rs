@@ -333,7 +333,7 @@ pub enum CancellationJudge<'a> {
 ///
 /// # Errors
 /// Returns a diagnostic for unreadable history or an invalid cancellation
-/// range. Lifecycle validation still checks the record's full schema.
+/// range, including a record that fails the full task schema.
 pub fn cancelled_standalone(
     root: &std::path::Path,
     base: &str,
@@ -405,12 +405,15 @@ pub fn cancelled_standalone(
     let id = &record.id;
     cancellation_lines(record)?;
     let texts = rule_texts(paths)?;
+    let history = history_paths(&repo, base, head)?;
     if texts
         .iter()
+        .chain(&history)
         .any(|path| !path.starts_with("project-management/"))
     {
-        return Err("a standalone cancellation amendment changes only project-management/ paths; keep product changes on the task branch".into());
+        return Err("a standalone cancellation amendment changes only project-management/ paths, in every commit as well as the final diff; keep product changes on the task branch".into());
     }
+    schema_problem(record)?;
     if let Some(problem) = range_problem(&repo, base, head, &texts) {
         return Err(problem);
     }
@@ -426,6 +429,38 @@ pub fn cancelled_standalone(
         ));
     }
     Ok(Some(id.clone()))
+}
+
+/// The full task schema of an incoming cancelled record (TSK-1001): the
+/// lifecycle view carries no title or standalone reason, so the record is
+/// validated as `codeflow validate` validates a task file.
+fn schema_problem(record: &RecordView) -> Result<(), String> {
+    let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let name = record
+        .path
+        .rsplit('/')
+        .next()
+        .unwrap_or("record.md")
+        .to_string();
+    let folder = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    let path = folder.join(name);
+    std::fs::write(&path, &record.content).map_err(|error| error.to_string())?;
+    let (errors, _) =
+        crate::validate::validate_task(&path, &crate::validate::ValidateOptions::default())
+            .map_err(|error| format!("{} is not a valid task record: {error}", record.id))?;
+    if errors.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} is not a valid task record: {}",
+        record.id,
+        errors
+            .iter()
+            .map(|error| format!("{}: {}", error.field, error.message))
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
 }
 
 /// A cancelled record carries its reason and scope in the Closeout.
@@ -538,6 +573,19 @@ pub fn range_problem_at(
 /// target's managed block byte for byte.
 #[must_use]
 pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) -> Option<String> {
+    range_problem_with(repo, base, head, paths, true)
+}
+
+/// [`range_problem`], with the per-commit history pass when `history`; the
+/// per-path probe that names the path at fault judges the final paths only,
+/// and names a history fault separately.
+fn range_problem_with(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+    paths: &[String],
+    history: bool,
+) -> Option<String> {
     let project = match project_at(repo, base) {
         Ok(project) => project,
         Err(error) => {
@@ -567,6 +615,16 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
             }
         }
     }
+    // The final diff can hide a change a commit made and a later one
+    // reverted; that history still lands, so each commit is held to the
+    // admitted paths, to regular entries only and to the target's managed
+    // AGENTS.md block too (TSK-1001).
+    if let Some(problem) = history
+        .then(|| history_problem(repo, base, head, &project))
+        .flatten()
+    {
+        return Some(problem);
+    }
     if let Some(path) = text {
         let path = crate::git::display_key(path);
         for (side, at) in [("target", base), ("head", head)] {
@@ -591,6 +649,168 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
             after.as_ref().map(|(_, bytes)| bytes.as_slice()),
         ) {
             return Some(MANAGED_BLOCK_CHANGED.to_string());
+        }
+    }
+    None
+}
+
+/// One entry a commit of a range changes: its path, its mode and blob on
+/// each side (zero when absent), and the commit (TSK-1001).
+pub struct HistoryChange {
+    pub commit: Oid,
+    pub path: String,
+    pub old_mode: i32,
+    pub new_mode: i32,
+    pub old_blob: Oid,
+    pub new_blob: Oid,
+}
+
+/// Every entry a commit of the range (reachable from `head`, not from
+/// `base`) changes: a commit's change against its one parent, a root
+/// commit's whole tree (against the empty tree), and for a merge the
+/// entries it changes against every parent, which is what the merge itself
+/// introduced. The walk uses the guarded history reader, so a shallow or
+/// overlaid history refuses. A name that is not UTF-8 is an error, never a
+/// lookalike.
+///
+/// # Errors
+/// Returns a message when the history or a tree cannot be read.
+pub fn history_changes(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+) -> Result<Vec<HistoryChange>, String> {
+    let message = |error: git2::Error| error.message().to_string();
+    let mut walk = history::revwalk(repo).map_err(message)?;
+    walk.push(head).map_err(message)?;
+    walk.hide(base).map_err(message)?;
+    let deltas = |commit: Oid,
+                  from: Option<&git2::Tree<'_>>,
+                  to: &git2::Tree<'_>|
+     -> Result<Vec<HistoryChange>, String> {
+        let diff = repo
+            .diff_tree_to_tree(from, Some(to), None)
+            .map_err(message)?;
+        let mut found = Vec::new();
+        for delta in diff.deltas() {
+            let (old, new) = (delta.old_file(), delta.new_file());
+            let name = new
+                .path_bytes()
+                .or_else(|| old.path_bytes())
+                .ok_or_else(|| "git reported a change with no path".to_string())?;
+            let path = String::from_utf8(name.to_vec()).map_err(|error| {
+                odd_name_problem(
+                    &crate::git::GitName::from_bytes(error.as_bytes())
+                        .display()
+                        .to_string(),
+                )
+            })?;
+            found.push(HistoryChange {
+                commit,
+                path,
+                old_mode: i32::from(old.mode()),
+                new_mode: i32::from(new.mode()),
+                old_blob: old.id(),
+                new_blob: new.id(),
+            });
+        }
+        Ok(found)
+    };
+    let mut found = Vec::new();
+    for oid in walk {
+        let commit = repo.find_commit(oid.map_err(message)?).map_err(message)?;
+        let tree = commit.tree().map_err(message)?;
+        let parents: Vec<git2::Tree<'_>> = history::parents(repo, &commit)
+            .map_err(message)?
+            .into_iter()
+            .map(|parent| repo.find_commit(parent).and_then(|parent| parent.tree()))
+            .collect::<Result<_, _>>()
+            .map_err(message)?;
+        match parents.as_slice() {
+            [] => found.extend(deltas(commit.id(), None, &tree)?),
+            [parent] => found.extend(deltas(commit.id(), Some(parent), &tree)?),
+            [first, rest @ ..] => {
+                let mut changes = deltas(commit.id(), Some(first), &tree)?;
+                for parent in rest {
+                    let other: BTreeSet<String> = deltas(commit.id(), Some(parent), &tree)?
+                        .into_iter()
+                        .map(|change| change.path)
+                        .collect();
+                    changes.retain(|change| other.contains(&change.path));
+                }
+                found.extend(changes);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Every path [`history_changes`] lists.
+///
+/// # Errors
+/// Returns a message when the history or a tree cannot be read.
+pub fn history_paths(repo: &Repository, base: Oid, head: Oid) -> Result<BTreeSet<String>, String> {
+    Ok(history_changes(repo, base, head)?
+        .into_iter()
+        .map(|change| change.path)
+        .collect())
+}
+
+/// Why a commit of a planning range carries what a planning amendment may
+/// not, though the final diff may not show it: a path outside the admitted
+/// set, a symbolic link or submodule on either side, or a change to the
+/// managed block of `AGENTS.md` (TSK-1001).
+fn history_problem(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+    project: &ProjectPaths,
+) -> Option<String> {
+    let changes = match history_changes(repo, base, head) {
+        Ok(changes) => changes,
+        Err(error) => {
+            return Some(format!(
+                "cannot read the range's commits to classify it: {error}"
+            ))
+        }
+    };
+    let blob = |id: Oid| -> Result<Option<Vec<u8>>, String> {
+        if id.is_zero() {
+            return Ok(None);
+        }
+        repo.find_blob(id)
+            .map(|blob| Some(blob.content().to_vec()))
+            .map_err(|error| error.message().to_string())
+    };
+    for change in changes {
+        let path = crate::git::display_key(&change.path);
+        let commit = change.commit.to_string();
+        let commit = &commit[..9];
+        if amendment_path(&change.path, project).is_none() {
+            return Some(format!(
+                "commit {commit} of this planning-only pull request changes {path}, outside the admitted set, though the final diff may not show it; a planning amendment's history carries planning paths only, so drop that commit (rebase it out) and keep product changes on a task branch"
+            ));
+        }
+        if let Some(kind) = [change.old_mode, change.new_mode]
+            .into_iter()
+            .find_map(special_entry_kind)
+        {
+            return Some(format!(
+                "commit {commit} of this planning-only pull request changes the {kind} {path}, though the final diff may not show it; a planning amendment's history carries regular files only, so drop that commit (rebase it out)"
+            ));
+        }
+        if change.path == "AGENTS.md" {
+            let (before, after) = match (blob(change.old_blob), blob(change.new_blob)) {
+                (Ok(before), Ok(after)) => (before, after),
+                (Err(error), _) | (_, Err(error)) => {
+                    return Some(format!("cannot read AGENTS.md in commit {commit}: {error}"))
+                }
+            };
+            if !instructions_block_unchanged(before.as_deref(), after.as_deref()) {
+                return Some(format!(
+                    "commit {commit}: {MANAGED_BLOCK_CHANGED}; a later commit restoring it does not take the change out of the landed history"
+                ));
+            }
         }
     }
     None
@@ -818,12 +1038,30 @@ pub(super) fn landing_problem(
     }
     // Name the path at fault; a problem no single path shows (the policy
     // cannot be read) names the first.
-    let single = |path: &String| range_problem(repo, parent, landing, std::slice::from_ref(path));
-    Ok(paths
-        .iter()
-        .find(|path| single(path).is_some())
-        .or_else(|| paths.first())
-        .cloned())
+    let single = |path: &String| {
+        range_problem_with(repo, parent, landing, std::slice::from_ref(path), false)
+    };
+    if let Some(path) = paths.iter().find(|path| single(path).is_some()) {
+        return Ok(Some(path.clone()));
+    }
+    // No final path is at fault, so a commit of the landing's history is
+    // (TSK-1001): name the first entry it changes that a planning
+    // amendment may not carry.
+    let project = project_at(repo, parent).ok();
+    let historical = history_changes(repo, parent, landing)
+        .ok()
+        .and_then(|changes| {
+            changes.into_iter().find_map(|change| {
+                let admitted = project
+                    .as_ref()
+                    .is_some_and(|project| amendment_path(&change.path, project).is_some());
+                let special = [change.old_mode, change.new_mode]
+                    .into_iter()
+                    .any(|mode| special_entry_kind(mode).is_some());
+                (!admitted || special || change.path == "AGENTS.md").then_some(change.path)
+            })
+        });
+    Ok(historical.or_else(|| paths.first().cloned()))
 }
 
 #[cfg(test)]
@@ -922,10 +1160,16 @@ mod tests {
             (head, orphan)
         };
         let paths = std::slice::from_ref(&record);
-        // The controls: an ordinary planning range, and disjoint histories
-        // read from the target, both pass.
+        // The control: an ordinary planning range passes. A disjoint
+        // history's root commit lands its whole tree, so its product file
+        // `a` is refused even though the range's own paths omit it
+        // (TSK-1001).
         assert_eq!(range_problem(&repo, base, head, paths), None);
-        assert_eq!(range_problem(&repo, base, orphan, paths), None);
+        let orphaned = range_problem(&repo, base, orphan, paths).expect("refused");
+        assert!(
+            orphaned.contains("changes a, outside the admitted set"),
+            "{orphaned}"
+        );
         drop(repo);
 
         let hex = first.to_string();

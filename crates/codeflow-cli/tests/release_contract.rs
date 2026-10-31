@@ -508,8 +508,11 @@ fn strict_repository_gate_installs_its_declared_coverage_tool() {
         .split("\n  gates-coverage:\n")
         .next()
         .expect("codeflow gates job must precede its coverage shards");
+    // TSK-1001: the parts run the base's driver with the base's test config.
     assert!(
-        gates.contains("run: codeflow test --mode full --strict"),
+        gates.contains(
+            "\"$driver/codeflow\" test --mode full --strict --all --only \"$only\" --config \"$driver/test-config.json\""
+        ),
         "strict aggregate gate must remain enabled"
     );
     // TSK-184, TSK-270: the coverage shards run the instrumented suite, and
@@ -693,6 +696,8 @@ fn an_adopter_without_release_tooling_is_judged_by_codeflow_ci_alone() {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env_remove("CODEFLOW_PR_BODY")
+            .env_remove("GITHUB_EVENT_PATH")
+            .env_remove("CODEFLOW_PR_IS_DRAFT")
             .env_remove("GITHUB_EVENT_NAME")
             .output()
             .unwrap();

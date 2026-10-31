@@ -41,12 +41,15 @@
       ".claude/settings.json",
       "scripts/proofs/**",
       "scripts/test_gate_contracts.py",
+      "scripts/test_gate_driver.py",
       "scripts/contract-scans.py",
       "scripts/test_contract_scans.py",
       "scripts/windows-partitions.py",
       "scripts/windows-test-times.json",
       "scripts/test_windows_partitions.py",
       "scripts/ci-reuse.py",
+      "scripts/admission_env.py",
+      "scripts/requirements-admission.txt",
       "scripts/test_ci_reuse.py",
       "scripts/coverage-shards.py",
       "scripts/coverage-test-times.json",
@@ -305,6 +308,22 @@
           "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_contract_scans.py"
         }
       }
+    },
+    {
+      "name": "gate-driver",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "python3 -B scripts/test_gate_driver.py"
+        },
+        "full": {
+          "command": "python3 -B scripts/test_gate_driver.py"
+        }
+      },
+      "requires": [
+        "codeflow-bin"
+      ]
     },
     {
       "name": "docs-portal-windows",

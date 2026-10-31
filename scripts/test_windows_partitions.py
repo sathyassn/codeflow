@@ -607,7 +607,8 @@ class WorkflowStructureTests(unittest.TestCase):
         reports = [s for s in steps if s.get("id") == "reports"]
         self.assertEqual(len(reports), 1, "the reports step must exist once")
         step = reports[0]
-        self.assertEqual(step["run"], "python -B scripts/windows-partitions.py reports --results "
+        # The base's planner, from the judge copy (TSK-1001).
+        self.assertEqual(step["run"], 'python -I -B "$CODEFLOW_JUDGE/scripts/windows-partitions.py" reports --results '
                          "target/nextest/partitions --list target/nextest/list/windows-tests.json")
         for forbidden in ("if", "continue-on-error"):
             self.assertNotIn(forbidden, step, f"the reports step must not carry `{forbidden}`")
@@ -621,7 +622,7 @@ class WorkflowStructureTests(unittest.TestCase):
         placement = steps[names.index("Every test ran in exactly one partition")]
         # The whole condition, so `... || true` or a dropped `!cancelled()` fails here.
         self.assertEqual(placement["if"], "${{ !cancelled() && steps.reports.outcome == 'success' }}")
-        self.assertIn("windows-partitions.py check", placement["text"])
+        self.assertIn('python -I -B "$CODEFLOW_JUDGE/scripts/windows-partitions.py" check', placement["text"])
 
     def test_the_journeys_job_hands_the_missing_partitions_to_the_verdict(self):
         job = self.jobs["windows-journeys"]
@@ -633,10 +634,29 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertIn("exit 1", verdict.split('[ "$JOURNEYS" != success ]', 1)[1])
 
     def test_the_partitions_run_their_filterset_from_the_builds_list(self):
+        # TSK-1001: the base's planner plans from the build's list in the
+        # `judge-windows` job, drift check first, and each partition runs
+        # the filter that job hands it.
+        plan = workflow_steps(self.jobs["judge-windows"])
+        select = [s for s in plan if s.get("id") == "select"]
+        self.assertEqual(len(select), 1)
+        # The planner starts from an absolute interpreter under `env -i`,
+        # which keeps only the list's path.
+        self.assertIn('list="$RUNNER_TEMP/windows-test-list/windows-tests.json"', select[0]["text"])
+        self.assertIn('env -i HOME=/home/runner PATH=/usr/bin:/bin /usr/bin/python3 -I -B '
+                      'scripts/windows-partitions.py drift --list "$list"', select[0]["text"])
+        self.assertIn('env -i HOME=/home/runner PATH=/usr/bin:/bin LIST="$list" /usr/bin/python3 -I -B -',
+                      select[0]["text"])
+        self.assertIn('"filter", str(n), "--list", os.environ["LIST"]', select[0]["text"])
         steps = workflow_steps(self.jobs["windows-tests"])
         run = [s for s in steps if s.get("name", "").startswith("cargo nextest run")]
         self.assertEqual(len(run), 1)
-        self.assertIn('filter ${{ matrix.partition }} --list "$RUNNER_TEMP/windows-test-list/windows-tests.json"', run[0]["run"])
+        # Written into the step by the runner, never read from the
+        # environment an earlier step can write (TSK-1001 review 5).
+        self.assertTrue(run[0]["run"].endswith(
+            "-E '${{ fromJSON(needs.judge-windows.outputs.partitions)[format('{0}', matrix.partition)] }}'"),
+            run[0]["run"])
+        self.assertNotIn("FILTER", self.jobs["windows-tests"])
 
 
 CS_SPEC = importlib.util.spec_from_file_location("coverage_shards", ROOT / "scripts" / "coverage-shards.py")
