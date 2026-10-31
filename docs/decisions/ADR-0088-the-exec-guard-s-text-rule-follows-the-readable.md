@@ -19,7 +19,7 @@ architecture_impact: "the Enforcement row names `hooks/sandbox_state.rs`, which 
 
 ## Context
 
-A text filter cannot contain a program it does not read. The PR 331 reviews found 14 classes of command that pass any rule the guard can apply to shell text. The strict rule that refuses them also refuses 42 lines of a 49-line everyday sample. Where the OS sandbox is enabled and fails closed with the shipped deny entries, the kernel already denies writes to the enforcement set; where it is absent, loosened or bypassed, nothing else stands behind the text. ADR-0008 made the exec guard one rule for every harness. ADR-0029 let a sandbox failure request one classified unsandboxed retry.
+A text filter cannot contain a program it does not read. The PR 331 reviews found 14 classes of command that pass any rule the guard can apply to shell text. The strict rule that refuses them also refuses 43 lines of a 49-line everyday sample, 12 more than the line's rule. Where the OS sandbox is enabled and fails closed with the shipped deny entries, the kernel already denies writes to the enforcement set; where it is absent, loosened or bypassed, nothing else stands behind the text. ADR-0008 made the exec guard one rule for every harness. ADR-0029 let a sandbox failure request one classified unsandboxed retry.
 
 Two designs chose the rule from the harness configuration the guard can read: first a list of loosening settings, then an attestation that each layer equals the shipped preset or a narrower form. Each review round from 15 to 18 found a layer or key the reader missed, in configuration formats CodeFlow does not own, so a weaker configuration still selected the relaxed rule. A feature that cannot be made sound is removed rather than patched (operator rule of 2026-10-24).
 
@@ -40,7 +40,7 @@ This amends ADR-0008 (one rule for every harness becomes a strict default with a
 
 ## Consequences
 
-- This is a breaking change (operator, 2026-10-28; release 4.0.0). Every project is strict until its operator lands `relaxed`: on the everyday sample, 42 of 49 lines refuse where the line refused 2, among them `echo "$HOME"`, `git commit -m "$MSG"` and `[ -f "$f" ]`.
+- This is a breaking change (operator, 2026-10-28; release 4.0.0). Every project is strict until its operator lands `relaxed`: on the everyday sample, 43 of 49 lines refuse where the relaxed rule, the line's, refuses 31, among them `echo "$HOME"`, `cd "$TMPDIR" && ls` and `grep -rn "$PAT" src`.
 - `codeflow init` and `codeflow update` never write the key. `codeflow doctor --check sandbox` prints the rule in force and, for relaxed, the ref it was read from, as "relaxed by operator choice, not verified", says what that ref is, and names the level each kind of finding takes.
 - Relaxed takes effect only once it is on every protected ref the hook reads. For CodeFlow's own repository, which reads `main` and the integration line, that is when it reaches `main` through the checkpoint.
 - A relaxed project trusts the OS sandbox it configures and the remote-tracking refs as last fetched; the guard does not check that the sandbox is enabled, fails closed or carries the floor. An unsandboxed retry the harness does not mark (Codex has no such field) follows the relaxed rule.

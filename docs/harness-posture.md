@@ -70,7 +70,7 @@ dated evidence.
 
 The exec guard applies one of two text rules to each shell call (ADR-0088):
 
-- **Strict**, the default: judges every word after a program the guard cannot read through, with no program exempt by name. It applies to every call unless the operator chose relaxed. It refuses 42 lines of the 49-line everyday sample where relaxed refuses 2.
+- **Strict**, the default: judges every word after a program the guard cannot read through, with no program exempt by name. It applies to every call unless the operator chose relaxed. It refuses 43 lines of the 49-line everyday sample where relaxed refuses 31.
 - **Relaxed:** the previous rule, by the operator's choice. It applies when `security.text_guard` is `relaxed` in every policy the hook reads at the remote-tracking refs as last fetched: the call's repository (its default branch and any declared line, where `strict` wins) and, for a Claude Code call, the session's project. A working copy, a local branch or tag, a remote `HEAD` that points outside the remote, a ref file that is a symbolic link and a repository without a remote stay strict, so the setting takes effect once it lands on every one of those refs and is fetched. The guard verifies no sandbox under relaxed.
 - **What relaxed trusts:** those refs are local state, not authenticated. A process that can write the repository's `.git` directory can set them, the same capability that defeats any text rule; authenticating them is TSK-1057's work.
 - **Always strict:** a recognized marked retry (`dangerouslyDisableSandbox`), and every call on native Windows. A harness that sends no retry field follows the rule in force.
