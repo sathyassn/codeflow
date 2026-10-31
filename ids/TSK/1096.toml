@@ -1,0 +1,11 @@
+id = "TSK-1096"
+uid = "a9b82f21-3e4b-4230-ae49-921881088611"
+kind = "TSK"
+title = "Present and portal tables encode state, extent and emphasis from one grammar module"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T00:19:20Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
