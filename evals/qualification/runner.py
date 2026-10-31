@@ -407,22 +407,35 @@ CODEX_DIALOG = re.compile(r"(?i)^\s*[│┃]?\s*[›❯]|\b(?:enter|esc)\b.*\b(?
 CODEX_FOLD = re.compile(r"\[Pasted Content (\d+) chars\]")
 
 
-def codex_expectation(native: list[str], repository: Path) -> dict:
-    """The caller's requested model and effort, for Codex frame checks."""
-    model = effort = None
+def requested_values(native: list[str]) -> dict[str, str]:
+    """The caller's native flags and their values, after `permission_flags`
+    has checked them (each flag once, each with a value)."""
+    values = {}
     index = 0
     while index < len(native):
         flag, separator, value = native[index].partition("=")
         index += 1
         if not separator and index < len(native):
             value = native[index]; index += 1
-        if flag == "--model":
-            model = value
-        elif flag == "-c":
-            effort = value.partition("=")[2].strip("\"'")
+        values[flag] = value
+    return values
+
+
+def codex_expectation(native: list[str], repository: Path) -> dict:
+    """The caller's requested model and effort, for Codex frame checks."""
+    values = requested_values(native)
+    model = values.get("--model")
+    effort = values["-c"].partition("=")[2].strip("\"'") if "-c" in values else None
     if not model:
         raise Refused("refused native flag: --model (required so Codex readiness can verify the model)", "--model")
     return {"model": model, "effort": effort, "repository": repository}
+
+
+def claude_expectation(native: list[str], repository: Path) -> dict:
+    """What the fixture's shipped status line must show, when it shows one:
+    the requested model and the fixture's folder. Without `--model` the row
+    never matches, so a fixture with the status line refuses readiness."""
+    return {"model": requested_values(native).get("--model"), "folder": repository.name}
 
 
 def codex_status(line: str, model: str, effort: str | None, repository: Path) -> bool:
@@ -1698,8 +1711,7 @@ def launch(args) -> None:
         permissions = permission_flags(args.harness, native, repository, environment=environment,
                                        codex_hook_trust=args.codex_hook_trust)
         codex = codex_expectation(native, repository) if args.harness == "codex" else None
-        # What the fixture's shipped status line must show, when it shows one.
-        claude = {"model": permissions.get("--model"), "folder": repository.name} if args.harness == "claude" else None
+        claude = claude_expectation(native, repository) if args.harness == "claude" else None
         # On any harness the option also covers Codex peers the subject opens;
         # only a Codex seat itself gets the native flag at launch.
         if args.codex_hook_trust == "bypass":

@@ -5924,6 +5924,12 @@ class ProcessRepairTests(unittest.TestCase):
         branch = "task/TSK-031-retry-settings-from-config"
         status = {"model": "claude-opus-5-5", "folder": "repository"}
         self.assertEqual('Try "fix typecheck errors"', runner.editor(screen, branch, status))
+        # The expectation comes from the trial's own checked native flags.
+        for native in [["--model", "claude-opus-5-5", "--effort", "high", "--permission-mode", "auto"],
+                       ["--model=claude-opus-5-5", "--permission-mode=auto"]]:
+            runner.permission_flags("claude", native)
+            self.assertEqual(status, runner.claude_expectation(native, Path("/subjects/trial/repository")))
+        self.assertIsNone(runner.claude_expectation(["--permission-mode", "auto"], Path("/r/repository"))["model"])
         row = "  Opus 5.5 (claude-opus-5-5) | v2.1.314 | default | repository (task/TSK-031-retry-settings-from-config) | ctx:0k/1000k (0%)"
         self.assertIn(row + "\n", screen)
         # Without the status expectation, or with another fixture's identity, it refuses.
@@ -7070,16 +7076,20 @@ class ProcessRepairTests(unittest.TestCase):
                     return {"result": {"process_info": {"foreground_processes": [{"name": "zsh"}]}}}
                 return {"result": {"agent": {"agent_status": "idle", "state_change_seq": 0}}}
 
-            def ready(*_args, **_kwargs):
+            expectations = []
+
+            def ready(*_args, **kwargs):
                 order.append("ready")
+                expectations.append(kwargs.get("claude"))
                 return {"agent_status": "idle"}
 
             def snapshot(*_args, **_kwargs):
                 order.append("snapshot")
                 return {"entries": {}, "errors": {}}
 
-            def deliver(*_args):
+            def deliver(*args):
                 order.append("delivery")
+                expectations.append(args[6])
                 return 1
 
             native = ["--model", "chosen-selector", "--permission-mode", "auto"]
@@ -7094,6 +7104,8 @@ class ProcessRepairTests(unittest.TestCase):
                 runner.launch(args)
             # Peers can only be opened after delivery; the watcher is answering by then.
             self.assertEqual(["start", "ready", "snapshot", "watch", "delivery"], order)
+            # The shipped status line is checked against the requested model and this fixture's folder.
+            self.assertEqual([{"model": "chosen-selector", "folder": "repository"}] * 2, expectations)
             self.assertFalse((args.output / "peers.stop").exists())
             args.output = evidence_root / "delivery-refused"
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
