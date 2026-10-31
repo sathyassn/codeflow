@@ -1,0 +1,11 @@
+id = "TSK-1106"
+uid = "7a4c2ad0-28f4-47e2-b692-642b26c897eb"
+kind = "TSK"
+title = "The shipped presets deny secret-bearing files by kind and keep source readable"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:19:16Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
