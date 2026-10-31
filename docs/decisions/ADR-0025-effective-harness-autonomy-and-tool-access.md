@@ -118,3 +118,11 @@ ADR-0055 amends production-host autonomy: Claude `bypassPermissions` or
 `auto`, Codex `approval_policy = "never"` plus `--sandbox danger-full-access`,
 Grok `--always-approve`. Consult and no-edit review stay non-bypass. Git
 hooks, git-guard, exec-guard, and CI remain the floor.
+
+## Note (2026-10-31)
+
+ADR-0093 replaces `sandbox.network.allowedDomains: ["*"]` with a list of the
+development hosts the shipped stacks use (operator decision 2026-10-31); the
+private-range denies and local binding stay. It also denies the `gh` and
+Docker token stores this decision kept readable; `gh` now runs outside the
+sandbox by name.

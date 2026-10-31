@@ -58,3 +58,16 @@ approval for every host retry can add `Bash(dangerouslyDisableSandbox:true)` to
   <https://code.claude.com/docs/en/sandboxing>
 - Claude Auto mode and input-parameter ask rules:
   <https://code.claude.com/docs/en/permissions>
+
+## Note (2026-10-31)
+
+ADR-0093 replaces the classified retry (operator decision 2026-10-31). The
+shipped presets set `sandbox.allowUnsandboxedCommands: false`, so a refused
+command never reruns outside the sandbox, and the commands that need host
+state run outside it by name in `sandbox.excludedCommands` (the `gh`
+subcommands CodeFlow uses and a plain `git push`). The plugin route in this
+record relied on the retry: its `codex-companion.mjs` command needs
+`~/.codex` state, and its path changes with each plugin version, so no
+project entry can name it. A person who keeps the plugin as a fallback
+adds its command to `excludedCommands` in their own user settings or a
+`--settings` file; the Herdr seat stays the primary route.

@@ -1,7 +1,9 @@
 //! CLI subcommand handlers. Each module owns its arg types and run function
 //! so `main.rs` stays a thin dispatcher (charter §3.1).
 
+pub mod bypass_mode;
 pub mod ci;
+pub mod claude_session;
 pub mod delegate;
 pub mod doctor;
 pub mod estimate;

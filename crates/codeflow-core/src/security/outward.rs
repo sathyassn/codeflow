@@ -2972,7 +2972,11 @@ fn family_id(id: &str) -> &'static str {
         "account" => "account",
         "keychain" => "keychain",
         "persistence" => "persistence",
-        _ => unreachable!("action table family lacks guard routing"),
+        "forge_exec" => "forge_exec",
+        "forge_write" => "forge_write",
+        // A family added to the table without a name here is still refused
+        // as an outward action, never a crash (TSK-1070 live canary).
+        _ => "unrouted_family",
     }
 }
 
@@ -4321,6 +4325,35 @@ mod tests {
                 evaluate(command, &SecuritySection::default())
                     .iter()
                     .any(|v| v.message.contains("configuration")),
+                "{command}"
+            );
+        }
+    }
+
+    /// A table family the guard has no name for crashed exec-guard
+    /// (`gh extension list` in the TSK-1070 live canary); every family is
+    /// named, and a denied forge form is refused as an outward action.
+    #[test]
+    fn every_table_family_is_routed_and_a_forge_exec_form_is_refused() {
+        for family in &table().families {
+            assert_eq!(family_id(&family.id), family.id.as_str());
+        }
+        for command in [
+            "gh extension list",
+            "gh auth status -t",
+            "gh repo clone o/r",
+        ] {
+            assert!(
+                evaluate(command, &SecuritySection::default())
+                    .iter()
+                    .any(|v| v.rule == "security.outward_actions"
+                        && v.message.starts_with("forge_exec action")),
+                "{command}"
+            );
+        }
+        for command in ["gh auth status", "gh repo view o/r", "gh pr view 1"] {
+            assert!(
+                evaluate(command, &SecuritySection::default()).is_empty(),
                 "{command}"
             );
         }

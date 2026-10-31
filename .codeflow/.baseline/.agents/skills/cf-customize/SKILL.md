@@ -66,15 +66,22 @@ Then verify and **offer** remediation; never install silently.
     trusting their comments:
     - `.claude/settings.json` (Claude Code 2.1.187 or newer applies the
       sandbox environment-variable denies): sandbox enabled and fail-closed, sandboxed Bash
-      auto-approved, classified unsandboxed retry enabled only for trusted
-      installed tools that fail because they require host state, wildcard
-      public-domain egress present for dependency/tool subprocesses, common private/link-local
+      auto-approved, `allowUnsandboxedCommands: false` with only the
+      host-state tools named in `excludedCommands`, network egress limited
+      to the shipped development hosts plus the project's own, common private/link-local
       destinations denied, destructive/privileged operations asked or
       classified, secret reads denied, and the shipped raw Anthropic/OpenAI/AWS
-      variables absent from sandboxed Bash. Claude ignores project
-      `defaultMode: auto` and `autoMode`, so use the user-level setting for a
-      lifecycle session (its one immutable CLI settings file carries the
-      hooks), then prove the composed boundary with a live canary.
+      variables absent from sandboxed Bash, and both guard hooks set
+      `timeout` and `onFailure: "block"`. Claude ignores project
+      auto or bypass in `defaultMode` and `autoMode`, and a
+      project `default` or `acceptEdits` outranks the user file. Auto and
+      bypass are both sanctioned host modes the person chooses at user or
+      launch scope; the guards, deny rules and fail-closed sandbox are the
+      floor in both. Offer the user-file line only on the person's explicit
+      yes, and run the live mode canary (which file set the mode, both
+      guards and a deny rule block a planted command, the sandbox refuses a
+      write): `references/personal-settings.md` "Permission mode, bypass
+      included".
     - `.codex/config.toml`: guarded workspace default, no legacy `sandbox_mode`,
       public network/live search. A builder's launch flags (the transport
       posture table) mean no prompts/OS sandbox; guards, hooks, and CI remain
@@ -174,9 +181,10 @@ or outward action. The fixes:
   operator control.
 
 - Claude auto mode unavailable → show the failed capability check; use
-  `acceptEdits` with the fail-closed project sandbox for this run. Do not write
-  `defaultMode: auto` into `.claude/settings.json`: Claude ignores it at project
-  scope. Offer the user-level setting only with approval. A lifecycle peer run
+  bypass (if the person chose it) or `acceptEdits` with the fail-closed
+  project sandbox for this run. Do not write an auto or bypass
+  `defaultMode` into `.claude/settings.json`: Claude ignores both at
+  project scope. Offer the user-level setting only with approval. A lifecycle peer run
   already uses its one immutable CLI settings file for hooks, so repeated
   `--settings` flags are not a supported composition mechanism; when user-scope
   auto is absent, use the documented `acceptEdits` fallback and record the

@@ -294,9 +294,9 @@ still make the live observations the steps below require.
    check the boundary they produce:
    - Claude: require sandbox + `failIfUnavailable: true`, sandboxed Bash
      autonomy, and raw-secret denies; a consult's auto mode also needs
-     user-scope `classifyAllShell`. Only a trusted installed tool may receive
-     one classified unsandboxed retry; arbitrary unsandboxed commands remain
-     out of bounds.
+     user-scope `classifyAllShell`. Only the trusted installed tools named in
+     `sandbox.excludedCommands` run outside the sandbox; a refused command
+     never reruns outside it.
    - Codex: the `cf-guard` or `cf-builder` profile its row selects.
      For every seat, public network and live search are enabled.
      Auto-review is not human authorization; catastrophic work still stops for

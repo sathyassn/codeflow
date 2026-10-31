@@ -142,6 +142,10 @@ enum Command {
         #[arg(long, value_name = "VERSION", conflicts_with_all = ["diff", "force"])]
         pin: Option<String>,
     },
+    /// Start Claude Code in adopted projects with the session settings
+    /// file: a binding sandbox, the host list and, on your yes, bypass
+    /// mode, through a `claude` shell function you choose to load.
+    ClaudeSession(cmd::claude_session::ClaudeSessionArgs),
     /// Claude-layer hooks, wired by the settings presets (charter §3.3).
     Hook(cmd::hook::HookArgs),
     /// Transport-neutral lifecycle for interactive delegate turns.
@@ -209,6 +213,7 @@ fn touches_registry(command: &Command) -> bool {
     !matches!(
         command,
         Command::Hook(_)
+            | Command::ClaudeSession(_)
             | Command::GitHook(_)
             | Command::Ci(_)
             | Command::Validate(_)
@@ -474,6 +479,7 @@ fn run() -> anyhow::Result<()> {
             } else {
                 prompts::gather_answers(&cwd)?
             };
+            let bypass_chosen = answers.permission_preset.as_deref() == Some("bypassPermissions");
             let options = scaffold::InitOptions {
                 tier,
                 force,
@@ -485,6 +491,25 @@ fn run() -> anyhow::Result<()> {
                 decide_pr_template(&cwd, &mut report)?;
             }
             print_block!(report.block());
+            if bypass_chosen {
+                println!("{}", prompts::BYPASS_ROUTE_NOTE);
+                // The session file and the startup-file line are the
+                // person's: offered only interactively, each written on a
+                // typed yes, never under --yes (TSK-1070, ADR-0093).
+                if !yes {
+                    match cmd::claude_session::Layout::from_env() {
+                        Some(layout) => {
+                            let _ = cmd::claude_session::install(
+                                &mut std::io::stdin().lock(),
+                                &layout,
+                            );
+                        }
+                        None => println!(
+                            "  No home directory is set, so the CodeFlow session settings were not offered."
+                        ),
+                    }
+                }
+            }
             cmd::present::provision_state_root_or_warn();
             report_workspace(&cwd, workspace_step)?;
         }
@@ -492,6 +517,7 @@ fn run() -> anyhow::Result<()> {
             Some(version) => std::process::exit(pin_release(&cwd, &version)),
             None => update(&assets, &cwd, diff, force)?,
         },
+        Command::ClaudeSession(args) => std::process::exit(cmd::claude_session::run(&args)),
         Command::Hook(args) => std::process::exit(cmd::hook::run(&args)),
         Command::Delegate(args) => std::process::exit(cmd::delegate::run(&args)),
         Command::GitHook(args) => std::process::exit(cmd::git_hook::run(&args)),

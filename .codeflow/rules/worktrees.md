@@ -118,9 +118,10 @@ Claude Code's denies writes to its protected paths, which include parts of
 worktree, then stops with `Operation not permitted` and leaves it
 half-removed. Where the effective sandbox denies those writes, make the proof
 first (merge, clean worktree, inactive owner), then run the removal once
-through the harness's sanctioned unsandboxed path, such as Claude Code's
-unsandboxed retry under its normal permission check. Do not make a first
-attempt inside the sandbox. If that path is disabled, refused or unavailable,
+through the harness's sanctioned unsandboxed path, where one exists under
+its normal permission check. Do not make a first attempt inside the
+sandbox. CodeFlow's shipped Claude presets have no such path (they set
+`sandbox.allowUnsandboxedCommands: false`). If that path is disabled, refused or unavailable,
 keep the worktree and hand the proven removal to the operator with the proof
 and the exact command. Report a removal that already stopped partway the same
 way. Never use `--force`, and never change sandbox or permission settings to

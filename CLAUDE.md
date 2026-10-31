@@ -20,13 +20,22 @@ check; when unsure, route.
   rule and the sanctioned path; fix the cause.
 - The project permission preset and fail-closed sandbox live in
   `.claude/settings.json`: sandbox-contained Bash, public web research and
-  local dev binding are enabled; a failed sandboxed command may request one
-  auto-classified unsandboxed retry for a trusted installed tool that needs
-  host state (for example, `herdr` or the official Codex plugin). This is not
-  a general bypass. Claude ignores repository requests for both auto mode and
-  classifier policy, so select auto in the active host (or user settings) and
-  supply `autoMode.classifyAllShell` at user or CLI scope. `/cf-customize`
-  canaries the effective mode; never claim the repo file enabled it.
+  local dev binding are enabled. Sandboxed commands reach only the listed
+  development hosts, and a refused command never reruns outside the
+  sandbox; only the `gh` subcommands CodeFlow uses and a plain `git push`
+  run outside it, by name in `sandbox.excludedCommands`, and only as a
+  single command with no pipe, redirect, `cd` or `$(...)`. Add a host or
+  tool in `.claude/settings.local.json`. The permission mode is the
+  person's: auto (with `autoMode.classifyAllShell`) or bypass, set at user
+  scope, at launch or in CodeFlow's session file, since Claude ignores both
+  in a repository file. `codeflow claude-session --install` writes that file
+  (`~/.codeflow/claude/session.json`), which makes the sandbox and host list
+  binding, and a `claude` shell function that starts with it inside
+  CodeFlow projects; a session started without it is warned at start. In
+  either mode `git-guard` and `exec-guard` block on a refusal,
+  crash or timeout, deny rules hold and the sandbox fails closed.
+  `/cf-customize` canaries the effective mode; never claim the repo file
+  enabled it.
 - `.claude/settings.json` also sets `includeCoAuthoredBy` to false and an
   empty `attribution` for commit and PR with the session link off, so the
   host never injects the AI attribution that project policy forbids; the

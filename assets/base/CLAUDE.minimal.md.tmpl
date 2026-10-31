@@ -13,10 +13,13 @@
   guard message: it names the violated policy rule and the sanctioned path.
 - The Claude project preset and fail-closed sandbox live in
   `.claude/settings.json`: sandbox-contained Bash and web research are
-  enabled, local dev binding is available, and a sandbox failure may request
-  one auto-classified unsandboxed retry for a trusted installed tool
-  requiring host state. This is not a general bypass; destructive,
-  privileged and secret boundaries remain. Codex uses the separate guarded
+  enabled, local dev binding is available, sandboxed commands reach only
+  the listed development hosts, and a refused command never reruns outside
+  the sandbox; only the `gh` subcommands CodeFlow uses and a plain
+  `git push` run outside it by name, each as a single command.
+  Destructive, privileged and secret boundaries remain. The permission
+  mode, auto or bypass, is the person's, set in `~/.claude/settings.json`
+  or at launch; the guards, deny rules and sandbox hold in both. Codex uses the separate guarded
   profile in `.codex/config.toml`; one harness's settings do not configure
   the other. Grok Build uses `.grok/hooks/` in the same in-session guard
   plane. The four planes remain git hooks, in-session guards, scaffolded CI,

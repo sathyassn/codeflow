@@ -574,46 +574,215 @@
     }
    ],
    "codex_note": "PowerShell `Set-ExecutionPolicy` arrives as one `-Command` string, which a prefix cannot match; exec-guard and the elevated Windows sandbox carry it."
+  },
+  {
+   "id": "forge_exec",
+   "decision": "deny",
+   "why": "The `gh` subcommands CodeFlow uses and a plain `git push` run outside the Claude sandbox by name (TSK-1070). The forms that would run code outside it, print the token or reach another host are refused: `gh` extensions, aliases, configuration, codespaces, keys, secrets, variables, clone and browse, a push with its own receive-pack or exec program, and an `ext::` remote.",
+   "claude": [
+    "Bash(gh extension *)",
+    "Bash(gh ext *)",
+    "Bash(gh alias *)",
+    "Bash(gh config set *)",
+    "Bash(gh auth status -t*)",
+    "Bash(gh auth status --show-token*)",
+    "Bash(gh auth status * -t*)",
+    "Bash(gh auth status * --show-token*)",
+    "Bash(gh codespace *)",
+    "Bash(gh cs *)",
+    "Bash(gh ssh-key *)",
+    "Bash(gh gpg-key *)",
+    "Bash(gh secret *)",
+    "Bash(gh variable set *)",
+    "Bash(gh variable delete *)",
+    "Bash(gh repo clone *)",
+    "Bash(gh browse *)",
+    "Bash(git push *--receive-pack*)",
+    "Bash(git push *--exec*)",
+    "Bash(git push *ext::**)"
+   ],
+   "codex": [
+    {
+     "pattern": [
+      "gh",
+      [
+       "extension",
+       "ext",
+       "alias",
+       "codespace",
+       "cs",
+       "ssh-key",
+       "gpg-key",
+       "browse"
+      ]
+     ],
+     "match": [
+      "gh extension install o/r"
+     ],
+     "not_match": [
+      "gh pr view 1"
+     ]
+    },
+    {
+     "pattern": [
+      "gh",
+      "config",
+      "set"
+     ]
+    },
+    {
+     "pattern": [
+      "gh",
+      "auth",
+      "status",
+      [
+       "-t",
+       "--show-token"
+      ]
+     ],
+     "not_match": [
+      "gh auth status"
+     ]
+    },
+    {
+     "pattern": [
+      "gh",
+      "variable",
+      [
+       "set",
+       "delete"
+      ]
+     ],
+     "not_match": [
+      "gh variable list"
+     ]
+    },
+    {
+     "pattern": [
+      "gh",
+      "repo",
+      "clone"
+     ],
+     "not_match": [
+      "gh repo view"
+     ]
+    },
+    {
+     "pattern": [
+      "git",
+      "push",
+      [
+       "--receive-pack",
+       "--exec"
+      ]
+     ]
+    }
+   ],
+   "codex_note": "An attached `--receive-pack=` or `--exec=`, `gh secret list` and an `ext::` remote cannot be a Codex prefix without forbidding every `git push` or `gh secret`; git-guard and exec-guard's outward check carry them."
+  },
+  {
+   "id": "forge_write",
+   "decision": "ask",
+   "why": "A `gh api` call that writes (a POST, PUT or PATCH method, a field or an input body, or any GraphQL call, since a mutation and a query share one form) runs outside the Claude sandbox by name (TSK-1070). It prompts in every mode, bypass included, so a person sees each write the text rules can name; an unattended session is refused (ADR-0093, departing from ADR-0075 decision 1 for this family only).",
+   "claude": [
+    "Bash(gh api -X POST*)",
+    "Bash(gh api -XPOST*)",
+    "Bash(gh api --method POST*)",
+    "Bash(gh api --method=POST*)",
+    "Bash(gh api * -X POST*)",
+    "Bash(gh api * -XPOST*)",
+    "Bash(gh api * --method POST*)",
+    "Bash(gh api * --method=POST*)",
+    "Bash(gh api -X PUT*)",
+    "Bash(gh api -XPUT*)",
+    "Bash(gh api --method PUT*)",
+    "Bash(gh api --method=PUT*)",
+    "Bash(gh api * -X PUT*)",
+    "Bash(gh api * -XPUT*)",
+    "Bash(gh api * --method PUT*)",
+    "Bash(gh api * --method=PUT*)",
+    "Bash(gh api -X PATCH*)",
+    "Bash(gh api -XPATCH*)",
+    "Bash(gh api --method PATCH*)",
+    "Bash(gh api --method=PATCH*)",
+    "Bash(gh api * -X PATCH*)",
+    "Bash(gh api * -XPATCH*)",
+    "Bash(gh api * --method PATCH*)",
+    "Bash(gh api * --method=PATCH*)",
+    "Bash(gh api -f *)",
+    "Bash(gh api * -f *)",
+    "Bash(gh api -F *)",
+    "Bash(gh api * -F *)",
+    "Bash(gh api --field*)",
+    "Bash(gh api * --field*)",
+    "Bash(gh api --raw-field*)",
+    "Bash(gh api * --raw-field*)",
+    "Bash(gh api --input*)",
+    "Bash(gh api * --input*)",
+    "Bash(gh api graphql*)"
+   ],
+   "codex_note": "Codex has no prompt under `never` approval and these writes are part of normal PR work, so Codex gets no rule; its sandbox and the token scope (D6) carry the call."
   }
  ],
  "claude_read_groups": [
   {
-   "why": "Source-name denies: any file whose name contains secret or credentials. The exceptions reopen source and documentation files by extension, and they narrow only these two rules because every other read deny is listed after them.",
+   "why": "Secret-named data files: a file named secret, secrets, credential or credentials (with or without a leading dot), and a data, config or key file whose name contains secret or credential. Source and documentation files are not matched, so they need no exception: Claude Code merges these rules into the OS sandbox, which cannot apply a `!` exception, and a bare `*secret*` deny made source files such as `secret_scan.rs` unreadable to every sandboxed command (TSK-1070).",
    "denies": [
-    "Read(**/*credentials*)",
-    "Read(**/*secret*)"
+    "Read(**/secret)",
+    "Read(**/secrets)",
+    "Read(**/.secret)",
+    "Read(**/.secrets)",
+    "Read(**/credential)",
+    "Read(**/credentials)",
+    "Read(**/.credentials)",
+    "Read(**/*secret*.env)",
+    "Read(**/*secret*.json)",
+    "Read(**/*secret*.yaml)",
+    "Read(**/*secret*.yml)",
+    "Read(**/*secret*.toml)",
+    "Read(**/*secret*.ini)",
+    "Read(**/*secret*.conf)",
+    "Read(**/*secret*.cfg)",
+    "Read(**/*secret*.txt)",
+    "Read(**/*secret*.xml)",
+    "Read(**/*secret*.properties)",
+    "Read(**/*secret*.key)",
+    "Read(**/*secret*.pem)",
+    "Read(**/*secret*.p12)",
+    "Read(**/*secret*.pfx)",
+    "Read(**/*secret*.gpg)",
+    "Read(**/*secret*.age)",
+    "Read(**/*secret*.asc)",
+    "Read(**/*secret*.jks)",
+    "Read(**/*secret*.keystore)",
+    "Read(**/*secret*.enc)",
+    "Read(**/*credential*.env)",
+    "Read(**/*credential*.json)",
+    "Read(**/*credential*.yaml)",
+    "Read(**/*credential*.yml)",
+    "Read(**/*credential*.toml)",
+    "Read(**/*credential*.ini)",
+    "Read(**/*credential*.conf)",
+    "Read(**/*credential*.cfg)",
+    "Read(**/*credential*.txt)",
+    "Read(**/*credential*.xml)",
+    "Read(**/*credential*.properties)",
+    "Read(**/*credential*.key)",
+    "Read(**/*credential*.pem)",
+    "Read(**/*credential*.p12)",
+    "Read(**/*credential*.pfx)",
+    "Read(**/*credential*.gpg)",
+    "Read(**/*credential*.age)",
+    "Read(**/*credential*.asc)",
+    "Read(**/*credential*.jks)",
+    "Read(**/*credential*.keystore)",
+    "Read(**/*credential*.enc)"
    ],
-   "carveouts": [
-    "Read(!**/*secret*.rs)",
-    "Read(!**/*secret*.py)",
-    "Read(!**/*secret*.ts)",
-    "Read(!**/*secret*.tsx)",
-    "Read(!**/*secret*.js)",
-    "Read(!**/*secret*.mjs)",
-    "Read(!**/*secret*.cjs)",
-    "Read(!**/*secret*.go)",
-    "Read(!**/*secret*.java)",
-    "Read(!**/*secret*.kt)",
-    "Read(!**/*secret*.rb)",
-    "Read(!**/*secret*.swift)",
-    "Read(!**/*secret*.md)",
-    "Read(!**/*credentials*.rs)",
-    "Read(!**/*credentials*.py)",
-    "Read(!**/*credentials*.ts)",
-    "Read(!**/*credentials*.tsx)",
-    "Read(!**/*credentials*.js)",
-    "Read(!**/*credentials*.mjs)",
-    "Read(!**/*credentials*.cjs)",
-    "Read(!**/*credentials*.go)",
-    "Read(!**/*credentials*.java)",
-    "Read(!**/*credentials*.kt)",
-    "Read(!**/*credentials*.rb)",
-    "Read(!**/*credentials*.swift)",
-    "Read(!**/*credentials*.md)"
-   ]
+   "carveouts": [],
+   "shell": false
   },
   {
-   "why": "Env files. Listed after the source-name exceptions so that `.env.secret.py` stays denied; the exceptions reopen only the example, sample, template and dist files.",
+   "why": "Env files; the exceptions reopen only the example, sample, template and dist files.",
    "denies": [
     "Read(**/.env)",
     "Read(**/.env.*)"
@@ -662,7 +831,14 @@
     "Read(~/.claude/settings-bkup.json)",
     "Read(~/.claude/shell-snapshots/**)",
     "Read(~/.claude/tasks/**)",
-    "Read(~/.claude/teams/**)"
+    "Read(~/.claude/teams/**)",
+    "Read(~/.config/gh/**)",
+    "Read(~/.git-credentials)",
+    "Read(~/.docker/config.json)",
+    "Read(~/.config/gcloud/**)",
+    "Read(~/.azure/**)",
+    "Read(~/.npmrc)",
+    "Read(~/Library/Keychains/**)"
    ],
    "carveouts": []
   }
@@ -694,7 +870,11 @@
   "AZURE_OPENAI_API_KEY",
   "CARGO_REGISTRY_TOKEN",
   "TWINE_PASSWORD",
-  "UV_PUBLISH_TOKEN"
+  "UV_PUBLISH_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "NPM_TOKEN",
+  "NODE_AUTH_TOKEN"
  ],
  "sandbox_read_denies": [
   "~/.pypirc",
@@ -702,7 +882,17 @@
   "~/.password-store",
   "~/.codex/auth.json",
   "~/.grok/auth.json",
-  "~/.grok/mcp_credentials.json"
+  "~/.grok/mcp_credentials.json",
+  "~/.config/gh",
+  "~/.git-credentials",
+  "~/.docker/config.json",
+  "~/.config/gcloud",
+  "~/.azure",
+  "~/.npmrc",
+  "~/Library/Keychains"
+ ],
+ "sandbox_write_denies": [
+  "**/.codeflow/git-hooks"
  ],
  "startup_paths": {
   "why": "Shell startup files and the files that run commands when a shell or terminal starts (issue 86, TSK-242). A function or alias planted in one is loaded by every later shell, and every command-text guard then judges the name it sees, not what runs. No policy key relaxes the class: the user edits their own profile. An entry ending in `/` is a directory and everything below it. `home` entries are relative to the home; the zsh entries also apply under `ZDOTDIR` and the `.config/` entries under `XDG_CONFIG_HOME` when those are set for the guard. `absolute` entries are system files. `anywhere` entries are file names protected in every directory.",

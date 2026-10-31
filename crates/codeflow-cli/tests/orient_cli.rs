@@ -42,7 +42,9 @@ fn run(root: &Path, hook: bool) -> String {
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEFLOW_SESSION_SETTINGS");
     if hook {
         command.args(["hook", "session-orient"]);
     } else {

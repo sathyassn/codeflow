@@ -19,11 +19,16 @@
 //!   rules last, so none can lift or be lifted by a project rule. An earlier
 //!   release's preset then only retires an array this preset dropped
 //!   ([`merge_settings_from_prior_release`]). Scalar permission keys
-//!   (`defaultMode`) are set only when absent.
+//!   (`defaultMode`) are set only when absent. When the preset ships no
+//!   mode, a `bypassPermissions` or `auto` mode the recorded baseline shows
+//!   `codeflow` shipped is removed, since Claude Code ignores it in a project
+//!   file; one the project set itself stays and is reported (ADR-0093).
 //! - **sandbox entries** — recursively add missing keys and union shipped array
 //!   entries, while preserving every explicit user scalar. On update, the prior
 //!   shipped baseline also identifies retired managed array entries; those are
-//!   removed while user-only entries survive. This lets security additions and
+//!   removed while user-only entries survive, and a scalar still at its
+//!   recorded shipped value moves to the new one (TSK-1070, such as
+//!   `allowUnsandboxedCommands`). This lets security additions and
 //!   boundary corrections reach existing projects without taking ownership of
 //!   project-specific sandbox configuration.
 //! - **env entries** — the shipped `env` keys are added to a project that
@@ -169,7 +174,8 @@ enum Previous {
     /// were shipped and which the project removed.
     Recorded,
     /// An earlier release's copy standing in for a missing baseline: it
-    /// only retires the entries of an array this preset dropped.
+    /// only retires the entries of an array this preset dropped, and of
+    /// `ask`, which 3.0 dropped and 4.0 reinstated (TSK-1070).
     PriorRelease,
 }
 
@@ -493,6 +499,14 @@ fn merge_sandbox(
             preset,
             report,
         );
+        move_shipped_scalars(
+            cur_sandbox,
+            previous_sandbox,
+            inc_sandbox,
+            &Shown::fixed("sandbox"),
+            preset,
+            report,
+        );
     }
     merge_additive_object(
         cur_sandbox,
@@ -543,6 +557,43 @@ fn remove_retired_array_entries(
                 });
             }
             _ => {}
+        }
+    }
+}
+
+/// Move a sandbox scalar, such as `allowUnsandboxedCommands`, that still
+/// holds the value the recorded baseline shows `codeflow` shipped to the new
+/// shipped value (TSK-1070). A value the project changed stays, and the
+/// additive merge after this reports it as preserved.
+fn move_shipped_scalars(
+    current: &mut Map<String, Value>,
+    previous: &Map<String, Value>,
+    incoming: &Map<String, Value>,
+    path: &Shown,
+    preset: Preset<'_>,
+    report: &mut Vec<Shown>,
+) {
+    for (key, inc_val) in incoming {
+        let (Some(current_value), Some(previous_value)) = (current.get_mut(key), previous.get(key))
+        else {
+            continue;
+        };
+        let key_path = shown!("{}.{}", path, preset.name(key));
+        match (current_value, previous_value, inc_val) {
+            (Value::Object(current), Value::Object(previous), Value::Object(incoming)) => {
+                move_shipped_scalars(current, previous, incoming, &key_path, preset, report);
+            }
+            (_, _, Value::Object(_) | Value::Array(_))
+            | (_, Value::Object(_) | Value::Array(_), _) => {}
+            (current_value, previous_value, inc_val) => {
+                if *current_value == *previous_value && *current_value != *inc_val {
+                    *current_value = inc_val.clone();
+                    report.push(shown!(
+                        "settings: updated {} to the new shipped value",
+                        key_path
+                    ));
+                }
+            }
         }
     }
 }
@@ -820,8 +871,11 @@ fn merge_permissions(
             .and_then(Value::as_array);
         match (cur_perms.get_mut(key), inc_val) {
             (Some(Value::Array(cur_arr)), Value::Array(inc_arr)) => {
+                // `ask` was dropped in 3.0 and returned in 4.0 with only the
+                // forge writes (TSK-1070), so an earlier release's asks are
+                // retired as they would have been when the array was dropped.
                 let previous = prev_arr
-                    .filter(|_| kind == Previous::Recorded)
+                    .filter(|_| kind == Previous::Recorded || key == "ask")
                     .map(Vec::as_slice);
                 merge_array(&name, cur_arr, previous, inc_arr, preset, report);
             }
@@ -846,6 +900,57 @@ fn merge_permissions(
                 report.push(shown!("settings: added permissions.{}", name));
             }
         }
+    }
+
+    if !inc_perms.contains_key("defaultMode") {
+        retire_project_scope_mode(cur_perms, previous, kind, report);
+    }
+}
+
+/// The permission modes Claude Code ignores in a project settings file
+/// (`bypassPermissions` and `auto` since v2.1.257): the session starts in
+/// Manual mode instead (ADR-0093).
+const PROJECT_IGNORED_MODES: [&str; 2] = ["bypassPermissions", "auto"];
+
+/// Retire a project `permissions.defaultMode` that Claude Code ignores at
+/// project scope, when the preset no longer ships a mode (TSK-1070,
+/// ADR-0093). A value still equal to the one the recorded baseline shows
+/// `codeflow` shipped is removed; one the project set itself, or any value
+/// without a recorded baseline, stays and is reported on every update.
+/// Other modes (`default`, `acceptEdits`, `plan`) take effect from a
+/// project file and are left alone.
+fn retire_project_scope_mode(
+    cur_perms: &mut Map<String, Value>,
+    previous: Option<&Map<String, Value>>,
+    kind: Previous,
+    report: &mut Vec<Shown>,
+) {
+    let Some(mode) = cur_perms
+        .get("defaultMode")
+        .and_then(Value::as_str)
+        .and_then(|mode| PROJECT_IGNORED_MODES.iter().find(|m| **m == mode))
+    else {
+        return;
+    };
+    let shipped = kind == Previous::Recorded
+        && previous
+            .and_then(|previous| previous.get("defaultMode"))
+            .and_then(Value::as_str)
+            == Some(*mode);
+    if shipped {
+        cur_perms.shift_remove("defaultMode");
+        report.push(shown!(
+            "settings: removed permissions.defaultMode \"{}\"; Claude Code ignores it \
+             in a project file, so set it in ~/.claude/settings.json or at launch",
+            Shown::fixed(mode)
+        ));
+    } else {
+        report.push(shown!(
+            "settings: {}permissions.defaultMode\"; Claude Code ignores \"{}\" in a \
+             project file, so set it in ~/.claude/settings.json or at launch",
+            Shown::fixed(KEPT_OWN),
+            Shown::fixed(mode)
+        ));
     }
 }
 
@@ -1366,6 +1471,116 @@ mod tests {
             !report.iter().any(|line| line.contains("no longer ships")),
             "{report:?}"
         );
+    }
+
+    /// A preset's permissions without a mode (this release's), with the
+    /// `acceptEdits` mode, and with a mode Claude Code ignores at project
+    /// scope (TSK-1070, ADR-0093).
+    const NO_MODE: &str = r#"{"permissions": {"deny": ["Read(**/.env)"]}}"#;
+    const ACCEPT: &str =
+        r#"{"permissions": {"defaultMode": "acceptEdits", "deny": ["Read(**/.env)"]}}"#;
+    fn with_mode(mode: &str) -> String {
+        format!(r#"{{"permissions": {{"defaultMode": "{mode}", "deny": ["Read(**/.env)"]}}}}"#)
+    }
+
+    fn merged_mode(current: &str, baseline: Option<&str>, incoming: &str) -> (Value, Vec<Shown>) {
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(current, baseline, incoming, &mut report).unwrap();
+        (serde_json::from_str(&merged).unwrap(), report)
+    }
+
+    /// TSK-1070: a `bypassPermissions` or `auto` mode the recorded baseline
+    /// shows `codeflow` shipped is removed when the preset ships no mode, and
+    /// the next update finds nothing to do.
+    #[test]
+    fn a_shipped_project_scope_ignored_mode_is_retired() {
+        for mode in ["bypassPermissions", "auto"] {
+            let shipped = with_mode(mode);
+            let (merged, report) = merged_mode(&shipped, Some(&shipped), NO_MODE);
+            assert!(
+                merged["permissions"].get("defaultMode").is_none(),
+                "{mode}: {merged}"
+            );
+            assert_eq!(merged["permissions"]["deny"][0], "Read(**/.env)");
+            assert!(
+                report.iter().any(|line| line.starts_with(&format!(
+                    "settings: removed permissions.defaultMode \"{mode}\""
+                ))),
+                "{mode}: {report:?}"
+            );
+            let once = serde_json::to_string(&merged).unwrap();
+            let (_, again) = merged_mode(&once, Some(NO_MODE), NO_MODE);
+            assert!(
+                !again.iter().any(|line| line.contains("defaultMode")),
+                "{again:?}"
+            );
+        }
+    }
+
+    /// TSK-1070: a mode the project set itself, or any mode without a
+    /// recorded baseline, stays and is reported as a standing note; modes
+    /// that work from a project file are left alone.
+    #[test]
+    fn a_project_set_mode_is_kept_and_other_modes_are_untouched() {
+        let bypass = with_mode("bypassPermissions");
+        for baseline in [Some(NO_MODE), Some(ACCEPT), None] {
+            let (merged, report) = merged_mode(&bypass, baseline, NO_MODE);
+            assert_eq!(
+                merged["permissions"]["defaultMode"], "bypassPermissions",
+                "{baseline:?}"
+            );
+            let kept = report
+                .iter()
+                .find(|line| line.contains("kept the project's \"permissions.defaultMode\""))
+                .unwrap_or_else(|| panic!("{baseline:?}: {report:?}"));
+            assert!(is_standing_note(kept), "{kept}");
+        }
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_prior_release(&bypass, &bypass, NO_MODE, &mut report).unwrap();
+        assert!(merged.contains("bypassPermissions"), "{merged}");
+        for current in [ACCEPT.to_string(), with_mode("default"), with_mode("plan")] {
+            let (merged, report) = merged_mode(&current, Some(&current), NO_MODE);
+            let before: Value = serde_json::from_str(&current).unwrap();
+            assert_eq!(
+                merged["permissions"]["defaultMode"],
+                before["permissions"]["defaultMode"]
+            );
+            assert!(
+                !report.iter().any(|line| line.contains("defaultMode")),
+                "{report:?}"
+            );
+        }
+        let (merged, report) = merged_mode(ACCEPT, Some(ACCEPT), ACCEPT);
+        assert_eq!(merged["permissions"]["defaultMode"], "acceptEdits");
+        assert!(!report.iter().any(|line| line.contains("defaultMode")));
+    }
+
+    /// TSK-1070: a sandbox scalar still at the recorded shipped value moves
+    /// to the new one; a value the project changed, or any value without a
+    /// recorded baseline, stays.
+    #[test]
+    fn a_shipped_sandbox_scalar_moves_and_a_project_value_stays() {
+        let shipped = r#"{"sandbox": {"enabled": true, "allowUnsandboxedCommands": true,
+            "network": {"allowLocalBinding": true}}}"#;
+        let incoming = r#"{"sandbox": {"enabled": true, "allowUnsandboxedCommands": false,
+            "excludedCommands": ["gh *"], "network": {"allowLocalBinding": true}}}"#;
+        let (merged, report) = merged_mode(shipped, Some(shipped), incoming);
+        assert_eq!(
+            merged["sandbox"]["allowUnsandboxedCommands"], false,
+            "{report:?}"
+        );
+        assert_eq!(merged["sandbox"]["excludedCommands"][0], "gh *");
+        assert!(report.iter().any(|line| line
+            == "settings: updated sandbox.allowUnsandboxedCommands to the new shipped value"));
+
+        let own = r#"{"sandbox": {"enabled": true, "allowUnsandboxedCommands": "yes",
+            "network": {"allowLocalBinding": true}}}"#;
+        let (merged, _) = merged_mode(own, Some(shipped), incoming);
+        assert_eq!(merged["sandbox"]["allowUnsandboxedCommands"], "yes");
+        let (merged, _) = merged_mode(shipped, None, incoming);
+        assert_eq!(merged["sandbox"]["allowUnsandboxedCommands"], true);
     }
 
     #[test]

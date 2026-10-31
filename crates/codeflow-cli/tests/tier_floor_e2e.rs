@@ -96,6 +96,8 @@ fn codeflow_command(dir: &Path, args: &[&str]) -> Command {
         .args(args)
         .current_dir(dir)
         .env("CODEFLOW_HOME", isolated_home())
+        // Never the person's own Claude user settings (TSK-1070).
+        .env("CLAUDE_CONFIG_DIR", isolated_home().join("claude-config"))
         .env("PATH", path)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -977,6 +979,8 @@ fn run_wired(root: &Path, hook: &str, command: &str) -> Output {
         .args(["-c", hook])
         .current_dir(root)
         .env("CODEFLOW_HOME", isolated_home())
+        // Never the person's own Claude user settings (TSK-1070).
+        .env("CLAUDE_CONFIG_DIR", isolated_home().join("claude-config"))
         .env("PATH", path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1182,7 +1186,9 @@ fn init_writes_the_compaction_default_at_every_tier_and_preset() {
         for (answer, mode) in [
             ("default", None),
             ("acceptEdits", Some("acceptEdits")),
-            ("bypassPermissions", Some("bypassPermissions")),
+            // Claude Code ignores bypassPermissions in a project file, so the
+            // preset leaves the mode unset and init prints the route (TSK-1070).
+            ("bypassPermissions", None),
         ] {
             let (_tmp, root) = project();
             let out = codeflow_with_input(
@@ -1203,12 +1209,94 @@ fn init_writes_the_compaction_default_at_every_tier_and_preset() {
                 mode,
                 "{tier_flag} {answer}: the wrong preset was written"
             );
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert_eq!(
+                stdout.contains("claude --permission-mode bypassPermissions"),
+                answer == "bypassPermissions",
+                "{tier_flag} {answer}: the bypass route note\n{stdout}"
+            );
             assert_eq!(
                 written["env"],
                 shipped_compaction_env(),
                 "{tier_flag} {answer}"
             );
         }
+    }
+}
+
+/// TSK-1070 (operator decisions 2026-10-31): after the `bypassPermissions`
+/// answer, `init` writes Codeflow's session file and `claude` function under
+/// a temporary HOME here, sets bypass mode in the session file only on an
+/// explicit yes, shows the startup-file line and adds it only on a second
+/// yes. The project file never carries the mode, and the person's own
+/// user settings file is untouched without a yes to one of its items.
+#[test]
+fn init_offers_the_session_settings_and_writes_only_on_an_explicit_yes() {
+    // Answers after the preset: bypass mode, then the startup-file line.
+    for (follow_up, bypass, line) in [
+        ("", false, false),
+        ("no\nno\n", false, false),
+        ("yes\nno\n", true, false),
+        ("yes\nyes\n", true, true),
+    ] {
+        let (tmp, root) = project();
+        let home = tmp.path().join("home");
+        let claude = home.join(".claude");
+        std::fs::create_dir_all(&claude).unwrap();
+        let user = claude.join("settings.json");
+        std::fs::write(&user, "{\"theme\": \"dark\"}\n").unwrap();
+        let zshrc = home.join(".zshrc");
+        std::fs::write(&zshrc, "export A=1\n").unwrap();
+        let mut child = codeflow_command(&root, &["init", "--minimal"])
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .env_remove("ZDOTDIR")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(
+            &mut child.stdin.take().unwrap(),
+            format!("proj\ncore\nbypassPermissions\n{follow_up}").as_bytes(),
+        )
+        .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{follow_up:?}: {stdout}");
+        assert!(stdout.contains("claude --permission-mode bypassPermissions"));
+        let project = read_json(&root, CLAUDE_SETTINGS);
+        assert!(project["permissions"].get("defaultMode").is_none());
+        // The person's own user file is untouched: no item was answered yes.
+        assert_eq!(
+            std::fs::read_to_string(&user).unwrap(),
+            "{\"theme\": \"dark\"}\n",
+            "{follow_up:?}"
+        );
+        let session: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.join(".codeflow/claude/session.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(session["sandbox"]["allowUnsandboxedCommands"], false);
+        assert_eq!(session["sandbox"]["network"]["strictAllowlist"], true);
+        assert_eq!(
+            session["permissions"]["defaultMode"] == "bypassPermissions",
+            bypass,
+            "{follow_up:?}"
+        );
+        assert!(home.join(".codeflow/shell/claude.sh").exists());
+        let rc = std::fs::read_to_string(&zshrc).unwrap();
+        assert!(
+            stdout.contains("this line would be added to the end of"),
+            "the exact line is shown before asking: {stdout}"
+        );
+        assert_eq!(
+            rc.contains(".codeflow/shell/claude.sh"),
+            line,
+            "{follow_up:?}"
+        );
+        assert!(rc.starts_with("export A=1\n"));
     }
 }
 

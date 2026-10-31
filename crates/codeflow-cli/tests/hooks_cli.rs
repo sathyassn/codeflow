@@ -64,7 +64,11 @@ fn isolated_codeflow(mut cmd: Command) -> Command {
     isolate_git(&mut cmd);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        // A run inside Claude Code would otherwise get the session-start
+        // warning (TSK-1070); the tests that want it set these themselves.
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEFLOW_SESSION_SETTINGS");
     cmd
 }
 
@@ -4682,6 +4686,56 @@ fn session_orient_adds_the_guidance_block_after_compact_resume_and_fork() {
             println!("guidance block {tier} {source}: {} bytes", block.len());
         }
     }
+}
+
+/// TSK-1070 AC-24: a Claude Code session in a Codeflow project that did not
+/// load the session file gets the warning as JSON, shown to the person
+/// (`systemMessage`) and to the model with the unchanged digest; a session
+/// started through the `claude` function gets the plain digest.
+#[test]
+fn session_orient_warns_a_claude_start_without_the_session_file() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_tier(dir.path(), "full");
+    let digest = codeflow()
+        .args(["orient"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let digest = String::from_utf8(digest.stdout).unwrap();
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "session-orient"])
+            .current_dir(dir.path())
+            .env("CLAUDECODE", "1"),
+        &start_payload("startup"),
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let warning = json["systemMessage"].as_str().unwrap();
+    assert!(warning.starts_with("codeflow: WARNING"), "{warning}");
+    assert!(
+        warning.contains("~/.codeflow/claude/session.json"),
+        "{warning}"
+    );
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "SessionStart");
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.starts_with(&digest), "{context}");
+    assert!(context.contains(warning), "{context}");
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "session-orient"])
+            .current_dir(dir.path())
+            .env("CLAUDECODE", "1")
+            .env("CODEFLOW_SESSION_SETTINGS", "1"),
+        &start_payload("startup"),
+    );
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), digest);
 }
 
 /// AC-1: no tier (not a scaffolded project) and a garbled payload keep the

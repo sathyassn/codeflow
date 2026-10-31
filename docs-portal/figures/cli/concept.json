@@ -217,6 +217,23 @@
           ]
         },
         {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 360,
+          "cy": 47,
+          "r": 7,
+          "id": "g0c9"
+        },
+        {
+          "text": "claude-session",
+          "x": 376,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "g0c9"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 16,
@@ -796,6 +813,23 @@
           ]
         },
         {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 218,
+          "cy": 103,
+          "r": 7,
+          "id": "g0c9"
+        },
+        {
+          "text": "claude-session",
+          "x": 232,
+          "y": 108,
+          "style": "mono",
+          "for": [
+            "g0c9"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
@@ -1216,7 +1250,7 @@
       "rows": [
         [
           "Scaffold",
-          "`init`, `update`, `epic`, `spec`, `task`, `adr`, `ids`, `estimate`, `feedback`",
+          "`init`, `update`, `epic`, `spec`, `task`, `adr`, `ids`, `estimate`, `feedback`, `claude-session`",
           "none"
         ],
         [

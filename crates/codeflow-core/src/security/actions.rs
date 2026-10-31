@@ -63,7 +63,8 @@ pub struct TestedFloor {
 pub enum Decision {
     /// Refused without a prompt.
     Deny,
-    /// Prompted. No shipped family asks (ADR-0075 decision 1).
+    /// Prompted. Only `forge_write` asks (ADR-0093, a departure from
+    /// ADR-0075 decision 1 for that family).
     Ask,
 }
 
@@ -139,6 +140,25 @@ pub struct ReadGroup {
     pub denies: Vec<String>,
     /// `Read(!...)` carve-outs; they narrow this group and every earlier one.
     pub carveouts: Vec<String>,
+    /// Whether exec-guard's shell secret check enforces this group. False
+    /// for a name-based group whose words also name ordinary files, such as
+    /// `secret.rs` beside `Read(**/secret)` (TSK-1070). Defaults to true.
+    #[serde(default = "shell_default")]
+    pub shell: bool,
+}
+
+fn shell_default() -> bool {
+    true
+}
+
+impl ReadGroup {
+    /// Whether the shell secret check enforces this group: never one with
+    /// carve-outs, which a shell word cannot apply, nor one marked
+    /// `"shell": false`.
+    #[must_use]
+    pub fn shell_enforced(&self) -> bool {
+        self.shell && self.carveouts.is_empty()
+    }
 }
 
 /// The whole action table.
@@ -159,6 +179,11 @@ pub struct ActionTable {
     pub sandbox_env_denies: Vec<String>,
     /// Secret stores the Claude sandbox denies to every subprocess.
     pub sandbox_read_denies: Vec<String>,
+    /// Paths the Claude sandbox denies to every subprocess's writes beyond
+    /// the startup and git configuration classes: the tracked hook
+    /// directory a push runs outside the sandbox (TSK-1070).
+    #[serde(default)]
+    pub sandbox_write_denies: Vec<String>,
     /// The shell startup class (issue 86, TSK-242).
     pub startup_paths: StartupPaths,
     /// The default user and system git configuration files (TSK-242), in
@@ -305,7 +330,7 @@ impl ActionTable {
             .collect()
     }
 
-    /// The Claude `permissions.ask` array; empty for the shipped table.
+    /// The Claude `permissions.ask` array: the `forge_write` family.
     #[must_use]
     pub fn claude_ask(&self) -> Vec<String> {
         self.family_rules(Decision::Ask)
@@ -353,6 +378,7 @@ impl ActionTable {
             .sandbox_write_denies()
             .into_iter()
             .chain(self.git_config_paths.sandbox_write_denies())
+            .chain(self.sandbox_write_denies.iter().cloned())
         {
             let path = Value::String(path);
             if !deny_write.contains(&path) {
@@ -379,7 +405,11 @@ impl ActionTable {
              # including danger-full-access (codex-rs core/src/exec_policy.rs:393-404,\n\
              # unified_exec/process_manager.rs:1479-1504 at 4fd5745e).\n",
         );
-        for family in &self.families {
+        for family in self
+            .families
+            .iter()
+            .filter(|f| f.decision == Decision::Deny)
+        {
             let why = family.codex_why.as_deref().unwrap_or(&family.why);
             for rule in &family.codex {
                 let pattern: Vec<String> = rule
@@ -467,14 +497,22 @@ mod tests {
                 "release",
                 "account",
                 "keychain",
-                "persistence"
+                "persistence",
+                "forge_exec",
+                "forge_write"
             ]
         );
-        assert!(table()
-            .families
-            .iter()
-            .all(|family| family.decision == Decision::Deny));
-        assert!(table().claude_ask().is_empty());
+        // TSK-1070: only the forge write family asks (ADR-0093).
+        for family in &table().families {
+            let asks = family.id == "forge_write";
+            assert_eq!(family.decision == Decision::Ask, asks, "{}", family.id);
+            assert!(
+                !asks || family.codex.is_empty(),
+                "an ask family has no Codex rule"
+            );
+        }
+        assert_eq!(table().claude_ask(), table().families[7].claude);
+        assert!(!table().codex_rules().contains("gh api graphql"));
     }
 
     #[test]
@@ -519,13 +557,50 @@ mod tests {
     }
 
     #[test]
+    fn the_shell_check_enforces_the_hard_denies_and_skips_name_groups() {
+        // TSK-1070: the secret-name group has no carve-outs now, so only its
+        // explicit flag keeps exec-guard from refusing `cat secret.rs`.
+        let groups = &table().claude_read_groups;
+        assert!(groups.last().unwrap().shell_enforced());
+        let names = groups
+            .iter()
+            .find(|g| g.denies.iter().any(|r| r == "Read(**/secret)"))
+            .unwrap();
+        assert!(names.carveouts.is_empty() && !names.shell_enforced());
+        let enforced: Vec<_> = groups.iter().filter(|g| g.shell_enforced()).collect();
+        assert_eq!(enforced.len(), 1, "only the hard group binds the shell");
+    }
+
+    #[test]
+    fn the_sandbox_write_denies_reach_the_preset() {
+        let mut preset = serde_json::json!({});
+        table().apply_to_claude_preset(&mut preset);
+        let deny_write = preset["sandbox"]["filesystem"]["denyWrite"]
+            .as_array()
+            .unwrap();
+        assert!(deny_write.contains(&serde_json::json!("**/.codeflow/git-hooks")));
+        let env: Vec<_> = preset["sandbox"]["credentials"]["envVars"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["name"].as_str())
+            .collect();
+        for name in ["GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN"] {
+            assert!(env.contains(&name), "{name}");
+        }
+    }
+
+    #[test]
     fn an_ask_family_generates_an_ask_array() {
         let mut table = table().clone();
         table.families[4].decision = Decision::Ask;
         let mut preset = serde_json::json!({"permissions": {"allow": []}});
         table.apply_to_claude_preset(&mut preset);
         let ask = preset["permissions"]["ask"].as_array().unwrap();
-        assert_eq!(ask.len(), table.families[4].claude.len());
+        assert_eq!(
+            ask.len(),
+            table.families[4].claude.len() + table.families[7].claude.len()
+        );
         assert!(!preset["permissions"]["deny"]
             .as_array()
             .unwrap()

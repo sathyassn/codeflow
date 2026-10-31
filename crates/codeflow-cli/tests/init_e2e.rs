@@ -554,7 +554,7 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
         serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
     assert_eq!(claude["sandbox"]["enabled"], true);
     assert_eq!(claude["sandbox"]["failIfUnavailable"], true);
-    assert_eq!(claude["sandbox"]["allowUnsandboxedCommands"], true);
+    assert_eq!(claude["sandbox"]["allowUnsandboxedCommands"], false);
     assert!(claude["permissions"]["allow"]
         .as_array()
         .is_some_and(|entries| entries.iter().any(|entry| entry == "WebFetch")));
@@ -1778,6 +1778,10 @@ fn run_wired_hook_with(exe: &Path, dir: &Path, command: &str, payload: &str) -> 
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
+        // A run inside Claude Code would otherwise get the session-start
+        // warning (TSK-1070).
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEFLOW_SESSION_SETTINGS")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
