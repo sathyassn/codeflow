@@ -1,4 +1,4 @@
-//! The local read of a CodeFlow settings file during a merge conflict
+//! The local read of a `CodeFlow` settings file during a merge conflict
 //! (TSK-330).
 //!
 //! The hooks read `.codeflow/policy.json` and `.codeflow/project.toml` from

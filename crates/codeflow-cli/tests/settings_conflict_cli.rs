@@ -171,7 +171,7 @@ impl Repo {
 
     /// Every guard's verdict on the commands that resolve or abandon a
     /// conflict in `file`, the planted ones, and an unrelated edit.
-    fn verdicts(&self, file: &str) -> Vec<(String, Verdict)> {
+    fn verdicts(&self, file: &str) -> Verdicts {
         let mut out = Vec::new();
         for command in [
             "git status".to_string(),
@@ -204,7 +204,7 @@ impl Repo {
     /// The verdicts during the conflict, then with each file's working copy
     /// replaced by its `HEAD` copy (parsed settings, index still unmerged),
     /// after which the conflicted text is put back.
-    fn compare(&self, files: &[&str]) -> (Vec<(String, Verdict)>, Vec<(String, Verdict)>, String) {
+    fn compare(&self, files: &[&str]) -> (Verdicts, Verdicts, String) {
         let conflicted = self.verdicts(files[0]);
         let notes = self.bash("git-guard", "git status");
         let saved: Vec<_> = files.iter().map(|f| (*f, self.read(f))).collect();
@@ -219,6 +219,9 @@ impl Repo {
         (conflicted, parsed, said(&notes))
     }
 }
+
+/// Each command with its verdict, in the order they ran.
+type Verdicts = Vec<(String, Verdict)>;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Verdict {
@@ -582,6 +585,7 @@ fn the_git_hooks_read_head_for_an_unmerged_settings_file() {
 /// would also lower the push level, while a planted protected push is
 /// refused. Run with `--nocapture` for the journey output.
 #[test]
+#[allow(clippy::too_many_lines)] // One journey keeps both conflicts in the order an adopter meets them.
 fn journey_an_adopter_resolves_and_abandons_a_settings_conflict() {
     let repo = Repo {
         temp: tempfile::tempdir().unwrap(),
