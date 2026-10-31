@@ -321,8 +321,8 @@ impl Engine {
     /// gitleaks wrote to stderr, a git it ran that did not exit with 0, or a report
     /// that could not be read.
     pub fn scan_staged(&self, verified: &Verified, root: &Path) -> Result<Vec<Finding>, String> {
-        let trace = GitTrace::new()?;
-        let attributes = TextAttributes::for_repository(root, trace.folder.path())?;
+        let attributes = TextAttributes::for_repository(root)?;
+        let folder = ScanFolder::new(&git_dir(root)?)?;
         if let Some(path) = unreadable_staged_path(root)? {
             return Err(format!(
                 "gitleaks cannot read a path with a backslash, double quote or \
@@ -350,8 +350,8 @@ impl Engine {
             .env_remove("GITLEAKS_CONFIG")
             .env_remove("GITLEAKS_CONFIG_TOML");
         attributes.apply(&mut command);
-        pin_git_output(&mut command, &attributes.config());
-        trace.apply(&mut command);
+        pin_git_output(&mut command, &folder.attributes_config());
+        folder.apply(&mut command);
         let out = command
             .output()
             .map_err(|error| format!("gitleaks did not run: {error}"))?;
@@ -370,7 +370,7 @@ impl Engine {
                     .unwrap_or_else(|| "output with no visible text".to_string())
             ));
         }
-        if let Some(why) = git_run_failure(&trace.events()?) {
+        if let Some(why) = git_run_failure(&folder.events()?) {
             return Err(format!(
                 "gitleaks did not read the whole staged diff: {why}"
             ));
@@ -397,9 +397,14 @@ fn first_line(stderr: &[u8]) -> Option<String> {
 /// diff, after `git -C <source>`.
 const STAGED_DIFF_ARGS: [&str; 5] = ["diff", "-U0", "--no-ext-diff", "--staged", "."];
 
-/// Git's own record of the git processes gitleaks starts: its trace2 event
-/// stream, written to a file only this user can open, in a folder that
-/// also holds the scan's attributes file.
+/// The trace file's name in the scan's private folder.
+const EVENTS: &str = "events";
+/// The attributes file's name in the scan's private folder.
+const ATTRIBUTES: &str = "attributes";
+
+/// The scan's private folder. It holds git's own record of the git
+/// processes gitleaks starts (its trace2 event stream) and the attributes
+/// file that shows every staged line as text.
 ///
 /// gitleaks exits 0 with an empty report when the git it runs fails part
 /// way through, and reports that only in a debug log whose lines can hold
@@ -407,43 +412,88 @@ const STAGED_DIFF_ARGS: [&str; 5] = ["diff", "-U0", "--no-ext-diff", "--staged",
 /// object written by git itself, so no path, file content or message can
 /// forge one, and a git that dies before it exits leaves no exit event.
 ///
-/// The trace is evidence the scan completed, so its storage is private. The
-/// folder is created owner-only (mode 0700 given to `mkdir`, which a umask
-/// can only narrow), and the event file inside it is created exclusively,
-/// owner read and write only, before any git opens it; git then appends to
-/// that file. The events are read back through the handle made here, so a
-/// file put in its place is never read, and a replaced path fails the scan.
-/// On Windows the folder and file take the access list of the user's own
-/// temporary folder, which is private to that user by default.
-struct GitTrace {
+/// Both files are input the scan trusts, so no other user may be able to
+/// replace them or any folder above them. The folder is made inside the
+/// repository's own git directory, never under `TMPDIR`, `TMP` or `TEMP`:
+/// anyone who can rename entries there or above it can already replace the
+/// hooks, configuration and index the scan reads, so the folder rests on no
+/// trust the commit does not already rest on, on every platform.
+///
+/// On Unix the folder is created with mode 0700 (given to `mkdir`, which a
+/// umask can only narrow), then opened without following a link, and it
+/// must be a directory this user owns with that mode. Both files are created
+/// inside that held directory (`openat`, exclusive, no link followed, mode
+/// 0600), never by resolving its path again. Elsewhere both are created
+/// exclusively and take the git directory's access list. Events are read
+/// back through the trace file's own handle, and on Unix the scan fails if
+/// the folder's or the trace's path no longer names what was made.
+struct ScanFolder {
     folder: tempfile::TempDir,
-    file: std::fs::File,
+    events: std::fs::File,
+    #[cfg(unix)]
+    held: std::fs::File,
 }
 
-impl GitTrace {
-    fn new() -> Result<Self, String> {
-        let unmade =
-            |error: std::io::Error| format!("cannot make a private file for git's trace: {error}");
+impl ScanFolder {
+    fn new(git_dir: &Path) -> Result<Self, String> {
+        let unmade = |error: std::io::Error| {
+            format!(
+                "cannot make the scan's private folder in {}: {error}",
+                git_dir.display()
+            )
+        };
         let mut builder = tempfile::Builder::new();
-        builder.prefix("codeflow-gitleaks-trace");
+        builder.prefix("codeflow-gitleaks-");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             builder.permissions(std::fs::Permissions::from_mode(0o700));
         }
-        let folder = builder.tempdir().map_err(unmade)?;
-        let file = create_private(&folder.path().join("events")).map_err(unmade)?;
-        Ok(Self { folder, file })
+        let folder = builder.tempdir_in(git_dir).map_err(unmade)?;
+        #[cfg(unix)]
+        {
+            let held = private::open_folder(folder.path()).map_err(unmade)?;
+            let events = private::create_in(&held, EVENTS).map_err(unmade)?;
+            let mut attributes = private::create_in(&held, ATTRIBUTES).map_err(unmade)?;
+            std::io::Write::write_all(&mut attributes, b"* diff\n").map_err(unmade)?;
+            Ok(Self {
+                folder,
+                events,
+                held,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let create = |name: &str| {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(folder.path().join(name))
+            };
+            let events = create(EVENTS).map_err(unmade)?;
+            let mut attributes = create(ATTRIBUTES).map_err(unmade)?;
+            std::io::Write::write_all(&mut attributes, b"* diff\n").map_err(unmade)?;
+            Ok(Self { folder, events })
+        }
     }
 
-    fn path(&self) -> std::path::PathBuf {
-        self.folder.path().join("events")
+    fn path(&self, name: &str) -> std::path::PathBuf {
+        self.folder.path().join(name)
     }
 
-    /// Send the events of every git under `command` to this trace, and no
-    /// other trace2 output: an inherited `GIT_TRACE2_*` setting is removed,
-    /// and the normal and performance targets are turned off (`0`), which
-    /// outranks a target a configuration file sets.
+    /// The pinned `core.attributesFile`: this folder's attributes file.
+    fn attributes_config(&self) -> [(&'static str, OsString); 1] {
+        [(
+            "core.attributesFile",
+            self.path(ATTRIBUTES).into_os_string(),
+        )]
+    }
+
+    /// Send the events of every git under `command` to this folder's trace,
+    /// and no other trace2 output: an inherited `GIT_TRACE2_*` setting is
+    /// removed, and the normal and performance targets are turned off
+    /// (`0`), which outranks a target a configuration file sets.
     fn apply(&self, command: &mut Command) {
         for (name, _) in std::env::vars_os() {
             if name.as_encoded_bytes().starts_with(b"GIT_TRACE2") {
@@ -451,26 +501,27 @@ impl GitTrace {
             }
         }
         command
-            .env("GIT_TRACE2_EVENT", self.path())
+            .env("GIT_TRACE2_EVENT", self.path(EVENTS))
             .env("GIT_TRACE2", "0")
             .env("GIT_TRACE2_PERF", "0");
     }
 
-    /// The events in the file made by [`GitTrace::new`], read through its
-    /// own handle. On Unix the path must still name that file.
+    /// The events in the trace file made by [`ScanFolder::new`], read
+    /// through its own handle. On Unix the folder's and the trace's paths
+    /// must still name what was made.
     fn events(&self) -> Result<Vec<u8>, String> {
         let unreadable =
             |error: std::io::Error| format!("cannot read git's trace of the scan: {error}");
         #[cfg(unix)]
         {
-            use std::os::unix::fs::MetadataExt;
-            let held = self.file.metadata().map_err(unreadable)?;
-            let named = std::fs::symlink_metadata(self.path()).map_err(unreadable)?;
-            if (held.dev(), held.ino()) != (named.dev(), named.ino()) {
+            if !private::names(&self.held, self.folder.path()).map_err(unreadable)? {
+                return Err("the scan's private folder was replaced while it ran".to_string());
+            }
+            if !private::names(&self.events, &self.path(EVENTS)).map_err(unreadable)? {
                 return Err("git's trace of the scan was replaced while it ran".to_string());
             }
         }
-        let mut file = &self.file;
+        let mut file = &self.events;
         let mut events = Vec::new();
         std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(0)).map_err(unreadable)?;
         std::io::Read::read_to_end(&mut file, &mut events).map_err(unreadable)?;
@@ -478,17 +529,104 @@ impl GitTrace {
     }
 }
 
-/// Create `path` for this user only: never an existing file or link, and on
-/// Unix with mode 0600.
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true).write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+/// Creation bound to a held directory, for the scan's private folder.
+#[cfg(unix)]
+mod private {
+    use std::ffi::CString;
+    use std::fs::File;
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Path;
+
+    /// Open the folder at `path` without following a link: it must be a
+    /// directory this user owns with mode 0700.
+    pub(super) fn open_folder(path: &Path) -> io::Result<File> {
+        let name = CString::new(path.as_os_str().as_bytes())?;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: a NUL-terminated path; a successful descriptor is owned once.
+        let descriptor = unsafe { libc::open(name.as_ptr(), flags) };
+        if descriptor == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: open returned this owned descriptor.
+        let folder = unsafe { File::from_raw_fd(descriptor) };
+        let metadata = folder.metadata()?;
+        // SAFETY: geteuid has no preconditions.
+        let me = unsafe { libc::geteuid() };
+        if !metadata.is_dir() || metadata.uid() != me || metadata.mode() & 0o777 != 0o700 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "it is not a folder only this user can open",
+            ));
+        }
+        Ok(folder)
     }
-    options.open(path)
+
+    /// Create `name` inside the held `folder`: exclusive, never through a
+    /// link, mode 0600, without resolving the folder's path again.
+    pub(super) fn create_in(folder: &File, name: &str) -> io::Result<File> {
+        let name = CString::new(name)?;
+        let flags =
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: a live directory descriptor and a NUL-terminated basename;
+        // the mode is supplied because O_CREAT is set. A successful
+        // descriptor is owned once.
+        let descriptor = unsafe {
+            libc::openat(
+                folder.as_raw_fd(),
+                name.as_ptr(),
+                flags,
+                0o600 as libc::c_uint,
+            )
+        };
+        if descriptor == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned this owned descriptor.
+        Ok(unsafe { File::from_raw_fd(descriptor) })
+    }
+
+    /// Whether `path`, not followed if a link, is the file `held` was opened on.
+    pub(super) fn names(held: &File, path: &Path) -> io::Result<bool> {
+        let held = held.metadata()?;
+        let named = std::fs::symlink_metadata(path)?;
+        Ok((held.dev(), held.ino()) == (named.dev(), named.ino()))
+    }
+}
+
+/// The absolute git directory of the repository at `root`, exactly as git
+/// prints it, less the one line break it ends with. Its bytes are kept as
+/// they are, so a folder name holding a line break is read whole; output
+/// without that line break, an empty path, or on Windows a path that is not
+/// UTF-8, is refused.
+fn git_dir(root: &Path) -> Result<std::path::PathBuf, String> {
+    let out = crate::git::command()
+        .args(["rev-parse", "--absolute-git-dir"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|error| format!("git did not run: {error}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "`git rev-parse --absolute-git-dir` exited with {}",
+            out.status
+        ));
+    }
+    let unusable = || "git printed a git directory the scan cannot use".to_string();
+    let mut printed = out.stdout;
+    if printed.pop() != Some(b'\n') || printed.is_empty() {
+        return Err(unusable());
+    }
+    #[cfg(unix)]
+    let path = {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(printed)
+    };
+    #[cfg(not(unix))]
+    let path = OsString::from(String::from_utf8(printed).map_err(|_| unusable())?);
+    Ok(std::path::PathBuf::from(path))
 }
 
 /// Why the git processes gitleaks ran did not read the whole staged diff,
@@ -687,15 +825,14 @@ const MIN_GIT: (u32, u32) = (2, 41);
 /// instead of the working tree, and a temporary attributes file sets `diff`
 /// on every path, which makes git show even a file holding a NUL byte as
 /// text. The clone's own `info/attributes` still applies: nothing committed
-/// or staged can change it. The file is made in the scan's private folder
-/// (see [`GitTrace`]), so no other user can put a file in its place.
+/// or staged can change it. The attributes file is made in the scan's
+/// private folder (see [`ScanFolder`]).
 struct TextAttributes {
     empty_tree: String,
-    file: tempfile::NamedTempFile,
 }
 
 impl TextAttributes {
-    fn for_repository(root: &Path, private: &Path) -> Result<Self, String> {
+    fn for_repository(root: &Path) -> Result<Self, String> {
         let git = |args: &[&str]| -> Result<String, String> {
             let out = crate::git::command()
                 .args(args)
@@ -722,27 +859,13 @@ impl TextAttributes {
             ));
         }
         let empty_tree = git(&["hash-object", "-t", "tree", "--stdin"])?;
-        let unwritable =
-            |error: std::io::Error| format!("cannot write an attributes file: {error}");
-        let mut file = tempfile::Builder::new()
-            .prefix("codeflow-gitleaks-attributes")
-            .tempfile_in(private)
-            .map_err(unwritable)?;
-        std::io::Write::write_all(&mut file, b"* diff\n").map_err(unwritable)?;
-        Ok(Self { empty_tree, file })
+        Ok(Self { empty_tree })
     }
 
     fn apply(&self, command: &mut Command) {
         command
             .env("GIT_ATTR_SOURCE", &self.empty_tree)
             .env("GIT_ATTR_NOSYSTEM", "1");
-    }
-
-    fn config(&self) -> [(&'static str, OsString); 1] {
-        [(
-            "core.attributesFile",
-            self.file.path().as_os_str().to_os_string(),
-        )]
     }
 }
 
@@ -900,33 +1023,75 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_trace_is_created_private_and_never_over_an_existing_file() {
+    fn the_scan_folder_is_private_and_bound_to_the_folder_it_made() {
         use std::os::unix::fs::PermissionsExt;
-        let trace = GitTrace::new().unwrap();
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(trace.folder.path()), 0o700);
-        assert_eq!(mode(&trace.path()), 0o600);
-        // A file or link already at the path is never opened.
-        let error = create_private(&trace.path()).unwrap_err();
+        let git_dir = tempfile::tempdir().unwrap();
+        let made = ScanFolder::new(git_dir.path()).unwrap();
+        let mode_of = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(made.folder.path().parent(), Some(git_dir.path()));
+        assert_eq!(mode_of(made.folder.path()), 0o700);
+        assert_eq!(mode_of(&made.path(EVENTS)), 0o600);
+        assert_eq!(mode_of(&made.path(ATTRIBUTES)), 0o600);
+        assert_eq!(std::fs::read(made.path(ATTRIBUTES)).unwrap(), b"* diff\n");
+        // A file or link already there is never opened.
+        let error = private::create_in(&made.held, EVENTS).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
-        let link = trace.folder.path().join("link");
-        std::os::unix::fs::symlink(trace.folder.path().join("absent"), &link).unwrap();
-        assert!(create_private(&link).is_err());
+        std::os::unix::fs::symlink("/nonexistent", made.path("link")).unwrap();
+        assert!(private::create_in(&made.held, "link").is_err());
         // Events git appends are read back through the handle.
         let mut appender = std::fs::OpenOptions::new()
             .append(true)
-            .open(trace.path())
+            .open(made.path(EVENTS))
             .unwrap();
         std::io::Write::write_all(&mut appender, b"{}\n").unwrap();
-        assert_eq!(trace.events().unwrap(), b"{}\n");
-        // A file put in its place fails the scan.
-        let other = trace.folder.path().join("other");
-        std::fs::write(&other, b"forged\n").unwrap();
-        std::fs::rename(&other, trace.path()).unwrap();
+        assert_eq!(made.events().unwrap(), b"{}\n");
+        // A file put in the trace's place fails the scan.
+        std::fs::write(made.path("other"), b"forged\n").unwrap();
+        std::fs::rename(made.path("other"), made.path(EVENTS)).unwrap();
         assert_eq!(
-            trace.events().unwrap_err(),
+            made.events().unwrap_err(),
             "git's trace of the scan was replaced while it ran"
         );
+    }
+
+    /// The folder is moved away and another put at its path between its
+    /// creation and the files': the files are still made in the folder that
+    /// was created, and the scan fails.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_substituted_during_creation_is_never_written_and_fails_the_scan() {
+        let git_dir = tempfile::tempdir().unwrap();
+        let made = tempfile::Builder::new().tempdir_in(git_dir.path()).unwrap();
+        std::fs::set_permissions(
+            made.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .unwrap();
+        let held = private::open_folder(made.path()).unwrap();
+        let moved = git_dir.path().join("moved");
+        std::fs::rename(made.path(), &moved).unwrap();
+        std::fs::create_dir(made.path()).unwrap();
+        let events = private::create_in(&held, EVENTS).unwrap();
+        assert!(moved.join(EVENTS).exists());
+        assert!(!made.path().join(EVENTS).exists());
+        let folder = ScanFolder {
+            folder: made,
+            events,
+            held,
+        };
+        assert_eq!(
+            folder.events().unwrap_err(),
+            "the scan's private folder was replaced while it ran"
+        );
+        // A folder open to others, or a link to one, is refused outright.
+        let open = git_dir.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::os::unix::fs::PermissionsExt::from_mode(0o777))
+            .unwrap();
+        assert!(private::open_folder(&open).is_err());
+        let link = git_dir.path().join("link");
+        std::os::unix::fs::symlink(&moved, &link).unwrap();
+        assert!(private::open_folder(&link).is_err());
     }
 
     #[test]

@@ -917,11 +917,14 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   gitleaks started exiting with 0; a git that failed or was killed is a
   failed scan. No path, file content or configuration value can forge or
   hide either check. The trace and the scan's attributes file sit in a
-  folder only the committing user can open: on Unix it is created with mode
-  0700 and the trace file with 0600, whatever the umask, and a trace file
-  replaced during the run is a failed scan. On Windows both take the access
-  list of the user's own temporary folder, which is private to that user by
-  default.
+  private folder inside the repository's git directory, never under
+  `TMPDIR`, `TMP` or `TEMP`: anyone who can rename entries there can already
+  replace the hooks and index the scan reads, so the folder adds no trust.
+  On Unix the folder is created with mode 0700 and both files inside the
+  opened folder with 0600, whatever the umask, and a folder or trace file
+  replaced during the run is a failed scan. On Windows both files take the
+  git directory's access list; the hook makes no Unix mode or replacement
+  check there.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,

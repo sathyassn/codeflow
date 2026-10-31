@@ -4649,6 +4649,52 @@ mod tests {
             );
         }
 
+        /// The scan's private folder sits in the repository's git directory,
+        /// whatever `TMPDIR` names, so a shared temporary folder whose
+        /// entries another user can rename never holds the trace or the
+        /// attributes file. The stand-in records where git was sent.
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_scan_folder_sits_in_the_git_directory() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            let bin = tempfile::tempdir().unwrap();
+            let seen = bin.path().join("seen");
+            let record = format!(
+                "folder=$(dirname \"$GIT_TRACE2_EVENT\")\n\
+                 (cd \"$folder/..\" && pwd -P) > '{0}'\n\
+                 ls \"$folder\" >> '{0}'",
+                seen.display()
+            );
+            let engine = stand_in(bin.path(), gitleaks::VERSION, "[]", 0, "", "git", &record);
+            let report = pre_commit_engine(
+                dir.path(),
+                &engine_policy(PolicyLevel::Block),
+                false,
+                false,
+                &engine,
+            )
+            .unwrap();
+            assert!(secret_findings(&report).is_empty(), "{report:?}");
+            let seen = std::fs::read_to_string(&seen).unwrap();
+            let lines: Vec<&str> = seen.lines().collect();
+            let git_dir = dir.path().join(".git").canonicalize().unwrap();
+            assert_eq!(lines, [git_dir.to_str().unwrap(), "attributes", "events"]);
+            // Cleaned up after the scan.
+            let left: Vec<_> = std::fs::read_dir(&git_dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("codeflow-gitleaks-")
+                })
+                .collect();
+            assert!(left.is_empty(), "{left:?}");
+        }
+
         /// The trace folder and file are owner-only under a permissive
         /// umask. The umask is process-wide, so the scan runs in a child
         /// test process of its own (`umask_probe_trace_modes`).
