@@ -8,7 +8,9 @@
 //! GitHub's REST shapes, and the hosted fixture on a scratch repository is
 //! owed (TSK-1080 AC-2, AC-4, AC-6).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 #[path = "support/process_folders.rs"]
@@ -152,6 +154,7 @@ fn the_dry_run_names_the_three_rulesets_and_reads_no_host() {
     );
 }
 
+#[cfg(unix)]
 /// The policy workflow on the recorded default branch, with the `trusted:`
 /// names TSK-336 declares.
 const POLICY: &str = r#"
@@ -163,6 +166,7 @@ jobs:
     name: "trusted: secret scan"
 "#;
 
+#[cfg(unix)]
 const CI: &str = "
 on: pull_request
 jobs:
@@ -172,6 +176,7 @@ jobs:
     name: windows
 ";
 
+#[cfg(unix)]
 /// This repository's foreign `main` ruleset as recorded on 2026-10-29.
 const FOREIGN: &str = r#"{"id":24379074,"name":"main required checks","target":"branch","source_type":"Repository","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["~DEFAULT_BRANCH"]}},"rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"do_not_enforce_on_create":false,"required_status_checks":[{"context":"codeflow gates","integration_id":15368},{"context":"commit standards","integration_id":15368}]}}],"bypass_actors":[]}"#;
 
