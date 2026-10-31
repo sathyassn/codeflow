@@ -1,0 +1,11 @@
+id = "TSK-1108"
+uid = "6bce8761-bb99-4c2a-8d2a-87368d55a19b"
+kind = "TSK"
+title = "Agents answer seat trust prompts themselves and the skills say so"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:19:29Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
