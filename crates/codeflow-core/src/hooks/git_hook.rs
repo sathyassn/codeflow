@@ -3838,6 +3838,19 @@ mod tests {
         /// environment beside itself, prints `report` and exits with `exit`.
         #[cfg(unix)]
         fn pinned_engine(bin: &Path, version: &str, report: &str, exit: i32) -> Engine {
+            pinned_engine_logging(bin, version, report, exit, "")
+        }
+
+        /// [`pinned_engine`] that also writes `log` to stderr, as gitleaks
+        /// writes its log.
+        #[cfg(unix)]
+        fn pinned_engine_logging(
+            bin: &Path,
+            version: &str,
+            report: &str,
+            exit: i32,
+            log: &str,
+        ) -> Engine {
             use std::os::unix::fs::PermissionsExt;
             let script = bin.join("gitleaks");
             std::fs::write(
@@ -3845,6 +3858,7 @@ mod tests {
                 format!(
                     "#!/bin/sh\nif [ \"$1\" = version ]; then echo '{version}'; exit 0; fi\n\
                      pwd > '{dir}/pwd'\nprintf '%s\\n' \"$@\" > '{dir}/args'\nenv > '{dir}/env'\n\
+                     cat >&2 <<'LOG'\n{log}\nLOG\n\
                      cat <<'REPORT'\n{report}\nREPORT\nexit {exit}\n",
                     dir = bin.display()
                 ),
@@ -4075,6 +4089,87 @@ mod tests {
                 });
                 assert!(found, "{report:?}");
             }
+        }
+
+        /// The official pinned binary over a staged symlink whose target is
+        /// the hash line, with the clone's configuration setting git's
+        /// `default` diff driver (which symlinks use, and path attributes do
+        /// not reach) to hide it: binary, a textconv that prints nothing,
+        /// or binary through an included file. Both routes refuse it. A git
+        /// that fails part way through is an incomplete scan.
+        #[cfg(unix)]
+        #[test]
+        fn test_pinned_gitleaks_reads_a_symlink_whatever_the_default_driver() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let policy = engine_policy(PolicyLevel::Block);
+            let target = format!("{{{}}}", HASH_LINE.trim());
+            let fixture = |config: &[(&str, &str)]| {
+                let dir = tempfile::tempdir().unwrap();
+                init_repo(dir.path(), "feat/x");
+                std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+                std::os::unix::fs::symlink(&target, dir.path().join("docs/link")).unwrap();
+                git(dir.path(), &["add", "docs/link"]);
+                for (key, value) in config {
+                    git(dir.path(), &["config", key, value]);
+                }
+                std::fs::write(dir.path().join(".git/MERGE_MSG"), "chore: merge side\n").unwrap();
+                dir
+            };
+            let routes = |dir: &Path| {
+                let merge = dir.join(".git/MERGE_MSG");
+                [
+                    pre_commit_engine(dir, &policy, false, false, &engine).unwrap(),
+                    commit_msg_secret_scan_engine(dir, &policy, &merge, &engine).unwrap(),
+                ]
+            };
+            let included = tempfile::tempdir().unwrap();
+            let include = included.path().join("driver.config");
+            std::fs::write(&include, "[diff \"default\"]\n\tbinary = true\n").unwrap();
+            let include = include.display().to_string();
+            for config in [
+                &[("diff.default.binary", "true")][..],
+                &[("diff.default.textconv", "true")][..],
+                &[("include.path", include.as_str())][..],
+            ] {
+                let dir = fixture(config);
+                for report in routes(dir.path()) {
+                    let found = secret_findings(&report).iter().any(|v| {
+                        v.message
+                            == "possible secret (gitleaks rule generic-api-key) staged at docs/link:1"
+                    });
+                    assert!(found, "{config:?}: {report:?}");
+                }
+            }
+            // The staged blob is gone: git fails part way through and
+            // gitleaks exits 0, so only its log tells.
+            let dir = fixture(&[]);
+            let blob = String::from_utf8(
+                crate::git::command()
+                    .args(["rev-parse", ":docs/link"])
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap()
+                    .stdout,
+            )
+            .unwrap();
+            let blob = blob.trim();
+            std::fs::remove_file(
+                dir.path()
+                    .join(".git/objects")
+                    .join(&blob[..2])
+                    .join(&blob[2..]),
+            )
+            .unwrap();
+            let verified = engine.verify().unwrap();
+            let error = engine.scan_staged(&verified, dir.path()).unwrap_err();
+            assert!(
+                error.starts_with("gitleaks did not read the whole staged diff"),
+                "{error}"
+            );
         }
 
         /// A disguise of the hash line: its name, the staged files,
@@ -4318,6 +4413,59 @@ mod tests {
                 );
                 assert_eq!(findings[0].level, PolicyLevel::Block);
             }
+        }
+
+        /// gitleaks exits 0 with an empty report when git fails part way
+        /// through; its log is what says so, and that is an incomplete scan.
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_reads_a_logged_git_failure_as_incomplete() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            for log in [
+                "11:17AM ERR [git] fatal: unable to read files to diff",
+                "\u{1b}[90m11:17AM\u{1b}[0m \u{1b}[31mFTL\u{1b}[0m failed",
+                "11:17AM DBG command aborted error=\"exit status 128\"",
+            ] {
+                let bin = tempfile::tempdir().unwrap();
+                let engine = pinned_engine_logging(bin.path(), gitleaks::VERSION, "[]", 0, log);
+                let report = pre_commit_engine(
+                    dir.path(),
+                    &engine_policy(PolicyLevel::Block),
+                    false,
+                    false,
+                    &engine,
+                )
+                .unwrap();
+                let findings = secret_findings(&report);
+                assert_eq!(findings.len(), 1, "{log}: {report:?}");
+                assert!(
+                    findings[0]
+                        .message
+                        .starts_with("staged secret scan incomplete: gitleaks did not read"),
+                    "{}",
+                    findings[0].message
+                );
+            }
+            // An ordinary debug log is a completed scan.
+            let bin = tempfile::tempdir().unwrap();
+            let engine = pinned_engine_logging(
+                bin.path(),
+                gitleaks::VERSION,
+                "[]",
+                0,
+                "11:17AM DBG executing: git diff\n11:17AM INF no leaks found",
+            );
+            let report = pre_commit_engine(
+                dir.path(),
+                &engine_policy(PolicyLevel::Block),
+                false,
+                false,
+                &engine,
+            )
+            .unwrap();
+            assert!(secret_findings(&report).is_empty(), "{report:?}");
         }
 
         // -- the automatic merge's scan in commit-msg (TSK-412 AC-7) --

@@ -906,7 +906,12 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   ignores configuration a caller passes down (`git -c`, inherited numbered
   `GIT_CONFIG_*` settings, `GIT_DIFF_OPTS`, `GIT_EXTERNAL_DIFF`, replace
   refs), so none of it can turn rename detection back on or change the
-  diff.
+  diff. A staged symlink's target is diffed with git's `default` driver,
+  which attributes do not reach, so the scan pins that driver to text with
+  no conversion whatever a configuration file or include sets; a submodule
+  shows as its commit line. gitleaks exits 0 with an empty report when git
+  fails part way through, so the hook reads its log and a logged git
+  failure is a failed scan.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,

@@ -335,7 +335,9 @@ impl Engine {
             // CI scan counts only one the trusted commit already holds, so
             // here it never hides a finding.
             .arg("--ignore-gitleaks-allow")
-            .args(["--log-level", "error"])
+            // gitleaks exits 0 with an empty report when git fails part way
+            // through, and says so only in its log, which is read below.
+            .args(["--log-level", "debug", "--no-color"])
             .args(["--report-format", "json", "--report-path", "-"])
             .args(["--exit-code", &FINDINGS_EXIT.to_string()])
             .arg("--gitleaks-ignore-path")
@@ -351,13 +353,17 @@ impl Engine {
             .output()
             .map_err(|error| format!("gitleaks did not run: {error}"))?;
         let code = out.status.code();
+        let failure = logged_failure(&out.stderr);
         if code != Some(0) && code != Some(FINDINGS_EXIT) {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let last = stderr.lines().rev().find(|line| !line.trim().is_empty());
             return Err(format!(
                 "gitleaks exited with {}{}",
                 out.status,
-                last.map_or_else(String::new, |line| format!(": {}", line.trim()))
+                failure.map_or_else(String::new, |line| format!(": {line}"))
+            ));
+        }
+        if let Some(line) = failure {
+            return Err(format!(
+                "gitleaks did not read the whole staged diff: {line}"
             ));
         }
         let findings = parse_report(&out.stdout)?;
@@ -368,6 +374,52 @@ impl Engine {
     }
 }
 
+/// What the gitleaks log says went wrong, if anything: its first error or
+/// fatal line, or that it aborted the git command it ran. gitleaks exits 0
+/// with an empty report when git fails part way through (for example on an
+/// unreadable object), and the managed CI scan reads its log for the same
+/// reason. Debug lines can quote scanned text, so only an error line is
+/// ever shown.
+fn logged_failure(stderr: &[u8]) -> Option<String> {
+    let mut aborted = false;
+    for raw in stderr.split(|byte| *byte == b'\n') {
+        let line = without_colour(raw);
+        // `<time> <level> <message>`
+        let mut fields = line.split(|byte| *byte == b' ').filter(|f| !f.is_empty());
+        let _time = fields.next();
+        match fields.next() {
+            Some(level) if level == b"ERR" || level == b"FTL" => {
+                return Some(String::from_utf8_lossy(&line).into_owned());
+            }
+            Some(level) if level == b"DBG" => {
+                aborted |= line
+                    .windows(b"command aborted".len())
+                    .any(|window| window == b"command aborted");
+            }
+            _ => {}
+        }
+    }
+    aborted.then(|| "gitleaks aborted the git command it ran".to_string())
+}
+
+/// `line` without ANSI colour sequences (`ESC [ ... m`).
+fn without_colour(line: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(line.len());
+    let mut bytes = line.iter().copied();
+    while let Some(byte) = bytes.next() {
+        if byte == 0x1b {
+            for next in bytes.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(byte);
+        }
+    }
+    out
+}
+
 /// Git settings that change how `git diff` names paths or colours output,
 /// pinned for the gitleaks run as the managed CI scan pins them, so a
 /// finding names the file a path allowlist matches. Rename and copy
@@ -375,8 +427,18 @@ impl Engine {
 /// the diff gitleaks reads sits under a path that check read: a rename from
 /// a name the parser cannot read would otherwise put that name in the
 /// header of the added lines and hide them.
-const GIT_OUTPUT_PINS: [(&str, &str); 9] = [
+///
+/// A symlink's staged target is diffed with git's `default` driver, which
+/// path attributes do not reach, so that driver is pinned too: never
+/// binary, its textconv the identity (`cat`) and nothing cached, whatever
+/// a configuration file or include sets. A submodule shows as its commit
+/// line only.
+const GIT_OUTPUT_PINS: [(&str, &str); 13] = [
     ("diff.renames", "false"),
+    ("diff.default.binary", "false"),
+    ("diff.default.textconv", "cat"),
+    ("diff.default.cachetextconv", "false"),
+    ("diff.submodule", "short"),
     ("core.quotePath", "true"),
     ("diff.noprefix", "false"),
     ("diff.mnemonicPrefix", "false"),

@@ -11404,9 +11404,9 @@ fn commit_msg_refuses_a_message_file_git_does_not_use() {
 }
 
 /// The official pinned binary (`CODEFLOW_TEST_GITLEAKS_DIR`; without it the
-/// test checks nothing) through the installed hook stages, with command
-/// configuration a caller passes down turning rename or copy detection back
-/// on. A file committed under a name gitleaks' parser cannot read is
+/// test checks nothing) through the CLI's hook stages (`codeflow git-hook`,
+/// called directly), with command configuration a caller passes down
+/// turning rename or copy detection back on. A file committed under a name gitleaks' parser cannot read is
 /// renamed to a safe name with a secret-shaped line added; pre-commit and
 /// the automatic-merge scan in commit-msg both refuse it.
 #[cfg(unix)]
@@ -11441,7 +11441,7 @@ fn caller_configuration_cannot_hide_a_rename_from_gitleaks() {
         )
         .unwrap();
         git(dir.path(), &["add", "after/renamed.json"]);
-        std::fs::write(dir.path().join(".git/MERGE_MSG"), "Merge branch 'side'\n").unwrap();
+        std::fs::write(dir.path().join(".git/MERGE_MSG"), "chore: merge side\n").unwrap();
         // The automatic-merge route first: no path check of its own reads
         // the old name, so only the scan stands between it and the commit.
         for stage in [

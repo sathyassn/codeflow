@@ -356,10 +356,10 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:secret-scan-lines",
     ),
-    // gitleaks' stderr: its last line only reaches the person in the incomplete-scan message, after the exit code already decided the scan failed (TSK-412).
+    // An error or fatal line of gitleaks' log, found by its ASCII level field on the raw bytes; the decoded text only reaches the person in the incomplete-scan message, and the scan has already failed (TSK-412).
     (
         "codeflow-core/src/hooks/gitleaks.rs",
-        "Engine::scan_staged",
+        "logged_failure",
         "from_utf8_lossy",
         1,
         "display",
@@ -2794,21 +2794,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "lines",
         1,
         "framing:git-commit-message-lines",
-    ),
-    // TSK-412: the last non-empty line of gitleaks' stderr, shown in the incomplete-scan message only; the exit code already decided the scan failed.
-    (
-        "crates/codeflow-core/src/hooks/gitleaks.rs",
-        "Engine::scan_staged",
-        "lines",
-        1,
-        "display",
-    ),
-    (
-        "crates/codeflow-core/src/hooks/gitleaks.rs",
-        "Engine::scan_staged",
-        "trim",
-        2,
-        "display",
     ),
     // TSK-412: `gitleaks version` output trimmed, then compared whole with the pinned ASCII version; any other output refuses.
     (
