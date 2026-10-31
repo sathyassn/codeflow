@@ -1,0 +1,11 @@
+id = "TSK-1100"
+uid = "97850886-eaa8-4a0f-a2e0-7ae7fa672181"
+kind = "TSK"
+title = "Figures draw expected windows on a time axis with now, dependencies and the path to main"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T00:40:56Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
