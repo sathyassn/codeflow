@@ -422,3 +422,168 @@ fn doctor_names_root_waivers_and_policy_explain_lists_new_keys() {
         assert!(said(&output).contains(key));
     }
 }
+
+/// TSK-323: the size and ignored-file rules through the installed hook
+/// shim, `git commit` and `codeflow ci`, judged by the authority commit.
+#[cfg(unix)]
+mod content_rules {
+    use super::{said, Adopter};
+    use serde_json::json;
+    use std::process::Output;
+
+    const MIB: usize = 1 << 20;
+
+    /// An adopter whose authority commit holds `.gitignore` and, for a new
+    /// scaffold, the project kind `codeflow init` writes.
+    fn adopter(new_scaffold: bool) -> Adopter {
+        let mut f = Adopter::new(&json!({}));
+        f.stage(".gitignore", 0o100_644, b"build/\n");
+        if new_scaffold {
+            f.stage(
+                ".codeflow/project.toml",
+                0o100_644,
+                concat!(
+                    "schema_version = 1\ntier = \"minimal\"\nscaffold_version = \"3.2.0\"\n",
+                    "stack = \"generic\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\n",
+                    "permission_preset = \"default\"\nfile_size_rule = \"refuse\"\n"
+                )
+                .as_bytes(),
+            );
+        }
+        f.base = f.commit(&[f.base]);
+        f.head(f.base);
+        f.repo
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        f.install_hook();
+        f
+    }
+
+    fn git(f: &Adopter, args: &[&str]) -> Output {
+        f.command("git").args(args).output().unwrap()
+    }
+
+    /// Write `size` bytes at `path`, add it with git, and commit through
+    /// the installed hook; then judge the range with `codeflow ci`.
+    fn commit_file(f: &Adopter, path: &str, size: usize) -> (Output, Option<Output>) {
+        let file = f.dir.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, vec![b'x'; size]).unwrap();
+        let add = git(f, &["add", "-f", "--", path]);
+        assert!(add.status.success(), "{}", said(&add));
+        let commit = git(f, &["commit", "-m", "feat: add a fixture file"]);
+        let ci = commit.status.success().then(|| {
+            let head = f.repo.head().unwrap().peel_to_commit().unwrap().id();
+            f.ci(head)
+        });
+        (commit, ci)
+    }
+
+    #[test]
+    fn a_new_scaffold_warns_at_two_mib_and_refuses_eleven_naming_the_routes() {
+        let f = adopter(true);
+        let (commit, ci) = commit_file(&f, "assets/two.bin", 2 * MIB);
+        let ci = ci.expect("the 2 MiB commit passes");
+        for output in [&commit, &ci] {
+            let text = said(output);
+            assert!(output.status.success(), "{text}");
+            assert!(
+                text.contains("warning — policy rule git.max_file_bytes (warn)"),
+                "{text}"
+            );
+        }
+        println!("2 MiB: {}", said(&commit));
+        let f = adopter(true);
+        let (commit, ci) = commit_file(&f, "assets/eleven.bin", 11 * MIB);
+        assert!(ci.is_none());
+        let text = said(&commit);
+        assert!(!commit.status.success(), "{text}");
+        for part in [
+            "BLOCKED — policy rule git.max_file_bytes (block)",
+            "assets/eleven.bin is 11534336 bytes",
+            "Git LFS",
+            "on the default branch through a reviewed pull request",
+            "admitted row",
+        ] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+        println!("11 MiB: {text}");
+        // The same file committed without the hook still fails in CI.
+        f.stage("assets/eleven.bin", 0o100_644, &vec![b'x'; 11 * MIB]);
+        let ci = f.ci(f.commit(&[f.base]));
+        assert!(!ci.status.success(), "{}", said(&ci));
+        assert!(said(&ci).contains("git.max_file_bytes"), "{}", said(&ci));
+    }
+
+    #[test]
+    fn an_ignored_build_artefact_passes_with_a_warning() {
+        let f = adopter(true);
+        let (commit, ci) = commit_file(&f, "build/app.o", 10);
+        let ci = ci.expect("the ignored file passes");
+        for output in [&commit, &ci] {
+            let text = said(output);
+            assert!(output.status.success(), "{text}");
+            assert!(
+                text.contains("ignored file changed: build/app.o matches `build/`"),
+                "{text}"
+            );
+        }
+        println!("ignored: {}", said(&commit));
+    }
+
+    #[test]
+    fn an_eleven_mib_file_tracked_by_git_lfs_passes() {
+        let f = adopter(true);
+        // git's own filter mechanism with a clean command that writes the
+        // Git LFS pointer, as `git lfs install` configures it.
+        let clean = f.dir.path().join("lfs-clean.sh");
+        std::fs::write(
+            &clean,
+            "t=$(mktemp); cat > \"$t\"; size=$(wc -c < \"$t\" | tr -d ' '); \
+             oid=$( (sha256sum \"$t\" 2>/dev/null || shasum -a 256 \"$t\") | cut -d' ' -f1); \
+             rm -f \"$t\"; printf 'version https://git-lfs.github.com/spec/v1\\noid sha256:%s\\nsize %s\\n' \"$oid\" \"$size\"\n",
+        )
+        .unwrap();
+        let filter = format!("sh {}", clean.display());
+        assert!(git(&f, &["config", "filter.lfs.clean", &filter])
+            .status
+            .success());
+        assert!(git(&f, &["config", "filter.lfs.required", "true"])
+            .status
+            .success());
+        std::fs::write(
+            f.dir.path().join(".gitattributes"),
+            "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+        )
+        .unwrap();
+        assert!(git(&f, &["add", ".gitattributes"]).status.success());
+        let (commit, ci) = commit_file(&f, "models/weights.bin", 11 * MIB);
+        let ci = ci.expect("the LFS pointer passes");
+        for output in [&commit, &ci] {
+            let text = said(output);
+            assert!(output.status.success(), "{text}");
+            assert!(!text.contains("git.max_file_bytes"), "{text}");
+        }
+        let recorded = git(&f, &["cat-file", "-p", "HEAD:models/weights.bin"]);
+        assert!(said(&recorded).starts_with("version https://git-lfs.github.com/spec/v1"));
+        println!("LFS pointer recorded: {}", said(&recorded));
+    }
+
+    #[test]
+    fn an_updated_project_gives_a_report_line_and_passes() {
+        let f = adopter(false);
+        let (commit, ci) = commit_file(&f, "assets/eleven.bin", 11 * MIB);
+        let ci = ci.expect("an updated project passes");
+        for output in [&commit, &ci] {
+            let text = said(output);
+            assert!(output.status.success(), "{text}");
+            assert!(!text.contains("policy rule git.max_file_bytes"), "{text}");
+            assert!(
+                text.contains("file too large: assets/eleven.bin")
+                    && text.contains("reported only"),
+                "{text}"
+            );
+        }
+        println!("updated project: {}", said(&commit));
+    }
+}

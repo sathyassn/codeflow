@@ -1,0 +1,457 @@
+//! The size and ignored-file rules (TSK-323), judged with the policy, the
+//! project kind and the `.gitignore` files of the authority commit, on
+//! staged changes and on commit ranges.
+use codeflow_core::hooks::path_policy::{self, ContentRules, PathPolicy, Report};
+use codeflow_core::hooks::policy::GitPolicy;
+use codeflow_core::hooks::PolicyLevel;
+use git2::{Oid, Repository};
+use serde_json::json;
+
+const MIB: usize = 1 << 20;
+
+struct Fixture {
+    dir: tempfile::TempDir,
+    repo: Repository,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        repo.set_head("refs/heads/feat/content").unwrap();
+        Self { dir, repo }
+    }
+
+    fn stage(&self, path: &str, contents: &[u8]) {
+        let mut index = self.repo.index().unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100_644,
+                uid: 0,
+                gid: 0,
+                file_size: u32::try_from(contents.len()).unwrap(),
+                id: self.repo.blob(contents).unwrap(),
+                flags: 0,
+                flags_extended: 0,
+                path: path.as_bytes().to_vec(),
+            })
+            .unwrap();
+        index.write().unwrap();
+    }
+
+    fn delete(&self, path: &str) {
+        let mut index = self.repo.index().unwrap();
+        index.remove_path(std::path::Path::new(path)).unwrap();
+        index.write().unwrap();
+    }
+
+    fn commit(&self, parents: &[Oid]) -> Oid {
+        let tree = self
+            .repo
+            .find_tree(self.repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let sig = git2::Signature::now("Tester", "test@example.invalid").unwrap();
+        let parents: Vec<_> = parents
+            .iter()
+            .map(|p| self.repo.find_commit(*p).unwrap())
+            .collect();
+        let id = self
+            .repo
+            .commit(
+                None,
+                &sig,
+                &sig,
+                "feat: content fixture",
+                &tree,
+                &parents.iter().collect::<Vec<_>>(),
+            )
+            .unwrap();
+        self.repo
+            .reference("refs/heads/feat/content", id, true, "test")
+            .unwrap();
+        id
+    }
+
+    /// The authority commit: its `.gitignore`, its project kind and its
+    /// policy, which `git` returns parsed.
+    fn authority(&self, gitignore: &str, new_scaffold: bool, git: &serde_json::Value) -> Oid {
+        self.stage(".gitignore", gitignore.as_bytes());
+        if new_scaffold {
+            self.stage(".codeflow/project.toml", b"file_size_rule = \"refuse\"\n");
+        }
+        self.stage(
+            ".codeflow/policy.json",
+            json!({ "git": git }).to_string().as_bytes(),
+        );
+        self.commit(&[])
+    }
+
+    fn rules(&self, authority: Oid, git: &serde_json::Value) -> ContentRules {
+        let git: GitPolicy = serde_json::from_value(git.clone()).unwrap();
+        ContentRules::at(&self.repo, &git, &[authority], None).unwrap()
+    }
+
+    /// The staged verdict and the verdict on the commit made from it.
+    fn judge(&self, authority: Oid, git: &serde_json::Value) -> [Report; 2] {
+        let rules = self.rules(authority, git);
+        let paths = PathPolicy::from_git(&GitPolicy::default()).unwrap();
+        let staged = path_policy::staged_with(&self.repo, &paths, Some(&rules)).unwrap();
+        let head = self.commit(&[authority]);
+        let range = path_policy::range_with(
+            self.dir.path(),
+            Some(&authority.to_string()),
+            &head.to_string(),
+            &paths,
+            Some(&rules),
+        )
+        .unwrap();
+        [staged, range]
+    }
+}
+
+fn levels(report: &Report, rule: &str) -> Vec<PolicyLevel> {
+    report
+        .violations
+        .iter()
+        .filter(|v| v.rule == rule)
+        .map(|v| v.level)
+        .collect()
+}
+
+fn big(size: usize) -> Vec<u8> {
+    vec![b'x'; size]
+}
+
+#[test]
+fn an_ignored_file_warns_by_default_and_block_refuses_it() {
+    for (git, level) in [
+        (json!({}), PolicyLevel::Warn),
+        (
+            json!({"ignored_files": {"level": "block"}}),
+            PolicyLevel::Block,
+        ),
+    ] {
+        let f = Fixture::new();
+        let authority = f.authority("build/\n*.log\n", false, &git);
+        f.stage("build/out.o", b"object");
+        f.stage("src/debug.log", b"log");
+        f.stage("src/main.rs", b"fn main() {}");
+        for report in f.judge(authority, &git) {
+            assert_eq!(
+                levels(&report, "git.ignored_files"),
+                [level, level],
+                "{report:?}"
+            );
+            let text = format!("{:?}", report.violations);
+            assert!(text.contains("build/out.o matches `build/`"), "{text}");
+            assert!(!text.contains("src/main.rs"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn a_tracked_ignored_file_is_still_judged() {
+    let f = Fixture::new();
+    f.stage("app.log", b"tracked before the rule");
+    let authority = f.authority("*.log\n", false, &json!({}));
+    f.stage("app.log", b"changed");
+    for report in f.judge(authority, &json!({})) {
+        assert_eq!(
+            levels(&report, "git.ignored_files"),
+            [PolicyLevel::Warn],
+            "{report:?}"
+        );
+    }
+}
+
+#[test]
+fn an_allow_entry_in_the_authority_admits_its_path() {
+    let git = json!({"ignored_files": {"level": "block",
+        "allow": [{"path": "Build/Kept", "reason": "generated fixture the tests read"}]}});
+    let f = Fixture::new();
+    let authority = f.authority("build/\n", false, &git);
+    f.stage("build/kept/data.bin", b"kept");
+    f.stage("build/other.bin", b"other");
+    for report in f.judge(authority, &git) {
+        let text = format!("{:?}", report.violations);
+        assert_eq!(levels(&report, "git.ignored_files"), [PolicyLevel::Block]);
+        assert!(text.contains("build/other.bin"), "{text}");
+        assert!(!text.contains("kept/data.bin"), "{text}");
+    }
+}
+
+#[test]
+fn a_gitignore_change_in_the_change_admits_and_adds_nothing() {
+    let f = Fixture::new();
+    let authority = f.authority("build/\n", false, &json!({}));
+    // The change re-includes build/ and ignores *.dat in its own file.
+    f.stage(".gitignore", b"!build/\n*.dat\n");
+    f.stage("build/out.o", b"object");
+    f.stage("table.dat", b"data");
+    for report in f.judge(authority, &json!({})) {
+        let text = format!("{:?}", report.violations);
+        assert_eq!(
+            levels(&report, "git.ignored_files"),
+            [PolicyLevel::Warn],
+            "{text}"
+        );
+        assert!(text.contains("build/out.o"), "{text}");
+        assert!(!text.contains("table.dat"), "{text}");
+        assert!(!text.contains("changed: .gitignore"), "{text}");
+    }
+}
+
+#[test]
+fn matching_follows_git_for_negation_nesting_and_case() {
+    let f = Fixture::new();
+    f.stage("build/.gitignore", b"!keep.o\n");
+    f.stage("docs/.gitignore", b"*.tmp\n!keep.tmp\n");
+    let authority = f.authority("build/\n*.log\n!keep.log\n", false, &json!({}));
+    for (path, ignored) in [
+        // An excluded directory cannot be re-included beneath it.
+        ("build/keep.o", true),
+        ("BUILD/Out.o", true),
+        ("keep.log", false),
+        ("deep/other.LOG", true),
+        ("docs/draft.tmp", true),
+        ("docs/keep.tmp", false),
+        ("elsewhere/draft.tmp", false),
+        ("builder/x", false),
+    ] {
+        f.stage(path, b"x");
+        let rules = f.rules(authority, &json!({}));
+        let paths = PathPolicy::from_git(&GitPolicy::default()).unwrap();
+        let report = path_policy::staged_with(&f.repo, &paths, Some(&rules)).unwrap();
+        assert_eq!(
+            !levels(&report, "git.ignored_files").is_empty(),
+            ignored,
+            "{path}: {report:?}"
+        );
+        f.delete(path);
+    }
+}
+
+#[test]
+fn a_new_scaffold_warns_over_one_mib_and_refuses_over_ten() {
+    for (size, expected) in [
+        (MIB, vec![]),
+        (MIB + 1, vec![PolicyLevel::Warn]),
+        (10 * MIB, vec![PolicyLevel::Warn]),
+        (10 * MIB + 1, vec![PolicyLevel::Block]),
+    ] {
+        let f = Fixture::new();
+        let authority = f.authority("", true, &json!({}));
+        f.stage("assets/blob.bin", &big(size));
+        for report in f.judge(authority, &json!({})) {
+            assert_eq!(
+                levels(&report, "git.max_file_bytes"),
+                expected,
+                "{size}: {report:?}"
+            );
+            assert!(report.notes.is_empty(), "{:?}", report.notes);
+        }
+    }
+}
+
+#[test]
+fn an_updated_project_reports_both_thresholds_and_refuses_neither() {
+    for size in [MIB + 1, 10 * MIB + 1] {
+        let f = Fixture::new();
+        let authority = f.authority("", false, &json!({}));
+        f.stage("assets/blob.bin", &big(size));
+        for report in f.judge(authority, &json!({})) {
+            assert!(
+                levels(&report, "git.max_file_bytes").is_empty(),
+                "{report:?}"
+            );
+            let notes = report.notes.join("\n");
+            assert!(notes.contains("assets/blob.bin"), "{notes}");
+            assert!(notes.contains("reported only"), "{notes}");
+        }
+    }
+}
+
+#[test]
+fn an_explicit_setting_replaces_the_default_in_either_project_kind() {
+    let git = json!({"max_file_bytes": {"limit": 2 * MIB, "except_under": ["Media"]}});
+    for new_scaffold in [false, true] {
+        let f = Fixture::new();
+        let authority = f.authority("", new_scaffold, &git);
+        f.stage("data/two.bin", &big(2 * MIB + 1));
+        f.stage("media/film.mov", &big(11 * MIB));
+        for report in f.judge(authority, &git) {
+            let text = format!("{:?}", report.violations);
+            assert_eq!(
+                levels(&report, "git.max_file_bytes"),
+                [PolicyLevel::Block],
+                "{text}"
+            );
+            assert!(text.contains("data/two.bin"), "{text}");
+            assert!(!text.contains("film.mov"), "{text}");
+            assert!(report.notes.is_empty(), "{:?}", report.notes);
+        }
+    }
+}
+
+#[test]
+fn the_working_copy_and_the_change_cannot_relax_the_authority() {
+    let f = Fixture::new();
+    let authority = f.authority("build/\n", true, &json!({}));
+    // The change lowers its own policy, drops the project kind and empties
+    // the ignore rules; the authority still judges.
+    f.stage(
+        ".codeflow/policy.json",
+        json!({"git": {"ignored_files": {"level": "off"},
+            "max_file_bytes": {"limit": 1_000_000_000_u64}}})
+        .to_string()
+        .as_bytes(),
+    );
+    f.stage(".codeflow/project.toml", b"");
+    f.stage(".gitignore", b"");
+    f.stage("build/huge.bin", &big(10 * MIB + 1));
+    for report in f.judge(authority, &json!({})) {
+        assert_eq!(levels(&report, "git.max_file_bytes"), [PolicyLevel::Block]);
+        assert_eq!(levels(&report, "git.ignored_files"), [PolicyLevel::Warn]);
+    }
+}
+
+#[test]
+fn the_rules_never_judge_the_gate_inputs() {
+    let ignore_everything = "*\n.codeflow/\n.github/\n";
+    for path in [
+        ".codeflow/policy.json",
+        ".codeflow/project.toml",
+        ".codeflow/bootstrap.sh",
+        ".codeflow/bootstrap.ps1",
+        ".codeflow/ci-setup.sh",
+        ".codeflow/git-hooks/pre-commit",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".gitignore",
+        "deep/.gitignore",
+    ] {
+        let f = Fixture::new();
+        let git = json!({"ignored_files": {"level": "block"}});
+        let authority = f.authority(ignore_everything, true, &git);
+        f.stage(path, &big(10 * MIB + 1));
+        for report in f.judge(authority, &git) {
+            assert!(
+                levels(&report, "git.max_file_bytes").is_empty()
+                    && levels(&report, "git.ignored_files").is_empty(),
+                "{path}: {report:?}"
+            );
+        }
+        println!("over 10 MiB and ignored, not judged: {path}");
+    }
+}
+
+#[test]
+fn a_size_refusal_names_the_file_its_size_the_limit_and_the_routes() {
+    let f = Fixture::new();
+    let authority = f.authority("", true, &json!({}));
+    f.stage("models/weights.bin", &big(11 * MIB));
+    let [staged, _] = f.judge(authority, &json!({}));
+    let refusal = staged
+        .violations
+        .iter()
+        .find(|v| v.rule == "git.max_file_bytes")
+        .expect("refused");
+    let text = refusal.render("pre-commit");
+    for part in [
+        "models/weights.bin",
+        "11534336 bytes (11.0 MiB)",
+        "over the limit of 10485760 bytes (10.0 MiB)",
+        "Git LFS",
+        "`limit` or `except_under` change to git.max_file_bytes",
+        "on the default branch through a reviewed pull request",
+        "from 4.2.0, by a per-path admitted row in the exemption register",
+    ] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+    println!("{text}");
+}
+
+#[test]
+fn a_git_lfs_path_is_sized_by_its_pointer() {
+    let f = Fixture::new();
+    let authority = f.authority("", true, &json!({}));
+    let payload = big(11 * MIB);
+    let digest = {
+        use sha2::Digest;
+        let hash = sha2::Sha256::digest(&payload);
+        hash.iter().fold(String::new(), |mut hex, b| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{b:02x}");
+            hex
+        })
+    };
+    let pointer = format!(
+        "version https://git-lfs.github.com/spec/v1\noid sha256:{digest}\nsize {}\n",
+        payload.len()
+    );
+    f.stage(
+        ".gitattributes",
+        b"*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    );
+    f.stage("models/weights.bin", pointer.as_bytes());
+    for report in f.judge(authority, &json!({})) {
+        assert!(report.violations.is_empty(), "{report:?}");
+        assert!(report.notes.is_empty(), "{:?}", report.notes);
+    }
+}
+
+#[test]
+fn a_file_added_then_deleted_in_the_range_is_still_refused() {
+    let f = Fixture::new();
+    let authority = f.authority("", true, &json!({}));
+    f.stage("big.bin", &big(10 * MIB + 1));
+    let added = f.commit(&[authority]);
+    f.delete("big.bin");
+    let head = f.commit(&[added]);
+    let rules = f.rules(authority, &json!({}));
+    let paths = PathPolicy::from_git(&GitPolicy::default()).unwrap();
+    let report = path_policy::range_with(
+        f.dir.path(),
+        Some(&authority.to_string()),
+        &head.to_string(),
+        &paths,
+        Some(&rules),
+    )
+    .unwrap();
+    assert_eq!(levels(&report, "git.max_file_bytes"), [PolicyLevel::Block]);
+}
+
+#[test]
+fn the_rules_run_when_the_path_gate_is_off() {
+    let git = json!({"path_policy": "off"});
+    let f = Fixture::new();
+    let authority = f.authority("", true, &git);
+    f.stage("big.bin", &big(10 * MIB + 1));
+    let rules = f.rules(authority, &git);
+    let paths = PathPolicy::from_git(&serde_json::from_value(git).unwrap()).unwrap();
+    let report = path_policy::staged_with(&f.repo, &paths, Some(&rules)).unwrap();
+    assert_eq!(levels(&report, "git.max_file_bytes"), [PolicyLevel::Block]);
+}
+
+#[test]
+fn an_unreadable_ignore_file_is_reported_at_the_rule_level() {
+    for (git, level) in [
+        (json!({}), PolicyLevel::Warn),
+        (
+            json!({"ignored_files": {"level": "block"}}),
+            PolicyLevel::Block,
+        ),
+    ] {
+        let f = Fixture::new();
+        f.stage("sub/.gitignore", b"\xff\xfe not text\n");
+        let authority = f.authority("", false, &git);
+        f.stage("src/lib.rs", b"");
+        let [staged, _] = f.judge(authority, &git);
+        assert_eq!(levels(&staged, "git.ignored_files"), [level], "{staged:?}");
+        assert!(format!("{:?}", staged.violations).contains("sub/.gitignore is not UTF-8"));
+    }
+}
