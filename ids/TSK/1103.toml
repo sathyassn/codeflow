@@ -1,0 +1,11 @@
+id = "TSK-1103"
+uid = "83a71a11-f1e7-48f3-a16e-bac86da156d6"
+kind = "TSK"
+title = "A project check runs from the trusted base before any candidate code"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:18:56Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
