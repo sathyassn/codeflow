@@ -1,0 +1,11 @@
+id = "TSK-1115"
+uid = "a80dea8c-1c6d-43d8-92b5-591b7e89fc09"
+kind = "TSK"
+title = "Python runs under the gate resolve only from the lock"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:20:15Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
