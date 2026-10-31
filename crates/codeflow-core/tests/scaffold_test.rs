@@ -2623,6 +2623,44 @@ fn init_and_update_write_the_adoption_marker_and_never_a_table() {
     assert!(state.contains("release_rules = 2"), "kept: {state}");
 }
 
+/// TSK-323: a fresh `init` marks a new scaffold so the default size limit
+/// refuses; `update` never writes the mark, keeps one already written, and
+/// reports how a project without it opts in.
+#[test]
+fn init_marks_a_new_scaffold_for_the_size_rule_and_update_never_does() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let state = read(&root, ".codeflow/project.toml");
+    assert!(
+        state.contains("file_size_rule = \"refuse\""),
+        "init: {state}"
+    );
+
+    // A project from before the rule: update reports and adds nothing.
+    let without = state.replace("file_size_rule = \"refuse\"\n", "");
+    std::fs::write(root.join(".codeflow/project.toml"), &without).unwrap();
+    let (_a2, assets) = fixture_assets(true);
+    let report = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    let state = read(&root, ".codeflow/project.toml");
+    assert!(!state.contains("file_size_rule"), "update: {state}");
+    let shown = report.shown().to_string();
+    assert!(
+        shown.contains("file size rule: files over 1 MiB"),
+        "{shown}"
+    );
+
+    // A new scaffold keeps its mark through update, with no report line.
+    std::fs::write(
+        root.join(".codeflow/project.toml"),
+        format!("{state}file_size_rule = \"refuse\"\n"),
+    )
+    .unwrap();
+    let report = scaffold::update(&assets, &root, &update_opts("2.2.0")).unwrap();
+    assert!(read(&root, ".codeflow/project.toml").contains("file_size_rule = \"refuse\""));
+    assert!(!report.shown().to_string().contains("file size rule"));
+}
+
 /// A project that added steps before the secret scan, in a workflow
 /// customised before TSK-210, keeps them through the 3-way merge of the new
 /// shipped workflow. Update keeps them as written and warns on every run
