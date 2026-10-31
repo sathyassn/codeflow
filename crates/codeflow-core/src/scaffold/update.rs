@@ -436,6 +436,9 @@ fn update_writes(
     if let Some(note) = record_outcome_marker(root)? {
         report.notes.push(note);
     }
+    if let Some(note) = size_rule_note(root, &state) {
+        report.notes.push(note);
+    }
     // The brownfield hook choice stays visible until the adopter makes it.
     if super::detect::configured_hooks_path(root)?.as_deref()
         == Some(super::detect::CODEFLOW_HOOKS_PATH)
@@ -637,6 +640,20 @@ fn record_work_records_baseline(root: &Path) -> Result<Option<Shown>, ScaffoldEr
         Shown::fixed(BASELINE_KEY),
         Shown::object_id(head)
     )))
+}
+
+/// The report line for the size rule's default (TSK-323): a project that
+/// `update` brings forward, which `init` never marked a new scaffold,
+/// reports large files and refuses none until its policy sets
+/// `git.max_file_bytes`.
+fn size_rule_note(root: &Path, state: &ProjectState) -> Option<Shown> {
+    let opted_in = crate::hooks::policy::Policy::load(root)
+        .is_ok_and(|policy| policy.git.max_file_bytes.is_some());
+    (state.file_size_rule.is_none() && !opted_in).then(|| {
+        Shown::fixed(
+            "file size rule: files over 1 MiB and over 10 MiB are report lines in this project, never refused; to refuse files over a limit, set git.max_file_bytes in .codeflow/policy.json on the default branch once every binary that judges it is 4.0.0 or later",
+        )
+    })
 }
 
 /// The Outcome section's adoption marker (TSK-435): written once, by the
@@ -1704,6 +1721,41 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-323: an updated project, which `init` never marked a new
+    /// scaffold, is told its size findings are report lines and how to opt
+    /// in; a new scaffold or a project that opted in is not.
+    #[test]
+    fn the_size_rule_note_names_the_opt_in_only_where_nothing_refuses() {
+        use super::super::manifest::Tier;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        let mut state = super::ProjectState {
+            schema_version: 1,
+            tier: Tier::Minimal,
+            scaffold_version: "3.1.1".to_string(),
+            stack: "generic".to_string(),
+            areas: vec![],
+            policy_armed: true,
+            git_hooks: "wired".to_string(),
+            permission_preset: "default".to_string(),
+            product_one_liner: String::new(),
+            release_rules: Some(1),
+            file_size_rule: None,
+        };
+        let note = super::size_rule_note(dir.path(), &state).expect("updated project");
+        assert!(note.to_string().contains("report lines"), "{note}");
+        assert!(note.to_string().contains("git.max_file_bytes"), "{note}");
+        state.file_size_rule = Some("refuse".into());
+        assert!(super::size_rule_note(dir.path(), &state).is_none());
+        state.file_size_rule = None;
+        std::fs::write(
+            dir.path().join(".codeflow").join("policy.json"),
+            r#"{"git": {"max_file_bytes": {"limit": 5000000}}}"#,
+        )
+        .unwrap();
+        assert!(super::size_rule_note(dir.path(), &state).is_none());
+    }
+
     #[test]
     fn r17_migration_without_repository_has_no_baseline() {
         let dir = tempfile::tempdir().unwrap();
