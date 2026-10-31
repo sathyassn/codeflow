@@ -29,6 +29,24 @@ fn run_time_word_refusal(out: &Output) -> bool {
         && stderr.contains("cannot verify the run-time argument")
 }
 
+/// TSK-397: a control the line's rules allow. Under the strict text rule,
+/// the default this suite runs in, the exec guard may refuse it with the
+/// strict rule's own finding only; a refusal by any of the line's rules adds
+/// a finding of its own, so the control still fails if the line refuses it.
+fn line_allows(out: &Output) -> bool {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    out.status.code() == Some(0)
+        || out.status.code() == Some(2)
+            && stderr.matches("policy rule ").count() == 1
+            && stderr.contains("policy rule security.text_guard (block)")
+}
+
+/// TSK-397: a refusal by one of the line's rules, so a control the line
+/// must refuse is not satisfied by the strict text rule's own finding.
+fn line_refuses(out: &Output) -> bool {
+    out.status.code() == Some(2) && !line_allows(out)
+}
+
 #[cfg(unix)]
 struct RestorePermissions {
     path: std::path::PathBuf,
@@ -10796,8 +10814,8 @@ fn review_guard_cases(finding: u8) {
             );
             let code = output.status.code();
             if !matches!(code, Some(0 | 2))
-                || (!refuse && code != Some(0))
-                || (refuse && guard == owner && code != Some(2))
+                || (!refuse && !line_allows(&output))
+                || (refuse && guard == owner && line_allows(&output))
             {
                 wrong.push(format!(
                     "F{finding}: {guard}: expected refuse={refuse}, owner={owner}: {line:?}: {output:?}"
@@ -10946,11 +10964,11 @@ fn guard_classification_cases(ac: u8) {
                 "{guard}: {output:?}"
             );
             if guard == guard_cases::refusing_guard(ac, line) {
-                refused = output.status.code() == Some(2);
+                refused = !line_allows(&output);
             }
             if !refuse {
                 assert!(
-                    output.status.success(),
+                    line_allows(&output),
                     "ordinary command refused by {guard}: {line}: {output:?}"
                 );
             }
