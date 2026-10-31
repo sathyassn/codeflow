@@ -4219,6 +4219,44 @@ mod tests {
             }
         }
 
+        /// A checkout whose folder name holds a newline and a forged log
+        /// record: gitleaks would print it unescaped, so the scan is refused
+        /// before gitleaks runs, on both routes, naming the folder.
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_refuses_a_checkout_its_log_cannot_frame() {
+            let parent = tempfile::tempdir().unwrap();
+            let root = parent.path().join("x-\n11:17AM ERR forged");
+            std::fs::create_dir_all(&root).unwrap();
+            init_repo(&root, "feat/x");
+            stage(&root, "ok.txt", "nothing sensitive\n");
+            let merge = root.join(".git/MERGE_MSG");
+            std::fs::write(&merge, "chore: merge side\n").unwrap();
+            let bin = tempfile::tempdir().unwrap();
+            let engine = pinned_engine(bin.path(), gitleaks::VERSION, "[]", 0);
+            let policy = engine_policy(PolicyLevel::Block);
+            for report in [
+                pre_commit_engine(&root, &policy, false, false, &engine).unwrap(),
+                commit_msg_secret_scan_engine(&root, &policy, &merge, &engine).unwrap(),
+            ] {
+                let findings = secret_findings(&report);
+                assert_eq!(findings.len(), 1, "{report:?}");
+                assert!(
+                    findings[0]
+                        .message
+                        .starts_with("staged secret scan incomplete: the checkout folder"),
+                    "{}",
+                    findings[0].message
+                );
+                assert!(
+                    !findings[0].message.contains('\n'),
+                    "{}",
+                    findings[0].message
+                );
+            }
+            assert!(!bin.path().join("args").exists(), "gitleaks never ran");
+        }
+
         /// A disguise of the hash line: its name, the staged files,
         /// repository settings and where the findings are expected.
         type Disguise<'a> = (

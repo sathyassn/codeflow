@@ -320,6 +320,9 @@ impl Engine {
     /// read, a git too old to pin attributes, a failed binary or a report
     /// that could not be read.
     pub fn scan_staged(&self, verified: &Verified, root: &Path) -> Result<Vec<Finding>, String> {
+        if let Some(why) = unloggable_location(root, std::env::var_os("PATH").as_deref()) {
+            return Err(why);
+        }
         let attributes = TextAttributes::for_repository(root)?;
         if let Some(path) = unreadable_staged_path(root)? {
             return Err(format!(
@@ -410,6 +413,47 @@ fn logged_failure(stderr: &[u8]) -> Option<String> {
         }
     }
     aborted.then(|| "gitleaks aborted the git command it ran".to_string())
+}
+
+/// Why the gitleaks log could not be trusted for a scan of `root` with this
+/// `PATH`, if it could not.
+///
+/// gitleaks writes values into its debug messages unescaped: the source
+/// folder (here `root`, which also names the configuration and ignore
+/// files) and the path of the `git` it finds on `PATH`. A control
+/// character in either, a newline above all, could start a line that reads
+/// as a log record of its own, so a completed scan could look failed, or a
+/// failure could be framed differently. The log format has no framing that
+/// message text cannot imitate, so such a location is refused before
+/// gitleaks runs, as an incomplete scan.
+fn unloggable_location(root: &Path, path: Option<&std::ffi::OsStr>) -> Option<String> {
+    let has_control =
+        |value: &std::ffi::OsStr| value.as_encoded_bytes().iter().any(u8::is_ascii_control);
+    let shown = |value: &std::ffi::OsStr| {
+        let name = crate::git::name::GitName::from_os_str(value);
+        match name.rule_text() {
+            Ok(text) => text.to_string(),
+            Err(not_utf8) => not_utf8.display().to_string(),
+        }
+    };
+    if has_control(root.as_os_str()) {
+        return Some(format!(
+            "the checkout folder {} holds a control character, which gitleaks \
+             prints unescaped in its log, so the scan's log could not be trusted; \
+             move the checkout to a folder without one",
+            shown(root.as_os_str())
+        ));
+    }
+    let folder = path
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .find(|folder| has_control(folder.as_os_str()))?;
+    Some(format!(
+        "the PATH folder {} holds a control character, and gitleaks prints \
+         the path of the git it finds there unescaped in its log, so the \
+         scan's log could not be trusted; remove that folder from PATH",
+        shown(folder.as_os_str())
+    ))
 }
 
 /// The first space-separated field of `line` and what follows it.
@@ -770,6 +814,22 @@ mod tests {
         ] {
             assert_eq!(logged_failure(log.as_bytes()), None, "{log}");
         }
+    }
+
+    #[test]
+    fn a_control_character_where_gitleaks_logs_it_is_refused() {
+        let plain = Path::new("/tmp/checkout");
+        let path = std::env::join_paths(["/usr/bin", "/bin"]).unwrap();
+        assert_eq!(unloggable_location(plain, Some(&path)), None);
+        assert_eq!(unloggable_location(plain, None), None);
+        let forged = Path::new("/tmp/x-\n11:17AM ERR forged");
+        let why = unloggable_location(forged, Some(&path)).unwrap();
+        assert!(why.starts_with("the checkout folder"), "{why}");
+        let path = std::env::join_paths(["/usr/bin", "/opt/x\nERR forged"]).unwrap();
+        let why = unloggable_location(plain, Some(&path)).unwrap();
+        assert!(why.starts_with("the PATH folder"), "{why}");
+        let tab = Path::new("/tmp/a\tb");
+        assert!(unloggable_location(tab, None).is_some());
     }
 
     #[test]

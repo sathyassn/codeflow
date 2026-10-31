@@ -190,7 +190,8 @@ reasons.
   An inline `gitleaks:allow` comment on a staged line does not exempt it.
 - **`git.secret_scan`: the staged secret scan is incomplete.** gitleaks
   failed or logged that git failed part way through, its report could not
-  be read, a staged path holds a backslash,
+  be read, the checkout folder or a `PATH` folder holds a control
+  character, a staged path holds a backslash,
   double quote or control character that gitleaks cannot read, or git is
   older than 2.41 and cannot stop a `.gitattributes` entry from hiding
   staged lines. The message names which; rename the path, upgrade git or

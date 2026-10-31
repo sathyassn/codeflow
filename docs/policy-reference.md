@@ -911,7 +911,9 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   no conversion whatever a configuration file or include sets; a submodule
   shows as its commit line. gitleaks exits 0 with an empty report when git
   fails part way through, so the hook reads its log and a logged git
-  failure is a failed scan.
+  failure is a failed scan. gitleaks prints the checkout folder and the
+  path of the `git` it finds on `PATH` unescaped in that log, so a control
+  character in either is a failed scan before gitleaks runs.
 - **Fingerprints.** A staged finding's fingerprint has no commit:
   `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
   A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,
