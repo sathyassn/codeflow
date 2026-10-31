@@ -1,0 +1,11 @@
+id = "TSK-1124"
+uid = "85b62c85-29e6-4b6c-b7ab-72437b2336ae"
+kind = "TSK"
+title = "A sync that takes a main task's record unchanged is not a change the line makes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T23:10:18Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
