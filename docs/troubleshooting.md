@@ -7,7 +7,7 @@
 
 ## Concept
 
-`codeflow doctor` runs twenty-four health checks against a repository and the tools around it.
+`codeflow doctor` runs twenty-five health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
 `codeflow update` or after a harness change.
@@ -19,7 +19,7 @@ It is for someone whose setup misbehaves after `codeflow init`, after
 
 ## Architecture
 
-The twenty-four checks fall into six groups by the surface each one reads.
+The twenty-five checks fall into six groups by the surface each one reads.
 
 - **Git hooks, CI and host rules.** `hooks`, `ci-perimeter` and
   `remote-perimeter` read the hook subcommands of the installed binary, git's
@@ -31,7 +31,9 @@ The twenty-four checks fall into six groups by the surface each one reads.
   the shipped timeout and, in Claude settings, `"onFailure": "block"`.
   `startup-files` reads
   the project's Claude settings and Codex profile for the shell startup
-  class, and the `source` lines of the home's startup files.
+  class, and the `source` lines of the home's startup files. `sandbox`
+  reports the text rule the exec guard applies, read from the landed
+  policy the way the hook reads it, and the state root's write grants.
 - **Policy and config.** `config`, `permissions`, `policy-source` and
   `adopter-fit` read the `.codeflow/` directory, including `policy.json` and
   `project.toml`, whether it is writable, and which git ref the agent guards
@@ -63,11 +65,12 @@ failed check never hides the others. Each line starts with a status badge.
 - `FAIL` means the check found a broken state.
 
 Doctor exits 0 when no check failed, with or without warnings, and 1 when any
-check failed. Nine checks can fail: `hooks`, `config`, `permissions`,
-`policy-source`, `model-bindings`, `delegate-roundtrip`, `repo-integrity`,
-`id-registry` and `adopter-fit`. The other fifteen warn at most.
+check failed. Eleven checks can fail: `hooks`, `guard-timeouts`, `sandbox`,
+`config`, `permissions`, `policy-source`, `model-bindings`,
+`delegate-roundtrip`, `repo-integrity`, `id-registry` and `adopter-fit`. The
+other fourteen warn at most.
 
-- `codeflow doctor --list` prints the twenty-four names and exits 0.
+- `codeflow doctor --list` prints the twenty-five names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an
   error to stderr and exits 1.
 
@@ -81,6 +84,7 @@ Each row below is one check, in the order doctor prints it.
 | `grok` | Any `.grok/hooks/*.json` file, whether `grok` is on PATH, Grok's folder trust store, and the CodeFlow hook commands in the hook files Grok reads. It also reads the answer the exec-guard in doctor's own process gives a fixed canary dangerous command under the catastrophic-command floor, with no policy or repository read | Warn when Grok does not trust the folder or cannot read its trust store, when a CodeFlow hook command carries a `$` Grok skips, or when the shipped shell guard does not refuse the canary with exit 2, a reason and Grok's deny answer. Note when the folder is trusted or folder trust is off (configured; a live run is not verified). A customised shell guard handler is reported unverified and never run. Where PATH resolves `codeflow` is reported, never run. Ok when no hook file exists | Once, run `/hooks-trust` in Grok, or start it with `--trust`, so the project hooks load; the check then reports a note. For a hook command, follow the printed step: `codeflow update`, resolving any `.new` file it writes, or a hand edit of a file update does not rewrite, for the reason doctor names. With stale files of both kinds, take both steps. For a missing shell guard that update would not bind again, add the guard group doctor quotes to `.grok/hooks/codeflow.json` |
 | `guard-timeouts` | The CodeFlow guard hook entries (git-guard, exec-guard and edit-guard) in `.claude/settings.json`, `.claude/settings.local.json`, `.grok/hooks/*.json` and `.codex/hooks.json` | Warn when a guard entry has no `timeout`, a timeout other than the shipped 30 seconds, or, in Claude settings, no `"onFailure": "block"`, since a guard that does not answer in time can then let the tool call through. Ok otherwise; when Grok or Codex hook files hold guards, the message says those harnesses have no fail-closed setting, so a guard that cannot reach its own 20 second deadline fails open there after the timeout. Fail when a hook file cannot be read or parsed | Run `codeflow update`, resolving any `.new` file it writes in favour of the shipped fields. Set the fields by hand in a file update does not manage, such as `.claude/settings.local.json`. Codex asks you to approve a changed hook again in `/hooks` |
 | `startup-files` | The shell startup class (issue 86) and the default git configuration files in `.claude/settings.json` (the `Edit` denies and the sandbox `denyWrite` entries) and in the profile `.codex/config.toml` selects and in `cf-builder`, read through `extends` with the nearest entry winning, as listed rules; whether `ZDOTDIR` or `XDG_CONFIG_HOME` is moved from its default; then the `source` and `.` lines of `~/.bashrc`, `~/.bash_profile`, `~/.profile`, `~/.zshenv`, `~/.zprofile` and `~/.zshrc`, each read once up to 256 KiB and never followed | Warn: a settings file is absent, unreadable or lacks entries of the class, or the Codex config selects another profile, sets `sandbox_mode`, or lets the selected profile or `cf-builder` write a class path or a path above or below one, in any spelling of the home, so that harness's sandbox does not deny every startup write. Warn: `ZDOTDIR` or `XDG_CONFIG_HOME` is moved or relative, so the startup files there have no generated deny. Warn: a startup file sources a literal path outside the class, or a path the check cannot read (a variable other than `$HOME`, a glob or a substitution), where an agent could plant a definition no rule protects. This check never fails doctor, and it cannot observe whether a harness enforces the rules it lists | For the settings, run `codeflow update`, resolving any `.new` file it writes. For a write grant in a profile, remove it from `.codex/config.toml`. For a moved directory, add deny rules for it to the harness settings yourself, or set the variable back to its default. All findings print together. For a sourced file, move what the named line sources into a protected startup path such as `~/.zsh/`, `~/.bashrc.d/` or `~/.config/fish/conf.d/`, or inline it |
+| `sandbox` | The text rule the exec guard applies (ADR-0088), through the function the hook uses, for a session started at the project root; the policy; the CodeFlow state root against the project, the temporary directory and every Claude settings layer's `allowWrite` and `additionalDirectories` | Fail: the policy cannot be read, or a Claude write grant reaches the state root. Note: `text rule: strict` with the reason, or `text rule: relaxed by operator choice, not verified` with the ref it was read from, which is the remote-tracking state as last fetched; either way, the level each kind of finding takes; Codex and Grok write grants are not checked | Nothing for the strict rule. To relax it, the operator lands `security.text_guard: relaxed` in `.codeflow/policy.json` on every protected ref the hook reads, then fetches; a `relaxed` in the working copy, a local branch or tag, or a repository without a remote is not honoured |
 | `config` | Every `.json` file under `.codeflow/`, parsed recursively | Warn: `.codeflow/` does not exist. Fail: a listed file does not parse, or the directory could not be scanned | Run `codeflow init` when the directory is missing. Repair the JSON in each listed file |
 | `permissions` | The owner write bit on `.codeflow/`, on Unix only, then whether this process can write the directories essential and full gates write outside the worktree: the lock directories (`locks/` under the CodeFlow home and `codeflow/` under the git common directory) and `gate-runs/` under the CodeFlow home. Says so when it runs inside the Claude Code sandbox (`SANDBOX_RUNTIME` set). Also reports what the `cf-builder` and `cf-guard` profiles in `.codex/config.toml` grant on `~/.codeflow/locks` and `~/.codeflow/gate-runs`, following `extends` and counting a grant on a covering folder; that report reads configuration and never changes the result. Inside a Codex seat (`CODEX_SANDBOX` set), an unwritable `gate-runs/` is reported as by design, since full gates stay with the primary | Fail: `.codeflow/` is not writable. Warn: a named gate directory is not writable, so `codeflow test --mode essential` or `--mode full` refuses with `gate lock unavailable` or fails to keep its evidence | Give the owner write permission on `.codeflow/`. For a gate directory, inside the Claude sandbox the operator adds it to `sandbox.filesystem.allowWrite` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs the gate outside the sandbox. Inside a Codex seat (`CODEX_SANDBOX` set), a review seat writes neither folder by design, so `codeflow reserve` and quick-mode heavy targets run in a builder seat relaunched with the builder launch in cf-model-orchestrator's `resources/routing/transport.md`; `codeflow doctor --preflight` checks that launch |
 | `policy-source` | Where the agent guards read `.codeflow/policy.json` and `.codeflow/project.toml`: the remote's default branch and declared target as last fetched, `HEAD` before any tracking ref exists, or the working copy on an unborn `HEAD`. It never fetches | Fail: the source cannot be read, such as several remotes without an `origin`, a missing authority ref or a dangling remote HEAD. Ok names the source and any local policy drift | Run `git fetch`. For an unset or custom default branch, the operator runs `git remote set-head <remote> --auto` ([enforcement planes](architecture/enforcement-planes.md#in-session-guards)) |

@@ -1105,6 +1105,16 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
             for command in guard_forms::PROJECT_DELETIONS {
                 let out = run_wired(&root, &hook, command);
                 let stderr = String::from_utf8_lossy(&out.stderr);
+                // TSK-397: the strict text rule, the default, may refuse a
+                // word filled in at run time; the relaxed rule's decisions
+                // are proven by the `text_guard_invariant` replay.
+                if out.status.code() == Some(2)
+                    && stderr.matches("policy rule ").count() == 1
+                    && stderr.contains("policy rule security.text_guard (block)")
+                    && stderr.contains("the strict text rule cannot verify the run-time argument")
+                {
+                    continue;
+                }
                 assert_eq!(
                     out.status.code(),
                     Some(0),

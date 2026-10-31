@@ -66,6 +66,19 @@ dated evidence.
 | Native Windows, Codex | its elevated Windows sandbox, selected by default | the scaffolded deterministic guard recognizes both Bash and PowerShell command events and Windows drive, system, profile, disk, recovery, and permission operations |
 | Native Windows, Claude Code | none; Git Bash or PowerShell work, but Claude's OS sandbox is not available | settings and hooks still apply, but they are not equivalent containment: move catastrophic or otherwise high-blast-radius work to WSL2 or a container, and if that boundary is unavailable, stop (ADR-0033) |
 
+### The exec guard's text rule
+
+The exec guard applies one of two text rules to each shell call (ADR-0088):
+
+- **Strict**, the default: judges every word after a program the guard cannot read through, with no program exempt by name. It applies to every call unless the operator chose relaxed. It refuses 43 lines of the 49-line everyday sample where relaxed refuses 31.
+- **Relaxed:** the previous rule, by the operator's choice. It applies when `security.text_guard` is `relaxed` in every policy the hook reads at the remote-tracking refs as last fetched: the call's repository (its default branch and any declared line, where `strict` wins) and, for a Claude Code call, the session's project. A working copy, a local branch or tag, a remote `HEAD` that points outside the remote, a ref file that is a symbolic link and a repository without a remote stay strict, so the setting takes effect once it lands on every one of those refs and is fetched. The guard verifies no sandbox under relaxed.
+- **What relaxed trusts:** those refs are local state, not authenticated. A process that can write the repository's `.git` directory can set them, the same capability that defeats any text rule; authenticating them is TSK-1057's work.
+- **Always strict:** a recognized marked retry (`dangerouslyDisableSandbox`), and every call on native Windows. A harness that sends no retry field follows the rule in force.
+- **Enforcement:** the strict rule's refusals always block; `git.hook_integrity` sets the level of the line's findings only.
+- **Environment:** neither rule sees the environment a command inherits. `PATH`, `HOME`, startup and configuration locations, a harness setting such as Codex's `shell_environment_policy`, or a secret-bearing variable can change what a literal command runs without appearing in its text ([what the startup backstop leaves open](policy-reference.md#what-the-startup-backstop-leaves-open)).
+
+Neither rule allows what the previous rule refused, except a line made only of bare `cd`, `pushd` and `popd` builtins, which relaxed allows and strict refuses (issue 342). `codeflow doctor --check sandbox` prints the rule in force and, for relaxed, the ref it was read from.
+
 The test runner's per-target `shell` is `auto` by default (`sh` on
 macOS/Linux/WSL2, `cmd.exe` on native Windows). This keeps generated `&&`
 command chains compatible with the shells built into each OS. Set it to `sh`,

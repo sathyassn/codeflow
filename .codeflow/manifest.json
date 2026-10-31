@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scaffold_version": "3.2.0",
+  "scaffold_version": "4.0.0",
   "files": {
     ".agents/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",
@@ -845,7 +845,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "b57ea00441c1ac70b047742b3679913fed9029ad15bb73f77937b6aedea5a49e",
+      "sha256": "79f3a5d6d20644aae09671369fe9f1607271831149f14ae709b1451b3db7557a",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -1787,7 +1787,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "cb06181de75b8dc56d1d485872a6f4c8c04d12b2e5666603b1bb01bcf7dae755",
+      "sha256": "b4a1cb9d8097c1a830d3e01ce63f7fbb97a2006ffd99583c1d569e87d6da76c9",
       "exec": false
     },
     ".codex/hooks.json": {
@@ -1841,13 +1841,13 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "8823b34af09e44316e1f49bba5083e795274157298c2e429a6bd9a9882c4fc98",
+      "sha256": "90150e46b11288a0047d25de3b24afc3f764a5263514af143b4769993f97444a",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "65650029e2b2e2044ddb6d3737dfba7b4c0122a8cdf79565f94573e89fd98bba",
+      "sha256": "e8f0ea4fbd8972f64cbee4d5eddeb8c61d8d8690b1bc10fcd109f9c904eec4dd",
       "exec": false
     },
     "docs/architecture.md": {
