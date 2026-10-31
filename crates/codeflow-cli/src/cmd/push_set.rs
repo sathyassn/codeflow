@@ -141,11 +141,13 @@ fn run_checked_with_binary(
     let url = url.or(remote);
     // Tracking refs describe the fetch location; they stand in for the push
     // location only when the two are the same.
-    let namespace = match (remote, url) {
-        (Some(name), Some(url)) if fetches_from(root, name, url)? => {
-            tracking_namespace(root, name)?
-        }
+    let tracking = match (remote, url) {
+        (Some(name), Some(url)) if fetches_from(root, name, url)? => Some(name),
         _ => None,
+    };
+    let namespace = match tracking {
+        Some(name) => tracking_namespace(root, name)?,
+        None => None,
     };
     // Asked once, on first use, for every pushed branch and each
     // `codeflow ci` the push set runs.
@@ -163,6 +165,7 @@ fn run_checked_with_binary(
         fetch_failed: &fetch_failed,
         fork: fork(root, url)?,
         namespace: namespace.as_deref(),
+        tracking,
         policy,
     };
     let mut steps: Vec<PushStep> = Vec::new();
@@ -862,6 +865,51 @@ fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, Strin
     }))
 }
 
+/// The first tracking ref this clone holds for `remote`, under
+/// `refs/remotes/<remote>/` or any destination of its fetch refspecs,
+/// exact or glob (a glob is read up to its last `/` before the `*`, a
+/// superset). A destination that is not a full ref name cannot be checked,
+/// so it refuses (TSK-1077 review round 01 F2).
+fn held_tracking_ref(root: &Path, remote: &str) -> Result<Option<String>, String> {
+    let key = format!("remote.{remote}.fetch");
+    let mut patterns = vec![format!("refs/remotes/{remote}/")];
+    if let Some(out) = git(root, &["config", "-z", "--get-all", &key])? {
+        for spec in out.split('\0').filter(|spec| !spec.is_empty()) {
+            if spec.starts_with('^') {
+                continue;
+            }
+            let spec = spec.strip_prefix('+').unwrap_or(spec);
+            let Some((_, dst)) = spec.split_once(':') else {
+                continue;
+            };
+            if dst.is_empty() {
+                continue;
+            }
+            let pattern = match dst.find('*') {
+                Some(star) => dst[..star]
+                    .rfind('/')
+                    .map_or(&dst[..star], |slash| &dst[..=slash]),
+                None => dst,
+            };
+            if !pattern.starts_with("refs/") {
+                return Err(format!(
+                    "{key} stores into {}, which is not a full ref name, so whether this clone still tracks the destination cannot be read; run git fetch --prune {}",
+                    display_text(dst),
+                    display_text(remote)
+                ));
+            }
+            patterns.push(pattern.to_string());
+        }
+    }
+    let mut args = vec!["for-each-ref", "--count=1", "--format=%(refname)"];
+    args.extend(patterns.iter().map(String::as_str));
+    Ok(git(root, &args)?.and_then(|out| {
+        out.split('\n')
+            .find(|name| !name.is_empty())
+            .map(str::to_string)
+    }))
+}
+
 /// What judges a pushed branch's `codeflow ci` (sathyassn/codeflow#22).
 /// The authority is always a candidate: the destination's default branch,
 /// which is the pull request's target only when the request goes there.
@@ -979,29 +1027,15 @@ fn judged_by(
         // Only a destination that answered with no branches is
         // initialization; one that was not asked, or could not be, refuses.
         destination.listing(root).map_err(str::to_string)?;
-        let Some(namespace) = destination.namespace else {
+        let Some(remote) = destination.tracking else {
             return Ok(Judged::Initialization);
         };
-        let held = git(
-            root,
-            &[
-                "for-each-ref",
-                "--count=1",
-                "--format=%(refname)",
-                namespace,
-            ],
-        )?
-        .is_some_and(|out| out.split('\n').any(|name| !name.is_empty()));
-        if !held {
+        let Some(held) = held_tracking_ref(root, remote)? else {
             return Ok(Judged::Initialization);
-        }
-        let remote = namespace
-            .strip_prefix("refs/remotes/")
-            .and_then(|rest| rest.strip_suffix('/'))
-            .unwrap_or(namespace);
+        };
         return Err(format!(
-            "the destination advertises no branches while this clone still holds tracking refs under {}, so no default branch can judge the push; run git fetch --prune {}",
-            display_text(namespace),
+            "the destination advertises no branches while this clone still holds its tracking ref {}, so no default branch can judge the push; run git fetch --prune {}",
+            display_text(&held),
             display_text(remote)
         ));
     }
@@ -1055,6 +1089,9 @@ struct Destination<'a> {
     /// The tracking namespace of a remote that fetches from `url`, for the
     /// protected-branch fallback; `None` when no tracking refs describe it.
     namespace: Option<&'a str>,
+    /// The configured remote that fetches from `url`, whose tracking refs
+    /// this clone may hold; `None` for a URL or path pushed to directly.
+    tracking: Option<&'a str>,
     policy: &'a GitPolicy,
 }
 

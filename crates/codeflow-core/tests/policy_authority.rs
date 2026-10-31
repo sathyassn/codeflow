@@ -400,6 +400,66 @@ fn asking_the_remote_runs_no_configured_command() {
     assert!(!ran.exists(), "the configured upload command ran");
 }
 
+/// Each repository setting that git would run as a command on the way to
+/// a remote: none runs when the authority asks the remote, and none can
+/// make a remote with refs read as empty (each case refuses with the fetch
+/// route). Review round 01 F1.
+#[cfg(unix)]
+#[test]
+fn no_configured_transport_command_runs_or_fabricates_initialization() {
+    let marker = tempfile::tempdir().unwrap();
+    let ran = marker.path().join("ran");
+    let touch = format!("sh -c 'touch {}' --", ran.display());
+    let touch = touch.as_str();
+    let cases: [(&str, &[(&str, &str)]); 5] = [
+        // An SSH command, for an SSH remote.
+        (
+            "ssh://example.invalid/repo.git",
+            &[("core.sshCommand", touch)],
+        ),
+        // A proxy command, for a git:// remote.
+        (
+            "git://example.invalid/repo.git",
+            &[("core.gitProxy", touch)],
+        ),
+        // A remote helper by a `vcs` name the configuration allows.
+        (
+            "https://example.invalid/repo.git",
+            &[
+                ("remote.origin.vcs", "touchy"),
+                ("protocol.touchy.allow", "always"),
+            ],
+        ),
+        // A URL rewritten to a command transport.
+        (
+            "fixture",
+            &[
+                ("url.ext::sh -c touch% /tmp/never.insteadOf", "fixture"),
+                ("protocol.ext.allow", "always"),
+            ],
+        ),
+        // A credential helper and an askpass program.
+        (
+            "http://127.0.0.1:9/repo.git",
+            &[("credential.helper", touch), ("core.askPass", touch)],
+        ),
+    ];
+    for (url, settings) in cases {
+        let f = Fixture::new(url);
+        let mut config = f.repo.config().unwrap();
+        for (key, value) in settings {
+            config.set_str(key, value).unwrap();
+        }
+        let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
+        f.on_branch(tip);
+        let error = landed_policy::load(f.root())
+            .err()
+            .unwrap_or_else(|| panic!("{url}: an unasked remote is no initialization"));
+        assert!(error.contains("git fetch origin"), "{url}: {error}");
+        assert!(!ran.exists(), "{url}: a configured command ran");
+    }
+}
+
 /// AC-5: read, parse and object errors at the authority refuse; a proven
 /// absence of the policy file selects the shipped defaults even when the
 /// working copy is weakened.

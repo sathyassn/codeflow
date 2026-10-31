@@ -62,12 +62,22 @@ destination that advertises no branches is initialization only while this
 clone holds no tracking refs for it; otherwise the push is refused with the
 fetch route, never judged by the working copy. Telling a remote with refs
 from one without is the only local step that asks the remote (`git
-ls-remote`, bounded, non-interactive, never a remote name that starts with
-`-`). The guards may ask it on every command, so the question runs no
-command the repository configures: only the file, git, http, https and
-ssh transports (`GIT_ALLOW_PROTOCOL`) and git's own upload command. After TSK-1057 lands, no remote is labelled local only when its
+ls-remote`, bounded, non-interactive, never a URL that starts with `-`).
+The guards may ask it on every command, so the question runs no command
+any configuration names: it runs outside the repository with no global or
+system configuration, at the remote's one configured URL, over the file,
+http, https and ssh transports only, with plain `ssh` that reads no
+configuration file and git's own upload command. A remote that needs
+credentials cannot be asked this way, and the result is the fetch route.
+After TSK-1057 lands, no remote is labelled local only when its
 baseline holds no record for the repository; otherwise the baseline's
 policy is enforced and `doctor` names the removed remote.
+
+What TSK-1077 delivers: the guards and the path checks of the commit hooks
+read the local authority above; pre-push judges with the default branch the
+destination advertises; `codeflow ci` judges with the commit it is given
+(`--policy-from`, else `--base`). The commit hooks' levels move to the
+authority in TSK-1078, and the hosted jobs in TSK-336.
 
 **Check identity.** Mode A, chosen for this repository (decision 3): a
 dedicated GitHub App holding only Checks write creates the `authority:

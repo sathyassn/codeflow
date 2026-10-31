@@ -88,7 +88,7 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
         // or whose tracking refs were deleted, from one that holds nothing
         // yet, so the remote is asked. Only a remote that answers with no
         // refs is initialization; any other answer or a failure refuses.
-        return match advertises_refs(root, remote) {
+        return match advertises_refs(&repo, root, remote) {
             Ok(false) => unestablished(
                 &repo,
                 root,
@@ -112,13 +112,30 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
     Ok(landed)
 }
 
-/// Whether `remote` advertises any ref. The name and its URL come from the
-/// repository's configuration, so the question is restricted: a name git
-/// could read as an option is refused, and only safe transports and git's
-/// own upload command are used (see
-/// [`crate::git::remote_query::advertises_any_ref`]).
-fn advertises_refs(root: &Path, remote: &str) -> Result<bool, String> {
-    crate::git::remote_query::advertises_any_ref(root, remote)
+/// Whether `remote` advertises any ref, asked at its one configured URL.
+/// The URL comes from the repository's configuration, so the question runs
+/// no configured command (see
+/// [`crate::git::remote_query::advertises_any_ref`]); a remote with no URL,
+/// several URLs, or one that is not UTF-8 is not asked.
+fn advertises_refs(repo: &Repository, root: &Path, remote: &str) -> Result<bool, String> {
+    let config = repo.config().map_err(|e| e.to_string())?;
+    let key = format!("remote.{remote}.url");
+    let mut urls = Vec::new();
+    let mut entries = config
+        .multivar(&key, None)
+        .map_err(|e| format!("cannot read {key}: {e}"))?;
+    while let Some(entry) = entries.next() {
+        let entry = entry.map_err(|e| format!("cannot read {key}: {e}"))?;
+        let url = entry
+            .value()
+            .map_err(|_| format!("{key} is not valid UTF-8"))?;
+        urls.push(url.to_string());
+    }
+    match urls.as_slice() {
+        [url] => crate::git::remote_query::advertises_any_ref(root, url),
+        [] => Err(format!("{key} is not set")),
+        _ => Err(format!("{key} has several values")),
+    }
 }
 
 /// `refs/remotes/<remote>/HEAD`, which must name a tracking branch of the
@@ -625,11 +642,16 @@ mod tests {
         }
     }
 
-    /// A remote name git could read as an option is never passed to it.
+    /// A remote URL git could read as an option is never passed to it.
     #[test]
-    fn a_remote_name_that_reads_as_an_option_is_not_asked() {
+    fn a_remote_url_that_reads_as_an_option_is_not_asked() {
         let dir = tempfile::tempdir().unwrap();
-        let error = advertises_refs(dir.path(), "--upload-pack=touch owned").unwrap_err();
+        let repo = Repository::init(dir.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.origin.url", "--upload-pack=touch owned")
+            .unwrap();
+        let error = advertises_refs(&repo, dir.path(), "origin").unwrap_err();
         assert!(error.contains("starts with '-'"), "{error}");
         assert!(!dir.path().join("owned").exists());
     }

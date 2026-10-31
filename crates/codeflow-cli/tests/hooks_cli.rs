@@ -9449,6 +9449,72 @@ fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
     }
 }
 
+/// TSK-1077 review round 01 F2, end to end: a clone whose fetch mapping
+/// stores the default branch outside `refs/remotes/origin/` still holds a
+/// stale tracking ref when the destination stops advertising branches. The
+/// push is refused with the fetch route, never labelled initialization.
+#[test]
+fn pre_push_refuses_a_stale_ref_under_an_exact_fetch_mapping() {
+    const ZERO: &str = "0000000000000000000000000000000000000000";
+    let tmp = tempfile::tempdir().unwrap();
+    let seed = tmp.path().join("seed");
+    std::fs::create_dir(&seed).unwrap();
+    init_repo(&seed, "master");
+    let origin = tmp.path().join("origin.git");
+    let clone = tmp.path().join("work");
+    isolate_clone(codeflow_fixture::clone(tmp.path(), &seed, &origin))
+        .bare()
+        .run();
+    isolate_clone(codeflow_fixture::clone(tmp.path(), &origin, &clone)).run();
+    git(&clone, &["config", "user.email", "t@example.com"]);
+    git(&clone, &["config", "user.name", "t"]);
+    git(
+        &clone,
+        &[
+            "config",
+            "--replace-all",
+            "remote.origin.fetch",
+            "+refs/heads/master:refs/mirror/master",
+        ],
+    );
+    git(&clone, &["fetch", "-q", "origin"]);
+    git(
+        &clone,
+        &["update-ref", "--no-deref", "-d", "refs/remotes/origin/HEAD"],
+    );
+    git(&clone, &["update-ref", "-d", "refs/remotes/origin/master"]);
+    git(&clone, &["switch", "-q", "-c", "fix/review"]);
+    std::fs::write(clone.join("review.txt"), "review\n").unwrap();
+    git(&clone, &["add", "."]);
+    git(&clone, &["commit", "-q", "-m", "fix: add review"]);
+    let head = String::from_utf8_lossy(
+        &git_command()
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&clone)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    // The destination no longer advertises a branch; refs/mirror/master is
+    // the clone's only, stale, record of it.
+    git(&origin, &["update-ref", "-d", "refs/heads/master"]);
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", "origin"])
+            .arg(&origin)
+            .current_dir(&clone),
+        &format!("refs/heads/fix/review {head} refs/heads/fix/review {ZERO}\n"),
+    );
+    let text =
+        String::from_utf8_lossy(&out.stderr).to_string() + &String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("refs/mirror/master"), "{text}");
+    assert!(text.contains("run git fetch --prune origin"), "{text}");
+    assert!(!text.contains("initialization:"), "{text}");
+}
+
 #[cfg(unix)]
 #[test]
 fn unsupported_policy_fresh_and_updated_projects_commit_and_push() {

@@ -104,16 +104,19 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 ### Blocked names and protected paths
 
-`git.path_policy` defaults to `block`. The policy authority is the default
-branch at one commit (ADR-0091): pre-commit, pre-merge-commit, pre-push and
-the guards read it from `refs/remotes/<remote>/HEAD`, and `codeflow ci`
-from the commit it judges against. Pre-commit also keeps any stricter
-working-copy denials; a working copy adds no exception. CI judges all
-commits the range introduces. No integration line, task record or
-`git.root_branch` supplies an exception, a denial or a level, so a
-branch-only or line-only exception grants no access. When the authority's
-tree holds no `.codeflow/policy.json`, the shipped defaults apply; an
-unreadable authority refuses.
+`git.path_policy` defaults to `block`. Path exceptions and denials come
+from the default branch at one commit (ADR-0091). The guards and the
+path checks of pre-commit and pre-merge-commit read it at the commit
+`refs/remotes/<remote>/HEAD` names; pre-commit also keeps any stricter
+working-copy denials, and a working copy adds no exception. Pre-push
+judges with the default branch the destination advertises, and `codeflow
+ci` with the commit it is given (`--policy-from`, else `--base`; the hosted
+jobs pass the pull request's target). CI judges all commits the range
+introduces. No integration line, task record or `git.root_branch` supplies
+an exception, a denial or a level, so a branch-only or line-only exception
+grants no access. When that commit holds no `.codeflow/policy.json`, the
+shipped defaults apply; an unreadable one refuses. The commit hooks still
+take their levels from the working copy until TSK-1078 lands.
 
 - A `git.blocked_names` string without `/` is a glob on the final component.
   A sequence with `/` matches consecutive components at any depth.

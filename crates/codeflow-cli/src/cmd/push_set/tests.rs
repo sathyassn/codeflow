@@ -167,6 +167,7 @@ impl History {
             url: self.remote.path().to_str(),
             advertised: &advertised,
             namespace: None,
+            tracking: None,
             policy: &GitPolicy::default(),
         };
         let pushed = PushRef {
@@ -548,6 +549,7 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
         url: h.remote.path().to_str(),
         advertised: &advertised,
         namespace: None,
+        tracking: None,
         policy: &GitPolicy::default(),
     };
     let pushed = PushRef {
@@ -771,6 +773,7 @@ fn round_two_hook_and_local_plans_use_the_same_epic_target() {
             url: None,
             advertised: &advertised,
             namespace: None,
+            tracking: None,
             policy: &GitPolicy::default(),
         };
         let target = ci_target(
@@ -852,6 +855,7 @@ fn round_two_unavailable_destination_refuses_before_ci() {
         url: None,
         advertised: &advertised,
         namespace: None,
+        tracking: None,
         policy: &GitPolicy::default(),
     };
     let exe = h.local.path().join("ci-fixture");
@@ -964,6 +968,7 @@ fn judged_against(h: &History, name: &str, tip: &str, pushed: &[PushRef]) -> Vec
         url: h.remote.path().to_str(),
         advertised: &advertised,
         namespace: None,
+        tracking: None,
         policy: &GitPolicy::default(),
     };
     let exe = h.local.path().join("ci-fixture");
@@ -1054,9 +1059,10 @@ fn the_destination_default_branch_is_named_escaped() {
 }
 
 /// `run_ci_ranges` for `feat/work` against a destination that advertises
-/// no branches, with this clone's tracking namespace `namespace`.
+/// no branches, where `tracking` names the remote whose tracking refs this
+/// clone may hold.
 #[cfg(unix)]
-fn judged_by_an_empty_destination(h: &History, namespace: Option<&str>) -> (Vec<String>, bool) {
+fn judged_by_an_empty_destination(h: &History, tracking: Option<&str>) -> (Vec<String>, bool) {
     use std::os::unix::fs::PermissionsExt;
     let base = h.git(&["rev-parse", "HEAD"]);
     h.git(&["checkout", "-q", "-b", "feat/work", &base]);
@@ -1081,7 +1087,8 @@ fn judged_by_an_empty_destination(h: &History, namespace: Option<&str>) -> (Vec<
         fork: None,
         url: h.remote.path().to_str(),
         advertised: &advertised,
-        namespace,
+        namespace: tracking.map(|_| "refs/remotes/origin/"),
+        tracking,
         policy: &GitPolicy::default(),
     };
     let exe = h.local.path().join("ci-fixture");
@@ -1119,7 +1126,7 @@ fn stale_tracking_refs_for_an_empty_destination_refuse_with_the_fetch_route() {
     let h = History::new();
     let tip = h.git(&["rev-parse", "HEAD"]);
     h.git(&["update-ref", "refs/remotes/origin/main", &tip]);
-    let (printed, ran) = judged_by_an_empty_destination(&h, Some("refs/remotes/origin/"));
+    let (printed, ran) = judged_by_an_empty_destination(&h, Some("origin"));
     assert!(!ran, "no codeflow ci runs: {printed:#?}");
     assert!(
         printed
@@ -1140,7 +1147,7 @@ fn stale_tracking_refs_for_an_empty_destination_refuse_with_the_fetch_route() {
 #[test]
 fn an_empty_destination_without_tracking_refs_is_initialization() {
     let h = History::new();
-    let (printed, ran) = judged_by_an_empty_destination(&h, Some("refs/remotes/origin/"));
+    let (printed, ran) = judged_by_an_empty_destination(&h, Some("origin"));
     assert!(!ran, "{printed:#?}");
     assert!(
         printed
@@ -1148,6 +1155,49 @@ fn an_empty_destination_without_tracking_refs_is_initialization() {
             .any(|text| text.starts_with("initialization: ")),
         "{printed:#?}"
     );
+}
+
+/// Review round 01 F2: a stale tracking ref outside `refs/remotes/<remote>/`
+/// still refuses, under an exact fetch mapping and under a later mapping
+/// after a glob one. Before the fix only the first glob mapping was read,
+/// and both pushes were labelled initialization.
+#[cfg(unix)]
+#[test]
+fn stale_refs_under_any_fetch_mapping_refuse_with_the_fetch_route() {
+    for (mappings, stale) in [
+        (
+            &["+refs/heads/main:refs/mirror/main"][..],
+            "refs/mirror/main",
+        ),
+        (
+            &[
+                "+refs/heads/*:refs/remotes/origin/*",
+                "+refs/heads/release:refs/archive/release",
+            ][..],
+            "refs/archive/release",
+        ),
+    ] {
+        let h = History::new();
+        h.git(&[
+            "config",
+            "--replace-all",
+            "remote.origin.fetch",
+            mappings[0],
+        ]);
+        for mapping in &mappings[1..] {
+            h.git(&["config", "--add", "remote.origin.fetch", mapping]);
+        }
+        let tip = h.git(&["rev-parse", "HEAD"]);
+        h.git(&["update-ref", stale, &tip]);
+        let (printed, ran) = judged_by_an_empty_destination(&h, Some("origin"));
+        assert!(!ran, "{stale}: {printed:#?}");
+        assert!(
+            printed
+                .iter()
+                .any(|text| text.contains(stale) && text.contains("run git fetch --prune origin")),
+            "{stale}: {printed:#?}"
+        );
+    }
 }
 
 /// A check the hook runs can quote a name the destination supplied; the
