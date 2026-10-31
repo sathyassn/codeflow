@@ -1,0 +1,11 @@
+id = "TSK-1104"
+uid = "5c6a8e45-5ba6-4580-9a7e-8ddf447c43aa"
+kind = "TSK"
+title = "Read-only git stays allowed while the policy authority is unresolved"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:19:03Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
