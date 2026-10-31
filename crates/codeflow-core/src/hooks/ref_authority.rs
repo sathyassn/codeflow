@@ -779,7 +779,7 @@ mod tests {
             report
                 .violations
                 .iter()
-                .any(|v| v.message.contains("missing policy source")),
+                .any(|v| v.message.contains("the policy authority is unset")),
             "{report:?}"
         );
         assert!(!recovery_fetch("git fetch origin", dir.path()));

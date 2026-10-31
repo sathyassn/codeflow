@@ -153,6 +153,136 @@ enum Failure {
     Other(String),
 }
 
+/// The transports [`advertises_any_ref`] may use. `GIT_ALLOW_PROTOCOL`
+/// overrides every `protocol.*.allow` setting, so no configuration enables
+/// `ext::` or another remote helper, and `git://`, whose proxy is a
+/// configured command, is left out.
+pub const SAFE_PROTOCOLS: &str = "file:http:https:ssh";
+
+/// The SSH command [`advertises_any_ref`] runs: plain `ssh`, reading no
+/// configuration file and never prompting.
+const HERMETIC_SSH: &str = "ssh -F none -o BatchMode=yes";
+
+/// The only inherited variables [`advertises_any_ref`] passes on: program
+/// lookup, the SSH agent, temporary space, the Windows system variables,
+/// and network proxies, which name a host, never a command. The home is
+/// not passed on: git's HTTP transport reads a `.netrc` there whatever its
+/// configuration says (review round 03 F5), so the question runs with an
+/// empty one.
+pub const KEPT_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "SystemRoot",
+    "SYSTEMROOT",
+    "COMSPEC",
+    "PATHEXT",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SSH_AUTH_SOCK",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+];
+
+/// Whether the repository at `url` advertises any ref. The guards and the
+/// commit hooks ask it on every command while a remote's tracking
+/// namespace is empty, to tell a remote that holds nothing yet from one
+/// whose tracking refs are missing here (TSK-1077), so the question runs
+/// no command any configuration names. It runs outside the repository,
+/// with no global or system configuration (so no credential helper,
+/// `core.sshCommand`, `insteadOf` or upload command applies), plain `ssh`
+/// that reads no configuration file, only [`SAFE_PROTOCOLS`] and git's own
+/// upload command, a clean environment ([`KEPT_ENVIRONMENT`]), so no
+/// inherited git, SSH or proxy-command variable applies, and an empty home,
+/// so no stored HTTP credential (`.netrc` or `_netrc`) is sent. Only SSH
+/// keys, which prove possession without disclosing a secret, still apply.
+/// A remote that needs other credentials or a configured SSH setup
+/// therefore cannot be asked, and the caller refuses with the fetch route.
+///
+/// `url` is the remote's configured URL; a relative local path is resolved
+/// against `root`, as git resolves it there. A URL git could read as an
+/// option is refused.
+///
+/// # Errors
+///
+/// Returns why the remote could not be asked.
+pub fn advertises_any_ref(root: &Path, url: &str) -> Result<bool, String> {
+    if url.is_empty() || url.starts_with('-') {
+        return Err("the remote URL is empty or starts with '-'".into());
+    }
+    let resolved = if is_local_path(url) && Path::new(url).is_relative() {
+        root.join(url).into_os_string()
+    } else {
+        std::ffi::OsString::from(url)
+    };
+    // An empty directory outside any repository: git reads no repository
+    // configuration, and discovery stops at its parent.
+    let outside = tempfile::tempdir()
+        .map_err(|error| format!("cannot create a directory to ask from: {error}"))?;
+    let ceiling = outside
+        .path()
+        .parent()
+        .map_or_else(|| outside.path().to_path_buf(), Path::to_path_buf);
+    let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let args = ["ls-remote", "--upload-pack=git-upload-pack"];
+    let answer = ls_remote_attempts(&args, 0, || {
+        // A clean environment: no inherited git, SSH or proxy-command
+        // variable (`GIT_NAMESPACE` would select which refs a local remote
+        // advertises, review round 02 F4); only what finding the programs,
+        // the user's SSH agent and keys, and a network proxy need passes.
+        // The home is the empty directory, so libcurl finds no `.netrc`
+        // (review round 03 F5); OpenSSH finds keys through the account.
+        let mut command = crate::git::judging_command();
+        command.env_clear();
+        for name in KEPT_ENVIRONMENT {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command
+            .current_dir(outside.path())
+            .env("HOME", outside.path())
+            .env("USERPROFILE", outside.path())
+            .args(args)
+            .arg(&resolved)
+            .env("GIT_CEILING_DIRECTORIES", &ceiling)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_SYSTEM", null)
+            .env("GIT_CONFIG_GLOBAL", null)
+            .env("GIT_ALLOW_PROTOCOL", SAFE_PROTOCOLS)
+            .env("GIT_SSH_COMMAND", HERMETIC_SSH)
+            .env("LC_ALL", "C")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_ASKPASS", "false")
+            .env("SSH_ASKPASS", "false")
+            .env("SSH_ASKPASS_REQUIRE", "never");
+        bounded(command, LS_REMOTE_DEADLINE)
+    })?;
+    // Git ends each advertised ref with a newline; any other byte is a ref.
+    Ok(answer.split('\n').any(|line| !line.is_empty()))
+}
+
+/// Whether git reads `url` as a local path: no `scheme://`, and no `:`
+/// before the first `/` (the scp-like `host:path` form), except a Windows
+/// drive letter.
+fn is_local_path(url: &str) -> bool {
+    if url.contains("://") {
+        return false;
+    }
+    match url.find(':') {
+        None => true,
+        Some(colon) => {
+            url[..colon].contains('/')
+                || (cfg!(windows) && colon == 1 && url.as_bytes()[0].is_ascii_alphabetic())
+        }
+    }
+}
+
 fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure> {
     let mut command = crate::git::judging_command();
     command
@@ -164,7 +294,14 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         .env("GIT_ASKPASS", "false")
         .env("SSH_ASKPASS", "false")
         .env("SSH_ASKPASS_REQUIRE", "never")
-        .env("GIT_SSH_COMMAND", batch_ssh_command(root)?)
+        .env("GIT_SSH_COMMAND", batch_ssh_command(root)?);
+    bounded(command, deadline)
+}
+
+/// Run `command` with no input, within `deadline` (then its whole process
+/// group is killed) and [`MAX_ANSWER_BYTES`], and return its answer.
+fn bounded(mut command: std::process::Command, deadline: Duration) -> Result<String, Failure> {
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

@@ -167,6 +167,8 @@ the project accepts.
    ```sh
    git remote add origin <url>
    CODEFLOW_HUMAN_OVERRIDE=1 git push -u origin main
+   # the hooks read policy only from the default branch (ADR-0091)
+   git remote set-head origin main
    ```
 
 8. Start the first feature on a `feat/*` branch in a worktree and land it by

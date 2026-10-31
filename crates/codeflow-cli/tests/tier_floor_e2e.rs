@@ -626,6 +626,13 @@ fn human_override_lands_protected_commits_and_pushes_but_nothing_destructive() {
         "human bootstrap push refused:\n{}",
         stderr(&out)
     );
+    // TSK-1077: a push records no remote HEAD, and the default branch it
+    // names is the only policy authority, so the operator records it once.
+    git_ok(
+        &root,
+        &["remote", "set-head", "origin", &main],
+        "remote set-head",
+    );
 
     // A commit on the protected branch: refused without, made with it.
     std::fs::write(root.join("notes.txt"), "one\n").unwrap();
