@@ -1,0 +1,11 @@
+id = "TSK-1111"
+uid = "835995c8-222f-42e2-af9b-359225db2719"
+kind = "TSK"
+title = "Figure frames read as part of the page with sans labels, keyed legends and rich Details"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:19:49Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
