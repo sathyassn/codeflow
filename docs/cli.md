@@ -196,9 +196,12 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
-| `codeflow remote protect` | | Apply protected-branch policy to the remote provider |
+| `codeflow remote protect` | | Write the rulesets codeflow owns: "codeflow authority updates" and "codeflow authority checks" on the default branch, "codeflow line checks" on the integration lines, and `codeflow protect <pattern>` for each other protected branch in policy.json |
 | | `--provider <PROVIDER>` | Remote provider (only `github` has an adapter; others print the manual checklist). Default `github`. |
 | | `--dry-run` | Print the intended rules without applying anything. |
+| | `--profile <PROFILE>` | Who reviews and who moves the default branch: solo-administrator (no approval; only the administrator role updates the default branch) or independent-review (one approval, stale approvals dismissed, the last push approved by someone else; only the maintain role updates it). One of `solo-administrator`, `independent-review`. Default `solo-administrator`. |
+| | `--check-app <APP_ID>` | The id of the GitHub App that creates the authority: checks (Mode A). Without it, the trusted: checks are pinned to GitHub Actions (Mode B). |
+| | `--lines <PATTERN>` | The integration-line branch pattern "codeflow line checks" targets. Default `integration/**`. |
 
 ### Verify
 
@@ -234,6 +237,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | | `--preflight` | Print the seat, sandbox and tool evidence the orchestrator preflight reads, each value marked configured, observed or unavailable; exit 1 when Codex refuses the builder launch or a builder write is refused; when the builder write probe gives no result, the line says builder readiness is not established and the exit stays 0. |
+| | `--profile <PROFILE>` | With `--check remote-perimeter`: compare the rulesets `codeflow remote protect` owns with this profile (solo-administrator or independent-review). A non-empty bypass list on the authority or line checks fails with or without it. One of `solo-administrator`, `independent-review`. |
 | `codeflow work next` | | List ready tasks first, then landed (work merged), waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
 | | `--json` | Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`. |
@@ -500,14 +504,12 @@ note and still refuses an added, removed, renumbered or reordered
 criterion, a changed tag or checkbox form, or an added list item that is
 no criterion (ADR-0080).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
-another provider prints the manual checklist. It requires the checks in
-`git.required_checks` (by default the shipped CI job names) on a branch that
-is up to date with its base, pinned to GitHub Actions on a ruleset. It reads
-the live rules first: every active repository ruleset that already targets the
-branch is updated in place, never duplicated, and a classic protection update keeps the
-settings it does not own, such as conversation resolution. A live read that
-fails or does not parse writes nothing for that branch. `codeflow doctor
---check remote-perimeter` reads the default branch's live rules back.
+another provider prints the manual checklist. It writes only rulesets it owns
+by name, never another ruleset or classic branch protection, and never weakens
+a rule; the rulesets, profiles and recovery window are in the
+[policy reference](policy-reference.md#remote-protection). A live read that
+fails or does not parse writes nothing. `codeflow doctor --check
+remote-perimeter` reads the default branch's live rules back.
 
 ### Verify notes
 
