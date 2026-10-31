@@ -6290,6 +6290,7 @@ mod tests {
             permission_preset: "acceptEdits".into(),
             product_one_liner: "x".into(),
             release_rules: None,
+            file_size_rule: None,
         }
         .store(dir.path())
         .unwrap();

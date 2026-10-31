@@ -1669,6 +1669,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "schema-reject-only",
     ),
+    // Rejects a blank allowance reason only; the allowed path keeps its
+    // exact components and uses the comparison spelling in normalize.
+    (
+        "crates/codeflow-core/src/hooks/path_policy.rs",
+        "IgnoredFiles::allowed",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
     // A reader error blocks active integrity unless authority or integrity
     // already denies it. Inactive integrity retains independent branch checks.
     (
