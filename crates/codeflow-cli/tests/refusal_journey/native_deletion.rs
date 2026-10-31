@@ -19,11 +19,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 /// Replay a Bash payload through every installed `PreToolUse` hook of
-/// `harness`, with `TMPDIR` naming `sentinel`.
+/// `harness`, with `TMPDIR` naming `sentinel`. The payload names `cwd`;
+/// the hook process runs in `process_cwd`, an unrelated directory, so a
+/// verdict read from the process's own directory shows.
 fn replay(
     project: &Project,
     harness: &str,
-    cwd: &Path,
+    (cwd, process_cwd): (&Path, &Path),
     sentinel: &Path,
     command: &str,
 ) -> Vec<Output> {
@@ -47,6 +49,7 @@ fn replay(
             let mut child = project
                 .command("sh")
                 .args(["-c", hook["command"].as_str().unwrap()])
+                .current_dir(process_cwd)
                 .env("TMPDIR", sentinel)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -123,149 +126,218 @@ fn run_native(dir: &Path, command: &str) -> BTreeSet<String> {
     removed
 }
 
-fn has_gnu_parallel() -> bool {
-    Command::new("parallel")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains("GNU parallel"))
+/// The native tool a form's run needs beyond POSIX `sh`, `find`, `xargs`
+/// and `rm`; a form whose tool is absent is still judged by the hooks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Native {
+    Any,
+    /// GNU `parallel`.
+    Parallel,
+    /// `python3`.
+    Python,
+    /// BSD `find`, which reads `-f PATH`.
+    BsdFind,
+    /// GNU `find`, which walks `.` when no start is named.
+    GnuFind,
+}
+
+/// Whether `command --version` succeeds and prints `mark`.
+fn answers(command: &mut Command, mark: &str) -> bool {
+    command.arg("--version").output().is_ok_and(|out| {
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains(mark)
+    })
 }
 
 /// Each bypass form, with `{dir}` for its directory, the entries it needs
-/// and whether its native run needs GNU `parallel`.
-const BYPASSES: &[(&str, &[&str], bool)] = &[
+/// and the native tool its run needs.
+const BYPASSES: &[(&str, &[&str], Native)] = &[
     // PR 84 review: blanks inside a path, framed by NUL, by quotes and by
     // parallel's newline, and the round 19 option clusters.
     (
         r"printf '%s\0' '{dir}/space name/../sentinel' | xargs -0 rm -rf --",
         &["inner/", "space name -> inner"],
-        false,
+        Native::Any,
     ),
     (
         r#"printf '"{dir}/space name/../sentinel"' | xargs rm -rf"#,
         &["inner/", "space name -> inner"],
-        false,
+        Native::Any,
     ),
     (
         r"printf '{dir}/space name/../sentinel\n' | parallel rm -rf",
         &["inner/", "space name -> inner"],
-        true,
+        Native::Parallel,
     ),
     (
         r"printf '%s\0' '{dir}/space name/../sentinel' | xargs -t0 rm -rf --",
         &["inner/", "space name -> inner"],
-        false,
+        Native::Any,
     ),
     (
         r"printf '%s\0' '{dir}/space name/../sentinel' | xargs -rt0 rm -rf --",
         &["inner/", "space name -> inner"],
-        false,
+        Native::Any,
     ),
     (
         r"printf '%s\n' '{dir}/space name/../sentinel' | xargs -I{} rm -rf {}",
         &["inner/", "space name -> inner"],
-        false,
+        Native::Any,
     ),
     (
         r"printf '%s\0' '{dir}/space name/../sentinel' | xargs -0 -I{} rm -rf {}",
         &["inner/", "space name -> inner"],
-        false,
+        Native::Any,
     ),
     (
         r"printf 'sentinel\n' | xargs -I{} rm -rf '{dir}/{}'",
         &[],
-        false,
+        Native::Any,
     ),
     (
         r"printf '%s\n' '{dir}/sentinel' | xargs -n 1 rm -rf",
         &[],
-        false,
+        Native::Any,
     ),
     // Issue 102 and this task: grammars the guard read differently from
     // the native tool.
     (
         r#"printf 'x\n{dir}/sentinel\n' | xargs sh -c 'rm -rf "$2"' _"#,
         &[],
-        false,
+        Native::Any,
     ),
     (
         r"printf '{dir}/sentinel\n' > list; xargs rm -rf < list",
         &[],
-        false,
+        Native::Any,
     ),
     (
         r"printf '{dir}/sentinel\n' > list; cat list | xargs rm -rf",
         &[],
-        false,
+        Native::Any,
     ),
     (
         "cd {dir} && find tree | xargs rm -rf",
         &["tree/", "tree/x sentinel"],
-        false,
+        Native::Any,
     ),
     (
         r#"find {dir}/a -maxdepth 1 -exec sh -c 'rm -rf "$2"/../../sentinel' _ {} +"#,
         &["a/", "a/f/"],
-        false,
+        Native::Any,
     ),
     (
         r"find {dir} -name kept -execdir rm -rf ../sentinel \;",
         &[],
-        false,
+        Native::Any,
     ),
     (
         "find -L {dir}/link -name sentinel -exec rm -rf {} +",
         &["link -> ."],
-        false,
+        Native::Any,
     ),
     (
         r"find {dir} -maxdepth 0 -exec echo {dir}/sentinel \; | xargs rm -rf",
         &[],
-        false,
+        Native::Any,
     ),
-    ("parallel 'rm -rf {dir}/sentinel' ::: x", &[], true),
-    ("parallel rm -rf {.} ::: {dir}/sentinel.x", &[], true),
-    ("parallel rm -rf {1}{2} ::: {dir}/senti ::: nel", &[], true),
+    ("parallel 'rm -rf {dir}/sentinel' ::: x", &[], Native::Parallel),
+    ("parallel rm -rf {.} ::: {dir}/sentinel.x", &[], Native::Parallel),
+    ("parallel rm -rf {1}{2} ::: {dir}/senti ::: nel", &[], Native::Parallel),
     // Review 01 of PR 425: a match that is the protected directory, a path
     // built on a match through a link, and a `+` that is an argument; then
     // the same through `xargs`.
-    (r"find {dir} -name sentinel -exec rm -rf {} \;", &[], false),
-    ("find {dir} -name sentinel -exec rm -rf {} +", &[], false),
+    (r"find {dir} -name sentinel -exec rm -rf {} \;", &[], Native::Any),
+    ("find {dir} -name sentinel -exec rm -rf {} +", &[], Native::Any),
     (
         r"find {dir} -name sentinel -execdir rm -rf {} \;",
         &[],
-        false,
+        Native::Any,
     ),
-    ("find {dir} -path '*sentinel*' -delete", &[], false),
+    ("find {dir} -path '*sentinel*' -delete", &[], Native::Any),
     (
         r#"find {dir}/sub -name link -exec sh -c 'rm -rf "$1""/"' _ {} \;"#,
         &["sub/", "sub/link -> ../sentinel"],
-        false,
+        Native::Any,
     ),
     (
         r#"find {dir}/sub -name link -exec sh -c 'cd -P "$1" && rm -rf "$PWD"' _ {} \;"#,
         &["sub/", "sub/link -> ../sentinel"],
-        false,
+        Native::Any,
     ),
     (
         r#"find {dir}/sub -name link -execdir sh -c 'cd -P "$1" && rm -rf "$PWD"' _ {} \;"#,
         &["sub/", "sub/link -> ../sentinel"],
-        false,
+        Native::Any,
     ),
     (
         r"find {dir}/a -exec rm -rf + {dir}/sentinel \;",
         &["a/"],
-        false,
+        Native::Any,
     ),
     (
         "find {dir} -name sentinel -print0 | xargs -0 rm -rf",
         &[],
-        false,
+        Native::Any,
     ),
     (
         r#"find {dir}/sub -name link -print0 | xargs -0 sh -c 'cd -P "$1" && rm -rf "$PWD"' _"#,
         &["sub/", "sub/link -> ../sentinel"],
-        false,
+        Native::Any,
     ),
+    // Review 02 of PR 425: a command that is not a plain remover (an
+    // interpreter, `mv`) on a protected match, starts after `--` or BSD
+    // `-f`, and no explicit start.
+    (
+        r"find {dir} -name sentinel -exec python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' {} \;",
+        &[],
+        Native::Python,
+    ),
+    (
+        r"find {dir} -name sentinel -exec perl -e 'use File::Path qw(remove_tree); remove_tree($ARGV[0])' {} \;",
+        &[],
+        Native::Any,
+    ),
+    (
+        r"find {dir} -name sentinel -exec mv {} {dir}/moved \;",
+        &[],
+        Native::Any,
+    ),
+    (
+        "find {dir} -name sentinel -print0 | xargs -0 perl -MFile::Path=remove_tree -e 'remove_tree(@ARGV)'",
+        &[],
+        Native::Any,
+    ),
+    (
+        "find {dir} -name sentinel -print0 | xargs -0 -I{} mv {} {dir}/moved",
+        &[],
+        Native::Any,
+    ),
+    (
+        r"find -- {dir}/sentinel -maxdepth 0 -exec rm -rf {} \;",
+        &[],
+        Native::Any,
+    ),
+    (
+        r"find -f {dir}/sentinel -- -exec rm -rf {} \;",
+        &[],
+        Native::BsdFind,
+    ),
+    (
+        r"find -name sentinel -exec rm -rf {} \;",
+        &[],
+        Native::GnuFind,
+    ),
+    // A walk read line by line by `read`, whose values are every match.
+    (
+        r#"find {dir} -name sentinel | while read f; do rm -rf "$f"; done"#,
+        &[],
+        Native::Any,
+    ),
+    // F5: a relative start, read from the payload's directory; the hooks
+    // run from an unrelated directory, so the process's own would hold
+    // no protected path.
+    (r"find . -name sentinel -exec rm -rf {} \;", &[], Native::Any),
+    ("find . -path '*sentinel*' -delete", &[], Native::Any),
 ];
 
 /// Each allowed form, the entries it needs, and exactly what it removes.
@@ -305,6 +377,12 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
         &["tree/", "tree/x", "tree/y"],
         &["tree/y"],
     ),
+    // A read-only program of a walk removes nothing.
+    (
+        "find tree -name x -exec grep -l x {} +",
+        &["tree/", "tree/x", "tree/y"],
+        &[],
+    ),
 ];
 
 fn refused_by_dangerous_commands(outputs: &[Output]) -> bool {
@@ -317,22 +395,31 @@ fn refused_by_dangerous_commands(outputs: &[Output]) -> bool {
 #[test]
 fn installed_hooks_refuse_each_bypass_and_allowed_forms_delete_what_native_tools_do() {
     let project = Project::new();
-    let parallel = has_gnu_parallel();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let elsewhere = elsewhere.path().canonicalize().unwrap();
+    let gnu_find = answers(&mut Command::new("find"), "GNU");
+    let has = |native: Native| match native {
+        Native::Any => true,
+        Native::Parallel => answers(&mut Command::new("parallel"), "GNU parallel"),
+        Native::Python => answers(&mut Command::new("python3"), "Python"),
+        Native::BsdFind => !gnu_find,
+        Native::GnuFind => gnu_find,
+    };
     let mut wrong = Vec::new();
     let mut index = 0;
-    for (form, setup, needs_parallel) in BYPASSES {
+    for (form, setup, native) in BYPASSES {
         index += 1;
         let dir = form_dir(&project, index, setup);
         let sentinel = dir.join("sentinel");
         let command = form.replace("{dir}", dir.to_str().unwrap());
         for harness in ["claude", "codex"] {
-            let outputs = replay(&project, harness, &dir, &sentinel, &command);
+            let outputs = replay(&project, harness, (&dir, &elsewhere), &sentinel, &command);
             if !refused_by_dangerous_commands(&outputs) {
                 wrong.push(format!("{harness} allowed bypass: {command}: {outputs:?}"));
             }
         }
-        if *needs_parallel && !parallel {
-            eprintln!("refused; native run skipped (no GNU parallel): {command}");
+        if !has(*native) {
+            eprintln!("refused; native run skipped (tool absent on this host): {command}");
             continue;
         }
         let removed = run_native(&dir, &command);
@@ -350,7 +437,7 @@ fn installed_hooks_refuse_each_bypass_and_allowed_forms_delete_what_native_tools
         let dir = form_dir(&project, index, setup);
         let sentinel = dir.join("sentinel");
         for harness in ["claude", "codex"] {
-            for output in replay(&project, harness, &dir, &sentinel, form) {
+            for output in replay(&project, harness, (&dir, &elsewhere), &sentinel, form) {
                 if !output.status.success() {
                     wrong.push(format!(
                         "{harness} refused allowed form {form}: {}",

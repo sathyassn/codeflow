@@ -57,12 +57,19 @@ pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
 /// repository; doctor's Grok guard canary judges with it (TSK-215).
 #[must_use]
 pub fn evaluate_floor(command: &str) -> Vec<Violation> {
+    floor_in(command, None)
+}
+
+/// The floor for a command that runs in `cwd`, the hook payload's
+/// directory: relative deletion targets are read from there.
+fn floor_in(command: &str, cwd: Option<&std::path::Path>) -> Vec<Violation> {
     let policy = SecurityPolicy::defaults();
     let ctx = CheckContext {
         command,
         sandbox_bypass: false,
         current_branch: "",
         policy: &policy,
+        cwd,
     };
     DangerousModule
         .check(&ctx)
@@ -118,6 +125,24 @@ pub fn evaluate_in(
     cwd: &std::path::Path,
     root: &std::path::Path,
 ) -> Vec<Violation> {
+    evaluate_placed(command, posix, levels, integrity, cwd, root, true)
+}
+
+/// [`evaluate_in`] for a hook payload. `placed` is false when the payload
+/// named no absolute directory, so `cwd` is this process's own: the
+/// deletion reader then places no relative path, here or in any command
+/// the line's Git calls run.
+#[must_use]
+pub fn evaluate_placed(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+    placed: bool,
+) -> Vec<Violation> {
+    let placed_cwd = placed.then_some(cwd);
     // The dangerous/privilege modules read only `command`; branch, sandbox
     // bypass, and the protected-path policy are irrelevant to them, so default
     // values suffice.
@@ -127,6 +152,7 @@ pub fn evaluate_in(
         sandbox_bypass: false,
         current_branch: "",
         policy: &policy,
+        cwd: placed_cwd,
     };
 
     // A consuming repository cannot turn the catastrophic floor off or
@@ -146,7 +172,7 @@ pub fn evaluate_in(
     let mut violations = if prose {
         Vec::new()
     } else {
-        evaluate_floor(command)
+        floor_in(command, placed_cwd)
     };
     // A Git line naming a share, verbatim or device path refuses before any
     // check below can discover a repository or read its configuration
@@ -187,12 +213,17 @@ pub fn evaluate_in(
         posix,
         levels,
         integrity,
-        cwd,
+        (cwd, placed),
         root,
         &mut violations,
     );
     violations.extend(program_violations(
-        command, posix, levels, integrity, cwd, root,
+        command,
+        posix,
+        levels,
+        integrity,
+        (cwd, placed),
+        root,
     ));
     violations.extend(runs);
     if !prose && levels.privilege_escalation.is_active() {
@@ -247,14 +278,14 @@ fn program_violations(
     posix: bool,
     levels: &SecuritySection,
     integrity: PolicyLevel,
-    cwd: &std::path::Path,
+    (cwd, placed): (&std::path::Path, bool),
     root: &std::path::Path,
 ) -> Vec<Violation> {
     match crate::security::git_preflight::program_runs(command, cwd) {
         Ok(runs) => runs
             .iter()
             .flat_map(|(program, directory)| {
-                evaluate_in(program, posix, levels, integrity, directory, root)
+                evaluate_placed(program, posix, levels, integrity, directory, root, placed)
             })
             .collect(),
         Err(why) => vec![Violation::new(
@@ -279,7 +310,7 @@ fn runner_violations(
     posix: bool,
     levels: &SecuritySection,
     integrity: PolicyLevel,
-    cwd: &std::path::Path,
+    (cwd, placed): (&std::path::Path, bool),
     root: &std::path::Path,
     line: &mut Vec<Violation>,
 ) -> Vec<Violation> {
@@ -297,7 +328,7 @@ fn runner_violations(
             bodies
                 .iter()
                 .flat_map(|(body, directory)| {
-                    evaluate_in(body, posix, levels, integrity, directory, root)
+                    evaluate_placed(body, posix, levels, integrity, directory, root, placed)
                 })
                 .collect()
         }

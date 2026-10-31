@@ -672,13 +672,20 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         let _ = term_writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
         return 2;
     };
-    let violations = exec_guard::evaluate_in(
+    // A payload with no absolute directory places no relative deletion
+    // target: `cwd` is then this process's own, not the command's.
+    let placed = payload
+        .cwd
+        .as_deref()
+        .is_some_and(std::path::Path::is_absolute);
+    let violations = exec_guard::evaluate_placed(
         command,
         exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)),
         &policy.security,
         policy.git.hook_integrity,
         &cwd,
         &root,
+        placed,
     );
     exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
 }

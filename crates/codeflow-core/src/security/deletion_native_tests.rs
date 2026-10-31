@@ -91,6 +91,51 @@ enum Needs {
     GnuXargs,
     /// GNU `parallel`.
     Parallel,
+    /// GNU `find`, which walks `.` when no start is named.
+    GnuFind,
+    /// BSD `find`, which reads `-f PATH` and clustered options.
+    BsdFind,
+    /// `python3`.
+    Python,
+}
+
+/// The native tools this host has, beyond POSIX ones.
+struct Host(Vec<Needs>);
+
+impl Host {
+    fn probe() -> Self {
+        let answers = |command: &mut Command, mark: &str| {
+            command.arg("--version").output().is_ok_and(|out| {
+                out.status.success() && String::from_utf8_lossy(&out.stdout).contains(mark)
+            })
+        };
+        let gnu_find = answers(&mut Command::new("find"), "GNU");
+        let mut has = vec![if gnu_find {
+            Needs::GnuFind
+        } else {
+            Needs::BsdFind
+        }];
+        for (needs, present) in [
+            (Needs::GnuXargs, answers(&mut Command::new("xargs"), "")),
+            (
+                Needs::Parallel,
+                answers(&mut Command::new("parallel"), "GNU parallel"),
+            ),
+            (
+                Needs::Python,
+                answers(&mut Command::new("python3"), "Python"),
+            ),
+        ] {
+            if present {
+                has.push(needs);
+            }
+        }
+        Self(has)
+    }
+
+    fn has(&self, needs: Needs) -> bool {
+        needs == Needs::Posix || self.0.contains(&needs)
+    }
 }
 
 struct Row {
@@ -378,6 +423,107 @@ fn rows() -> Vec<Row> {
             Unproven,
         ),
         row(
+            "find-print0-consumer",
+            GUARDED_BELOW,
+            "find sub -name guarded -print0 | xargs -0 perl -MFile::Path=remove_tree -e 'remove_tree(@ARGV)'",
+            Unproven,
+        ),
+        row(
+            "find-print0-consumer",
+            GUARDED_BELOW,
+            "find sub -name guarded -print0 | xargs -0 -I{} mv {} moved",
+            Unproven,
+        ),
+        row(
+            "find-print0-consumer",
+            GUARDED_BELOW,
+            "find sub -name guarded -print0 | xargs -0 command rm -rf",
+            Unproven,
+        ),
+        needing(
+            row(
+                "find-print0-consumer",
+                GUARDED_BELOW,
+                "find sub -name guarded -print0 | parallel -0 perl -MFile::Path=remove_tree -e 'remove_tree(@ARGV)'",
+                Unproven,
+            ),
+            Needs::Parallel,
+        ),
+        row(
+            "find-print0-reader",
+            TREE,
+            "find sub -print0 | xargs -0 grep -l fixture",
+            Exact,
+        ),
+        row(
+            "find-print0-reader",
+            TREE,
+            "find sub -type f -print0 | xargs -0 wc -l",
+            Exact,
+        ),
+        // Starts: options both tools read, `--` and BSD `-f`.
+        row(
+            "find-starts",
+            GUARDED_BELOW,
+            r"find -- sub -name guarded -exec rm -rf {} \;",
+            Refused,
+        ),
+        row(
+            "find-starts",
+            GUARDED_BELOW,
+            r"find -- sub/guarded -maxdepth 0 -exec rm -rf {} \;",
+            Refused,
+        ),
+        needing(
+            row(
+                "find-starts",
+                GUARDED_BELOW,
+                r"find -f sub/guarded -- -exec rm -rf {} \;",
+                Refused,
+            ),
+            Needs::BsdFind,
+        ),
+        row("find-starts", TREE, "find -P sub -name y -delete", Within),
+        needing(
+            row(
+                "find-starts-other",
+                GUARDED_BELOW,
+                r"find -name guarded -exec rm -rf {} \;",
+                Unproven,
+            ),
+            Needs::GnuFind,
+        ),
+        needing(
+            row(
+                "find-starts-other",
+                GUARDED_BELOW,
+                "find -dx sub -path '*guarded*' -delete",
+                Unproven,
+            ),
+            Needs::BsdFind,
+        ),
+        needing(
+            row(
+                "find-starts-other",
+                GUARDED_BELOW,
+                "find -fsub -- -path '*guarded*' -delete",
+                Unproven,
+            ),
+            Needs::BsdFind,
+        ),
+        row(
+            "find-read",
+            GUARDED_BELOW,
+            r#"find sub -name guarded | while read f; do rm -rf "$f"; done"#,
+            Unproven,
+        ),
+        row(
+            "find-read",
+            GUARDED_BELOW,
+            r#"find sub -name guarded > list; while IFS= read -r f; do rm -rf "$f"; done < list"#,
+            Unproven,
+        ),
+        row(
             "find-print-blanks",
             &["sub/", "sub/x y", "y", "keep"],
             "find sub | xargs rm -rf",
@@ -475,6 +621,53 @@ fn rows() -> Vec<Row> {
             r"find sub -name z -execdir rm -rf x \;",
             Unproven,
         ),
+        // Round 02: a command that is not a plain remover reaches a
+        // protected match.
+        needing(
+            row(
+                "find-exec-other",
+                GUARDED_BELOW,
+                r"find sub -name guarded -exec python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' {} \;",
+                Unproven,
+            ),
+            Needs::Python,
+        ),
+        row(
+            "find-exec-other",
+            GUARDED_BELOW,
+            r"find sub -name guarded -exec perl -e 'use File::Path qw(remove_tree); remove_tree($ARGV[0])' {} \;",
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
+            GUARDED_BELOW,
+            r"find sub -name guarded -exec mv {} moved \;",
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
+            GUARDED_BELOW,
+            r"find sub -name guarded -exec env rm -rf {} \;",
+            Unproven,
+        ),
+        row(
+            "find-exec-other",
+            GUARDED_BELOW,
+            r"find sub -name guarded -exec /bin/rm -rf {} \;",
+            Unproven,
+        ),
+        row(
+            "find-exec-read",
+            TREE,
+            r"find sub -name y -exec grep -l fixture {} +",
+            Exact,
+        ),
+        row(
+            "find-exec-read",
+            TREE,
+            r"find sub -type f -execdir cat {} \;",
+            Exact,
+        ),
         row(
             "find-follow",
             &["sub/", "sub/link -> ../out", "out/", "out/x", "keep"],
@@ -515,14 +708,6 @@ fn rows() -> Vec<Row> {
             Exact,
         ),
     ]
-}
-
-/// Whether this host's `xargs` is GNU's: only GNU's answers `--version`.
-fn gnu_xargs() -> bool {
-    Command::new("xargs")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| out.status.success())
 }
 
 /// Create the row's entries under `base`.
@@ -632,7 +817,7 @@ fn fixture_dir() -> tempfile::TempDir {
 }
 
 /// Run one row; `Err` holds why it disagrees, `Ok(None)` a skip.
-fn check(row: &Row, gnu_xargs: bool, parallel: bool) -> Result<Option<String>, String> {
+fn check(row: &Row, host: &Host) -> Result<Option<String>, String> {
     let dir = fixture_dir();
     let base = dir.path().canonicalize().unwrap();
     build(&base, row.setup);
@@ -655,12 +840,7 @@ fn check(row: &Row, gnu_xargs: bool, parallel: bool) -> Result<Option<String>, S
         (_, Some(found)) => return Err(format!("expected allowed, guard refused: {found:?}")),
         (_, None) => {}
     }
-    let runs = match row.needs {
-        Needs::Posix => true,
-        Needs::GnuXargs => gnu_xargs,
-        Needs::Parallel => parallel,
-    };
-    if !runs {
+    if !host.has(row.needs) {
         return Ok(Some(format!("skipped: no {:?} on this host", row.needs)));
     }
     let output = run_native(&base, &row.command);
@@ -701,14 +881,10 @@ fn check(row: &Row, gnu_xargs: bool, parallel: bool) -> Result<Option<String>, S
 #[cfg(unix)]
 #[test]
 fn native_tools_remove_what_the_guard_judged() {
-    let gnu_xargs = gnu_xargs();
-    let parallel = Command::new("parallel")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains("GNU parallel"));
+    let host = Host::probe();
     let mut failures = Vec::new();
     for row in rows() {
-        match check(&row, gnu_xargs, parallel) {
+        match check(&row, &host) {
             Ok(None) => eprintln!("ok      {:<28} {:?}", row.grammar, row.command),
             Ok(Some(skip)) => eprintln!("skip    {:<28} {:?} ({skip})", row.grammar, row.command),
             Err(why) => {

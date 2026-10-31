@@ -152,12 +152,18 @@
 //! | `parallel-replacement-strings` | `{.}`, `{/}`, `{//}`, `{#}`, `{1}`, `{= … =}` and every other brace form | unproven |
 //! | `parallel-sources` | a second `:::` list, `::::` files and `:::+` linked lists | unproven |
 //! | `parallel-options` | every option other than `-0`, `--null`, `-d`, `-I`, `-j`, `-P`, `-r`, `-t` | unproven |
-//! | `find-print0` | `find -print0` into a plain remover by `xargs -0` or `parallel -0`: each value is a start or a path below it, and a protected directory below a start is refused | modelled |
-//! | `find-print0-consumer` | a `find` list given to anything but a plain remover whose operands are the values: a shell, `eval` or other operands | unproven |
+//! | `find-starts` | the starts after `-H`, `-L`, `-P`, `-E`, `-X`, `-d`, `-s`, `-x`, `-D ARG`, `-O<digits>`, `-f PATH` (a start) and `--`, up to a primary both BSD and GNU `find` know | modelled |
+//! | `find-starts-other` | no explicit start, a clustered or attached option (`-dx`, `-fPATH`), any other leading option, a first expression word one `find` reads as a path, and `-files0-from` | unproven |
+//! | `find-print0` | `find -print0` into a plain remover by `xargs -0` or `parallel -0`: each value is a start or a path below it, and a protected directory at or below a start is refused | modelled |
+//! | `find-print0-reader` | `find -print0` into a read-only program (`grep`, `cat`, `wc`, `ls` and the like), which removes nothing | modelled |
+//! | `find-print0-consumer` | a `find` list that `xargs` or `parallel` gives to anything else: an interpreter, `mv`, a shell, a launcher, other operands | unproven |
+//! | `find-read` | a `find` walk read by `read` or `mapfile`, whose values are every path below its starts | unproven |
+//! | `find-pipe-program` | a `find` list piped straight into a program in another language (`python3`, `perl`, `awk`), whose deletions the reader does not see, as with a path written in that program | untested |
 //! | `find-print-blanks` | `find` output framed by blanks, quotes or newlines, which a name below the start may hold | unproven |
-//! | `find-delete` | `-delete`: the start's tree, and a protected directory below a start is refused | modelled |
-//! | `find-exec` | `-exec`, `-ok` with `;` or `{} +` running a plain remover whose operands are only `{}`: each match is judged as the start's tree, and a protected directory below a start is refused | modelled |
-//! | `find-exec-other` | any other command `find` runs that removes: a shell, `eval`, `cd` chains, `{}` inside a longer word, another operand, or a `+` that does not follow `{}` | unproven |
+//! | `find-delete` | `-delete`: the start's tree, and a protected directory at or below a start is refused | modelled |
+//! | `find-exec` | `-exec`, `-ok` with `;` or `{} +` running a plain remover (`rm`, `rmdir`, `unlink`, `shred`, `srm` by that bare name) whose other words are options and `{}`: each match is judged as the start's tree, and a protected directory at or below a start is refused | modelled |
+//! | `find-exec-read` | `-exec`, `-execdir` running a read-only program by its bare name, with `{}` only as a whole word | modelled |
+//! | `find-exec-other` | any other command `find` runs: an interpreter, `mv`, a shell, a launcher, a path to a program, `{}` inside a longer word, another operand, or a `+` that does not follow `{}` | unproven |
 //! | `find-execdir` | `-execdir`, `-okdir` running a plain remover whose operands are only `{}`, judged as `find-exec` | modelled |
 //! | `find-follow` | `-L`, `-follow`: the walk leaves its starts through links | unproven |
 //! | `find-other-output` | `-printf`, `-fprint`, `-ls`, `-exec` and the like piped on: output that is not the walk | unproven |
@@ -199,6 +205,7 @@ pub(super) struct Unproven {
 
 /// The protected deletion `command` performs, read from the process's
 /// working directory.
+#[cfg(test)]
 pub(super) fn composed_deletion(command: &str) -> Option<Found> {
     let base = std::env::current_dir().ok();
     composed_deletion_in(command, base.as_deref())
@@ -1920,6 +1927,8 @@ mod why {
     pub const READ_INPUT: &str =
         "input the guard cannot see (`read` from a file or an unknown command)";
     pub const MAPFILE: &str = "`mapfile` input the guard cannot see";
+    pub const WALK_READ: &str = "a `find` walk read by `read` or `mapfile`, whose values are \
+        every path below its starts, which the guard does not list";
     pub const GETOPTS: &str = "`getopts`";
     pub const CASE: &str = "a case-converting attribute (`declare -u`, `-l` or `-c`)";
     pub const DECLARE: &str = "a declaration option the guard does not model";
@@ -1943,12 +1952,16 @@ mod why {
         delimiter a name may hold; frame it with `-print0` and `xargs -0`";
     pub const BATCH: &str = "more `xargs` input than one invocation is proven to hold";
     pub const FOLLOW: &str = "a `find` walk that follows links out of its start";
+    pub const FIND_BODY: &str = "a command `find` runs on its matches other than `rm`, \
+        `rmdir`, `unlink`, `shred` or `srm` with options and `{}` operands, the only form \
+        the guard models";
+    pub const FIND_CONSUMER: &str = "a `find` list given to a command other than `rm`, \
+        `rmdir`, `unlink`, `shred` or `srm` with options and the listed paths, the only form \
+        the guard models";
     pub const EXECDIR: &str = "a `find -execdir` command run in each match's directory";
-    pub const FIND_BODY: &str = "a command `find` runs that removes something other than \
-        its matches alone: only `rm`, `rmdir`, `unlink`, `shred` or `srm` with options and `{}` \
-        operands is modelled";
-    pub const FIND_CONSUMER: &str = "a `find` list given to a command other than a plain \
-        remover whose operands are the listed paths";
+    pub const FIND_PLACE: &str = "a `find` start the guard cannot place on disk";
+    pub const FIND_STARTS: &str = "`find` starts the guard cannot read exactly: name each \
+        start explicitly after the options `-H`, `-L`, `-P` or `--`";
     pub const PARALLEL_SOURCES: &str =
         "a `parallel` input source other than one `:::` list or the standard input";
     pub const PARALLEL_REPLACEMENT: &str =
@@ -3645,7 +3658,7 @@ impl Reader<'_> {
                     at += 1;
                 }
                 let name = argv.get(at).map_or("MAPFILE", String::as_str);
-                let values: Values = match fed {
+                let mut values: Values = match &fed {
                     Some(fed) if fed.complete && modelled => fed
                         .items
                         .iter()
@@ -3665,6 +3678,11 @@ impl Reader<'_> {
                         .collect(),
                     _ => [taint(why::MAPFILE)].into(),
                 };
+                // A walk's start stands for every path below it, which
+                // the reader does not list.
+                if fed.is_some_and(|fed| fed.items.iter().any(|item| item.tree)) {
+                    values.insert(taint(why::WALK_READ));
+                }
                 st.arrays.insert(name.to_string());
                 st.set(name, values);
             }
@@ -4333,6 +4351,10 @@ impl Reader<'_> {
             return;
         }
         let items = fed.map(|f| f.items).unwrap_or_default();
+        // A walk's value is a start, which `read` gives first, and stands
+        // for every path below it, which `read` gives one line at a time
+        // and the reader does not list.
+        let walk = items.iter().any(|item| item.tree);
         let mut per_name: Vec<Values> = vec![Values::new(); names.len()];
         let mut elements = Values::new();
         for item in &items {
@@ -4355,11 +4377,17 @@ impl Reader<'_> {
             if values.is_empty() {
                 values.insert(String::new());
             }
+            if walk {
+                values.insert(taint(why::WALK_READ));
+            }
             st.set(name, values);
         }
         if let Some(array) = array {
             if elements.is_empty() {
                 elements.insert(String::new());
+            }
+            if walk {
+                elements.insert(taint(why::WALK_READ));
             }
             st.arrays.insert(array.clone());
             st.set(&array, elements);
@@ -4461,50 +4489,45 @@ impl Reader<'_> {
         self.judge_paths(operands, st, ambiguous);
     }
 
-    /// `find`: a deletion over a protected start is refused whatever its
-    /// tests (`-name` selects within the tree, it never proves the tree
-    /// safe). A match is any path below a start, so a deletion is also
-    /// refused when a protected directory lies below a start
-    /// ([`protected_below`]): a test may select exactly that directory.
-    ///
-    /// The only removing command modelled is a plain remover whose operands
-    /// are `{}` ([`plain_remover`]); any other (a shell, `eval`, a `cd`
-    /// chain, `{}/x`, another operand) is unproven, since its path is
-    /// built from a match the reader does not list. A walk that follows
-    /// links (`-L`, `-follow`) reaches paths outside its starts, so a
-    /// deletion in it is unproven. Each command is also read on its own
-    /// with `{}` as each start; an `-execdir` or `-okdir` command runs in
-    /// each match's directory, which the reader does not know, so there
-    /// `{}` is the start's absolute path and the directory is unknown.
+    /// `find` with an action (`-delete`, `-exec`, `-execdir`, `-ok`,
+    /// `-okdir`), proven only in one shape. Its starts must read exactly
+    /// ([`parse_find`]). A deletion is refused when a start is protected
+    /// or a protected directory lies at or below a start, where it really
+    /// lands included ([`protected_below`]): a test may select exactly that
+    /// directory. Each command it runs must be a plain remover of `{}`
+    /// ([`plain_remover`]) or a read-only program ([`read_only`]); any other
+    /// is unproven, since it may reach any match or a path built from one.
+    /// A walk that follows links (`-L`, `-follow`) reaches paths outside
+    /// its starts, so a deletion in it is unproven.
     fn judge_find(&mut self, args: &[String], st: &State, ambiguous: bool) {
-        let mut at = 0;
-        while let Some(arg) = args.get(at) {
-            match arg.as_str() {
-                "-H" | "-L" | "-P" => at += 1,
-                "-D" => at += 2,
-                _ if arg.starts_with("-O") => at += 1,
-                _ => break,
-            }
+        if !find_acts(args) {
+            return;
         }
-        let options = &args[..at.min(args.len())];
-        let rest = args.get(at..).unwrap_or_default();
-        let starts_end = rest
-            .iter()
-            .position(|a| a.starts_with('-') || matches!(a.as_str(), "(" | "!" | ","))
-            .unwrap_or(rest.len());
-        let (starts, expression) = rest.split_at(starts_end);
-        let dot = [".".to_string()];
-        let starts = if starts.is_empty() { &dot[..] } else { starts };
-        let bodies = exec_bodies(expression);
-        let deletes = expression.iter().any(|a| a == "-delete")
-            || bodies.iter().any(|body| runs_remover(&body.words, 0));
+        let call = match parse_find(args) {
+            Ok(call) => call,
+            Err(reason) => {
+                self.report(
+                    Judged::Unproven(Unproven {
+                        reason: reason.into(),
+                        cwd: false,
+                    }),
+                    ambiguous,
+                );
+                return;
+            }
+        };
+        let bodies = exec_bodies(call.expression);
+        let deletes = call.expression.iter().any(|a| a == "-delete")
+            || bodies
+                .iter()
+                .any(|body| plain_remover(&body.words, Some("{}")));
         if deletes {
-            self.judge_paths(starts.iter().map(String::as_str), st, ambiguous);
-            self.judge_below(starts.iter().map(String::as_str), st);
+            self.judge_paths(call.starts.iter().map(String::as_str), st, ambiguous);
+            self.judge_below(call.starts.iter().map(String::as_str), st);
             if self.done() {
                 return;
             }
-            if find_follows(options, expression) {
+            if call.follows {
                 self.report(
                     Judged::Unproven(Unproven {
                         reason: why::FOLLOW.into(),
@@ -4514,40 +4537,49 @@ impl Reader<'_> {
                 );
             }
         }
-        for body in bodies {
-            if runs_remover(&body.words, 0) && !plain_remover(&body.words, Some("{}")) {
-                self.report(
-                    Judged::Unproven(Unproven {
-                        reason: why::FIND_BODY.into(),
-                        cwd: false,
-                    }),
-                    ambiguous,
-                );
-            }
-            for start in starts {
+        // Only a plain remover or a read-only program of `{}` is a proven
+        // command on matches the reader does not list; any other (an
+        // interpreter, `mv`, a shell, a launcher, an unknown program) may
+        // reach any of them, or past them.
+        if bodies.iter().any(|body| {
+            !plain_remover(&body.words, Some("{}")) && !read_only(&body.words, Some("{}"))
+        }) {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: why::FIND_BODY.into(),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+        }
+        // Each command is also read on its own with `{}` as each start, so
+        // a protected path it names is refused as the `rm` check names it.
+        // An `-execdir` or `-okdir` command runs in each match's directory,
+        // which the reader does not know: there `{}` is the start's
+        // absolute path and the directory is unknown.
+        for body in &bodies {
+            for start in &call.starts {
+                let mut there = st.clone();
+                let mut values = Vec::new();
                 if body.in_match_dir {
-                    let mut there = st.clone();
                     there.set_cwd([taint(why::EXECDIR)].into());
                     for cwd in &st.cwd {
-                        let absolute = match resolve(cwd, start) {
+                        values.push(match resolve(cwd, start) {
                             Ok(path) if path.starts_with('/') => path,
                             Ok(path) => self
                                 .absolute(&path)
                                 .and_then(|path| path.to_str().map(str::to_string))
                                 .unwrap_or_else(|| taint(why::EXECDIR)),
                             Err(reason) => taint(&reason),
-                        };
-                        let line: Vec<String> = body
-                            .words
-                            .iter()
-                            .map(|w| w.replace("{}", &absolute))
-                            .collect();
-                        self.exec(&line, &there, None, false, ambiguous);
+                        });
                     }
                 } else {
+                    values.push(start.clone());
+                }
+                for value in values {
                     let line: Vec<String> =
-                        body.words.iter().map(|w| w.replace("{}", start)).collect();
-                    self.exec(&line, st, None, false, ambiguous);
+                        body.words.iter().map(|w| w.replace("{}", &value)).collect();
+                    self.exec(&line, &there, None, false, ambiguous);
                 }
             }
         }
@@ -4559,11 +4591,16 @@ impl Reader<'_> {
     fn judge_below<'p>(&mut self, starts: impl IntoIterator<Item = &'p str>, st: &State) {
         for start in starts {
             for cwd in &st.cwd {
-                let Ok(path) = resolve(cwd, start) else {
-                    continue;
+                let path = match resolve(cwd, start) {
+                    Ok(path) => path,
+                    Err(reason) => {
+                        self.unplaced_start(&reason);
+                        return;
+                    }
                 };
-                if unproven(&path).is_some() {
-                    continue;
+                if let Some(reason) = unproven(&path) {
+                    self.unplaced_start(reason);
+                    return;
                 }
                 let absolute = if path.starts_with('/') {
                     Some(path.clone())
@@ -4571,10 +4608,16 @@ impl Reader<'_> {
                     self.absolute(&path)
                         .and_then(|path| path.to_str().map(str::to_string))
                 };
+                // A start the reader cannot place, or one that exists but
+                // does not resolve, may hold anything.
                 let Some(absolute) = absolute else {
-                    continue;
+                    self.unplaced_start(why::FIND_PLACE);
+                    return;
                 };
-                let real = self.real_path(&absolute);
+                let Ok(real) = self.real_path_checked(&absolute) else {
+                    self.unplaced_start(why::FIND_PLACE);
+                    return;
+                };
                 let found = protected_below(&absolute)
                     .or_else(|| real.as_deref().and_then(protected_below));
                 if let Some(target) = found {
@@ -4585,29 +4628,15 @@ impl Reader<'_> {
         }
     }
 
-    /// Values from a `find` walk name its starts and every path below
-    /// them: refuse a protected directory below a start, and a consumer
-    /// other than a plain remover of those values (`other_consumer`).
-    fn judge_tree_starts(
-        &mut self,
-        starts: &[String],
-        st: &State,
-        ambiguous: bool,
-        other_consumer: impl FnOnce() -> bool,
-    ) {
-        if starts.is_empty() {
-            return;
-        }
-        self.judge_below(starts.iter().map(String::as_str), st);
-        if other_consumer() {
-            self.report(
-                Judged::Unproven(Unproven {
-                    reason: why::FIND_CONSUMER.into(),
-                    cwd: false,
-                }),
-                ambiguous,
-            );
-        }
+    /// Refuse a deletion below a `find` start the reader cannot place.
+    fn unplaced_start(&mut self, reason: &str) {
+        self.report(
+            Judged::Unproven(Unproven {
+                reason: reason.into(),
+                cwd: false,
+            }),
+            false,
+        );
     }
 
     /// `xargs CMD`: the command alone, then the command with every input
@@ -4622,13 +4651,53 @@ impl Reader<'_> {
         let inner = options.command;
         self.exec(inner, st, None, false, ambiguous);
         let entries = input_entries(input, options.delimiter);
+        let replace = options.replace.as_deref();
+        let remover = self.walk_consumer(
+            &entries,
+            plain_remover(inner, replace),
+            read_only(inner, replace),
+            ambiguous,
+        );
         let starts = tree_starts(&entries);
-        self.judge_xargs_entries(inner, options.replace.as_deref(), entries, st, ambiguous);
+        self.judge_xargs_entries(inner, replace, entries, st, ambiguous);
         // After the values themselves, so a protected start is named as
         // the `rm` check names it.
-        self.judge_tree_starts(&starts, st, ambiguous, || {
-            runs_remover(inner, 0) && !plain_remover(inner, options.replace.as_deref())
-        });
+        if remover {
+            self.judge_below(starts.iter().map(String::as_str), st);
+        }
+    }
+
+    /// Judge the consumer of a `find` walk's values among `entries`, and
+    /// say whether every path below the walk's starts must be judged too.
+    /// A plain remover is proven: it is judged on the values and on every
+    /// path below their starts. A read-only program of a walk whose starts
+    /// are known needs nothing more. Any other consumer, or a read-only
+    /// one of a walk the reader could not read, is unproven.
+    fn walk_consumer(
+        &mut self,
+        entries: &[Input],
+        remover: bool,
+        reader: bool,
+        ambiguous: bool,
+    ) -> bool {
+        let mut walk = entries.iter().filter(|item| item.tree).peekable();
+        if walk.peek().is_none() {
+            return false;
+        }
+        if remover {
+            return true;
+        }
+        let known = walk.all(|item| unproven(&item.value).is_none());
+        if !(reader && known) {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: why::FIND_CONSUMER.into(),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+        }
+        false
     }
 
     /// Run `xargs`'s command on its values: once per line with `-I`, else
@@ -4777,6 +4846,13 @@ impl Reader<'_> {
                 })
                 .collect()
         };
+        let inert = shell_inert(command, token);
+        let remover = self.walk_consumer(
+            &entries,
+            inert && plain_remover(command, Some(token)),
+            inert && read_only(command, Some(token)),
+            ambiguous,
+        );
         let starts = tree_starts(&entries);
         // GNU `parallel` joins the command's words with blanks and runs the
         // line in a shell, with each value quoted in place of `{}` or after
@@ -4810,11 +4886,9 @@ impl Reader<'_> {
             }
         }
         self.depth -= 1;
-        self.judge_tree_starts(&starts, st, ambiguous, || {
-            let text = ["sh".to_string(), "-c".to_string(), command.join(" ")];
-            !plain_remover(command, Some(token))
-                && (runs_remover(command, 0) || runs_remover(&text, 0))
-        });
+        if remover {
+            self.judge_below(starts.iter().map(String::as_str), st);
+        }
     }
 
     /// `rsync --delete…` deletes in its destination, and
@@ -5825,44 +5899,35 @@ impl Reader<'_> {
                             });
                         }
                     }
-                    "find" => {
-                        let options: Vec<String> = argv[1..]
-                            .iter()
-                            .take_while(|a| matches!(a.as_str(), "-H" | "-L" | "-P"))
-                            .cloned()
-                            .collect();
-                        let starts: Vec<&String> = argv[1 + options.len()..]
-                            .iter()
-                            .take_while(|a| {
-                                !a.starts_with('-') && !matches!(a.as_str(), "(" | "!" | ",")
-                            })
-                            .collect();
-                        let expression = &argv[1 + options.len() + starts.len()..];
-                        if expression
-                            .iter()
-                            .any(|a| FIND_OTHER_OUTPUT.contains(&a.as_str()))
-                        {
-                            complete = false;
+                    // A walk the reader cannot read is a value it cannot
+                    // place, still from a walk.
+                    "find" => match parse_find(&argv[1..]) {
+                        Ok(call) => {
+                            if call
+                                .expression
+                                .iter()
+                                .any(|a| FIND_OTHER_OUTPUT.contains(&a.as_str()))
+                            {
+                                complete = false;
+                            }
+                            if call.follows {
+                                out.push(Input {
+                                    value: taint(why::FOLLOW),
+                                    tree: true,
+                                });
+                            }
+                            for start in call.starts {
+                                out.push(Input {
+                                    value: start,
+                                    tree: true,
+                                });
+                            }
                         }
-                        if find_follows(&options, expression) {
-                            out.push(Input {
-                                value: taint(why::FOLLOW),
-                                tree: false,
-                            });
-                        }
-                        if starts.is_empty() {
-                            out.push(Input {
-                                value: ".".to_string(),
-                                tree: true,
-                            });
-                        }
-                        for start in starts {
-                            out.push(Input {
-                                value: start.clone(),
-                                tree: true,
-                            });
-                        }
-                    }
+                        Err(reason) => out.push(Input {
+                            value: taint(reason),
+                            tree: true,
+                        }),
+                    },
                     // A line of text: `xargs` splits it, `read` and a shell
                     // read it whole.
                     "echo" => {
@@ -7200,6 +7265,135 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
     options
 }
 
+/// A `find` call read by the option grammar BSD and GNU `find` share.
+struct FindCall<'a> {
+    /// Every start, as the tool walks them.
+    starts: Vec<String>,
+    /// The expression after the starts.
+    expression: &'a [String],
+    /// Whether the walk follows symbolic links below its starts.
+    follows: bool,
+}
+
+/// The primaries both BSD and GNU `find` read as the start of an
+/// expression. A first expression word outside this set is a path to one
+/// of them and an expression to the other, so the starts are not known.
+const FIND_FIRST_PRIMARIES: &[&str] = &[
+    "-amin",
+    "-anewer",
+    "-atime",
+    "-cmin",
+    "-cnewer",
+    "-ctime",
+    "-delete",
+    "-depth",
+    "-empty",
+    "-exec",
+    "-execdir",
+    "-follow",
+    "-group",
+    "-iname",
+    "-inum",
+    "-ipath",
+    "-iregex",
+    "-links",
+    "-ls",
+    "-maxdepth",
+    "-mindepth",
+    "-mmin",
+    "-mount",
+    "-mtime",
+    "-name",
+    "-newer",
+    "-nogroup",
+    "-not",
+    "-nouser",
+    "-ok",
+    "-path",
+    "-perm",
+    "-print",
+    "-print0",
+    "-prune",
+    "-regex",
+    "-size",
+    "-type",
+    "-user",
+    "-xdev",
+];
+
+/// Read a `find` call's options and starts, or say why they are not known.
+///
+/// The options are exactly `-H`, `-L`, `-P` (both tools), `-E`, `-X`,
+/// `-d`, `-s`, `-x` and `-f PATH` (BSD; `-f` names a start), `-D ARG` and
+/// `-O<digits>` (GNU), and `--`, which ends them. Any other option word,
+/// a clustered or attached form, no explicit start (GNU walks `.`, BSD
+/// refuses) and `-files0-from` (GNU reads starts from a file) leave the
+/// starts unknown. The starts end at the first word that begins with `-`
+/// or is `(`, `!`, `)` or `,`; that word must be `(`, `!` or a primary in
+/// [`FIND_FIRST_PRIMARIES`].
+fn parse_find(args: &[String]) -> Result<FindCall<'_>, &'static str> {
+    let mut starts = Vec::new();
+    let mut follow_option = None;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        match arg.as_str() {
+            "--" => {
+                at += 1;
+                break;
+            }
+            "-H" | "-P" => follow_option = Some(false),
+            "-L" => follow_option = Some(true),
+            "-E" | "-X" | "-d" | "-s" | "-x" => {}
+            "-D" | "-f" => {
+                let value = args.get(at + 1).ok_or(why::FIND_STARTS)?;
+                if arg == "-f" {
+                    starts.push(value.clone());
+                }
+                at += 1;
+            }
+            _ if arg.strip_prefix("-O").is_some_and(|level| {
+                !level.is_empty() && level.bytes().all(|b| b.is_ascii_digit())
+            }) => {}
+            _ if arg.starts_with('-') && arg.len() > 1 => return Err(why::FIND_STARTS),
+            _ => break,
+        }
+        at += 1;
+    }
+    let rest = args.get(at..).unwrap_or_default();
+    let boundary = rest
+        .iter()
+        .position(|a| a.starts_with('-') || matches!(a.as_str(), "(" | "!" | ")" | ","))
+        .unwrap_or(rest.len());
+    let (named, expression) = rest.split_at(boundary);
+    if let Some(first) = expression.first() {
+        if !(matches!(first.as_str(), "(" | "!") || FIND_FIRST_PRIMARIES.contains(&first.as_str()))
+        {
+            return Err(why::FIND_STARTS);
+        }
+    }
+    starts.extend(named.iter().cloned());
+    if starts.is_empty() || expression.iter().any(|a| a == "-files0-from") {
+        return Err(why::FIND_STARTS);
+    }
+    Ok(FindCall {
+        starts,
+        expression,
+        follows: follow_option == Some(true) || expression.iter().any(|a| a == "-follow"),
+    })
+}
+
+/// Whether a `find` expression acts on its matches: `-delete`, or a
+/// command run by `-exec`, `-execdir`, `-ok` or `-okdir`. Read word by
+/// word, so an argument spelled like an action counts as one.
+fn find_acts(expression: &[String]) -> bool {
+    expression.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "-delete" | "-exec" | "-execdir" | "-ok" | "-okdir"
+        )
+    })
+}
+
 /// A command a `find` expression runs.
 struct ExecBody {
     words: Vec<String>,
@@ -7235,18 +7429,6 @@ fn exec_bodies(expression: &[String]) -> Vec<ExecBody> {
     bodies
 }
 
-/// Whether `find`'s options and expression make it follow symbolic links
-/// below its starts: the last of `-H`, `-L` and `-P` is `-L`, or the
-/// expression holds `-follow`.
-fn find_follows(options: &[String], expression: &[String]) -> bool {
-    options.iter().rev().find_map(|a| match a.as_str() {
-        "-L" => Some(true),
-        "-H" | "-P" => Some(false),
-        _ => None,
-    }) == Some(true)
-        || expression.iter().any(|a| a == "-follow")
-}
-
 /// The `find` primaries that print something other than the matched path
 /// on its own line or record, or that write a file: their output is not
 /// the walk the reader lists.
@@ -7264,45 +7446,90 @@ fn tree_starts(entries: &[Input]) -> Vec<String> {
         .collect()
 }
 
-/// Whether a command is a plain remover: `rm`, `rmdir`, `unlink`,
-/// `shred` or `srm` behind launchers, whose other words are options, `--`
-/// or `token` itself; with no token (`xargs` appending its values), no
-/// operand at all. Only these remove exactly the paths they are given.
+/// Whether a command is a plain remover: its first word is exactly `rm`,
+/// `rmdir`, `unlink`, `shred` or `srm` (no path, no launcher), and its
+/// other words are options, `--` or `token` itself; with no token
+/// (`xargs` appending its values), no operand at all. Only these remove
+/// exactly the paths they are given.
 fn plain_remover(words: &[String], token: Option<&str>) -> bool {
-    let Some(run) = unwrap(words) else {
+    proven_body(words, token, &["rm", "rmdir", "unlink", "shred", "srm"])
+}
+
+/// Whether a command only reads what it is given: its first word is
+/// exactly a program that never removes or writes a file (no path, no
+/// launcher), and every other word is `token` itself or holds no brace,
+/// so no match is spliced into a longer word.
+fn read_only(words: &[String], token: Option<&str>) -> bool {
+    const READERS: &[&str] = &[
+        "grep",
+        "egrep",
+        "fgrep",
+        "cat",
+        "head",
+        "tail",
+        "wc",
+        "ls",
+        "stat",
+        "du",
+        "md5sum",
+        "sha1sum",
+        "sha256sum",
+        "shasum",
+        "echo",
+        "printf",
+    ];
+    let Some((first, rest)) = words.split_first() else {
         return false;
     };
-    let Some((first, rest)) = run.argv.split_first() else {
+    READERS.contains(&first.as_str())
+        && rest
+            .iter()
+            .all(|word| token.is_some_and(|token| word == token) || !word.contains('{'))
+}
+
+/// A command whose first word is exactly one of `programs` and whose
+/// other words are options without a brace, `--`, or exactly `token`.
+fn proven_body(words: &[String], token: Option<&str>, programs: &[&str]) -> bool {
+    let Some((first, rest)) = words.split_first() else {
         return false;
     };
-    if !matches!(
-        program_name(first).as_str(),
-        "rm" | "rmdir" | "unlink" | "shred" | "srm"
-    ) {
+    if !programs.contains(&first.as_str()) {
         return false;
     }
     let mut options = true;
     rest.iter().all(|word| {
+        if token.is_some_and(|token| word == token) {
+            return true;
+        }
         if options && word == "--" {
             options = false;
             return true;
         }
-        if options && word.starts_with('-') && word != "-" {
-            return true;
-        }
-        token.is_some_and(|token| word == token)
+        options && word.starts_with('-') && word != "-" && !word.contains('{')
     })
 }
 
-/// Whether a protected directory lies strictly below `dir`: a system
+/// Whether `parallel` may join `words` into shell text unchanged: each is
+/// `token` itself, which `parallel` replaces with a quoted value, or holds
+/// only letters, digits and `-_.=,/`.
+fn shell_inert(words: &[String], token: &str) -> bool {
+    words.iter().all(|word| {
+        word == token
+            || word
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.=,/".contains(&b))
+    })
+}
+
+/// Whether a protected directory lies at or below `dir`: a system
 /// directory, a top-level collection, a home directory or a temp root.
-/// A `find` match below `dir` may be exactly that directory.
+/// A `find` match at or below `dir` may be exactly that directory.
 fn protected_below(dir: &str) -> Option<&'static str> {
     let dir = normalize_path(dir);
     let dir = dir.trim_end_matches('/');
     let below = |path: &str| {
         let path = path.trim_end_matches('/');
-        path.len() > dir.len() && path.starts_with(dir) && path.as_bytes()[dir.len()] == b'/'
+        path.starts_with(dir) && (path.len() == dir.len() || path.as_bytes()[dir.len()] == b'/')
     };
     let mut candidates: Vec<(String, &'static str)> = Vec::new();
     for parent in ["/", "/private", "/var", "/private/var"] {
@@ -7327,7 +7554,7 @@ fn protected_below(dir: &str) -> Option<&'static str> {
             // A temp directory whose name is not UTF-8 cannot be judged by
             // name, so one below `dir` fails closed.
             None => {
-                if tmpdir.starts_with(dir) && tmpdir.as_path() != std::path::Path::new(dir) {
+                if tmpdir.starts_with(dir) {
                     return Some("temp root");
                 }
             }
@@ -7348,46 +7575,12 @@ fn protected_below(dir: &str) -> Option<&'static str> {
     // macOS per-user temp roots, `/private/var/folders/<xx>/<id>/T`.
     for folders in ["/var/folders", "/private/var/folders"] {
         if let Some(rest) = format!("{dir}/").strip_prefix(&format!("{folders}/")) {
-            if rest.split('/').filter(|part| !part.is_empty()).count() < 3 {
+            if rest.split('/').filter(|part| !part.is_empty()).count() <= 3 {
                 return Some("temp root");
             }
         }
     }
     None
-}
-
-/// Whether a command removes files: a remover, possibly behind launchers,
-/// `xargs`, or a shell whose script runs one.
-fn runs_remover(argv: &[String], depth: usize) -> bool {
-    if depth > MAX_DEPTH {
-        return false;
-    }
-    let Some(run) = unwrap(argv) else {
-        return false;
-    };
-    let Some(first) = run.argv.first() else {
-        return false;
-    };
-    match program_name(first).as_str() {
-        "rm" | "rmdir" | "unlink" | "shred" | "srm" => true,
-        "xargs" => runs_remover(after_xargs_options(&run.argv[1..]).command, depth + 1),
-        name if name == "eval" || crate::hooks::git_guard::is_shell(name) => {
-            let script = if program_name(first) == "eval" {
-                super::composed::paths::eval_body(&run.argv[1..])
-            } else {
-                shell_script(&run.argv[1..])
-                    .map(|(script, _)| script.to_string())
-                    .unwrap_or_default()
-            };
-            let mut simples = Vec::new();
-            collect_simples(&Parser::parse(&script), &mut simples);
-            simples.iter().any(|(words, _)| {
-                let argv: Vec<String> = words.iter().map(word_text).collect();
-                runs_remover(&argv, depth + 1)
-            })
-        }
-        _ => false,
-    }
 }
 
 fn collect_simples(node: &Node, out: &mut Vec<(Vec<Word>, Vec<Redir>)>) {
@@ -8850,13 +9043,17 @@ mod tests {
     use super::composed_deletion_in;
     use crate::security::{CheckContext, SecurityModule, SecurityPolicy, Verdict};
 
+    /// The verdict for `command` run in this test's own directory, as a
+    /// hook payload names it.
     fn verdict(command: &str) -> Option<Verdict> {
         let policy = SecurityPolicy::defaults();
+        let cwd = std::env::current_dir().unwrap();
         DangerousModule.check(&CheckContext {
             command,
             sandbox_bypass: false,
             current_branch: "",
             policy: &policy,
+            cwd: Some(&cwd),
         })
     }
 
@@ -8902,6 +9099,104 @@ mod tests {
         }
     }
 
+    /// TSK-286 review 02 (F4): a `find` call's starts are read by the
+    /// options BSD and GNU `find` share, or the call is unproven.
+    #[test]
+    fn find_starts_are_read_exactly_or_unproven() {
+        let args = |line: &str| line.split(' ').map(str::to_string).collect::<Vec<_>>();
+        for (line, starts) in [
+            ("-- a -delete", vec!["a"]),
+            ("-H -P a b -name x", vec!["a", "b"]),
+            ("-f a -- -exec", vec!["a"]),
+            ("-f a -f b -- -print", vec!["a", "b"]),
+            ("-E -X -d -s -x a -print", vec!["a"]),
+            ("-D tree -O3 a", vec!["a"]),
+            ("-L a ( -name x )", vec!["a"]),
+        ] {
+            let words = args(line);
+            let call = super::parse_find(&words).unwrap_or_else(|e| panic!("{line}: {e}"));
+            assert_eq!(call.starts, starts, "{line}");
+        }
+        for line in ["-L a -print", "a -follow -print"] {
+            let words = args(line);
+            assert!(super::parse_find(&words).unwrap().follows, "{line}");
+        }
+        for line in [
+            "-name x -delete",
+            "-dx a -delete",
+            "-fa -delete",
+            "-follow -delete",
+            "-f",
+            "-f a -print",
+            "-- -foo -delete",
+            "a -readable -delete",
+            "a , -delete",
+            "a -name x -files0-from list",
+            "-Q a -delete",
+        ] {
+            assert_eq!(
+                super::parse_find(&args(line)).err(),
+                Some(super::why::FIND_STARTS),
+                "{line}"
+            );
+        }
+    }
+
+    /// A `find` walk read line by line names every path below its
+    /// starts, so a deletion of what `read` or `mapfile` gives is
+    /// unproven; the same loop on known values is still read.
+    #[test]
+    fn a_find_walk_read_by_read_or_mapfile_is_unproven() {
+        let base = Some(std::path::Path::new("/fixture"));
+        for command in [
+            r#"find /fixture/a -name b | while read f; do rm -rf "$f"; done"#,
+            r#"find /fixture/a -name b | while IFS= read -r f; do rm -rf "$f"; done"#,
+            r#"find /fixture/a -name b | { mapfile -t list; rm -rf "${list[@]}"; }"#,
+        ] {
+            let found = composed_deletion_in(command, base);
+            assert_eq!(
+                found.and_then(|f| f.unproven).map(|u| u.reason).as_deref(),
+                Some(super::why::WALK_READ),
+                "{command}"
+            );
+        }
+        let known = r#"printf '%s\n' /fixture/a/b | while read f; do rm -rf "$f"; done"#;
+        assert!(composed_deletion_in(known, base).is_none(), "{known}");
+    }
+
+    /// TSK-286 review 02 (F5): a relative `find` start is read from the
+    /// directory the hook payload names; with none, it is placed nowhere.
+    #[test]
+    fn a_relative_find_start_is_read_from_the_payload_directory() {
+        let policy = SecurityPolicy::defaults();
+        let here = std::env::current_dir().unwrap();
+        let check = |command: &str, cwd: Option<&std::path::Path>| {
+            DangerousModule.check(&CheckContext {
+                command,
+                sandbox_bypass: false,
+                current_branch: "",
+                policy: &policy,
+                cwd,
+            })
+        };
+        for command in [
+            "find . -name '*.o' -delete",
+            "D=build && find $D -delete",
+            "find . -name '*.rs' -exec grep -l x {} +",
+        ] {
+            assert!(check(command, Some(&here)).is_none(), "{command}");
+        }
+        for cwd in [None, Some(std::path::Path::new("relative"))] {
+            let verdict = check("find . -name '*.o' -delete", cwd);
+            assert!(verdict.is_some(), "{cwd:?}");
+        }
+        let found = composed_deletion_in("find . -name '*.o' -delete", None).unwrap();
+        assert_eq!(
+            found.unproven.map(|u| u.reason).as_deref(),
+            Some(super::why::FIND_PLACE)
+        );
+    }
+
     /// Native Windows places a `/`-rooted path nowhere, so a recursive
     /// delete below one is unproven: `C:\scratch` may be a junction to
     /// `C:\`, and `rm -r /scratch/Windows` would reach `C:\Windows`. A
@@ -8928,8 +9223,20 @@ mod tests {
                 "{command}: {found:?}"
             );
         }
+        // This reader has no directory, so a `find` start is placed nowhere
+        // and a deletion below it is unproven; the rest are allowed.
         for command in PROJECT_DELETIONS {
-            assert!(read(command).is_none(), "{command}");
+            let reason = read(command)
+                .and_then(|found| found.unproven)
+                .map(|u| u.reason);
+            if command.contains("find ") {
+                assert!(
+                    matches!(reason.as_deref(), None | Some(super::why::FIND_PLACE)),
+                    "{command}: {reason:?}"
+                );
+            } else {
+                assert_eq!(reason, None, "{command}");
+            }
         }
     }
 

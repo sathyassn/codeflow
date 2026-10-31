@@ -146,7 +146,6 @@ pub const PROJECT_DELETIONS: &[&str] = &[
     "find . -name node_modules -exec rm -rf {} +",
     "find . -name '*.o' -exec rm -f {} +",
     "D=./build; rm -rf $D",
-    "D=build && find $D -delete",
     "cd build && rm -rf *",
     "cd ~/code/app && rm -rf target",
     "rm -rf ~/code/app/target",

@@ -705,24 +705,41 @@ promise; the qualified shell parser (TSK-1073, 4.0.0) owns that residual.
 
 For a recursive deletion (`security.dangerous_commands`), exec-guard reads
 the input and options of `xargs`, `parallel`, `find` and `ls` by each
-tool's grammar. Each grammar is modelled, refused as unproven, or untested,
-in the grammar table in the module documentation of
-`crates/codeflow-core/src/security/deletion.rs`. A native differential
-fixture runs the real tools on disposable files and checks that each
-modelled form removes what the guard judged (TSK-286, issue 102). A
-`find` match is any path below a start, so a deletion through `find`
-(`-delete`, a removing `-exec`, or a `-print0` list piped to a remover) is
-refused when a protected directory, such as a home or the temp root, lies
-below a start. The only removing command `find` may run, or pass its list
-to, is `rm`, `rmdir`, `unlink`, `shred` or `srm` with options and `{}` (or
-the listed paths) as its only operands. Among the unproven forms: any
-other removing command there (a shell, `eval`, a `cd` chain, `{}/x`,
-another operand, or a `+` that does not follow `{}`), `xargs` input the
-guard cannot read (a file, or a producer it does not run), input longer
-than one 2048-byte command line, `xargs -L`, `-n`, `-E` and `-a`, `find`
-output framed by blanks or newlines (use `-print0` with `xargs -0`),
-`find -L`, and `parallel` replacement strings other than a whole `{}` word
-or more than one `:::` list.
+tool's grammar, from the directory the hook payload names; a payload with
+no absolute directory places no relative path. Each grammar is modelled,
+refused as unproven, or untested, in the grammar table in the module
+documentation of `crates/codeflow-core/src/security/deletion.rs`. A native
+differential fixture runs the real tools on disposable files and checks
+that each modelled form removes what the guard judged (TSK-286, issue
+102).
+
+A `find` call that acts on its matches (`-delete`, `-exec`, `-execdir`,
+`-ok`, `-okdir`) is allowed in one shape only:
+
+- Its starts are named explicitly after the options both BSD and GNU
+  `find` read (`-H`, `-L`, `-P`, `-E`, `-X`, `-d`, `-s`, `-x`, `-D ARG`,
+  `-O<digits>`, `-f PATH` and `--`). Any other option, a clustered or
+  attached option, no start, or `-files0-from` is unproven.
+- A deletion is refused when a start is protected or a protected
+  directory, such as a home or the temp root, lies at or below a start,
+  where it really lands included, since a match may be that directory.
+  `-L` and `-follow` are unproven.
+- Each command it runs is `rm`, `rmdir`, `unlink`, `shred` or `srm` by
+  that bare name, with options and `{}` as its only other words, or a
+  read-only program by its bare name (`grep`, `cat`, `head`, `tail`,
+  `wc`, `ls`, `stat`, `du`, the checksum tools, `echo`, `printf`) with
+  `{}` only as a whole word. Any other command is unproven: an
+  interpreter, `mv`, a shell, a launcher such as `env`, a path to a
+  program, `{}/x`, or a `+` that does not follow `{}`.
+
+The same rule holds for a `find -print0` list piped to `xargs -0` or
+`parallel -0`. Also unproven: a `find` walk read by `read` or `mapfile`,
+whose values are every path below its starts, `xargs` input the guard
+cannot read (a file, or a producer it does not run), input longer than one
+2048-byte command line, `xargs -L`, `-n`, `-E` and `-a`, `find` output
+framed by blanks or newlines (use `-print0` with `xargs -0`), `parallel`
+command words outside letters, digits and `-_.=,/`, `parallel` replacement
+strings other than a whole `{}` word, and more than one `:::` list.
 
 ### Program variables the guards judge
 

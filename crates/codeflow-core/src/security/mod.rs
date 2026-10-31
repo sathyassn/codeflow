@@ -96,6 +96,9 @@ pub struct CheckContext<'a> {
     pub current_branch: &'a str,
     /// Security policy configuration.
     pub policy: &'a SecurityPolicy,
+    /// The absolute directory the command runs in, from the hook payload;
+    /// with `None` the deletion reader places no relative path.
+    pub cwd: Option<&'a std::path::Path>,
 }
 
 /// Trait implemented by each security enforcement module.

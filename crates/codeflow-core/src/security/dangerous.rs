@@ -696,7 +696,11 @@ impl SecurityModule for DangerousModule {
         if let Some(v) = check_recursive_delete(cmd) {
             return Some(v);
         }
-        if let Some(found) = super::deletion::composed_deletion(cmd) {
+        // Relative paths are read from the directory the command runs in,
+        // the hook payload's, never this process's own; with no absolute
+        // directory, no relative path is placed.
+        let base = ctx.cwd.filter(|cwd| cwd.is_absolute());
+        if let Some(found) = super::deletion::composed_deletion_in(cmd, base) {
             return Some(composed_verdict(&found));
         }
 
@@ -1080,6 +1084,7 @@ mod tests {
             sandbox_bypass: false,
             current_branch: "feat/test",
             policy: test_policy(),
+            cwd: None,
         }
     }
 
