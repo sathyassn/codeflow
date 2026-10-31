@@ -333,6 +333,28 @@ const BYPASSES: &[(&str, &[&str], Native)] = &[
         &[],
         Native::Any,
     ),
+    // Review 03 of PR 425: a walk given to a program in another language
+    // by a pipe, a process substitution or a file.
+    (
+        r#"find {dir} -name sentinel | perl -ne 'chomp; system("rm", "-rf", $_)'"#,
+        &[],
+        Native::Any,
+    ),
+    (
+        r#"find {dir} -name sentinel | awk '{ system("rm -rf " $0) }'"#,
+        &[],
+        Native::Any,
+    ),
+    (
+        r#"find {dir} -name sentinel > {dir}/list; perl -ne 'chomp; system("rm", "-rf", $_)' {dir}/list"#,
+        &[],
+        Native::Any,
+    ),
+    (
+        r"find {dir} -name sentinel | python3 -c 'import shutil, sys; [shutil.rmtree(p.strip()) for p in sys.stdin]'",
+        &[],
+        Native::Python,
+    ),
     // F5: a relative start, read from the payload's directory; the hooks
     // run from an unrelated directory, so the process's own would hold
     // no protected path.

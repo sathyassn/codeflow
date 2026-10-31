@@ -733,13 +733,21 @@ A `find` call that acts on its matches (`-delete`, `-exec`, `-execdir`,
   program, `{}/x`, or a `+` that does not follow `{}`.
 
 The same rule holds for a `find -print0` list piped to `xargs -0` or
-`parallel -0`. Also unproven: a `find` walk read by `read` or `mapfile`,
-whose values are every path below its starts, `xargs` input the guard
-cannot read (a file, or a producer it does not run), input longer than one
-2048-byte command line, `xargs -L`, `-n`, `-E` and `-a`, `find` output
-framed by blanks or newlines (use `-print0` with `xargs -0`), `parallel`
-command words outside letters, digits and `-_.=,/`, `parallel` replacement
-strings other than a whole `{}` word, and more than one `:::` list.
+`parallel -0`. Any other program a `find` walk reaches, by a pipe (through
+any filter), a substitution (`$(…)`, `<(…)`) or a file (`>`, `exec >`,
+`-fprint`, `-fls`), is unproven unless it only reads and prints (`grep`,
+`cat`, `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr` and the like): an
+interpreter such as `python3`, `awk`, `sed`, a shell or `tee` may delete
+any path the walk lists. A walk sent to `/dev/null`, or its error output
+sent anywhere, is not limited.
+
+Also unproven: a `find` walk read by `read` or `mapfile`, whose values are
+every path below its starts, `xargs` input the guard cannot read (a file,
+or a producer it does not run), input longer than one 2048-byte command
+line, `xargs -L`, `-n`, `-E` and `-a`, `find` output framed by blanks or
+newlines (use `-print0` with `xargs -0`), `parallel` command words outside
+letters, digits and `-_.=,/`, `parallel` replacement strings other than a
+whole `{}` word, and more than one `:::` list.
 
 ### Program variables the guards judge
 

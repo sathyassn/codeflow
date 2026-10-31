@@ -158,7 +158,8 @@
 //! | `find-print0-reader` | `find -print0` into a read-only program (`grep`, `cat`, `wc`, `ls` and the like), which removes nothing | modelled |
 //! | `find-print0-consumer` | a `find` list that `xargs` or `parallel` gives to anything else: an interpreter, `mv`, a shell, a launcher, other operands | unproven |
 //! | `find-read` | a `find` walk read by `read` or `mapfile`, whose values are every path below its starts | unproven |
-//! | `find-pipe-program` | a `find` list piped straight into a program in another language (`python3`, `perl`, `awk`), whose deletions the reader does not see, as with a path written in that program | untested |
+//! | `find-pipe-reader` | a `find` list piped into a program that only reads and prints (`grep`, `wc`, `head`, `sort`, `uniq`, `cut`, `tr`), which removes nothing | modelled |
+//! | `find-walk-out` | a `find` walk given by a pipe, a substitution (`$(…)`, `<(…)`) or a file (`>`, `exec >`, `-fprint`, `-fls`) to anything but `xargs`, `parallel`, a plain remover or a program that only reads: an interpreter, `awk`, `sed`, a shell, `tee` | unproven |
 //! | `find-print-blanks` | `find` output framed by blanks, quotes or newlines, which a name below the start may hold | unproven |
 //! | `find-delete` | `-delete`: the start's tree, and a protected directory at or below a start is refused | modelled |
 //! | `find-exec` | `-exec`, `-ok` with `;` or `{} +` running a plain remover (`rm`, `rmdir`, `unlink`, `shred`, `srm` by that bare name) whose other words are options and `{}`: each match is judged as the start's tree, and a protected directory at or below a start is refused | modelled |
@@ -226,6 +227,7 @@ fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> O
         found: None,
         depth: 0,
         pipe_input: None,
+        stdout_away: false,
         jumps: Vec::new(),
         expanding: Vec::new(),
         traps: Vec::new(),
@@ -445,6 +447,23 @@ struct Redir {
     body: Option<String>,
     /// A heredoc whose delimiter is unquoted: its body is expanded.
     expand: bool,
+    /// The file descriptor written before the operator (`2>`), if any.
+    fd: Option<u32>,
+}
+
+impl Redir {
+    /// Whether this sends the standard output somewhere other than
+    /// `/dev/null`: `>`, `>>`, `>|`, `>&` on descriptor 1, and `&>`.
+    fn stdout_away(&self) -> bool {
+        let writes = matches!(self.op.as_str(), ">" | ">>" | ">|" | ">&" | "&>" | "&>>");
+        let stdout = self.fd.is_none_or(|fd| fd == 1);
+        let null = self
+            .target
+            .as_ref()
+            .and_then(Word::plain)
+            .is_some_and(|target| target == "/dev/null");
+        writes && stdout && !null
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -549,15 +568,17 @@ impl Lexer {
                 }
                 '<' | '>' => {
                     // A leading file descriptor number belongs to the operator.
-                    if word
+                    let mut fd = None;
+                    if let Some(digits) = word
                         .as_ref()
                         .and_then(Word::plain)
-                        .is_some_and(|w| w.chars().all(|c| c.is_ascii_digit()))
+                        .filter(|w| w.chars().all(|c| c.is_ascii_digit()))
                     {
+                        fd = Some(digits.parse().unwrap_or(u32::MAX));
                         word = None;
                     }
                     self.flush(&mut toks, &mut word);
-                    self.redirection(&mut toks, &mut pending);
+                    self.redirection(&mut toks, &mut pending, fd);
                 }
                 _ => {
                     self.begin(&mut word);
@@ -637,6 +658,7 @@ impl Lexer {
                     target,
                     body: None,
                     expand: false,
+                    fd: None,
                 }));
             }
             "|&" => toks.push(Tok::Op("|")),
@@ -690,7 +712,7 @@ impl Lexer {
     }
 
     /// Read one redirection operator and its target.
-    fn redirection(&mut self, toks: &mut Vec<Tok>, pending: &mut Vec<Pending>) {
+    fn redirection(&mut self, toks: &mut Vec<Tok>, pending: &mut Vec<Pending>, fd: Option<u32>) {
         const OPS: &[&str] = &["<<<", "<<-", "<<", "<>", "<&", ">>", ">&", ">|", "<", ">"];
         let rest: String = self.chars[self.at..].iter().take(3).collect();
         let op = OPS
@@ -719,6 +741,7 @@ impl Lexer {
                 target: None,
                 body: None,
                 expand,
+                fd,
             }));
             return;
         }
@@ -728,6 +751,7 @@ impl Lexer {
             target,
             body: None,
             expand: false,
+            fd,
         }));
     }
 
@@ -736,6 +760,18 @@ impl Lexer {
             self.at += 1;
         }
         let mut word = Word::default();
+        // `< <(…)` and `> >(…)`: the target is a process substitution,
+        // whose command runs and whose output is the input (or whose input
+        // is the output).
+        if matches!(self.peek(0), Some('<' | '>')) && self.peek(1) == Some('(') {
+            let (inner, next) = self.balanced(self.at + 1, '(', ')');
+            self.at = next;
+            word.parts.push(Part::Subst {
+                script: inner,
+                quoted: false,
+            });
+            return Some(word);
+        }
         while let Some(ch) = self.peek(0) {
             if crate::hooks::git_guard::shell_blank(ch)
                 || matches!(ch, ';' | '&' | '|' | '(' | ')' | '<' | '>')
@@ -1927,6 +1963,9 @@ mod why {
     pub const READ_INPUT: &str =
         "input the guard cannot see (`read` from a file or an unknown command)";
     pub const MAPFILE: &str = "`mapfile` input the guard cannot see";
+    pub const WALK_OUT: &str = "a `find` walk given to a program, a file or a substitution \
+        other than `xargs`, `parallel`, a plain remover or a read-only program, which may \
+        reach any path it lists";
     pub const WALK_READ: &str = "a `find` walk read by `read` or `mapfile`, whose values are \
         every path below its starts, which the guard does not list";
     pub const GETOPTS: &str = "`getopts`";
@@ -2615,6 +2654,10 @@ struct Reader<'a> {
     depth: usize,
     /// What the pipeline stage being read receives on its input.
     pipe_input: Option<Fed>,
+    /// Whether the command being read writes its standard output to a
+    /// file (a redirection, or an earlier `exec >file`), not to a pipe,
+    /// a substitution or the terminal.
+    stdout_away: bool,
     jumps: Vec<Frame>,
     /// Aliases being expanded, which are not expanded again inside.
     expanding: Vec<String>,
@@ -2966,7 +3009,10 @@ impl Reader<'_> {
                 if fed.is_some() {
                     self.pipe_input = fed;
                 }
+                let away = self.stdout_away;
+                self.stdout_away |= redirs.iter().any(Redir::stdout_away);
                 self.run(body, st);
+                self.stdout_away = away;
                 self.pipe_input = outer;
             }
             Node::Unknown(reason, inner) => {
@@ -3081,17 +3127,33 @@ impl Reader<'_> {
 
     fn pipe(&mut self, stages: &[Node], st: &mut State) {
         let outer = self.pipe_input.take();
+        let away = self.stdout_away;
         let mut last = st.clone();
+        // Once a stage lists a `find` walk, every later stage reads what
+        // came of it: a filter passes it on, `xargs grep -l` names its
+        // matches.
+        let mut walk = false;
         for (at, stage) in stages.iter().enumerate() {
             self.pipe_input = if at == 0 {
                 outer.clone()
             } else {
-                Some(self.producer_values(&stages[at - 1], st))
+                let mut fed = self.producer_values(&stages[at - 1], st);
+                walk |= fed.items.iter().any(|item| item.tree);
+                if walk && !fed.items.iter().any(|item| item.tree) {
+                    fed.items.push(Input {
+                        value: taint(why::WALK_OUT),
+                        tree: true,
+                    });
+                }
+                Some(fed)
             };
+            // Each stage but the last writes to the pipe.
+            self.stdout_away = away && at + 1 == stages.len();
             let mut child = st.clone();
             self.frame(FrameKind::Child, stage, &mut child);
             last = child;
         }
+        self.stdout_away = away;
         self.pipe_input = outer;
         // Under zsh (or bash `lastpipe`) the last stage runs in this shell.
         st.join(&last);
@@ -3179,11 +3241,22 @@ impl Reader<'_> {
     /// and also as written, since bash does not expand an alias defined on
     /// the same line.
     fn simple(&mut self, words: &[Word], redirs: &[Redir], st: &mut State) {
+        let outer = self.stdout_away;
+        self.stdout_away |= redirs.iter().any(Redir::stdout_away);
         let expanded = self.expand_alias(words, redirs, st);
         self.simple_plain(words, redirs, st);
         if let Some(expanded) = expanded {
             st.join(&expanded);
             self.status = None;
+        }
+        // `exec` with only redirections keeps them for the rest of the line.
+        let bare_exec = words
+            .iter()
+            .filter(|w| w.assignment().is_none())
+            .map(Word::plain)
+            .eq([Some("exec")]);
+        if !bare_exec {
+            self.stdout_away = outer;
         }
     }
 
@@ -4337,9 +4410,12 @@ impl Reader<'_> {
         } else {
             None
         };
+        let walk = fed
+            .as_ref()
+            .is_some_and(|f| f.items.iter().any(|item| item.tree));
         if let Some(reason) = reason {
             for name in names.iter().chain(&array) {
-                st.set(name, [taint(reason)].into());
+                st.set(name, walk_values([taint(reason)].into(), walk));
             }
             if let Some(array) = array {
                 st.arrays.insert(array);
@@ -4347,7 +4423,6 @@ impl Reader<'_> {
             return;
         }
         let items = fed.map(|f| f.items).unwrap_or_default();
-        let walk = items.iter().any(|item| item.tree);
         let mut per_name: Vec<Values> = vec![Values::new(); names.len()];
         let mut elements = Values::new();
         for item in &items {
@@ -4426,6 +4501,23 @@ impl Reader<'_> {
             return;
         };
         let ambiguous = ambiguous || st.cwd.len() > 1;
+        // A `find` walk on the input or among the arguments reaches only
+        // a program proven to remove exactly what it is given or to read.
+        let walk_in = input.is_some_and(|fed| {
+            fed.items
+                .iter()
+                .any(|item| item.tree || walk_value(&item.value))
+        }) || argv[1..].iter().any(|word| walk_value(word));
+        if walk_in && !walk_reader(&program_name(first)) {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: why::WALK_OUT.into(),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+            return;
+        }
         match program_name(first).as_str() {
             name if crate::hooks::git_guard::is_shell(name) => {
                 // A new shell: its own arguments, no function calls.
@@ -4487,6 +4579,17 @@ impl Reader<'_> {
     /// A walk that follows links (`-L`, `-follow`) reaches paths outside
     /// its starts, so a deletion in it is unproven.
     fn judge_find(&mut self, args: &[String], st: &State, ambiguous: bool) {
+        // A walk written to a file may be read by any later program.
+        if self.stdout_away || args.iter().any(|a| FIND_FILE_OUTPUT.contains(&a.as_str())) {
+            self.report(
+                Judged::Unproven(Unproven {
+                    reason: why::WALK_OUT.into(),
+                    cwd: false,
+                }),
+                ambiguous,
+            );
+            return;
+        }
         if !find_acts(args) {
             return;
         }
@@ -4608,7 +4711,7 @@ impl Reader<'_> {
                 let found = protected_below(&absolute)
                     .or_else(|| real.as_deref().and_then(protected_below));
                 if let Some(target) = found {
-                    self.report(Judged::Protected(target), true);
+                    self.report(Judged::Protected(target), false);
                     return;
                 }
             }
@@ -5468,7 +5571,14 @@ impl Reader<'_> {
                 let kind = if *quoted { Kind::Quoted } else { Kind::Split };
                 match self.substitution(script, st) {
                     Output::Known(outputs) => outputs.into_iter().map(|v| (v, kind)).collect(),
-                    Output::External | Output::Unknown => vec![(taint(why::OUTPUT), Kind::Quoted)],
+                    Output::External | Output::Unknown => {
+                        let reason = if lists_walk(script) {
+                            why::WALK_OUT
+                        } else {
+                            why::OUTPUT
+                        };
+                        vec![(taint(reason), Kind::Quoted)]
+                    }
                 }
             }
             Part::Array(elements) => {
@@ -5496,7 +5606,10 @@ impl Reader<'_> {
             left: Vec::new(),
         });
         self.depth += 1;
+        // A substitution's output is its value, never a file.
+        let away = std::mem::replace(&mut self.stdout_away, false);
         let out = self.output_of(&node, &mut child);
+        self.stdout_away = away;
         self.depth -= 1;
         self.jumps.pop();
         self.status = status;
@@ -5833,10 +5946,20 @@ impl Reader<'_> {
                 }
                 add(items, true);
             } else if let Some(target) = &redir.target {
-                // A redirection target can hold a substitution that runs.
-                let _ = self.fields(target, st);
+                // A redirection target can hold a substitution that runs;
+                // `< <(find …)` gives the walk on the input.
+                let fields = self.fields(target, st);
                 if redir.op.starts_with('<') {
-                    add(Vec::new(), false);
+                    let walk = fields.iter().flatten().any(|value| walk_value(value));
+                    let items = if walk {
+                        vec![Input {
+                            value: taint(why::WALK_OUT),
+                            tree: true,
+                        }]
+                    } else {
+                        Vec::new()
+                    };
+                    add(items, false);
                 }
             }
         }
@@ -7252,6 +7375,55 @@ fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
     options
 }
 
+/// The `find` primaries that write the walk to a file.
+const FIND_FILE_OUTPUT: &[&str] = &["-fprint", "-fprint0", "-fprintf", "-fls"];
+
+/// Whether `value` came from a `find` walk the reader does not list, by
+/// any of the constructs it depends on.
+fn walk_value(value: &str) -> bool {
+    [why::WALK_OUT, why::WALK_READ]
+        .iter()
+        .any(|reason| value.contains(&taint(reason)))
+}
+
+/// Whether `program` may be given a `find` walk: `xargs` and `parallel`
+/// (judged on what they run), a plain remover (judged on its operands) and
+/// a program that only reads and prints.
+fn walk_reader(program: &str) -> bool {
+    matches!(
+        program,
+        "xargs"
+            | "parallel"
+            | "rm"
+            | "rmdir"
+            | "unlink"
+            | "shred"
+            | "srm"
+            | "sort"
+            | "uniq"
+            | "cut"
+            | "tr"
+            | "basename"
+            | "dirname"
+    ) || READERS.contains(&program)
+}
+
+/// Whether a substitution's script runs `find`, whose walk it then prints.
+fn lists_walk(script: &str) -> bool {
+    let mut simples = Vec::new();
+    collect_simples(&Parser::parse(script), &mut simples);
+    simples.iter().any(|(words, _)| {
+        let argv: Vec<String> = words
+            .iter()
+            .skip_while(|w| w.assignment().is_some())
+            .map(word_text)
+            .collect();
+        unwrap(&argv)
+            .and_then(|run| run.argv.first().map(|first| program_name(first) == "find"))
+            .unwrap_or(false)
+    })
+}
+
 /// What `read` or `mapfile` gives from its input: a `find` walk's value is
 /// a start, given as it is, and stands for every path below it, which they
 /// give one line at a time and the reader does not list.
@@ -7452,29 +7624,31 @@ fn plain_remover(words: &[String], token: Option<&str>) -> bool {
     proven_body(words, token, &["rm", "rmdir", "unlink", "shred", "srm"])
 }
 
+/// The programs that never remove or write a file, by their bare names.
+const READERS: &[&str] = &[
+    "grep",
+    "egrep",
+    "fgrep",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "ls",
+    "stat",
+    "du",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "shasum",
+    "echo",
+    "printf",
+];
+
 /// Whether a command only reads what it is given: its first word is
 /// exactly a program that never removes or writes a file (no path, no
 /// launcher), and every other word is `token` itself or holds no brace,
 /// so no match is spliced into a longer word.
 fn read_only(words: &[String], token: Option<&str>) -> bool {
-    const READERS: &[&str] = &[
-        "grep",
-        "egrep",
-        "fgrep",
-        "cat",
-        "head",
-        "tail",
-        "wc",
-        "ls",
-        "stat",
-        "du",
-        "md5sum",
-        "sha1sum",
-        "sha256sum",
-        "shasum",
-        "echo",
-        "printf",
-    ];
     let Some((first, rest)) = words.split_first() else {
         return false;
     };
@@ -8565,6 +8739,7 @@ mod tests {
                 found: None,
                 depth: 0,
                 pipe_input: None,
+                stdout_away: false,
                 jumps: vec![],
                 expanding: vec![],
                 traps: vec![],
@@ -8886,6 +9061,7 @@ mod tests {
             found: None,
             depth: 0,
             pipe_input: None,
+            stdout_away: false,
             jumps: Vec::new(),
             expanding: Vec::new(),
             traps: Vec::new(),
@@ -8938,6 +9114,7 @@ mod tests {
             found: None,
             depth: 0,
             pipe_input: None,
+            stdout_away: false,
             jumps: Vec::new(),
             expanding: Vec::new(),
             traps: Vec::new(),
@@ -8989,6 +9166,7 @@ mod tests {
             found: None,
             depth: 0,
             pipe_input: None,
+            stdout_away: false,
             jumps: Vec::new(),
             expanding: Vec::new(),
             traps: Vec::new(),
@@ -9149,6 +9327,7 @@ mod tests {
             r#"find /fixture/a -name b | while read f; do rm -rf "$f"; done"#,
             r#"find /fixture/a -name b | while IFS= read -r f; do rm -rf "$f"; done"#,
             r#"find /fixture/a -name b | { mapfile -t list; rm -rf "${list[@]}"; }"#,
+            r#"while read f; do rm -rf "$f"; done < <(find /fixture/a -name b)"#,
         ] {
             let found = composed_deletion_in(command, base);
             assert_eq!(
@@ -9159,6 +9338,56 @@ mod tests {
         }
         let known = r#"printf '%s\n' /fixture/a/b | while read f; do rm -rf "$f"; done"#;
         assert!(composed_deletion_in(known, base).is_none(), "{known}");
+    }
+
+    /// TSK-286 review 03 (F6): a `find` walk reaches only `xargs`,
+    /// `parallel`, a plain remover or a program that only reads, by a pipe,
+    /// a substitution or a file; a walk sent to `/dev/null` or a stage
+    /// that reads is still allowed.
+    #[test]
+    fn a_find_walk_reaches_only_proven_programs() {
+        let base = Some(std::path::Path::new("/fixture"));
+        for command in [
+            "find /fixture/a -name b | python3 -c 'import sys'",
+            "find /fixture/a -name b -print0 | perl -0ne 'print'",
+            "find /fixture/a -name b | awk '{print}'",
+            "find /fixture/a -name b | sort | python3 x.py",
+            "find /fixture/a -name b | tee list",
+            "find /fixture/a -name b | sh",
+            "python3 x.py < <(find /fixture/a -name b)",
+            "python3 x.py <(find /fixture/a -name b)",
+            "python3 x.py $(find /fixture/a -name b)",
+            "for f in $(find /fixture/a -name b); do python3 x.py \"$f\"; done",
+            "mapfile -t list < <(find /fixture/a -name b); python3 x.py \"${list[@]}\"",
+            "find /fixture/a -name b | while read f; do python3 x.py; done",
+            "read -r f < <(find /fixture/a -name b); python3 x.py \"$f\"",
+            "find /fixture/a -name b > >(python3 x.py)",
+            "find /fixture/a -name b > list",
+            "find /fixture/a -name b 1> list",
+            "find /fixture/a -name b &> list",
+            "{ find /fixture/a -name b; } > list",
+            "exec > list; find /fixture/a -name b",
+            "find /fixture/a -name b -fprint list",
+            "find /fixture/a -name b -fls list",
+        ] {
+            let reason = composed_deletion_in(command, base)
+                .and_then(|f| f.unproven)
+                .map(|u| u.reason);
+            assert_eq!(reason.as_deref(), Some(super::why::WALK_OUT), "{command}");
+        }
+        for command in [
+            "find /fixture/a -name b | wc -l",
+            "find /fixture/a -name b | sort | uniq | head -n 3",
+            "find /fixture/a -name b 2>/dev/null | grep x",
+            "find /fixture/a -name b 2> errors | cut -c1-9",
+            "find /fixture/a -name b > /dev/null",
+            "find /fixture/a -name b | while read f; do echo \"$f\"; done",
+            "echo $(find /fixture/a -name b | wc -l)",
+            "{ find /fixture/a -name b | wc -l; } > count",
+            "cat notes | python3 x.py",
+        ] {
+            assert!(composed_deletion_in(command, base).is_none(), "{command}");
+        }
     }
 
     /// TSK-286 review 02 (F5): a relative `find` start is read from the

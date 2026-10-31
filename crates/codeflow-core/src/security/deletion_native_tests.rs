@@ -523,6 +523,42 @@ fn rows() -> Vec<Row> {
             r#"find sub -name guarded > list; while IFS= read -r f; do rm -rf "$f"; done < list"#,
             Unproven,
         ),
+        // Review 03: a walk given to a program in another language, by a
+        // pipe, through a filter or by a file.
+        row(
+            "find-walk-out",
+            GUARDED_BELOW,
+            r#"find sub -name guarded | perl -ne 'chomp; system("rm", "-rf", $_)'"#,
+            Unproven,
+        ),
+        row(
+            "find-walk-out",
+            GUARDED_BELOW,
+            r#"find sub -name guarded | awk '{ system("rm -rf " $0) }'"#,
+            Unproven,
+        ),
+        row(
+            "find-walk-out",
+            GUARDED_BELOW,
+            r#"find sub -name guarded | sort | perl -ne 'chomp; system("rm", "-rf", $_)'"#,
+            Unproven,
+        ),
+        row(
+            "find-walk-out",
+            GUARDED_BELOW,
+            r#"find sub -name guarded > list; perl -ne 'chomp; system("rm", "-rf", $_)' list"#,
+            Unproven,
+        ),
+        needing(
+            row(
+                "find-walk-out",
+                GUARDED_BELOW,
+                r"find sub -name guarded | python3 -c 'import shutil, sys; [shutil.rmtree(p.strip()) for p in sys.stdin]'",
+                Unproven,
+            ),
+            Needs::Python,
+        ),
+        row("find-pipe-reader", TREE, "find sub | sort | wc -l", Exact),
         row(
             "find-print-blanks",
             &["sub/", "sub/x y", "y", "keep"],
