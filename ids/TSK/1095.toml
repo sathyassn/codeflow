@@ -1,0 +1,11 @@
+id = "TSK-1095"
+uid = "22a820d0-8da2-4ff8-ace7-5d4a3327c8a9"
+kind = "TSK"
+title = "codeflow report progress computes percent complete, order, lanes, estimates and issues for any scope"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T00:19:16Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
