@@ -1121,6 +1121,35 @@ fn audit_repo(
     base
 }
 
+/// The fake osv-scanner: it reports an advisory unless an `osv-scanner.toml`
+/// sits beside the lockfile and, as osv-scanner does, skips a lockfile the
+/// `.gitignore` names unless it runs with `--no-ignore`. `OSV_FAKE` is
+/// `empty` or `broken` (both exit 128) and `OSV_FAKE_SOURCE` is the path the
+/// advisory names. With `--format json` it prints a report on stdout, one
+/// vulnerability per id in `OSV_FAKE_IDS` (default `GHSA-test`), and its
+/// messages on stderr.
+const FAKE_OSV_SCANNER: &str = r#"#!/bin/sh
+case " $* " in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac
+case ${OSV_FAKE:-} in
+  empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;
+  broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;
+esac
+if [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi
+case " $* " in
+  *' --format json '*)
+    echo 'Scanned 1 file' >&2
+    printf '{"results":[{"source":{"path":"%s/%s","type":"lockfile"},"packages":[{"package":{"name":"demo","version":"1.0.0","ecosystem":"crates.io"},"vulnerabilities":[' "$PWD" "${OSV_FAKE_SOURCE:-Cargo.lock}"
+    sep=
+    for id in ${OSV_FAKE_IDS:-GHSA-test}; do
+      printf '%s{"id":"%s","aliases":["CVE-%s"]}' "$sep" "$id" "$id"
+      sep=,
+    done
+    printf ']}]}]}\n'
+    exit 1 ;;
+esac
+echo "GHSA-test advisory in ${OSV_FAKE_SOURCE:-Cargo.lock}"; exit 1
+"#;
+
 /// Run the security-review job's dependency audit step in `repo` with
 /// `TRUSTED_SHA` set, a fake `curl` and `sha256sum`, and a fake
 /// osv-scanner that reports an advisory unless an `osv-scanner.toml` sits
@@ -1136,7 +1165,7 @@ fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
     // it made there; the system temp directory stays untouched (TSK-386).
     let runner_temp = step_temp(&repo.parent().unwrap().join("runner-temp"));
     let system_temp = step_temp(&repo.parent().unwrap().join("tmp"));
-    let scanner = "#!/bin/sh\ncase \" $* \" in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac\ncase ${OSV_FAKE:-} in\n  empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;\n  broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;\nesac\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho \"GHSA-test advisory in ${OSV_FAKE_SOURCE:-Cargo.lock}\"; exit 1\n";
+    let scanner = FAKE_OSV_SCANNER;
     let curl = format!(
         "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -o) shift; printf '%s' \"{}\" > \"$1\";; esac; shift; done\n",
         scanner.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$")
@@ -1299,6 +1328,218 @@ fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("GHSA-test"), "{out:?}");
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
+}
+
+/// A repository with one lockfile whose base commit holds `policy` and
+/// `base_files` and whose head commit adds or changes `head_files`. A file
+/// whose text starts with `symlink:` is committed as a link to the rest.
+/// Returns the base SHA.
+fn exception_repo(
+    work: &Path,
+    policy: &str,
+    base_files: &[(&str, &str)],
+    head_files: &[(&str, &str)],
+) -> String {
+    git(work, &["init", "-q", "-b", "main"]);
+    git(work, &["config", "user.email", "t@example.com"]);
+    git(work, &["config", "user.name", "t"]);
+    let put = |files: &[(&str, &str)]| {
+        for (path, text) in files {
+            let target = work.join(path);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            let _ = std::fs::remove_file(&target);
+            match text.strip_prefix("symlink:") {
+                Some(to) => std::os::unix::fs::symlink(to, &target).unwrap(),
+                None => std::fs::write(&target, text).unwrap(),
+            }
+        }
+    };
+    std::fs::write(work.join("Cargo.lock"), "# lock\n").unwrap();
+    put(&[(".codeflow/policy.json", policy)]);
+    put(base_files);
+    git(work, &["add", "-A"]);
+    git(work, &["commit", "-qm", "base"]);
+    let base = git(work, &["rev-parse", "HEAD"]);
+    put(head_files);
+    git(work, &["add", "-A"]);
+    git(work, &["commit", "-q", "--allow-empty", "-m", "head"]);
+    base
+}
+
+const HOOK: &str = ".codeflow/audit-exceptions.sh";
+/// A hook that accepts each finding whose advisory id is a row of the
+/// register, which it reads from the exported trusted commit.
+const ACCEPTING_HOOK: &str = "awk -F'\\t' 'NR==FNR { ok[$1] = 1; next } ($1 in ok)' docs/register.txt \"$CODEFLOW_AUDIT_FINDINGS\"\n";
+
+/// sathyassn/codeflow#149: a project exception hook on the trusted commit
+/// accepts findings from a trusted register, and a pull request cannot
+/// accept its own.
+#[test]
+fn the_project_exception_hook_accepts_findings_from_the_trusted_commit() {
+    let block = levels("warn", "block");
+    let run = |base: &[(&str, &str)], head: &[(&str, &str)], fake: &[(&str, &str)]| {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        let trusted = exception_repo(&work, &block, base, head);
+        let out = run_audit_step(&work, &trusted, fake);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+    let register = ("docs/register.txt", "GHSA-a\nGHSA-b\n");
+    let accepting = (HOOK, ACCEPTING_HOOK);
+    let one = [("OSV_FAKE_IDS", "GHSA-a")];
+    let two = [("OSV_FAKE_IDS", "GHSA-a GHSA-c")];
+
+    // AC-1: every finding is a register row, so the step passes and lists
+    // each accepted finding; the hook runs from the exported trusted commit.
+    let (ok, text) = run(&[accepting, register], &[], &one);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains(
+            "accepted by the project exception hook: GHSA-a\tdemo\t1.0.0\tcrates.io\tCargo.lock\tCVE-GHSA-a"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Every dependency advisory is accepted"),
+        "{text}"
+    );
+    let (ok, text) = run(
+        &[accepting, register],
+        &[],
+        &[("OSV_FAKE_IDS", "GHSA-a GHSA-b")],
+    );
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("hook: GHSA-a\tdemo") && text.contains("hook: GHSA-b\tdemo"),
+        "{text}"
+    );
+
+    // AC-1: one finding the register lacks fails the step, which still
+    // lists the accepted one and the one that is not accepted.
+    let (ok, text) = run(&[accepting, register], &[], &two);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("accepted by the project exception hook: GHSA-a\t"),
+        "{text}"
+    );
+    assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
+    assert!(!text.contains("Every dependency advisory"), "{text}");
+
+    // AC-1: a hook that accepts nothing, prints a line that is no finding,
+    // or fails (even after printing a real finding) accepts nothing.
+    for (hook, expect) in [
+        ("exit 0\n", ""),
+        ("echo 'GHSA-a'\n", ""),
+        (
+            "awk '{print}' \"$CODEFLOW_AUDIT_FINDINGS\"\nexit 3\n",
+            "failed (exit 3)",
+        ),
+    ] {
+        let (ok, text) = run(&[(HOOK, hook), register], &[], &one);
+        assert!(!ok, "{hook}: {text}");
+        assert!(text.contains("not accepted: GHSA-a\t"), "{hook}: {text}");
+        assert!(text.contains(expect), "{hook}: {text}");
+    }
+
+    // AC-2: a head that adds the hook and its register gets neither: the
+    // trusted commit has none, so the audit fails and says why.
+    let (ok, text) = run(&[], &[accepting, register], &one);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains(
+            "::notice::this change holds .codeflow/audit-exceptions.sh, but the trusted commit does not"
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains("accepted by the project exception hook"),
+        "{text}"
+    );
+
+    // AC-2: a head that changes only the hook, or only the register, is
+    // judged by the trusted commit's copies.
+    let (ok, text) = run(&[(HOOK, "exit 0\n"), register], &[accepting], &one);
+    assert!(!ok, "{text}");
+    assert!(!text.contains("::notice::"), "{text}");
+    let (ok, text) = run(
+        &[accepting, register],
+        &[("docs/register.txt", "GHSA-a\nGHSA-b\nGHSA-c\n")],
+        &two,
+    );
+    assert!(!ok, "{text}");
+    assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
+    // ... and a head that breaks the hook or empties the register cannot
+    // take away the trusted commit's acceptance either.
+    let (ok, text) = run(&[accepting, register], &[(HOOK, "exit 7\n")], &one);
+    assert!(ok, "{text}");
+    let (ok, text) = run(&[accepting, register], &[("docs/register.txt", "")], &one);
+    assert!(ok, "{text}");
+
+    // AC-3: the failure advice names the hook when the trusted commit holds
+    // it, and the v3.1.0 `osv-scanner.toml` route otherwise.
+    let (ok, text) = run(&[(HOOK, "exit 0\n")], &[], &one);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("Triage, or accept a justified finding through the project exception hook .codeflow/audit-exceptions.sh."),
+        "{text}"
+    );
+    assert!(
+        !text.contains("osv-scanner.toml beside the lockfile"),
+        "{text}"
+    );
+    let (ok, text) = run(&[], &[], &one);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("failing. Triage, or record a justified suppression in an osv-scanner.toml beside the lockfile.\n"),
+        "{text}"
+    );
+    assert!(text.contains("GHSA-test advisory in Cargo.lock"), "{text}");
+    assert!(!text.contains("exception hook"), "{text}");
+
+    // The hook judges advisories only: a scan error is never accepted, and
+    // a hook that is not a regular file on the trusted commit fails closed.
+    let (ok, text) = run(&[accepting, register], &[], &[("OSV_FAKE", "broken")]);
+    assert!(!ok, "{text}");
+    assert!(
+        !text.contains("accepted by the project exception hook"),
+        "{text}"
+    );
+    let (ok, text) = run(&[(HOOK, "symlink:/etc/hostname")], &[], &one);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("is not a regular file; failing closed"),
+        "{text}"
+    );
+}
+
+/// At the warn level the hook still lists what it accepts, and findings it
+/// does not accept are reported without failing the step.
+#[test]
+fn the_project_exception_hook_reports_at_the_warn_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    let trusted = exception_repo(
+        &work,
+        &levels("warn", "warn"),
+        &[(HOOK, ACCEPTING_HOOK), ("docs/register.txt", "GHSA-a\n")],
+        &[],
+    );
+    let out = run_audit_step(&work, &trusted, &[("OSV_FAKE_IDS", "GHSA-a GHSA-c")]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        text.contains("accepted by the project exception hook: GHSA-a\t"),
+        "{text}"
+    );
+    assert!(text.contains("not accepted: GHSA-c\t"), "{text}");
+    assert!(text.contains("::warning::dependency advisories"), "{text}");
 }
 
 /// TSK-449 AC-7: the shipped gate runs essential on pull requests and full
