@@ -1,0 +1,11 @@
+id = "TSK-1119"
+uid = "33dd00ae-645c-4304-a02a-373c93b408e4"
+kind = "TSK"
+title = "Every script CodeFlow ships or runs has tests and counts toward the coverage floor"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:41:59Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
