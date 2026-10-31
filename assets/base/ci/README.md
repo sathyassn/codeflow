@@ -335,7 +335,8 @@ records.
   tab separated: advisory id, package, version, ecosystem, lockfile path,
   and the advisory's aliases joined by commas. `CODEFLOW_TRUSTED_SHA` is the
   trusted commit and `CODEFLOW_TRUSTED_ROOT` is the exported folder. The
-  scan runs with `--format json` when the trusted commit holds the hook.
+  scan runs with `--verbosity error --format json` when the trusted commit
+  holds the hook, so its log holds only errors.
 - **Exit contract.** The hook prints the findings it accepts to standard
   output, one per line, copied unchanged from the findings file. Exit 0 with
   those lines is a verdict; any other exit status makes the hook accept
@@ -343,8 +344,11 @@ records.
   when every finding is accepted and lists each as `accepted by the project
   exception hook: <finding>`; otherwise it lists the rest as `not accepted:
   <finding>` and applies the policy level as before (`block` fails, `warn`
-  reports). A scan error, or a scan that finds no advisory, never reaches
-  the hook.
+  reports). The hook runs only when osv-scanner exits 1 for advisories and
+  logged no error. osv-scanner exits 1 even when it could not read a
+  lockfile, so any logged error means the scan may be incomplete: the hook
+  is not run, the logged errors are printed, and the policy level applies as
+  if nothing were accepted.
 - **Advice.** When the trusted commit holds the hook, the failure message
   tells the reader to accept a justified finding through it. Without the
   hook, the message and the `osv-scanner.toml` route are as in 3.1.0, and
