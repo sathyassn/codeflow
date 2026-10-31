@@ -206,6 +206,22 @@ fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
     codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &rest.join(" "))])
 }
 
+/// What judges a push under [`Judged::Target`]: the policy at the
+/// destination default branch's tip, or the shipped defaults when that
+/// tip holds no policy file. The destination names its default branch, so
+/// the name is shown escaped.
+fn judging_source(target: &str, tip: &str, defaults: bool) -> String {
+    let target = display_text(target);
+    if defaults {
+        format!(
+            "the shipped defaults, since {target} {} holds no .codeflow/policy.json",
+            short(tip)
+        )
+    } else {
+        format!("the policy at {target} {}", short(tip))
+    }
+}
+
 /// Run `codeflow ci` over each pushed ref's range. A release branch is
 /// judged from the default target's tip, as its pull request is; another
 /// branch from the boundary of what the destination holds, or noted when
@@ -247,21 +263,19 @@ fn run_ci_ranges(
                 target,
                 tip,
                 policy,
+                defaults,
             } => {
-                // The destination names its default branch: shown escaped.
-                let target = display_text(target);
+                let which = judging_source(target, tip, *defaults);
                 if !policy.test_gate_on_push.is_active() {
                     report.status.push(format!(
-                        "`codeflow ci` did not run for '{shown_branch}': the policy at {target} {}, the destination's default branch and the candidate authority, turns the push check off; the hosted job on the pull request's target is the enforcement",
-                        short(tip)
+                        "`codeflow ci` did not run for '{shown_branch}': {which}, the destination's default branch and the candidate authority, turns the push check off; the hosted job on the pull request's target is the enforcement"
                     ));
                     continue;
                 }
                 (
                     (**policy).clone(),
                     format!(
-                        "`codeflow ci` judges '{shown_branch}' with the policy at {target} {}, the destination's default branch: a candidate authority, not a known pull request target; the hosted job on the real target is the enforcement",
-                        short(tip)
+                        "`codeflow ci` judges '{shown_branch}' with {which}, the destination's default branch: a candidate authority, not a known pull request target; the hosted job on the real target is the enforcement"
                     ),
                 )
             }
@@ -277,16 +291,19 @@ fn run_ci_ranges(
                 ));
                 continue;
             }
-            Judged::Unverified(why) => {
+            Judged::Initialization => {
+                // A release branch is still refused where no default target
+                // exists (see [`release_base`]); nothing else is judged.
+                if matches!(
+                    release_base(root, r, branch, destination, report),
+                    Scoped::Refused
+                ) {
+                    continue;
+                }
                 report.status.push(format!(
-                    "no candidate authority for '{shown_branch}': {why}"
+                    "initialization: the destination advertises no branches, so '{shown_branch}' creates its first; creating the default branch is not an authority claim, and no `codeflow ci` runs until it exists"
                 ));
-                (
-                    blocking(destination.policy),
-                    format!(
-                        "`codeflow ci` checks '{shown_branch}' with the policy at its range's base, at block level whatever the working copy's gate says; this is a best-effort check, not the hosted verdict"
-                    ),
-                )
+                continue;
             }
         };
         let policy = &policy;
@@ -850,13 +867,15 @@ fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, Strin
 /// which is the pull request's target only when the request goes there.
 /// The hosted job, run on the real target, is the enforcement.
 enum Judged {
-    /// The validated policy at the destination default branch's tip: it
-    /// decides the rules, whether the check gates the push and at what
-    /// level.
+    /// The validated policy at the destination default branch's tip, or
+    /// the shipped defaults when that tip proves the policy file absent
+    /// (`defaults`): it decides the rules, whether the check gates the push
+    /// and at what level.
     Target {
         target: String,
         tip: String,
         policy: Box<GitPolicy>,
+        defaults: bool,
     },
     /// The default branch's tip is here, and its policy cannot be read or
     /// fails strict validation: the push is refused, whether or not its
@@ -867,9 +886,10 @@ enum Judged {
         tip: String,
         why: String,
     },
-    /// No candidate authority could be read: the check runs where a range
-    /// resolves, at block level, and says it is not the hosted verdict.
-    Unverified(String),
+    /// The destination advertises no branches and this clone holds no
+    /// tracking refs for it: the push creates the first branch, which is
+    /// not an authority claim, so no `codeflow ci` runs (TSK-1077).
+    Initialization,
 }
 
 /// The destination default branch's advertised tip and its policy: the
@@ -917,15 +937,6 @@ fn target_policy(root: &Path, tip: &str) -> TargetPolicy {
     )
 }
 
-/// The working copy's git policy with the push check at block level: the
-/// fallback cannot be lowered or turned off by the head.
-fn blocking(policy: &GitPolicy) -> GitPolicy {
-    GitPolicy {
-        test_gate_on_push: codeflow_core::hooks::PolicyLevel::Block,
-        ..policy.clone()
-    }
-}
-
 /// A note for a push that does not go to the configured `upstream`: its
 /// pull request may target the upstream, whose policy can differ from the
 /// candidate authority read here.
@@ -948,8 +959,12 @@ fn fork(root: &Path, url: Option<&str>) -> Result<Option<String>, String> {
 /// (the fetch is timed in the push set's steps, and a failure is not
 /// retried). No other branch is an authority, protected or not: a branch
 /// the destination advertises proves it exists, not that its policy
-/// landed through review. An unanswered destination, a failed fetch or a
-/// default branch without a policy leave no candidate authority.
+/// landed through review. An unanswered destination or a failed fetch
+/// refuses; a default branch without a policy file is judged by the
+/// shipped defaults. A destination that advertises no branches is
+/// initialization only while this clone holds no tracking refs for it;
+/// otherwise the tracking refs and the destination disagree and the push
+/// is refused with the fetch route, never judged by the working copy.
 fn judged_by(
     root: &Path,
     destination: &Destination<'_>,
@@ -961,8 +976,33 @@ fn judged_by(
         .as_ref()
         .map_err(Clone::clone)?;
     if asked.default.is_none() {
-        return Ok(Judged::Unverified(
-            "the destination has no default branch yet".into(),
+        // Only a destination that answered with no branches is
+        // initialization; one that was not asked, or could not be, refuses.
+        destination.listing(root).map_err(str::to_string)?;
+        let Some(namespace) = destination.namespace else {
+            return Ok(Judged::Initialization);
+        };
+        let held = git(
+            root,
+            &[
+                "for-each-ref",
+                "--count=1",
+                "--format=%(refname)",
+                namespace,
+            ],
+        )?
+        .is_some_and(|out| out.split('\n').any(|name| !name.is_empty()));
+        if !held {
+            return Ok(Judged::Initialization);
+        }
+        let remote = namespace
+            .strip_prefix("refs/remotes/")
+            .and_then(|rest| rest.strip_suffix('/'))
+            .unwrap_or(namespace);
+        return Err(format!(
+            "the destination advertises no branches while this clone still holds tracking refs under {}, so no default branch can judge the push; run git fetch --prune {}",
+            display_text(namespace),
+            display_text(remote)
         ));
     }
     let anchor = match destination.anchor(root, steps) {
@@ -975,16 +1015,21 @@ fn judged_by(
             target,
             tip,
             policy: policy.clone(),
+            defaults: false,
         },
         TargetPolicy::Malformed(why) => Judged::Invalid {
             target,
             tip,
             why: why.clone(),
         },
-        TargetPolicy::Missing => Judged::Unverified(format!(
-            "the destination's default branch {} has no policy yet",
-            display_text(&target)
-        )),
+        // A proven absence at the tip: the shipped defaults, never the
+        // working copy (TSK-1077 AC-5).
+        TargetPolicy::Missing => Judged::Target {
+            target,
+            tip,
+            policy: Box::new(GitPolicy::default()),
+            defaults: true,
+        },
     })
 }
 

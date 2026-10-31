@@ -89,10 +89,16 @@ fn with_origin() -> tempfile::TempDir {
     // Scratch clones and state live beside the work, outside its status.
     write(root, ".git/info/exclude", ".dest.git/\n.other/\n");
     let dest = root.join(".dest.git");
-    git(root, &["init", "-q", "--bare", dest.to_str().unwrap()]);
+    git(
+        root,
+        &["init", "-q", "--bare", "-b", "main", dest.to_str().unwrap()],
+    );
     git(root, &["remote", "add", "origin", dest.to_str().unwrap()]);
     git(root, &["push", "-q", "origin", "main", "feat/x"]);
     git(root, &["fetch", "-q", "origin"]);
+    // TSK-1077: the remote's default branch is the policy authority; a
+    // fetch records it on git 2.48 or later, so set it on every version.
+    git(root, &["remote", "set-head", "origin", "main"]);
     dir
 }
 

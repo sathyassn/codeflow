@@ -96,6 +96,18 @@ impl Fixture {
         }
     }
 
+    /// An `origin` that holds nothing yet, so the policy authority is the
+    /// labelled initialization state whatever other remote a case
+    /// configures (TSK-1077 reads only `origin` when it exists).
+    fn empty_origin(&self) {
+        let bare = self.temp.path().join("origin.git");
+        git(
+            self.temp.path(),
+            &["init", "-q", "--bare", &shell_path(&bare)],
+        );
+        git(&self.root, &["remote", "add", "origin", &shell_path(&bare)]);
+    }
+
     fn targets(&self) -> [PathBuf; 4] {
         [
             self.root.join(".claude/settings.json"),
@@ -3505,6 +3517,7 @@ fn repair3_runner_filter_and_option_sources() {
         ("url.ext::sh -c rm% -rf% .claude.insteadOf", "fixture"),
     ] {
         let configured = Fixture::new();
+        configured.empty_origin();
         git(&configured.root, &["config", key, value]);
         for hook in ["exec-guard", "git-guard"] {
             let out = configured.command(&configured.linked, hook, "git ls-remote fixture");
@@ -3903,6 +3916,7 @@ fn repair3_runner_rejects_non_unicode_command_environment() {
 #[test]
 fn repair3_runner_rejects_non_unicode_transport() {
     let f = Fixture::new();
+    f.empty_origin();
     let config = f.root.join(".git/config");
     let mut bytes = std::fs::read(&config).unwrap();
     bytes.extend_from_slice(b"\n[remote \"fixture\"]\nurl = ext::sh -c rm% -rf% .claude\xff\n");

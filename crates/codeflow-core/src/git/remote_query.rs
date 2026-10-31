@@ -153,8 +153,51 @@ enum Failure {
     Other(String),
 }
 
+/// The transports a question asked outside a git command may use.
+/// `GIT_ALLOW_PROTOCOL` overrides every `protocol.*.allow` setting, so
+/// repository configuration cannot enable `ext::` or another remote helper
+/// that runs a local command.
+pub const SAFE_PROTOCOLS: &str = "file:git:http:https:ssh";
+
+/// Whether `remote` advertises any ref, asked from outside a git command:
+/// the guards and the commit hooks call it to tell a remote that holds
+/// nothing yet from one whose tracking refs are missing here (TSK-1077).
+/// Beyond [`ls_remote`]'s bounds, only [`SAFE_PROTOCOLS`] are allowed and
+/// the upload command is git's own, so a configured `remote.*.uploadpack`
+/// never runs. A name git could read as an option is refused.
+///
+/// # Errors
+///
+/// Returns why the remote could not be asked.
+pub fn advertises_any_ref(root: &Path, remote: &str) -> Result<bool, String> {
+    if remote.starts_with('-') {
+        return Err("the remote name starts with '-'".into());
+    }
+    let args = ["ls-remote", "--upload-pack=git-upload-pack", remote];
+    let answer = ls_remote_attempts(&args, 0, || {
+        run_with(
+            root,
+            &args,
+            LS_REMOTE_DEADLINE,
+            &[("GIT_ALLOW_PROTOCOL", SAFE_PROTOCOLS)],
+        )
+    })?;
+    // Git ends each advertised ref with a newline; any other byte is a ref.
+    Ok(answer.split('\n').any(|line| !line.is_empty()))
+}
+
 fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure> {
+    run_with(root, args, deadline, &[])
+}
+
+fn run_with(
+    root: &Path,
+    args: &[&str],
+    deadline: Duration,
+    env: &[(&str, &str)],
+) -> Result<String, Failure> {
     let mut command = crate::git::judging_command();
+    command.envs(env.iter().copied());
     command
         .arg("-C")
         .arg(root)

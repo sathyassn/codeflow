@@ -1958,9 +1958,10 @@ struct Judging {
 /// recorded at `authority`, read as git data, so a head that loosens its own
 /// policy cannot judge itself. The hosted templates run from a checkout of
 /// the target tip they pass as the base, so there the two are the same.
-/// Without an authority, or when it carries no policy yet (the adoption
-/// change itself), the working copy's. `None` (after naming each error) when
-/// the authority's policy is unreadable or invalid, which verifies nothing.
+/// Without an authority, the working copy's. When the authority's tree
+/// proves the policy file absent (the adoption change itself), the shipped
+/// defaults (TSK-1077). `None` (after naming each error) when the
+/// authority's policy is unreadable or invalid, which verifies nothing.
 ///
 /// The policy judges the commit, branch, PR-body and work checks and their
 /// levels. Some inputs stay elsewhere, by design: the auto-detected range's
@@ -1983,7 +1984,21 @@ fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -
     let base = authority.sha();
     let text = match codeflow_core::hooks::landed_policy::policy_text_at(root, base) {
         Ok(Some(text)) => text,
-        Ok(None) => return Some(from_working(working)),
+        // A proven absence at the authority selects the shipped defaults,
+        // never the working copy, which the range itself can write
+        // (TSK-1077 AC-5).
+        Ok(None) => {
+            println!(
+                "codeflow ci: verifying against the shipped defaults, since .codeflow/policy.json is absent at {}",
+                authority.describe()
+            );
+            let policy = Policy::default();
+            return Some(Judging {
+                profiles: policy.git.automation_profiles.clone(),
+                policy,
+                raw: Ok(None),
+            });
+        }
         Err(error) => {
             eprintln!(
                 "codeflow ci: error: cannot read .codeflow/policy.json at {}: {error} — nothing was verified",
