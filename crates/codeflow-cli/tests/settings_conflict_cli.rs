@@ -847,4 +847,16 @@ fn an_absent_unmerged_policy_keeps_a_custom_protected_branch() {
         said(&absent)
     );
     assert_eq!(notes_for(&said(&absent), POLICY), 1, "{}", said(&absent));
+
+    // Review finding F4: with the file absent and an index that cannot be
+    // read, nothing shows the file is not unmerged, so the hook refuses.
+    std::fs::remove_file(repo.work().join(POLICY)).unwrap();
+    std::fs::write(repo.work().join(".git/index"), "not an index").unwrap();
+    let unreadable = pre_push(&repo);
+    assert_eq!(unreadable.status.code(), Some(2), "{}", said(&unreadable));
+    assert!(
+        said(&unreadable).contains("cannot read the index"),
+        "{}",
+        said(&unreadable)
+    );
 }

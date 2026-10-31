@@ -1834,6 +1834,9 @@ are with parsed settings, and only the local read is replaced.
   conflict and the recovery: `HEAD` has no commit, holds no copy, or holds
   a copy that does not parse. Defaults are never used in its place.
 - An authority that cannot be read refuses as before, naming the source.
+- An absent settings file reads as the shipped defaults only when the index
+  can be read and holds no unmerged entry for it; otherwise the hooks
+  refuse.
 - A merge writes `AUTO_MERGE` before its index records the conflict. So the
   `reference-transaction` stage judges a transaction that writes only Git's
   own state refs (`AUTO_MERGE`, `ORIG_HEAD`, `MERGE_HEAD`,

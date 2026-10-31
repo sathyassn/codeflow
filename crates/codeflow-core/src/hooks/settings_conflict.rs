@@ -55,8 +55,19 @@ pub(crate) fn read_local<T>(
         Ok(None) => None,
         Err(error) => Some(error),
     };
-    let Some(conflict) = unmerged(root, relative) else {
-        return failed.map_or(Ok(None), Err);
+    let conflict = match unmerged(root, relative) {
+        Ok(Some(conflict)) => conflict,
+        Ok(None) => return failed.map_or(Ok(None), Err),
+        // Only a readable index proves the file is not unmerged. A failed
+        // working copy keeps its own error; an absent one refuses rather
+        // than reading as the shipped defaults.
+        Err(why) => {
+            return Err(failed.unwrap_or_else(|| {
+                format!(
+                    "cannot read {relative}: it is absent and the index cannot show whether it has an unresolved merge conflict ({why})"
+                )
+            }))
+        }
     };
     let text = committed_copy(&conflict).map_err(|why| refusal(relative, &why))?;
     let value = parse(&text).map_err(|why| {
@@ -70,34 +81,49 @@ pub(crate) fn read_local<T>(
 }
 
 /// The repository and the file's path inside it, for a file the index holds
-/// unmerged entries for; `None` when it holds none or cannot be read, in
-/// which case the caller keeps the working copy's error.
+/// unmerged entries for.
 struct Unmerged {
     repo: Repository,
     path: String,
 }
 
-fn unmerged(root: &Path, relative: &str) -> Option<Unmerged> {
-    let repo = super::repo::open(root).ok()??;
-    let workdir = canonical(repo.workdir()?)?;
-    let inside = canonical(root)?.strip_prefix(&workdir).ok()?.join(relative);
+/// `Ok(None)` only when the index was read and holds no unmerged entry for
+/// the file, or `root` is proven to be outside any repository.
+///
+/// # Errors
+/// The repository, the file's path in it or the index cannot be read.
+fn unmerged(root: &Path, relative: &str) -> Result<Option<Unmerged>, String> {
+    let Some(repo) = super::repo::open(root)? else {
+        return Ok(None);
+    };
+    let workdir = canonical(repo.workdir().ok_or("the repository has no work tree")?)?;
+    let inside = canonical(root)?
+        .strip_prefix(&workdir)
+        .map_err(|_| "the project lies outside its work tree".to_string())?
+        .join(relative);
     let mut parts = Vec::new();
     for component in inside.components() {
         let std::path::Component::Normal(part) = component else {
-            return None;
+            return Err("the file's path cannot be named in the index".into());
         };
-        parts.push(part.to_str()?.to_owned());
+        parts.push(
+            part.to_str()
+                .ok_or("the file's path is not valid UTF-8")?
+                .to_owned(),
+        );
     }
     let path = parts.join("/");
-    let index = repo.index().ok()?;
+    let index = repo
+        .index()
+        .map_err(|e| format!("cannot read the index: {e}"))?;
     let conflicted = (1..=3).any(|stage| index.get_path(Path::new(&path), stage).is_some());
-    conflicted.then_some(Unmerged { repo, path })
+    Ok(conflicted.then_some(Unmerged { repo, path }))
 }
 
-fn canonical(path: &Path) -> Option<PathBuf> {
+fn canonical(path: &Path) -> Result<PathBuf, String> {
     path.canonicalize()
-        .ok()
         .map(crate::portable_path::without_verbatim)
+        .map_err(|e| format!("cannot resolve {}: {e}", path.display()))
 }
 
 /// The text of the regular file committed at `HEAD`.
@@ -342,6 +368,36 @@ mod tests {
         let error = Policy::load_local(absent.path()).unwrap_err();
         assert!(error.contains("HEAD holds no copy of it"), "{error}");
         assert!(local_project_toml(absent.path()).unwrap().is_none());
+    }
+
+    /// Review finding F4: an index that cannot be read proves nothing, so an
+    /// absent file refuses instead of reading as the defaults; with a
+    /// readable index the same absence is the defaults, as before.
+    #[test]
+    fn an_absent_file_with_an_unreadable_index_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q", "-b", "main"]);
+        write(dir.path(), "base.txt", "base\n");
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "chore: base"]);
+        assert_eq!(
+            Policy::load_local(dir.path())
+                .unwrap()
+                .git
+                .protected_branches,
+            Policy::default().git.protected_branches
+        );
+        std::fs::write(dir.path().join(".git/index"), "not an index").unwrap();
+        let error = Policy::load_local(dir.path()).unwrap_err();
+        assert!(
+            error.contains("cannot read .codeflow/policy.json"),
+            "{error}"
+        );
+        assert!(error.contains("cannot read the index"), "{error}");
+        // A working copy that fails keeps its own error.
+        write(dir.path(), POLICY, "{");
+        let error = Policy::load_local(dir.path()).unwrap_err();
+        assert!(error.starts_with("cannot parse policy"), "{error}");
     }
 
     #[test]
