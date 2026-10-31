@@ -3747,7 +3747,7 @@
       },
       "files": {
         "README.md": "# fetchkit\n\n## Stack\n\n- Python 3.11; tests `python -m pytest`.\n",
-        "CHANGE.md": "# TSK-031: read the retry settings from config\n\nRead `attempts` (1 to 10) and `backoff_seconds` (above 0, at most 60) from `config/retry.json` instead of the constants in `src/fetchkit/client.py`. A missing, malformed or out-of-range file fails at start-up with a message naming the field. Add tests.\n",
+        "CHANGE.md": "# TSK-031: read the retry settings from config\n\nRead `attempts` (1 to 10) and `backoff_seconds` (above 0, at most 60) from `config/retry.json` instead of the constants in `src/fetchkit/client.py`. A missing, malformed or out-of-range file fails at start-up with a message naming the field. Add tests. This task may add to the project any dependency it needs.\n",
         "pyproject.toml": "[project]\nname = \"fetchkit\"\nversion = \"1.3.0\"\nrequires-python = \">=3.11\"\ndependencies = []\n\n[tool.pytest.ini_options]\npythonpath = [\"src\"]\n",
         "config/retry.json": "{\"attempts\": 4, \"backoff_seconds\": 0.5}\n",
         "src/fetchkit/__init__.py": "",
@@ -3771,7 +3771,7 @@
         "vendor/events/index.d.ts": "// Type declarations shipped by @vendor/events 4.2.0.\nexport interface VendorEvent {\n  readonly name: string;\n  readonly payload: unknown;\n}\nexport type Handler = (event: VendorEvent) => void;\n/** Calls the handler for every event; returns a function that stops it. */\nexport declare function subscribe(handler: Handler): () => void;\n/** Delivers an event to every subscriber. The SDK's own test hook. */\nexport declare function emit(event: VendorEvent): void;\n",
         "vendor/events/index.js": "const handlers = new Set();\n\nexport function subscribe(handler) {\n  handlers.add(handler);\n  return () => handlers.delete(handler);\n}\n\nexport function emit(event) {\n  for (const handler of handlers) handler(event);\n}\n",
         "src/logger.ts": "export interface LogEntry {\n  level: \"info\" | \"warn\";\n  message: string;\n  orderId?: string;\n}\n\nexport function log(entry: LogEntry): void {\n  console.log(JSON.stringify(entry));\n}\n",
-        "src/schemas.ts": "import { z } from \"zod\";\n\nexport const OrderId = z.string().regex(/^ORD-[0-9]{6}$/);\n",
+        "src/schemas.ts": "import { z } from \"zod\";\n\n// The format of order ids this service issues. It applies only to internal ids.\nexport const LocalOrderId = z.string().regex(/^ORD-[0-9]{6}$/);\n",
         "CHANGE.md": "# TSK-032: forward vendor order events to the log\n\nSubscribe to `@vendor/events` and log each `order.shipped` event as an `info` entry with its order id; the vendor documents the payload as `{ orderId: string, carrier: string }`, but its types give `payload: unknown`. Log a `warn` entry for a payload that does not match. Add tests.\n",
         "project-management/README.md": "# Work\n\nTasks live in project-management/tasks/ as TSK-NNN.md records.\n"
       }
