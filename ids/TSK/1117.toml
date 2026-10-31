@@ -1,0 +1,11 @@
+id = "TSK-1117"
+uid = "7d5a38f2-6b78-4411-bba5-5a125f189853"
+kind = "TSK"
+title = "The register holds across a line's merge of main and on the merged tree"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-31T16:20:27Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
