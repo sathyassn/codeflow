@@ -33,16 +33,14 @@ pub struct TestArgs {
     #[arg(long, conflicts_with_all = ["mode", "strict", "since", "all", "only", "config"])]
     pub lock_status: bool,
 
-    /// Exit non-zero when no targets executed or candidate evidence skipped a target.
+    /// Exit non-zero when no targets executed or a requested target was skipped.
     /// Explicit --only and mode exclusions are not skips.
     /// Use for scripted callers that require execution evidence.
     #[arg(long)]
     pub strict: bool,
 
-    /// Compare the entire candidate delta with a recorded green base.
-    /// Without --since, full mode executes every target.
-    /// Default: the merge base of HEAD and the task's declared integration target.
-    /// An unproven base conservatively runs every target.
+    /// Accepted and narrows nothing: no local run record earns selection
+    /// credit (ADR-0089), so every eligible target runs.
     #[arg(long, conflicts_with = "all")]
     pub since: Option<String>,
 

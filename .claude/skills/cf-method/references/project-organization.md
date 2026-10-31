@@ -293,8 +293,10 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
 ### Picking up and starting work
 
 - `codeflow work next --epic EPC-NNN --json` lists ready tasks first, then
-  waiting and blocked ones with their reasons, and names the fetched snapshot
-  it judged; both flags are optional.
+  landed ones (work merged, record still open, with the `codeflow task
+  status` command that settles it), then waiting and blocked ones with their
+  reasons, and names the fetched snapshot it judged; both flags are
+  optional.
 - `codeflow work claim TSK-NNN` checks readiness against the fetched target
   tip, creates `task/TSK-NNN-<slug>` from it (or from a named reviewed pin,
   `--on`) and pushes it; on a branch that already holds a new standalone

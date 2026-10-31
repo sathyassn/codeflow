@@ -35,6 +35,8 @@ pub const DEFAULT_NAMES: &[&str] = &[
     ".kube/config",
     ".aws/credentials",
     "application_default_credentials.json",
+    "credentials.json",
+    ".credentials.json",
 ];
 
 /// A final-component glob, or a sequence of component globs at any depth.
@@ -263,6 +265,9 @@ impl Report {
     }
 }
 
+const LINK: u32 = 0o120_000;
+const GITLINK: u32 = 0o160_000;
+
 fn check_entry(
     repo: &Repository,
     policy: &PathPolicy,
@@ -280,13 +285,26 @@ fn check_entry(
             return Ok(());
         }
     };
-    if exempt(&path) {
+    // A gate input skips the name and prefix rules so the gate can repair its
+    // own inputs, but only as a regular file: a link is still judged by its
+    // target below, and any other entry type refuses.
+    let input = exempt(&path);
+    if input && !deleted && mode != LINK && !matches!(mode, 0o100_644 | 0o100_755 | 0o100_664) {
+        let kind = if mode == GITLINK {
+            "a gitlink".to_string()
+        } else {
+            format!("an entry of mode {mode:o}")
+        };
+        report.refuse(
+            policy,
+            format!("gate input {shown} is {kind}; it must be a regular file or a safe symlink"),
+        );
         return Ok(());
     }
-    if policy.protected_hit(&path) {
+    if !input && policy.protected_hit(&path) {
         report.refuse(policy, format!("protected path changed: {shown}"));
     }
-    if policy.name_hit(&path) {
+    if !input && policy.name_hit(&path) {
         if deleted {
             report.notes.push(format!(
                 "deleted blocked name {shown}; its earlier content remains in history"
@@ -295,7 +313,7 @@ fn check_entry(
             report.refuse(policy, format!("blocked name changed: {shown}"));
         }
     }
-    if !deleted && mode == 0o120_000 {
+    if !deleted && mode == LINK {
         let blob = repo
             .find_blob(id)
             .map_err(|e| format!("cannot read symlink {shown}: {e}"))?;
@@ -303,10 +321,12 @@ fn check_entry(
         let content = blob.content();
         let content = content.strip_prefix(b"./").unwrap_or(content);
         let target = normalize(content.strip_suffix(b"/").unwrap_or(content));
+        // A letter then a colon is a Windows drive path, rooted ("C:/x") or
+        // drive-relative ("C:x"); either can leave the tree.
+        let drive =
+            |t: &str| matches!(t.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
         match target {
-            Ok(target)
-                if !(target.starts_with('/') || target.as_bytes().get(1..3) == Some(b":/")) =>
-            {
+            Ok(target) if !(target.starts_with('/') || drive(&target)) => {
                 let resolved = path.rsplit_once('/').map_or_else(
                     || target.clone(),
                     |(parent, _)| format!("{parent}/{target}"),
@@ -588,7 +608,9 @@ mod tests {
                 "kubeconfig",
                 ".kube/config",
                 ".aws/credentials",
-                "application_default_credentials.json"
+                "application_default_credentials.json",
+                "credentials.json",
+                ".credentials.json"
             ]
         );
         assert_eq!(GitPolicy::default().blocked_names, default_names());

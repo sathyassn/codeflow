@@ -712,7 +712,11 @@ pub const SCHEMA: [KeySpec; 74] = [
         notes: "Read only from the policy at the default target's tip at the \
                 destination, so a pushed branch or a pull request cannot set \
                 its own scope; a change takes effect once it lands on the \
-                default target. A pattern that could match a protected branch \
+                default target. A default target with no policy uses the \
+                built-in pattern only when no commit in its history has \
+                carried one (a first adoption); a removed policy, or history \
+                that cannot prove the absence, refuses. A pattern that could \
+                match a protected branch \
                 or an epic line name (`integration/EPC-*`) is refused, so the \
                 default target and epic lines keep their own rules.",
     },

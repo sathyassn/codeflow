@@ -1,6 +1,7 @@
 //! TSK-379: built hooks judge the repository holding a target.
 use super::{
-    codeflow, enforced_repo, expansion_codeflow, guard_payload, run_with_stdin, shell_path,
+    codeflow, enforced_repo, expansion_codeflow, git_command, guard_payload, run_with_stdin,
+    shell_path,
 };
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -9,15 +10,10 @@ use std::process::{Command, Output};
 // caller runs an instrumented build. The override belongs to Git's child
 // environment, never to the surrounding Cargo or coverage process.
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = git_command()
         .args(args)
         .current_dir(dir)
         .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap();
     assert!(out.status.success(), "git {args:?}: {out:?}");
@@ -1700,9 +1696,11 @@ fn tsk1002_review17_fd_values_help_programs_carets_and_backups() {
     // A leading `^` handed to a Git call that runs a configured program
     // may expand to an option-like name, so it stays refused, with a
     // message to quote it. The fixture configures that program itself:
-    // without one the runner reader has nothing to judge, and whether the
-    // host's system config names one (macOS Git sets `credential.helper`)
-    // must not decide the verdict (hosted run 41026268442).
+    // without one the runner reader has nothing to judge. The isolation in
+    // `host_isolation.rs` removes the host's `PAGER` and `GIT_PAGER`, which
+    // supplied the program on a developer host and not on a hosted runner
+    // (run 41026268442), and removes the host's configuration; it cannot
+    // supply the program the test needs (TSK-1084).
     git(&f.root, &["config", "core.pager", "less"]);
     let out = f.command(&f.linked, "git-guard", "cd clean && git log ^main HEAD");
     let err = String::from_utf8_lossy(&out.stderr);
@@ -4852,11 +4850,9 @@ fn worktree_add_reads_linked_includes_by_their_logical_path() {
         }
         // Real Git takes the logical child, and runs it during the add.
         git(&f.root, &["worktree", "add", "--detach", &dest]);
-        let out = Command::new("git")
+        let out = git_command()
             .args(["config", "--get", "core.fsmonitor"])
             .current_dir(stage.join("linkedwt"))
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
             .unwrap();
         assert_eq!(out.status.success(), callback_logical, "{out:?}");
@@ -4910,11 +4906,9 @@ fn worktree_add_reads_includes_through_an_admin_alias() {
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
         git(&f.root, &["worktree", "add", "--detach", &dest]);
-        let out = Command::new("git")
+        let out = git_command()
             .args(["config", "--get", "core.fsmonitor"])
             .current_dir(stage.join("aliaswt"))
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
             .unwrap();
         assert!(out.status.success(), "{kind}: {out:?}");

@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use git2::{BranchType, Repository};
 
+use super::work_start::record_kind_for_tree_path;
 use super::work_start::{
     carried_task_id_name, parse_record, records_from_tree, validate_anchored_task, work_prefixes,
     work_suffix, work_suffix_name, NotReady, Record, RecordKind,
@@ -29,6 +30,11 @@ pub enum State {
     Ready,
     /// A visible, unlanded branch carries the task: claimed (advisory).
     Active,
+    /// The record is still open but a branch carrying the task has landed
+    /// in its target with work beyond the record (TSK-1038). The core
+    /// would hold, yet the task is finished, not startable: the record
+    /// needs `codeflow task status`.
+    Landed,
     /// `todo` with an unmet dependency or a spec not yet approved.
     Waiting,
     /// A Blocker, an awaiting selection or a closed epic.
@@ -44,6 +50,7 @@ impl State {
         match self {
             Self::Ready => "ready",
             Self::Active => "active",
+            Self::Landed => "landed",
             Self::Waiting => "waiting",
             Self::Blocked => "blocked",
             Self::Invalid => "invalid",
@@ -79,6 +86,12 @@ pub struct Entry {
     /// Visible, unlanded branches carrying the task id, in display form
     /// (`GitName::display`), for text output.
     pub branches: Vec<String>,
+    /// Landed branches carrying the task id whose work reached the target
+    /// beyond the task's own record, in display form. Set on a
+    /// [`State::Landed`] entry; empty otherwise (TSK-1038).
+    pub landed_branches: Vec<String>,
+    /// The same landed branches as git stores them, for machine output.
+    pub landed_branch_names: Vec<String>,
     /// The same branches as git stores them, for machine output: the exact
     /// text, or the display form for a name that is not valid UTF-8, which
     /// no text can hold exactly (TSK-388).
@@ -124,11 +137,15 @@ impl Backlog {
         [
             State::Ready,
             State::Active,
+            State::Landed,
             State::Waiting,
             State::Blocked,
             State::Invalid,
         ]
         .into_iter()
+        // `landed` is shown only when a task is in it, so a repository with
+        // no finished-but-open task reads as it always did.
+        .filter(|state| *state != State::Landed || self.in_state(*state).next().is_some())
         .map(|state| format!("{} {}", state.as_str(), self.in_state(state).count()))
         .collect::<Vec<_>>()
         .join(" · ")
@@ -654,6 +671,135 @@ fn split_landed(
     (open.into_iter().collect(), done)
 }
 
+/// The most commits walked from a landed tip to the line it left.
+const LANDED_WALK_LIMIT: usize = 100_000;
+
+/// The first-parent line of one target tip, read at most once and only when
+/// a landed branch needs it.
+type LandLine = std::cell::OnceCell<Option<std::collections::HashSet<git2::Oid>>>;
+
+/// The landed branches among `done` whose work reached `target` beyond the
+/// task's own record (TSK-1038). A branch whose commits only filed or
+/// amended `task_id`'s record is not finished work, so the task stays
+/// startable. A branch whose commits cannot be read to the end proves
+/// nothing, the same rule [`landed`] follows, so it does not count.
+fn landed_work_branches(
+    repo: &Repository,
+    line: &LandLine,
+    claims: &[(GitName, git2::Oid)],
+    done: &[GitName],
+    target: git2::Oid,
+    task_id: &str,
+) -> Vec<GitName> {
+    if done.is_empty() {
+        return Vec::new();
+    }
+    let _judgment = history::judgment();
+    let Some(line) = line.get_or_init(|| first_parent_line(repo, target)) else {
+        return Vec::new();
+    };
+    done.iter()
+        .filter(|name| {
+            claims.iter().any(|(seen, tip)| {
+                seen == *name && adds_work_beyond_record(repo, line, *tip, task_id)
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// The commits on the first-parent line of `target`, by parent links alone.
+/// `None` when the walk cannot be completed.
+fn first_parent_line(
+    repo: &Repository,
+    target: git2::Oid,
+) -> Option<std::collections::HashSet<git2::Oid>> {
+    let mut line = std::collections::HashSet::new();
+    let mut current = repo.find_commit(target).ok()?;
+    loop {
+        line.insert(current.id());
+        if history::parents(repo, &current).ok()?.is_empty() {
+            return Some(line);
+        }
+        current = history::parent(repo, &current, 0).ok()?;
+    }
+}
+
+/// Whether a landed `tip` changed any path other than `task_id`'s own task
+/// record. The branch's own commits are the first-parent chain from `tip`
+/// down to the commit where it left the target's first-parent `line`; a
+/// merge commit on that chain (the line merged in) is skipped, since its
+/// diff against its first parent is the line's work, not the branch's.
+fn adds_work_beyond_record(
+    repo: &Repository,
+    line: &std::collections::HashSet<git2::Oid>,
+    tip: git2::Oid,
+    task_id: &str,
+) -> bool {
+    let own_record = format!("{task_id}.md");
+    let is_own_record = |bytes: &[u8]| {
+        std::str::from_utf8(bytes).is_ok_and(|path| {
+            record_kind_for_tree_path(path) == Some(RecordKind::Task)
+                && path.rsplit('/').next() == Some(own_record.as_str())
+        })
+    };
+    let Ok(mut current) = repo.find_commit(tip) else {
+        return false;
+    };
+    for _ in 0..LANDED_WALK_LIMIT {
+        if line.contains(&current.id()) {
+            return false;
+        }
+        let Ok(parents) = history::parents(repo, &current) else {
+            return false;
+        };
+        if parents.len() < 2 {
+            let Ok(tree) = current.tree() else {
+                return false;
+            };
+            let parent_tree = match parents.len() {
+                0 => None,
+                _ => match history::parent(repo, &current, 0).and_then(|parent| parent.tree()) {
+                    Ok(tree) => Some(tree),
+                    Err(_) => return false,
+                },
+            };
+            let Ok(diff) = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None) else {
+                return false;
+            };
+            let other = diff.deltas().any(|delta| {
+                [delta.old_file().path_bytes(), delta.new_file().path_bytes()]
+                    .into_iter()
+                    .flatten()
+                    .any(|path| !is_own_record(path))
+            });
+            if other {
+                return true;
+            }
+        }
+        // The chain ends at a root that never met the line: unproven.
+        let Some(&first) = parents.first() else {
+            return false;
+        };
+        match repo.find_commit(first) {
+            Ok(parent) => current = parent,
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+/// The suggested command for a task whose work has landed while its record
+/// is open (TSK-1038): the one command that settles the record.
+#[must_use]
+pub fn landed_status_command(task_id: &str) -> String {
+    format!("codeflow task status {task_id} complete")
+}
+
+fn landed_reason(status: &str) -> String {
+    format!("its work has landed on its target but the record is still {status}")
+}
+
 fn fetched_at(repo: &Repository) -> Option<String> {
     let modified = std::fs::metadata(repo.commondir().join("FETCH_HEAD"))
         .and_then(|meta| meta.modified())
@@ -777,6 +923,48 @@ fn sort_by_state_then_id(out: &mut Backlog) {
     out.landed.sort_by(|a, b| crate::ids::compare_ids(a, b));
 }
 
+/// What a task's state is judged against: the records on one target tip.
+struct Judged<'a> {
+    repo: &'a Repository,
+    records: &'a BTreeMap<String, Record>,
+    reference: &'a str,
+    tip: git2::Oid,
+    line: &'a LandLine,
+}
+
+/// The state and reason of one open task, and the landed branches that make
+/// it [`State::Landed`]; `None` for a closed task. Only a task that would
+/// otherwise be ready can be finished without its record knowing: a claim, a
+/// hold or a missing dependency already keeps it out of the ready list.
+fn derive_state(
+    on: &Judged<'_>,
+    record: &Record,
+    claims: &[(GitName, git2::Oid)],
+    done: &[GitName],
+    unclaimed: bool,
+) -> Option<(State, String, Vec<GitName>)> {
+    match validate_anchored_task(on.repo, on.records, &record.id, on.reference) {
+        Ok(_) if unclaimed => {
+            let landed = landed_work_branches(on.repo, on.line, claims, done, on.tip, &record.id);
+            Some(if landed.is_empty() {
+                (State::Ready, String::new(), landed)
+            } else {
+                (State::Landed, landed_reason(&record.status), landed)
+            })
+        }
+        Ok(_) => Some((State::Active, String::new(), Vec::new())),
+        Err(error) => {
+            let state = match error.not_ready() {
+                NotReady::Closed => return None,
+                NotReady::Blocked => State::Blocked,
+                NotReady::Waiting => State::Waiting,
+                NotReady::Invalid => State::Invalid,
+            };
+            Some((state, error.to_string(), Vec::new()))
+        }
+    }
+}
+
 /// Compute the backlog from the last-fetched refs. Makes no network call.
 ///
 /// # Errors
@@ -810,6 +998,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     for (target, reference, tip, records) in &tips {
         let remotes = claim_remotes(&repo, repo_root, Some(target))?;
         let carried = scope_scan(&mut scans, &repo, &prefixes, &ids, remotes)?;
+        let land_line = LandLine::new();
         for record in records
             .values()
             .filter(|record| record.kind == RecordKind::Task)
@@ -833,16 +1022,12 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                 progress.complete += usize::from(record.status == "complete");
                 progress.cancelled += usize::from(record.status == "cancelled");
             }
-            let (names, done) = split_landed(
-                &repo,
-                repo_root,
-                carried
-                    .claims
-                    .get(&record.id)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default(),
-                *tip,
-            );
+            let claims = carried
+                .claims
+                .get(&record.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let (names, done) = split_landed(&repo, repo_root, claims, *tip);
             // The report shows names; the decisions above used exact bytes.
             out.landed
                 .extend(done.iter().map(|name| name.display().to_string()));
@@ -853,17 +1038,18 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
             if names.len() > 1 {
                 out.conflicts.insert(record.id.clone(), names.clone());
             }
-            let (state, reason) =
-                match validate_anchored_task(&repo, records, &record.id, reference) {
-                    Ok(_) if names.is_empty() => (State::Ready, String::new()),
-                    Ok(_) => (State::Active, String::new()),
-                    Err(error) => match error.not_ready() {
-                        NotReady::Closed => continue,
-                        NotReady::Blocked => (State::Blocked, error.to_string()),
-                        NotReady::Waiting => (State::Waiting, error.to_string()),
-                        NotReady::Invalid => (State::Invalid, error.to_string()),
-                    },
-                };
+            let judged_on = Judged {
+                repo: &repo,
+                records,
+                reference,
+                tip: *tip,
+                line: &land_line,
+            };
+            let Some((state, reason, landed_work)) =
+                derive_state(&judged_on, record, claims, &done, names.is_empty())
+            else {
+                continue;
+            };
             // A claim on a waiting task makes it active; a Blocker or an
             // invalid record keeps precedence over any branch, which is still
             // listed with the entry.
@@ -881,6 +1067,11 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                 reason,
                 branches: names,
                 branch_names,
+                landed_branches: landed_work
+                    .iter()
+                    .map(|name| name.display().to_string())
+                    .collect(),
+                landed_branch_names: landed_work.iter().map(exact_text).collect(),
                 informational_branches: carried.information(&record.id, reference),
             });
         }
@@ -1786,12 +1977,33 @@ pub fn claim_on(
     if let Some(current) = &renamed {
         carried.retain(|(name, _)| name != current);
     }
-    let (open, _) = split_landed(&repo, repo_root, &carried, target_tip);
+    let (open, done) = split_landed(&repo, repo_root, &carried, target_tip);
     if !open.is_empty() {
         let shown: Vec<String> = open.iter().map(|name| name.display().to_string()).collect();
         return Err(format!(
             "{task_id} is already claimed by a visible branch: {}",
             shown.join(", ")
+        ));
+    }
+    // Finished work is not claimed again (TSK-1038): the landed branch and
+    // the one command that settles the record are named.
+    let landed = landed_work_branches(
+        &repo,
+        &LandLine::new(),
+        &carried,
+        &done,
+        target_tip,
+        task_id,
+    );
+    if !landed.is_empty() {
+        let shown: Vec<String> = landed
+            .iter()
+            .map(|name| name.display().to_string())
+            .collect();
+        return Err(format!(
+            "{task_id} has already landed on {reference_shown} in {} while its record is still open; settle the record with `{}`",
+            shown.join(", "),
+            landed_status_command(task_id)
         ));
     }
     let title = records
@@ -2726,6 +2938,143 @@ mod tests {
                 GitName::from_text("task/TSK-238-caf\u{fffd}")
             ])
         );
+    }
+
+    /// Land `branch` on `main` with a merge commit; `files` are what its one
+    /// commit writes.
+    fn land(root: &Path, branch: &str, files: &[(&str, &str)]) {
+        run(root, &["switch", "-q", "-c", branch, "main"]);
+        for (path, content) in files {
+            // A record keeps its front matter; a note is appended.
+            let path = root.join(path);
+            let mut text = fs::read_to_string(&path).unwrap_or_default();
+            text.push_str(content);
+            fs::write(path, text).unwrap();
+        }
+        commit(root, "work");
+        run(root, &["switch", "-q", "main"]);
+        run(root, &["merge", "-q", "--no-ff", "-m", "land", branch]);
+    }
+
+    /// TSK-1038: a task whose branch landed with work, record still `todo`,
+    /// is `landed` (never `ready`) and `claim` refuses it by name.
+    #[test]
+    fn a_task_whose_work_landed_is_landed_not_ready_and_is_not_claimed() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        task(root, "TSK-002", "todo", "[]", "");
+        commit(root, "plan");
+        land(root, "task/TSK-001-done", &[("done.txt", "done\n")]);
+
+        let backlog = backlog(root).unwrap();
+        let landed = entry(&backlog, "TSK-001");
+        assert_eq!(landed.state, State::Landed);
+        assert_eq!(landed.landed_branches, ["task/TSK-001-done"]);
+        assert_eq!(landed.landed_branch_names, ["task/TSK-001-done"]);
+        assert!(landed.branches.is_empty());
+        assert_eq!(entry(&backlog, "TSK-002").state, State::Ready);
+        assert_eq!(
+            backlog.counts_line(),
+            "ready 1 · active 0 · landed 1 · waiting 0 · blocked 0 · invalid 0"
+        );
+        let refused = claim(root, "TSK-001").unwrap_err();
+        assert!(refused.contains("already landed"), "{refused}");
+        assert!(refused.contains("task/TSK-001-done"), "{refused}");
+        assert!(
+            refused.contains("codeflow task status TSK-001 complete"),
+            "{refused}"
+        );
+        claim(root, "TSK-002").unwrap();
+    }
+
+    /// TSK-1038 AC-4: a landed branch that changed only the task's own
+    /// record is not finished work, even with the line merged into it.
+    #[test]
+    fn a_record_only_branch_leaves_the_task_ready() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        commit(root, "plan");
+        run(root, &["switch", "-q", "-c", "task/TSK-001-record", "main"]);
+        fs::write(
+            root.join("project-management/tasks/TSK-001.md"),
+            "---\nid: TSK-001\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: main\ntitle: \"work TSK-001\"\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-09-27\n---\n\n# TSK-001 amended\n",
+        )
+        .unwrap();
+        commit(root, "amend the record");
+        // The line moves, and the branch merges it in before landing.
+        run(root, &["switch", "-q", "main"]);
+        fs::write(root.join("other.txt"), "other\n").unwrap();
+        commit(root, "other");
+        run(root, &["switch", "-q", "task/TSK-001-record"]);
+        run(root, &["merge", "-q", "--no-ff", "-m", "line in", "main"]);
+        run(root, &["switch", "-q", "main"]);
+        run(
+            root,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "land",
+                "task/TSK-001-record",
+            ],
+        );
+
+        let backlog = backlog(root).unwrap();
+        assert_eq!(entry(&backlog, "TSK-001").state, State::Ready);
+        assert_eq!(backlog.landed, ["task/TSK-001-record"], "it did land");
+        claim(root, "TSK-001").unwrap();
+    }
+
+    /// Another file beside the record makes the landed branch work, and
+    /// another task's record does not stand in for the task's own.
+    #[test]
+    fn a_landed_branch_with_any_other_path_is_work() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        task(root, "TSK-002", "todo", "[]", "");
+        commit(root, "plan");
+        land(
+            root,
+            "task/TSK-001-both",
+            &[
+                ("project-management/tasks/TSK-001.md", "x\n"),
+                ("code.rs", "x\n"),
+            ],
+        );
+        land(
+            root,
+            "task/TSK-002-other-record",
+            &[("project-management/tasks/TSK-001.md", "y\n")],
+        );
+        let backlog = backlog(root).unwrap();
+        assert_eq!(entry(&backlog, "TSK-001").state, State::Landed);
+        assert_eq!(entry(&backlog, "TSK-002").state, State::Landed);
+    }
+
+    /// A claim, a hold or an open branch alongside a landed one keeps its own
+    /// state: only a would-be-ready task becomes `landed`.
+    #[test]
+    fn a_landed_branch_does_not_override_an_open_claim_or_a_hold() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        task(root, "TSK-002", "blocked", "[]", "");
+        commit(root, "plan");
+        land(root, "task/TSK-001-first", &[("first.txt", "1\n")]);
+        run(root, &["switch", "-q", "-c", "fix/TSK-001-second", "main"]);
+        fs::write(root.join("second.txt"), "2\n").unwrap();
+        commit(root, "second");
+        run(root, &["switch", "-q", "main"]);
+        land(root, "task/TSK-002-first", &[("held.txt", "1\n")]);
+
+        let backlog = backlog(root).unwrap();
+        assert_eq!(entry(&backlog, "TSK-001").state, State::Active);
+        assert!(entry(&backlog, "TSK-001").landed_branches.is_empty());
+        assert_eq!(entry(&backlog, "TSK-002").state, State::Blocked);
     }
 
     #[test]

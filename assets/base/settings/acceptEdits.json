@@ -364,8 +364,7 @@
       "allowWrite": [
         "~/Library/Application Support/codeflow/present",
         "~/.local/state/codeflow/present",
-        "~/.codeflow/locks",
-        "~/.codeflow/gate-runs"
+        "~/.codeflow/locks"
       ],
       "denyRead": [
         "~/.ssh",
