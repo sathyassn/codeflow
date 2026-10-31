@@ -42,6 +42,12 @@ use std::path::{Path, PathBuf};
 /// argument with whitespace removed, how many, why it never holds git).
 const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     (
+        "codeflow-cli/src/cmd/claude_session.rs",
+        "shell",
+        2,
+        "the shell-function test sources the `claude` function under the installed bash and zsh in a disposable fixture with a stub `claude`, never git (TSK-1070)",
+    ),
+    (
         "codeflow-core/src/security/outward.rs",
         "shell",
         2,

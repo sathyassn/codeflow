@@ -736,7 +736,7 @@ mod tests {
         let plain = dir.path().join("plain");
         for repo in [&adopted, &plain] {
             std::fs::create_dir_all(repo.join("sub")).unwrap();
-            let status = std::process::Command::new("git")
+            let status = codeflow_core::git::command()
                 .args(["init", "-q"])
                 .current_dir(repo)
                 .status()
@@ -758,7 +758,7 @@ mod tests {
                 .current_dir(cwd)
                 .env("HOME", &home)
                 .env("PATH", &path)
-                .env_remove(MARKER_VAR)
+                .env_remove("CODEFLOW_SESSION_SETTINGS")
                 .output()
                 .unwrap();
             (
@@ -832,7 +832,7 @@ mod tests {
         std::fs::write(&wrapper, WRAPPER).unwrap();
         let adopted = dir.path().join("adopted");
         std::fs::create_dir_all(adopted.join(".codeflow")).unwrap();
-        let status = std::process::Command::new("git")
+        let status = codeflow_core::git::command()
             .args(["init", "-q"])
             .current_dir(&adopted)
             .status()
@@ -846,7 +846,7 @@ mod tests {
                 .args(args)
                 .current_dir(cwd)
                 .env("HOME", &home)
-                .env_remove(MARKER_VAR)
+                .env_remove("CODEFLOW_SESSION_SETTINGS")
                 .output()
                 .unwrap();
             assert!(out.status.success());

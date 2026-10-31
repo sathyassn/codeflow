@@ -25,7 +25,8 @@ check; when unsure, route.
   sandbox; only the `gh` subcommands CodeFlow uses and a plain `git push`
   run outside it, by name in `sandbox.excludedCommands`, and only as a
   single command with no pipe, redirect, `cd` or `$(...)`. Add a host or
-  tool in `.claude/settings.local.json`. The permission mode is the
+  tool in `.claude/settings.local.json`; `herdr` and the official Codex
+  plugin go in the person's own user settings. The permission mode is the
   person's: auto (with `autoMode.classifyAllShell`) or bypass, set at user
   scope, at launch or in CodeFlow's session file, since Claude ignores both
   in a repository file. `codeflow claude-session --install` writes that file

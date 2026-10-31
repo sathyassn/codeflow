@@ -1392,8 +1392,10 @@ fn autonomy_reference_keeps_its_owned_parts() {
                 "`integration/` branch that policy does not protect",
             ),
             (
-                "classified retry",
-                "take the one classified unsandboxed retry without asking, never for an action the presets refuse",
+                // TSK-1070 removed the unsandboxed retry; the duty is now
+                // that a refused command never leaves the sandbox.
+                "no unsandboxed rerun",
+                "never rerun it outside the sandbox",
             ),
             (
                 "bypass removes prompts, not boundaries",

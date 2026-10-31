@@ -1847,7 +1847,7 @@
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "974df61224273bd832e33f3630671342c21e0b9ac247ca36905ba22cffcdf8c1",
+      "sha256": "7cf258d455770eed231324bb5d5d9b001522e765f7a13307b6bc86fc68732f72",
       "exec": false
     },
     "docs/architecture.md": {
