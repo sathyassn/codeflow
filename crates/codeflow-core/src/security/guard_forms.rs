@@ -137,9 +137,9 @@ pub const ROOTED_DELETIONS: &[&str] = &[
 ];
 
 /// The [`PROJECT_DELETIONS`] that give `rm` or `find` a word filled in at
-/// run time: the baseline allows them, and where the strict rule applies
-/// the exec guard refuses them under `git.hook_integrity` (TSK-397 design
-/// D).
+/// run time: the relaxed rule allows them, and where the strict rule
+/// applies the exec guard refuses them under `security.text_guard` (TSK-397
+/// design D).
 pub const RUN_TIME_PROJECT_DELETIONS: &[&str] = &[
     "D=./build; rm -rf $D",
     "D=build && find $D -delete",
