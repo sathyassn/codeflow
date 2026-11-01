@@ -17,21 +17,20 @@ pub struct TestArgs {
     #[command(subcommand)]
     pub command: Option<TestCommand>,
 
-    /// Full (default) and essential hold the shared heavy-work lock for the run.
+    /// Full (default) and essential take a heavy-run slot for the run; quick takes
+    /// one when its first heavy target starts. Heavy runs in any worktree or project
+    /// run at once; past the host's job budget a run uses fewer jobs.
     /// Undeclared quick targets use `execution.quick_default_class` (light by default).
-    /// Quick runs light targets beside gates; heavy targets wait up to
-    /// `--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then
-    /// refuse if still held. Under `codeflow reserve` they use its lock (Unix).
+    /// Only a `host_exclusive` target runs alone; while one holds the host, heavy
+    /// work waits up to `--wait-seconds` or `execution.heavy_wait_seconds`
+    /// (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix).
     /// With no quick targets, quick uses essential targets, heavy unless declared light.
-    /// Both the `CodeFlow` home and git common directory use `full-gate.lock`, also
-    /// excluding full gates from 3.1. Essential gates from 3.1 take no lock.
-    /// These locks do not make the rest of the machine quiet.
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
 
-    /// Seconds heavy quick targets wait for the shared heavy-work lock,
-    /// replacing `execution.heavy_wait_seconds`. Full and essential refuse
-    /// at once as before.
+    /// Seconds heavy work waits for a host-exclusive target, or a
+    /// host-exclusive target for other heavy runs, replacing
+    /// `execution.heavy_wait_seconds`.
     #[arg(long, value_name = "SECONDS")]
     pub wait_seconds: Option<u64>,
 
@@ -138,7 +137,7 @@ pub fn run(args: &TestArgs) -> i32 {
     if args.lock_status {
         return print_lock_status(&root);
     }
-    let _lock = match guard_gate(&root, &args.mode, args.config.as_deref()) {
+    let _lock = match guard_gate(&root, &args.mode, args.config.as_deref(), args.wait_seconds) {
         Ok(lock) => lock,
         Err(message) => {
             eprintln!("codeflow test: refused: {message}");
@@ -273,13 +272,15 @@ fn nothing_ran(args: &TestArgs, reason: &str) -> i32 {
 }
 
 /// TSK-134 guards, checked before any target runs: a gate that runs cargo
-/// warns about a `CARGO_TARGET_DIR` outside the worktree, and essential or full mode
-/// takes the machine-wide gate lock (held until the returned value drops) or
-/// refuses naming the gate that holds it.
+/// warns about a `CARGO_TARGET_DIR` outside the worktree, and essential or
+/// full mode takes a heavy-run slot (held until the returned value drops).
+/// Other heavy runs never refuse it (TSK-1145); a host-exclusive target
+/// holding the host makes it wait up to the run's bound, then refuse.
 fn guard_gate(
     root: &std::path::Path,
     mode: &str,
     config: Option<&std::path::Path>,
+    wait_seconds: Option<u64>,
 ) -> Result<Option<GateLock>, String> {
     if gate_uses_cargo(root, mode, config) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
@@ -294,16 +295,38 @@ fn guard_gate(
     let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
         format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
     })?;
-    let lock = acquire_gate_lock(&dirs, root, mode).map_err(|held| {
-        let mut message = held.to_string();
-        if message.contains("gate lock unavailable") {
-            message.push_str(
-                "; `codeflow doctor --check permissions` names each directory the gate must write, \
-                 and inside the Claude Code sandbox the one to add to `sandbox.filesystem.allowWrite`",
-            );
+    let wait = std::time::Duration::from_secs(wait_seconds.unwrap_or_else(|| {
+        let path = config.map_or_else(
+            || root.join(".codeflow/test-config.json"),
+            std::path::Path::to_path_buf,
+        );
+        codeflow_core::testing::config::load_test_config(&path)
+            .map_or(0, |config| config.execution.heavy_wait_seconds)
+    }));
+    let start = std::time::Instant::now();
+    let mut announced = false;
+    let lock = loop {
+        match acquire_gate_lock(&dirs, root, mode) {
+            Ok(lock) => break lock,
+            Err(held) if held.exclusive && start.elapsed() < wait => {
+                if !announced {
+                    announced = true;
+                    eprintln!("codeflow test: waiting up to {}s: {held}", wait.as_secs());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(held) => {
+                let mut message = held.to_string();
+                if message.contains("gate lock unavailable") {
+                    message.push_str(
+                        "; `codeflow doctor --check permissions` names each directory the gate must write, \
+                         and inside the Claude Code sandbox the one to add to `sandbox.filesystem.allowWrite`",
+                    );
+                }
+                return Err(message);
+            }
         }
-        message
-    })?;
+    };
     for note in &lock.notes {
         eprintln!("codeflow test: {note}");
     }

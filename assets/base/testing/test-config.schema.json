@@ -50,7 +50,12 @@
           "type": "integer",
           "minimum": 0,
           "default": 0,
-          "description": "Bounded wait for heavy quick work to acquire the shared gate lock."
+          "description": "Bounded wait while a host-exclusive target holds the host, and for a host-exclusive target while other heavy runs hold it. Heavy runs never wait for each other."
+        },
+        "host_jobs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Jobs all heavy runs on this host share. Omitted uses the logical cores, lowered to available memory at 1 GiB per job. A run past capacity starts with its share instead of waiting."
         },
         "worker_budget": {
           "type": "integer",
@@ -230,7 +235,12 @@
         "exclusive": {
           "type": "boolean",
           "default": false,
-          "description": "Run alone."
+          "description": "Run with no other target of this run alongside it."
+        },
+        "host_exclusive": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run alone on the host: no other target of this run and no other heavy run on the machine beside it. Only for a target that cannot share the host, such as a timing-sensitive one."
         },
         "input_class": {
           "type": "string",
@@ -302,7 +312,7 @@
         },
         "heavy": {
           "type": "boolean",
-          "description": "Heavy work takes the quick gate lock; false declares light work. Omitted targets are heavy only in the quick-to-essential fallback."
+          "description": "Heavy quick work takes a heavy-run slot and its job share; false declares light work. Omitted targets are heavy only in the quick-to-essential fallback."
         },
         "workers": {
           "type": "integer",

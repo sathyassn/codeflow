@@ -208,8 +208,8 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | Command | Argument or flag | What it does |
 |---|---|---|
 | `codeflow test` | | Run the test gate (configured targets or runtime stack detection) |
-| | `--mode <MODE>` | Full (default) and essential hold the shared heavy-work lock for the run. Undeclared quick targets use `execution.quick_default_class` (light by default). Quick runs light targets beside gates; heavy targets wait up to `--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then refuse if still held. Under `codeflow reserve` they use its lock (Unix). With no quick targets, quick uses essential targets, heavy unless declared light. Both the `CodeFlow` home and git common directory use `full-gate.lock`, also excluding full gates from 3.1. Essential gates from 3.1 take no lock. These locks do not make the rest of the machine quiet. One of `full`, `quick`, `essential`. Default `full`. |
-| | `--wait-seconds <SECONDS>` | Seconds heavy quick targets wait for the shared heavy-work lock, replacing `execution.heavy_wait_seconds`. Full and essential refuse at once as before. |
+| | `--mode <MODE>` | Full (default) and essential take a heavy-run slot for the run; quick takes one when its first heavy target starts. Heavy runs in any worktree or project run at once; past the host's job budget a run uses fewer jobs. Undeclared quick targets use `execution.quick_default_class` (light by default). Only a `host_exclusive` target runs alone; while one holds the host, heavy work waits up to `--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix). With no quick targets, quick uses essential targets, heavy unless declared light. One of `full`, `quick`, `essential`. Default `full`. |
+| | `--wait-seconds <SECONDS>` | Seconds heavy work waits for a host-exclusive target, or a host-exclusive target for other heavy runs, replacing `execution.heavy_wait_seconds`. |
 | | `--lock-status` | Read recorded lock holders and their start times without running targets. Records are snapshots; admission still checks the OS lock and live target groups. |
 | | `--strict` | Exit non-zero when no targets executed or a requested target was skipped. Explicit --only and mode exclusions are not skips. Use for scripted callers that require execution evidence. |
 | | `--since <SINCE>` | Accepted and narrows nothing: no local run record earns selection credit (ADR-0089), so every eligible target runs. |
@@ -221,8 +221,8 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--template <NAME>` | Write an embedded test-config template by name. |
 | | `--replace` | Explicitly replace an existing config when applying --template. |
 | | `--add-target` | Interactively append one target to the existing config. |
-| `codeflow reserve <COMMAND>...` | | Run a direct heavy command under the shared gate lock |
-| | `--wait-seconds <WAIT_SECONDS>` | Maximum seconds to wait for another heavy run. Zero refuses immediately. Default `0`. |
+| `codeflow reserve <COMMAND>...` | | Run a direct heavy command in a heavy-run slot, beside other heavy runs |
+| | `--wait-seconds <WAIT_SECONDS>` | Maximum seconds to wait while a host-exclusive target holds the host. Zero refuses immediately. Other heavy runs never make a reserve wait. Default `0`. |
 | | `--timeout-seconds <TIMEOUT_SECONDS>` | Stop the command and its descendants after this many seconds. Default `3600`. |
 | | `<COMMAND>...` | Executable and exact arguments, following --. |
 | `codeflow validate [PATH]` | | Validate record frontmatter; --docs adds the doc-graph integrity lint |

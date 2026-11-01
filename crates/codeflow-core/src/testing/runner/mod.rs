@@ -347,6 +347,22 @@ fn run_parallel(
         .collect()
 }
 
+/// The worker budget of a run that shares the host with `runs` heavy runs,
+/// itself included: its own `worker_budget` while they fit the host's job
+/// budget, else its share of that budget (TSK-1145).
+fn run_budget(execution: &super::config::ExecutionConfig, runs: usize) -> Option<usize> {
+    let host = super::capacity::host_jobs(execution.host_jobs);
+    if super::capacity::lowered(host, execution.worker_budget, runs) {
+        let jobs = super::capacity::run_jobs(host, execution.worker_budget, runs);
+        progress!(
+            "[codeflow test] {runs} heavy runs share this host's {host} jobs; this run uses {jobs}"
+        );
+        Some(jobs)
+    } else {
+        execution.worker_budget
+    }
+}
+
 /// Run a validated dependency graph with bounded concurrency and exclusive targets.
 /// Prerequisite failures remain named results, never fresh passes.
 #[must_use]
@@ -384,9 +400,13 @@ pub fn run_dependency_targets_with_admission(
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::mpsc::channel;
     let bound = parallel_bound(execution.parallel, execution.max_parallel);
-    let mut admission = None;
+    let mut admission: Option<super::gate_guard::GateLock> = None;
     let mut wait_started = None;
-    let mut ticket: Option<super::gate_guard::WaitTicket> = None;
+    // The jobs heavy targets share: the run's own budget, lowered when more
+    // heavy runs share the host than its job budget holds (TSK-1145).
+    let mut budget = super::gate_guard::held_runs()
+        .map_or(execution.worker_budget, |runs| run_budget(execution, runs));
+    let mut host_hold: Option<(usize, super::gate_guard::HostExclusive)> = None;
     let mut allocations = BTreeMap::<usize, usize>::new();
     let baseline = match super::delivery::tracked(project_dir) {
         Ok(snapshot) => snapshot,
@@ -433,46 +453,34 @@ pub fn run_dependency_targets_with_admission(
             {
                 continue;
             }
-            if target.exclusive && !running.is_empty() {
+            if (target.exclusive || target.host_exclusive) && !running.is_empty() {
                 break;
             }
-            let heavy = target.heavy == Some(true);
-            let free_workers = execution
-                .worker_budget
-                .map(|budget| budget.saturating_sub(allocations.values().sum()));
+            // A host-exclusive target needs the host, so it is admitted as heavy work.
+            let heavy = target.heavy == Some(true) || target.host_exclusive;
+            let free_workers =
+                budget.map(|budget| budget.saturating_sub(allocations.values().sum()));
             if heavy && free_workers.is_some_and(|free| free < target.workers.unwrap_or(1)) {
                 continue;
             }
             if quick && heavy && admission.is_none() {
+                // Heavy runs never wait for each other (TSK-1145): admission
+                // refuses only while a host-exclusive target holds the host,
+                // and then waits up to the run's bound.
                 let bound = Duration::from_secs(execution.heavy_wait_seconds);
-                // A waiter queues before its first attempt, so waiters take
-                // the lock in arrival order (TSK-1128).
-                let queued = if ticket.is_none() && wait_started.is_none() && !bound.is_zero() {
-                    super::gate_guard::WaitTicket::take(project_dir, bound)
-                        .map(|taken| ticket = Some(taken))
-                } else {
-                    Ok(())
-                };
-                let attempt = queued.and_then(|()| {
-                    super::gate_guard::acquire_project_gate_lock(
-                        project_dir,
-                        "quick",
-                        ticket.as_ref(),
-                    )
-                });
-                match attempt {
+                match super::gate_guard::acquire_project_gate_lock(project_dir, "quick") {
                     Ok(lock) => {
                         for note in &lock.notes {
                             progress!("[codeflow test] {note}");
                         }
+                        budget = run_budget(execution, lock.runs);
                         admission = Some(lock);
                         wait_started = None;
-                        ticket = None;
                     }
                     Err(message) => {
                         let first_wait = wait_started.is_none();
                         let since = wait_started.get_or_insert_with(Instant::now);
-                        if !message.contains("gate lock unavailable") && since.elapsed() < bound {
+                        if message.contains("host-exclusive") && since.elapsed() < bound {
                             if first_wait {
                                 progress!(
                                     "[codeflow test] waiting up to {}s for heavy work: {message}",
@@ -482,7 +490,6 @@ pub fn run_dependency_targets_with_admission(
                             waiting = true;
                             continue;
                         }
-                        ticket = None;
                         let reason = format!("not run: heavy target refused: {message}");
                         progress!("[codeflow test] {}: {reason}", target.name);
                         results.insert(index, Ok(not_run(target, &reason)));
@@ -492,8 +499,34 @@ pub fn run_dependency_targets_with_admission(
                     }
                 }
             }
+            if target.host_exclusive {
+                let bound = Duration::from_secs(execution.heavy_wait_seconds);
+                match super::gate_guard::hold_host_exclusive(project_dir, bound) {
+                    Ok(hold) => {
+                        progress!(
+                            "[codeflow test] {} runs alone on this host (host_exclusive)",
+                            target.name
+                        );
+                        host_hold = Some((index, hold));
+                    }
+                    Err(message) => {
+                        let reason = format!("not run: host-exclusive target refused: {message}");
+                        progress!("[codeflow test] {}: {reason}", target.name);
+                        results.insert(index, Ok(not_run(target, &reason)));
+                        completed.insert(target.name.clone(), false);
+                        pending.remove(&index);
+                        continue;
+                    }
+                }
+            }
+            // Admission may have lowered the budget for this run.
+            let free_workers =
+                budget.map(|budget| budget.saturating_sub(allocations.values().sum()));
             let mut target = target.clone();
-            if heavy {
+            // A run whose budget the host lowered sizes every target not
+            // declared light, so its tools do not take the whole host.
+            let sized = heavy || (budget != execution.worker_budget && target.heavy != Some(false));
+            if sized {
                 if let Some(free) = free_workers {
                     let ready = pending
                         .iter()
@@ -505,7 +538,7 @@ pub fn run_dependency_targets_with_admission(
                                     .all(|r| completed.get(r) == Some(&true))
                         })
                         .count();
-                    let shares = if target.exclusive {
+                    let shares = if target.exclusive || target.host_exclusive {
                         1
                     } else {
                         ready.min(bound - running.len()).max(1)
@@ -531,7 +564,7 @@ pub fn run_dependency_targets_with_admission(
             }
             pending.remove(&index);
             running.insert(index);
-            exclusive_running = target.exclusive;
+            exclusive_running = target.exclusive || target.host_exclusive;
             let declarations = declarations.to_vec();
             let mode = mode.to_string();
             let root = project_dir.to_path_buf();
@@ -581,11 +614,17 @@ pub fn run_dependency_targets_with_admission(
         };
         running.remove(&index);
         allocations.remove(&index);
-        if !running.iter().any(|&i| targets[i].heavy == Some(true)) {
+        if !running
+            .iter()
+            .any(|&i| targets[i].heavy == Some(true) || targets[i].host_exclusive)
+        {
             admission = None;
         }
-        if targets[index].exclusive {
+        if targets[index].exclusive || targets[index].host_exclusive {
             exclusive_running = false;
+        }
+        if host_hold.as_ref().is_some_and(|(held, _)| *held == index) {
+            host_hold = None;
         }
         let passed = result.as_ref().is_ok_and(|r| r.exit_code == 0);
         progress!(
@@ -758,7 +797,7 @@ fn run_owed_target(
             result.coverage_path = Some(destination.join("coverage"));
         }
     }
-    if target.heavy == Some(true) {
+    if target.heavy == Some(true) || target.host_exclusive {
         if let Some(workers) = target.env.get("CARGO_BUILD_JOBS") {
             let oracle = target
                 .env
@@ -915,7 +954,7 @@ fn spawn_command(
         &target.name,
         timeout,
         super::evidence::redacted_values(target).is_empty(),
-        target.heavy == Some(true),
+        target.heavy == Some(true) || target.host_exclusive,
         false,
     )
 }
@@ -1416,6 +1455,7 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            host_exclusive: false,
             heavy: None,
             workers: None,
             runner: RunnerType::Custom,

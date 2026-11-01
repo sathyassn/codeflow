@@ -1,81 +1,79 @@
-//! Guards for heavy test work: one heavy gate at a time, and no
-//! cargo target directory shared between worktrees.
+//! Guards for heavy test work: admission by host capacity, and no cargo
+//! target directory shared between worktrees.
 //!
-//! **One gate at a time.** Concurrent full gates on one machine turned green
-//! suites into 600 s timeouts. [`acquire_full_gate_lock`] takes an exclusive
-//! lock (`flock` on Unix, a byte-range lock on Windows; the OS releases it
-//! when the process exits, however it exits) on up to two files:
+//! **Heavy runs share the host** (TSK-1145). Full and essential gates,
+//! heavy quick targets and `codeflow reserve` each take one free *slot*
+//! among the slot locks of a lock folder, and hold the folder's *host lock*
+//! shared. No run waits for another: a run takes the first free slot, and
+//! the number of busy slots tells it how many heavy runs share the host, so
+//! it can size its job count ([`super::capacity`]). Only a target that
+//! declares `host_exclusive` takes the host lock exclusively
+//! ([`hold_host_exclusive`]); it starts when no other heavy run holds the
+//! host, and no heavy run starts while it runs. Locks are OS locks (`flock`
+//! on Unix, byte-range locks on Windows; the OS releases them when the
+//! process exits, however it exits) in up to two folders:
 //!
-//! - the machine-wide lock under the `CodeFlow` home (`CODEFLOW_HOME`, else
-//!   `~/.codeflow`), which spans every repository on the machine;
-//! - the repository lock under the git common directory, which spans every
-//!   worktree of the repository.
+//! - the machine-wide folder under the `CodeFlow` home (`CODEFLOW_HOME`,
+//!   else `~/.codeflow`), which spans every repository on the machine;
+//! - the repository folder under the git common directory, which spans
+//!   every worktree of the repository.
 //!
-//! Every configured lock must be opened and acquired before targets start,
-//! so essential and full gates, heavy quick targets and reserved commands
-//! exclude each other on one machine. An unavailable lock
-//! refuses, naming the path and sandbox error. The shipped Claude settings
-//! presets allow sandboxed writes to `~/.codeflow/locks` and
-//! `~/.codeflow/gate-runs` (TSK-216), the two home directories a full gate
-//! writes, and `codeflow doctor --check permissions` names any of them this
-//! process cannot write ([`unwritable_gate_dirs`]). A held lock refuses and
-//! names the holder recorded beside it. A record that still names a holder
-//! while its lock is free was left by a process that died, and is reclaimed.
+//! A run takes one slot and the shared host lock in every configured folder
+//! before targets start. Slot `0` is [`LOCK_FILE`], the file older binaries
+//! lock exclusively; slot `n` is `full-gate-<n>.lock`. A lock that cannot
+//! be opened or a record that cannot be read refuses, naming the path and
+//! error (fail closed). The shipped Claude settings presets allow sandboxed
+//! writes to `~/.codeflow/locks` and `~/.codeflow/gate-runs` (TSK-216), and
+//! `codeflow doctor --check permissions` names any folder this process
+//! cannot write ([`unwritable_gate_dirs`]). A record that still names a
+//! holder while its slot is free was left by a process that died, and is
+//! reclaimed.
 //!
 //! **Lock folders may be writable by a sandboxed seat** (TSK-1003), so a
 //! lock file is never written: it is opened read only, without following
-//! links, and only locked. The holder record ([`RECORD_FILE`]) is replaced
-//! whole by a new file renamed into place, read without following links,
-//! and shown only through validated values (numbers, a known mode, and a
-//! folder only when its text names one the gate already trusts; a planted
-//! folder value is never resolved). A link planted in the folder can be
-//! locked or replaced, never written through, and reveals nothing beyond a
-//! folder the gate already trusts. A gate that cannot write its record
-//! refuses instead of running uncoordinated. The folder
-//! stays an advisory coordination boundary: a seat that can write it can
-//! block or split coordination between gates. A record a pre-3.2 gate keeps
-//! inside the lock file is still read while the record file names no holder.
+//! links, and only locked. Each holder record (`full-gate.record` beside
+//! slot 0, `full-gate-<n>.record` beside slot `n`, `host.record` beside the
+//! host lock) is replaced whole by a new file renamed into place, read
+//! without following links, and shown only through validated values
+//! (numbers, a known mode, and a folder only when its text names one the
+//! gate already trusts; a planted folder value is never resolved). A link
+//! planted in the folder can be locked or replaced, never written through,
+//! and reveals nothing beyond a folder the gate already trusts. A run that
+//! cannot write its record refuses instead of running uncoordinated. The
+//! folder stays an advisory coordination boundary: a seat that can write it
+//! can block or split coordination between runs. A record a pre-3.2 gate
+//! keeps inside the lock file is still read while the record file names no
+//! holder.
 //!
 //! **Target lifetime on Unix.** Heavy quick targets and reserved commands
-//! have a watcher that ends their process group when the controller exits.
-//! Other targets can outlive a killed gate. While a gate holds the lock, the runner records
-//! each running target's process group in the holder record
-//! ([`target_group_started`]). A free lock whose record names a process
-//! group with a live process is still held: the next gate refuses until
-//! that group exits.
+//! have a watcher that ends their process group when the controller exits;
+//! it keeps copies of the run's slot and host locks, so a target that
+//! outlives its run keeps its slot busy and keeps a host-exclusive target
+//! out. Other targets can outlive a killed gate. While a run holds a slot,
+//! the runner records each running target's process group in the slot's
+//! record ([`target_group_started`]). A free slot whose record names a
+//! process group with a live process counts as busy.
 //!
 //! **On Windows they end with it** (TSK-142). Each target runs in a
 //! kill-on-close job object whose only handle the gate process holds, so
 //! the OS ends the target's tree when it closes that handle as the gate
-//! exits, and the lock never frees while a target of the gate runs. No
-//! group is recorded there.
+//! exits. No group is recorded there.
 //!
-//! **A command under `codeflow reserve` shares its lock** (TSK-1128). On
+//! **A command under `codeflow reserve` shares its slot** (TSK-1128). On
 //! Unix, `codeflow reserve` hands a `codeflow` command duplicates of its
 //! locked lock descriptors and names them in [`RESERVED_LOCKS_ENV`]. The
 //! name grants nothing: the receiving process marks them close-on-exec at
 //! start ([`adopt_reserved_locks`]), and quick admission and a nested
-//! reserve use them only after each lock path's file identity matches a
+//! reserve use them only after a slot path's file identity matches a
 //! descriptor, a fresh open of that path is refused by the OS lock, and the
 //! descriptor itself takes it, which only the holder's own open file
-//! description can. Anything else falls back to ordinary admission. Full
-//! and essential gates never inherit.
-//!
-//! **Waiters are served in arrival order** (TSK-1128). A quick run or a
-//! reserve that waits for the lock takes a ticket in the `waiters` folder
-//! of the first lock directory, named by its arrival time, process and
-//! deadline ([`WaitTicket`]). Quick admission and reserve take the lock
-//! only when no earlier live ticket is queued; a ticket whose process has
-//! exited or whose deadline has passed is stale and removed. A queue that
-//! cannot be read, or a ticket name that does not parse, refuses the
-//! waiter (fail closed). Full and essential gates do not wait and do not
-//! read the queue.
+//! description can. Anything else falls back to ordinary admission, which
+//! takes a slot of its own. Full and essential gates never inherit.
 //!
 //! **Target directory.** `CARGO_TARGET_DIR` outside the worktree lets builds
 //! in parallel worktrees overwrite each other's binaries. A shared directory
-//! is also a legitimate way to save disk, and the gate lock already keeps two
-//! gates apart, so [`check_cargo_target_dir`] returns a warning, never a
-//! refusal.
+//! is also a legitimate way to save disk, so [`check_cargo_target_dir`]
+//! returns a warning, never a refusal.
 
 use crate::bounded_file::FileIdentity;
 use std::collections::BTreeSet;
@@ -87,36 +85,54 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// File name of the gate lock in each lock directory. The file is only ever
-/// opened read only and locked; `CodeFlow` never writes, truncates or deletes
-/// it (TSK-1003).
+/// File name of slot 0 in each lock directory, the file older binaries
+/// lock exclusively. Slot files are only ever opened read only and locked;
+/// `CodeFlow` never writes, truncates or deletes them (TSK-1003).
 pub const LOCK_FILE: &str = "full-gate.lock";
 
-/// File name of the holder record beside each lock. A record is replaced
+/// File name of the holder record beside slot 0. Every lock's record is
+/// its file name with `.lock` replaced by `.record`. A record is replaced
 /// whole: written to a new file created exclusively under a random name in
 /// the same folder, then renamed over this name. An existing record is
 /// never opened for writing, so a link planted at this name is replaced,
 /// never written through (TSK-1003).
 pub const RECORD_FILE: &str = "full-gate.record";
 
-/// File name of the record lock beside each lock. Its OS lock is held while
-/// a process reads, merges and renames the holder record, so a reserve and
-/// the nested run under it never drop a group line the other just added
-/// (TSK-1128). Like the gate lock, it is only opened read only and locked.
-const RECORD_LOCK_FILE: &str = "full-gate.record.lock";
+/// File name of the host lock in each lock directory: every heavy run
+/// holds it shared, and a `host_exclusive` target holds it exclusively
+/// (TSK-1145).
+pub const HOST_LOCK_FILE: &str = "host.lock";
 
-/// A held heavy-work lock. The locks release when this value drops (or when
-/// the process exits); a clean drop also clears the holder record.
+/// The most slots one lock directory offers. A host never runs this many
+/// heavy runs; the bound keeps a scan of the folder finite.
+pub const MOST_SLOTS: usize = 64;
+
+/// File name of slot `index`: [`LOCK_FILE`] for slot 0, else
+/// `full-gate-<index>.lock`.
+#[must_use]
+pub fn slot_file(index: usize) -> String {
+    if index == 0 {
+        LOCK_FILE.to_string()
+    } else {
+        format!("full-gate-{index}.lock")
+    }
+}
+
+/// A heavy run's admission. Its locks release when this value drops (or
+/// when the process exits); a clean drop also clears its slot records.
 #[derive(Debug)]
 pub struct GateLock {
     id: u64,
     files: Vec<AcquiredFile>,
-    /// Descriptors of a lock an enclosing `codeflow reserve` holds. They are
-    /// never unlocked here: unlocking would release the holder's lock.
+    /// Descriptors of a slot an enclosing `codeflow reserve` holds. They
+    /// are never unlocked here: unlocking would release the holder's slot.
     inherited: Vec<File>,
-    /// The lock files held, whose records the drop clears.
+    /// The slot lock files held, whose records the drop clears.
     paths: Vec<PathBuf>,
-    /// Degradations and reclaimed stale locks, for the caller to print.
+    /// Heavy runs that share the host, this one included: the busy slots
+    /// of the most crowded lock directory when the slot was taken.
+    pub runs: usize,
+    /// Degradations and reclaimed stale slots, for the caller to print.
     pub notes: Vec<String>,
 }
 
@@ -124,7 +140,7 @@ pub struct GateLock {
 /// process groups of running targets.
 struct Held {
     id: u64,
-    /// The lock files held, each with its record beside it.
+    /// The slot lock files held, each with its record beside it.
     paths: Vec<PathBuf>,
     record: String,
     groups: BTreeSet<u32>,
@@ -134,8 +150,13 @@ struct Held {
     /// A lock an enclosing reserve holds: its record's holder lines stay the
     /// holder's, and this process only adds and removes its own groups.
     inherited: bool,
+    /// The host locks this run holds shared, one per lock directory, with
+    /// their paths; empty for an inherited lock, whose holder holds them.
+    host: Vec<(PathBuf, AcquiredFile)>,
     /// The folders a record's `dir` may name, for re-reading the record.
     trusted: Vec<String>,
+    /// [`GateLock::runs`] of this lock.
+    runs: usize,
     #[cfg(unix)]
     descriptors: Vec<std::os::fd::RawFd>,
 }
@@ -148,10 +169,18 @@ fn held() -> std::sync::MutexGuard<'static, Vec<Held>> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The heavy runs sharing the host as this process's admission saw them,
+/// when it holds one: the most any of its locks counted.
+#[must_use]
+pub fn held_runs() -> Option<usize> {
+    held().iter().map(|lock| lock.runs).max()
+}
+
 impl Drop for GateLock {
     fn drop(&mut self) {
         // Deregister first, under the registry lock, so no target update can
-        // rewrite a record after it is cleared.
+        // rewrite a record after it is cleared. The entry's host locks
+        // release when it drops, after the records are cleared.
         let entry = {
             let mut held = held();
             held.iter()
@@ -160,17 +189,17 @@ impl Drop for GateLock {
         };
         if !self.inherited.is_empty() {
             // The record is the holder's. Groups of this process's targets
-            // that still run stay on it, so the next gate refuses while they
+            // that still run stay on it, so the slot stays busy while they
             // live (TSK-1128); finished ones were removed as they ended.
             return;
         }
         for path in &self.paths {
             // Best effort, before the locks release: an uncleared record only
-            // reads as a stale lock, which the next gate reclaims. An empty
+            // reads as a stale slot, which the next run reclaims. An empty
             // record names no holder, so readers fall back to a legacy record
             // inside the lock file, which a pre-3.2 gate may have left. Live
-            // groups a nested run added stay, so the lock is not free while
-            // they run (TSK-1128).
+            // groups a nested run added stay, so the slot is busy while they
+            // run (TSK-1128).
             let clear = || {
                 let kept = entry
                     .as_ref()
@@ -188,6 +217,7 @@ impl Drop for GateLock {
                 clear();
             }
         }
+        drop(entry);
         // AcquiredFile explicitly unlocks before its descriptor closes.
     }
 }
@@ -221,50 +251,44 @@ fn foreign_live_groups(path: &Path, entry: &Held) -> std::io::Result<Vec<u32>> {
 /// Why heavy work may not start.
 #[derive(Debug)]
 pub struct LockHeld {
-    /// The lock file that is held.
+    /// The lock file that is held or unavailable.
     pub path: PathBuf,
-    /// The holder record in that file (empty when the holder has not written
-    /// it yet).
+    /// The holder record of that lock (empty when the holder has not
+    /// written it yet), or why the lock is unavailable.
     pub holder: String,
-    /// Process groups of targets still running after their gate process
-    /// exited; empty when the gate process itself holds the lock.
+    /// Process groups of targets still running after their run exited.
     pub running_groups: Vec<u32>,
+    /// A `host_exclusive` target holds the host, or one is refused because
+    /// other heavy runs hold it.
+    pub exclusive: bool,
+}
+
+impl LockHeld {
+    fn unavailable(path: PathBuf, holder: String) -> Self {
+        Self {
+            path,
+            holder,
+            running_groups: Vec::new(),
+            exclusive: false,
+        }
+    }
 }
 
 impl std::fmt::Display for LockHeld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.holder.starts_with("gate lock unavailable:")
-            || self.holder.starts_with("cannot read gate lock record:")
-            || self.holder.starts_with("cannot reclaim gate lock:")
-        {
-            return write!(
-                f,
-                "{} (lock: {})",
-                self.holder,
-                crate::git::display_path(&self.path)
-            );
+        let lock = crate::git::display_path(&self.path);
+        if !self.exclusive {
+            return write!(f, "{} (lock: {lock})", self.holder);
         }
         let holder = if self.holder.trim().is_empty() {
             "a process that has not recorded itself yet".to_string()
         } else {
             describe_holder(&self.holder)
         };
-        if !self.running_groups.is_empty() {
-            let groups: Vec<String> = self.running_groups.iter().map(u32::to_string).collect();
-            return write!(
-                f,
-                "another heavy gate's targets are still running on this machine: process \
-                 group {} of {holder}, whose gate process has exited. Only one heavy gate \
-                 runs at a time; wait for those targets to finish or stop them (lock: {})",
-                groups.join(", "),
-                crate::git::display_path(&self.path)
-            );
-        }
         write!(
             f,
-            "another heavy gate is running on this machine: {holder}. Only one heavy gate \
-             runs at a time; wait for it to finish (lock: {})",
-            crate::git::display_path(&self.path)
+            "a host-exclusive target is running on this machine: {holder}. Heavy runs \
+             start when it ends (lock: {lock})"
         )
     }
 }
@@ -351,12 +375,15 @@ fn probe_evidence_dir(home: &Path) -> std::io::Result<()> {
 fn probe_lock_dir(dir: &Path) -> std::io::Result<()> {
     let lock = dir.join(LOCK_FILE);
     let probe = dir.join(format!(".record-probe-{}", std::process::id()));
-    open_lock_file(&lock).map(drop).and_then(|()| {
-        let (anchor, relative) = lock_anchor(&probe)?;
-        let tree = crate::contained::Tree::open(anchor)?;
-        tree.write(&relative, b"")?;
-        tree.remove(&relative)
-    })
+    open_lock_file(&lock)
+        .map(drop)
+        .and_then(|()| open_lock_file(&dir.join(HOST_LOCK_FILE)).map(drop))
+        .and_then(|()| {
+            let (anchor, relative) = lock_anchor(&probe)?;
+            let tree = crate::contained::Tree::open(anchor)?;
+            tree.write(&relative, b"")?;
+            tree.remove(&relative)
+        })
 }
 
 /// What a builder seat has to write outside its worktree (TSK-337), each
@@ -419,17 +446,32 @@ pub fn builder_write_probe(
     results
 }
 
-/// Read holder records without taking a lock, changing a record, or creating directories.
-/// These are snapshots: admission still checks the OS lock and live target groups.
+/// Read holder records without taking a lock, changing a record, or creating directories:
+/// the host lock's and every existing slot's. These are snapshots: admission still checks
+/// the OS locks and live target groups.
 /// # Errors
 /// Refuses discovery failures and unreadable or oversized records.
 pub fn gate_lock_status(root: &Path) -> Result<Vec<String>, String> {
     let dirs = lock_dirs(root, crate::registry::codeflow_home().as_deref())
         .map_err(|error| format!("cannot discover gate lock directories: {error}"))?;
     let trusted = trusted_dirs(root);
-    dirs.into_iter()
-        .map(|dir| holder_status(&dir.join(LOCK_FILE), &trusted))
-        .collect()
+    let mut lines = Vec::new();
+    for dir in dirs {
+        lines.push(holder_status(&dir.join(HOST_LOCK_FILE), &trusted)?);
+        for index in 0..MOST_SLOTS {
+            let path = dir.join(slot_file(index));
+            let absent = crate::absence::proven_absent(&path).map_err(|error| {
+                format!(
+                    "cannot read gate lock {}: {error}",
+                    crate::git::display_path(&path)
+                )
+            })?;
+            if index == 0 || !absent {
+                lines.push(holder_status(&path, &trusted)?);
+            }
+        }
+    }
+    Ok(lines)
 }
 
 /// One status line for the lock at `path`: its holder's validated values, or
@@ -457,21 +499,35 @@ fn holder_status(path: &Path, trusted: &[String]) -> Result<String, String> {
     Ok(format!("{}: {description}", crate::git::display_path(path)))
 }
 
-/// Acquire the machine and repository locks, with the operator's repair pointer.
+/// Admit a heavy run of `root` in `mode`, with the operator's repair pointer.
 /// # Errors
-/// Refuses unavailable directories and held locks before starting heavy work.
-/// Quick admission and `codeflow reserve` call this; under an enclosing
-/// `codeflow reserve` they first use its lock ([`RESERVED_LOCKS_ENV`]).
-/// Full and essential gates take the lock themselves and never inherit.
-/// A waiter passes its `ticket`; any caller is refused while an earlier
-/// live ticket is queued, so waiters take the lock in arrival order.
-pub fn acquire_project_gate_lock(
-    root: &Path,
-    mode: &str,
-    ticket: Option<&WaitTicket>,
-) -> Result<GateLock, String> {
+/// Refuses unavailable directories and unreadable records, and while a
+/// `host_exclusive` target holds the host. Never refuses because other heavy
+/// runs are active. Quick admission and `codeflow reserve` call this; under
+/// an enclosing `codeflow reserve` they first use its slot
+/// ([`RESERVED_LOCKS_ENV`]). Full and essential gates admit themselves
+/// through [`acquire_gate_lock`] and never inherit.
+pub fn acquire_project_gate_lock(root: &Path, mode: &str) -> Result<GateLock, String> {
     let dirs = project_lock_dirs(root)?;
-    acquire_in_turn(&dirs, root, mode, ticket)
+    #[cfg(unix)]
+    {
+        let adopted = adopted().clone();
+        if let Some(lock) = inherit_gate_lock(&dirs, &adopted, trusted_dirs(root)) {
+            return Ok(lock);
+        }
+    }
+    acquire_gate_lock(&dirs, root, mode).map_err(|held| with_repair_pointer(&held))
+}
+
+/// A refusal's text, with the permissions pointer when a lock is unavailable.
+#[must_use]
+pub fn with_repair_pointer(held: &LockHeld) -> String {
+    let message = held.to_string();
+    if message.contains("gate lock unavailable") {
+        format!("{message}; run `codeflow doctor --check permissions` to identify the directories to repair")
+    } else {
+        message
+    }
 }
 
 /// The lock directories of `root`, with the operator's repair pointer.
@@ -480,32 +536,6 @@ pub fn acquire_project_gate_lock(
 pub fn project_lock_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     lock_dirs(root, crate::registry::codeflow_home().as_deref())
         .map_err(|error| format!("gate lock unavailable: cannot discover repository: {error}; run `codeflow doctor --check permissions`"))
-}
-
-fn acquire_in_turn(
-    dirs: &[PathBuf],
-    root: &Path,
-    mode: &str,
-    ticket: Option<&WaitTicket>,
-) -> Result<GateLock, String> {
-    #[cfg(unix)]
-    {
-        let adopted = adopted().clone();
-        if let Some(lock) = inherit_gate_lock(dirs, &adopted, trusted_dirs(root)) {
-            return Ok(lock);
-        }
-    }
-    if let Some(ahead) = earliest_waiter(dirs, ticket.map(|ticket| ticket.name.as_str()))? {
-        return Err(format!(
-            "an earlier waiter is queued for the heavy-work lock: {ahead}; waiters take the lock in arrival order"
-        ));
-    }
-    acquire_gate_lock(dirs, root, mode).map_err(|held| {
-        let message = held.to_string();
-        if message.contains("gate lock unavailable") {
-            format!("{message}; run `codeflow doctor --check permissions` to identify the directories to repair")
-        } else { message }
-    })
 }
 
 /// Test-only interleaving points in lock acquisition, so a test can change
@@ -550,65 +580,70 @@ pub(crate) mod interleave {
     }
 }
 
-/// Open the lock file at `path` and take its OS lock without waiting, or
-/// say why not: the holder's record, or why the lock is unavailable.
-fn open_and_lock(path: &Path, trusted: &[String]) -> Result<File, LockHeld> {
+/// The outcome of trying one slot without waiting.
+enum Slot {
+    /// The slot is ours, locked and checked.
+    Taken(File),
+    /// Another run holds it.
+    Busy,
+}
+
+/// Open the lock file at `path` and take its OS lock (shared or exclusive)
+/// without waiting: the locked file, `Busy` when another process holds it,
+/// or why the lock is unavailable.
+fn try_open_and_lock(path: &Path, shared: bool) -> Result<Slot, LockHeld> {
     let path = path.to_path_buf();
-    let mut file = match open_lock_file(&path) {
+    let file = match open_lock_file(&path) {
         Ok(file) => file,
         Err(error) => {
-            return Err(LockHeld {
-                holder: format!("gate lock unavailable: {error}"),
+            return Err(LockHeld::unavailable(
                 path,
-                running_groups: Vec::new(),
-            });
+                format!("gate lock unavailable: {error}"),
+            ));
         }
     };
-    match os_lock::try_lock(&file) {
+    let locked = if shared {
+        os_lock::try_lock_shared(&file)
+    } else {
+        os_lock::try_lock(&file)
+    };
+    match locked {
         Ok(()) => {
             #[cfg(test)]
             interleave::at(interleave::Point::Locked);
             if let Err(error) = same_lock_file(&path, &file) {
                 os_lock::unlock(&file);
-                return Err(LockHeld {
-                    holder: format!("gate lock unavailable: {error}; retry"),
+                return Err(LockHeld::unavailable(
                     path,
-                    running_groups: Vec::new(),
-                });
+                    format!("gate lock unavailable: {error}; retry"),
+                ));
             }
+            Ok(Slot::Taken(file))
         }
-        Err(error) if os_lock::is_contended(&error) => {
-            return Err(LockHeld {
-                holder: read_holder(&path, Some(&mut file), trusted)
-                    .unwrap_or_else(|error| format!("cannot read gate lock record: {error}")),
-                path,
-                running_groups: Vec::new(),
-            });
-        }
-        Err(error) => {
-            return Err(LockHeld {
-                holder: format!("gate lock unavailable: {error}"),
-                path,
-                running_groups: Vec::new(),
-            });
-        }
+        Err(error) if os_lock::is_contended(&error) => Ok(Slot::Busy),
+        Err(error) => Err(LockHeld::unavailable(
+            path,
+            format!("gate lock unavailable: {error}"),
+        )),
     }
-    Ok(file)
 }
 
-/// Take every full-gate lock in `dirs`, or refuse naming the holder.
+/// Admit a full gate in `dirs`; see [`acquire_gate_lock`].
 ///
 /// # Errors
 ///
-/// Returns [`LockHeld`] when another process holds any of the locks. Locks
-/// already taken in this call are released before returning.
+/// As [`acquire_gate_lock`].
 pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<GateLock, LockHeld> {
     acquire_gate_lock(dirs, project_dir, "full")
 }
 
-/// Take the shared heavy-work locks and record the requested mode.
+/// Admit a heavy run: in every lock directory, hold the host lock shared and
+/// take the first free slot, recording `mode` beside it. Other active runs
+/// never refuse it; they only raise [`GateLock::runs`].
 /// # Errors
-/// Returns the holder or the unavailable lock path without starting work.
+/// While a `host_exclusive` target holds the host; when a lock directory or
+/// lock cannot be opened, a slot record cannot be read or written, or every
+/// slot is busy. Locks taken in this call are released before returning.
 pub fn acquire_gate_lock(
     dirs: &[PathBuf],
     project_dir: &Path,
@@ -619,6 +654,7 @@ pub fn acquire_gate_lock(
         files: Vec::new(),
         inherited: Vec::new(),
         paths: Vec::new(),
+        runs: 1,
         notes: Vec::new(),
     };
     let record = holder_record(project_dir, mode);
@@ -626,54 +662,36 @@ pub fn acquire_gate_lock(
     if dirs.is_empty() {
         lock.notes.push(
             "no gate lock location (no CodeFlow home and no git repository); \
-             this gate does not guard against a concurrent one"
+             this run does not see other heavy runs or a host-exclusive target"
                 .to_string(),
         );
     }
+    let mut host = Vec::new();
     for dir in dirs {
-        let path = dir.join(LOCK_FILE);
-        let file = open_and_lock(&path, &trusted)?;
-        let mut acquired = AcquiredFile(file);
-        let file = &mut acquired.0;
-        let previous = read_holder(&path, Some(file), &trusted).map_err(|error| LockHeld {
-            holder: format!("cannot read gate lock record: {error}"),
-            path: path.clone(),
-            running_groups: Vec::new(),
-        })?;
-        let running_groups = live_groups(&previous).map_err(|error| LockHeld {
-            holder: format!("cannot reclaim gate lock: {error}; inspect and repair the lock record after verifying its processes"),
-            path: path.clone(),
-            running_groups: Vec::new(),
-        })?;
-        if !running_groups.is_empty() {
-            // The gate that wrote this record is gone but its targets are
-            // not: the lock is still in use. Leave the record for the next
-            // check.
-            return Err(LockHeld {
-                holder: previous,
-                path,
-                running_groups,
-            });
+        let host_path = dir.join(HOST_LOCK_FILE);
+        match try_open_and_lock(&host_path, true)? {
+            Slot::Taken(file) => host.push((host_path, AcquiredFile(file))),
+            Slot::Busy => {
+                let holder = read_holder(&host_path, None, &trusted).unwrap_or_default();
+                return Err(LockHeld {
+                    path: host_path,
+                    holder,
+                    running_groups: Vec::new(),
+                    exclusive: true,
+                });
+            }
         }
-        if !previous.trim().is_empty() {
-            lock.notes.push(format!(
-                "reclaimed a stale gate lock at {} left by {}",
-                crate::git::display_path(&path),
-                crate::git::display_line(&describe_holder(&previous))
+        let (acquired, path, busy) = take_slot(dir, &trusted, &mut lock.notes)?;
+        // The record is what lets another run see this one and its live
+        // targets, so a run that cannot write it does not run uncoordinated
+        // (TSK-1003): it refuses, and the slot releases as `acquired` drops.
+        if let Err(error) = write_record(&path, &record) {
+            return Err(LockHeld::unavailable(
+                path,
+                format!("gate lock unavailable: its holder record cannot be written: {error}"),
             ));
         }
-        // The record is what lets another gate see this one and its live
-        // targets, so a gate that cannot write it does not run uncoordinated
-        // (TSK-1003): it refuses, and the lock releases as `acquired` drops.
-        if let Err(error) = write_record(&path, &record) {
-            return Err(LockHeld {
-                holder: format!(
-                    "gate lock unavailable: its holder record cannot be written: {error}"
-                ),
-                path,
-                running_groups: Vec::new(),
-            });
-        }
+        lock.runs = lock.runs.max(busy + 1);
         lock.files.push(acquired);
         lock.paths.push(path);
     }
@@ -685,205 +703,269 @@ pub fn acquire_gate_lock(
             groups: BTreeSet::new(),
             recorded: BTreeSet::new(),
             inherited: false,
-            trusted,
             #[cfg(unix)]
             descriptors: {
                 use std::os::fd::AsRawFd;
-                lock.files.iter().map(|file| file.0.as_raw_fd()).collect()
+                lock.files
+                    .iter()
+                    .map(|file| file.0.as_raw_fd())
+                    .chain(host.iter().map(|(_, file)| file.0.as_raw_fd()))
+                    .collect()
             },
+            host,
+            trusted,
+            runs: lock.runs,
         });
     }
     Ok(lock)
 }
 
-/// The folder of waiter tickets, inside the first lock directory.
-const WAITERS_DIR: &str = "waiters";
+/// Take the first free slot in `dir`: the slot, its path, and how many
+/// other slots in `dir` are busy. A slot is busy when another process holds
+/// its lock or its record names a live target group.
+fn take_slot(
+    dir: &Path,
+    trusted: &[String],
+    notes: &mut Vec<String>,
+) -> Result<(AcquiredFile, PathBuf, usize), LockHeld> {
+    let mut busy = 0;
+    for index in 0..MOST_SLOTS {
+        let path = dir.join(slot_file(index));
+        let Slot::Taken(file) = try_open_and_lock(&path, false)? else {
+            busy += 1;
+            continue;
+        };
+        let mut acquired = AcquiredFile(file);
+        let previous = read_holder(&path, Some(&mut acquired.0), trusted).map_err(|error| {
+            LockHeld::unavailable(
+                path.clone(),
+                format!("cannot read gate lock record: {error}"),
+            )
+        })?;
+        let running = live_groups(&previous).map_err(|error| {
+            LockHeld::unavailable(
+                path.clone(),
+                format!("cannot reclaim gate lock: {error}; inspect and repair the lock record after verifying its processes"),
+            )
+        })?;
+        if !running.is_empty() {
+            // The run that wrote this record is gone but its targets are
+            // not: the slot is still in use. Leave the record for them.
+            busy += 1;
+            continue;
+        }
+        if !previous.trim().is_empty() {
+            notes.push(format!(
+                "reclaimed a stale gate lock at {} left by {}",
+                crate::git::display_path(&path),
+                crate::git::display_line(&describe_holder(&previous))
+            ));
+        }
+        busy += busy_after(dir, index + 1, trusted)?;
+        return Ok((acquired, path, busy));
+    }
+    Err(LockHeld::unavailable(
+        dir.join(slot_file(0)),
+        format!("every one of the {MOST_SLOTS} heavy-run slots is in use on this machine"),
+    ))
+}
 
-/// The most tickets a queue may hold before it refuses as unreadable.
-const MOST_WAITERS: usize = 256;
+/// Busy slots in `dir` from `first` on, among the slot files that exist.
+/// A free slot is locked only for the check and released at once.
+fn busy_after(dir: &Path, first: usize, trusted: &[String]) -> Result<usize, LockHeld> {
+    let mut busy = 0;
+    for index in first..MOST_SLOTS {
+        let path = dir.join(slot_file(index));
+        let absent = crate::absence::proven_absent(&path).map_err(|error| {
+            LockHeld::unavailable(path.clone(), format!("gate lock unavailable: {error}"))
+        })?;
+        if !absent && slot_busy(&path, trusted)? {
+            busy += 1;
+        }
+    }
+    Ok(busy)
+}
 
-/// Seconds past its deadline after which a live process's ticket is stale.
-const TICKET_GRACE_SECONDS: u64 = 5;
-
-/// A place in the queue for the heavy-work lock, held while its process
-/// waits and removed when it drops (TSK-1128). The name orders the queue:
-/// `ticket-<arrival ns>-<pid>-<deadline unix seconds>`.
+/// The host held exclusively for a `host_exclusive` target. Dropping it
+/// releases the host and takes this process's shared host locks back.
 #[derive(Debug)]
-pub struct WaitTicket {
-    anchor: PathBuf,
-    relative: String,
-    name: String,
+pub struct HostExclusive {
+    files: Vec<(PathBuf, AcquiredFile)>,
 }
 
-impl WaitTicket {
-    /// Join the queue of the locks in `root`'s lock directories, waiting at
-    /// most `wait`.
-    /// # Errors
-    /// When the queue folder cannot be written (`gate lock unavailable`).
-    pub fn take(root: &Path, wait: std::time::Duration) -> Result<Self, String> {
-        Self::take_in(&project_lock_dirs(root)?, wait)
-    }
-
-    fn take_in(dirs: &[PathBuf], wait: std::time::Duration) -> Result<Self, String> {
-        let unavailable = |error: std::io::Error| {
-            format!("gate lock unavailable: cannot join the waiter queue: {error}")
-        };
-        let Some(dir) = dirs.first() else {
-            return Err("gate lock unavailable: no lock directory for a waiter queue".to_string());
-        };
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-        let name = format!(
-            "ticket-{:020}-{}-{}",
-            now.as_nanos(),
-            std::process::id(),
-            now.as_secs()
-                .saturating_add(wait.as_secs())
-                .saturating_add(1)
-        );
-        let ticket_path = dir.join(WAITERS_DIR).join(&name);
-        let (anchor, relative) = lock_anchor(&ticket_path).map_err(unavailable)?;
-        let tree = crate::contained::Tree::open(anchor).map_err(unavailable)?;
-        let folder = relative.rsplit_once('/').map_or("", |(folder, _)| folder);
-        tree.create_dir_all(folder).map_err(unavailable)?;
-        tree.create_new(&relative, b"").map_err(unavailable)?;
-        Ok(Self {
-            anchor: anchor.to_path_buf(),
-            relative,
-            name,
-        })
-    }
-}
-
-impl Drop for WaitTicket {
+impl Drop for HostExclusive {
     fn drop(&mut self) {
-        if let Ok(tree) = crate::contained::Tree::open(&self.anchor) {
-            let _ = tree.remove(&self.relative);
+        for (path, _) in &self.files {
+            let _ = write_record(path, "");
         }
+        self.files.clear();
+        retake_shared(std::time::Duration::from_secs(5));
     }
 }
 
-/// A parsed ticket name: arrival, process and deadline.
-fn parse_ticket(name: &str) -> Option<(u128, u32, u64)> {
-    let mut parts = name.strip_prefix("ticket-")?.split('-');
-    let arrival = parts.next()?.parse().ok()?;
-    let pid = parts.next()?.parse().ok().filter(|pid| *pid > 1)?;
-    let deadline = parts.next()?.parse().ok()?;
-    parts.next().is_none().then_some((arrival, pid, deadline))
+/// Take the host lock of every lock directory of `root` exclusively, so the
+/// calling run's next target runs alone on the host: this process's own
+/// shared host locks are released first, then the exclusive locks are tried
+/// until `wait` passes. A run under `codeflow reserve` cannot take them,
+/// since the reserve holds the host shared.
+/// # Errors
+/// When other heavy runs still hold the host after `wait`, the run is nested
+/// under a reserve, or a lock cannot be opened. The shared locks are taken
+/// back before returning.
+pub fn hold_host_exclusive(
+    root: &Path,
+    wait: std::time::Duration,
+) -> Result<HostExclusive, String> {
+    hold_host_exclusive_in(&project_lock_dirs(root)?, root, wait)
 }
 
-/// The earliest live ticket other than `own`, described for a refusal, or
-/// `None`. Stale tickets are removed on the way. Only names starting with
-/// `ticket-` are read; such a name that does not parse, or a queue that
-/// cannot be listed, is an error naming `gate lock unavailable`.
-fn earliest_waiter(dirs: &[PathBuf], own: Option<&str>) -> Result<Option<String>, String> {
-    let unavailable =
-        |error: String| format!("gate lock unavailable: cannot read the waiter queue: {error}");
-    let Some(dir) = dirs.first() else {
-        return Ok(None);
-    };
-    let probe = dir.join(WAITERS_DIR).join("probe");
-    let (anchor, relative) = lock_anchor(&probe).map_err(|error| unavailable(error.to_string()))?;
-    let folder = relative
-        .rsplit_once('/')
-        .map_or("", |(folder, _)| folder)
-        .to_string();
-    let tree = match crate::contained::Tree::open(anchor) {
-        Ok(tree) => tree,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(unavailable(error.to_string())),
-    };
-    let names = match tree.entries(&folder, MOST_WAITERS) {
-        Ok(names) => names,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(unavailable(error.to_string())),
-    };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let mut earliest: Option<(u128, u32)> = None;
-    for name in names {
-        let Some(name) = name.to_str().map(str::to_string) else {
-            return Err(unavailable("a ticket name is not valid UTF-8".to_string()));
-        };
-        if !name.starts_with("ticket-") {
-            continue;
+/// [`hold_host_exclusive`] over the given lock directories.
+/// # Errors
+/// As [`hold_host_exclusive`].
+pub fn hold_host_exclusive_in(
+    dirs: &[PathBuf],
+    root: &Path,
+    wait: std::time::Duration,
+) -> Result<HostExclusive, String> {
+    if held().iter().any(|lock| lock.inherited) {
+        return Err(
+            "a host-exclusive target cannot run under `codeflow reserve`, which holds the host \
+             for its command; run it outside the reserve"
+                .to_string(),
+        );
+    }
+    let trusted = trusted_dirs(root);
+    for lock in held().iter() {
+        for (_, file) in &lock.host {
+            os_lock::unlock(&file.0);
         }
-        let Some((arrival, pid, deadline)) = parse_ticket(&name) else {
-            // Refuse this time, and move the name aside so it cannot wedge
-            // the queue; a name that cannot be moved keeps refusing.
-            let aside = format!("{folder}/quarantined-{now}-{name}");
-            let moved = tree.rename(&format!("{folder}/{name}"), &aside).is_ok();
-            return Err(unavailable(format!(
-                "a ticket name does not parse: {}{}",
-                crate::git::display_line(&name),
-                if moved {
-                    "; it was moved aside as quarantined-<time>-<name>, retry"
-                } else {
-                    "; it could not be moved aside, remove it"
+    }
+    let start = std::time::Instant::now();
+    let mut taken: Vec<(PathBuf, AcquiredFile)> = Vec::new();
+    let result = loop {
+        let mut busy = None;
+        let mut failed = None;
+        for dir in dirs.iter().skip(taken.len()) {
+            let path = dir.join(HOST_LOCK_FILE);
+            match try_open_and_lock(&path, false) {
+                Ok(Slot::Taken(file)) => taken.push((path, AcquiredFile(file))),
+                Ok(Slot::Busy) => {
+                    busy = Some(path);
+                    break;
                 }
-            )));
+                Err(held) => {
+                    failed = Some(with_repair_pointer(&held));
+                    break;
+                }
+            }
+        }
+        if let Some(message) = failed {
+            break Err(message);
+        }
+        if busy.is_none() && taken.len() == dirs.len() {
+            // The host lock is ours, but a target that outlived its run can
+            // still be working: a slot other than this run's own that is
+            // busy keeps the target waiting.
+            match orphaned_slot(dirs, &trusted) {
+                Ok(None) => break Ok(()),
+                Ok(Some(path)) => busy = Some(path),
+                Err(held) => break Err(with_repair_pointer(&held)),
+            }
+        }
+        let Some(path) = busy else {
+            break Ok(());
         };
-        if Some(name.as_str()) == own {
-            continue;
+        if start.elapsed() >= wait {
+            break Err(format!(
+                "a host-exclusive target waits for the other heavy runs on this machine to \
+                 end, and they still ran after {}s (lock: {})",
+                wait.as_secs(),
+                crate::git::display_path(&path)
+            ));
         }
-        if now > deadline.saturating_add(TICKET_GRACE_SECONDS) || !process_alive(pid) {
-            let _ = tree.remove(&format!("{folder}/{name}"));
-            continue;
-        }
-        // Equal arrivals are ordered by process, so exactly one goes first.
-        if own
-            .and_then(parse_ticket)
-            .is_some_and(|(mine, my_pid, _)| (mine, my_pid) < (arrival, pid))
-        {
-            continue;
-        }
-        if earliest.is_none_or(|first| (arrival, pid) < first) {
-            earliest = Some((arrival, pid));
-        }
-    }
-    Ok(earliest.map(|(_, pid)| format!("process {pid}")))
-}
-
-#[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return false;
+        std::thread::sleep(std::time::Duration::from_millis(50));
     };
-    // SAFETY: signal 0 only checks that the process exists.
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        return true;
+    if let Err(message) = result {
+        drop(taken);
+        retake_shared(wait.max(std::time::Duration::from_secs(5)));
+        return Err(message);
     }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    let record = holder_record(root, "exclusive");
+    let unwritten = taken.iter().find_map(|(path, _)| {
+        write_record(path, &record)
+            .err()
+            .map(|error| (path.clone(), error))
+    });
+    if let Some((path, error)) = unwritten {
+        drop(taken);
+        retake_shared(std::time::Duration::from_secs(5));
+        return Err(format!(
+            "gate lock unavailable: the host-exclusive record beside {} cannot be written: {error}",
+            crate::git::display_path(&path)
+        ));
+    }
+    Ok(HostExclusive { files: taken })
 }
 
-#[cfg(windows)]
-fn process_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED};
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-    /// `GetExitCodeProcess` reports this code while the process runs.
-    const STILL_ACTIVE: u32 = 259;
-    // SAFETY: the handle is checked, used for one query and closed.
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            // A process this user may not open still exists.
-            return GetLastError() == ERROR_ACCESS_DENIED;
+/// A busy slot in `dirs` that this process does not hold, if any.
+fn orphaned_slot(dirs: &[PathBuf], trusted: &[String]) -> Result<Option<PathBuf>, LockHeld> {
+    let own: Vec<PathBuf> = held()
+        .iter()
+        .flat_map(|lock| lock.paths.iter().cloned())
+        .collect();
+    for dir in dirs {
+        for index in 0..MOST_SLOTS {
+            let path = dir.join(slot_file(index));
+            if own.contains(&path) {
+                continue;
+            }
+            let absent = crate::absence::proven_absent(&path).map_err(|error| {
+                LockHeld::unavailable(path.clone(), format!("gate lock unavailable: {error}"))
+            })?;
+            if !absent && slot_busy(&path, trusted)? {
+                return Ok(Some(path));
+            }
         }
-        let mut code = 0_u32;
-        let queried = GetExitCodeProcess(handle, &raw mut code) != 0;
-        CloseHandle(handle);
-        !queried || code == STILL_ACTIVE
+    }
+    Ok(None)
+}
+
+/// Whether the existing slot at `path` is busy: held by another process, or
+/// free with a record naming a live target group.
+fn slot_busy(path: &Path, trusted: &[String]) -> Result<bool, LockHeld> {
+    match try_open_and_lock(path, false)? {
+        Slot::Busy => Ok(true),
+        Slot::Taken(file) => {
+            let mut acquired = AcquiredFile(file);
+            let record = read_holder(path, Some(&mut acquired.0), trusted).map_err(|error| {
+                LockHeld::unavailable(
+                    path.to_path_buf(),
+                    format!("cannot read gate lock record: {error}"),
+                )
+            })?;
+            let running = live_groups(&record).map_err(|error| {
+                LockHeld::unavailable(
+                    path.to_path_buf(),
+                    format!("cannot reclaim gate lock: {error}"),
+                )
+            })?;
+            Ok(!running.is_empty())
+        }
     }
 }
 
-#[cfg(not(any(unix, windows)))]
-fn process_alive(_pid: u32) -> bool {
-    // Without a check here, a ticket lives until its deadline.
-    true
+/// Take back this process's shared host locks, waiting up to `wait` for a
+/// host-exclusive target of another run to end.
+fn retake_shared(wait: std::time::Duration) {
+    let start = std::time::Instant::now();
+    let held = held();
+    for lock in held.iter() {
+        for (_, file) in &lock.host {
+            while os_lock::try_lock_shared(&file.0).is_err() && start.elapsed() < wait {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+    }
 }
 
 /// Names the lock descriptors `codeflow reserve` hands to a `codeflow`
@@ -960,15 +1042,15 @@ fn parse_descriptors(value: &str) -> Option<Vec<i32>> {
     Some(descriptors)
 }
 
-/// Use the locks in `dirs` that an enclosing holder handed over as
+/// Use the slots in `dirs` that an enclosing holder handed over as
 /// `descriptors`, or `None` to fall back to ordinary admission. Every lock
-/// must match: the lock path's file has the identity of one descriptor, a
-/// fresh open of that path is refused by the OS lock (someone holds it), and
-/// that descriptor takes the lock (so the holder is its open file
-/// description, which only the holder's process tree can carry). A
-/// descriptor this process opened itself, or one naming any other file,
-/// fails a check. Nothing is unlocked on any path: the descriptors share the
-/// holder's lock, and the holder record stays the holder's.
+/// directory must match: one of its existing slot files has the identity of
+/// one descriptor, a fresh open of that path is refused by the OS lock
+/// (someone holds it), and that descriptor takes the lock (so the holder is
+/// its open file description, which only the holder's process tree can
+/// carry). A descriptor this process opened itself, or one naming any other
+/// file, fails a check. Nothing is unlocked on any path: the descriptors
+/// share the holder's slot, and the holder record stays the holder's.
 #[cfg(unix)]
 fn inherit_gate_lock(
     dirs: &[PathBuf],
@@ -979,16 +1061,9 @@ fn inherit_gate_lock(
     if dirs.is_empty() || descriptors.is_empty() {
         return None;
     }
-    let mut inherited = Vec::new();
-    for dir in dirs {
-        let path = dir.join(LOCK_FILE);
-        let (anchor, relative) = lock_anchor(&path).ok()?;
-        let current = crate::contained::Tree::open(anchor)
-            .ok()?
-            .open_regular(&relative)
-            .ok()?;
-        let identity = FileIdentity::of(&current).ok()?;
-        let file = descriptors.iter().find_map(|&fd| {
+    let candidates: Vec<(FileIdentity, File)> = descriptors
+        .iter()
+        .filter_map(|&fd| {
             // SAFETY: F_DUPFD_CLOEXEC returns a new descriptor this process
             // owns, or -1 when `fd` is not open.
             let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
@@ -997,7 +1072,25 @@ fn inherit_gate_lock(
             }
             // SAFETY: `copy` is a fresh descriptor owned by nothing else.
             let file = unsafe { File::from_raw_fd(copy) };
-            (FileIdentity::of(&file).ok()? == identity).then_some(file)
+            Some((FileIdentity::of(&file).ok()?, file))
+        })
+        .collect();
+    let mut inherited = Vec::new();
+    let mut paths = Vec::new();
+    for dir in dirs {
+        let (path, file) = (0..MOST_SLOTS).find_map(|index| {
+            let path = dir.join(slot_file(index));
+            let (anchor, relative) = lock_anchor(&path).ok()?;
+            let current = crate::contained::Tree::open(anchor)
+                .ok()?
+                .open_regular(&relative)
+                .ok()?;
+            let identity = FileIdentity::of(&current).ok()?;
+            let file = candidates
+                .iter()
+                .find(|(candidate, _)| *candidate == identity)
+                .and_then(|(_, file)| file.try_clone().ok())?;
+            Some((path, file))
         })?;
         let fresh = open_lock_file(&path).ok()?;
         match os_lock::try_lock(&fresh) {
@@ -1013,21 +1106,30 @@ fn inherit_gate_lock(
             return None;
         }
         inherited.push(file);
+        paths.push(path);
     }
-    let paths: Vec<PathBuf> = dirs.iter().map(|dir| dir.join(LOCK_FILE)).collect();
+    // The run under the reserve is the reserve's run: its busy slot counts
+    // once, so `runs` is the busy slots of the most crowded folder.
+    let runs = dirs
+        .iter()
+        .filter_map(|dir| busy_after(dir, 0, &trusted).ok())
+        .max()
+        .unwrap_or(1)
+        .max(1);
     let lock = GateLock {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         files: Vec::new(),
         inherited,
         paths: paths.clone(),
+        runs,
         notes: vec![
-            "heavy work runs under the lock held by the enclosing `codeflow reserve`".to_string(),
+            "heavy work runs under the slot held by the enclosing `codeflow reserve`".to_string(),
         ],
     };
-    // Targets' watchers keep copies of the lock, and this process adds its
+    // Targets' watchers keep copies of the slot, and this process adds its
     // targets' groups to the holder's record without changing its holder
-    // lines, so a gate refuses while they run even after this process and
-    // the reserve end (TSK-1128).
+    // lines, so the slot stays busy while they run, even after this process
+    // and the reserve end (TSK-1128).
     held().push(Held {
         id: lock.id,
         paths,
@@ -1035,7 +1137,9 @@ fn inherit_gate_lock(
         groups: BTreeSet::new(),
         recorded: BTreeSet::new(),
         inherited: true,
+        host: Vec::new(),
         trusted,
+        runs: lock.runs,
         descriptors: lock.inherited.iter().map(AsRawFd::as_raw_fd).collect(),
     });
     Some(lock)
@@ -1170,7 +1274,9 @@ fn rewrite_serialized(lock: &Held, path: &Path) -> Vec<String> {
 /// to finish. A holder keeps it only for one read, merge and rename, and
 /// the OS releases it if that process dies.
 fn with_record_lock<T>(lock: &Path, rewrite: impl FnOnce() -> T) -> std::io::Result<T> {
-    let record_lock = lock.with_file_name(RECORD_LOCK_FILE);
+    let mut record_lock = record_path(lock).into_os_string();
+    record_lock.push(".lock");
+    let record_lock = PathBuf::from(record_lock);
     let (anchor, relative) = lock_anchor(&record_lock)?;
     let guard = crate::contained::Tree::open(anchor)?.create_read_only(&relative)?;
     let start = std::time::Instant::now();
@@ -1259,6 +1365,10 @@ mod os_lock {
         file.try_lock_exclusive()
     }
 
+    pub(super) fn try_lock_shared(file: &File) -> std::io::Result<()> {
+        FileExt::try_lock_shared(file)
+    }
+
     pub(super) fn unlock(file: &File) {
         let _ = FileExt::unlock(file);
     }
@@ -1290,14 +1400,14 @@ mod os_lock {
         overlapped
     }
 
-    pub(super) fn try_lock(file: &File) -> std::io::Result<()> {
+    fn lock_range(file: &File, flags: u32) -> std::io::Result<()> {
         let mut overlapped = at_lock_offset();
         // SAFETY: the handle is open for the call, and the OVERLAPPED lives
         // across it; a synchronous handle completes before returning.
         let locked = unsafe {
             LockFileEx(
                 file.as_raw_handle(),
-                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                flags | LOCKFILE_FAIL_IMMEDIATELY,
                 0,
                 1,
                 0,
@@ -1309,6 +1419,16 @@ mod os_lock {
         } else {
             Ok(())
         }
+    }
+
+    pub(super) fn try_lock(file: &File) -> std::io::Result<()> {
+        lock_range(file, LOCKFILE_EXCLUSIVE_LOCK)
+    }
+
+    /// A shared lock on the same byte: any number of shared holders, and
+    /// no exclusive holder beside them.
+    pub(super) fn try_lock_shared(file: &File) -> std::io::Result<()> {
+        lock_range(file, 0)
     }
 
     pub(super) fn unlock(file: &File) {
@@ -1389,9 +1509,15 @@ fn same_lock_file(path: &Path, file: &File) -> std::io::Result<()> {
     }
 }
 
-/// The record path beside the lock file at `lock`.
+/// The record path beside the lock file at `lock`: its name with `.lock`
+/// replaced by `.record` ([`RECORD_FILE`] beside [`LOCK_FILE`]).
 fn record_path(lock: &Path) -> PathBuf {
-    lock.with_file_name(RECORD_FILE)
+    let name = lock
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|name| name.strip_suffix(".lock"))
+        .map_or_else(|| RECORD_FILE.to_string(), |stem| format!("{stem}.record"));
+    lock.with_file_name(name)
 }
 
 /// The holder record for the lock at `lock`, parsed and rendered again from
@@ -1497,7 +1623,7 @@ fn trimmed_dir(dir: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// The modes a holder record names.
-const LOCK_MODES: [&str; 4] = ["full", "quick", "essential", "reserve"];
+const LOCK_MODES: [&str; 5] = ["full", "quick", "essential", "reserve", "exclusive"];
 
 /// Parse a holder record strictly and render it again from validated
 /// values only: `pid` as a process number, `started` as a Unix time,
@@ -1713,44 +1839,81 @@ mod tests {
         vec![tmp.join("home-locks"), tmp.join("repo-locks")]
     }
 
+    /// TSK-1145 AC-1: a second heavy run is admitted beside the first, in
+    /// the next slot of every folder, and both count as sharing the host.
     #[test]
-    fn a_second_gate_is_refused_naming_the_holder() {
+    fn a_second_run_takes_the_next_slot_and_both_are_counted() {
         let tmp = tempfile::tempdir().unwrap();
-        // The holder's folder is shown only when it exists.
         let work = std::fs::canonicalize(tmp.path()).unwrap().join("work-a");
         std::fs::create_dir(&work).unwrap();
         let first = acquire_full_gate_lock(&dirs(tmp.path()), &work).unwrap();
         assert!(first.notes.is_empty(), "{:?}", first.notes);
+        assert_eq!(first.runs, 1);
+        assert!(first.paths.iter().all(|path| path.ends_with(LOCK_FILE)));
 
-        // A second gate for the same project sees the holder's folder, which
-        // it trusts; any other folder shows as unknown.
-        let held = acquire_full_gate_lock(&dirs(tmp.path()), &work).unwrap_err();
-        let message = held.to_string();
-        assert!(
-            message.contains(&format!("pid {}", std::process::id())),
-            "{message}"
-        );
-        assert!(
-            message.contains(&format!("in {}", trimmed_dir(&work.display().to_string()))),
-            "{message}"
-        );
-        assert!(message.contains("one heavy gate"), "{message}");
+        let second = acquire_full_gate_lock(&dirs(tmp.path()), &work).unwrap();
+        assert_eq!(second.runs, 2);
+        assert!(second.paths.iter().all(|path| path.ends_with(slot_file(1))));
+        for dir in dirs(tmp.path()) {
+            let record = std::fs::read_to_string(dir.join("full-gate-1.record")).unwrap();
+            assert!(
+                record.contains(&format!("pid={}", std::process::id())),
+                "{record}"
+            );
+        }
+        assert_eq!(held_runs(), Some(2).max(held_runs()));
 
         drop(first);
+        drop(second);
         // A sibling test forking a child can hold a duplicate of the lock
         // descriptor until that child's exec closes it; allow that window.
         let again = (0..40)
             .find_map(|_| {
                 acquire_full_gate_lock(&dirs(tmp.path()), Path::new("/work/b"))
-                    .map_err(|_| std::thread::sleep(std::time::Duration::from_millis(50)))
                     .ok()
+                    .filter(|lock| lock.paths.iter().all(|path| path.ends_with(LOCK_FILE)))
+                    .or_else(|| {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        None
+                    })
             })
-            .expect("the lock is free once its holder drops it");
+            .expect("slot 0 is free once its holder drops it");
         assert!(
             again.notes.is_empty(),
             "a clean release leaves no stale record: {:?}",
             again.notes
         );
+    }
+
+    /// TSK-1145 AC-4: a host-exclusive hold refuses new heavy runs, naming
+    /// the hold, and a heavy run keeps a host-exclusive hold out.
+    #[test]
+    fn a_host_exclusive_hold_and_heavy_runs_exclude_each_other() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let dirs = dirs(tmp.path());
+        let none = std::time::Duration::ZERO;
+        let hold = hold_host_exclusive_in(&dirs, &work, none).expect("an idle host");
+        let refused = acquire_full_gate_lock(&dirs, &work).unwrap_err();
+        assert!(refused.exclusive);
+        let message = refused.to_string();
+        assert!(
+            message.contains("host-exclusive target is running"),
+            "{message}"
+        );
+        assert!(message.contains("exclusive mode"), "{message}");
+        drop(hold);
+        let run = acquire_full_gate_lock(&dirs, &work).expect("the host is free again");
+        drop(run);
+        // A run in another process holds the host shared; a second open
+        // file description stands for it here.
+        let other = open_lock_file(&dirs[0].join(HOST_LOCK_FILE)).unwrap();
+        os_lock::try_lock_shared(&other).unwrap();
+        let waited = hold_host_exclusive_in(&dirs, &work, none).unwrap_err();
+        assert!(waited.contains("host-exclusive target waits"), "{waited}");
+        os_lock::unlock(&other);
+        drop(hold_host_exclusive_in(&dirs, &work, none).expect("the other run ended"));
     }
 
     /// TSK-1128 AC-2, AC-5: only descriptors of the holder's own locked
@@ -1792,17 +1955,21 @@ mod tests {
         let inherited = inherit_gate_lock(&dirs, &handed, Vec::new())
             .expect("the holder's descriptors inherit");
         assert!(inherited.notes[0].contains("enclosing `codeflow reserve`"));
-        let refused = acquire_full_gate_lock(&dirs, &work)
-            .unwrap_err()
-            .to_string();
-        assert!(refused.contains("one heavy gate"), "{refused}");
+        assert_eq!(inherited.runs, 1, "the nested run is the holder's run");
+        let beside = acquire_full_gate_lock(&dirs, &work).expect("another run is admitted");
+        assert_eq!(beside.runs, 2);
+        assert!(beside.paths.iter().all(|path| path.ends_with(slot_file(1))));
+        drop(beside);
         drop(inherited);
-        let refused = acquire_full_gate_lock(&dirs, &work)
-            .unwrap_err()
-            .to_string();
+        let fresh = open_lock_file(&dirs[0].join(LOCK_FILE)).unwrap();
         assert!(
-            refused.contains(&format!("pid {}", std::process::id())),
-            "the inherited lock never releases or rewrites the holder's: {refused}"
+            os_lock::try_lock(&fresh).is_err(),
+            "the inherited lock never releases the holder's slot"
+        );
+        let record = std::fs::read_to_string(dirs[0].join(RECORD_FILE)).unwrap();
+        assert!(
+            record.contains(&format!("pid={}", std::process::id())),
+            "the inherited lock never rewrites the holder's record: {record}"
         );
         drop(holder);
     }
@@ -1818,7 +1985,7 @@ mod tests {
         let work = tmp.path().join("work");
         std::fs::create_dir(&work).unwrap();
         let dirs = dirs(tmp.path());
-        let lock = acquire_in_turn(&dirs, &work, "reserve", None).unwrap();
+        let lock = acquire_gate_lock(&dirs, &work, "reserve").unwrap();
         let path = lock.paths[0].clone();
         let trusted = trusted_dirs(&work);
         // Live process groups stand for the reserve's command and the
@@ -1839,7 +2006,9 @@ mod tests {
             groups: BTreeSet::from([mine]),
             recorded: BTreeSet::from([mine]),
             inherited: false,
+            host: Vec::new(),
             trusted: trusted.clone(),
+            runs: 1,
             descriptors: Vec::new(),
         };
         // At the rewrite's read, a nested run (an inherited lock) adds the
@@ -1862,7 +2031,9 @@ mod tests {
                     groups: BTreeSet::from([foreign]),
                     recorded: BTreeSet::from([foreign]),
                     inherited: true,
+                    host: Vec::new(),
                     trusted,
+                    runs: 1,
                     descriptors: Vec::new(),
                 };
                 assert_eq!(rewrite_serialized(&nested, &path), Vec::<String>::new());
@@ -1893,96 +2064,6 @@ mod tests {
         drop(lock);
     }
 
-    /// TSK-1128 AC-7: an earlier waiter takes the lock before a later one;
-    /// stale and dropped tickets stop counting; a malformed ticket refuses.
-    #[test]
-    fn waiters_take_the_lock_in_arrival_order() {
-        let tmp = tempfile::tempdir().unwrap();
-        let work = tmp.path().join("work");
-        std::fs::create_dir(&work).unwrap();
-        let dirs = dirs(tmp.path());
-        let wait = std::time::Duration::from_secs(60);
-        let earlier = WaitTicket::take_in(&dirs, wait).unwrap();
-        // One process takes one ticket at a time; the pause keeps the two
-        // names apart on a clock coarser than a nanosecond.
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let later = WaitTicket::take_in(&dirs, wait).unwrap();
-        let refused = acquire_in_turn(&dirs, &work, "reserve", Some(&later)).unwrap_err();
-        assert!(refused.contains("an earlier waiter is queued"), "{refused}");
-        let refused = acquire_in_turn(&dirs, &work, "quick", None).unwrap_err();
-        assert!(refused.contains("an earlier waiter is queued"), "{refused}");
-        let first = acquire_in_turn(&dirs, &work, "reserve", Some(&earlier))
-            .expect("the earlier waiter goes first");
-        drop(earlier);
-        drop(first);
-        let second = (0..40)
-            .find_map(|_| {
-                acquire_in_turn(&dirs, &work, "reserve", Some(&later))
-                    .map_err(|_| std::thread::sleep(std::time::Duration::from_millis(50)))
-                    .ok()
-            })
-            .expect("the later waiter goes next");
-        drop(second);
-        drop(later);
-
-        let queue = dirs[0].join(WAITERS_DIR);
-        // A ticket of an exited process, and one past its deadline, are stale.
-        std::fs::write(
-            queue.join("ticket-00000000000000000001-999999-99999999999"),
-            "",
-        )
-        .unwrap();
-        std::fs::write(
-            queue.join(format!(
-                "ticket-00000000000000000002-{}-1",
-                std::process::id()
-            )),
-            "",
-        )
-        .unwrap();
-        let lock =
-            acquire_in_turn(&dirs, &work, "quick", None).expect("stale tickets do not block");
-        drop(lock);
-        assert_eq!(
-            std::fs::read_dir(&queue).unwrap().count(),
-            0,
-            "stale tickets are removed"
-        );
-        std::fs::write(queue.join("ticket-junk"), "").unwrap();
-        let refused = acquire_in_turn(&dirs, &work, "quick", None).unwrap_err();
-        assert!(refused.contains("gate lock unavailable"), "{refused}");
-        assert!(refused.contains("moved aside"), "{refused}");
-        assert!(
-            !queue.join("ticket-junk").exists(),
-            "the name is quarantined"
-        );
-        let lock = acquire_in_turn(&dirs, &work, "quick", None)
-            .expect("one refusal, then the queue works");
-        drop(lock);
-    }
-
-    /// TSK-1128 N1: two tickets with the same arrival are ordered by
-    /// process, so exactly one of them waits.
-    #[cfg(unix)]
-    #[test]
-    fn equal_arrivals_are_ordered_by_process() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dirs = dirs(tmp.path());
-        let queue = dirs[0].join(WAITERS_DIR);
-        std::fs::create_dir_all(&queue).unwrap();
-        let mut pids = [std::process::id(), std::os::unix::process::parent_id()];
-        pids.sort_unstable();
-        let name = |pid: u32| format!("ticket-00000000000000000042-{pid}-99999999999");
-        for pid in pids {
-            std::fs::write(queue.join(name(pid)), "").unwrap();
-        }
-        assert_eq!(earliest_waiter(&dirs, Some(&name(pids[0]))).unwrap(), None);
-        assert_eq!(
-            earliest_waiter(&dirs, Some(&name(pids[1]))).unwrap(),
-            Some(format!("process {}", pids[0]))
-        );
-    }
-
     #[test]
     fn hand_over_values_parse_strictly() {
         assert_eq!(parse_descriptors("7"), Some(vec![7]));
@@ -1993,13 +2074,14 @@ mod tests {
     }
 
     #[test]
-    fn the_repository_lock_alone_still_refuses() {
-        // A sandboxed gate may reach only the repository lock; it must still
-        // see a gate that holds both.
+    fn the_repository_folder_alone_still_counts_a_run() {
+        // A sandboxed run may reach only the repository folder; it must
+        // still see a run that holds both.
         let tmp = tempfile::tempdir().unwrap();
         let _both = acquire_full_gate_lock(&dirs(tmp.path()), Path::new("/w")).unwrap();
         let repo_only = vec![tmp.path().join("repo-locks")];
-        assert!(acquire_full_gate_lock(&repo_only, Path::new("/w")).is_err());
+        let alone = acquire_full_gate_lock(&repo_only, Path::new("/w")).unwrap();
+        assert_eq!(alone.runs, 2);
     }
 
     #[test]
@@ -2028,7 +2110,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_free_lock_is_held_while_its_target_group_runs() {
+    fn a_free_slot_whose_target_group_runs_counts_as_busy() {
         use std::os::unix::process::CommandExt;
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("locks");
@@ -2045,28 +2127,29 @@ mod tests {
             format!("pid=999999\nstarted=1\ndir=/gone\ngroup={group}\n"),
         )
         .unwrap();
-        let held = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
-            .expect_err("a live target group keeps the lock");
-        assert_eq!(held.running_groups, vec![group]);
-        let message = held.to_string();
-        assert!(
-            message.contains(&format!("process group {group}")),
-            "{message}"
-        );
-        assert!(
-            message.contains("pid 999999 in an unknown directory"),
-            "{message}"
-        );
+        let beside = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
+            .expect("a run is admitted beside a surviving target");
+        assert_eq!(beside.runs, 2, "the surviving target counts as a run");
+        assert!(beside.paths[0].ends_with(slot_file(1)));
         assert!(
             std::fs::read_to_string(dir.join(LOCK_FILE))
                 .unwrap()
                 .contains(&format!("group={group}")),
-            "the refusal leaves the record for the next check"
+            "the record stays for the surviving target"
         );
+        let refused = hold_host_exclusive_in(
+            std::slice::from_ref(&dir),
+            Path::new("/w"),
+            std::time::Duration::ZERO,
+        )
+        .unwrap_err();
+        assert!(refused.contains("host-exclusive target waits"), "{refused}");
+        drop(beside);
 
         target.kill().unwrap();
         target.wait().unwrap();
         let lock = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")).unwrap();
+        assert!(lock.paths[0].ends_with(LOCK_FILE));
         assert!(
             lock.notes
                 .iter()
@@ -2555,7 +2638,7 @@ mod tests {
 
     /// TSK-1003: a gate of a pre-3.2 binary keeps its record inside the lock
     /// file. While the record file names no holder, that legacy record is
-    /// still read, so its killed gate's live targets keep the lock held.
+    /// still read, so its killed gate's live targets keep the slot busy.
     #[cfg(unix)]
     #[test]
     fn a_legacy_record_is_read_while_the_record_file_is_empty() {
@@ -2575,9 +2658,13 @@ mod tests {
             format!("pid=999999\nstarted=1\ndir=/old\ngroup={group}\n"),
         )
         .unwrap();
-        let held = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
-            .expect_err("the legacy record's live group keeps the lock");
-        assert_eq!(held.running_groups, vec![group]);
+        let beside = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")).unwrap();
+        assert_eq!(
+            beside.runs, 2,
+            "the legacy record's live group keeps slot 0 busy"
+        );
+        assert!(beside.paths[0].ends_with(slot_file(1)));
+        drop(beside);
         target.kill().unwrap();
         target.wait().unwrap();
     }
@@ -2698,6 +2785,7 @@ mod tests {
         let dir = home.join(HOME_LOCK_DIR);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(LOCK_FILE), "").unwrap();
+        std::fs::write(dir.join(HOST_LOCK_FILE), "").unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
         let refused = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"));
         let reported = unwritable_gate_dirs(tmp.path(), Some(&home));

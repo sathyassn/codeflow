@@ -76,9 +76,16 @@ pub struct ExecutionConfig {
     #[serde(default, skip_serializing_if = "QuickTargetClass::is_light")]
     pub quick_default_class: QuickTargetClass,
 
-    /// Maximum wait for heavy quick targets to acquire the shared gate lock.
+    /// Maximum wait for a host-exclusive target: for a heavy run while one
+    /// holds the host, and for one while other heavy runs hold it. Heavy
+    /// runs never wait for each other (TSK-1145).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub heavy_wait_seconds: u64,
+
+    /// Jobs all heavy runs on this host share. Omitted computes it from the
+    /// logical cores and available memory (`testing::capacity`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_jobs: Option<usize>,
 
     /// Total workers shared by concurrent heavy targets. Omitted leaves tools unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,6 +203,12 @@ pub struct TargetConfig {
     /// Run with no other target alongside it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub exclusive: bool,
+
+    /// Run alone on the host: no other target of this run and no other
+    /// heavy run on the machine beside it (TSK-1145). Only for a target that
+    /// cannot share the host, such as a timing-sensitive one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub host_exclusive: bool,
 
     /// Runner type.
     pub runner: RunnerType,
@@ -539,6 +552,7 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "input_class",
         "evidence",
         "exclusive",
+        "host_exclusive",
         "heavy",
         "workers",
     ];
@@ -603,6 +617,12 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
         return Err(TestingError::ConfigInvalid {
             path: path.to_path_buf(),
             message: "worker_budget must be positive".into(),
+        });
+    }
+    if config.execution.host_jobs == Some(0) {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: "host_jobs must be positive".into(),
         });
     }
     if config.execution.max_parallel == Some(0) {
@@ -1152,6 +1172,7 @@ mod tests {
                 input_class: None,
                 evidence: None,
                 exclusive: false,
+                host_exclusive: false,
                 heavy: None,
                 workers: None,
                 runner: RunnerType::Custom,
