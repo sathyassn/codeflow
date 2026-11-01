@@ -24,9 +24,9 @@ fn shipped_and_repository_workflow_jobs_declare_timeouts() {
         let jobs = workflow["jobs"].as_mapping().expect("workflow has jobs");
         assert!(!jobs.is_empty(), "{} has no jobs", path.display());
         for (name, job) in jobs {
-            if !job["timeout-minutes"]
+            if job["timeout-minutes"]
                 .as_u64()
-                .is_some_and(|minutes| minutes > 0)
+                .is_none_or(|minutes| minutes == 0)
             {
                 missing.push(format!(
                     "{}: jobs.{} needs a positive timeout-minutes",
