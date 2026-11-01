@@ -1733,7 +1733,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "0f1f0fa4462d3f7610e77ef8e20f164080f023bf2822c6b4b8f07776a3f6c7b6",
+      "sha256": "25d2911c4aa18f3367df040cc915d46f5bc4cd6860a7aa6bcb408b80e565f7b5",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {

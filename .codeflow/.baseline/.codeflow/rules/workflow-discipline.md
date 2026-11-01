@@ -425,8 +425,9 @@ line tip).
   `codeflow reserve -- <command>`) is admitted at once and takes a
   coordination slot in the lock folder, which records that it is running.
   The slot is not the budget.
-- A run uses its own width (its worker budget, else the whole job budget)
-  while the active runs fit the budget at that width. When more runs are
+- A run uses its own width (its worker budget, never above the job budget,
+  else the whole job budget) while the active runs fit the budget at that
+  width. When more runs are
   active, it starts at once with the budget divided among them, at least one
   job. A run never waits for another run and never skips a target for lack of
   capacity.
