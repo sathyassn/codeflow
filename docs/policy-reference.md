@@ -732,11 +732,15 @@ changes and symlink retargeting can change the paths selected after the
 check. Classification cannot eliminate that race. Native filesystem denies
 remain a separate backstop for the paths they actually cover.
 
-The shell check skips read-rule groups that have carve-outs. It does not
-enforce the `.env` or `secret`/`credentials` source-name groups, including
-`.env.production` and `credentials.json`. File-tool rules still apply those
-groups with their example and source exceptions, such as `.env.example`
-and `secret_scan.rs`.
+The shell check skips read-rule groups that have carve-outs and groups the
+action table marks `"shell": false`. It does not enforce the `.env` group
+or the `secret`/`credentials` name group, including `.env.production` and
+`credentials.json`. The Read tool and the sandbox still apply both: the
+`.env` group with its example exceptions, such as `.env.example`, and the
+name group only on exact secret names and data-file extensions, so a
+source file such as `secret_scan.rs` stays readable everywhere (TSK-1070).
+The shell check matches its rules without ASCII case, so
+`~/Library/Keychains` also covers `~/library/keychains`.
 
 Writer checks also use the shared resolver. An unread command substitution
 in a writer operand refuses while a checkout is reachable. Links created
@@ -1927,8 +1931,9 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   conditions or concurrent changes, issue 88); a code-running key set at repository
   scope, which an allowed `git status` then runs; a workspace symbolic
   link to a protected file, which no sandbox was tested against; a seat
-  with no sandbox; Claude's unsandboxed retry, since the presets set
-  `allowUnsandboxedCommands`; the `security.sandbox_retry` keys are
+  with no sandbox; Claude's unsandboxed retry where a person sets
+  `allowUnsandboxedCommands` back to `true` (the presets set `false`);
+  the `security.sandbox_retry` keys are
   unsupported and have no effect; commands in `excludedCommands`; `sandbox.filesystem.disabled`
   set at user, managed or CLI scope; native Windows Claude; Grok's
   Windows stub; and a hard-linked repository `config` on a git that

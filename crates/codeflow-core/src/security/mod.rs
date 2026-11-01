@@ -30,6 +30,7 @@ pub(crate) mod arguments;
 pub mod composed;
 pub mod dangerous;
 mod deletion;
+pub(crate) mod gh_api;
 pub mod git;
 pub(crate) mod git_config;
 pub(crate) mod git_config_writes;

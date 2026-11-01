@@ -124,3 +124,10 @@ retry, not every hook-touching command. The preset does not ship it because
 the prompt then fires on every retry in every mode.
 ADR-0025's autonomy statement continues to apply; ADR-0029 amended its
 sandbox-retry rule and this decision amends its mode line.
+
+## Note (2026-10-31)
+
+ADR-0093 amends the mode line of this decision: Claude Code ignores
+`bypassPermissions` in a project file since v2.1.257, so `bypass-sandboxed.json`
+no longer ships `defaultMode`, and `codeflow update` removes the value where the
+recorded baseline shows CodeFlow shipped it. The rest of this decision stands.

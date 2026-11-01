@@ -1504,6 +1504,78 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
+    // The typed consent answer: a read error leaves the line empty, which counts as no, so nothing is written without a yes (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/claude_session.rs",
+        "ask",
+        "obtain-absent:read_line",
+        1,
+        "unproven",
+    ),
+    // The typed consent answer: only `yes` or `y` after trimming is a yes; any other text is no (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/claude_session.rs",
+        "ask",
+        "trim",
+        1,
+        "format-contract",
+    ),
+    // Startup-file lines are compared whole against the one line codeflow writes; a near match is not this line and stays (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/claude_session.rs",
+        "has_line",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    // Removes only lines equal to the recorded line codeflow wrote; every other line is kept as it was (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/claude_session.rs",
+        "remove_line",
+        "lines",
+        2,
+        "format-contract",
+    ),
+    // An unset SHELL offers no startup file and prints how to source the function instead (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/claude_session.rs",
+        "Layout::from_env",
+        "obtain-absent:var",
+        1,
+        "unproven",
+    ),
+    // An unset ZDOTDIR is zsh's own default of the home directory, the file zsh reads (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/claude_session.rs",
+        "Layout::from_env",
+        "obtain-absent:var_os",
+        1,
+        "unproven",
+    ),
+    // A user settings file holding only whitespace is no settings; anything else must parse as a JSON object or nothing is written (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/claude_session/user_settings.rs",
+        "read_user",
+        "trim",
+        1,
+        "format-contract",
+    ),
+    // An unreadable kernel release only leaves the sandbox item offered; it is added only on a yes and never sets failIfUnavailable, so an unavailable sandbox is still reported by the harness (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/claude_session/user_settings.rs",
+        "sandbox_supported",
+        "obtain-absent:read_to_string",
+        1,
+        "unproven",
+    ),
+    // An unset marker shows the session-start warning, the side that tells the person; the marker only decides whether a warning prints (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/hook.rs",
+        "session_orient",
+        "obtain-absent:var",
+        1,
+        "unproven",
+    ),
     // TSK-452: doctor's preflight report only prints evidence and decides
     // nothing. A missing or misread catalog, settings file or PATH entry is
     // printed as unavailable, never as configured or observed.
@@ -2195,6 +2267,30 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:from_utf8",
         1,
         "unproven",
+    ),
+    // A payload that does not parse as JSON gets no ask answer; shell_call parsed the same text first and refuses one it cannot read, so this only tells the Claude payload apart (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/hook.rs",
+        "from_claude",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // A DELETE word is refused even with surrounding Unicode space, since gh trims a header value with Go's strings.TrimSpace; trimming more only widens a refusal (TSK-1070 security review round 3).
+    (
+        "crates/codeflow-core/src/security/gh_api.rs",
+        "names_delete",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // A jq program admitted by the field-selector check still runs through jq, which rejects any space it does not lex; trimming here can only admit a program jq then refuses (TSK-1070 security review round 4).
+    (
+        "crates/codeflow-core/src/security/gh_api.rs",
+        "is_field_selector",
+        "trim",
+        2,
+        "schema-reject-only",
     ),
     // This handler runs after the blocking guard verdict; malformed already-produced JSON chooses the textual denial message, retaining nonzero exit/refusal.
     (
@@ -6888,6 +6984,22 @@ const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"]
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),
     ("crates/codeflow-core/src/hooks/sandbox_state.rs", "claude_layers", "ErrorKind::NotFound", 1, "Only native NotFound on read_dir of the managed settings drop-in directory means it adds no layer (TSK-397); every other error is reported by doctor's state-root check, which then fails."),
+    ("crates/codeflow-cli/src/cmd/bypass_mode.rs", "managed_files", "ErrorKind::NotFound", 1, "A missing managed-settings.d holds no drop-in that could disable bypass mode; every other listing or entry error refuses bypass mode (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/bypass_mode.rs", "read_object", "ErrorKind::NotFound", 1, "A settings file that does not exist sets nothing; every other read error, and a file that is not a JSON object, refuses bypass mode (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "append_line", "ErrorKind::NotFound", 1, "A startup file that does not exist is created with the one line, only after the person's yes; every other read error propagates and nothing is written (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "install", "ErrorKind::NotFound", 1, "No session file yet means a fresh one; every other read error refuses the install before anything is written (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "read_manifest", "ErrorKind::NotFound", 1, "No install record yet means nothing installed; every other read error, and a record that does not parse, refuses install and uninstall (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "remove_line", "ErrorKind::NotFound", 1, "A startup file that no longer exists holds no line to remove; every other read error propagates and uninstall exits nonzero (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "run", "exists", 2, "Status display only: present or absent is printed and nothing is decided or written (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "uninstall", "ErrorKind::NotFound", 1, "A file already gone needs no removal; every other read error is reported and uninstall exits nonzero (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "note_prior", "ErrorKind::NotFound", 1, "No file at the path means nothing predates the install, so there is nothing to put back; every other read error refuses the install before it writes (TSK-1070 security review)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "adopt_changes", "ErrorKind::NotFound", 1, "A file already gone holds no change of the person's to keep; every other read error refuses the reinstall before it writes (TSK-1070 security review round 2)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "write_owned", "ErrorKind::NotFound", 1, "No file yet means no earlier content whose hash must stay recognisable; every other read error refuses the write (TSK-1070 security review round 2)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "file_mode", "ErrorKind::NotFound", 1, "No wrapper yet means no permission bits to keep or restore; every other metadata error refuses the wrapper write (TSK-1070 security review round 2)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "write_atomic", "ErrorKind::NotFound", 2, "canonicalize finds no file, or a dangling link, so the write lands at the path as given, creating it; and a target with no metadata is new, so it is created owner-only; every other error propagates and nothing is written (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session/user_settings.rs", "on_path", "is_file", 1, "Only decides whether the Herdr item is offered; it is added only on the person's yes, and a herdr that is not found is not offered (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session/user_settings.rs", "read_record", "ErrorKind::NotFound", 1, "No record yet means nothing was added; every other read error, and a record that does not parse, refuses the offer and the removal (TSK-1070)."),
+    ("crates/codeflow-cli/src/cmd/claude_session/user_settings.rs", "read_user", "ErrorKind::NotFound", 1, "No user settings file reads as empty settings and is created only on a yes, with no backup needed; every other read error leaves the file untouched (TSK-1070)."),
     ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),

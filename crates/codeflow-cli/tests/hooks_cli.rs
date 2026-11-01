@@ -99,7 +99,11 @@ fn isolated_codeflow(mut cmd: Command) -> Command {
     isolate_git(&mut cmd);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        // A run inside Claude Code would otherwise get the session-start
+        // warning (TSK-1070); the tests that want it set these themselves.
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEFLOW_SESSION_SETTINGS");
     cmd
 }
 
@@ -4761,6 +4765,99 @@ fn session_orient_adds_the_guidance_block_after_compact_resume_and_fork() {
             println!("guidance block {tier} {source}: {} bytes", block.len());
         }
     }
+}
+
+/// TSK-1070 AC-24: a Claude Code session in a Codeflow project that did not
+/// load the session file gets the warning as JSON, shown to the person
+/// (`systemMessage`) and to the model with the unchanged digest; a session
+/// started through the `claude` function gets the plain digest.
+#[test]
+fn session_orient_warns_a_claude_start_without_the_session_file() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_tier(dir.path(), "full");
+    let digest = codeflow()
+        .args(["orient"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let digest = String::from_utf8(digest.stdout).unwrap();
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "session-orient"])
+            .current_dir(dir.path())
+            .env("CLAUDECODE", "1"),
+        &start_payload("startup"),
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let warning = json["systemMessage"].as_str().unwrap();
+    assert!(warning.starts_with("codeflow: WARNING"), "{warning}");
+    assert!(
+        warning.contains("~/.codeflow/claude/session.json"),
+        "{warning}"
+    );
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "SessionStart");
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.starts_with(&digest), "{context}");
+    assert!(context.contains(warning), "{context}");
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "session-orient"])
+            .current_dir(dir.path())
+            .env("CLAUDECODE", "1")
+            .env("CODEFLOW_SESSION_SETTINGS", "1"),
+        &start_payload("startup"),
+    );
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), digest);
+}
+
+/// TSK-1070 review: the warning does not depend on the digest, so a
+/// project that turns the digest off still shows it.
+#[test]
+fn session_orient_warns_with_the_digest_turned_off() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let cf = dir.path().join(".codeflow");
+    std::fs::create_dir_all(&cf).unwrap();
+    std::fs::write(
+        cf.join("project.toml"),
+        "tier = \"full\"\n[orient]\nenabled = false\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "-A"]);
+    git(dir.path(), &["commit", "-qm", "chore: off"]);
+    let quiet = run_with_stdin(
+        codeflow()
+            .args(["hook", "session-orient"])
+            .current_dir(dir.path())
+            .env("CLAUDECODE", "1")
+            .env("CODEFLOW_SESSION_SETTINGS", "1"),
+        &start_payload("startup"),
+    );
+    assert!(quiet.stdout.is_empty(), "the digest is off");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "session-orient"])
+            .current_dir(dir.path())
+            .env("CLAUDECODE", "1"),
+        &start_payload("startup"),
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let warning = json["systemMessage"].as_str().unwrap();
+    assert!(warning.starts_with("codeflow: WARNING"), "{warning}");
+    assert_eq!(
+        json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap(),
+        format!("{warning}\n")
+    );
 }
 
 /// AC-1: no tier (not a scaffolded project) and a garbled payload keep the
@@ -11296,6 +11393,455 @@ fn a_guard_stalled_on_a_fifo_include_refuses_at_its_deadline() {
         assert!(
             took >= Duration::from_secs(GUARD_DEADLINE_SECS),
             "{guard} answered in {took:?}, before its deadline: {stderr}"
+        );
+    }
+}
+
+/// Exec-guard with a payload shaped as each harness sends it: Claude Code's
+/// (`hook_event_name`), or Codex's (the same plus `turn_id`).
+fn exec_guard_from(dir: &Path, command: &str, codex: bool) -> Output {
+    let mut payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": dir,
+        "session_id": "s-1",
+        "permission_mode": "bypassPermissions",
+    });
+    if codex {
+        payload["turn_id"] = serde_json::json!("t-1");
+    }
+    let mut hook = codeflow();
+    hook.env("SHELL", "/bin/zsh");
+    run_with_stdin(
+        hook.args(["hook", "exec-guard"]).current_dir(dir),
+        &payload.to_string(),
+    )
+}
+
+/// TSK-1070 security review round 2 (SEC-05): Claude Code runs `gh api`
+/// outside its sandbox by name, so exec-guard reads its options by gh's own
+/// grammar. A DELETE is refused in every spelling, case and quoting the
+/// shell turns into the same arguments, and a form the guard cannot be sure
+/// of is refused.
+#[test]
+fn exec_guard_refuses_every_gh_api_delete_and_unread_form() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        "gh api repos/o/r -X=DeLeTe",
+        "gh api repos/o/r -iXDELETE",
+        "gh api repos/o/r -X 'DeLeTe'",
+        "gh api repos/o/r -X \"delete\"",
+        "gh api repos/o/r --method=dElEtE",
+        "gh api repos/o/r -H 'X-HTTP-Method-Override: DELETE'",
+        "gh api repos/o/r -X \"$M\"",
+        "gh api repos/o/r $FLAGS",
+        "gh auth status -at",
+        "gh auth status --show-token=true",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("security.outward_actions"), "{command}: {err}");
+    }
+}
+
+/// TSK-1070 security review round 2 (SEC-05): a `gh api` write in any
+/// spelling, case or quoting asks the person (Claude's `ask` answer, which
+/// prompts in bypass mode too); a read does not, and neither does a Codex
+/// call, whose `gh` runs in Codex's own sandbox.
+#[test]
+fn exec_guard_asks_before_every_gh_api_write() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        "gh api repos/o/r/actions/runs/1/rerun -X PoSt",
+        "gh api repos/o/r -X 'POST'",
+        "gh api repos/o/r -X=put",
+        "gh api repos/o/r -iX patch",
+        "gh api repos/o/r --method=pAtCh",
+        "gh api repos/o/r -'f'body=x",
+        "gh api repos/o/r -fbody=x",
+        "gh api repos/o/r --raw-field=body=x",
+        "gh api repos/o/r --input body.json",
+        "gh api graphql -f query=x",
+        "gh api https://example.invalid/review-canary",
+        "gh api repos/o/r --hostname example.invalid",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let answer: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("{command}: no ask answer ({e}): {stdout}"));
+        assert_eq!(
+            answer["hookSpecificOutput"]["permissionDecision"], "ask",
+            "{command}"
+        );
+        assert_eq!(answer["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert!(
+            answer["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .unwrap()
+                .contains("`gh api`"),
+            "{command}"
+        );
+        let codex = exec_guard_from(dir.path(), command, true);
+        assert_eq!(codex.status.code(), Some(0), "{command}");
+        assert!(codex.stdout.is_empty(), "{command}: Codex gets no ask");
+    }
+    for command in [
+        "gh api repos/o/r/pulls/1 --jq .head.sha",
+        "gh api repos/o/r -X get",
+        "gh pr view 1",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        assert_eq!(out.status.code(), Some(0), "{command}");
+        assert!(
+            out.stdout.is_empty(),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
+/// TSK-1070 security review round 4 (SEC-09): gh runs a `--jq` program or
+/// a template outside the sandbox with its own environment, so `--jq env`
+/// printed every inherited variable. On every `gh` call, a `--jq` program
+/// is admitted only as a plain field selector and a template is refused,
+/// under `security.secret_reads`, through the full hook.
+#[test]
+fn exec_guard_refuses_gh_output_programs_on_every_verb() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        "gh api rate_limit --jq env",
+        "gh api rate_limit --jq=env",
+        "gh api rate_limit -q env",
+        "gh api rate_limit -qenv",
+        "gh api rate_limit --jq '$ENV'",
+        "gh api rate_limit --jq '$ENV.GH_TOKEN'",
+        "gh api rate_limit --jq 'env[(\"GH_\" + \"TOKEN\")]'",
+        "gh api rate_limit --jq 'env | getpath([\"GH_TOKEN\"])'",
+        "gh api rate_limit --jq '$__loc__'",
+        "gh api rate_limit --jq '\"\\(env)\"'",
+        "gh pr view 458 --json number --jq env",
+        "gh pr view 458 --json number -q '.number, env'",
+        "gh issue list --json title --jq 'env.GH_TOKEN'",
+        "gh run list --json name --jq '[env]'",
+        "gh release view v1 --json name --jq env",
+        "gh repo view --json name --jq env",
+        "gh search prs x --json title --jq env",
+        "gh -R o/r pr view 1 --json title --jq env",
+        "gh api repos/o/r --template '{{.name}}'",
+        "gh pr view 1 --json title --template={{.title}}",
+        "gh pr view 1 --json title -t '{{.title}}'",
+        "gh api repos/o/r -t '{{.name}}'",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("security.secret_reads"), "{command}: {err}");
+        assert!(err.contains("--json"), "{command}: {err}");
+    }
+    // The selector forms CodeFlow's docs and scripts use stay allowed.
+    for command in [
+        "gh api repos/o/r/pulls/1 --jq .head.sha",
+        "gh api repos/o/r/rulesets --jq '.[].id'",
+        "gh api repos/o/r/contents/x --jq .content",
+        "gh run view 1 --json jobs --jq '.jobs[].databaseId'",
+        "gh run view 1 --json attempt --jq .attempt",
+        "gh pr view 458 --json number,state --jq '.number, .state'",
+        "gh pr list --json number --jq '.[] | .number'",
+        "gh pr create -t title -b body",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// TSK-1070 security review round 5 (SEC-09-R5-OPTION-VALUE,
+/// SEC-10-R5-TEMPLATE): exec-guard reads every word of a `gh` call for an
+/// output program, with no `--` stop, so a `--` that is another option's
+/// value hides nothing, and the first of `q` and `t` in a short word decides
+/// whether it is a selector or a template. Both hook payload shapes.
+#[test]
+fn exec_guard_reads_every_gh_word_for_an_output_program() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for codex in [false, true] {
+        for command in [
+            // The two Codex triggers.
+            "gh pr list -R o/r --search -- --json number --jq env",
+            "gh pr view 458 --json title -tq.name",
+            // `--` as the value of other string options.
+            "gh issue list --label -- --json title --jq env",
+            "gh pr list --author -- --json number -q env",
+            "gh run list --branch -- --json name --jq=env",
+            "gh search prs --repo -- x --json title -qenv",
+            "gh pr list --search -- --json number --template '{{.number}}'",
+            "gh api repos/o/r -- --jq env",
+            // Repeated flags: each is judged.
+            "gh pr view 1 --json title --jq .title --jq env",
+            "gh pr view 1 --json title -q .title -q=env",
+            // Attached templates, whatever text follows the `t`.
+            "gh pr view 1 --json title -t'{{.title}}q.name'",
+            "gh pr view 1 --json title -t=q.name",
+            "gh pr create -tq.name",
+            // A title does not excuse another word.
+            "gh pr create -t x -- --jq env",
+            "gh issue edit 1 -t x --template '{{.a}}'",
+        ] {
+            let out = exec_guard_from(dir.path(), command, codex);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{codex} {command}: {err}");
+            assert!(
+                err.contains("security.secret_reads"),
+                "{codex} {command}: {err}"
+            );
+        }
+        for command in [
+            "gh pr view 458 --json title -q.title",
+            "gh pr view 458 --json title -q=.title",
+            "gh pr view 458 --json title,number --jq=.title --jq .number",
+            "gh pr list --search -- --json number --jq '.[].number'",
+            "gh pr create -t title -b body",
+            "gh pr create --title title -b body",
+            "gh issue edit 1 -t title",
+        ] {
+            let out = exec_guard_from(dir.path(), command, codex);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{codex} {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+/// TSK-1070 security review round 6 (SEC-09-R6-SHELL-ARGV): a `gh` call
+/// runs only when every argument word is provably literal. A word the
+/// shell builds, in any class, and arguments a runner supplies are
+/// refused on every verb; quoted literals stay allowed. Both hook payload
+/// shapes.
+#[test]
+fn exec_guard_refuses_gh_arguments_the_shell_builds() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for codex in [false, true] {
+        for command in [
+            // The reported payload.
+            "gh pr view 458 --json number {--jq,env}",
+            // Brace expansion, nested and combined.
+            "gh pr view 458 --json number {--jq,{env,x}}",
+            "gh pr view 458 --json number --j{q,x} env",
+            "gh run list --json name -{q,x}env",
+            // Parameter expansion and word splitting, quoted or not.
+            "gh pr view 458 --json number $FLAGS",
+            "gh pr view 458 --json number --jq \"$P\"",
+            "gh issue list --json title ${OPTS}",
+            // Arrays and positional arguments.
+            "gh pr view 458 --json number \"${args[@]}\"",
+            "gh pr view 458 --json number \"$@\"",
+            // Command substitution and backquotes.
+            "gh pr view 458 --json number $(printf -- '--jq env')",
+            "gh pr view 458 --json number `printf -- --jq` env",
+            // Globs, extended globs and tilde.
+            "gh pr view 458 --json number --j?",
+            "gh pr view 458 --json number --jq*",
+            "gh pr view 458 --json number @(--jq) env",
+            "gh pr view 458 --json number ~/x",
+            // Runners that supply the arguments.
+            "printf '%s\\n' --jq env | xargs gh pr view 458 --json number",
+            "find . -name x -exec gh pr view 458 --json number {} +",
+            "printf -- '--jq env' | parallel gh pr view 458 --json number",
+            "parallel gh pr view 458 --json number ::: --jq env",
+            "sudo gh pr view 458 --json number",
+            // Every verb, not only api.
+            "gh api repos/o/r {--jq,env}",
+            "gh release view v1 --json name {--jq,env}",
+        ] {
+            let out = exec_guard_from(dir.path(), command, codex);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{codex} {command}: {err}");
+        }
+        // Quoted literals hold pattern characters as text.
+        for command in [
+            "gh pr view 458 --json number --jq '.number'",
+            "gh run view 1 --json jobs --jq '.jobs[].databaseId'",
+            "gh pr list --json number --jq '.[] | .number'",
+            "gh pr create -t 'fix: keep {braces} and $dollars (literal)' -b 'body *'",
+            "gh issue create --title \"a ~tilde\" --body 'x'",
+            "gh pr view 458 --json title,number",
+            "env GH_PAGER=cat gh pr view 458 --json number",
+            "timeout 60 gh run watch 1",
+            "command -v gh",
+        ] {
+            let out = exec_guard_from(dir.path(), command, codex);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{codex} {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+fn assert_asks(dir: &Path, command: &str) {
+    let out = exec_guard_from(dir, command, false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{command}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let answer: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("{command}: no ask answer ({e}): {stdout}"));
+    assert_eq!(
+        answer["hookSpecificOutput"]["permissionDecision"], "ask",
+        "{command}"
+    );
+}
+
+/// TSK-1070 security review round 3 (SEC-05): exec-guard no longer models
+/// gh's argument grammar. A `gh api` call is a read only in one narrow
+/// plain form; a DELETE in any spelling or position is refused, every
+/// other form asks, and a `gh auth` call with the token flag anywhere or an
+/// option before its subcommand is refused. Each round-3 attack runs
+/// through the full hook.
+#[test]
+fn exec_guard_holds_the_round_three_gh_attacks() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        // A superseded help flag must not hide the DELETE (R3-HELP).
+        "gh api repos/o/r -X=DeLeTe --help --help=false",
+        "gh api repos/o/r -X=DeLeTe --help=false --help",
+        // Options before `api` (R3-DISPATCH).
+        "gh -X=DeLeTe api repos/o/r",
+        "gh -X DELETE api repos/o/r",
+        "gh --method=dElEtE api repos/o/r",
+        // A DELETE override with an explicit GET, in both orders.
+        "gh api repos/o/r -X GET -H X-HTTP-Method-Override:dElEtE",
+        "gh api repos/o/r -H X-HTTP-Method-Override:dElEtE -X GET",
+        // The token flag in any position, and options before the auth
+        // subcommand (R3-DISPATCH).
+        "gh auth --show-token=true status",
+        "gh auth -t status",
+        "gh auth status --SHOW-TOKEN",
+        "gh auth status -aT",
+        "gh --hostname github.com auth status",
+        "gh -R o/r auth status",
+        "gh auth -h github.com status",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("security.outward_actions"), "{command}: {err}");
+    }
+    for command in [
+        // A superseded help flag must not hide a write (R3-HELP).
+        "gh api repos/o/r -X PoSt --help --help=false",
+        "gh api repos/o/r -X PoSt --help=false --help",
+        "gh api repos/o/r --help",
+        "gh api repos/o/r -h",
+        // An override header never lowers the wire method (R3-HEADER).
+        "gh api repos/o/r/actions/runs/1/rerun -X PoSt -H X-HTTP-Method-Override:GET",
+        "gh api repos/o/r/actions/runs/1/rerun -H X-HTTP-Method-Override:GET -X PoSt",
+        "gh api repos/o/r -H Accept:application/json",
+        // Options before `api` (R3-DISPATCH).
+        "gh --hostname=example.invalid api repos/o/r",
+        "gh -R o/r api repos/o/r",
+        "gh -X PoSt api repos/o/r",
+        // Outside the plain read form.
+        "gh api search/issues -X GET -f q=repo:o/r",
+        "gh api repos/o/r -X HEAD",
+        "gh api repos/o/r -XGET",
+        "gh api repos/o/r --metod POST",
+        "gh api repos/o/r --verbose",
+    ] {
+        assert_asks(dir.path(), command);
+    }
+    for command in [
+        "gh api repos/o/r",
+        "gh api repos/o/r -X GET --paginate --slurp -q .name",
+        "gh api repos/o/r --method=GET --jq=.name -i --silent",
+        "gh auth status",
+        "gh auth status -a -h github.com",
+        "gh -R o/r pr view 1",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.stdout.is_empty(),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
+/// TSK-1070 security review round 2 (the excluded `git push` runs the
+/// pre-push hooks outside the sandbox): an edit, or a shell write, to the
+/// hooks folder of a linked worktree under the project is refused, as it
+/// is at the project root. The Edit tool's settings deny is anchored at the
+/// project root, so the guards carry the worktrees.
+#[test]
+fn the_hooks_folder_of_a_worktree_is_refused_to_edits_and_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_repo(root, "main");
+    std::fs::create_dir_all(root.join(".codeflow/git-hooks")).unwrap();
+    std::fs::write(root.join(".codeflow/git-hooks/pre-push"), "#!/bin/sh\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: hooks"]);
+    git(root, &["config", "core.hooksPath", ".codeflow/git-hooks"]);
+    git(root, &["worktree", "add", "-b", "task/x", ".worktrees/x"]);
+    let hook = root.join(".worktrees/x/.codeflow/git-hooks/pre-push");
+    assert!(hook.exists());
+    let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+        "file_path": hook, "content":"#!/bin/sh\ntouch /tmp/x\n"}, "cwd": root})
+    .to_string();
+    let out = run_with_stdin(
+        codeflow().args(["hook", "edit-guard"]).current_dir(root),
+        &payload,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for command in [
+        "printf x > .worktrees/x/.codeflow/git-hooks/pre-push",
+        "cp base.txt .worktrees/x/.codeflow/git-hooks/pre-push",
+    ] {
+        let out = run_with_stdin(
+            codeflow().args(["hook", "git-guard"]).current_dir(root),
+            &guard_payload(command, root),
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 }

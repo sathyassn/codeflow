@@ -1033,6 +1033,11 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     // A person's own Claude Code settings, named where cf-customize says
     // where each person sets their effort (TSK-1028).
     "~/.claude/settings.json",
+    // The person's session file, its install record and the record of the
+    // user-file entries, which `codeflow claude-session` writes (TSK-1070).
+    "~/.codeflow/claude/session.json",
+    "~/.codeflow/claude/install.json",
+    "~/.codeflow/claude-user-settings.json",
     ".grok/hooks/codeflow.json",
     ".codeflow/estimate.json",
     ".codeflow/manifest.json",

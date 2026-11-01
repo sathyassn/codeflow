@@ -108,8 +108,11 @@ fn update_from_prior_presets_retires_the_asks_and_keeps_adopter_entries() {
         let merged_value = json(&merged);
         let perms = &merged_value["permissions"];
 
-        // Every shipped ask is gone; only the adopter's own ask remains.
-        assert_eq!(strings(&perms["ask"]), ["Bash(deploy *)"], "{label}");
+        // Every earlier shipped ask is gone; the forge-write asks
+        // (TSK-1070) and the adopter's own ask remain.
+        let mut expected_ask = strings(&incoming_value["permissions"]["ask"]);
+        expected_ask.push("Bash(deploy *)".to_string());
+        assert_eq!(strings(&perms["ask"]), expected_ask, "{label}");
         assert!(
             strings(&prior_value["permissions"]["ask"]).len() > 5,
             "{label}: the prior preset really asked"
@@ -164,14 +167,22 @@ fn a_pristine_prior_preset_updates_to_exactly_the_new_arrays() {
             merge_settings_from_baseline(&prior, Some(&prior), &incoming, &mut report).unwrap();
         let merged = json(&merged);
         let incoming = json(&incoming);
-        assert!(merged["permissions"].get("ask").is_none(), "{label}");
+        assert_eq!(
+            merged["permissions"]["ask"], incoming["permissions"]["ask"],
+            "{label}"
+        );
         assert_eq!(
             merged["permissions"]["deny"], incoming["permissions"]["deny"],
             "{label}"
         );
-        assert!(report
-            .iter()
-            .any(|l| l == "settings: removed permissions.ask: the preset no longer ships it"));
+        // The preset ships asks again (the `gh api` writes, TSK-1070), so
+        // the earlier release's asks are retired one by one.
+        assert!(
+            report.iter().any(|l| l
+                .as_str()
+                .starts_with("settings: removed retired permissions.ask entry")),
+            "{label}: {report:?}"
+        );
     }
 }
 
@@ -209,8 +220,14 @@ fn without_a_baseline_new_entries_are_added_and_nothing_is_removed() {
     let merged = json(&merged);
     let prior = json(&prior);
     // Nothing can be told apart from the adopter's own choice, so nothing
-    // is removed; every new deny is added.
-    assert_eq!(merged["permissions"]["ask"], prior["permissions"]["ask"]);
+    // is removed; every new deny and ask is added.
+    let ask = strings(&merged["permissions"]["ask"]);
+    for rule in strings(&prior["permissions"]["ask"])
+        .into_iter()
+        .chain(strings(&json(&incoming)["permissions"]["ask"]))
+    {
+        assert!(ask.contains(&rule), "missing ask {rule}");
+    }
     let deny = strings(&merged["permissions"]["deny"]);
     for rule in strings(&json(&incoming)["permissions"]["deny"]) {
         assert!(deny.contains(&rule), "missing {rule}");
@@ -588,9 +605,10 @@ fn update_without_a_baseline_compares_with_the_2_1_0_copy() {
 
     let report = scaffold::update(&assets(), &root, &update_opts()).unwrap();
     let settings = text(&root.join(".claude/settings.json"));
-    assert!(
-        json(&settings)["permissions"].get("ask").is_none(),
-        "asks retired"
+    assert_eq!(
+        json(&settings)["permissions"]["ask"],
+        json(&shipped("default.json"))["permissions"]["ask"],
+        "the 2.1.0 asks retired and the forge-write asks added"
     );
     let deny = strings(&json(&settings)["permissions"]["deny"]);
     for rule in strings(&json(&shipped("default.json"))["permissions"]["deny"]) {
@@ -695,9 +713,10 @@ fn without_a_baseline_an_adopters_ordered_exceptions_keep_their_meaning() {
     scaffold::update(&assets(), &root, &update_opts()).unwrap();
     let first = text(&root.join(".claude/settings.json"));
     keeps_order(&first, "first update");
-    assert!(
-        json(&first)["permissions"].get("ask").is_none(),
-        "asks retired"
+    assert_eq!(
+        json(&first)["permissions"]["ask"],
+        json(&shipped("default.json"))["permissions"]["ask"],
+        "the 2.1.0 asks retired and the forge-write asks added"
     );
     scaffold::update(&assets(), &root, &update_opts()).unwrap();
     let second = text(&root.join(".claude/settings.json"));

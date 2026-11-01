@@ -55,8 +55,9 @@ Lifecycle waits stay the completion signal.
   contract; the generated task file carries only the lifecycle hooks). On
   every host, keep the OS sandbox
   enabled with `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
-  and permit an auto-classified unsandboxed retry only for a trusted
-  installed tool that requires host state. That is not a
+  keep `sandbox.allowUnsandboxedCommands: false`, and run a trusted
+  installed tool that requires host state outside the sandbox only by its
+  `sandbox.excludedCommands` entry. That is not a
   write grant and not hook-trust bypass. Never
   `--dangerously-skip-permissions` unless the operator named it, and never
   `--dangerously-bypass-hook-trust`. Consults still edit nothing. See

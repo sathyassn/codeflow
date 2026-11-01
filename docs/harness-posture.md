@@ -26,19 +26,165 @@ an operator still has to decide.
 
 | Harness | What the shipped preset enables | What stays gated |
 |---|---|---|
-| Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests, ask rules for destructive source-control operations, `Edit` denies and sandbox write denies for the shell startup files; a status line showing model, version, output style, folder, branch and context use, and no `effortLevel` (ADR-0087); cross-family seats pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; an unsandboxed retry only when the native configuration permits it, auto-classified for a trusted installed tool that needs host state such as `herdr` or the official Codex plugin; the guards judge the retried command under the same policy, a retry never lifts a destructive, privileged, publishing, secret-read or enforcement-file refusal, and a delegated seat that runs sandboxed denies the retry natively; auto mode and classifier policy are never taken from the repository, so project `acceptEdits` remains the ordinary fallback (ADR-0026, ADR-0029) |
+| Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, sandbox egress limited to the development hosts listed below (TSK-1070), local port binding for dev/UI tests, ask rules for `gh api` writes, `Edit` denies and sandbox write denies for the shell startup files; a status line showing model, effort, version, output style, folder, branch, worktree, pull request, context use and plan usage, and no `effortLevel` (ADR-0087); cross-family seats pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries, including the token stores of `gh`, git, Docker, gcloud, Azure, npm and the macOS keychains; no unsandboxed retry (`allowUnsandboxedCommands: false`), so a command the sandbox refuses fails in every mode, and only the commands that need host state run outside it by name (`excludedCommands`: the `gh` subcommands CodeFlow uses and a plain `git push`), still judged by the guards and the deny rules; auto and bypass mode and classifier policy are never taken from the repository, so the mode is the person's (ADR-0026, ADR-0029, ADR-0093) |
 | Codex | Guarded workspace permission profile (no `sandbox_mode` key), live search, reviewer-subagent escalation review, workspace key-file denies, the current primary seat's configured fallback, the default secret-bearing environment filter, `approval_policy = "never"`, no `model_reasoning_effort` (effort is each person's, ADR-0087), shell startup files read only; a builder seat runs the `cf-builder` profile and a reviewer the `cf-guard` profile, so no seat runs without the OS sandbox (ADR-0075 D1 as amended on 2026-10-05) | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
 | Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload; Grok's `workspace` sandbox leaves the home, and so its shell startup files, unwritable | The hooks load only after the one-time `/hooks-trust` (or `--trust`); the doctor check reports structural wiring, not trust state (ADR-0054) |
 
-The unsandboxed retry for Claude Code works as follows.
+Commands outside the Claude Code sandbox work as follows (ADR-0093, which
+amends ADR-0029's retry).
 
-- It happens only when the native configuration permits it.
-- It is auto-classified, and only for a trusted installed tool that needs host
-  state, such as the official Codex plugin.
-- The guards judge the retried command under the same policy.
-- A retry never lifts a destructive, privileged, publishing, secret-read or
-  enforcement-file refusal.
-- A delegated seat that runs sandboxed denies the retry natively.
+- The shipped presets set `sandbox.allowUnsandboxedCommands: false`. Claude
+  Code then ignores a request to rerun a refused command outside the
+  sandbox, so a refusal holds in every permission mode, bypass included.
+- `sandbox.excludedCommands` names the commands that need host state.
+  `gh` reads its token from `~/.config/gh`, which the sandbox denies, and
+  fails TLS verification under the macOS sandbox, so the subcommands
+  CodeFlow uses run outside it: `gh pr` view, list, checks, diff, status,
+  create, comment, edit, ready, review and merge; `gh run` view, list,
+  watch, rerun and cancel; `gh issue` view, list, status, create, comment,
+  edit, close and reopen; `gh api`, `gh repo view`, `gh release view`,
+  `gh release list`, `gh search` and `gh auth status`. `gh run download`,
+  which extracts an archive, and `gh pr checkout` and `gh issue develop`,
+  which run git, stay sandboxed (TSK-1070 security review). The excluded
+  verbs still act on this machine: `gh pr create` can push a branch and,
+  with `--editor`, start the editor; `gh pr merge --delete-branch` deletes
+  the local branch. The git that `gh` starts is not judged by git-guard.
+  `git push *` covers a plain push, which asks `gh` for the HTTPS
+  credential and runs the pre-push hook.
+- An entry matches only when every command in the call matches it. A pipe,
+  a file redirect, a `cd`, `git -C <path>`, an environment prefix or a
+  `$(...)` keeps the whole call sandboxed (Claude Code sandboxing docs and
+  the TSK-1070 canary). So an agent pushes with a plain `git push` from the
+  session's working directory, which git-guard resolves as the repository,
+  and selects `gh` output fields with `--jq` (a plain field selector;
+  see below). A script that calls `git` or `gh`
+  stays sandboxed too, and an App token passed as `GH_TOKEN=$(...) gh ...`
+  never matches an entry.
+- The guards, the deny rules and the ask rules judge an excluded command
+  like any other. The `forge_exec` denies refuse the `gh` and push forms
+  that would run code outside the sandbox, print the token or reach
+  another host: extensions, aliases, `gh config set`, `gh auth status
+  --show-token`, codespaces, keys, secrets, variables, `gh repo clone`,
+  `gh browse`, `--receive-pack`, `--exec` and `ext::` remotes.
+- A list of spellings never closes, and neither does a model of gh's
+  option grammar (TSK-1070 security review round 3), so exec-guard judges
+  `gh api` and `gh auth` against one narrow allowlist and asks or refuses
+  everything else:
+  - A `gh api` call runs without a prompt only in the plain read form:
+    `api` is the first word after `gh`, one endpoint that is not GraphQL
+    or an absolute URL, an explicit method only as `-X GET`, `--method
+    GET` or `--method=GET`, and otherwise only `-q`/`--jq` (as a field
+    selector, below), `--cache`, `-i`/`--include`, `--paginate`,
+    `--slurp` and `--silent`, each as a separate word or a long `=` form.
+  - Every other `gh api` form gets a prompt (the `ask` decision, which
+    Claude Code shows in bypass mode too): a write method, a field or
+    input body (with `-X GET` too), any header, `--help`, `--input`,
+    `--hostname`, GraphQL, an absolute URL, an attached or bundled short
+    option, an option before `api`, and any option outside the list.
+  - A `gh api` call with a word naming DELETE anywhere (the method word,
+    an option with it attached, or a header value, in any case) is
+    refused, and so is a `gh auth` call with the token flag anywhere
+    (`--show-token` or a short option word holding `t`) or with an option
+    before its subcommand.
+  - A word the shell fills in is refused, in a `gh api` or `gh auth` call
+    or as the `gh` subcommand.
+  - An output program is code: gh runs a `--jq` program or a template
+    outside the sandbox with its own environment, so `--jq env` would
+    print the GitHub token (TSK-1070 security review round 4). On every
+    `gh` call, `--jq`/`-q` is admitted only as a plain field selector
+    (dot paths of names with `[]` and `[N]`, joined by `|` or `,`, such
+    as `.head.sha` or `.[] | .name`), and every template is refused,
+    under `security.secret_reads`. The check does not model where gh's
+    options end, since an option can take `--` as its value (review
+    round 5): it reads every word of the call, with no `--` stop, and any
+    word that is or could be `--jq`, `--template`, `-q` or `-t`,
+    including a short word whose letters hold `q` or `t`, must be a jq
+    flag with a selector program or the call is refused. The only
+    exception is the separate word `-t` as the title of `gh pr` or
+    `gh issue` `create` and `edit`, and another word in that call can
+    still refuse it. This refuses some harmless calls, such as a value
+    holding `q` or `t` attached to a short option (`-Ftitle=x`); spell
+    the value as a separate word.
+  - A `gh` call runs only when every argument word is literal (review
+    round 6: `{--jq,env}` became two arguments the guard never saw). A
+    word the shell builds is refused on every `gh` verb: a variable or
+    word splitting, an array or positional argument, a command
+    substitution or backquote, a glob or extended glob, a tilde, and
+    brace expansion. So is `gh` with arguments run by any program other
+    than a plain launcher such as `env` or `timeout` (`xargs`,
+    `find -exec`, `parallel`, `sudo`), and every word after `gh` is read
+    for output programs whatever program runs it. Quote a word that
+    holds pattern characters: a quoted literal stays allowed.
+    For anything richer, read the `--json`
+    output as gh prints it: a pipe into `jq` keeps the call sandboxed,
+    where gh has no token.
+  - The `forge_write` ask rules and the DELETE denies in the presets name
+    the common spellings as a second layer.
+- Excluded commands do not inherit the host list: an excluded `gh` or
+  `git push` reaches whatever host it names. The prompt covers `gh api`
+  with `--hostname` or an absolute URL; `gh` with `GH_HOST` or a `-R
+  host/owner/repo` and a push to a remote URL on another host have no
+  rule of their own, so such a call can carry data off the host list;
+  `gh` sends a token only to a host it holds one for.
+  A push runs the pre-push hooks in `.codeflow/git-hooks` outside the
+  sandbox, so the sandbox denies writes to that folder in any checkout
+  (`**/.codeflow/git-hooks`; on Linux the sandbox may need explicit
+  paths). The Edit tool's deny rule covers the project's own folder, and
+  edit-guard refuses an edit to it in any checkout, worktrees included. A
+  `core.hooksPath` other than `.codeflow/git-hooks` has no such deny;
+  git-guard refuses changing it. The sandbox also removes `GH_TOKEN`,
+  `GITHUB_TOKEN`, `NPM_TOKEN` and `NODE_AUTH_TOKEN` from every sandboxed
+  command.
+- Herdr's socket and the official Codex plugin route (ADR-0029) also need
+  host state, but no shipped preset excludes them: an entry there reaches
+  every adopter. A person who uses them adds `herdr *`, with denies for
+  its update, machine, server and config commands, or the plugin's
+  command, in their own user settings or a `--settings` file
+  (`/cf-customize`). A project that needs another tool, or `git fetch` on
+  a private remote whose credential helper reads a denied key file, adds
+  it to `.claude/settings.local.json`; the lists merge across files.
+  Never exclude a script or interpreter under a path sandboxed commands
+  can write.
+
+Sandboxed commands reach only these development hosts
+(`sandbox.network.allowedDomains`, operator decision 2026-10-31, which
+replaces ADR-0025's `*`):
+
+| Hosts | Used by |
+|---|---|
+| `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` | git fetch and clone, release downloads such as the CodeFlow installer, raw files and source archives |
+| `crates.io`, `index.crates.io`, `static.crates.io`, `static.rust-lang.org` | cargo and rustup (the Rust stack and CodeFlow's own gates) |
+| `registry.npmjs.org` | npm and pnpm (the node stack, CodeFlow's docs portal and present web gates) |
+| `pypi.org`, `files.pythonhosted.org` | pip (the python stack) |
+| `proxy.golang.org`, `sum.golang.org` | Go modules (the go stack's `go test` and `go vet`) |
+| `cdn.playwright.dev`, `playwright.download.prss.microsoft.com` | Playwright browser downloads for the docs portal and present browser checks |
+| `code.claude.com`, `docs.anthropic.com` | Claude Code and Anthropic documentation fetched from the shell |
+
+- The private-range, link-local and internal-name `deniedDomains` and
+  `allowLocalBinding` are unchanged. Web search and `WebFetch` follow
+  their permission rules, not this list. The Python and Go hosts serve
+  adopters on those stacks; CodeFlow's own gates use the GitHub, Rust, npm
+  and Playwright hosts.
+- The private-range denies match host names only. A connection to an IP
+  literal such as `10.255.255.1` is not refused by `10.*` (sandbox
+  exemptions research, live probe 2026-10-31), so they do not stop a
+  command that names an address directly.
+- `allowLocalBinding` lets a sandboxed command listen on and reach local
+  ports, which dev servers and UI tests need. It also reaches every other
+  local listener, such as the roughly 30 ports local Codex app-servers
+  hold; whether those require authentication is not verified.
+- A connection to an unlisted host prompts in Manual and acceptEdits,
+  is refused in auto unless the classifier approves it, and is allowed
+  in bypass unless `sandbox.network.strictAllowlist` is `true` in the
+  user file or a `--settings` file; a project file cannot set it, and
+  under it Claude Code ignores the project's list, so that same file
+  lists the hosts (Claude Code sandboxing docs, checked 2026-10-31, and
+  the TSK-1070 canary).
+- An adopter adds a host in `.claude/settings.local.json` (personal) or
+  `.claude/settings.json` (shared), for example
+  `{"sandbox": {"network": {"allowedDomains": ["registry.example.com"]}}}`.
+  `codeflow update` keeps every host the project added and removes only
+  a shipped entry it retired, such as `*`.
 
 The catastrophic classifier is a non-relaxable floor, not a complete endpoint
 security product. Managed organization policy, least-privilege host accounts,
@@ -92,7 +238,8 @@ decided on 2026-10-30 to drop that grant and add no local recorder
 
 - **Full gates run outside the sandbox.** A full gate in a sandboxed
   session fails its evidence preflight, so the primary runs it in the
-  operator's terminal or as an approved unsandboxed run. Only the primary
+  operator's terminal; the shipped sandbox does not rerun it outside the
+  sandbox. Only the primary
   runs full gates. `codeflow doctor --check permissions` reports the
   evidence folder as unwritable by design inside the sandbox.
 - **Writable reports earn no credit.** Any process of the user can still
@@ -179,6 +326,7 @@ Authenticated command-line tools must be able to read their own configuration.
 | Claude's credential mask | the shipped sandbox removes the exact Anthropic, OpenAI, and AWS raw credentials named in ADR-0026 from Bash without stripping credentials from every hook or stdio MCP, and leaves brokered tools and MCP processes available. When a project needs a raw GitHub, npm, Cargo, or provider token, prefer a broker or keychain; otherwise configure Claude's user/managed credential mask with TLS termination and exact `injectHosts` |
 | Subprocess scrub | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` is a user/managed hardening option only after proving the project's hooks and stdio MCPs do not require those provider credentials |
 | Auto mode | Claude deliberately ignores repository requests for auto mode and classifier policy, so a Codex-hosted peer launches interactively with `--permission-mode auto` and CLI-scoped `autoMode.classifyAllShell`; `/cf-customize` can offer the equivalent user default but never writes it without approval |
+| Bypass mode | a sanctioned host mode the person chooses, like auto (ADR-0093, issue 451). Claude ignores `bypassPermissions` in a project file and starts the session in Manual mode, and a project `default` or `acceptEdits` outranks the user file, so the `default` and `bypassPermissions` presets set no mode and bypass comes from `~/.claude/settings.json` or `--permission-mode bypassPermissions`; `/cf-customize` canaries the live mode. `codeflow claude-session --install`, which the person runs in their own terminal, writes CodeFlow's session file, `~/.codeflow/claude/session.json`, with bypass mode only after they type yes (not offered when managed or user settings set `disableBypassPermissionsMode`), and a `claude` shell function that loads it with `--settings` inside CodeFlow projects, where the sandbox, host list and deny rules bind whatever the repository says. A start without it (an IDE, the desktop app, `command claude`) is warned at session start (operator decision 2026-10-31). The guards (`onFailure: "block"`), deny rules, ask rules, the fail-closed sandbox with no unsandboxed retry, git hooks and CI still hold; the classifier, allow rules and protected-path prompts are gone, and the excluded tools run outside the sandbox without a prompt |
 | Codex review approvals | `auto_review` is configured but is not a human authorization path, and it does not pause for that subagent. Use `on-request` and `approvals_reviewer = "user"` only on a consult/no-edit lane when policy requires a human decision |
 
 ### Shared and personal settings
@@ -189,7 +337,7 @@ scaffold ships a status line and leaves effort to each person (ADR-0087).
 
 | Key | Shipped in the shared file | Where a person sets their own |
 |---|---|---|
-| Claude `statusLine` | a `jq` line: model name and id, version, output style, folder, branch, context used with a green, yellow or red percentage; without `jq`, folder and branch | `.claude/settings.local.json` |
+| Claude `statusLine` | a `jq` line: model name and id, version, output style, folder, branch, context used with a green, yellow or red percentage, and, when Claude Code supplies them, the effort, the open pull request and its review state, the 5-hour and 7-day plan usage and the linked worktree (TSK-1070); without `jq`, folder and branch | `.claude/settings.local.json` |
 | Claude `effortLevel` | none | `~/.claude/settings.json`, `.claude/settings.local.json`, or `--effort` at launch |
 | Codex `model_reasoning_effort` | none | `~/.codex/config.toml`, or `-c model_reasoning_effort=...` at launch |
 | Claude compaction point (`env`) | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 1000000 and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 35: compaction near 350K tokens, a team cost policy that also applies to subagents | `env` in `.claude/settings.local.json` |
@@ -232,7 +380,9 @@ digest points to them after a compaction.
   whatever the project meant by it, so a project on the compaction
   percentage of 50 moves to 35; a value that differs from the recorded
   shipped value stays, and the report names its key when the default
-  changed.
+  changed. A `permissions.defaultMode` of `bypassPermissions` or `auto`,
+  which a project file cannot set, is removed when the recorded baseline
+  shows CodeFlow shipped it, and otherwise kept and reported (ADR-0093).
 
 ### Hosting the duo from either seat
 

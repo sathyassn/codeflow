@@ -12,7 +12,13 @@ use codeflow_core::scaffold::InitAnswers;
 /// Codex autonomy is a fixed per-repo posture in `.codex/config.toml`
 /// (ADR-0008) — the label says so, so a codex-primary user is not left
 /// believing this answer configured their harness.
-const PRESET_QUESTION: &str = "Claude Code project preset (default | acceptEdits | bypassPermissions; bypass only for an externally isolated container/VM) — auto mode is selected at CLI/user scope, and codex autonomy lives in .codex/config.toml";
+const PRESET_QUESTION: &str = "Claude Code project preset (default | acceptEdits | bypassPermissions). acceptEdits pins that mode in the project file, above your user settings; default and bypassPermissions leave the mode to you, and Claude Code takes auto or bypassPermissions only from ~/.claude/settings.json or the launch flag. Codex autonomy lives in .codex/config.toml";
+
+/// Printed after `init` when the operator chose the `bypassPermissions`
+/// preset (TSK-1070, issue 451). Claude Code ignores `bypassPermissions` in
+/// a project settings file and starts the session in Manual mode, so the
+/// preset leaves the mode unset and this note names the routes that work.
+pub const BYPASS_ROUTE_NOTE: &str = "Bypass mode: Claude Code does not take bypassPermissions from .claude/settings.json, so the project file leaves the mode unset.\n  Start one session in bypass: claude --permission-mode bypassPermissions\n  CodeFlow can keep bypass mode, a sandbox a repository cannot loosen and the host list in its own session file, ~/.codeflow/claude/session.json, and start `claude` with it inside CodeFlow projects. Each change below is shown first; bypass mode and the startup-file line are made only on your yes.\n  The guard hooks, deny rules and the fail-closed sandbox still apply in bypass mode; /cf-customize runs the canary that shows it.";
 
 fn ask(input: &mut impl BufRead, question: &str, default: &str) -> std::io::Result<String> {
     print!("{question} [{default}]: ");
@@ -193,8 +199,7 @@ mod tests {
         // The preset writes .claude/settings.json only; the label must name
         // the harness it binds and point codex users at their real knob.
         assert!(PRESET_QUESTION.starts_with("Claude Code project preset"));
-        assert!(PRESET_QUESTION.contains("auto mode is selected at CLI/user scope"));
-        assert!(PRESET_QUESTION.contains("externally isolated container/VM"));
+        assert!(PRESET_QUESTION.contains("only from ~/.claude/settings.json or the launch flag"));
         assert!(PRESET_QUESTION.contains(".codex/config.toml"));
     }
 

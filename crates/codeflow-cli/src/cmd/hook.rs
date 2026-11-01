@@ -233,16 +233,50 @@ fn session_orient(stdin: &str) -> i32 {
                 }
             };
             let digest = orient::generate(&root);
-            let mut out = std::io::stdout();
             // The digest quotes branch names and record text: a block, each
             // line written under the sink rule (TSK-388).
-            let _ = out.write_all(digest.as_str().as_bytes());
-            // The digest's own off-switch also silences the guidance block.
+            let mut text = digest.as_str().to_string();
+            // The warning does not depend on the digest: its off-switch
+            // silences only the digest and the guidance block.
+            let warning = session_settings_warning(
+                std::env::var_os("CLAUDECODE").is_some(),
+                std::env::var(super::claude_session::MARKER_VAR)
+                    .ok()
+                    .as_deref(),
+            );
+            if let Some(warning) = &warning {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(warning);
+                text.push('\n');
+            }
             if !digest.is_empty() {
                 let source = guidance::payload_source(stdin).unwrap_or_default();
                 if let Some(block) = guidance::session_guidance(&root, &source) {
-                    let _ = out.write_all(b"\n");
-                    let _ = out.write_all(block.as_str().as_bytes());
+                    text.push('\n');
+                    text.push_str(block.as_str());
+                }
+            }
+            let mut out = std::io::stdout();
+            match warning {
+                // Plain session-start output reaches only the model; the
+                // JSON form also shows the warning to the person
+                // (`systemMessage`), checked live on Claude Code 2.1.316.
+                Some(warning) => {
+                    let json = serde_json::json!({
+                        "systemMessage": warning,
+                        "hookSpecificOutput": {
+                            "hookEventName": "SessionStart",
+                            "additionalContext": text,
+                        },
+                    });
+                    // serde escapes every control character, so the
+                    // JSON line needs no display rule of its own.
+                    let _ = out.write_all(format!("{json}\n").as_bytes());
+                }
+                None => {
+                    let _ = out.write_all(text.as_bytes());
                 }
             }
             let _ = out.flush();
@@ -251,6 +285,20 @@ fn session_orient(stdin: &str) -> i32 {
         guidance::HookEvent::Other(_) => {}
     }
     0
+}
+
+/// The session-start warning for a Claude Code session in a Codeflow
+/// project that did not start through the `claude` function with
+/// Codeflow's session file (TSK-1070): an IDE extension, the desktop app or
+/// `command claude`. Claude Code sets `CLAUDECODE` for its hooks; the
+/// function sets [`super::claude_session::MARKER_VAR`]. A warning only:
+/// the variable is the session's own, so it proves nothing, and a refusal
+/// would leave such a session unable to run any command.
+#[must_use]
+pub fn session_settings_warning(claude: bool, marker: Option<&str>) -> Option<String> {
+    (claude && marker != Some("1")).then(|| {
+        "codeflow: WARNING: this Claude Code session started without CodeFlow's session settings (~/.codeflow/claude/session.json), so the repository's settings can loosen the sandbox and the host list is not enforced. Tell the person now. To fix it, quit and start again from a terminal in this project with `claude` after `codeflow claude-session --install`, or run `claude --settings ~/.codeflow/claude/session.json`.".to_string()
+    })
 }
 
 /// Write the prompt's one rule line, if any; a write error is dropped.
@@ -737,7 +785,51 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         &root,
         &outcome,
     );
+    if !codeflow_core::hooks::any_blocking(&violations) && from_claude(stdin) {
+        let asks = exec_guard::asks_in(command, &policy.security, &cwd);
+        if !asks.is_empty() {
+            claude_ask(out, &asks);
+        }
+    }
     exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
+}
+
+/// Whether the payload comes from Claude Code: a `PreToolUse` event with
+/// none of the fields Codex adds (`turn_id`). Grok names its event
+/// `hookEventName` and gets its deny answer from [`grok_deny`].
+fn from_claude(stdin: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(stdin)
+        .ok()
+        .is_some_and(|value| {
+            value
+                .get("hook_event_name")
+                .and_then(serde_json::Value::as_str)
+                == Some("PreToolUse")
+                && value.get("turn_id").is_none()
+        })
+}
+
+/// Claude Code's ask answer: the person confirms the call before it runs,
+/// in every permission mode, bypass included (live check 2026-10-31,
+/// Claude Code 2.1.316); a session with no person refuses it.
+fn claude_ask(out: &mut dyn Write, asks: &[String]) {
+    let reason = format!(
+        "codeflow exec-guard: {}. It runs outside the sandbox with your GitHub token (TSK-1070, ADR-0093); confirm only if you meant it.",
+        asks.join("; ")
+    );
+    let answer = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "ask",
+            "permissionDecisionReason": reason,
+        }
+    });
+    let _ = term_writeln!(
+        out,
+        "{}",
+        codeflow_core::git::display_json(&answer.to_string())
+    );
+    let _ = out.flush();
 }
 
 /// Why the session project's policy keeps a call made from `root` strict:
@@ -1011,5 +1103,18 @@ mod tests {
         assert!(read_bounded_utf8(Cursor::new([0xff]), 5)
             .unwrap_err()
             .contains("UTF-8"));
+    }
+
+    /// TSK-1070: a Claude session without the function's marker is warned;
+    /// one started through it, and every other harness, is not.
+    #[test]
+    fn only_a_claude_start_without_the_session_file_is_warned() {
+        use super::session_settings_warning as warn;
+        let warning = warn(true, None).unwrap();
+        assert!(warning.contains("~/.codeflow/claude/session.json"));
+        assert!(warning.contains("codeflow claude-session --install"));
+        assert!(warn(true, Some("0")).is_some());
+        assert!(warn(true, Some("1")).is_none());
+        assert!(warn(false, None).is_none());
     }
 }

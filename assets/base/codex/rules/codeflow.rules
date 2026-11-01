@@ -205,3 +205,44 @@ prefix_rule(
     decision = "forbidden",
     justification = "User-level persistence and settings that need no elevation. Root-only system commands are left to the privilege family (review finding F9).",
 )
+
+prefix_rule(
+    pattern = ["gh", ["extension", "ext", "alias", "codespace", "cs", "ssh-key", "gpg-key", "browse"]],
+    decision = "forbidden",
+    justification = "The `gh` subcommands CodeFlow uses and a plain `git push` run outside the Claude sandbox by name (TSK-1070). The forms that would run code outside it, print the token or reach another host are refused: `gh` extensions, aliases, configuration, codespaces, keys, secrets, variables, clone and browse, a push with its own receive-pack or exec program, and an `ext::` remote.",
+    match = ["gh extension install o/r"],
+    not_match = ["gh pr view 1"],
+)
+
+prefix_rule(
+    pattern = ["gh", "config", "set"],
+    decision = "forbidden",
+    justification = "The `gh` subcommands CodeFlow uses and a plain `git push` run outside the Claude sandbox by name (TSK-1070). The forms that would run code outside it, print the token or reach another host are refused: `gh` extensions, aliases, configuration, codespaces, keys, secrets, variables, clone and browse, a push with its own receive-pack or exec program, and an `ext::` remote.",
+)
+
+prefix_rule(
+    pattern = ["gh", "auth", "status", ["-t", "--show-token"]],
+    decision = "forbidden",
+    justification = "The `gh` subcommands CodeFlow uses and a plain `git push` run outside the Claude sandbox by name (TSK-1070). The forms that would run code outside it, print the token or reach another host are refused: `gh` extensions, aliases, configuration, codespaces, keys, secrets, variables, clone and browse, a push with its own receive-pack or exec program, and an `ext::` remote.",
+    not_match = ["gh auth status"],
+)
+
+prefix_rule(
+    pattern = ["gh", "variable", ["set", "delete"]],
+    decision = "forbidden",
+    justification = "The `gh` subcommands CodeFlow uses and a plain `git push` run outside the Claude sandbox by name (TSK-1070). The forms that would run code outside it, print the token or reach another host are refused: `gh` extensions, aliases, configuration, codespaces, keys, secrets, variables, clone and browse, a push with its own receive-pack or exec program, and an `ext::` remote.",
+    not_match = ["gh variable list"],
+)
+
+prefix_rule(
+    pattern = ["gh", "repo", "clone"],
+    decision = "forbidden",
+    justification = "The `gh` subcommands CodeFlow uses and a plain `git push` run outside the Claude sandbox by name (TSK-1070). The forms that would run code outside it, print the token or reach another host are refused: `gh` extensions, aliases, configuration, codespaces, keys, secrets, variables, clone and browse, a push with its own receive-pack or exec program, and an `ext::` remote.",
+    not_match = ["gh repo view"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", ["--receive-pack", "--exec"]],
+    decision = "forbidden",
+    justification = "The `gh` subcommands CodeFlow uses and a plain `git push` run outside the Claude sandbox by name (TSK-1070). The forms that would run code outside it, print the token or reach another host are refused: `gh` extensions, aliases, configuration, codespaces, keys, secrets, variables, clone and browse, a push with its own receive-pack or exec program, and an `ext::` remote.",
+)

@@ -265,19 +265,49 @@ fn relative_names_secret(word: &str) -> bool {
     })
 }
 
+/// The read rules the shell secret check enforces, in ASCII lowercase as
+/// every word it judges is: the patterns of the shell-enforced Claude read
+/// groups (`Read(...)` stripped), then the sandbox read denies. A rule such
+/// as `~/Library/Keychains` keeps its case in the shipped settings and is
+/// matched here without it (TSK-1070).
+struct ShellRules {
+    hard: Vec<String>,
+    named: Vec<String>,
+}
+
+fn shell_rules() -> &'static ShellRules {
+    static RULES: std::sync::OnceLock<ShellRules> = std::sync::OnceLock::new();
+    RULES.get_or_init(|| {
+        let table = actions::table();
+        ShellRules {
+            hard: table
+                .claude_read_groups
+                .iter()
+                .filter(|group| group.shell_enforced())
+                .flat_map(|group| group.denies.iter())
+                .filter_map(|rule| rule.strip_prefix("Read(")?.strip_suffix(')'))
+                .map(str::to_ascii_lowercase)
+                .collect(),
+            named: table
+                .sandbox_read_denies
+                .iter()
+                .map(|path| path.to_ascii_lowercase())
+                .collect(),
+        }
+    })
+}
+
 /// The home directories on the way to a protected path, with the home and
 /// a directory outside it, where a relative word may be read.
 fn protected_dirs() -> &'static [String] {
     static DIRS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     DIRS.get_or_init(|| {
-        let table = actions::table();
-        let rules = table
-            .claude_read_groups
+        let shell = shell_rules();
+        let rules = shell
+            .hard
             .iter()
-            .filter(|group| group.carveouts.is_empty())
-            .flat_map(|group| group.denies.iter())
-            .filter_map(|rule| rule.strip_prefix("Read(")?.strip_suffix(')'))
-            .chain(table.sandbox_read_denies.iter().map(String::as_str));
+            .chain(shell.named.iter())
+            .map(String::as_str);
         let mut dirs = vec!["~".to_string(), "/__unknown_directory__".to_string()];
         for rule in rules.filter(|rule| rule.starts_with("~/")) {
             let mut dir = "~".to_string();
@@ -1458,25 +1488,18 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
     secret_stores()
         .iter()
         .any(|store| word.trim_end_matches('/') == store)
-        || actions::table().sandbox_read_denies.iter().any(|path| {
+        || shell_rules().named.iter().any(|path| {
             word == path
                 || word
-                    .strip_prefix(path)
+                    .strip_prefix(path.as_str())
                     .is_some_and(|tail| tail.starts_with('/'))
                 || reader.is_some_and(|expands| secret_prefix(word, path, expands))
         })
-        || actions::table().claude_read_groups.iter().any(|group| {
-            // This group has no carve-outs; source-name and env-file groups do.
-            group.carveouts.is_empty()
-                && group.denies.iter().any(|rule| {
-                    let Some(pattern) =
-                        rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')'))
-                    else {
-                        return false;
-                    };
-                    matches_extended_glob(word, pattern)
-                        || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
-                })
+        // Env files (carve-outs) and secret-named data files (marked
+        // `"shell": false`) are left to the deny rules and the sandbox.
+        || shell_rules().hard.iter().any(|pattern| {
+            matches_extended_glob(word, pattern)
+                || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
         })
         || secret_backup(word)
 }
@@ -1494,16 +1517,9 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -
 /// (`certificate.pem.txt`) would need a suffix list (the operator's choice
 /// on security review 03, H-B).
 fn secret_backup(word: &str) -> bool {
-    let table = actions::table();
-    let hard = table
-        .claude_read_groups
-        .iter()
-        .filter(|group| group.carveouts.is_empty())
-        .flat_map(|group| group.denies.iter())
-        .filter_map(|rule| rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')));
-    let named = table.sandbox_read_denies.iter().map(String::as_str);
+    let shell = shell_rules();
     let plain = |part: &str| !part.contains(['*', '?', '[']);
-    hard.chain(named).any(|rule| {
+    shell.hard.iter().chain(shell.named.iter()).any(|rule| {
         let Some((directory, leaf)) = rule.rsplit_once('/') else {
             return false;
         };
@@ -1591,20 +1607,13 @@ fn home_rule_glob(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
                 .iter()
                 .any(|reading| super::pattern::glob_intersects(reading, rule).unwrap_or(true))
     };
-    let table = actions::table();
-    table
-        .sandbox_read_denies
+    let shell = shell_rules();
+    shell
+        .named
         .iter()
+        .chain(shell.hard.iter())
         .map(String::as_str)
         .any(intersects)
-        || table.claude_read_groups.iter().any(|group| {
-            group.carveouts.is_empty()
-                && group.denies.iter().any(|rule| {
-                    rule.strip_prefix("Read(")
-                        .and_then(|rule| rule.strip_suffix(')'))
-                        .is_some_and(intersects)
-                })
-        })
 }
 
 fn glob_base<'a>(
@@ -1633,18 +1642,12 @@ fn home_spelling(word: &str, home: Option<&Path>) -> String {
 fn secret_stores() -> &'static [String] {
     static STORES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     STORES.get_or_init(|| {
-        let table = actions::table();
         let mut stores = Vec::new();
-        let rules = table
-            .claude_read_groups
+        for rule in shell_rules()
+            .hard
             .iter()
-            .filter(|group| group.carveouts.is_empty())
-            .flat_map(|group| group.denies.iter())
-            .filter_map(|rule| {
-                rule.strip_prefix("Read(")
-                    .and_then(|rule| rule.strip_suffix(')'))
-            });
-        for rule in rules.filter(|rule| rule.starts_with("~/")) {
+            .filter(|rule| rule.starts_with("~/"))
+        {
             let Some(directory) = rule.strip_suffix("/**") else {
                 continue;
             };
@@ -3816,7 +3819,7 @@ mod tests {
             table
                 .claude_read_groups
                 .iter()
-                .filter(|group| group.carveouts.is_empty())
+                .filter(|group| group.shell_enforced())
                 .flat_map(|group| &group.denies)
                 .filter_map(|rule| {
                     rule.strip_prefix("Read(~/")
@@ -3928,6 +3931,35 @@ mod tests {
             "copies/my.netrc.bak",
         ] {
             assert!(!secret_backup(word), "{word}");
+        }
+    }
+
+    /// TSK-1070: the narrowed secret-name group has no carve-outs, and it
+    /// still binds only the Read tool and the sandbox. Source files whose
+    /// names hold "secret" or "credentials" stay readable from the shell,
+    /// while the new token stores are refused.
+    #[test]
+    fn secret_named_sources_stay_readable_and_token_stores_are_refused() {
+        for word in [
+            "crates/codeflow-cli/tests/ci_cli/secret_scan_exemption.rs",
+            "tests/refusal_journey/secret_paths.rs",
+            "src/secret.rs",
+            "src/secrets.ts",
+            "docs/credentials.md",
+        ] {
+            assert!(!secret_path_spelling(word, None, Some(false)), "{word}");
+            assert!(!secret_backup(word), "{word}");
+        }
+        for word in [
+            "~/.config/gh/hosts.yml",
+            "~/.git-credentials",
+            "~/.docker/config.json",
+            "~/.config/gcloud/application_default_credentials.json",
+            "~/.azure/msal_token_cache.json",
+            "~/.npmrc",
+            "~/library/keychains/login.keychain-db",
+        ] {
+            assert!(secret_path_spelling(word, None, Some(false)), "{word}");
         }
     }
 

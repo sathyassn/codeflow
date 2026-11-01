@@ -25,9 +25,13 @@ completion.
    server is reachable, **stop driving Herdr**: say so, take the fallback the
    transport rule orders, and label that path **degraded**. `HERDR_ENV=1`
    only marks a caller inside a Herdr pane.
-2. From a sandboxed host, the Herdr socket can sit outside the sandbox: run
-   `herdr` through the session's permitted unsandboxed retry for a trusted
-   installed tool, never by changing sandbox or permission settings.
+2. From a sandboxed Claude host the Herdr socket sits outside the sandbox,
+   and the shipped presets do not exclude `herdr`. It runs outside the
+   sandbox only when the person added `herdr *` to `sandbox.excludedCommands`
+   in their own user settings, as `/cf-customize` offers with denies for
+   `herdr update`, `machine`, `server` and `config`. If a `herdr` call is
+   refused by the sandbox, say so and take the degraded fallback; never
+   change sandbox or permission settings yourself to reach it.
 3. Never `herdr server stop`. Never close a workspace, tab, or pane this run
    did not create. Never send keys to `$HERDR_PANE_ID` (the caller), or to
    any pane this run did not create.

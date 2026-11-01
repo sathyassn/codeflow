@@ -848,6 +848,18 @@ catalog! {
     OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),
         "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
 
+    /// A `gh` call whose options the guard cannot read for certain; the
+    /// call runs outside the Claude sandbox with the GitHub token
+    /// (TSK-1070).
+    GH_CALL_UNREAD = Step::Edit(".codeflow/policy.json"),
+        "write the call with literal words and only the options gh has: the method as a plain word (`-X POST`), one endpoint, no `$` or backquote in any word; a write still asks before it runs, and a DELETE stays the operator's; the check is `security.outward_actions` in `.codeflow/policy.json`, which the operator owns";
+
+    /// A `gh` output program (`--jq` beyond a plain field selector, or a
+    /// template), which gh runs outside the Claude sandbox with its
+    /// environment (TSK-1070 security review round 4).
+    GH_OUTPUT_PROGRAM = Step::Edit(".codeflow/policy.json"),
+        "write every `gh` argument as a literal word, quoting any that holds pattern characters, with no variable, substitution, glob, brace or `xargs` supplier; select fields with a plain path such as `--jq .head.sha` or `--jq '.[].name'`, or read the `--json` output as gh prints it; filters, functions, variables and templates are refused because gh evaluates them outside the sandbox with the GitHub token in its environment, and a pipe into `jq` keeps the call sandboxed, where gh has no token; the check is `security.secret_reads` in `.codeflow/policy.json`, which the operator owns";
+
     /// A recursive read or glob whose complete selected paths cannot be inspected.
     SECRET_SELECTION = Step::Edit(".codeflow/policy.json"),
         "narrow the search roots or file selection to paths the guard can inspect within its metadata budget, without including secret stores; the operator runs an intended secret read personally in a separate terminal; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";

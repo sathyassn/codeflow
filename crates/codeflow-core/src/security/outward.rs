@@ -16,11 +16,8 @@ pub(crate) fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation
     evaluate_at(command, levels, None)
 }
 
-pub(crate) fn evaluate_at(
-    command: &str,
-    levels: &SecuritySection,
-    cwd: Option<&Path>,
-) -> Vec<Violation> {
+/// The line read once, with the commands in its interpreter code.
+fn parse_line(command: &str, cwd: Option<&Path>) -> (Parsed, Parsed) {
     let mut parsed = Parsed::default();
     visit(command, cwd, 0, &mut parsed);
     let mut embedded = Parsed::default();
@@ -30,6 +27,59 @@ pub(crate) fn evaluate_at(
             argv(&words[at..], None, cwd, 0, &mut embedded);
         }
     }
+    (parsed, embedded)
+}
+
+/// What the person is asked before the line runs: each `gh api` call on
+/// it outside the one plain read form (the `forge_write` family). The
+/// guard does not model gh's option grammar; it admits only that narrow
+/// form of literal words and asks for the rest. Empty when the
+/// outward-action check is off.
+pub(crate) fn asks_at(command: &str, levels: &SecuritySection, cwd: Option<&Path>) -> Vec<String> {
+    if !levels.outward_actions.is_active() {
+        return Vec::new();
+    }
+    let (parsed, embedded) = parse_line(command, cwd);
+    let mut asks = parsed.gh_writes;
+    asks.extend(embedded.gh_writes);
+    asks.sort();
+    asks.dedup();
+    asks
+}
+
+/// The refusals for `gh` output programs (TSK-1070 security review
+/// round 4), under `security.secret_reads`.
+fn gh_output_programs(gh_code: Vec<String>, levels: &SecuritySection) -> Vec<Violation> {
+    if !levels.secret_reads.is_active() {
+        return Vec::new();
+    }
+    gh_code
+        .into_iter()
+        .map(|why| {
+            Violation::new(
+                "security.secret_reads",
+                levels.secret_reads,
+                format!("gh output program: {why}, so it can print the GitHub token and every other variable gh holds"),
+                crate::remedy::GH_OUTPUT_PROGRAM.remedy(),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn evaluate_at(
+    command: &str,
+    levels: &SecuritySection,
+    cwd: Option<&Path>,
+) -> Vec<Violation> {
+    let (parsed, embedded) = parse_line(command, cwd);
+    let mut unread_gh = parsed.unread_gh;
+    unread_gh.extend(embedded.unread_gh);
+    unread_gh.sort();
+    unread_gh.dedup();
+    let mut gh_code = parsed.gh_code;
+    gh_code.extend(embedded.gh_code);
+    gh_code.sort();
+    gh_code.dedup();
     let mut families = parsed.families;
     families.extend(embedded.families);
     let mut config_reasons = parsed.config_reasons;
@@ -54,6 +104,17 @@ pub(crate) fn evaluate_at(
             )
         })
         .collect();
+    violations.extend(gh_output_programs(gh_code, levels));
+    if levels.outward_actions.is_active() {
+        violations.extend(unread_gh.into_iter().map(|why| {
+            Violation::new(
+                "security.outward_actions",
+                levels.outward_actions,
+                format!("unread gh call: {why}; it runs outside the sandbox with the GitHub token, so a form the guard cannot read is refused"),
+                crate::remedy::GH_CALL_UNREAD.remedy(),
+            )
+        }));
+    }
     violations.extend(families
         .into_iter()
         .filter_map(|(id, root)| {
@@ -135,6 +196,20 @@ struct Parsed {
     config_reasons: Vec<(Option<PathBuf>, String)>,
     unreadable: Vec<String>,
     families: Vec<(&'static str, Option<PathBuf>)>,
+    /// `gh` calls whose options the guard cannot read for certain, with the
+    /// reason (TSK-1070 security review round 2): refused.
+    unread_gh: Vec<String>,
+    /// The words the shell builds in the segments being read, outermost
+    /// first (TSK-1070 security review round 6): a `gh` call among them
+    /// has arguments the guard cannot see, so it is refused.
+    generated: Vec<String>,
+    /// `gh api` calls that write or reach another host, with the reason:
+    /// the person is asked before they run.
+    gh_writes: Vec<String>,
+    /// `gh` calls with an output program other than a plain field
+    /// selector, with the reason: refused, since gh runs it outside the
+    /// sandbox with its environment (TSK-1070 security review round 4).
+    gh_code: Vec<String>,
     code: Vec<String>,
     stdin_interpreter: usize,
     commands: Vec<Unwrapped>,
@@ -664,6 +739,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
     let (step_input, step_bound) = (out.literal_input.clone(), out.input.bound);
     for (stage, segment) in segments.into_iter().enumerate() {
         stage_input(out, &segment, (stage, stages), (&step_input, step_bound));
+        let generated = enter_segment(&segment, out);
         let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
         let before = words.len();
         strip_reserved_words(&mut words);
@@ -752,6 +828,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
                 }
             }
         }
+        out.generated.truncate(generated);
     }
     out.literal_input = step_input;
     out.input.bound = step_bound;
@@ -3076,6 +3153,124 @@ fn perl_attached_code(arg: &str) -> Option<&str> {
     None
 }
 
+/// Record the words the shell builds in `segment` and judge a `gh` it
+/// names; returns the mark to truncate [`Parsed::generated`] back to when
+/// the segment is done (TSK-1070 security review round 6).
+fn enter_segment(segment: &str, out: &mut Parsed) -> usize {
+    let mark = out.generated.len();
+    out.generated
+        .extend(crate::hooks::git_guard::shell_generated_words(segment));
+    gh_segment(segment, out);
+    mark
+}
+
+/// A segment that names `gh` in any word position, judged without knowing
+/// which program runs it (TSK-1070 security review round 6): every word
+/// after it is read for an output program, and `gh` with arguments run by
+/// a program other than a known launcher (`env`, `timeout`, `command` and
+/// the like) is refused, since a runner such as `parallel` or `xargs` can
+/// hand gh arguments from its input or its own options that the guard
+/// cannot establish.
+fn gh_segment(segment: &str, out: &mut Parsed) {
+    let words = crate::hooks::git_guard::command_argv(segment);
+    let Some(at) = words
+        .iter()
+        .position(|word| crate::hooks::git_guard::launcher_name(word) == "gh")
+    else {
+        return;
+    };
+    if let Some(why) = super::gh_api::output_code(&words[at + 1..]) {
+        out.gh_code.push(why);
+    }
+    let program = crate::hooks::git_guard::strip_launchers(&words)
+        .map(|(program, _)| crate::hooks::git_guard::launcher_name(program));
+    if at + 1 < words.len() && program != Some("gh") {
+        out.gh_code.push(format!(
+            "`{}` runs gh, so the guard cannot see the arguments gh receives",
+            program.unwrap_or(words[0].as_str())
+        ));
+    }
+}
+
+/// Why the shell or a runner, rather than the written words, decides the
+/// arguments of this `gh` call, or `None` (TSK-1070 security review round
+/// 6).
+fn gh_unproven(out: &Parsed) -> Option<String> {
+    if let Some(word) = out.generated.first() {
+        return Some(format!(
+            "the shell builds the word `{word}` when the command runs, so the guard cannot see the arguments gh receives"
+        ));
+    }
+    out.supplier.as_ref().map(|_| {
+        "`xargs` or `find` supplies gh's arguments, so the guard cannot see them".to_string()
+    })
+}
+
+/// The `gh` calls whose family depends on their options: a visibility
+/// change, and `gh api` and `gh auth`, judged against one narrow allowlist
+/// rather than a model of gh's grammar (TSK-1070 security review round 3).
+/// `rest` is every word after `gh`.
+fn gh_family(
+    rest: &[String],
+    sub: &str,
+    body: &[String],
+    out: &mut Parsed,
+    source: &dyn Fn() -> Result<Option<PathBuf>, String>,
+) -> Result<(), String> {
+    use super::gh_api::{Auth, Intent};
+    if sub == "repo"
+        && body.first().is_some_and(|s| s == "edit")
+        && body
+            .iter()
+            .any(|s| s == "--visibility" || s.starts_with("--visibility="))
+    {
+        out.families.push(("account", source()?));
+    }
+    if let Some(why) = super::gh_api::output_code(rest) {
+        out.gh_code.push(why);
+    }
+    if let Some(why) = gh_unproven(out) {
+        out.gh_code.push(why);
+    }
+    let Some(first) = rest.first() else {
+        return Ok(());
+    };
+    if crate::hooks::git_guard::expands(first) {
+        out.unread_gh.push(format!(
+            "`gh {first}`: the subcommand is filled in by the shell, so the guard cannot see which runs"
+        ));
+        return Ok(());
+    }
+    // An option before the subcommand: which word gh takes as the
+    // subcommand depends on which options take a value, so a call that
+    // could be `gh api` or `gh auth` is never read as a plain one.
+    let leading = first.starts_with('-');
+    let api = if leading {
+        rest.iter()
+            .any(|w| w == "api")
+            .then(|| super::gh_api::api_after_options(rest))
+    } else {
+        (sub == "api").then(|| super::gh_api::api_intent(body))
+    };
+    match api {
+        None | Some(Intent::Read) => {}
+        Some(Intent::Delete) => out.families.push(("account", source()?)),
+        Some(Intent::Write(why)) => out.gh_writes.push(format!("`gh api` {why}")),
+        Some(Intent::Unread(why)) => out.unread_gh.push(format!("`gh api`: {why}")),
+    }
+    let auth = if leading {
+        rest.iter().any(|w| w == "auth").then_some(Auth::Refused)
+    } else {
+        (sub == "auth").then(|| super::gh_api::auth_intent(body))
+    };
+    match auth {
+        None | Some(Auth::Plain) => {}
+        Some(Auth::Refused) => out.families.push(("forge_exec", source()?)),
+        Some(Auth::Unread(why)) => out.unread_gh.push(format!("`gh auth`: {why}")),
+    }
+    Ok(())
+}
+
 fn direct_family(
     name: &str,
     rest: &[String],
@@ -3144,26 +3339,7 @@ fn direct_family(
         }
     }
     if name == "gh" {
-        if sub == "repo"
-            && body.first().is_some_and(|s| s == "edit")
-            && body
-                .iter()
-                .any(|s| s == "--visibility" || s.starts_with("--visibility="))
-        {
-            out.families.push(("account", source()?));
-        }
-        if sub == "api"
-            && body.iter().enumerate().any(|(i, a)| {
-                a.eq_ignore_ascii_case("-XDELETE")
-                    || a.eq_ignore_ascii_case("--method=DELETE")
-                    || ((a == "-X" || a == "--method")
-                        && body
-                            .get(i + 1)
-                            .is_some_and(|v| v.eq_ignore_ascii_case("DELETE")))
-            })
-        {
-            out.families.push(("account", source()?));
-        }
+        gh_family(rest, sub, body, out, &source)?;
     }
     if name.starts_with("git-credential-") {
         out.families.push(("account", source()?));
@@ -3197,7 +3373,11 @@ fn family_id(id: &str) -> &'static str {
         "account" => "account",
         "keychain" => "keychain",
         "persistence" => "persistence",
-        _ => unreachable!("action table family lacks guard routing"),
+        "forge_exec" => "forge_exec",
+        "forge_write" => "forge_write",
+        // A family added to the table without a name here is still refused
+        // as an outward action, never a crash (TSK-1070 live canary).
+        _ => "unrouted_family",
     }
 }
 
@@ -4551,6 +4731,35 @@ mod tests {
         }
     }
 
+    /// A table family the guard has no name for crashed exec-guard
+    /// (`gh extension list` in the TSK-1070 live canary); every family is
+    /// named, and a denied forge form is refused as an outward action.
+    #[test]
+    fn every_table_family_is_routed_and_a_forge_exec_form_is_refused() {
+        for family in &table().families {
+            assert_eq!(family_id(&family.id), family.id.as_str());
+        }
+        for command in [
+            "gh extension list",
+            "gh auth status -t",
+            "gh repo clone o/r",
+        ] {
+            assert!(
+                evaluate(command, &SecuritySection::default())
+                    .iter()
+                    .any(|v| v.rule == "security.outward_actions"
+                        && v.message.starts_with("forge_exec action")),
+                "{command}"
+            );
+        }
+        for command in ["gh auth status", "gh repo view o/r", "gh pr view 1"] {
+            assert!(
+                evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+    }
+
     #[test]
     fn table_families_are_refused_through_each_wrapper() {
         for family in &table().families {
@@ -4695,6 +4904,19 @@ mod tests {
         ] {
             for wrapper in &WRAPPERS[..11] {
                 let command = wrapper.replace("{}", command);
+                // A runner that can supply gh's arguments refuses it
+                // (TSK-1070 security review round 6).
+                if command.contains(" gh ")
+                    && ["xargs", "find", "npx"]
+                        .iter()
+                        .any(|runner| wrapper.starts_with(runner))
+                {
+                    assert!(
+                        !evaluate(&command, &SecuritySection::default()).is_empty(),
+                        "{command}"
+                    );
+                    continue;
+                }
                 if command == "env -i git push origin task/x" {
                     let findings = evaluate(&command, &SecuritySection::default());
                     assert!(

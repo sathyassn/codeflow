@@ -425,8 +425,8 @@ fn deny_rules_cover_secret_files() {
             "{name}: key material (*.key / *.pem) must be deny-read"
         );
         assert!(
-            has("*credentials*"),
-            "{name}: *credentials* must be deny-read"
+            has("*credential*.json") && has("*secret*.json"),
+            "{name}: secret-named data files must be deny-read"
         );
     }
 }
@@ -553,6 +553,115 @@ fn sandbox_denies_secret_stores_to_every_subprocess() {
     }
 }
 
+/// TSK-1070 (operator decision 2026-10-31): Claude Code merges `Read` deny
+/// rules into the OS sandbox, which cannot apply a `!` exception, so a
+/// secret-name deny must not match a source file on its own. A source or
+/// documentation file named after secrets stays readable by every rule
+/// taken without its exceptions, while secret-named data files, exact
+/// secret names and key material stay denied.
+#[test]
+fn secret_name_denies_spare_source_files_without_any_exception() {
+    let read_denies = |value: &serde_json::Value| -> Vec<String> {
+        perm_array(value, "deny")
+            .into_iter()
+            .filter_map(|rule| {
+                let inner = rule.strip_prefix("Read(")?.strip_suffix(')')?;
+                (!inner.starts_with('!')).then(|| inner.to_string())
+            })
+            .collect()
+    };
+    for name in preset_files() {
+        let value = load(&name);
+        let denies = read_denies(&value);
+        for source in [
+            "crates/codeflow-cli/tests/ci_cli/secret_scan_exemption.rs",
+            "crates/codeflow-cli/tests/refusal_journey/secret_paths.rs",
+            "crates/codeflow-core/tests/managed_secret_scan.rs",
+            "src/secrets.ts",
+            "lib/credentials_helper.py",
+            "pkg/secret.go",
+            "docs/credentials-guide.md",
+            "web/secretStore.js",
+        ] {
+            let hit: Vec<&String> = denies
+                .iter()
+                .filter(|pattern| rule_covers_path(pattern, source))
+                .collect();
+            assert!(hit.is_empty(), "{name}: {source} is denied by {hit:?}");
+        }
+        for data in [
+            "config/app-secret.json",
+            "k8s/secrets.yaml",
+            "deploy/db-credentials.env",
+            "gcp-credential.json",
+            "secret",
+            "config/.secrets",
+            "infra/credentials",
+            "vault/secret.toml",
+            "keys/service-secret.pem",
+        ] {
+            assert!(
+                denies.iter().any(|pattern| rule_covers_path(pattern, data)),
+                "{name}: {data} is readable"
+            );
+        }
+    }
+}
+
+/// TSK-1070 (operator decision 2026-10-31): the Read tool and the sandbox
+/// refuse the token stores of the common CLIs.
+#[test]
+fn token_stores_are_denied_to_the_read_tool_and_the_sandbox() {
+    let stores = [
+        ("~/.config/gh/hosts.yml", "~/.config/gh"),
+        ("~/.git-credentials", "~/.git-credentials"),
+        ("~/.docker/config.json", "~/.docker/config.json"),
+        ("~/.config/gcloud/credentials.db", "~/.config/gcloud"),
+        ("~/.azure/msal_token_cache.json", "~/.azure"),
+        ("~/.npmrc", "~/.npmrc"),
+        (
+            "~/Library/Keychains/login.keychain-db",
+            "~/Library/Keychains",
+        ),
+    ];
+    for name in preset_files() {
+        let value = load(&name);
+        let deny = perm_array(&value, "deny");
+        let deny_read = value["sandbox"]["filesystem"]["denyRead"]
+            .as_array()
+            .unwrap();
+        for (file, store) in stores {
+            assert!(read_denied(&deny, file), "{name}: Read of {file} allowed");
+            assert!(
+                deny_read.iter().any(|entry| entry == store),
+                "{name}: sandbox denyRead misses {store}"
+            );
+        }
+    }
+}
+
+/// TSK-1070 (operator decision 2026-10-31): a command the sandbox refuses
+/// cannot rerun outside it, in any mode. The few tools that need host
+/// state run outside it by name: the `gh` subcommands Codeflow uses read
+/// the token from `~/.config/gh` and fail TLS under Seatbelt, and a plain
+/// `git push` over HTTPS asks `gh` for the credential. `herdr` is offered
+/// at user scope only (sandbox exemptions research, section 6). Bash deny
+/// and ask rules still apply to them.
+#[test]
+fn every_preset_runs_a_strict_sandbox_with_a_minimal_excluded_list() {
+    for name in preset_files() {
+        let sandbox = &load(&name)["sandbox"];
+        assert_eq!(sandbox["enabled"], true, "{name}");
+        assert_eq!(sandbox["failIfUnavailable"], true, "{name}");
+        assert_eq!(sandbox["allowUnsandboxedCommands"], false, "{name}");
+        assert_eq!(
+            sandbox["excludedCommands"],
+            serde_json::json!(SHIPPED_EXCLUDED_COMMANDS),
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn sandbox_reallows_only_immutable_plugin_code_under_claude_state() {
     for name in preset_files() {
@@ -607,7 +716,8 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
         );
         // The write denies are the enforcement paths (TSK-397 design D,
         // H-4), the shell startup class and the default git configuration
-        // files (TSK-242).
+        // files (TSK-242), and the hook directory of every worktree a push
+        // runs outside the sandbox (TSK-1070).
         let table = actions::table();
         // The generator appends what a preset lacks, so the entries the
         // presets already carried come first.
@@ -619,6 +729,11 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
                 .iter()
                 .filter_map(|rule| actions::edit_deny_write_path(rule)),
         );
+        for path in &table.sandbox_write_denies {
+            if !denied.contains(path) {
+                denied.push(path.clone());
+            }
+        }
         assert_eq!(
             value["sandbox"]["filesystem"]["denyWrite"],
             serde_json::json!(denied),
@@ -713,19 +828,25 @@ fn claude_state_denies_leave_the_official_plugin_runtime_available() {
     }
 }
 
+/// The GitHub CLI still reaches its own configuration. Until TSK-1070 the
+/// presets left `~/.config/gh` and `~/.docker/config.json` readable so a
+/// sandboxed `gh` or `docker` could find its credential. The operator
+/// decided on 2026-10-31 to deny those token stores to the Read tool and
+/// the sandbox, so `gh` runs outside the sandbox by name instead, where it
+/// reads its configuration and the guards and deny rules still judge it.
+/// Docker gets no exclusion: a sandboxed `docker` cannot reach its socket
+/// either, so a project that drives it adds its own entry.
 #[test]
 fn authenticated_tool_configuration_remains_available() {
-    // GitHub CLI and Docker may resolve real credentials through the OS
-    // keychain or another broker, but they still need their non-secret config
-    // to locate that path. Blocking the whole config file disables the tool.
     for name in preset_files() {
-        let deny = perm_array(&load(&name), "deny");
-        for entry in ["Read(~/.config/gh/**)", "Read(~/.docker/config.json)"] {
-            assert!(
-                !deny.iter().any(|d| d == entry),
-                "{name}: {entry} prevents an approved authenticated tool from using brokered configuration"
-            );
-        }
+        let value = load(&name);
+        let deny = perm_array(&value, "deny");
+        assert!(deny.iter().any(|d| d == "Read(~/.config/gh/**)"), "{name}");
+        let excluded = value["sandbox"]["excludedCommands"].as_array().unwrap();
+        assert!(
+            excluded.iter().any(|entry| entry == "gh pr view *"),
+            "{name}: gh cannot read its configuration inside the sandbox"
+        );
     }
 }
 
@@ -882,20 +1003,87 @@ fn escalation_additions_leave_prohibitions_and_sandbox_unchanged() {
             sandbox["failIfUnavailable"], true,
             "{name}: sandbox must stay fail-closed"
         );
-        assert!(
-            sandbox["excludedCommands"]
-                .as_array()
-                .is_none_or(std::vec::Vec::is_empty),
-            "{name}: a broad static sandbox exclusion appeared"
+        // TSK-1070 (operator decision 2026-10-31): the only exclusions are
+        // the named host-state tools, never a broad one.
+        assert_eq!(
+            sandbox["excludedCommands"],
+            serde_json::json!(SHIPPED_EXCLUDED_COMMANDS),
+            "{name}: the sandbox exclusions changed"
         );
+        assert_eq!(sandbox["allowUnsandboxedCommands"], false, "{name}");
     }
 }
 
+/// The tools the shipped sandbox runs outside it by name (TSK-1070): only
+/// `gh` verbs that change nothing on this machine (security review SEC-03:
+/// `gh run download` extracts an archive, `gh pr checkout` and
+/// `gh issue develop` run git, so they stay sandboxed).
+const SHIPPED_EXCLUDED_COMMANDS: [&str; 31] = [
+    "gh pr view *",
+    "gh pr list *",
+    "gh pr checks *",
+    "gh pr diff *",
+    "gh pr status *",
+    "gh pr create *",
+    "gh pr comment *",
+    "gh pr edit *",
+    "gh pr ready *",
+    "gh pr review *",
+    "gh pr merge *",
+    "gh run view *",
+    "gh run list *",
+    "gh run watch *",
+    "gh run rerun *",
+    "gh run cancel *",
+    "gh issue view *",
+    "gh issue list *",
+    "gh issue status *",
+    "gh issue create *",
+    "gh issue comment *",
+    "gh issue edit *",
+    "gh issue close *",
+    "gh issue reopen *",
+    "gh api *",
+    "gh repo view *",
+    "gh release view *",
+    "gh release list *",
+    "gh search *",
+    "gh auth status",
+    "git push *",
+];
+
+/// The development hosts sandboxed commands may reach (TSK-1070, operator
+/// decision 2026-10-31, replacing ADR-0025's `*`). Each has a use:
+/// GitHub for git, releases, raw files and archives; crates.io and
+/// `static.rust-lang.org` for cargo and rustup; npm, `PyPI` and the Go module
+/// proxy for the shipped node, python and go stacks; the two Playwright
+/// download hosts for the docs portal's browser check; the Claude Code and
+/// Anthropic docs for lookups from the shell.
+const SHIPPED_ALLOWED_DOMAINS: [&str; 17] = [
+    "github.com",
+    "api.github.com",
+    "codeload.github.com",
+    "*.githubusercontent.com",
+    "crates.io",
+    "index.crates.io",
+    "static.crates.io",
+    "static.rust-lang.org",
+    "registry.npmjs.org",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "proxy.golang.org",
+    "sum.golang.org",
+    "cdn.playwright.dev",
+    "playwright.download.prss.microsoft.com",
+    "code.claude.com",
+    "docs.anthropic.com",
+];
+
 #[test]
 fn every_preset_has_a_fail_closed_autonomous_sandbox() {
-    // Broad public access is available to both native web tools and sandboxed
-    // development commands. Auto mode still classifies every shell command,
-    // while the sandbox blocks common private/link-local destinations.
+    // Native web tools keep public research; sandboxed commands reach only
+    // the shipped development hosts, and the sandbox also blocks common
+    // private and link-local destinations.
     for name in preset_files() {
         let value = load(&name);
         let sandbox = &value["sandbox"];
@@ -908,26 +1096,28 @@ fn every_preset_has_a_fail_closed_autonomous_sandbox() {
             sandbox["autoAllowBashIfSandboxed"], true,
             "{name}: sandboxed Bash should run autonomously"
         );
+        // TSK-1070 (operator decision 2026-10-31) replaced ADR-0029's
+        // classified retry: a refused command never reruns outside the
+        // sandbox, and only the named host-state tools run outside it.
         assert_eq!(
-            sandbox["allowUnsandboxedCommands"], true,
-            "{name}: trusted tools that cannot run in the OS sandbox need the classified retry path"
+            sandbox["allowUnsandboxedCommands"], false,
+            "{name}: a refused command must not rerun outside the sandbox"
         );
-        assert!(
-            sandbox["excludedCommands"]
-                .as_array()
-                .is_none_or(std::vec::Vec::is_empty),
-            "{name}: do not grant a static broad sandbox exclusion; use the classified retry path"
+        assert_eq!(
+            sandbox["excludedCommands"],
+            serde_json::json!(SHIPPED_EXCLUDED_COMMANDS),
+            "{name}: only the named host-state tools run outside the sandbox"
         );
         assert_eq!(
             sandbox["network"]["allowLocalBinding"], true,
             "{name}: local dev servers must be available to UI tests"
         );
-        let allowed_domains = sandbox["network"]["allowedDomains"]
-            .as_array()
-            .expect("allowedDomains array");
-        assert!(
-            allowed_domains.iter().any(|domain| domain == "*"),
-            "{name}: sandboxed development tools need broad public egress"
+        // TSK-1070 (operator decision 2026-10-31): sandboxed commands reach
+        // only the named development hosts, never every public host.
+        assert_eq!(
+            sandbox["network"]["allowedDomains"],
+            serde_json::json!(SHIPPED_ALLOWED_DOMAINS),
+            "{name}: the sandbox reaches only the shipped development hosts"
         );
         let denied_domains = sandbox["network"]["deniedDomains"]
             .as_array()
@@ -986,15 +1176,22 @@ fn top_level_keys_stay_within_the_pinned_union() {
 }
 
 #[test]
-fn minimal_claude_guidance_matches_the_classified_retry_setting() {
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/CLAUDE.minimal.md.tmpl");
-    let guidance = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    assert!(guidance.contains("auto-classified unsandboxed retry"));
-    assert!(guidance.contains("trusted installed tool"));
-    assert!(guidance.contains("This is not a general bypass"));
-    assert!(!guidance.contains("unsandboxed retry is disabled"));
+fn minimal_claude_guidance_matches_the_strict_sandbox_setting() {
+    // TSK-1070 (operator decision 2026-10-31) replaced ADR-0029's classified
+    // retry: the guidance must not promise a rerun outside the sandbox.
+    for template in ["CLAUDE.minimal.md.tmpl", "CLAUDE.md.tmpl"] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/base")
+            .join(template);
+        let guidance = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(!guidance.contains("unsandboxed retry"), "{template}");
+        assert!(
+            guidance.contains("never reruns outside"),
+            "{template}: say a refused command is not rerun outside the sandbox"
+        );
+        assert!(guidance.contains("development hosts"), "{template}");
+    }
 }
 
 /// A project settings file ignores `auto` and `bypassPermissions`, while its
@@ -1015,6 +1212,37 @@ fn default_preset_leaves_the_permission_mode_to_the_operator() {
         load("acceptEdits.json")["permissions"]["defaultMode"],
         "acceptEdits"
     );
+}
+
+/// TSK-1070 (issue 451): no preset ships a `defaultMode` that Claude Code
+/// ignores at project scope. Since v2.1.257 a project `bypassPermissions`
+/// does not take effect and the session starts in Manual mode, and a
+/// project value outranks the user file, so shipping it would also hold a
+/// person's user-level bypass back. The bypass preset therefore leaves the
+/// mode unset; bypass comes from the user settings file or the launch flag,
+/// and the guard hooks keep blocking on a timeout or a crash.
+#[test]
+fn no_preset_ships_a_mode_claude_code_ignores_at_project_scope() {
+    for name in preset_files() {
+        let value = load(&name);
+        let mode = value["permissions"].get("defaultMode");
+        assert!(
+            !matches!(
+                mode.and_then(serde_json::Value::as_str),
+                Some("bypassPermissions" | "auto")
+            ),
+            "{name}: ships defaultMode {mode:?}, which a project file cannot set"
+        );
+        for hook in value["hooks"]["PreToolUse"][0]["hooks"].as_array().unwrap() {
+            assert_eq!(hook["onFailure"], "block", "{name}: {hook}");
+            assert!(hook["timeout"].as_u64().is_some(), "{name}: {hook}");
+        }
+        assert_eq!(value["sandbox"]["enabled"], true, "{name}");
+        assert_eq!(value["sandbox"]["failIfUnavailable"], true, "{name}");
+    }
+    assert!(load("bypass-sandboxed.json")["permissions"]
+        .get("defaultMode")
+        .is_none());
 }
 
 // ---- Generated from the action table (ADR-0075, TSK-171) ----------------
@@ -1092,11 +1320,18 @@ fn codex_rules_are_generated_from_the_action_table() {
 /// and the default git configuration files (TSK-242), added after the
 /// samples were taken, add their `Edit` denies and sandbox `denyWrite`
 /// entries, which are removed here before the comparison. Hook commands are excluded: their fail-closed form and
-/// `--contract` flag are TSK-173's.
+/// `--contract` flag are TSK-173's. A third departure is TSK-1070's
+/// (operator decision 2026-10-31): the bare `*secret*` and `*credentials*`
+/// denies and their source exceptions became a list of secret-named data
+/// files, and seven token stores joined the hard denies and the sandbox
+/// `denyRead`; four token variables joined the sandbox env denies; and the
+/// `forge_exec` and `forge_write` families were added (sandbox exemptions
+/// research); [`tsk1070_departure`] maps the reference across it.
 #[test]
 fn the_generator_reproduces_the_reference_samples() {
     let table = actions::table();
     let reference: serde_json::Value = read_json(&evidence("actions.json"));
+    let departure = tsk1070_departure();
     let sorted = |value: &serde_json::Value| {
         let mut items: Vec<String> = value
             .as_array()
@@ -1108,9 +1343,12 @@ fn the_generator_reproduces_the_reference_samples() {
         items
     };
     let mut denies = table.claude_read_denies();
+    denies.retain(|rule| !departure.added_denies.contains(rule));
+    denies.extend(departure.removed_denies.iter().cloned());
     denies.sort();
     assert_eq!(denies, sorted(&reference["claude_read_denies"]));
     let mut carveouts = table.claude_read_carveouts();
+    carveouts.extend(departure.removed_carveouts.iter().cloned());
     carveouts.sort();
     assert_eq!(carveouts, sorted(&reference["claude_read_carveouts"]));
     for key in [
@@ -1120,26 +1358,45 @@ fn the_generator_reproduces_the_reference_samples() {
         "sandbox_read_denies",
         "delegate_denies",
     ] {
-        let embedded: serde_json::Value = serde_json::from_str(include_str!(
+        let mut embedded: serde_json::Value = serde_json::from_str(include_str!(
             "../../codeflow-core/src/security/actions.json"
         ))
         .unwrap();
+        if key == "sandbox_read_denies" {
+            embedded[key]
+                .as_array_mut()
+                .unwrap()
+                .retain(|store| !departure.added_stores.iter().any(|s| store == s));
+        }
+        if key == "sandbox_env_denies" {
+            embedded[key]
+                .as_array_mut()
+                .unwrap()
+                .retain(|name| !departure.added_env.iter().any(|s| name == s));
+        }
+        if key == "families" {
+            let families = embedded[key].as_array_mut().unwrap();
+            families.retain(|f| !departure.added_families.iter().any(|id| f["id"] == *id));
+            for family in families {
+                family["claude"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|rule| !departure.added_rules.iter().any(|r| rule == r));
+            }
+        }
         assert_eq!(
             embedded[key], reference[key],
             "{key} left the reference table"
         );
     }
+    let mut reference_table = table.clone();
+    reference_table
+        .families
+        .retain(|f| !departure.added_families.contains(&f.id.as_str()));
     for name in PRESET_FILES {
         let mut generated = read_json(&evidence(&format!("current/{name}")));
         table.apply_to_claude_preset(&mut generated);
-        let mut startup = table.startup_paths.claude_edit_denies();
-        startup.extend(table.git_config_paths.claude_edit_denies());
-        let deny = generated["permissions"]["deny"].as_array_mut().unwrap();
-        deny.retain(|rule| !startup.iter().any(|s| rule == s));
-        generated["sandbox"]["filesystem"]
-            .as_object_mut()
-            .unwrap()
-            .remove("denyWrite");
+        departure.map_to_reference(table, &mut generated);
         let mut expected = read_json(&evidence(&format!("claude/{name}")));
         for value in [&mut generated, &mut expected] {
             let object = value.as_object_mut().unwrap();
@@ -1150,7 +1407,7 @@ fn the_generator_reproduces_the_reference_samples() {
         assert_eq!(generated, expected, "{name}");
     }
     assert_eq!(
-        table.codex_rules(),
+        reference_table.codex_rules(),
         std::fs::read_to_string(evidence("codex/rules/codeflow.rules")).unwrap()
     );
     assert_eq!(
@@ -1159,12 +1416,131 @@ fn the_generator_reproduces_the_reference_samples() {
     );
 }
 
+/// The read rules TSK-1070 changed against the design's reference table.
+struct Departure {
+    added_denies: Vec<String>,
+    removed_denies: Vec<String>,
+    removed_carveouts: Vec<String>,
+    added_stores: Vec<String>,
+    added_env: Vec<&'static str>,
+    added_families: Vec<&'static str>,
+    /// Rules TSK-1070's security review added to a family the reference
+    /// already had: the other spellings of a `gh api` DELETE (SEC-05).
+    added_rules: Vec<String>,
+}
+
+impl Departure {
+    /// Map a generated preset back to the reference: drop what the shell
+    /// startup class, the git configuration files and TSK-1070 added, and
+    /// restore what TSK-1070 removed.
+    fn map_to_reference(&self, table: &actions::ActionTable, generated: &mut serde_json::Value) {
+        let added_family_rules: Vec<String> = table
+            .families
+            .iter()
+            .filter(|f| self.added_families.contains(&f.id.as_str()))
+            .flat_map(|f| f.claude.iter().cloned())
+            .collect();
+        generated["permissions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ask");
+        generated["sandbox"]["credentials"]["envVars"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|e| !self.added_env.iter().any(|s| e["name"] == *s));
+        let mut startup = table.startup_paths.claude_edit_denies();
+        startup.extend(table.git_config_paths.claude_edit_denies());
+        let deny = generated["permissions"]["deny"].as_array_mut().unwrap();
+        deny.retain(|rule| {
+            !startup
+                .iter()
+                .chain(&added_family_rules)
+                .chain(&self.added_denies)
+                .chain(&self.added_rules)
+                .any(|s| rule == s)
+        });
+        deny.extend(
+            self.removed_denies
+                .iter()
+                .chain(&self.removed_carveouts)
+                .map(|rule| serde_json::json!(rule)),
+        );
+        generated["sandbox"]["filesystem"]["denyRead"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|store| !self.added_stores.iter().any(|s| store == s));
+        generated["sandbox"]["filesystem"]
+            .as_object_mut()
+            .unwrap()
+            .remove("denyWrite");
+    }
+}
+
+/// The `gh api` DELETE spellings the reference samples deny.
+const REFERENCE_DELETE_FORMS: [&str; 4] = [
+    "-X DELETE",
+    "-XDELETE",
+    "--method DELETE",
+    "--method=DELETE",
+];
+
+fn tsk1070_departure() -> Departure {
+    let table = actions::table();
+    let stores = [
+        ("Read(~/.config/gh/**)", "~/.config/gh"),
+        ("Read(~/.git-credentials)", "~/.git-credentials"),
+        ("Read(~/.docker/config.json)", "~/.docker/config.json"),
+        ("Read(~/.config/gcloud/**)", "~/.config/gcloud"),
+        ("Read(~/.azure/**)", "~/.azure"),
+        ("Read(~/.npmrc)", "~/.npmrc"),
+        ("Read(~/Library/Keychains/**)", "~/Library/Keychains"),
+    ];
+    let mut added_denies = table.claude_read_groups[0].denies.clone();
+    added_denies.extend(stores.iter().map(|(rule, _)| (*rule).to_string()));
+    // The fixed folder for user-settings backups (review round 2, SEC-08).
+    added_denies.push("Read(~/.codeflow/claude/backups/**)".to_string());
+    let mut removed_carveouts = Vec::new();
+    for word in ["secret", "credentials"] {
+        for ext in [
+            "rs", "py", "ts", "tsx", "js", "mjs", "cjs", "go", "java", "kt", "rb", "swift", "md",
+        ] {
+            removed_carveouts.push(format!("Read(!**/*{word}*.{ext})"));
+        }
+    }
+    Departure {
+        added_denies,
+        removed_denies: vec![
+            "Read(**/*credentials*)".to_string(),
+            "Read(**/*secret*)".to_string(),
+        ],
+        removed_carveouts,
+        added_stores: stores.iter().map(|(_, s)| (*s).to_string()).collect(),
+        added_env: vec!["GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN"],
+        added_families: vec!["forge_exec", "forge_write"],
+        added_rules: table
+            .families
+            .iter()
+            .flat_map(|f| f.claude.iter())
+            .filter(|rule| {
+                rule.starts_with("Bash(gh api ")
+                    && rule.to_ascii_uppercase().contains("DELETE")
+                    && !REFERENCE_DELETE_FORMS.iter().any(|form| {
+                        *rule == &format!("Bash(gh api {form}*)")
+                            || *rule == &format!("Bash(gh api * {form}*)")
+                    })
+            })
+            .cloned()
+            .collect(),
+    }
+}
+
 /// AC-1: the commands ordinary work runs, which no deny rule may refuse.
-const ORDINARY_WORK: [&str; 11] = [
+/// `gh secret list` left the list with TSK-1070: every `gh secret` form is
+/// refused now that `gh` runs outside the sandbox.
+const ORDINARY_WORK: [&str; 10] = [
     "rm -rf /tmp/x",
     "rm -rf ~/scratch/x",
     "gh release view v1",
-    "gh secret list",
     "crontab -l",
     "git branch -d topic",
     "cargo test",
@@ -1174,27 +1550,74 @@ const ORDINARY_WORK: [&str; 11] = [
     "npm --prefix x run publish-docs",
 ];
 
-/// AC-1: no preset asks, and no deny rule matches ordinary work.
+/// AC-1: the only asks are the forge writes (TSK-1070, ADR-0093), and no
+/// deny or ask rule matches ordinary work.
 #[test]
-fn presets_carry_no_ask_rules_and_deny_no_ordinary_work() {
+fn presets_ask_only_for_forge_writes_and_deny_no_ordinary_work() {
     for name in preset_files() {
         let value = load(&name);
-        assert!(
-            value["permissions"].get("ask").is_none(),
-            "{name}: an ask rule prompts in every mode (ADR-0075)"
-        );
+        let ask = perm_array(&value, "ask");
+        assert_eq!(ask, actions::table().claude_ask(), "{name}");
         let deny = perm_array(&value, "deny");
-        for command in ORDINARY_WORK {
+        for command in ORDINARY_WORK.iter().chain(&FORGE_READS) {
             assert!(
                 !denied(&deny, "Bash", command),
                 "{name}: a deny rule refuses ordinary work {command:?}"
+            );
+            assert!(
+                !denied(&ask, "Bash", command),
+                "{name}: an ask rule prompts for ordinary work {command:?}"
+            );
+        }
+        for command in FORGE_WRITES {
+            assert!(
+                denied(&ask, "Bash", command),
+                "{name}: {command:?} does not ask"
             );
         }
     }
 }
 
+/// `gh` reads an agent runs outside the sandbox without a prompt.
+const FORGE_READS: [&str; 6] = [
+    "gh pr view 12 --json state",
+    "gh api repos/o/r/pulls/1",
+    "gh api -X GET search/issues",
+    "gh run view 3 --log-failed",
+    "gh auth status",
+    "gh repo view o/r",
+];
+
+/// `gh api` writes that prompt in every mode (TSK-1070).
+const FORGE_WRITES: [&str; 22] = [
+    "gh api -X POST repos/o/r/issues",
+    "gh api repos/o/r/issues -X PATCH",
+    "gh api --method=PUT repos/o/r/x",
+    "gh api repos/o/r/issues/1/comments -f body=x",
+    "gh api repos/o/r/issues -F title=x",
+    "gh api repos/o/r/x --input body.json",
+    "gh api -XPOST repos/o/r/x",
+    "gh api graphql -f query=x",
+    // TSK-1070 SEC-05: attached values, `=` and lowercase spellings, an
+    // `-i` bundle, graphql after other flags and another host.
+    "gh api repos/o/r/issues/1/comments -fbody=x",
+    "gh api repos/o/r/issues/1/comments -Fbody=x",
+    "gh api -fbody=x repos/o/r/issues/1/comments",
+    "gh api repos/o/r/x --field=body=x",
+    "gh api repos/o/r/x --raw-field=body=x",
+    "gh api -X=POST repos/o/r/x",
+    "gh api repos/o/r/x -Xpost",
+    "gh api repos/o/r/x --method patch",
+    "gh api repos/o/r/x --method=put",
+    "gh api -iXPOST repos/o/r/x",
+    "gh api repos/o/r/x -ifbody=x",
+    "gh api -H 'Accept: x' graphql -f query=x",
+    "gh api --hostname example.invalid /",
+    "gh api / --hostname=example.invalid",
+];
+
 /// AC-2: a representative command per family, each denied.
-const FAMILY_EXAMPLES: [(&str, &[&str]); 6] = [
+const FAMILY_EXAMPLES: [(&str, &[&str]); 8] = [
     (
         "privilege",
         &[
@@ -1239,6 +1662,9 @@ const FAMILY_EXAMPLES: [(&str, &[&str]); 6] = [
             "git push --mirror",
             "git credential fill",
             "gh api -X DELETE repos/o/r",
+            "gh api -X=DELETE repos/o/r",
+            "gh api repos/o/r --method delete",
+            "gh api repos/o/r -Xdelete",
         ],
     ),
     (
@@ -1259,6 +1685,25 @@ const FAMILY_EXAMPLES: [(&str, &[&str]); 6] = [
             "systemctl enable x",
         ],
     ),
+    (
+        "forge_exec",
+        &[
+            "gh extension install o/gh-x",
+            "gh alias set co 'pr checkout'",
+            "gh config set git_protocol ssh",
+            "gh auth status --show-token",
+            "gh auth status -h github.com -t",
+            "gh codespace ssh",
+            "gh ssh-key add k.pub",
+            "gh secret list",
+            "gh variable set X",
+            "gh repo clone o/r",
+            "git push --receive-pack=/tmp/x origin HEAD",
+            "git push origin HEAD --exec=/tmp/x",
+            "git push ext::sh\\ -c\\ id HEAD",
+        ],
+    ),
+    ("forge_write", &FORGE_WRITES),
 ];
 
 /// AC-2: every preset denies every family of the table.
@@ -1269,17 +1714,21 @@ fn every_preset_denies_every_action_family() {
     let covered: Vec<&str> = FAMILY_EXAMPLES.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids, covered, "a family without examples");
     for name in preset_files() {
-        let deny = perm_array(&load(&name), "deny");
+        let value = load(&name);
+        // The forge write family asks (TSK-1070); every other family denies.
+        let rules = |id: &str| perm_array(&value, if id == "forge_write" { "ask" } else { "deny" });
         for family in &table.families {
+            let rules = rules(&family.id);
             for rule in &family.claude {
-                assert!(deny.contains(rule), "{name}: {} lost {rule}", family.id);
+                assert!(rules.contains(rule), "{name}: {} lost {rule}", family.id);
             }
         }
         for (id, commands) in FAMILY_EXAMPLES {
+            let rules = rules(id);
             for command in commands {
                 assert!(
-                    denied(&deny, "Bash", command),
-                    "{name}: {id} command {command:?} is not denied"
+                    denied(&rules, "Bash", command),
+                    "{name}: {id} command {command:?} is not refused"
                 );
             }
         }
@@ -1341,6 +1790,60 @@ fn rule_covers_path(pattern: &str, path: &str) -> bool {
     match pattern.strip_prefix('/') {
         Some(anchored) => path_matches(anchored, path),
         None => path_matches(pattern, path),
+    }
+}
+
+/// TSK-1070 SEC-02: Codeflow's launcher files under the home (the shell
+/// function, the editor wrapper, the session file and the install records)
+/// are denied to the Edit and Write tools and to sandboxed writes.
+#[test]
+fn launcher_files_are_denied_to_edits_and_sandboxed_writes() {
+    const LAUNCHER_FILES: [&str; 5] = [
+        ".codeflow/shell/claude.sh",
+        ".codeflow/shell/claude-wrapper.sh",
+        ".codeflow/claude/session.json",
+        ".codeflow/claude/install.json",
+        ".codeflow/claude-user-settings.json",
+    ];
+    for name in preset_files() {
+        let value = load(&name);
+        let deny = perm_array(&value, "deny");
+        let writes: Vec<String> = value["sandbox"]["filesystem"]["denyWrite"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        for file in LAUNCHER_FILES {
+            assert!(
+                deny.iter()
+                    .filter_map(|rule| rule.strip_prefix("Edit(~/")?.strip_suffix(')'))
+                    .any(|pattern| path_matches(pattern, file)),
+                "{name}: no Edit deny covers ~/{file}"
+            );
+            assert!(
+                writes.iter().any(|entry| entry
+                    .strip_prefix("~/")
+                    .is_some_and(|dir| file == dir || file.starts_with(&format!("{dir}/")))),
+                "{name}: no sandbox write deny covers ~/{file}"
+            );
+        }
+    }
+}
+
+/// Security review round 2 (SEC-08): the backups of the person's user
+/// settings live in one fixed folder, whatever `CLAUDE_CONFIG_DIR` says,
+/// and every preset denies that folder to the Read tool, which Claude Code
+/// also applies to sandboxed commands.
+#[test]
+fn user_settings_backups_are_denied_to_reads() {
+    for name in preset_files() {
+        let deny = perm_array(&load(&name), "deny");
+        assert!(
+            deny.iter()
+                .any(|rule| rule == "Read(~/.codeflow/claude/backups/**)"),
+            "{name}: the user-settings backups are readable"
+        );
     }
 }
 
@@ -1714,15 +2217,41 @@ fn rule_matcher_follows_the_documented_bash_rule_syntax() {
 /// the scaffold installs run it too, with an isolated home and host git
 /// configuration neutralized.
 fn run_codeflow(root: &Path, home: &Path, args: &[&str]) -> std::process::Output {
+    codeflow_cmd(root, home, args)
+        .output()
+        .expect("codeflow runs")
+}
+
+/// [`run_codeflow`] with `input` on stdin, such as the init answers.
+fn run_codeflow_with_input(
+    root: &Path,
+    home: &Path,
+    args: &[&str],
+    input: &str,
+) -> std::process::Output {
+    let mut child = codeflow_cmd(root, home, args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("codeflow starts");
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), input.as_bytes()).unwrap();
+    child.wait_with_output().expect("codeflow runs")
+}
+
+fn codeflow_cmd(root: &Path, home: &Path, args: &[&str]) -> std::process::Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
     let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    std::process::Command::new(&exe)
+    let mut command = std::process::Command::new(&exe);
+    command
         .args(args)
         .current_dir(root)
         .env("CODEFLOW_HOME", home)
+        // Never the person's own Claude user settings (TSK-1070).
+        .env("CLAUDE_CONFIG_DIR", home.join("claude-config"))
         .env("PATH", path)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -1734,9 +2263,8 @@ fn run_codeflow(root: &Path, home: &Path, args: &[&str]) -> std::process::Output
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
-        .output()
-        .expect("codeflow runs")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+    command
 }
 
 fn succeeded(out: &std::process::Output, what: &str) -> String {
@@ -1769,6 +2297,163 @@ fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     }
     files.sort();
     files
+}
+
+/// TSK-1070 AC-13: `codeflow update` on a project that holds an earlier
+/// bypass preset, with the adopter's own edits, removes the shipped
+/// `defaultMode` Claude Code ignores at project scope, moves the shipped
+/// status line, and keeps every edit of the adopter's. A mode the project
+/// set itself, which the baseline does not hold, stays and is reported.
+#[test]
+fn update_retires_the_shipped_bypass_mode_and_keeps_the_adopters_edits() {
+    for shipped_mode in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("proj");
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        // The adopter chose the bypass preset; the follow-up offer to write
+        // the user file gets end of input, so nothing is written there.
+        succeeded(
+            &run_codeflow_with_input(
+                &root,
+                &home,
+                &["init", "--minimal"],
+                "proj\ncore\nbypassPermissions\n",
+            ),
+            "init --minimal",
+        );
+        assert!(!home.join("claude-config/settings.json").exists());
+        let fixture = repo_root()
+            .join("crates/codeflow-core/tests/fixtures/presets-2.1.0/bypass-sandboxed.json");
+        let mut baseline: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(fixture).unwrap()).unwrap();
+        let mut project = baseline.clone();
+        if !shipped_mode {
+            // The project chose the mode; the recorded baseline never held it.
+            baseline["permissions"]
+                .as_object_mut()
+                .unwrap()
+                .remove("defaultMode");
+        }
+        project["permissions"]["allow"]
+            .as_array_mut()
+            .unwrap()
+            .push("Bash(make *)".into());
+        project["env"] = serde_json::json!({"ADOPTER_FLAG": "1"});
+        project["adopterKey"] = serde_json::json!(true);
+        let plant = |rel: &str, value: &serde_json::Value| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, serde_json::to_string_pretty(value).unwrap() + "\n").unwrap();
+        };
+        plant(".claude/settings.json", &project);
+        plant(".codeflow/.baseline/.claude/settings.json", &baseline);
+
+        let report = succeeded(&run_codeflow(&root, &home, &["update"]), "update");
+        let merged = read_json(&root.join(".claude/settings.json"));
+        let allow = merged["permissions"]["allow"].as_array().unwrap();
+        assert!(allow.iter().any(|e| e == "Bash(make *)"), "{shipped_mode}");
+        assert_eq!(merged["env"]["ADOPTER_FLAG"], "1", "{shipped_mode}");
+        assert_eq!(merged["adopterKey"], true, "{shipped_mode}");
+        assert_eq!(
+            merged["statusLine"],
+            load("default.json")["statusLine"],
+            "{shipped_mode}: the shipped status line moves"
+        );
+        // D1 to D3 reach the adopter too: no unsandboxed retry, the
+        // excluded host-state tools, no bare secret-name deny.
+        assert_eq!(merged["sandbox"]["allowUnsandboxedCommands"], false);
+        assert_eq!(
+            merged["sandbox"]["excludedCommands"],
+            load("default.json")["sandbox"]["excludedCommands"]
+        );
+        let deny = perm_array(&merged, "deny");
+        assert!(
+            !deny.iter().any(|rule| rule == "Read(**/*secret*)"),
+            "{report}"
+        );
+        assert!(deny.iter().any(|rule| rule == "Read(~/.config/gh/**)"));
+        if shipped_mode {
+            assert!(
+                merged["permissions"].get("defaultMode").is_none(),
+                "{merged}\n{report}"
+            );
+            assert!(
+                report.contains("removed permissions.defaultMode \"bypassPermissions\""),
+                "{report}"
+            );
+        } else {
+            assert_eq!(merged["permissions"]["defaultMode"], "bypassPermissions");
+            assert!(
+                report.contains("kept the project's \"permissions.defaultMode\""),
+                "{report}"
+            );
+        }
+    }
+}
+
+/// TSK-1070 (operator decision 2026-10-31): `codeflow update` on a project
+/// that still holds the shipped `*` network allowlist retires `*`, adds
+/// every shipped development host and keeps the hosts the adopter added.
+/// A project that removed `*` itself is not given it back.
+#[test]
+fn update_narrows_the_shipped_network_and_keeps_the_adopters_hosts() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    succeeded(
+        &run_codeflow(&root, &home, &["init", "--yes", "--minimal"]),
+        "init --minimal",
+    );
+    // The previous release shipped `*`; the adopter added two hosts.
+    let mut baseline = load("acceptEdits.json");
+    baseline["sandbox"]["network"]["allowedDomains"] = serde_json::json!(["*"]);
+    let mut project = baseline.clone();
+    project["sandbox"]["network"]["allowedDomains"] =
+        serde_json::json!(["*", "internal.example", "registry.example.org"]);
+    let plant = |rel: &str, value: &serde_json::Value| {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_string_pretty(value).unwrap() + "\n").unwrap();
+    };
+    plant(".claude/settings.json", &project);
+    plant(".codeflow/.baseline/.claude/settings.json", &baseline);
+
+    let report = succeeded(&run_codeflow(&root, &home, &["update"]), "update");
+    let merged = read_json(&root.join(".claude/settings.json"));
+    let domains = merged["sandbox"]["network"]["allowedDomains"]
+        .as_array()
+        .unwrap();
+    assert!(!domains.iter().any(|d| d == "*"), "{merged}\n{report}");
+    for host in SHIPPED_ALLOWED_DOMAINS {
+        assert!(domains.iter().any(|d| d == host), "{host}\n{report}");
+    }
+    for host in ["internal.example", "registry.example.org"] {
+        assert!(
+            domains.iter().any(|d| d == host),
+            "{host}: the adopter's host"
+        );
+    }
+    assert!(
+        report.contains("removed retired sandbox.network.allowedDomains entry"),
+        "{report}"
+    );
+    let denied = merged["sandbox"]["network"]["deniedDomains"]
+        .as_array()
+        .unwrap();
+    assert!(denied.iter().any(|d| d == "192.168.*"));
+    assert_eq!(merged["sandbox"]["network"]["allowLocalBinding"], true);
+
+    // A second update changes nothing.
+    let again = succeeded(&run_codeflow(&root, &home, &["update"]), "update again");
+    assert_eq!(
+        read_json(&root.join(".claude/settings.json")),
+        merged,
+        "{again}"
+    );
 }
 
 /// The adopter's own denies: a command, and two reads that overlap the
@@ -1876,9 +2561,10 @@ fn a_2_1_0_project_upgrades_through_the_installed_cli() {
         let (_dir, root, home) = planted_2_1_0_project(adopter, settings_baseline);
         let first = succeeded(&run_codeflow(&root, &home, &["update"]), "first update");
         let updated = assert_effective_rules(&root, case, adopter);
-        assert!(
-            updated["permissions"].get("ask").is_none(),
-            "{case}: the shipped asks are retired:\n{first}"
+        assert_eq!(
+            perm_array(&updated, "ask"),
+            actions::table().claude_ask(),
+            "{case}: the shipped asks are retired and the forge writes ask:\n{first}"
         );
         assert!(
             first.contains("removed retired permissions.ask entry \"Bash(sudo *)\""),
@@ -2069,7 +2755,7 @@ fn status_line_without_jq_prints_folder_and_branch() {
             .unwrap_or_else(|| panic!("{tool} not on PATH"))
     };
     let bin = status_folder("bin", false);
-    for tool in ["cat", "basename", "git"] {
+    for tool in ["cat", "basename", "git", "tr"] {
         std::os::unix::fs::symlink(find(tool), bin.join(tool)).unwrap();
     }
     let repo = status_folder("repo-nojq", true);
@@ -2103,7 +2789,8 @@ fn status_line_without_jq_prints_folder_and_branch() {
 /// Review of PR 368: the line hands the status JSON to `jq` byte for byte,
 /// so a backslash in a path or name, or an escaped control character, stays
 /// literal under `/bin/sh` instead of turning into an escape or a parse
-/// error.
+/// error. Since TSK-1070 SEC-01 a tab shows as a space and other control
+/// characters are removed.
 #[cfg(unix)]
 #[test]
 fn status_line_keeps_backslashes_and_escapes_literal() {
@@ -2146,11 +2833,452 @@ fn status_line_keeps_backslashes_and_escapes_literal() {
             assert_eq!(
                 visible(&out),
                 format!(
-                    "Opus 5.5 (claude-opus-5-5) | v2.3.1 | {style} | {folder}{branch} | ctx:1k/1000k (0%)\n"
+                    "Opus 5.5 (claude-opus-5-5) | v2.3.1 | {} | {folder}{branch} | ctx:1k/1000k (0%)\n",
+                    style.replace('\t', " ")
                 ),
                 "{preset}"
             );
         }
     }
     let _ = std::fs::remove_dir_all(slashed);
+}
+
+// ---- The richer status line (TSK-1070, issue 402) -----------------------
+
+/// TSK-1028's base status JSON with the given extra top-level fields merged
+/// in; `worktree` goes into `workspace.git_worktree`.
+#[cfg(unix)]
+fn rich_json(folder: &Path, extra: &serde_json::Value, worktree: Option<&str>) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(&status_json(folder, 120_000)).unwrap();
+    for (key, field) in extra.as_object().unwrap() {
+        value[key] = field.clone();
+    }
+    if let Some(name) = worktree {
+        value["workspace"]["git_worktree"] = serde_json::json!(name);
+    }
+    value.to_string()
+}
+
+/// AC-6's separator rule: no `null`, empty brackets or doubled separator.
+#[cfg(unix)]
+fn assert_clean(line: &str, case: &str) {
+    for bad in ["null", "()", "[]", "| |", "||", "  "] {
+        assert!(!line.contains(bad), "{case}: {bad:?} in {line:?}");
+    }
+}
+
+#[cfg(unix)]
+fn has_jq(path: &std::ffi::OsStr) -> bool {
+    std::env::split_paths(path).any(|dir| dir.join("jq").is_file())
+}
+
+/// The visible line for `json`, from every preset, asserted identical.
+#[cfg(unix)]
+fn line_for(folder: &Path, json: &str, path: &std::ffi::OsStr) -> String {
+    let mut seen: Option<String> = None;
+    for preset in preset_files() {
+        let (out, code) = run_status_line(&preset, folder, json, path);
+        assert_eq!(code, 0, "{preset}");
+        let out = visible(&out);
+        if let Some(first) = &seen {
+            assert_eq!(&out, first, "{preset} differs from the other presets");
+        }
+        seen = Some(out);
+    }
+    seen.unwrap()
+}
+
+/// AC-2: the effort prints beside the model at each documented level, and
+/// nothing prints for it when `effort` is absent.
+#[cfg(unix)]
+#[test]
+fn status_line_shows_effort_beside_the_model() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("levels", true);
+    for level in ["low", "medium", "high", "xhigh", "max"] {
+        let json = rich_json(
+            &repo,
+            &serde_json::json!({"effort": {"level": level}}),
+            None,
+        );
+        let line = line_for(&repo, &json, &path);
+        assert!(
+            line.starts_with(&format!("Opus 5.5 (claude-opus-5-5) · {level} | v2.3.1")),
+            "{line}"
+        );
+        assert_clean(&line, level);
+    }
+    let line = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert!(
+        line.starts_with("Opus 5.5 (claude-opus-5-5) | v2.3.1"),
+        "{line}"
+    );
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-3: the pull request number and review state, the number alone, and
+/// nothing when `pr` is absent.
+#[cfg(unix)]
+#[test]
+fn status_line_shows_the_pull_request_and_its_review_state() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("pr", true);
+    for (state, shown) in [
+        ("approved", "approved"),
+        ("pending", "pending"),
+        ("changes_requested", "changes requested"),
+        ("draft", "draft"),
+    ] {
+        let json = rich_json(
+            &repo,
+            &serde_json::json!({"pr": {
+                "number": 451,
+                "url": "https://example.invalid/451",
+                "review_state": state
+            }}),
+            None,
+        );
+        let line = line_for(&repo, &json, &path);
+        assert!(
+            line.contains(&format!(" | PR 451 {shown} | ctx:")),
+            "{line}"
+        );
+        assert_clean(&line, state);
+    }
+    let json = rich_json(&repo, &serde_json::json!({"pr": {"number": 7}}), None);
+    let line = line_for(&repo, &json, &path);
+    assert!(line.contains(" | PR 7 | ctx:"), "{line}");
+    assert_clean(&line, "number only");
+    let line = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert!(!line.contains("PR"), "{line}");
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-4: each usage window with its percentage, either alone, none, a
+/// fractional value, 100, and a present 0, which prints.
+#[cfg(unix)]
+#[test]
+fn status_line_shows_plan_usage_windows() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("usage", true);
+    let window = |pct: serde_json::Value| serde_json::json!({"used_percentage": pct, "resets_at": 1_738_425_600});
+    for (limits, shown) in [
+        (
+            serde_json::json!({"five_hour": window(23.5.into()), "seven_day": window(41.into())}),
+            Some("| 5h 24% · 7d 41%"),
+        ),
+        (
+            serde_json::json!({"five_hour": window(100.into())}),
+            Some("| 5h 100%"),
+        ),
+        (
+            serde_json::json!({"seven_day": window(0.into())}),
+            Some("| 7d 0%"),
+        ),
+        (serde_json::json!({}), None),
+    ] {
+        let json = rich_json(&repo, &serde_json::json!({"rate_limits": limits}), None);
+        let line = line_for(&repo, &json, &path);
+        match shown {
+            Some(text) => assert!(line.trim_end().ends_with(text), "{line}"),
+            None => assert!(line.trim_end().ends_with("(12%)"), "{line}"),
+        }
+        assert_clean(&line, &limits.to_string());
+    }
+    let line = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert!(!line.contains("5h ") && !line.contains("7d "), "{line}");
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-5: the linked worktree's name, and nothing for it in the main tree.
+#[cfg(unix)]
+#[test]
+fn status_line_shows_the_linked_worktree() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("worktree", true);
+    let folder = repo.file_name().unwrap().to_str().unwrap().to_string();
+    let json = rich_json(&repo, &serde_json::json!({}), Some("tsk-1070"));
+    let line = line_for(&repo, &json, &path);
+    assert!(
+        line.contains(&format!("| {folder} (feature-x) · wt:tsk-1070 | ctx:")),
+        "{line}"
+    );
+    let line = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert!(!line.contains("wt:"), "{line}");
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-6: with none of the new fields the line is TSK-1028's exactly, and
+/// all sixteen combinations of the four groups keep the separator rule.
+#[cfg(unix)]
+#[test]
+fn status_line_keeps_the_existing_text_and_clean_separators() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("combos", true);
+    let folder = repo.file_name().unwrap().to_str().unwrap().to_string();
+    let base = line_for(
+        &repo,
+        &rich_json(&repo, &serde_json::json!({}), None),
+        &path,
+    );
+    assert_eq!(
+        base,
+        format!(
+            "Opus 5.5 (claude-opus-5-5) | v2.3.1 | Explanatory | {folder} (feature-x) | ctx:120k/1000k (12%)\n"
+        )
+    );
+    for mask in 0u8..16 {
+        let mut extra = serde_json::Map::new();
+        if mask & 1 != 0 {
+            extra.insert("effort".into(), serde_json::json!({"level": "high"}));
+        }
+        if mask & 2 != 0 {
+            extra.insert(
+                "pr".into(),
+                serde_json::json!({"number": 12, "review_state": "pending"}),
+            );
+        }
+        if mask & 4 != 0 {
+            extra.insert(
+                "rate_limits".into(),
+                serde_json::json!({
+                    "five_hour": {"used_percentage": 23.5},
+                    "seven_day": {"used_percentage": 81}
+                }),
+            );
+        }
+        let worktree = (mask & 8 != 0).then_some("wt");
+        let json = rich_json(&repo, &serde_json::Value::Object(extra), worktree);
+        let line = line_for(&repo, &json, &path);
+        assert_clean(&line, &format!("mask {mask}"));
+        assert_eq!(
+            line.contains("(claude-opus-5-5) · high |"),
+            mask & 1 != 0,
+            "{mask}: {line}"
+        );
+        assert_eq!(
+            line.contains("| PR 12 pending |"),
+            mask & 2 != 0,
+            "{mask}: {line}"
+        );
+        assert_eq!(
+            line.contains("| 5h 24% · 7d 81%"),
+            mask & 4 != 0,
+            "{mask}: {line}"
+        );
+        assert_eq!(line.contains("· wt:wt |"), mask & 8 != 0, "{mask}: {line}");
+        assert!(
+            line.ends_with('\n') && line.matches('\n').count() == 1,
+            "{mask}: {line:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// AC-7: without `jq` the line still prints the folder and branch, whatever
+/// new fields the status JSON carries.
+#[cfg(unix)]
+#[test]
+fn status_line_without_jq_ignores_the_new_fields() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let find = |tool: &str| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(tool))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("{tool} not on PATH"))
+    };
+    let bin = status_folder("bin-rich", false);
+    for tool in ["cat", "basename", "git", "tr"] {
+        std::os::unix::fs::symlink(find(tool), bin.join(tool)).unwrap();
+    }
+    let repo = status_folder("rich-nojq", true);
+    let folder = repo.file_name().unwrap().to_str().unwrap().to_string();
+    let json = rich_json(
+        &repo,
+        &serde_json::json!({
+            "effort": {"level": "max"},
+            "pr": {"number": 3, "review_state": "draft"},
+            "rate_limits": {"five_hour": {"used_percentage": 50}}
+        }),
+        Some("wt"),
+    );
+    for preset in preset_files() {
+        let (out, code) = run_status_line(&preset, &repo, &json, bin.as_os_str());
+        assert_eq!(code, 0, "{preset}");
+        assert_eq!(
+            out,
+            format!("{folder} (feature-x) | jq not found\n"),
+            "{preset}"
+        );
+    }
+    for folder in [bin, repo] {
+        let _ = std::fs::remove_dir_all(folder);
+    }
+}
+
+/// Claude Code reads a rule ending in `:*` as its old prefix form and the
+/// `*` before it literally, so `Bash(git push *ext::*)` denied nothing; it
+/// warned "reads its * literally" and let `ext::` through (TSK-1070 live
+/// canary on 2.1.316). `*ext::**` matches. No shipped rule may end so.
+#[test]
+fn no_shipped_permission_rule_ends_in_the_legacy_prefix_form() {
+    for name in preset_files() {
+        let preset = load(&name);
+        for key in ["allow", "deny", "ask"] {
+            for rule in preset["permissions"][key].as_array().into_iter().flatten() {
+                let rule = rule.as_str().unwrap_or_default();
+                if let Some(head) = rule.strip_suffix(":*)") {
+                    assert!(
+                        !head.contains('*'),
+                        "{name}: {key} rule {rule} ends in `:*` with another `*`, which Claude Code reads literally"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Runs `command` under `shell -c` in `folder` with `json` on stdin; returns
+/// stdout and stderr.
+#[cfg(unix)]
+fn run_under(shell: &str, command: &str, folder: &Path, json: &str) -> (String, String) {
+    use std::io::Write;
+    let mut child = std::process::Command::new(shell)
+        .args(["-c", command])
+        .current_dir(folder)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("shell runs");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(json.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// TSK-1070 SEC-01: no status JSON field is ever evaluated by the shell.
+/// A folder name carrying the field separator and a command substitution
+/// in arithmetic position (the security review's canary) prints as plain
+/// text under `/bin/sh` and Bash in every preset, control characters and
+/// all other text from the JSON are stripped, and a non-numeric, negative
+/// or zero count falls back to safe numbers instead of reaching the shell.
+#[cfg(unix)]
+#[test]
+fn status_line_never_evaluates_status_text() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("inject", true);
+    let marker = repo.join("CODEFLOW_ARITH_CANARY");
+    let payload = format!(
+        "/tmp/x\u{1f}1\u{1f}2\u{1f}3\u{1f}4\u{1f}5\u{1f}6\u{1f}a[$(printf CODEFLOW_ARITH_CANARY >&2; touch {})0]",
+        marker.display()
+    );
+    let hostile = serde_json::json!({
+        "model": {"id": "id\u{1b}[31m$(id)", "display_name": "Opus\u{7}\n5.5"},
+        "version": "`touch x`",
+        "output_style": {"name": "a\u{1f}b"},
+        "workspace": {"current_dir": payload, "git_worktree": "wt\u{1b}]0;t\u{7}"},
+        "effort": {"level": "$((1+1))"},
+        "pr": {"number": "1$(id)", "review_state": "x\u{9b}31m"},
+        "rate_limits": {"five_hour": {"used_percentage": "a[$(id)]"}, "seven_day": {"used_percentage": -5}},
+        "context_window": {
+            "context_window_size": "x[$(id)]",
+            "current_usage": {"input_tokens": "a[$(id)0]", "cache_read_input_tokens": -1,
+                "cache_creation_input_tokens": 1e300, "output_tokens": 2000}
+        }
+    })
+    .to_string();
+    for shell in ["/bin/sh", "/bin/bash"] {
+        if !Path::new(shell).is_file() {
+            continue;
+        }
+        for preset in preset_files() {
+            let command = load(&preset)["statusLine"]["command"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let (out, err) = run_under(shell, &command, &repo, &hostile);
+            assert!(
+                !err.contains("CODEFLOW_ARITH_CANARY"),
+                "{shell} {preset}: {err}"
+            );
+            assert!(err.is_empty(), "{shell} {preset}: stderr {err:?}");
+            assert!(!marker.exists(), "{shell} {preset}: the payload ran");
+            let shown = visible(&out);
+            assert!(
+                shown.ends_with('\n') && shown.matches('\n').count() == 1,
+                "{shell} {preset}: {shown:?}"
+            );
+            for byte in shown.trim_end_matches('\n').chars() {
+                assert!(
+                    !byte.is_control(),
+                    "{shell} {preset}: control {byte:?} in {shown:?}"
+                );
+            }
+            assert!(
+                shown.contains("ctx:2k/200k (1%)"),
+                "{shell} {preset}: {shown:?}"
+            );
+            assert!(
+                !shown.contains("5h ") && !shown.contains("7d "),
+                "{shell} {preset}: {shown:?}"
+            );
+            assert!(shown.contains("wt:wt]0;t"), "{shell} {preset}: {shown:?}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// TSK-1070 SEC-01: without jq the fallback prints the folder with its
+/// control characters removed.
+#[cfg(unix)]
+#[test]
+fn status_line_fallback_strips_control_characters() {
+    let base = status_folder("fallback", false);
+    let folder = base.join("a\u{1b}[31mb\u{7}c");
+    std::fs::create_dir_all(&folder).unwrap();
+    let bin = base.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for tool in ["cat", "basename", "git", "tr", "printf"] {
+        let found = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join(tool))
+            .find(|p| p.is_file());
+        if let Some(found) = found {
+            let _ = std::os::unix::fs::symlink(found, bin.join(tool));
+        }
+    }
+    for preset in preset_files() {
+        let (out, _) = run_status_line(&preset, &folder, "{}", bin.as_os_str());
+        assert_eq!(out, "a[31mbc | jq not found\n", "{preset}");
+    }
+    let _ = std::fs::remove_dir_all(base);
 }
