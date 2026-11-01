@@ -451,14 +451,18 @@ pub(crate) fn repository_of(
 const LOCATION_VARIABLES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
 
 /// The location variables this process inherited, with their values.
-pub(crate) fn process_location() -> Environment {
-    LOCATION_VARIABLES
-        .iter()
-        .filter_map(|name| {
-            std::env::var_os(name)
-                .map(|value| ((*name).to_string(), value.to_string_lossy().into_owned()))
-        })
-        .collect()
+/// A value that is not text refuses, since it cannot be compared.
+pub(crate) fn process_location() -> Result<Environment, String> {
+    let mut found = Environment::new();
+    for name in LOCATION_VARIABLES {
+        if let Some(value) = std::env::var_os(name) {
+            let text = value
+                .into_string()
+                .map_err(|_| format!("cannot verify the repository: {name} is not text"))?;
+            found.insert(name.to_string(), text);
+        }
+    }
+    Ok(found)
 }
 
 /// Refuse a call whose repository location the caller chose (TSK-1130). The
@@ -510,7 +514,7 @@ fn location(
     globals: &[String],
     environment: &Environment,
     clean: bool,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<PathBuf>, String> {
     let run = |tail: &[&str]| -> Result<Vec<u8>, String> {
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut command = crate::git::command();
@@ -545,12 +549,11 @@ fn location(
         .and_then(text)
         .unwrap_or_default();
     Ok(dirs
-        .lines()
-        .chain(top.lines())
-        .map(|line| {
-            std::fs::canonicalize(line)
-                .map_or_else(|_| line.to_string(), |p| p.to_string_lossy().into_owned())
-        })
+        .strip_suffix('\n')
+        .unwrap_or(&dirs)
+        .split('\n')
+        .chain(top.strip_suffix('\n').unwrap_or(&top).split('\n'))
+        .map(|line| std::fs::canonicalize(line).unwrap_or_else(|_| PathBuf::from(line)))
         .collect())
 }
 

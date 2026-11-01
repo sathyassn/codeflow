@@ -608,7 +608,7 @@ fn configured_commands(
         cwd,
         &settings,
         &config_environment(env),
-        &crate::security::git_config::process_location(),
+        &crate::security::git_config::process_location()?,
     )?;
     let config = crate::security::git_config::read(cwd, &settings, &config_environment(env))?;
     transport(args, &config)?;
