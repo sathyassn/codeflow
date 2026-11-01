@@ -927,9 +927,9 @@ pub fn require_offline_objects(root: &Path) -> Result<(), String> {
     promisor_refusal(&version, promisor).map_or(Ok(()), Err)
 }
 
-/// Give a git process that lists staged paths the scan's pins: no rename
+/// Give a git process that reads staged or indexed objects the scan's pins: no rename
 /// detection through configuration, no caller configuration, no lazy fetch.
-pub fn pin_staged_listing(command: &mut Command) {
+pub fn pin_object_reader(command: &mut Command) {
     pin_git_output(command, &[]);
 }
 

@@ -11625,8 +11625,10 @@ fn real_git_path() -> std::path::PathBuf {
 
 /// A repository with a promisor remote whose `.gitattributes` blob is
 /// promised and absent, and one new staged file. Its remote's upload-pack is
-/// a wrapper that leaves `fetched` behind, so any fetch or transport process
-/// is seen. Returns the folder that keeps it, the repository and the marker.
+/// a wrapper that leaves `fetched` behind, so an upload-pack start is seen;
+/// the tests also read the Git Trace2 events of the hook process tree and
+/// assert no process started with a fetch or transport name (`fetch_events`).
+/// Returns the folder that keeps it, the repository and the marker.
 #[cfg(unix)]
 fn promisor_repository_missing_blobs() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf)
 {
@@ -11740,7 +11742,7 @@ fn git_wrapper(folder: &Path, version: Option<&str>, fail_config: bool) -> std::
     std::fs::write(
         bin.join("git"),
         format!(
-            "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n{version_case}{config_case}esac\nexec '{}' \"$@\"\n",
+            "#!/bin/sh\n{{ echo \"CALL $*\"; env | grep -E '^GIT_CONFIG_(PARAMETERS|COUNT|KEY_|VALUE_)' | sed 's/^/ENV /'; }} >> '{}'\ncase \"$*\" in\n{version_case}{config_case}esac\nexec '{}' \"$@\"\n",
             log.display(),
             real_git_path().display()
         ),
@@ -11753,16 +11755,26 @@ fn git_wrapper(folder: &Path, version: Option<&str>, fail_config: bool) -> std::
 /// Run the pre-commit or the merge (commit-msg) hook entry point in the
 /// repository, with the wrapper first on `PATH`.
 #[cfg(unix)]
-fn promisor_hook(work: &Path, wrapper: &Path, merge: bool, redirect_config: bool) -> Output {
+fn promisor_hook(
+    work: &Path,
+    wrapper: &Path,
+    merge: bool,
+    redirect_config: bool,
+    env: &[(&str, &str)],
+) -> Output {
     let mut command = codeflow();
-    command.current_dir(work).env(
-        "PATH",
-        format!(
-            "{}:{}",
-            wrapper.display(),
-            std::env::var("PATH").unwrap_or_default()
-        ),
-    );
+    command
+        .envs(env.iter().copied())
+        .env("GIT_TRACE2_EVENT", trace_path(wrapper))
+        .current_dir(work)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                wrapper.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
     if merge {
         let head = std::fs::read_to_string(work.join(".git/refs/heads/feat/x")).unwrap();
         std::fs::write(work.join(".git/MERGE_HEAD"), head).unwrap();
@@ -11800,7 +11812,7 @@ fn promisor_repositories_are_refused_before_an_object_read_on_both_routes() {
         ] {
             let (keep, work, fetched) = promisor_repository_missing_blobs();
             let wrapper = git_wrapper(keep.path(), version, fail_config);
-            let out = promisor_hook(&work, &wrapper, merge, redirect);
+            let out = promisor_hook(&work, &wrapper, merge, redirect, &[]);
             let stderr = String::from_utf8_lossy(&out.stderr);
             assert!(!out.status.success(), "{route} {case}: {stderr}");
             let expected = if fail_config {
@@ -11814,13 +11826,18 @@ fn promisor_repositories_are_refused_before_an_object_read_on_both_routes() {
                 "{route} {case}: a fetch or transport process started; git calls:\n{}\n{stderr}",
                 std::fs::read_to_string(keep.path().join("git-calls.log")).unwrap_or_default()
             );
+            assert_eq!(
+                fetch_events(keep.path()),
+                Vec::<String>::new(),
+                "{route} {case}: Trace2 saw a fetch or transport start"
+            );
         }
 
         // Git 2.46 passes the decision; the listing then reads no blob and
         // never renames, and nothing is fetched.
         let (keep, work, fetched) = promisor_repository_missing_blobs();
         let wrapper = git_wrapper(keep.path(), Some("2.46.0"), false);
-        let out = promisor_hook(&work, &wrapper, merge, false);
+        let out = promisor_hook(&work, &wrapper, merge, false, &[]);
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
             !stderr.contains("upgrade git to 2.46 or later"),
@@ -11829,6 +11846,11 @@ fn promisor_repositories_are_refused_before_an_object_read_on_both_routes() {
         assert!(
             !fetched.exists(),
             "{route}: a fetch or transport process started"
+        );
+        assert_eq!(
+            fetch_events(keep.path()),
+            Vec::<String>::new(),
+            "{route}: Trace2 saw a fetch or transport start"
         );
         if merge {
             let log = std::fs::read_to_string(keep.path().join("git-calls.log")).unwrap();
@@ -11839,4 +11861,162 @@ fn promisor_repositories_are_refused_before_an_object_read_on_both_routes() {
             );
         }
     }
+}
+
+/// Where the Git Trace2 events of one fixture's hook process tree go.
+#[cfg(unix)]
+fn trace_path(wrapper: &Path) -> std::path::PathBuf {
+    wrapper.parent().unwrap().join("trace2.json")
+}
+
+/// The process starts in the fixture's Trace2 events as `(started, fetches)`:
+/// how many processes started, and the command lines of those that name a
+/// fetch or transport (`fetch`, `fetch-pack`, `upload-pack`, a `remote-*`
+/// helper, or the fixture's upload-pack wrapper).
+#[cfg(unix)]
+fn trace_starts(folder: &Path) -> (usize, Vec<String>) {
+    let text = std::fs::read_to_string(folder.join("trace2.json")).unwrap_or_default();
+    let (mut started, mut fetches) = (0, Vec::new());
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if !matches!(event["event"].as_str(), Some("start" | "child_start")) {
+            continue;
+        }
+        started += 1;
+        let argv: Vec<&str> = event["argv"]
+            .as_array()
+            .map(|all| all.iter().filter_map(serde_json::Value::as_str).collect())
+            .unwrap_or_default();
+        let transport = argv.iter().any(|word| {
+            matches!(*word, "fetch" | "fetch-pack" | "upload-pack")
+                || word.starts_with("remote-")
+                || word.ends_with("upload-pack-wrapper")
+        });
+        if transport {
+            fetches.push(argv.join(" "));
+        }
+    }
+    (started, fetches)
+}
+
+/// The fetch or transport starts in the fixture's Trace2 events.
+#[cfg(unix)]
+fn fetch_events(folder: &Path) -> Vec<String> {
+    trace_starts(folder).1
+}
+
+/// The blocks of the wrapper's log for the calls whose arguments contain
+/// `word`: each is the call line and the configuration variables it saw.
+#[cfg(unix)]
+fn logged_calls(folder: &Path, word: &str) -> Vec<String> {
+    std::fs::read_to_string(folder.join("git-calls.log"))
+        .unwrap_or_default()
+        .split("CALL ")
+        .filter(|block| block.lines().next().is_some_and(|call| call.contains(word)))
+        .map(str::to_string)
+        .collect()
+}
+
+/// R15-1 sibling: a promisor designation that comes only from inherited
+/// command-line or numbered configuration is absent from the capability
+/// decision (which removes caller settings), so the attribute reader must
+/// not see it either. On a Git before 2.46 the reader would otherwise treat a
+/// missing attributes blob as fetchable.
+#[cfg(unix)]
+#[test]
+fn inherited_promisor_settings_never_reach_the_attribute_reader() {
+    let command_line = [(
+        "GIT_CONFIG_PARAMETERS",
+        "'extensions.partialclone=origin' 'remote.origin.promisor=true'",
+    )];
+    let numbered = [
+        ("GIT_CONFIG_COUNT", "2"),
+        ("GIT_CONFIG_KEY_0", "extensions.partialclone"),
+        ("GIT_CONFIG_VALUE_0", "origin"),
+        ("GIT_CONFIG_KEY_1", "remote.origin.promisor"),
+        ("GIT_CONFIG_VALUE_1", "true"),
+    ];
+    for (form, env) in [
+        ("command line", &command_line[..]),
+        ("numbered", &numbered[..]),
+    ] {
+        let (keep, work, fetched) = promisor_repository_missing_blobs();
+        // The repository's own configuration has no promisor designation.
+        git(&work, &["config", "--unset", "remote.origin.promisor"]);
+        git(&work, &["config", "--unset", "extensions.partialClone"]);
+        let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
+        let out = promisor_hook(&work, &wrapper, false, false, env);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let reads = logged_calls(keep.path(), "check-attr");
+        assert!(!reads.is_empty(), "{form}: no attribute read ran: {stderr}");
+        for read in &reads {
+            for leaked in ["promisor", "partialclone", "=origin"] {
+                assert!(
+                    !read.contains(leaked),
+                    "{form}: the attribute reader inherited {leaked}:\n{read}"
+                );
+            }
+        }
+        assert!(!fetched.exists(), "{form}: upload-pack started");
+        assert_eq!(fetch_events(keep.path()), Vec::<String>::new(), "{form}");
+    }
+}
+
+/// The installed shim: hooks wired into the fixture, then `git commit`
+/// itself. Git runs the shim, the shim runs codeflow, and a promisor
+/// repository on a Git before 2.46 is refused before any object read, with
+/// no fetch or transport start in Trace2 and no commit made.
+#[cfg(unix)]
+#[test]
+fn installed_hooks_refuse_a_promisor_commit_on_an_old_git() {
+    let (keep, work, fetched) = promisor_repository_missing_blobs();
+    wire_scan_hooks(&work);
+    let before = git_command()
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&work)
+        .output()
+        .unwrap()
+        .stdout;
+    let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
+    let out = git_command()
+        .args(["commit", "-m", "feat: add a staged file"])
+        .current_dir(&work)
+        .env("LC_ALL", "C")
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_TRACE2_EVENT", trace_path(&wrapper))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                wrapper.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "the commit was not refused:\nstdout: {}\nstderr: {stderr}\ngit calls:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        std::fs::read_to_string(keep.path().join("git-calls.log")).unwrap_or_default()
+    );
+    assert!(stderr.contains("codeflow pre-commit"), "{stderr}");
+    assert!(stderr.contains("upgrade git to 2.46 or later"), "{stderr}");
+    let after = git_command()
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&work)
+        .output()
+        .unwrap()
+        .stdout;
+    assert_eq!(before, after, "no commit was made");
+    assert!(!fetched.exists(), "upload-pack started");
+    let (started, fetches) = trace_starts(keep.path());
+    assert!(
+        started > 0,
+        "Trace2 saw no process: the observation is blind"
+    );
+    assert_eq!(fetches, Vec::<String>::new());
 }

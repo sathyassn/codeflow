@@ -475,7 +475,7 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
     // fetches; the listing below may read promised blobs.
     codeflow_core::hooks::gitleaks::require_offline_objects(root).map_err(unreadable)?;
     let mut command = codeflow_core::git::command();
-    codeflow_core::hooks::gitleaks::pin_staged_listing(&mut command);
+    codeflow_core::hooks::gitleaks::pin_object_reader(&mut command);
     let out = command
         .arg("-C")
         .arg(root)

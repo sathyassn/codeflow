@@ -234,7 +234,7 @@ pub fn marker_sizes(
     super::gitleaks::require_offline_objects(root)
         .map_err(|reason| AttrError::Failed(format!("git check-attr: {reason}")))?;
     let mut command = crate::git::command();
-    crate::git::local_objects_only(&mut command);
+    super::gitleaks::pin_object_reader(&mut command);
     command.arg("-C").arg(root);
     let from = match source {
         AttrSource::Index {
