@@ -1,0 +1,11 @@
+id = "TSK-1146"
+uid = "1b50181f-db7f-406d-9840-aff4f141bccb"
+kind = "TSK"
+title = "CodeFlow's capabilities are inventoried and classified across all four dimensions"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:52:22Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
