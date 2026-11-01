@@ -177,26 +177,48 @@ const PR_BODY_ENV: &str = "CODEFLOW_PR_BODY";
 
 /// Whether the pull request is a draft (`true` or `false`), for a host
 /// whose event file does not say; GitHub's event payload is read otherwise.
-const PR_DRAFT_ENV: &str = "CODEFLOW_PR_DRAFT";
+/// It is not `CODEFLOW_PR_DRAFT`, which names the saved PR body file the
+/// release preflight reads (TSK-1001).
+const PR_DRAFT_ENV: &str = "CODEFLOW_PR_IS_DRAFT";
 
-/// Whether the pull request under check is a draft (TSK-451): the explicit
-/// `CODEFLOW_PR_DRAFT`, else GitHub's `pull_request.draft` in the event
-/// file. Unknown reads as ready, so a missing citation is reported.
-fn pr_is_draft(environment: &BTreeMap<String, String>) -> bool {
+/// What a run knows of the pull request's draft state (TSK-451, TSK-1001).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Readiness {
+    /// A draft: nothing that only a ready pull request owes is asked.
+    Draft,
+    /// Known ready: the host's event, or `CODEFLOW_PR_IS_DRAFT=false`, says
+    /// so, and what blocks landing blocks here.
+    Ready,
+    /// Not known: a push, a local lint, or an event file that cannot be
+    /// read. Warnings read it as ready, the side that reports; a landing
+    /// refusal never fires on it, so a durability push is never stopped.
+    Unknown,
+}
+
+/// The pull request's draft state: the explicit `CODEFLOW_PR_IS_DRAFT`,
+/// else GitHub's `pull_request.draft` in the event file.
+fn pr_readiness(environment: &BTreeMap<String, String>) -> Readiness {
     if let Some(value) = environment.get(PR_DRAFT_ENV) {
-        return value == "true";
+        return match value.as_str() {
+            "true" => Readiness::Draft,
+            "false" => Readiness::Ready,
+            _ => Readiness::Unknown,
+        };
     }
     let Some(path) = environment.get("GITHUB_EVENT_PATH") else {
-        return false;
+        return Readiness::Unknown;
     };
-    // An event file that cannot be read or parsed proves no draft, so the
-    // pull request is judged as ready, the side that reports.
-    match std::fs::read(path) {
-        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-            Ok(event) => event["pull_request"]["draft"] == serde_json::Value::Bool(true),
-            Err(_) => false,
+    // An event file that cannot be read or parsed proves nothing.
+    let Ok(bytes) = std::fs::read(path) else {
+        return Readiness::Unknown;
+    };
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(event) => match &event["pull_request"]["draft"] {
+            serde_json::Value::Bool(true) => Readiness::Draft,
+            serde_json::Value::Bool(false) => Readiness::Ready,
+            _ => Readiness::Unknown,
         },
-        Err(_) => false,
+        Err(_) => Readiness::Unknown,
     }
 }
 
@@ -343,6 +365,7 @@ pub fn run(args: &CiArgs) -> i32 {
             return 2;
         }
     };
+    let readiness = pr_readiness(&environment);
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
@@ -733,6 +756,10 @@ pub fn run(args: &CiArgs) -> i32 {
             &head,
             &line_target,
             &stacked,
+            Landing {
+                readiness,
+                code: change.is_none_or(|class| !class.docs_only),
+            },
             &mut tagged,
             &mut ran,
         )
@@ -754,14 +781,15 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut ran,
     );
     // The visible workgraph is checked once for tracked work, whether the
-    // task comes from the branch or from the `Task:` line (TSK-133).
+    // task comes from the branch or from the `Task:` line (TSK-133), and
+    // for a planning amendment or cancellation, which changes records
+    // (TSK-1001).
     if own_task
-        || work_class
-            .as_ref()
-            .and_then(classification::Class::task_id)
-            .is_some()
+        || work_class.as_ref().is_some_and(|class| {
+            class.task_id().is_some() || matches!(class, classification::Class::PlanningOnly { .. })
+        })
     {
-        visible_graph_check(&root, level, &mut tagged, &mut ran);
+        visible_graph_check(&root, &head, level, &mut tagged, &mut ran);
     }
 
     // --- PR-body check ----------------------------------------------------
@@ -796,12 +824,19 @@ pub fn run(args: &CiArgs) -> i32 {
                 return 2;
             }
         } || git.branch_is_protected(&line_target);
+        // A completed task's acceptance block supplies the Reviews row
+        // (TSK-451), so the section may be left out (TSK-1001).
+        let derived = work_class
+            .as_ref()
+            .and_then(classification::Class::review_task)
+            .is_some_and(|task_id| has_acceptance_block(&root, &head, task_id));
         tagged.extend(evaluate_pr_checks(
             git,
             &body,
             class,
             range.breaking_commit,
             protected,
+            derived,
         ));
         // The quick run is owed only where `codeflow test` is configured.
         // A test config that cannot be stat'ed for a reason other than its
@@ -810,7 +845,7 @@ pub fn run(args: &CiArgs) -> i32 {
             std::fs::symlink_metadata(root.join(".codeflow/test-config.json")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound
         );
-        let owes_quick = configured && !pr_is_draft(&environment);
+        let owes_quick = configured && readiness != Readiness::Draft;
         tagged.extend(
             pr_body::quick_citation(git, &body, class, !owes_quick)
                 .into_iter()
@@ -950,6 +985,7 @@ fn work_checks<'a>(
     head: &str,
     line_target: &str,
     stacked: &[ReviewedPin],
+    landing: Landing,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
 ) -> Option<classification::Class> {
@@ -1050,8 +1086,36 @@ fn work_checks<'a>(
         class.as_ref(),
         range_parts.as_ref(),
         head,
+        landing,
     ));
     class
+}
+
+/// What a landing refusal needs to know of the pull request (TSK-1001):
+/// whether it is known ready, and whether its range changes code.
+#[derive(Debug, Clone, Copy)]
+struct Landing {
+    readiness: Readiness,
+    code: bool,
+}
+
+/// Whether durable work tracking is on for a range (TSK-1001): in the
+/// checkout, or committed at `base` or at `head`. The committed states
+/// decide as well as the working checkout, so a hosted check run from a
+/// target checkout without tracking still judges a range that adds the
+/// first record. A state that cannot be read is a violation, never off.
+fn tracking_active(root: &Path, base: Option<&str>, head: &str) -> Result<bool, Violation> {
+    let mut enabled = codeflow_core::workgraph::durable_work_tracking_enabled(root)
+        .map_err(tracking_state_violation)?;
+    for revision in base.into_iter().chain(std::iter::once(head)) {
+        enabled |= codeflow_core::workgraph::durable_work_tracking_enabled_at(root, revision)
+            .map_err(|error| {
+                tracking_state_violation(format!(
+                    "cannot read whether {revision} tracks durable work: {error}"
+                ))
+            })?;
+    }
+    Ok(enabled)
 }
 
 /// Release acceptance applies only where durable tracking is enabled. All
@@ -1078,11 +1142,17 @@ fn tracked_review(
     class: Option<&classification::Class>,
     range: Option<&classification::Range<'_>>,
     head: &str,
+    landing: Landing,
 ) -> Option<TaggedViolation> {
-    let (Some(body), Some(task_id)) = (body, class.and_then(classification::Class::review_task))
-    else {
-        return None;
+    let body = body?;
+    let tag = |violation| TaggedViolation {
+        sha: None,
+        violation,
     };
+    if class.is_some_and(classification::Class::is_cancellation) {
+        return cancellation_review(git, body, head, landing).map(tag);
+    }
+    let task_id = class.and_then(classification::Class::review_task)?;
     // A redaction records its own review and preserves the original
     // completion's provenance; it does not claim a new completion.
     let redaction = range.is_some_and(|range| {
@@ -1092,11 +1162,37 @@ fn tracked_review(
     if redaction {
         None
     } else {
-        review_row_check(root, git, body, head, task_id).map(|violation| TaggedViolation {
-            sha: None,
-            violation,
-        })
+        review_row_check(root, git, body, head, task_id, landing).map(tag)
     }
+}
+
+/// A record-only cancellation (TSK-414) carries no completion record, so
+/// its review is bound by the body (TSK-1001): a pull request known to be
+/// ready needs a Reviews row approving exactly its head commit, so an edit
+/// after the review needs a new one. A draft and a run that cannot tell
+/// owe none yet.
+fn cancellation_review(
+    git: &GitPolicy,
+    body: &str,
+    head: &str,
+    landing: Landing,
+) -> Option<Violation> {
+    if landing.readiness != Readiness::Ready {
+        return None;
+    }
+    let heading = adoption::mapped_sections(git, &["Reviews".into()]).remove(0);
+    if pr_body::review_names_revision(body, &heading, head) {
+        return None;
+    }
+    Some(Violation::always_blocking(
+        codeflow_core::workgraph::acceptance::BINDING_RULE,
+        format!(
+            "this ready cancellation has no {heading} row approving its head {head}; a cancellation carries no acceptance block, so its review binds the exact commit it read"
+        ),
+        &format!(
+            "after the review, add a {heading} row `| <seat> | whole unit at {head} | approved |`, or keep the pull request draft until then; a later commit needs a new review row"
+        ),
+    ))
 }
 
 fn review_row_check(
@@ -1105,6 +1201,7 @@ fn review_row_check(
     body: &str,
     head: &str,
     task_id: &str,
+    landing: Landing,
 ) -> Option<Violation> {
     use codeflow_core::workgraph::record_text::acceptance_blocks;
     let path = format!("project-management/tasks/{task_id}.md");
@@ -1123,6 +1220,13 @@ fn review_row_check(
             ))
         }
     };
+    // TSK-1001: the task's status decides, never whether a block parses.
+    // An unfinished task's acceptance text binds nothing (the completion
+    // binding judges complete tasks only), so it derives no row.
+    let status = task_status(&record, task_id);
+    if status.as_deref() != Some("complete") {
+        return unfinished_ready(git, status.as_deref(), head, task_id, landing);
+    }
     let block = acceptance_blocks(&record)
         .into_iter()
         .filter(|block| !block.is_superseded())
@@ -1163,6 +1267,67 @@ fn review_row_check(
             "{task_id}'s acceptance block binds the reviewed commit {reviewed}, and the {heading} section has no row approving it; the row derived from the block is the record"
         ),
         codeflow_core::remedy::REVIEW_ROW_BINDING.with(&[("sha", &reviewed)]),
+    ))
+}
+
+/// Whether `task_id`'s record at `head` holds an active acceptance block,
+/// from which the Reviews row is derived (TSK-451). A record that cannot be
+/// read holds none, so the section stays required.
+fn has_acceptance_block(root: &Path, head: &str, task_id: &str) -> bool {
+    let path = format!("project-management/tasks/{task_id}.md");
+    codeflow_core::workgraph::acceptance::text_at(root, head, &path)
+        .ok()
+        .flatten()
+        .is_some_and(|record| {
+            // Only a completed task's block is the completion record
+            // (TSK-1001): an unfinished task's block derives no row.
+            task_status(&record, task_id).as_deref() == Some("complete")
+                && codeflow_core::workgraph::record_text::acceptance_blocks(&record)
+                    .into_iter()
+                    .any(|block| !block.is_superseded() && block.parsed.is_ok())
+        })
+}
+
+/// The `status` of `task_id`'s record text, or `None` when the record does
+/// not parse, which no check reads as complete.
+fn task_status(record: &str, task_id: &str) -> Option<String> {
+    codeflow_core::workgraph::lifecycle::RecordView::parse(
+        codeflow_core::workgraph::work_start::RecordKind::Task,
+        &format!("project-management/tasks/{task_id}.md"),
+        record,
+    )
+    .ok()
+    .map(|view| view.status)
+}
+
+/// A pull request known to be ready that changes code for a task that is
+/// not complete (TSK-1001) has no reviewed commit bound to it, so it is
+/// not landable: it is refused at the `git.work_records` level until the
+/// review is recorded in the block (`codeflow task status <id> complete`),
+/// which binds the reviewed commit and every later product change to it.
+/// A draft, a docs-only range and a run that cannot tell (a push, a local
+/// lint) are not refused, so durability pushes and the review of a ready
+/// pull request go on as before; the refusal names the step that clears
+/// it. A task the head records complete without a block is judged by the
+/// completion binding instead.
+fn unfinished_ready(
+    git: &GitPolicy,
+    status: Option<&str>,
+    head: &str,
+    task_id: &str,
+    landing: Landing,
+) -> Option<Violation> {
+    if landing.readiness != Readiness::Ready || !landing.code {
+        return None;
+    }
+    Some(Violation::new(
+        codeflow_core::workgraph::acceptance::BINDING_RULE,
+        git.work_records_level(),
+        format!(
+            "{task_id} is not complete (status {}), so this ready pull request has no reviewed commit bound to its code at {head}; acceptance text in an unfinished record binds nothing; it is not landable yet",
+            status.unwrap_or("unreadable")
+        ),
+        codeflow_core::remedy::UNFINISHED_READY.with(&[("sha", head)]),
     ))
 }
 
@@ -1435,6 +1600,7 @@ fn evaluate_pr_checks(
     class: ChangeClass,
     breaking_commit: bool,
     protected: bool,
+    reviews_derived: bool,
 ) -> Vec<TaggedViolation> {
     let mut findings = Vec::new();
     if !pr_body::has_content(body) && git.pr_sections.is_active() {
@@ -1447,7 +1613,13 @@ fn evaluate_pr_checks(
     }
     findings.extend(evaluate_pr_body(git, body));
     let required = release_required(protected, breaking_commit);
-    findings.extend(evaluate_pr_structure(git, body, class, required));
+    findings.extend(evaluate_pr_structure_with(
+        git,
+        body,
+        class,
+        required,
+        reviews_derived,
+    ));
     findings.extend(pr_body::presentation(git, body, protected));
     findings.extend(pr_body::summary_shape(git, body));
     if required || find_section(body, &pr_body::release_heading(git)) != SectionState::Missing {
@@ -1692,10 +1864,14 @@ fn own_branch_preflight(
     false
 }
 
-/// The visible workgraph, checked once per run for tracked work at the
-/// `git.work_planning` level (TSK-133).
+/// The visible workgraph, checked once per run at the `git.work_planning`
+/// level (TSK-133), on the candidate head (TSK-1001): the checkout when it
+/// is at `head`, else a temporary detached worktree of `head`, so a hosted
+/// check run from the target checkout validates what would land, never
+/// the target. A head that cannot be checked out refuses.
 fn visible_graph_check(
     root: &Path,
+    head: &str,
     level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
@@ -1704,7 +1880,28 @@ fn visible_graph_check(
     // in the output.
     ran.push("work.valid_graph");
     println!("codeflow ci: work.valid_graph: the docs validation of this run");
-    let workgraph = validate_workgraph(root);
+    let refuse = |tagged: &mut Vec<TaggedViolation>, message: String| {
+        tagged.push(TaggedViolation {
+            sha: None,
+            violation: Violation::new(
+                "work.valid_graph",
+                level,
+                message,
+                codeflow_core::remedy::WORKGRAPH_INVALID.remedy(),
+            ),
+        });
+    };
+    let candidate = match Candidate::of(root, head) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            refuse(
+                tagged,
+                format!("cannot check out the head {head} to validate its workgraph: {error}"),
+            );
+            return;
+        }
+    };
+    let workgraph = validate_workgraph(candidate.path(root));
     if !workgraph.is_clean() {
         let findings = workgraph
             .issues
@@ -1712,15 +1909,92 @@ fn visible_graph_check(
             .map(String::as_str)
             .collect::<Vec<_>>()
             .join("; ");
-        tagged.push(TaggedViolation {
-            sha: None,
-            violation: Violation::new(
-                "work.valid_graph",
-                level,
-                format!("visible durable workgraph is invalid: {findings}"),
-                codeflow_core::remedy::WORKGRAPH_INVALID.remedy(),
-            ),
-        });
+        refuse(
+            tagged,
+            format!("visible durable workgraph is invalid: {findings}"),
+        );
+    }
+}
+
+/// The full commit id `revision` names in the repository at `root`, read
+/// strictly: anything but one 40-character hex id is an error.
+fn commit_id(root: &Path, revision: &str) -> Result<String, String> {
+    let out = codeflow_core::workgraph::history::command()
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+        .arg(format!("{revision}^{{commit}}"))
+        .output()
+        .map_err(|error| error.to_string())?;
+    let id = out
+        .stdout
+        .strip_suffix(b"\n")
+        .unwrap_or(&out.stdout)
+        .to_vec();
+    if out.status.success() && id.len() == 40 && id.iter().all(u8::is_ascii_hexdigit) {
+        String::from_utf8(id).map_err(|_| format!("{revision} is not a commit here"))
+    } else {
+        Err(format!("{revision} is not a commit here"))
+    }
+}
+
+/// The tree `codeflow ci` validates: the checkout when it is at the head,
+/// else a temporary detached worktree of the head, removed when dropped.
+struct Candidate {
+    worktree: Option<(PathBuf, tempfile::TempDir)>,
+    root: PathBuf,
+}
+
+impl Candidate {
+    fn of(root: &Path, head: &str) -> Result<Self, String> {
+        let wanted = commit_id(root, head)?;
+        // A checkout whose HEAD cannot be read is validated through a
+        // fresh worktree of the head, the strict side.
+        if commit_id(root, "HEAD").as_deref() == Ok(wanted.as_str()) {
+            return Ok(Self {
+                worktree: None,
+                root: root.to_path_buf(),
+            });
+        }
+        let holder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let path = holder.path().join("candidate");
+        let out = codeflow_core::workgraph::history::command()
+            .arg("-C")
+            .arg(root)
+            .args(["worktree", "add", "--detach", "--quiet"])
+            .arg(&path)
+            .arg(&wanted)
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !out.status.success() {
+            return Err(format!(
+                "`git worktree add` of {wanted} exited with {}",
+                out.status
+            ));
+        }
+        Ok(Self {
+            worktree: Some((path, holder)),
+            root: root.to_path_buf(),
+        })
+    }
+
+    fn path<'a>(&'a self, root: &'a Path) -> &'a Path {
+        self.worktree
+            .as_ref()
+            .map_or(root, |(path, _)| path.as_path())
+    }
+}
+
+impl Drop for Candidate {
+    fn drop(&mut self) {
+        if let Some((path, _)) = &self.worktree {
+            let _ = codeflow_core::workgraph::history::command()
+                .arg("-C")
+                .arg(&self.root)
+                .args(["worktree", "remove", "--force"])
+                .arg(path)
+                .output();
+        }
     }
 }
 
@@ -2263,11 +2537,26 @@ enum SectionState {
 /// project still requires them. Template remnants (leftover placeholders
 /// from the shipped PR template) draw a WARN, never a block, whatever the
 /// level says.
+#[cfg(test)]
 fn evaluate_pr_structure(
     git: &GitPolicy,
     body: &str,
     class: ChangeClass,
     release_required: bool,
+) -> Vec<Violation> {
+    evaluate_pr_structure_with(git, body, class, release_required, false)
+}
+
+/// The PR-body structure check above, where `reviews_derived` says a completed
+/// task's acceptance block supplies the Reviews row (TSK-451): the Reviews
+/// section, under its mapped heading, may then be left out or left empty,
+/// whatever level `git.pr_sections` sets (TSK-1001).
+fn evaluate_pr_structure_with(
+    git: &GitPolicy,
+    body: &str,
+    class: ChangeClass,
+    release_required: bool,
+    reviews_derived: bool,
 ) -> Vec<Violation> {
     if !git.pr_sections.is_active() {
         return Vec::new();
@@ -2305,8 +2594,16 @@ fn evaluate_pr_structure(
         }
     }
 
+    let reviews_heading = adoption::mapped_sections(git, &["Reviews".into()]).remove(0);
     for (section, why) in required {
-        let (found, detail) = match find_section(body, section) {
+        let state = find_section(body, section);
+        if reviews_derived
+            && section.eq_ignore_ascii_case(&reviews_heading)
+            && matches!(state, SectionState::Missing | SectionState::Empty)
+        {
+            continue;
+        }
+        let (found, detail) = match state {
             SectionState::Present => continue,
             SectionState::Duplicate => (
                 format!("PR body has duplicate section '## {section}'{why}"),
@@ -3441,11 +3738,32 @@ mod tests {
         let body = "## Reviews\n| peer | 0123456 | approved |\n";
         let git = super::GitPolicy::default();
         let dir = r24_range(&[], &[("README.md", "readme\n")]);
-        assert!(super::review_row_check(dir.path(), &git, body, "HEAD", "TSK-001").is_none());
+        assert!(super::review_row_check(
+            dir.path(),
+            &git,
+            body,
+            "HEAD",
+            "TSK-001",
+            super::Landing {
+                readiness: super::Readiness::Unknown,
+                code: true
+            }
+        )
+        .is_none());
         let dir = r24_range(&[], &[(RECORD, "---\nid: TSK-001\n---\n")]);
         r24_remove(dir.path(), &format!("HEAD:{RECORD}"));
-        let violation = super::review_row_check(dir.path(), &git, body, "HEAD", "TSK-001")
-            .expect("an unreadable record refuses");
+        let violation = super::review_row_check(
+            dir.path(),
+            &git,
+            body,
+            "HEAD",
+            "TSK-001",
+            super::Landing {
+                readiness: super::Readiness::Unknown,
+                code: true,
+            },
+        )
+        .expect("an unreadable record refuses");
         assert_eq!(
             violation.rule,
             codeflow_core::workgraph::acceptance::BINDING_RULE
@@ -4533,10 +4851,17 @@ mod tests {
     fn a_light_range_reads_an_absent_release_impact_as_none() {
         let docs = vec!["docs/guide.md".to_string()];
         let release = |body: &str, files: &[String], breaking: bool| {
-            evaluate_pr_checks(&shipped_git(), body, class_of(Some(files)), breaking, false)
-                .into_iter()
-                .filter(|t| t.violation.rule == "git.pr_release_impact")
-                .count()
+            evaluate_pr_checks(
+                &shipped_git(),
+                body,
+                class_of(Some(files)),
+                breaking,
+                false,
+                false,
+            )
+            .into_iter()
+            .filter(|t| t.violation.rule == "git.pr_release_impact")
+            .count()
         };
         assert_eq!(release(LIGHT_BODY, &docs, false), 0);
         // Code on an unprotected line also has optional release impact.

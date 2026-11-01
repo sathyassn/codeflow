@@ -268,7 +268,7 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
     let workflow = read(".github/workflows/codeflow-ci.yml");
     let trigger = workflow.split("permissions:").next().unwrap();
     assert!(trigger.contains(
-        "  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review]\n  push:"
+        "  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review, edited]\n  push:"
     ));
     assert!(trigger.contains("integration/**"));
     // TSK-449: a draft of any base runs no gate job.

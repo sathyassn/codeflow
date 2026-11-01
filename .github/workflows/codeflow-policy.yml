@@ -67,6 +67,20 @@ jobs:
       pull-requests: read
       actions: read
     steps:
+      # Only a protected base supplies the code this job builds and runs
+      # (TSK-1001): before any checkout or build, a pull request into any
+      # other branch fails here, since a branch its author controls would
+      # run its own code as the judge.
+      - name: The base branch is a protected one
+        if: github.event_name == 'pull_request_target'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          case "$BASE_REF" in
+            main|master|integration/*) echo "base ${BASE_REF} is protected" ;;
+            *) echo "::error::the base ${BASE_REF} is not main, master or integration/**; its code is not trusted to judge this pull request"; exit 1 ;;
+          esac
+
       # The target, never the pull request head: for a pull request its base
       # commit, otherwise the event's own commit. The binary, the pin and the
       # policy all come from this checkout.
@@ -82,7 +96,11 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
 
+      # A pull_request_target run restores the cache but never saves one: a
+      # cache it wrote could be restored by a later trusted run (TSK-1001).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request_target' }}
 
       - name: Build codeflow from the target's source
         run: |
@@ -124,6 +142,15 @@ jobs:
             jq -r '.body // ""' "${RUNNER_TEMP}/pull.json"
             echo "${delimiter}"
           } >> "$GITHUB_OUTPUT"
+          # The digest of the exact body judged here, from the same read;
+          # merge admission binds it and refuses when the body moved since.
+          echo "sha256=$(python3 -I -c 'import hashlib, json, sys; print(hashlib.sha256((json.load(open(sys.argv[1])).get("body") or "").encode("utf-8")).hexdigest())' "${RUNNER_TEMP}/pull.json")" >> "$GITHUB_OUTPUT"
+          # The draft state from the same read, so the judgment and the
+          # admission below use one snapshot, never the event's older one
+          # (a rerun of a draft event after the pull request was made ready).
+          # A draft state that is not true or false fails this job.
+          draft=$(python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])).get("draft"); sys.exit(2) if not isinstance(d, bool) else print(str(d).lower())' "${RUNNER_TEMP}/pull.json")
+          echo "draft=${draft}" >> "$GITHUB_OUTPUT"
 
       # The PR body reaches `codeflow ci` through `env:`, never interpolated
       # into the script, so an untrusted body cannot inject shell.
@@ -134,6 +161,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
+          CODEFLOW_PR_IS_DRAFT: ${{ steps.body.outputs.draft }}
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
         run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
 
@@ -158,7 +186,24 @@ jobs:
             codeflow ids check
           fi
 
-      # Merge admission (TSK-449 AC-6). A draft's codeflow-ci verdicts are
+      # The verifier's interpreter is pinned, so the hash-pinned wheels it
+      # installs are the ones reviewed (TSK-1001).
+      - name: Pin the verifier's Python
+        id: python
+        if: github.event_name == 'pull_request_target'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12.16'
+          update-environment: false
+
+      # Merge admission (TSK-449 AC-6, TSK-1001). It binds trusted identity
+      # only: the head, base, body and draft state this job judged, which the live pull
+      # request must match before and after admission; the codeflow-ci
+      # workflow and this verdict script hashed at the head against that
+      # base (a pull request that edits either picks its own jobs and is
+      # refused); GitHub's association of the run with exactly this pull
+      # request, head and base, beside the title the trusted workflow
+      # writes; and no other pull request sharing the head. A draft's codeflow-ci verdicts are
       # skipped, which a required-check rule reads as passing, so this
       # required check passes only when the newest codeflow-ci pull_request
       # run at exactly this head completed with success and both verdicts
@@ -175,11 +220,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BODY_SHA256: ${{ steps.body.outputs.sha256 }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          DRAFT: ${{ github.event.pull_request.draft }}
+          PYTHON: ${{ steps.python.outputs.python-path }}
+          DRAFT: ${{ steps.body.outputs.draft }}
         run: |
+          set -euo pipefail
           wait=2100
           if [ "$DRAFT" = true ]; then wait=0; fi
-          python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
-            --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows \
-            --wait "$wait"
+          # The provenance verifier: PyJWT with cryptography, every
+          # distribution pinned by SHA-256 in the target's requirements file.
+          # Wheels only: no source build runs code during the install.
+          "$PYTHON" -I -m venv "${RUNNER_TEMP}/admission"
+          "${RUNNER_TEMP}/admission/bin/pip" install --quiet --disable-pip-version-check --require-hashes --no-deps \
+            --only-binary=:all: -r scripts/requirements-admission.txt
+          "${RUNNER_TEMP}/admission/bin/python" -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
+            --workflow .github/workflows/codeflow-ci.yml \
+            --trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py \
+            --trusted-file scripts/requirements-admission.txt \
+            --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --body-sha256 "$BODY_SHA256" --draft "$DRAFT" \
+            --require "codeflow gates" --require windows --wait "$wait"

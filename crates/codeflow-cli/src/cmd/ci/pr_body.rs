@@ -944,26 +944,62 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
     out
 }
 
-/// Whether the visible body gives a reason for removing `criterion`
-/// (TSK-451): a line naming it as a whole word and a form of "remove", with
-/// at least two more words of reason.
-pub(super) fn gives_removal_reason(body: &str, criterion: &str) -> bool {
+/// Whether the visible body gives a reason for `task` removing `criterion`
+/// (TSK-451, TSK-1001): a line, list marker allowed, of the form
+/// `AC-n removed: <reason>`, optionally led by the task id, which must then
+/// be `task`. The reason needs at least three words that are neither a
+/// criterion or work id nor a form of "remove", so ids never stand in for
+/// a reason and a line that names the criterion without declaring its
+/// removal ("Do not remove AC-1") never counts.
+pub(super) fn gives_removal_reason(body: &str, task: &str, criterion: &str) -> bool {
     visible_text(body, false).split('\n').any(|line| {
-        let words: Vec<String> = line
-            .split(|c: char| !(c.is_alphanumeric() || c == '-'))
-            .map(|word| word.trim_matches('-').to_ascii_lowercase())
+        let line = line
+            .trim_start_matches([' ', '\t'])
+            .trim_start_matches(['-', '*', '+'])
+            .trim_start_matches([' ', '\t']);
+        let Some((declared, reason)) = line.split_once(':') else {
+            return false;
+        };
+        let words: Vec<&str> = declared
+            .split([' ', '\t'])
             .filter(|word| !word.is_empty())
             .collect();
-        let names = words
-            .iter()
-            .any(|word| word.eq_ignore_ascii_case(criterion));
-        let removes = words.iter().any(|word| word.starts_with("remov"));
-        let reason = words
-            .iter()
-            .filter(|word| !word.eq_ignore_ascii_case(criterion) && !word.starts_with("remov"))
+        let names = match words.as_slice() {
+            [id, removed] => {
+                id.eq_ignore_ascii_case(criterion) && removed.eq_ignore_ascii_case("removed")
+            }
+            [owner, id, removed] => {
+                owner.eq_ignore_ascii_case(task)
+                    && id.eq_ignore_ascii_case(criterion)
+                    && removed.eq_ignore_ascii_case("removed")
+            }
+            _ => false,
+        };
+        let substantive = reason
+            .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+            .map(|word| word.trim_matches('-'))
             .filter(|word| word.chars().any(char::is_alphabetic))
+            .filter(|word| {
+                let lower = word.to_ascii_lowercase();
+                !lower.starts_with("remov")
+                    && !codeflow_core::workgraph::record_text::is_criterion_id(
+                        &word.to_ascii_uppercase(),
+                    )
+                    && !is_work_id(word)
+            })
             .count();
-        names && removes && reason >= 2
+        names && substantive >= 3
+    })
+}
+
+/// Whether `word` is a work item id (`TSK-12`, `EPC-3`, `SPC-7`).
+fn is_work_id(word: &str) -> bool {
+    word.split_once('-').is_some_and(|(prefix, number)| {
+        ["TSK", "EPC", "SPC"]
+            .iter()
+            .any(|kind| prefix.eq_ignore_ascii_case(kind))
+            && !number.is_empty()
+            && number.bytes().all(|byte| byte.is_ascii_digit())
     })
 }
 
@@ -1612,6 +1648,38 @@ fn substantive(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::gives_removal_reason;
+
+    /// TSK-1001 AC-7: a removal needs `AC-n removed: <reason>` with a real
+    /// reason; ids, negations and another task's line never count.
+    #[test]
+    fn a_removal_reason_is_a_declared_line_with_real_words() {
+        let accepted = [
+            "- AC-2 removed: the remaining criteria cover the journey",
+            "TSK-7 AC-2 removed: AC-3 now covers the same failure path",
+            "* ac-2 REMOVED: merged into the parser criterion",
+        ];
+        for body in accepted {
+            assert!(gives_removal_reason(body, "TSK-7", "AC-2"), "{body}");
+        }
+        let refused = [
+            "AC-1 AC-2 AC-3 removed",
+            "AC-2 removed",
+            "Do not remove AC-2",
+            "Do not remove AC-2: it still matters a lot",
+            "AC-2 removed: AC-1 AC-3 AC-4 removed",
+            "AC-2 removed: TSK-1 TSK-2 EPC-3",
+            "AC-2 removed: TBD",
+            "AC-2 removed: see below",
+            "TSK-8 AC-2 removed: another task removes its own criterion here",
+            "AC-22 removed: the remaining criteria cover the journey",
+            "<!-- AC-2 removed: the remaining criteria cover the journey -->",
+        ];
+        for body in refused {
+            assert!(!gives_removal_reason(body, "TSK-7", "AC-2"), "{body}");
+        }
+    }
+
     use super::*;
 
     /// A body whose Summary is `summary`, followed by a Changes section.

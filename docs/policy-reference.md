@@ -850,6 +850,37 @@ exception. Files must be regular. When carrying documentation, indexes or
 names the excluded path and the admitted set; carry an excluded file in a
 task PR.
 
+## Ready pull requests and planning ranges
+
+`codeflow ci` reads whether a pull request is a draft from the host's event,
+or from `CODEFLOW_PR_IS_DRAFT` (`true` or `false`) where the host's event
+does not say. `CODEFLOW_PR_DRAFT` is not that variable: it names the saved
+PR body file the release preflight reads. A push and a local lint cannot
+tell, and nothing below refuses them (TSK-1001).
+
+Once a pull request is known to be ready:
+
+- A code range for a task with no acceptance block is refused at the
+  `git.work_records` level as not landable, until its review is recorded
+  with `codeflow task status <id> complete`. Review of the ready pull
+  request goes on as before.
+- A record-only cancellation, which carries no acceptance block, needs a
+  Reviews row approving its exact head commit.
+
+At every level of `git.pr_sections`, a completed task's acceptance block
+supplies the Reviews row, so the section may be left out or left empty.
+
+A criteria correction of a completed standalone task (ADR-0080) may change
+nothing else in that record or in an epic. A removed criterion needs a body
+line `AC-n removed: <reason>`, optionally led by the task id, whose reason
+has at least three words that are neither ids nor forms of remove.
+
+A planning or cancellation range is held to the planning paths in every
+commit, and in what a merge commit itself introduces, as well as in its
+final diff. A cancelled record must pass the task schema. A planning pull
+request runs the one docs validation on the candidate head, through a
+temporary worktree when the checkout is at another commit.
+
 ## Destination lookup failures
 
 `codeflow ci` and pre-push refuse under `ci.destination_unavailable` when

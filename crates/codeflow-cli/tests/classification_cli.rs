@@ -17,6 +17,8 @@ fn codeflow() -> Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("GITHUB_BASE_REF")
@@ -1389,7 +1391,7 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
 /// `codeflow ci` as a pull request check whose draft state is `draft`.
 fn ci_draft(root: &Path, branch: &str, pr_body: &str, draft: &str) -> (i32, String) {
     let out = codeflow()
-        .env("CODEFLOW_PR_DRAFT", draft)
+        .env("CODEFLOW_PR_IS_DRAFT", draft)
         .env_remove("GITHUB_EVENT_PATH")
         .args([
             "ci",
@@ -1415,6 +1417,8 @@ fn ci_draft(root: &Path, branch: &str, pr_body: &str, draft: &str) -> (i32, Stri
     )
 }
 
+const UNFINISHED: &str = "TSK-001 is not complete (status";
+
 /// TSK-451 AC-8: once ready, a code pull request's Testing section cites
 /// `codeflow test --mode quick` for the head tree, reported at the Testing
 /// check's level (warn); a draft owes none, and nor does a project without
@@ -1431,7 +1435,6 @@ fn a_ready_code_pull_request_cites_the_quick_run_and_a_draft_owes_none() {
     );
     let plain = body("Task: TSK-001");
     let unconfigured = ci_draft(root, "feat/tracked", &plain, "false");
-    assert_passes(&unconfigured, "no codeflow test configured");
     assert!(!unconfigured.1.contains(MISSING), "{}", unconfigured.1);
 
     branch_with(
@@ -1442,10 +1445,12 @@ fn a_ready_code_pull_request_cites_the_quick_run_and_a_draft_owes_none() {
             (".codeflow/test-config.json", "{}\n"),
         ],
     );
+    // TSK-1001 AC-5: TSK-001 has no acceptance block, so a ready code PR
+    // is also refused as not landable; the citation stays a warning.
     let ready = ci_draft(root, "feat/tracked", &plain, "false");
-    assert_passes(&ready, "a ready PR without the citation warns");
     assert!(ready.1.contains(MISSING), "{}", ready.1);
     assert!(ready.1.contains("warning"), "{}", ready.1);
+    assert!(ready.1.contains(UNFINISHED), "{}", ready.1);
 
     let draft = ci_draft(root, "feat/tracked", &plain, "true");
     assert_passes(&draft, "a draft");
@@ -1456,7 +1461,6 @@ fn a_ready_code_pull_request_cites_the_quick_run_and_a_draft_owes_none() {
         "- focused test\n- At HEAD, `codeflow test --mode quick`: 12 passed\n",
     );
     let ready_cited = ci_draft(root, "feat/tracked", &cited, "false");
-    assert_passes(&ready_cited, "a ready PR with the citation");
     assert!(!ready_cited.1.contains(MISSING), "{}", ready_cited.1);
 }
 

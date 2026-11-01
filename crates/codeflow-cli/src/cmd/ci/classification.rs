@@ -174,6 +174,13 @@ impl Class {
     pub(super) fn is_secret_scan_exemption(&self) -> bool {
         matches!(self, Self::SecretScanExemption(_))
     }
+
+    /// A record-only standalone cancellation (TSK-414): the one planning
+    /// class that names no epic, since a planning amendment names at least
+    /// one.
+    pub(super) fn is_cancellation(&self) -> bool {
+        matches!(self, Self::PlanningOnly { epics } if epics.is_empty())
+    }
 }
 
 /// A release head (SPC-013 R-120) and the one task the release checks

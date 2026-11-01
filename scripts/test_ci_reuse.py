@@ -19,6 +19,16 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+# The provenance verifier is PyJWT with cryptography, pinned by hash
+# (TSK-1001); run under it, installing it first when it is missing.
+_ENV = importlib.util.spec_from_file_location("admission_env", ROOT / "scripts" / "admission_env.py")
+_admission_env = importlib.util.module_from_spec(_ENV)
+_ENV.loader.exec_module(_admission_env)
+_admission_env.ensure()
+
+import jwt  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
+
 SPEC = importlib.util.spec_from_file_location("ci_reuse", ROOT / "scripts" / "ci-reuse.py")
 reuse = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reuse)
@@ -264,97 +274,466 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.main(broken), (0, ""))
 
 
+BASE = "d" * 40
+BASE_REF = "integration/EPC-022-x"
+TRUSTED = [WORKFLOW, "scripts/ci-reuse.py"]
+TITLE = f"codeflow-ci pull request #95 into {BASE_REF} at {BASE}"
+
+
+ASSOCIATION = {"number": 95, "head": {"sha": HEAD}, "base": {"ref": BASE_REF, "sha": BASE}}
+BODY = "Task: TSK-1\n\n## Summary\n"
+BODY_SHA = reuse.hashlib.sha256(BODY.encode()).hexdigest()
+
+
+def admission_run(**changes):
+    changes.setdefault("display_title", TITLE)
+    changes.setdefault("run_started_at", STARTED)
+    changes.setdefault("updated_at", ENDED)
+    changes.setdefault("pull_requests", [dict(ASSOCIATION)])
+    return run(**changes)
+
+
+MERGE = "e" * 40
+REPO = "o/r"
+
+
+class FilesGit:
+    """The trusted files at each commit: the base's and, unless changed,
+    the same bytes at the head and at the merge commit the run executed,
+    whose parents are the base and the head."""
+
+    def __init__(self, head_files=None, missing=(), merge_files=None, merge_parents=None):
+        self.files = {BASE: {path: f"trusted {path}".encode() for path in TRUSTED}}
+        self.files[HEAD] = dict(self.files[BASE], **(head_files or {}))
+        self.files[MERGE] = dict(self.files[HEAD], **(merge_files or {}))
+        self.missing = set(missing)
+        self.merge_parents = merge_parents if merge_parents is not None else [BASE, HEAD]
+
+    def show(self, commit, path):
+        if (commit, path) in self.missing or path not in self.files.get(commit, {}):
+            raise reuse.Skip(f"no {path} at {commit}")
+        return self.files[commit][path]
+
+    def parents(self, commit):
+        if commit != MERGE:
+            raise reuse.Skip(f"{commit} is not here")
+        return list(self.merge_parents)
+
+
+def _key(kid="k1"):
+    """A fresh RSA key from cryptography, and its public JWK from PyJWT:
+    signing and the published key come from the libraries, independent of
+    the verifier under test."""
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private.public_key()))
+    public.update({"kid": kid, "alg": "RS256", "use": "sig"})
+    return private, public
+
+
+KEY, JWK = _key()
+STARTED, ENDED = "2026-10-25T10:00:00Z", "2026-10-25T10:40:00Z"
+ISSUED = int(reuse.epoch("2026-10-25T10:01:00Z"))
+
+
+def token(claims=None, key=KEY, kid="k1", algorithm="RS256", drop=()):
+    """A JWT signed by PyJWT with `key`, carrying the claims a trusted run of
+    #95 at the head into the base carries, changed by `claims`, less `drop`."""
+    payload = {"iss": reuse.OIDC_ISSUER, "aud": reuse.PROVENANCE_AUDIENCE, "repository": REPO, "run_id": "77",
+               "run_attempt": "1", "event_name": "pull_request", "ref": "refs/pull/95/merge",
+               "base_ref": BASE_REF, "workflow_ref": f"{REPO}/{WORKFLOW}@refs/pull/95/merge", "sha": MERGE,
+               "workflow_sha": MERGE, "iat": ISSUED, "nbf": ISSUED - 5, "exp": ISSUED + 300}
+    payload.update(claims or {})
+    for name in drop:
+        payload.pop(name)
+    return jwt.encode(payload, key, algorithm=algorithm, headers={"kid": kid})
+
+
+class AdmissionApi(FakeApi):
+    repo = REPO
+
+    def __init__(self, live=None, later=None, heads=None, tokens=None, **kwargs):
+        # `tokens` maps an artifact name to its token; by default each run
+        # carries a valid one for its own id and attempt 1.
+        self.tokens = tokens
+        kwargs.setdefault("runs", [admission_run()])
+        kwargs.setdefault("pulls", heads if heads is not None else [{"number": 95, "head": {"sha": HEAD}}])
+        super().__init__(**kwargs)
+        self.live = {"state": "open", "draft": False, "head": {"sha": HEAD}, "body": BODY,
+                     "base": {"ref": BASE_REF, "sha": BASE, "repo": {"id": 1}}}
+        self.live.update(live or {})
+        self.later = later
+        self.reads = 0
+
+    def provenance(self, run, name, member):
+        if self.tokens is None:
+            return token({"run_id": str(run)})
+        if name not in self.tokens:
+            raise reuse.Skip(f"run {run} has 0 live artifacts named {name}")
+        return self.tokens[name]
+
+    def oidc_keys(self):
+        return [JWK]
+
+    def pull(self, number):
+        # `later`, when given, is what every read after the first returns:
+        # the pull request moving while admission runs.
+        self.reads += 1
+        if self.later is not None and self.reads > 1:
+            moved = dict(self.live)
+            moved.update(self.later)
+            return moved
+        return self.live
+
+
 class AdmissionTests(unittest.TestCase):
-    """TSK-449 AC-6: `commit standards` admits a pull request only on a
-    completed successful ready run at the exact head; each other case
-    refuses, and only a pending or absent run is worth waiting for."""
+    """TSK-449 AC-6 and TSK-1001 AC-1, AC-2: `commit standards` admits a
+    pull request only on a completed successful ready run at its live head,
+    titled by the trusted workflow for its live base, with the workflow and
+    verdict script unchanged from the base; each other case refuses, and
+    only a pending or absent run is worth waiting for."""
 
-    def admitted(self, api):
-        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95)
+    def admitted(self, api, git=None, base_ref=BASE_REF, base_sha=BASE, body=BODY_SHA, draft=False):
+        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95, git or FilesGit(), TRUSTED, base_ref, base_sha, body,
+                           draft)
 
-    def refused(self, api, pending=False):
+    def refused(self, api, pending=False, git=None, **expected):
         with self.assertRaises(reuse.Skip) as caught:
-            self.admitted(api)
+            self.admitted(api, git, **expected)
         self.assertEqual(isinstance(caught.exception, reuse.Pending), pending, str(caught.exception))
         return str(caught.exception)
 
     def test_a_successful_ready_run_at_the_exact_head_admits(self):
-        self.assertEqual(self.admitted(FakeApi()), 77)
+        self.assertEqual(self.admitted(AdmissionApi()), 77)
+
+    def test_a_pull_request_that_changes_the_workflow_or_verdict_script_refuses(self):
+        # AC-1: two successful no-op jobs named like the verdicts, from a
+        # workflow the pull request rewrote, never admit.
+        noop = [job("codeflow gates"), job("windows")]
+        for path in TRUSTED:
+            with self.subTest(path=path):
+                reason = self.refused(AdmissionApi(jobs={77: noop}), git=FilesGit({path: b"jobs: no-op"}))
+                self.assertIn(f"the pull request changes {path}", reason)
+                self.assertIn("this pull request needs a human merge, by the operator, never by an agent", reason)
+        reason = self.refused(AdmissionApi(), git=FilesGit(missing={(HEAD, WORKFLOW)}))
+        self.assertIn(f"cannot read {WORKFLOW}", reason)
+        with self.assertRaises(reuse.Skip):
+            reuse.admit(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, FilesGit(), [], BASE_REF, BASE, BODY_SHA, False)
+        with self.assertRaises(reuse.Skip):
+            reuse.admit(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, None, TRUSTED, BASE_REF, BASE, BODY_SHA, False)
+
+    def test_a_run_for_another_base_or_a_retargeted_pull_request_refuses(self):
+        # AC-2: the run's trusted title and association must name the base
+        # the caller judged; a run made for another base waits for a fresh one.
+        other_base = admission_run(display_title=f"codeflow-ci pull request #95 into {BASE_REF} at {MAIN}")
+        self.assertIn("tested the base", self.refused(AdmissionApi(runs=[other_base]), pending=True))
+        # A retarget: the live base no longer matches the judged one.
+        retargeted = AdmissionApi(live={"base": {"ref": "main", "sha": BASE, "repo": {"id": 1}}})
+        self.assertIn("does not match the snapshot", self.refused(retargeted))
+        # The caller judged another base than the live one.
+        self.assertIn("base_sha", self.refused(AdmissionApi(), base_sha=MAIN))
+        self.assertIn("no expected base", self.refused(AdmissionApi(), base_ref=""))
+
+    def test_a_companion_pull_request_cannot_lend_its_run(self):
+        # Review finding 2: a companion pull request with the same head into
+        # a base its author controls can run another workflow and title it
+        # for this pull request. GitHub's own association names the
+        # companion, so the run never admits.
+        spoof = admission_run(pull_requests=[{"number": 96, "head": {"sha": HEAD},
+                                              "base": {"ref": "attacker", "sha": MAIN}}])
+        self.assertIn("tested the base", self.refused(AdmissionApi(runs=[spoof]), pending=True))
+        both = admission_run(pull_requests=[dict(ASSOCIATION), {"number": 96, "head": {"sha": HEAD},
+                                                                "base": {"ref": "attacker", "sha": MAIN}}])
+        self.refused(AdmissionApi(runs=[both]), pending=True)
+        self.assertIn("associated with 2 pull requests", reuse.association_problem(both, 95, HEAD, BASE_REF, BASE))
+        # A companion that shares the head refuses even when its run is
+        # gone from the association, open or closed.
+        companion = [{"number": 95, "head": {"sha": HEAD}}, {"number": 96, "head": {"sha": HEAD}}]
+        self.assertIn("#96 also have head", self.refused(AdmissionApi(heads=companion)))
+        # A later pull request that only contains the head is no companion.
+        stacked = [{"number": 95, "head": {"sha": HEAD}}, {"number": 97, "head": {"sha": MAIN}}]
+        self.assertEqual(self.admitted(AdmissionApi(heads=stacked)), 77)
+
+    def test_a_draft_judgment_never_joins_a_ready_pull_requests_gates(self):
+        # Review 2 finding 1: a rerun of an old draft event judged the pull
+        # request as a draft; it is ready now and its ready-event gates are
+        # green. The judged readiness must match the live one, and a draft
+        # judgment never admits.
+        self.assertIn("draft", self.refused(AdmissionApi(), draft=True))
+        self.assertIn("never admitted", self.refused(AdmissionApi(live={"draft": True}), draft=True))
+        with self.assertRaises(reuse.Skip):
+            reuse.admit(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, FilesGit(), TRUSTED, BASE_REF, BASE,
+                        BODY_SHA, None)
+
+    def test_only_a_run_with_signed_trusted_provenance_admits(self):
+        # Review 2 finding 2: the run's GitHub-signed OIDC token must name
+        # this run and attempt, a pull_request event on this pull request's
+        # merge ref and base, and a merge commit of the base and the head
+        # whose workflow equals the base's.
+        name = "codeflow-provenance-1"
+        for claims, needle in (({"ref": "refs/pull/96/merge",
+                                 "workflow_ref": f"{REPO}/{WORKFLOW}@refs/pull/96/merge"}, "ref="),
+                               ({"run_id": "78"}, "run_id="),
+                               ({"run_attempt": "2"}, "run_attempt="),
+                               ({"base_ref": "attacker"}, "base_ref="),
+                               ({"event_name": "pull_request_target"}, "event_name="),
+                               ({"aud": "sts.amazonaws.com"}, "InvalidAudience"),
+                               ({"iss": "https://example.invalid"}, "InvalidIssuer"),
+                               ({"repository": "fork/r"}, "repository="),
+                               ({"workflow_sha": BASE}, "names no merge commit")):
+            with self.subTest(claims=claims):
+                self.assertIn(needle, self.refused(AdmissionApi(tokens={name: token(claims)})))
+        forged, _ = _key()
+        self.assertIn("does not verify", self.refused(AdmissionApi(tokens={name: token(key=forged)})))
+        self.assertIn("0 GitHub OIDC keys match", self.refused(AdmissionApi(tokens={name: token(kid="k2")})))
+        self.assertIn("no readable signed provenance", self.refused(AdmissionApi(tokens={})))
+        self.assertIn("not a JWT", self.refused(AdmissionApi(tokens={name: "nonsense"})))
+        # The merge commit the run executed held another workflow, or was
+        # the merge of another base: refused, though the head equals the base.
+        self.assertIn("did not run the trusted workflow",
+                      self.refused(AdmissionApi(), git=FilesGit(merge_files={WORKFLOW: b"jobs: no-op"})))
+        self.assertIn("not of the base", self.refused(AdmissionApi(), git=FilesGit(merge_parents=[MAIN, HEAD])))
+        self.assertEqual(self.admitted(AdmissionApi(tokens={name: token()})), 77)
+
+    def test_the_token_is_verified_by_the_library_under_an_archival_time_policy(self):
+        # Review 3 finding 4: PyJWT with cryptography verifies the token.
+        # It is archival evidence: an expired token still admits, but iat,
+        # nbf and exp must be present, finite numbers with nbf <= iat <= exp,
+        # and iat inside the run's own window.
+        name = "codeflow-provenance-1"
+        def refuse(value, needle):
+            self.assertIn(needle, self.refused(AdmissionApi(tokens={name: value})))
+        expired = token({"iat": ISSUED, "nbf": ISSUED - 5, "exp": ISSUED + 1})
+        self.assertEqual(self.admitted(AdmissionApi(tokens={name: expired})), 77)
+        for missing in ("iat", "nbf", "exp"):
+            with self.subTest(missing=missing):
+                refuse(token(drop=(missing,)), "does not verify")
+        for field in ("iat", "nbf", "exp"):
+            with self.subTest(field=field):
+                refuse(token({field: "soon"}), "")
+        # Review 4: each time is a finite number, and the token was issued
+        # inside its own validity (nbf <= iat <= exp).
+        for field in ("iat", "nbf", "exp"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(field=field, value=value):
+                    refuse(token({field: value}), "not a finite number")
+        refuse(token({"nbf": ISSUED + 600, "exp": ISSUED + 300}), "out of order")
+        refuse(token({"nbf": ISSUED + 5, "exp": ISSUED + 300}), "out of order")
+        refuse(token({"nbf": ISSUED - 600, "exp": ISSUED - 300}), "out of order")
+        refuse(token({"iat": ISSUED - 7200, "nbf": ISSUED - 7205, "exp": ISSUED - 6900}), "outside run 77's window")
+        refuse(token({"iat": ISSUED + 7200, "nbf": ISSUED + 7200, "exp": ISSUED + 7500}), "outside run 77's window")
+        api = AdmissionApi(runs=[admission_run(run_started_at=None)])
+        self.assertIn("no readable start and end times", self.refused(api))
+        # Algorithm confusion: an HS256 token keyed with the public JWK text.
+        import hmac
+        def part(value):
+            return jwt.utils.base64url_encode(json.dumps(value).encode()).decode()
+        signing = f"{part({'alg': 'HS256', 'kid': 'k1'})}.{part({'iss': reuse.OIDC_ISSUER})}"
+        mac = hmac.new(json.dumps(JWK).encode(), signing.encode(), "sha256").digest()
+        refuse(f"{signing}.{jwt.utils.base64url_encode(mac).decode()}", "not RS256")
+        unsigned = jwt.encode({"iss": reuse.OIDC_ISSUER}, None, algorithm="none")
+        refuse(unsigned, "not RS256")
+        # Two published keys with the token's key id: refused, never guessed.
+        duplicate = AdmissionApi(tokens={name: token()})
+        duplicate.oidc_keys = lambda: [JWK, JWK]
+        self.assertIn("2 GitHub OIDC keys match", self.refused(duplicate))
+
+    def test_an_overlong_signature_is_refused(self):
+        # Review 3 finding 3: a valid signature with a leading zero byte is
+        # not RSASSA-PKCS1-v1_5 (its length must equal the modulus length).
+        header, payload, signature = token().split(".")
+        raw = reuse.base64url_decode(signature)
+        padded = jwt.utils.base64url_encode(b"\x00" + raw).decode()
+        self.assertIn("does not verify",
+                      self.refused(AdmissionApi(tokens={"codeflow-provenance-1": f"{header}.{payload}.{padded}"})))
+
+    def test_a_missing_verifier_refuses(self):
+        with mock.patch.dict("sys.modules", {"jwt": None}):
+            self.assertIn("provenance verifier is not installed", self.refused(AdmissionApi()))
+
+    def test_a_pull_request_that_moves_during_admission_refuses(self):
+        # Review finding 3: the pull request is read again before success.
+        for later, field in (({"base": {"ref": BASE_REF, "sha": MAIN, "repo": {"id": 1}}}, "base_sha"),
+                             ({"head": {"sha": MAIN}}, "head"),
+                             ({"body": BODY + "edited"}, "body_sha256"),
+                             ({"draft": True}, "draft")):
+            with self.subTest(field=field):
+                api = AdmissionApi(later=later)
+                reason = self.refused(api)
+                self.assertIn("moved during admission", reason)
+                self.assertIn(field, reason)
+                self.assertGreaterEqual(api.reads, 2)
+        # A body edited after the caller judged it, or a draft, refuses at once.
+        self.assertIn("body_sha256", self.refused(AdmissionApi(live={"body": "another body"})))
+        self.assertIn("draft", self.refused(AdmissionApi(live={"draft": True})))
+
+    def test_a_run_without_the_trusted_title_or_for_another_pull_request_refuses(self):
+        for title in (None, "", "codeflow-ci", f"codeflow-ci pull request #96 into {BASE_REF} at {BASE}",
+                      f"{TITLE} extra"):
+            with self.subTest(title=title):
+                self.refused(AdmissionApi(runs=[admission_run(display_title=title)]), pending=True)
+
+    def test_a_moved_head_a_closed_pull_request_or_an_unreadable_base_refuses(self):
+        self.assertIn("head", self.refused(AdmissionApi(live={"head": {"sha": MAIN}})))
+        self.assertIn("state", self.refused(AdmissionApi(live={"state": "closed"})))
+        self.assertIn("base_ref", self.refused(AdmissionApi(live={"base": {}})))
 
     def test_a_draft_neutral_run_at_the_same_head_refuses(self):
         draft = [job("codeflow gates", "skipped"), job("windows", "skipped"), job("secret scan")]
-        reason = self.refused(FakeApi(jobs={77: draft}))
+        reason = self.refused(AdmissionApi(jobs={77: draft}))
         self.assertIn("'codeflow gates' of run 77 concluded skipped", reason)
         self.assertIn("mark the pull request ready", reason)
 
     def test_no_ready_run_refuses_and_may_be_waited_for(self):
-        self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95 exists",
-                      self.refused(FakeApi(runs=[]), pending=True))
+        self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95",
+                      self.refused(AdmissionApi(runs=[]), pending=True))
 
     def test_a_pending_run_refuses_and_may_be_waited_for(self):
         for status in ("queued", "in_progress", "waiting"):
             with self.subTest(status=status):
-                api = FakeApi(runs=[run(status=status, conclusion=None)])
+                api = AdmissionApi(runs=[admission_run(status=status, conclusion=None)])
                 self.assertIn(f"is {status}", self.refused(api, pending=True))
 
     def test_a_cancelled_or_failed_run_refuses(self):
         for conclusion in ("cancelled", "failure", "timed_out", "skipped"):
             with self.subTest(conclusion=conclusion):
-                self.assertIn(f"concluded {conclusion}", self.refused(FakeApi(runs=[run(conclusion=conclusion)])))
+                api = AdmissionApi(runs=[admission_run(conclusion=conclusion)])
+                self.assertIn(f"concluded {conclusion}", self.refused(api))
 
     def test_a_green_run_on_another_head_refuses(self):
-        api = FakeApi(runs=[run(head_sha=MAIN)])
+        api = AdmissionApi(runs=[admission_run(head_sha=MAIN)])
         self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run", self.refused(api, pending=True))
-
-    def test_a_green_run_at_the_same_head_for_another_pull_request_refuses(self):
-        other = run(pull_requests=[{"number": 96, "base": {"ref": "main"}}])
-        self.assertIn("run of #95 exists", self.refused(FakeApi(runs=[other]), pending=True))
-        self.refused(FakeApi(runs=[run(pull_requests=[])]), pending=True)
 
     def test_another_workflow_or_event_never_admits(self):
         for changes in ({"path": ".github/workflows/other.yml"}, {"event": "push"}):
             with self.subTest(changes=changes):
-                self.refused(FakeApi(runs=[run(**changes)]), pending=True)
+                self.refused(AdmissionApi(runs=[admission_run(**changes)]), pending=True)
 
     def test_the_newest_run_at_the_head_decides(self):
         # A ready run started after the draft's neutral run is still pending.
-        api = FakeApi(runs=[run(), run(id=78, run_number=6, status="in_progress", conclusion=None)])
+        api = AdmissionApi(runs=[admission_run(), admission_run(id=78, run_number=6, status="in_progress",
+                                                                conclusion=None)])
         self.assertIn("run 78", self.refused(api, pending=True))
         # A missing verdict job refuses.
         self.assertIn("'windows' of run 77 concluded nothing",
-                      self.refused(FakeApi(jobs={77: [job("codeflow gates")]})))
+                      self.refused(AdmissionApi(jobs={77: [job("codeflow gates")]})))
 
     def test_main_waits_only_for_a_pending_run_and_fails_closed(self):
-        def run_main(api, wait):
+        def run_main(api, wait, trusted=True):
             out = io.StringIO()
-            with mock.patch.object(reuse, "Api", return_value=api), \
+            files = ["--trusted-file", WORKFLOW, "--trusted-file", "scripts/ci-reuse.py"] if trusted else []
+            with mock.patch.object(reuse, "Api", return_value=api), mock.patch.object(reuse, "Git", FilesGit), \
                     mock.patch.object(reuse.time, "sleep") as sleep, redirect_stdout(out):
                 code = reuse.admit_main(["--repo", "o/r", "--head", HEAD, "--workflow", WORKFLOW,
-                                         "--require", "codeflow gates", "--require", "windows",
+                                         "--require", "codeflow gates", "--require", "windows", *files,
+                                         "--base-ref", BASE_REF, "--base-sha", BASE, "--body-sha256", BODY_SHA,
+                                         "--draft", "false",
                                          "--pull", "95", "--wait", str(wait)])
             return code, out.getvalue(), sleep.call_count
-        self.assertEqual(run_main(FakeApi(), 0)[0], 0)
-        code, text, slept = run_main(FakeApi(runs=[run(status="in_progress", conclusion=None)]), 0)
+        self.assertEqual(run_main(AdmissionApi(), 0)[0], 0)
+        self.assertEqual(run_main(AdmissionApi(), 0, trusted=False)[0], 1)
+        code, text, slept = run_main(AdmissionApi(runs=[admission_run(status="in_progress", conclusion=None)]), 0)
         self.assertEqual((code, slept), (1, 0), text)
-        code, text, slept = run_main(FakeApi(runs=[run(conclusion="failure")]), 600)
+        code, text, slept = run_main(AdmissionApi(runs=[admission_run(conclusion="failure")]), 600)
         self.assertEqual((code, slept), (1, 0), text)
 
-        class Finishing(FakeApi):
+        class Finishing(AdmissionApi):
             calls = 0
 
             def runs(self, head):
                 Finishing.calls += 1
-                return [run()] if Finishing.calls > 2 else [run(status="in_progress", conclusion=None)]
+                return [admission_run()] if Finishing.calls > 2 else [admission_run(status="in_progress",
+                                                                                     conclusion=None)]
         with mock.patch.object(reuse.time, "monotonic", return_value=0.0):
             code, text, slept = run_main(Finishing(), 600)
         self.assertEqual((code, slept), (0, 2), text)
 
-        class Broken(FakeApi):
+        class Broken(AdmissionApi):
             def runs(self, head):
                 raise OSError("network down")
         code, text, _ = run_main(Broken(), 0)
         self.assertEqual(code, 1)
         self.assertIn("refused: the decision failed", text)
+
+
+class EditReuseTests(unittest.TestCase):
+    """TSK-1001 AC-3: a run an `edited` event started without changing the
+    base reuses the newest earlier green run of the same pull request, head
+    and base; anything else runs every gate."""
+
+    def reused(self, api):
+        return reuse.edit_reuse(HEAD, WORKFLOW, REQUIRED, api, 95, BASE_REF, BASE, 90, FilesGit(), TRUSTED)
+
+    def skipped(self, api):
+        with self.assertRaises(reuse.Skip) as caught:
+            self.reused(api)
+        return str(caught.exception)
+
+    def test_the_newest_green_run_of_the_same_base_is_reused(self):
+        self.assertEqual(self.reused(AdmissionApi()), 77)
+
+    def test_this_run_another_base_or_a_failed_newest_run_runs_every_gate(self):
+        self.skipped(AdmissionApi(runs=[admission_run(id=90)]))
+        self.skipped(AdmissionApi(runs=[admission_run(display_title=f"codeflow-ci pull request #95 into main at {BASE}")]))
+        newer_failure = [admission_run(), admission_run(id=78, run_number=6, conclusion="failure")]
+        self.assertIn("run 78", self.skipped(AdmissionApi(runs=newer_failure)))
+        running = [admission_run(id=78, run_number=6, status="in_progress", conclusion=None)]
+        self.skipped(AdmissionApi(runs=running))
+        self.skipped(AdmissionApi(jobs={77: [job("codeflow gates")]}))
+
+    def test_a_reused_run_needs_its_signed_provenance(self):
+        name = "codeflow-provenance-1"
+        self.assertIn("ref=", self.skipped(AdmissionApi(tokens={name: token({"ref": "refs/pull/96/merge"})})))
+        self.skipped(AdmissionApi(tokens={}))
+        with self.assertRaises(reuse.Skip):
+            reuse.edit_reuse(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, BASE_REF, BASE, 90)
+
+    def test_a_companion_pull_request_stops_edit_reuse(self):
+        companion = [{"number": 95, "head": {"sha": HEAD}}, {"number": 96, "head": {"sha": HEAD}}]
+        self.assertIn("#96", self.skipped(AdmissionApi(heads=companion)))
+        spoof = admission_run(pull_requests=[{"number": 96, "head": {"sha": HEAD},
+                                              "base": {"ref": BASE_REF, "sha": BASE}}])
+        self.skipped(AdmissionApi(runs=[spoof]))
+
+    def test_main_writes_the_run_only_on_reuse_and_never_fails(self):
+        def run_main(api):
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "out"
+                output.write_text("")
+                argv = ["--repo", "sathyassn/codeflow", "--head", HEAD, "--pull", "95", "--base-ref", BASE_REF,
+                        "--base-sha", BASE, "--workflow-ref", f"sathyassn/codeflow/{WORKFLOW}@refs/pull/95/merge",
+                        "--run-id", "90", "--require", "codeflow gates", "--require", "windows",
+                        "--trusted-file", WORKFLOW, "--trusted-file", "scripts/ci-reuse.py"]
+                with mock.patch.object(reuse, "Api", return_value=api), mock.patch.object(reuse, "Git", FilesGit), \
+                        mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}), redirect_stdout(io.StringIO()):
+                    code = reuse.edit_main(argv)
+                return code, output.read_text()
+        self.assertEqual(run_main(AdmissionApi()), (0, "run=77\n"))
+        self.assertEqual(run_main(AdmissionApi(runs=[])), (0, ""))
+
+
+class ProvenanceArtifactTests(unittest.TestCase):
+    """The artifact reader: exactly one live artifact of that name, read
+    from its zip; anything else refuses."""
+
+    def api(self, artifacts, archive=b""):
+        api = reuse.Api("https://api.example", REPO, "t")
+        api.pages = lambda path, key: artifacts
+        api.bytes_at = lambda url: archive
+        return api
+
+    def test_one_live_artifact_is_read_and_anything_else_refuses(self):
+        buffer = io.BytesIO()
+        with reuse.zipfile.ZipFile(buffer, "w") as bundle:
+            bundle.writestr("provenance.jwt", "a.b.c\n")
+        live = [{"name": "codeflow-provenance-1", "expired": False, "archive_download_url": "u"}]
+        self.assertEqual(self.api(live, buffer.getvalue()).provenance(77, "codeflow-provenance-1", "provenance.jwt"),
+                         "a.b.c\n")
+        for artifacts in ([], live * 2, [dict(live[0], expired=True)]):
+            with self.subTest(artifacts=artifacts):
+                with self.assertRaises(reuse.Skip):
+                    self.api(artifacts, buffer.getvalue()).provenance(77, "codeflow-provenance-1", "provenance.jwt")
+        with self.assertRaises(reuse.Skip):
+            self.api(live, b"not a zip").provenance(77, "codeflow-provenance-1", "provenance.jwt")
 
 
 class GitTests(unittest.TestCase):
@@ -385,6 +764,9 @@ class GitTests(unittest.TestCase):
             self.assertTrue(reader.is_ancestor(base, head))
             self.assertFalse(reader.is_ancestor(merged, head))
             self.assertEqual(reader.changed(base, merged), ["Cargo.lock"])
+            self.assertEqual(reader.show(head, "Cargo.lock"), b"lock\n")
+            with self.assertRaises(reuse.Skip):
+                reader.show(base, "Cargo.lock")
 
 
 if __name__ == "__main__":

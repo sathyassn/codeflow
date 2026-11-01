@@ -92,6 +92,21 @@ Merge:
 - Main-push and integration-line CI repeat the state check without writing.
 - These release jobs live in `codeflow-release.yml`, outside the managed
   `codeflow-ci.yml` that every adopter receives. No scaffold installs them.
+- `release impact (trusted)` runs from its own workflow,
+  `codeflow-release-trusted.yml`, on `pull_request_target`, including body
+  edits and a draft made ready. It first refuses a base other than `main`,
+  `master` or `integration/**`, then checks out the base commit, builds
+  only that commit's `codeflow`, runs only its `scripts/release.py`, and
+  fetches the pull request head as git data, never built or run, so a pull
+  request cannot replace its own judge. `release.py pr-snapshot` pins the
+  head, base and body before `check-pr` and rechecks them before the job
+  reports (TSK-1001). Each release-impact check lives in a workflow that
+  triggers only where its job runs, so no event reports either as skipped.
+  GitHub takes a `pull_request_target` definition from the default branch,
+  so the trusted check reports only once `main` carries it. Until then
+  `release impact` in `codeflow-release.yml` keeps reporting as before,
+  running the candidate's own definition; TSK-1015 removes it after that
+  checkpoint, and the operator then requires the trusted check.
 - A PR check tests the merge with `main` as it was when the run started, so
   a green from an older `main` says nothing about the current one. Under
   ADR-0081 the `main` ruleset requires branches to be up to date before
@@ -152,6 +167,26 @@ Concurrency:
 - Its concurrency group covers the authority job only, not the whole generated
   workflow. Operate one deliberate publication at a time. If runs overlap, the
   no-clobber and partial-attempt checks remain the safety boundary.
+
+### Merge admission
+
+`commit standards` in `codeflow-policy.yml` admits a ready pull request
+only on a successful `codeflow-ci` run at its exact head, whose signed
+provenance names that pull request and base (`scripts/ci-reuse.py admit`,
+TSK-1001). The run is trusted only when the pull request leaves every file
+on the admission trusted-file list as the base has it:
+`.github/workflows/codeflow-ci.yml`, `scripts/ci-reuse.py` and
+`scripts/requirements-admission.txt`, and any file later added to that
+list. A pull request that changes one of them is refused automatic
+admission and needs a human merge: the operator merges it, never an agent.
+The refusal says so.
+
+The base's parity rules judge every pull request, one that changes
+`codeflow-ci.yml` included. A pull request that changes what those rules
+pin therefore fails its own `codeflow gates (judges)` job, since the base
+does not know the new form yet. Merging it over that failure is the
+operator's decision, made on review of the change; an agent never makes
+it.
 
 ### codeflow's own releases
 
@@ -403,7 +438,7 @@ Three planes check release state, from cheapest to authoritative:
 |---|---|---|
 | Pre-push | `release.py preflight` for each pushed branch | only a push that breaks a release tree its base kept valid |
 | `codeflow integrate` | `release.py check-state --structural` in the test stage | an invalid tree |
-| CI, `codeflow-release.yml` | `release impact` (full `check-pr`) on pull requests; `release state` on pushes to `main` and `integration/**` | yes |
+| CI, `codeflow-release.yml` and `codeflow-release-trusted.yml` | `release impact` (full `check-pr`) on pull requests, and `release impact (trusted)`, the same from the target's definitions through `pull_request_target`; `release state` on pushes to `main` and `integration/**` | yes |
 
 The first two planes are the local planes:
 

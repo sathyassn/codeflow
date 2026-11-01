@@ -50,6 +50,8 @@ fn codeflow_at(binary: &Path) -> Command {
         // The structure check reads this when no --pr-body flag is given; the
         // developer's shell must not leak a body into the no-body tests.
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("CI_PIPELINE_SOURCE")
@@ -88,6 +90,34 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
         .current_dir(dir)
         .output()
         .expect("binary runs")
+}
+
+/// Install the shipped pre-push shim as the repository's hook, as `codeflow
+/// init` lays it out, and run a real `git push` of `branch` to `origin`
+/// through it with this build as the hook binary (TSK-1001). Unix only:
+/// the shim is a shell script.
+#[cfg(unix)]
+fn installed_push(dir: &Path, branch: &str) -> Output {
+    let hooks = dir.join(".git/codeflow-hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let shim = hooks.join("pre-push");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/git-hooks/pre-push"),
+        &shim,
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    git(dir, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    git_command(dir)
+        .args(["push", "-q", "origin", branch])
+        .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
+        .output()
+        .expect("git push runs")
 }
 
 /// A fixture Git command in `dir`: no global or system configuration, the

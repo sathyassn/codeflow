@@ -19,6 +19,8 @@ fn codeflow() -> Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("GITHUB_BASE_REF")

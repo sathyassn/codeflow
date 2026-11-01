@@ -64,6 +64,8 @@ fn with_env(command: &mut Command) -> &mut Command {
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .env_remove("CODEFLOW_PR_DRAFT")
         .env_remove("GITHUB_BASE_REF")
         .env_remove("GITHUB_HEAD_REF")
@@ -209,6 +211,19 @@ fn codeflow_release_jobs_live_outside_the_managed_ci_file() {
             own.contains(required),
             "codeflow-release.yml lacks {required}"
         );
+    }
+    // TSK-1001: the trusted job lives in its own workflow, from the
+    // target's definitions.
+    let trusted =
+        std::fs::read_to_string(root.join(".github/workflows/codeflow-release-trusted.yml"))
+            .unwrap();
+    for required in [
+        "pull_request_target:\n    types: [opened, synchronize, reopened, edited, ready_for_review]",
+        "name: release impact (trusted)",
+        "python3 -I scripts/release.py check-pr",
+        "python3 -I scripts/release.py pr-snapshot",
+    ] {
+        assert!(trusted.contains(required), "codeflow-release-trusted.yml lacks {required}");
     }
     let manifest =
         std::fs::read_to_string(root.join("assets/base/scaffold-manifest.toml")).unwrap();
