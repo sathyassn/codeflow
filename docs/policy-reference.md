@@ -1787,14 +1787,20 @@ configuration-dependent actions unverifiable. Literal configuration
 destinations refuse append writes too. A dynamic value for a known unrelated
 destination, such as `export PATH=$PATH:/x`, is allowed.
 
-A `core.hooksPath` that Git reads in the command scope also refuses a Git call,
-whether the command text writes it or the hook process inherited it through
-`GIT_CONFIG_COUNT` or `GIT_CONFIG_PARAMETERS` (TSK-1130). It replaces the
-repository hooks that the enforcement plane installs for that call. The guard
-reads the scope from the same effective-configuration read that lists the
-other settings, so an unreadable configuration refuses too. A hooks path from a
-repository, global or system file is the operator's own configuration and is
-not judged by this rule; git-guard and exec-guard apply it alike.
+A `core.hooksPath` replaces the repository hooks that the enforcement plane
+installs, so the guards refuse a Git call unless the value in force comes from
+the repository's own configuration (TSK-1130). Git reports the scope of each
+value. A call passes when no `core.hooksPath` is set, or when the last value
+Git lists is in the `local` or `worktree` scope. A value in the `command`
+scope (written in the command, or inherited through the count-based or
+parameters-based command-scope variables), the `global` scope or the `system`
+scope refuses, whatever its directory holds. The hook process environment can
+select those files (an explicit global or system file, the home or XDG
+directory, and includes from them), and a directory can gain a hook after the
+check, so the guard trusts the scope and not the file. An include keeps the
+scope of the file that includes it. An unreadable configuration refuses too.
+To keep a custom hooks directory, set it in the repository's own
+configuration. git-guard and exec-guard apply the rule alike.
 
 On a line with a configuration-dependent Git decision, the guards refuse any
 non-Git segment that mentions a configuration variable except as a plain

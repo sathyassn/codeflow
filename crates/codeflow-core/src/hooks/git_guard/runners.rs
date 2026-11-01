@@ -606,7 +606,7 @@ fn configured_commands(
     let settings = configuration_options(args)?;
     let config = crate::security::git_config::read(cwd, &settings, &config_environment(env))?;
     transport(args, &config)?;
-    command_scope_hooks_path(&config)?;
+    repository_owned_hooks_path(&config)?;
     for path in config
         .sources
         .iter()
@@ -800,25 +800,28 @@ fn transport(
     Ok(())
 }
 
-/// Refuse a `core.hooksPath` that Git takes from the command scope: the
-/// environment (`GIT_CONFIG_COUNT`, `GIT_CONFIG_PARAMETERS`) or a `-c`
-/// option. It replaces the hooks the enforcement plane installs for this
-/// call, and the guard already refuses the same assignment when the command
-/// text writes it (TSK-1130). A value from a repository, global or system
-/// file is the operator's own configuration and is not judged here.
-fn command_scope_hooks_path(
+/// Refuse a `core.hooksPath` that does not come from the repository's own
+/// configuration (TSK-1130). Git runs hooks from the directory the
+/// effective value names, and the enforcement plane installs its hooks in
+/// the repository. A value from the command scope (`-c`, `GIT_CONFIG_COUNT`,
+/// `GIT_CONFIG_PARAMETERS`) replaces them for the call. A value from the
+/// global or system scope can replace them too, and the process
+/// environment selects those files (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+/// `HOME`, `XDG_CONFIG_HOME`, and any include in them), so Git's scope label
+/// does not show who chose the file. Only an absent value (Git's default
+/// hooks directory) or a value from the `local` or `worktree` scope, files
+/// inside the repository, passes. The directory it names is not read: a
+/// path the caller chose can gain a hook between this check and the run.
+fn repository_owned_hooks_path(
     config: &crate::security::git_config::EffectiveConfig,
 ) -> Result<(), String> {
-    if config
-        .get_all("core.hooksPath")
-        .iter()
-        .any(|(scope, _, _)| *scope == "command")
-    {
-        return Err(
-            "core.hooksPath is set in the command scope (the environment or -c), which replaces the repository hooks; unset the inherited Git configuration variables or the option".into(),
-        );
+    // Git lists values in precedence order, so the last one is in force.
+    match config.get_all("core.hooksPath").last() {
+        None | Some(("local" | "worktree", _, _)) => Ok(()),
+        Some((scope, _, _)) => Err(format!(
+            "core.hooksPath comes from the {scope} configuration, which the environment or the command can select and which replaces the repository hooks; set it in the repository's own configuration or unset it"
+        )),
     }
-    Ok(())
 }
 
 const FOREACH_OPTIONS: OptionSpec = OptionSpec {
@@ -2353,14 +2356,37 @@ mod tests {
         root
     }
 
-    fn call(root: &Path, words: &[&str]) -> Result<Vec<String>, String> {
+    fn call_with(
+        root: &Path,
+        words: &[&str],
+        environment: &[(&str, &str)],
+    ) -> Result<Vec<String>, String> {
         let args: Vec<String> = words.iter().map(ToString::to_string).collect();
-        configured_commands(
-            &args,
-            root,
-            &crate::security::git_config::Environment::new(),
-            &[],
-        )
+        let environment: crate::security::git_config::Environment = environment
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+        configured_commands(&args, root, &environment, &[])
+    }
+
+    fn call(root: &Path, words: &[&str]) -> Result<Vec<String>, String> {
+        call_with(root, words, &[])
+    }
+
+    /// A configuration file that sets the hooks path, outside the repository.
+    fn hostile_file(dir: &Path, name: &str) -> String {
+        let file = dir.join(name);
+        std::fs::write(&file, "[core]\n\thooksPath = /elsewhere\n").unwrap();
+        file.to_string_lossy().into_owned()
+    }
+
+    fn set_local_hooks_path(root: &Path) {
+        let set = crate::git::command()
+            .args(["config", "core.hooksPath", "/repository-owned"])
+            .current_dir(root)
+            .status()
+            .unwrap();
+        assert!(set.success());
     }
 
     #[test]
@@ -2368,20 +2394,97 @@ mod tests {
         let root = repository();
         let refused = call(root.path(), &["-c", "core.hooksPath=/elsewhere", "status"])
             .expect_err("a command-scope hooks path replaces the repository hooks");
-        assert!(refused.contains("command scope"), "{refused}");
+        assert!(refused.contains("command"), "{refused}");
     }
 
     #[test]
-    fn a_hooks_path_in_a_repository_file_is_not_judged() {
+    fn a_hooks_path_chosen_by_the_environment_refuses_in_every_file_scope() {
         let root = repository();
-        let set = crate::git::command()
-            .args(["config", "core.hooksPath", "/elsewhere"])
-            .current_dir(root.path())
-            .status()
-            .unwrap();
-        assert!(set.success());
+        let outside = tempfile::tempdir().unwrap();
+        let file = hostile_file(outside.path(), "hostile");
+        // An explicit global or system file.
+        assert!(call_with(root.path(), &["status"], &[("GIT_CONFIG_GLOBAL", &file)]).is_err());
+        assert!(call_with(root.path(), &["status"], &[("GIT_CONFIG_SYSTEM", &file)]).is_err());
+        // A home directory the caller picked.
+        let home = outside.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[core]\n\thooksPath = /elsewhere\n",
+        )
+        .unwrap();
+        let home_text = home.to_string_lossy().into_owned();
+        assert!(call_with(root.path(), &["status"], &[("HOME", &home_text)]).is_err());
+        // An XDG directory the caller picked, with no file in the home.
+        let xdg = outside.path().join("xdg");
+        std::fs::create_dir_all(xdg.join("git")).unwrap();
+        std::fs::write(xdg.join("git/config"), "[core]\n\thooksPath = /elsewhere\n").unwrap();
+        let xdg_text = xdg.to_string_lossy().into_owned();
+        let bare = outside.path().join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        let bare_text = bare.to_string_lossy().into_owned();
+        assert!(call_with(
+            root.path(),
+            &["status"],
+            &[("HOME", &bare_text), ("XDG_CONFIG_HOME", &xdg_text)]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn an_included_hooks_path_keeps_the_scope_of_the_file_that_includes_it() {
+        let root = repository();
+        let outside = tempfile::tempdir().unwrap();
+        let target = hostile_file(outside.path(), "included");
+        // Direct include from a global file the caller selected.
+        let direct = outside.path().join("direct");
+        std::fs::write(&direct, format!("[include]\n\tpath = {target}\n")).unwrap();
+        let direct_text = direct.to_string_lossy().into_owned();
+        assert!(call_with(
+            root.path(),
+            &["status"],
+            &[("GIT_CONFIG_GLOBAL", &direct_text)]
+        )
+        .is_err());
+        // Conditional include whose condition matches this repository.
+        let conditional = outside.path().join("conditional");
+        std::fs::write(
+            &conditional,
+            format!(
+                "[includeIf \"gitdir:{}/\"]\n\tpath = {target}\n",
+                root.path().canonicalize().unwrap().to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let conditional_text = conditional.to_string_lossy().into_owned();
+        assert!(call_with(
+            root.path(),
+            &["status"],
+            &[("GIT_CONFIG_GLOBAL", &conditional_text)]
+        )
+        .is_err());
+        // An include named on the command line keeps the command scope.
+        let include = format!("include.path={target}");
+        assert!(call(root.path(), &["-c", &include, "status"]).is_err());
+    }
+
+    #[test]
+    fn a_local_hooks_path_overrides_an_injected_one() {
+        let root = repository();
+        let outside = tempfile::tempdir().unwrap();
+        let file = hostile_file(outside.path(), "hostile");
+        set_local_hooks_path(root.path());
+        // The repository's own value is the last one Git reads, so the
+        // injected global value is ineffective and the call is not refused.
+        assert!(call_with(root.path(), &["status"], &[("GIT_CONFIG_GLOBAL", &file)]).is_ok());
         assert!(call(root.path(), &["status"]).is_ok());
         assert!(call(root.path(), &["-c", "user.name=x", "status"]).is_ok());
+    }
+
+    #[test]
+    fn no_hooks_path_is_not_judged() {
+        let root = repository();
+        assert!(call(root.path(), &["status"]).is_ok());
     }
 
     #[test]
