@@ -1,0 +1,11 @@
+id = "ADR-0095"
+uid = "84ae92c7-a752-4603-9d79-a7528ce54f6e"
+kind = "ADR"
+title = "Default effort follows each vendor's recommendation"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T19:07:27Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
