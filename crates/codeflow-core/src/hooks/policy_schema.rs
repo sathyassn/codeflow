@@ -750,13 +750,13 @@ pub const SCHEMA: [KeySpec; 76] = [
         path: "git.blocked_names", kind: KeyKind::PathRules,
         valid: "strings or {pattern, except_under: [root-relative prefix], reason}",
         purpose: "Block final-component globs or component sequences at any depth.",
-        notes: "Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key.",
+        notes: "Shipped names remain when omitted; use a narrow explained except_under on the default branch to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.protected_paths", kind: KeyKind::PathRules,
         valid: "{prefix, allow: [{path, reason}]} entries",
         purpose: "Refuse every change under root-anchored component prefixes.",
-        notes: "Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key.",
+        notes: "Exceptions come only from the default branch at one commit; a working copy adds denials only, and line-only or branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.ignored_files", kind: KeyKind::ContentRule,

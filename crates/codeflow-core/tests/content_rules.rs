@@ -562,11 +562,12 @@ fn a_byte_order_mark_and_decomposed_patterns_match_as_git_reads_them() {
     }
 }
 
-/// Review 01, finding 3: with no remote HEAD both `main` and `master` are
-/// read; each tree's ignore rules are judged whole, and the stricter
-/// settings of the two policies apply.
+/// Review 01, finding 3, under ADR-0091: no default branch is guessed.
+/// With `main` and `master` fetched and no remote HEAD the rules refuse and
+/// name the repair; once origin/HEAD names `main`, main's tree and policy
+/// alone judge, and master's stricter limit is never read.
 #[test]
-fn with_main_and_master_assumed_each_tree_and_the_stricter_settings_judge() {
+fn only_the_recorded_default_branch_judges_and_none_is_guessed() {
     let f = Fixture::new();
     f.repo
         .remote("origin", "https://example.invalid/adopter.git")
@@ -598,6 +599,19 @@ fn with_main_and_master_assumed_each_tree_and_the_stricter_settings_judge() {
         .unwrap();
     index.write().unwrap();
     f.stage("sub/payload.bin", &big(4 * MIB));
+    let error =
+        codeflow_core::hooks::landed_policy::staged_rules(f.dir.path(), &GitPolicy::default())
+            .err()
+            .expect("an unset origin/HEAD refuses");
+    assert!(error.contains("git remote set-head origin -a"), "{error}");
+    f.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
     let (paths, rules) =
         codeflow_core::hooks::landed_policy::staged_rules(f.dir.path(), &GitPolicy::default())
             .unwrap();
@@ -607,10 +621,9 @@ fn with_main_and_master_assumed_each_tree_and_the_stricter_settings_judge() {
         [PolicyLevel::Block],
         "{report:?}"
     );
-    assert_eq!(
-        levels(&report, "git.max_file_bytes"),
-        [PolicyLevel::Block],
-        "{report:?}"
+    assert!(
+        !levels(&report, "git.max_file_bytes").contains(&PolicyLevel::Block),
+        "master's 3 MiB limit was read: {report:?}"
     );
 }
 
