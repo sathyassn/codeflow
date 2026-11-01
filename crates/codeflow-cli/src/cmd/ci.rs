@@ -2191,21 +2191,19 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
             ));
         }
     }
-    if git.commit_emoji.is_active() {
-        if let Some(c) = standards::find_emoji(body) {
-            out.push(Violation::new(
-                "git.commit_emoji",
-                git.commit_emoji,
-                format!("PR body contains emoji ('{c}')"),
-                codeflow_core::remedy::PR_EMOJI.remedy(),
-            ));
-        }
+    if git.commit_emoji.is_active() && standards::find_emoji(body).is_some() {
+        out.push(Violation::new(
+            "git.commit_emoji",
+            git.commit_emoji,
+            "PR body contains an emoji".to_string(),
+            codeflow_core::remedy::PR_EMOJI.remedy(),
+        ));
     }
     out.extend(standards::pr_body_policy_character(git, body));
-    if let Some(id) = codeflow_core::validate::docs::ledger_citation(body) {
+    if codeflow_core::validate::docs::ledger_citation(body).is_some() {
         out.push(Violation::always_blocking(
             "coord.ledger_citation",
-            format!("PR body cites the coordination ledger id {id}"),
+            "PR body cites a coordination ledger id (an FU, LN or WS id)".to_string(),
             "name the task, pull request or commit instead; FU, LN and WS ids are local to one clone's coordination ledger (ADR-0086)",
         ));
     }
@@ -2332,11 +2330,11 @@ fn evaluate_pr_structure(
 
     // Template remnants: always warn-only — a nudge to finish the body, never
     // a block (mirrors the breaking_watch_paths tripwire convention).
-    for (line_no, line, what) in find_placeholders(&strip_html_comments(body, true)) {
+    for (line_no, what) in find_placeholders(&strip_html_comments(body, true)) {
         out.push(Violation::new(
             "git.pr_sections",
             PolicyLevel::Warn,
-            format!("PR body line {line_no} is a template remnant ({what}): '{line}'"),
+            format!("PR body line {line_no} is a template remnant ({what})"),
             codeflow_core::remedy::PR_TEMPLATE_REMNANT.remedy(),
         ));
     }
@@ -2410,10 +2408,11 @@ fn strip_html_comments(text: &str, preserve_lines: bool) -> String {
 }
 
 /// Scan the body for leftovers of the shipped PR template, each reported as
-/// (1-based line number, the trimmed line, what it is): the paste-your-output
+/// (1-based line number, what it is): the paste-your-output
 /// placeholder, a table row of empty cells (`|  |  |`), and unresolved
-/// Release impact alternatives.
-fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
+/// Release impact alternatives. The line's own text is never returned: the
+/// policy run's log carries none of the body (TSK-1040).
+fn find_placeholders(body: &str) -> Vec<(usize, &'static str)> {
     let mut out = Vec::new();
     for (idx, line) in body.lines().enumerate() {
         let t = line.trim();
@@ -2437,7 +2436,7 @@ fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
         } else {
             continue;
         };
-        out.push((idx + 1, t.to_string(), what));
+        out.push((idx + 1, what));
     }
     out
 }
@@ -4042,7 +4041,7 @@ mod tests {
             assert!(
                 found.iter().any(|v| v.rule == "coord.ledger_citation"
                     && v.level == PolicyLevel::Block
-                    && v.message.contains(planted)),
+                    && !v.message.contains(planted)),
                 "{planted}: {found:?}"
             );
         }
@@ -4636,7 +4635,10 @@ mod tests {
         let findings = find_placeholders(&strip_html_comments(body, true));
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].0, 4);
-        assert_eq!(findings[0].1, "- Breaking: yes | no");
+        assert_eq!(
+            findings[0].1,
+            "unresolved template alternatives or placeholders"
+        );
     }
 
     #[test]

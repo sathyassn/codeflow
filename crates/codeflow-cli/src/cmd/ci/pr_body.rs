@@ -124,43 +124,49 @@ struct HtmlContainers {
 /// Block-level elements that can wrap Markdown content. Custom elements
 /// (a hyphen in the name) are containers too; inline tags never are.
 fn html_container(name: &str) -> bool {
-    name.contains('-')
-        || matches!(
-            name,
-            "address"
-                | "article"
-                | "aside"
-                | "blockquote"
-                | "center"
-                | "dd"
-                | "details"
-                | "dialog"
-                | "div"
-                | "dl"
-                | "dt"
-                | "fieldset"
-                | "figcaption"
-                | "figure"
-                | "footer"
-                | "form"
-                | "header"
-                | "li"
-                | "main"
-                | "nav"
-                | "ol"
-                | "p"
-                | "pre"
-                | "section"
-                | "summary"
-                | "table"
-                | "tbody"
-                | "td"
-                | "tfoot"
-                | "th"
-                | "thead"
-                | "tr"
-                | "ul"
-        )
+    name.contains('-') || block_container(name)
+}
+
+/// The block-level elements `html_container` tracks by name. A diagnostic
+/// prints an element's name only when it is one of these: a custom element's
+/// name is the author's own text (TSK-1040).
+fn block_container(name: &str) -> bool {
+    matches!(
+        name,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "center"
+            | "dd"
+            | "details"
+            | "dialog"
+            | "div"
+            | "dl"
+            | "dt"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "header"
+            | "li"
+            | "main"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "section"
+            | "summary"
+            | "table"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "tr"
+            | "ul"
+    )
 }
 
 impl HtmlContainers {
@@ -934,8 +940,13 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
     let limit = usize::try_from(git.pr_body_max_words).unwrap_or(usize::MAX);
     let length = length_message(limit, body, &outline.sections);
     for tag in &outline.unclosed {
+        let (open, close) = if block_container(tag) {
+            (format!("<{tag}>"), format!("</{tag}>"))
+        } else {
+            ("custom element".to_string(), "its closing tag".to_string())
+        };
         warn(format!(
-            "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
+            "PR body opens an HTML {open} block that never closes; its later headings still count as sections, but close it with {close}"
         ));
     }
     // ADR-0071 rule 7: whether a Summary anchors the reader is judged by
