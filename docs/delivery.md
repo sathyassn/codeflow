@@ -185,6 +185,13 @@ pull request cites the full gate by run id and revision, and the review
 verdict lives on the pull request, so the evidence survives the cleanup of
 worktrees and build directories.
 
+Where work stands is read, never stored. `codeflow status --epic EPC-NNN`
+(or `--task`, `--line`, and `--json` for the versioned facts) derives each
+task's stage, location, place in the order, lane, window and issues from
+the records on each target's tip, the fetched refs, the forge and the
+coordination ledger, with the readiness core that `work next` uses; see
+[the CLI reference](cli.md#remember-notes).
+
 ### Completed work imported from another line
 
 An ordinary merge can bring completed work from `main` or a verified epic
