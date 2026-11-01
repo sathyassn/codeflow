@@ -278,3 +278,58 @@ fn only_links_on_record_paths_withhold_the_class() {
         decision(dir.path(), &base, class);
     }
 }
+
+/// Point the index entry `path` at `object` as a gitlink and commit it.
+fn set_gitlink(root: &Path, path: &str, object: &str) {
+    git(
+        root,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{object},{path}"),
+        ],
+    );
+    git(root, &["commit", "-qm", "test: set a gitlink"]);
+}
+
+#[test]
+fn any_submodule_change_keeps_the_full_gate_even_when_git_ignores_it() {
+    for change in ["moved", "added", "removed", "unchanged"] {
+        let (dir, first) = fixture("{}");
+        let root = dir.path();
+        write(
+            root,
+            ".gitmodules",
+            "[submodule \"vendor\"]\n\tpath = vendor\n\turl = ./vendor\n\tignore = all\n",
+        );
+        git(root, &["add", ".gitmodules"]);
+        git(
+            root,
+            &["commit", "-qm", "test: ignore the vendor submodule"],
+        );
+        let second = git(root, &["rev-parse", "HEAD"]);
+        if change != "added" {
+            set_gitlink(root, "vendor", &first);
+        }
+        let base = git(root, &["rev-parse", "HEAD"]);
+        match change {
+            "moved" | "added" => set_gitlink(root, "vendor", &second),
+            "removed" => {
+                git(root, &["rm", "-q", "--cached", "vendor"]);
+                git(root, &["commit", "-qm", "test: remove the gitlink"]);
+            }
+            _ => {}
+        }
+        write(root, "docs/guide.md", "Changed\n");
+        git(root, &["add", "docs/guide.md"]);
+        git(root, &["commit", "-qm", "test: change a record"]);
+        let expected = if change == "unchanged" {
+            LandingClass::RecordsOnly
+        } else {
+            LandingClass::Code
+        };
+        let actual = classify_landing(root, &base, "HEAD");
+        assert_eq!(actual.class, expected, "{change}: {}", actual.reason);
+    }
+}

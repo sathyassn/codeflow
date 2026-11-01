@@ -145,7 +145,8 @@ planning classifier's product, watched, instruction, hidden and template
 exclusions. Config and JSON stay code. A project marks Markdown that a build
 or check executes or treats as a contract in `product_paths` or
 `breaking_watch_paths`; a record declaration never overrides those lists.
-Both sides of a rename or copy must qualify. A mode change, a symlink or
+Both sides of a rename or copy must qualify. A mode change, any submodule
+added, removed or moved to another commit at any path, a symlink or
 submodule under a declared record folder or on a folder a changed record
 resolves through, an unreadable diff or invalid config keeps the full gate.
 

@@ -159,13 +159,24 @@ fn records_only(root: &Path, base: &str, head: &str) -> Result<(), String> {
         .iter()
         .map(|pattern| glob::Pattern::new(pattern).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
-    let output = super::history::command()
+    // A submodule commit is code wherever it sits. Compare gitlinks from the
+    // two trees directly, since git's diff can omit them (`.gitmodules`
+    // `ignore = all`, `diff.ignoreSubmodules`, inherited config).
+    if gitlinks(&base)? != gitlinks(&head)? {
+        return Err("a submodule is added, removed or moved to another commit".into());
+    }
+    // The judging command drops inherited `GIT_CONFIG_*` overrides, and
+    // `--ignore-submodules=none` overrides repository config and
+    // `.gitmodules`, so the raw diff lists every changed gitlink.
+    let output = crate::git::judging_command()
+        .args(["-c", "core.commitGraph=false"])
         .arg("-C")
         .arg(root)
         .args([
             "diff",
             "--raw",
             "-z",
+            "--ignore-submodules=none",
             "--no-ext-diff",
             "--no-textconv",
             "--find-renames",
@@ -182,7 +193,8 @@ fn records_only(root: &Path, base: &str, head: &str) -> Result<(), String> {
     }
     let entries = parse_raw(&output.stdout).ok_or("cannot parse candidate diff")?;
     classify_entries(&entries, &patterns, &project)?;
-    // A link can redirect a tool reading a record only when it sits under a
+    // Changed links and gitlinks are refused above. An unchanged link can
+    // redirect a tool reading a record only when it sits under a
     // declared record folder or on a folder a changed record resolves
     // through. Links elsewhere, such as a root `CLAUDE.md -> AGENTS.md`,
     // cannot, so they do not withhold the class.
@@ -229,6 +241,24 @@ fn records_only(root: &Path, base: &str, head: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Every gitlink in `commit`'s tree, by path bytes, with the commit it names.
+fn gitlinks(
+    commit: &git2::Commit<'_>,
+) -> Result<std::collections::BTreeMap<Vec<u8>, git2::Oid>, String> {
+    let tree = commit.tree().map_err(|error| error.to_string())?;
+    let mut links = std::collections::BTreeMap::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+        if entry.filemode() == 0o160_000 {
+            let mut path = dir.as_bytes().to_vec();
+            path.extend_from_slice(entry.name_bytes());
+            links.insert(path, entry.id());
+        }
+        git2::TreeWalkResult::Ok
+    })
+    .map_err(|error| error.to_string())?;
+    Ok(links)
 }
 
 /// The folder part of a glob before its first wildcard, ending in `/`, or
