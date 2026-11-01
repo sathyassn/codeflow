@@ -924,6 +924,30 @@ pub fn epic_line_binding(
             "names {epic_id}, which is not the epic of branch '{branch}'"
         )));
     }
+    epic_line_bound_at(repo_root, line, anchor, place)
+}
+
+/// Whether the trusted records at `anchor` (named `place` in messages) bind
+/// `line` as an epic line, whatever branch asks: the epic exists there
+/// without being cancelled or archived, and a task of that epic there names
+/// this exact line. [`epic_line_binding`] adds the asking branch's own
+/// claim; `codeflow ci` uses this alone to confirm the line a landing
+/// candidate's head would become the tip of (TSK-1155).
+///
+/// # Errors
+///
+/// Returns why the repository, the anchor or a record could not be read.
+pub fn epic_line_bound_at(
+    repo_root: &Path,
+    line: &str,
+    anchor: &str,
+    place: &str,
+) -> Result<EpicLineBinding, WorkStartError> {
+    let line = logical_target(line);
+    let epic_id = match super::line_adoption::epic_id(line) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+    };
     let repo = Repository::discover(repo_root)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let tree = repo

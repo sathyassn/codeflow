@@ -71,6 +71,30 @@ impl AdoptionReport {
     }
 }
 
+/// The `work.epic_line` finding for direct commits `unadopted` that `line`
+/// would receive, as `(message, remedy)`. `reset` is the ref the remedy's
+/// `git reset --keep` returns the line to. The pre-push hook and
+/// `codeflow ci` share it, so both name the same commits and the same
+/// remedy (TSK-1155).
+#[must_use]
+pub fn direct_commit_refusal(line: &str, unadopted: &[String], reset: &str) -> (String, String) {
+    let epic = epic_id(line).unwrap_or("its epic");
+    let ids = unadopted
+        .iter()
+        .map(|id| id.get(..9).unwrap_or(id))
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        format!(
+            "{} would receive a commit made directly on the line ({ids})",
+            crate::git::display_text(line)
+        ),
+        format!(
+            "land it by a pull request: save it on a task or planning branch, then `git reset --keep {reset}` and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
+        ),
+    )
+}
+
 /// Parse and check the shape of an epic record's `line_adoptions` value.
 pub(crate) fn parse(value: Option<&Value>) -> Result<Vec<LineAdoption>, String> {
     let Some(value) = value else {
@@ -248,4 +272,82 @@ pub fn check_range(
         }
     }
     Ok(report)
+}
+
+/// The commit `origin/<line>` names as fetched, or `None` when the line has
+/// no remote-tracking ref. A local branch never counts: the fetched tip is
+/// the one trusted authority for the line (TSK-1155).
+///
+/// # Errors
+/// Returns an error when the repository or the ref cannot be read.
+pub fn fetched_tip(root: &Path, line: &str) -> Result<Option<String>, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let name = format!("refs/remotes/origin/{line}");
+    let tip = match repo.find_reference(&name) {
+        Ok(reference) => reference
+            .peel_to_commit()
+            .map(|commit| Some(commit.id().to_string()))
+            .map_err(|e| format!("origin/{line}: {e}")),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(format!("origin/{line}: {error}")),
+    };
+    tip
+}
+
+/// The epic lines (`integration/EPC-*`) whose fetched tip is exactly
+/// `commit`, sorted.
+///
+/// # Errors
+/// Returns an error when the repository, `commit` or a fetched line cannot
+/// be read.
+pub fn fetched_lines_at(root: &Path, commit: &str) -> Result<Vec<String>, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let commit = repo
+        .revparse_single(commit)
+        .and_then(|object| object.peel_to_commit())
+        .map(|commit| commit.id())
+        .map_err(|e| format!("{commit}: {e}"))?;
+    let mut lines = Vec::new();
+    let references = repo
+        .references_glob("refs/remotes/origin/integration/*")
+        .map_err(|e| format!("cannot list the fetched epic lines: {e}"))?;
+    for reference in references {
+        let reference = reference.map_err(|e| format!("cannot read a fetched epic line: {e}"))?;
+        let Some(name) = reference
+            .name()
+            .ok()
+            .and_then(|name| name.strip_prefix("refs/remotes/origin/"))
+        else {
+            continue;
+        };
+        if epic_id(name).is_err() {
+            continue;
+        }
+        let tip = reference
+            .peel_to_commit()
+            .map_err(|e| format!("cannot read the tip of 'origin/{name}': {e}"))?;
+        if tip.id() == commit {
+            lines.push(name.to_string());
+        }
+    }
+    lines.sort();
+    Ok(lines)
+}
+
+/// Whether `head` contains `tip` in its history, so the line could move
+/// from `tip` to `head` without losing a commit.
+///
+/// # Errors
+/// Returns an error when either revision or their history cannot be read.
+pub fn descends_from(root: &Path, tip: &str, head: &str) -> Result<bool, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let resolve = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|e| format!("{revision}: {e}"))
+    };
+    let tip = resolve(tip)?;
+    let head = resolve(head)?;
+    Ok(history::merge_base(&repo, tip, head).map_err(|e| e.to_string())? == tip)
 }
