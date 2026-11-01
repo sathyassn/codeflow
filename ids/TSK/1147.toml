@@ -1,0 +1,11 @@
+id = "TSK-1147"
+uid = "eda07131-059b-4940-80a7-865e96e5f1ac"
+kind = "TSK"
+title = "Guidance and seat config describe capacity admission, not one gate at a time"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:52:33Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
