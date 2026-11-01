@@ -11293,7 +11293,10 @@ fn gitleaks_scan_makes_no_network_call_and_authority_refuses_when_the_remote_can
 
     // A tracking ref (what git fetch leaves): no remote contact, so the
     // only refusal left is the engine's own, for the missing binary.
-    git(dir.path(), &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
     git(
         dir.path(),
         &[
