@@ -525,13 +525,13 @@ and CI runs it again.
 | Captured output | Bounded, with truncation reported |
 | `test setup` | Detects only at the repository root; monorepos declare package `cwd` targets; never automatically replaces populated or malformed config |
 
-One full gate runs at a time on a machine.
+Heavy runs share the host by capacity and start with fewer jobs past its
+budget; only a `host_exclusive` target runs alone
+([details](troubleshooting.md#heavy-work-shares-the-host)).
 
-- A second gate refuses and names the holder.
 - A gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
   worktree, and each target prints a start line on stderr as it begins.
-- A killed gate never lets a second one run beside its target. On Unix the
-  lock is held until the target's process group exits. On Windows the
+- A killed gate's slot stays busy while its target runs. On Windows the
   target's job object ends its process tree with the gate.
 
 The `pre-push` hook runs the push set: `codeflow ci` over the pushed range,
