@@ -1,0 +1,11 @@
+id = "TSK-1156"
+uid = "e61b5c70-bb1f-4beb-b8b6-8a86fd8197c4"
+kind = "TSK"
+title = "Codex builder seats can claim, push and run their own gates"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T21:29:15Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
