@@ -866,17 +866,6 @@ impl ContentRules {
         Self::at(&repo, &git, Some(commit), None)
     }
 
-    /// [`ContentRules::at`] at the commit `rev` names with the policy `git`,
-    /// as `codeflow ci` reads it when no authority commit resolves.
-    ///
-    /// # Errors
-    /// The repository or `rev` cannot be read, or as [`ContentRules::at`].
-    pub fn at_rev(root: &Path, git: &GitPolicy, rev: &str) -> Result<Self, String> {
-        let repo = Repository::discover(root).map_err(|e| e.to_string())?;
-        let commit = Self::commit(&repo, rev)?;
-        Self::at(&repo, git, Some(commit), None)
-    }
-
     fn commit(repo: &Repository, rev: &str) -> Result<git2::Oid, String> {
         repo.revparse_single(rev)
             .and_then(|o| o.peel_to_commit())
@@ -887,25 +876,6 @@ impl ContentRules {
                     crate::git::display_text(rev)
                 )
             })
-    }
-
-    /// The stricter of two authorities' rules, as when the default branch
-    /// is assumed to be `main` or `master` and both exist: the higher
-    /// ignored-file level, the allowances and exceptions both grant, the
-    /// lower limit, and refusal if either refuses. Each tree's ignore rules
-    /// are kept whole, so an exclusion in one is never undone by a
-    /// re-inclusion in the other.
-    #[must_use]
-    pub fn stricter(mut self, other: Self) -> Self {
-        if self.ignored_level.lower(other.ignored_level) == self.ignored_level {
-            self.ignored_level = other.ignored_level;
-        }
-        self.ignored_allow = overlap(&self.ignored_allow, &other.ignored_allow);
-        self.ignore.extend(other.ignore);
-        self.limit = self.limit.min(other.limit);
-        self.except_under = overlap(&self.except_under, &other.except_under);
-        self.refuse |= other.refuse;
-        self
     }
 
     /// Whether a file over the limit is refused, rather than reported.
@@ -1026,27 +996,6 @@ pub const ROUTES: &str = "admit it by tracking the path with Git LFS (the gate s
 
 /// Why a size finding is only a report line in an updated project.
 const REPORTED: &str = "reported only, since git.max_file_bytes is not set on the default branch; set it there to refuse such files";
-
-/// The prefixes both lists cover: for each pair where one lies under the
-/// other, the narrower one.
-fn overlap(left: &[String], right: &[String]) -> Vec<String> {
-    let mut both = Vec::new();
-    for a in left {
-        for b in right {
-            let narrower = if under(a, b) {
-                a
-            } else if under(b, a) {
-                b
-            } else {
-                continue;
-            };
-            if !both.contains(narrower) {
-                both.push(narrower.clone());
-            }
-        }
-    }
-    both
-}
 
 fn bytes(size: u64) -> String {
     let tenths = size.saturating_mul(10) / (1 << 20);

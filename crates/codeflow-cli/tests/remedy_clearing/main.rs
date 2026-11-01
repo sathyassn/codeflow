@@ -600,6 +600,8 @@ fn with_destination(root: &Path) -> PathBuf {
     );
     git(root, &["remote", "add", "origin", dest.to_str().unwrap()]);
     git(root, &["fetch", "-q", "origin"]);
+    // TSK-1077: record the policy authority on every git version.
+    git(root, &["remote", "set-head", "origin", &target]);
     git(
         root,
         &["switch", "-q", "-c", "feat/x", &format!("origin/{target}")],
