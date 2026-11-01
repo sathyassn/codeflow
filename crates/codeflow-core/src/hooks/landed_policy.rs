@@ -18,6 +18,16 @@ pub struct LandedPolicy {
     /// and local only).
     pub authority: Option<Authority>,
     pub local_differs: bool,
+    /// Whether the policy was read from the remote's default branch as last
+    /// fetched, with plain ref files on the way. `false` in the labelled
+    /// states and when the ref-file checks found a reason;
+    /// `security.text_guard: relaxed` is honoured only when this is `true`
+    /// (TSK-397). These refs are local state: a process that can write the
+    /// repository's `.git` directory can set them, which TSK-1057 owns.
+    pub remote_tracked: bool,
+    /// Why the default-branch refs are not taken as the remote's state, when
+    /// the ref-file checks found a reason (TSK-397 security review SEC01-2).
+    pub tracking_doubt: Option<String>,
     /// The commit the policy and project settings were read at: the
     /// authority's, or `HEAD`'s in the labelled states; `None` when they
     /// came from the working copy. The size and ignored-file rules
@@ -113,6 +123,8 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
     let shown = crate::git::display_text(&authority.reference);
     let (policy, project) = at_commit(&repo, oid, &shown)?;
     let mut landed = finish(root, policy, project, shown)?;
+    landed.tracking_doubt = ref_file_doubt(&repo, remote, &authority);
+    landed.remote_tracked = landed.tracking_doubt.is_none();
     landed.authority = Some(authority);
     landed.commit = Some(oid);
     Ok(landed)
@@ -206,6 +218,56 @@ fn default_branch(repo: &Repository, remote: &str) -> Result<Authority, String> 
     })
 }
 
+/// Why the default branch's refs are not taken as the remote's state, or
+/// `None` (TSK-397 security review SEC01-2). [`default_branch`] already
+/// holds the remote `HEAD` to a direct tracking branch of the remote; this
+/// adds that neither loose ref file, nor a directory on its way, is a
+/// symbolic link. A packed ref is ordinary git state and is read as it is.
+/// The checks narrow what a local edit can pass off as the remote's state;
+/// they do not authenticate it: whoever can write `.git` can still forge a
+/// plain ref (TSK-1057).
+fn ref_file_doubt(repo: &Repository, remote: &str, authority: &Authority) -> Option<String> {
+    let base = repo.commondir().to_path_buf();
+    linked_ref_file(&base, &format!("refs/remotes/{remote}/HEAD"))
+        .or_else(|| linked_ref_file(&base, &authority.reference))
+}
+
+/// A reason when the loose file for ref `name` under `base`, or a
+/// directory on its way, is a symbolic link, or the file is not a regular
+/// file. An absent path is a packed ref, which is not questioned.
+fn linked_ref_file(base: &Path, name: &str) -> Option<String> {
+    let mut path = base.to_path_buf();
+    let parts: Vec<&str> = name.split('/').collect();
+    for (index, part) in parts.iter().enumerate() {
+        path.push(part);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Some(format!(
+                    "the ref file for {} passes through a symbolic link at {}",
+                    crate::git::display_text(name),
+                    path.display()
+                ))
+            }
+            Ok(meta) if index + 1 == parts.len() && !meta.is_file() => {
+                return Some(format!(
+                    "the ref file for {} is not a regular file",
+                    crate::git::display_text(name)
+                ))
+            }
+            Ok(_) => {}
+            // A loose ref file that does not exist is a packed ref.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => {
+                return Some(format!(
+                    "the ref file for {} cannot be inspected: {error}",
+                    crate::git::display_text(name)
+                ))
+            }
+        }
+    }
+    None
+}
+
 /// A state with no remote default branch: `HEAD`'s policy, or the working
 /// copy before the first commit, labelled with `reason`.
 fn unestablished(repo: &Repository, root: &Path, reason: &str) -> Result<LandedPolicy, String> {
@@ -239,6 +301,8 @@ fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
         source: source.into(),
         authority: None,
         local_differs: false,
+        remote_tracked: false,
+        tracking_doubt: None,
         commit: None,
     })
 }
@@ -257,6 +321,8 @@ fn finish(
         source,
         authority: None,
         local_differs,
+        remote_tracked: false,
+        tracking_doubt: None,
         commit: None,
     })
 }
@@ -349,6 +415,18 @@ fn file_in(
     if entry.kind() != Some(git2::ObjectType::Blob) || entry.filemode() == 0o120_000 {
         return Err(format!(
             "cannot read policy source {shown}: {path} is not a regular file"
+        ));
+    }
+    // The size is read from the object header before the object is loaded,
+    // so an oversized blob is never copied (TSK-397 security review SEC01-3).
+    let (size, _) = repo
+        .odb()
+        .and_then(|odb| odb.read_header(entry.id()))
+        .map_err(|e| format!("cannot read policy source {shown}: {path}: {e}"))?;
+    if size as u64 > super::policy::SETTINGS_READ_LIMIT {
+        return Err(format!(
+            "cannot read policy source {shown}: {path} is larger than {} bytes",
+            super::policy::SETTINGS_READ_LIMIT
         ));
     }
     let blob = repo

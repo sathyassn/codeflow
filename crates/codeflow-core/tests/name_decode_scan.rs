@@ -1478,6 +1478,32 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-397: doctor's Claude settings reader. A layer that is not UTF-8
+    // or not a JSON object is reported, never read as an absent layer. A
+    // `.git` file's `gitdir:` value is trimmed as Git trims it, and the main
+    // checkout counts only when the trimmed path resolves to the common
+    // directory; otherwise the check reports it.
+    (
+        "crates/codeflow-core/src/hooks/sandbox_state.rs",
+        "read_text",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/sandbox_state.rs",
+        "claude_layers",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/sandbox_state.rs",
+        "main_checkout",
+        "trim",
+        1,
+        "format-contract",
+    ),
     // TSK-452: doctor's preflight report only prints evidence and decides
     // nothing. A missing or misread catalog, settings file or PATH entry is
     // printed as unavailable, never as configured or observed.
@@ -6816,6 +6842,8 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/hooks/sandbox_state.rs", "read_text", "is_file", 2, "Type checks on obtained metadata, before and after opening; any non-file is unreadable, a strict-rule trigger, so a FIFO, device or directory never reads as an absent layer (TSK-397)."),
+    ("crates/codeflow-core/src/hooks/sandbox_state.rs", "claude_layers", "ErrorKind::NotFound", 1, "Only native NotFound on read_dir of the managed settings drop-in directory means it adds no layer (TSK-397); every other error is reported by doctor's state-root check, which then fails."),
     ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
@@ -6934,6 +6962,11 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/model_qualification.rs", "read_bounded_json_with_hook", "is_file", 2, "Type checks on metadata obtained with errors propagated; false returns Err."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_dir", 1, "Type check on entry.file_type(), whose error propagates out of load_skill_tree to its callers."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_file", 1, "Type check on entry.file_type(), whose error propagates; a regular file is then read with its error propagated."),
+    ("crates/codeflow-core/src/bounded_file.rs", "read_bounded_following", "is_file", 2, "Type checks on std::fs::metadata and on the opened descriptor's metadata, both obtained with errors propagated; a non-regular file is refused with InvalidData, and the open is non-blocking so a fifo never holds the reader (TSK-397 SEC01-3)."),
+    ("crates/codeflow-core/src/hooks/landed_policy.rs", "linked_ref_file", "is_file", 1, "Type check on symlink_metadata obtained with its error handled; a ref path that is not a regular file is doubted, which keeps the strict text rule (TSK-397 SEC01-2)."),
+    ("crates/codeflow-core/src/hooks/landed_policy.rs", "linked_ref_file", "ErrorKind::NotFound", 1, "A missing loose ref file is a packed ref, which git reads as usual; any other inspection error is doubted, which keeps the strict text rule (TSK-397 SEC01-2)."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "config_files_readable", "is_file", 1, "Type check on std::fs::metadata obtained with its error handled; a configuration file that is not regular refuses discovery before libgit2 reads it (TSK-397 SEC01-3)."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "config_files_readable", "ErrorKind::NotFound", 1, "An absent config or config.worktree is ordinary and is left to libgit2; any other inspection error refuses discovery (TSK-397 SEC01-3)."),
     ("crates/codeflow-core/src/bounded_file.rs", "read_regular", "is_file", 1, "Type check on std::fs::metadata with its error propagated, so a missing path or dangling link keeps NotFound for the caller; a non-regular file is refused with InvalidInput before it is opened, so a fifo never blocks."),
     ("crates/codeflow-core/src/doctor/mod.rs", "read_bounded", "is_file", 1, "Type check on std::fs::metadata with its error returned as an open failure; a non-regular file is refused before File::open, so a fifo never blocks the probe read."),
     ("crates/codeflow-core/src/reading.rs", "regular_text", "is_file", 1, "Type check on std::fs::metadata taken after proven_absent, with its error propagated, so a dangling link fails; only a regular file is read, with its error propagated, and a directory, fifo or device is never read."),

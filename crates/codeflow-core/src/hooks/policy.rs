@@ -815,6 +815,31 @@ pub struct SecuritySection {
     /// Unsupported legacy entries; accepted values have no effect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_retry_allow: Option<Vec<serde_json::Value>>,
+    /// Which text rule the exec guard applies (TSK-397): `strict`, the
+    /// default, adds the strict rule to every shell call; `relaxed`, the
+    /// operator's choice, applies the line's rule and verifies nothing.
+    #[serde(skip_serializing_if = "TextGuard::is_strict")]
+    pub text_guard: TextGuard,
+}
+
+/// The `security.text_guard` values.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextGuard {
+    /// The strict rule applies to every shell call.
+    #[default]
+    Strict,
+    /// The line's rule, by the operator's choice; honoured only from the
+    /// remote-tracking refs as last fetched.
+    Relaxed,
+}
+
+impl TextGuard {
+    /// Whether this is the default, `strict`.
+    #[must_use]
+    pub fn is_strict(&self) -> bool {
+        *self == Self::Strict
+    }
 }
 
 impl Default for SecuritySection {
@@ -831,6 +856,7 @@ impl Default for SecuritySection {
             workflow_pushes: None,
             sandbox_retry: None,
             sandbox_retry_allow: None,
+            text_guard: TextGuard::Strict,
         }
     }
 }
@@ -1057,16 +1083,26 @@ pub fn policy_armed(root: &Path) -> Result<bool, String> {
     }
 }
 
+/// The largest policy or project settings file read, in the working copy or
+/// as a committed blob (TSK-397 security review SEC01-3).
+pub(crate) const SETTINGS_READ_LIMIT: u64 = 4 * 1024 * 1024;
+
 /// Read an optional configuration file. Only proven absence selects a default;
-/// existing entries and unresolved ancestors remain unreadable inputs.
+/// existing entries and unresolved ancestors remain unreadable inputs. The
+/// read is bounded and never waits: a fifo, directory, device or file over
+/// [`SETTINGS_READ_LIMIT`] is unreadable, which the guards refuse.
 /// # Errors
 /// The file cannot be read as text.
 pub(crate) fn optional_text(path: &Path) -> Result<Option<String>, String> {
-    let unreadable = |error| format!("cannot read {}: {error}", path.display());
+    let unreadable = |error: std::io::Error| format!("cannot read {}: {error}", path.display());
     if crate::absence::proven_absent(path).map_err(unreadable)? {
         return Ok(None);
     }
-    std::fs::read_to_string(path).map(Some).map_err(unreadable)
+    let bytes = crate::bounded_file::read_bounded_following(path, SETTINGS_READ_LIMIT)
+        .map_err(unreadable)?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| format!("cannot read {}: not UTF-8", path.display()))
 }
 
 /// Parse optional project settings without hiding obtaining errors.
