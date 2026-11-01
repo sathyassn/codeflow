@@ -6969,3 +6969,6 @@ mod sync_merges;
 
 #[path = "acceptance_cli/line_sync_push.rs"]
 mod line_sync_push;
+
+#[path = "acceptance_cli/own_line_criteria.rs"]
+mod own_line_criteria;
