@@ -336,6 +336,13 @@ catalog! {
     /// A task branch whose planning is not anchored on the target.
     WORK_START_RECONCILE = Step::Codeflow("codeflow work start"),
         "reconcile the target branch, then run `codeflow work start {id}`";
+    /// A task blocked on the target (TSK-1036): its own pull request
+    /// unblocks it once the Blocker is resolved.
+    WORK_START_UNBLOCK = Step::Codeflow("codeflow task status"),
+        "when the Blocker is resolved, unblock the task in this pull request: run `codeflow task status {id} todo`, which removes the Blocker, commit the record on this branch, then run `codeflow work start {id}`; while the Blocker holds, the task waits for its revisit event";
+    /// A range that unblocks a task (TSK-1036): evidence, not a refusal.
+    RECORD_UNBLOCKED = Step::Codeflow("codeflow ci"),
+        "nothing to change: `codeflow ci` shows the Blocker the range removes, and a human reviewer confirms it is resolved";
     /// A task whose planning record has not reached the target.
     WORK_START_MERGE_PLANNING = Step::Codeflow("codeflow work start"),
         "merge the epic's planning change into '{target}', or for a standalone task commit its record on this branch, then run `codeflow work start {id}`";
