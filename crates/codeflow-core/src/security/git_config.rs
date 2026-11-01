@@ -447,6 +447,113 @@ pub(crate) fn repository_of(
     }
 }
 
+/// The variables that move Git's repository, common directory or work tree.
+const LOCATION_VARIABLES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+
+/// The location variables this process inherited, with their values.
+pub(crate) fn process_location() -> Environment {
+    LOCATION_VARIABLES
+        .iter()
+        .filter_map(|name| {
+            std::env::var_os(name)
+                .map(|value| ((*name).to_string(), value.to_string_lossy().into_owned()))
+        })
+        .collect()
+}
+
+/// Refuse a call whose repository location the caller chose (TSK-1130). The
+/// repository whose `local` and `worktree` configuration the guards trust is
+/// the one Git finds from the working directory. When `inherited` says the
+/// process environment (or `environment`) sets `GIT_DIR`, `GIT_COMMON_DIR` or
+/// `GIT_WORK_TREE`, Git may read another repository's configuration and
+/// hooks. This asks Git for the Git directory, common directory and work tree
+/// with and without those variables, and refuses unless the answers match.
+/// A probe that fails refuses.
+pub(crate) fn inherited_location_is_own(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+    inherited: &Environment,
+) -> Result<(), String> {
+    // A name the command itself assigns is the command's own choice, which
+    // the target resolution judges; only the inherited ones are judged here.
+    let set: Vec<&str> = LOCATION_VARIABLES
+        .iter()
+        .copied()
+        .filter(|name| inherited.contains_key(*name) && !environment.contains_key(*name))
+        .collect();
+    if set.is_empty() {
+        return Ok(());
+    }
+    let mut given = inherited.clone();
+    given.extend(
+        environment
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
+    let as_given = location(cwd, globals, &given, false)?;
+    let own = location(cwd, globals, environment, true)?;
+    if as_given == own {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} in the environment moves the repository Git uses away from the one the guard found from the working directory; unset it",
+            set.join(", ")
+        ))
+    }
+}
+
+/// Git's answer for the repository location from `cwd`, canonical, with the
+/// location variables kept (`clean` false) or removed (`clean` true).
+fn location(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+    clean: bool,
+) -> Result<Vec<String>, String> {
+    let run = |tail: &[&str]| -> Result<Vec<u8>, String> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut command = crate::git::command();
+        command.current_dir(cwd).stdin(Stdio::null());
+        command.env_remove("GIT_CONFIG");
+        for (name, value) in environment {
+            if !(clean && LOCATION_VARIABLES.contains(&name.as_str())) {
+                command.env(name, value);
+            }
+        }
+        if clean {
+            for name in LOCATION_VARIABLES {
+                command.env_remove(name);
+            }
+        }
+        with_globals(&mut command, cwd, globals)?;
+        command.arg("--no-pager").args(tail);
+        bounded_output(&mut command, deadline)
+    };
+    let text = |bytes: Vec<u8>| {
+        String::from_utf8(bytes).map_err(|_| "cannot read the Git repository paths".to_string())
+    };
+    let dirs = text(run(&[
+        "rev-parse",
+        "--absolute-git-dir",
+        "--path-format=absolute",
+        "--git-common-dir",
+    ])?)?;
+    // A repository with no work tree has no top level; that answer is part
+    // of the comparison, not an error.
+    let top = run(&["rev-parse", "--show-toplevel"])
+        .and_then(text)
+        .unwrap_or_default();
+    Ok(dirs
+        .lines()
+        .chain(top.lines())
+        .map(|line| {
+            std::fs::canonicalize(line)
+                .map_or_else(|_| line.to_string(), |p| p.to_string_lossy().into_owned())
+        })
+        .collect())
+}
+
 pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,

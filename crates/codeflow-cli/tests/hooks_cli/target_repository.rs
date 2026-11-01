@@ -321,6 +321,55 @@ fn tsk1130_a_hooks_path_in_an_environment_selected_file_refuses_git() {
     }
 }
 
+/// TSK-1130: the repository whose `local` and `worktree` configuration the
+/// guards trust is the one Git finds from the working directory. A
+/// `GIT_DIR`, `GIT_COMMON_DIR` or `GIT_WORK_TREE` the hook process inherits
+/// can move Git to another repository, so both guards refuse git under any of
+/// them, from the root checkout and a linked worktree. The same variable
+/// naming the repository the guard found itself, and no variable, are
+/// allowed.
+#[test]
+fn tsk1130_an_inherited_repository_location_refuses_git_in_both_guards() {
+    let f = Fixture::new();
+    let other = f.temp.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    git(&other, &["init", "-q"]);
+    let other_git = shell_path(&other.join(".git"));
+    let other_tree = shell_path(&other);
+    let run = |hook: &str, cwd: &Path, env: &[(&str, &str)]| {
+        let mut cmd = f.guard_command(cwd, hook);
+        for (name, value) in env {
+            cmd.env(name, value);
+        }
+        run_with_stdin(&mut cmd, &guard_payload("git status", cwd))
+    };
+    let moved = [
+        ("GIT_DIR", other_git.as_str()),
+        ("GIT_COMMON_DIR", other_git.as_str()),
+        ("GIT_WORK_TREE", other_tree.as_str()),
+    ];
+    let own = [
+        (&f.root, shell_path(&f.root.join(".git"))),
+        (&f.linked, shell_path(&f.root.join(".git/worktrees/w"))),
+    ];
+    for hook in ["git-guard", "exec-guard"] {
+        for (cwd, own_git) in &own {
+            for (name, value) in moved {
+                let out = run(hook, cwd, &[(name, value)]);
+                assert!(refused(&out), "{hook} {name}: {out:?}");
+                assert!(
+                    String::from_utf8_lossy(&out.stderr).contains(name),
+                    "{hook} {name}: {out:?}"
+                );
+            }
+            for env in [&[][..], &[("GIT_DIR", own_git.as_str())][..]] {
+                let out = run(hook, cwd, env);
+                assert!(line_allows(&out), "{hook} {env:?}: {out:?}");
+            }
+        }
+    }
+}
+
 /// Issue #342 commands are classified from a linked task worktree. None of
 /// the payloads run, including the absolute temporary destinations.
 #[test]

@@ -1800,7 +1800,14 @@ directory, and includes from them), and a directory can gain a hook after the
 check, so the guard trusts the scope and not the file. An include keeps the
 scope of the file that includes it. An unreadable configuration refuses too.
 To keep a custom hooks directory, set it in the repository's own
-configuration. git-guard and exec-guard apply the rule alike.
+configuration. The repository whose `local` and `worktree` values count is
+the one Git finds from the working directory, which the caller cannot
+choose. When the hook process environment sets `GIT_DIR`, `GIT_COMMON_DIR`
+or `GIT_WORK_TREE`, the guards ask Git for the Git directory, common
+directory and work tree with and without those variables, and refuse
+unless the answers match; a probe that fails refuses. A variable that names
+the repository Git finds anyway is allowed. git-guard and exec-guard apply
+the rules alike.
 
 On a line with a configuration-dependent Git decision, the guards refuse any
 non-Git segment that mentions a configuration variable except as a plain

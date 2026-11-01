@@ -604,6 +604,12 @@ fn configured_commands(
         return Ok(Vec::new());
     };
     let settings = configuration_options(args)?;
+    crate::security::git_config::inherited_location_is_own(
+        cwd,
+        &settings,
+        &config_environment(env),
+        &crate::security::git_config::process_location(),
+    )?;
     let config = crate::security::git_config::read(cwd, &settings, &config_environment(env))?;
     transport(args, &config)?;
     repository_owned_hooks_path(&config)?;
@@ -2479,6 +2485,44 @@ mod tests {
         assert!(call_with(root.path(), &["status"], &[("GIT_CONFIG_GLOBAL", &file)]).is_ok());
         assert!(call(root.path(), &["status"]).is_ok());
         assert!(call(root.path(), &["-c", "user.name=x", "status"]).is_ok());
+    }
+
+    #[test]
+    fn a_repository_location_the_caller_chose_refuses() {
+        let root = repository();
+        let other = repository();
+        let own_git = root.path().join(".git").to_string_lossy().into_owned();
+        let other_git = other.path().join(".git").to_string_lossy().into_owned();
+        let other_tree = other.path().to_string_lossy().into_owned();
+        for (name, value) in [
+            ("GIT_DIR", other_git.as_str()),
+            ("GIT_COMMON_DIR", other_git.as_str()),
+            ("GIT_WORK_TREE", other_tree.as_str()),
+        ] {
+            let inherited = [(name.to_string(), value.to_string())]
+                .into_iter()
+                .collect();
+            let refused = crate::security::git_config::inherited_location_is_own(
+                root.path(),
+                &[],
+                &crate::security::git_config::Environment::new(),
+                &inherited,
+            )
+            .expect_err(name);
+            assert!(refused.contains(name), "{refused}");
+        }
+        // The variable naming the repository the guard found itself is not
+        // a move, and neither is no variable.
+        let own: crate::security::git_config::Environment =
+            [("GIT_DIR".to_string(), own_git)].into_iter().collect();
+        assert!(crate::security::git_config::inherited_location_is_own(
+            root.path(),
+            &[],
+            &crate::security::git_config::Environment::new(),
+            &own
+        )
+        .is_ok());
+        assert!(call(root.path(), &["status"]).is_ok());
     }
 
     #[test]
