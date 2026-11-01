@@ -85,7 +85,19 @@ fn amendment(root: &Path, own: Own, extra: Extra) -> String {
 /// run `codeflow ci` for the task pull request into [`LINE`].
 fn complete_and_judge(root: &Path, own: Own, reviewed: &str, by: &str) -> (i32, String) {
     let own = if own == Own::Untouched { Own::Amended } else { own };
-    write_own(root, own, "complete", &waived_block(reviewed, by));
+    // A removed criterion leaves the record, so the block has no row for
+    // it to waive (`work.records` refuses a row the record does not have).
+    let closeout = if own == Own::Removed {
+        block(
+            reviewed,
+            &["AC-2: verified | journey ran"],
+            "verified | tests/journey.rs",
+            "none: nothing deferred",
+        )
+    } else {
+        waived_block(reviewed, by)
+    };
+    write_own(root, own, "complete", &closeout);
     commit(root, "docs(records): complete TSK-001");
     ci_on(root, LINE, "task/TSK-001-work", "Task: TSK-001")
 }
