@@ -2444,10 +2444,10 @@ fn unblock_notice(old: &RecordView, record: &RecordView) -> Option<Finding> {
     }
     let blocker = super::record_text::parse_blocker(&old.body).unwrap_or_default();
     let field = |value: &str| {
-        if value.trim().is_empty() {
+        if value.is_empty() {
             "(none recorded)".to_string()
         } else {
-            value.trim().to_string()
+            value.to_string()
         }
     };
     Some(Finding::new(
