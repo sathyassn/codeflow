@@ -1,0 +1,11 @@
+id = "ADR-0094"
+uid = "9f3056b2-68f0-44c6-b47f-77fe4053655f"
+kind = "ADR"
+title = "Lanes as recorded sessions"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T03:40:27Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
