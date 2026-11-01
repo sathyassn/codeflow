@@ -765,6 +765,9 @@ catalog! {
     /// Harness settings without the shell startup class (TSK-242).
     DOCTOR_STARTUP_PRESETS = Step::Codeflow("codeflow update"),
         "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
+    /// The text rule the exec guard applies (TSK-397, H-6).
+    DOCTOR_TEXT_RULE_UNSEEN = Step::Edit(".codeflow/policy.json"),
+        "nothing is needed for the strict rule; to relax it, the operator sets `security.text_guard` to `relaxed` in .codeflow/policy.json and lands it on every protected ref the hook reads, accepting that no sandbox is verified";
     /// Git include paths that need operator inspection.
     DOCTOR_GIT_CONFIG_INCLUDES = Step::Git("git config"),
         "The operator inspects git config --show-origin --includes --list and secures or removes its include paths; rerun codeflow doctor --check git-config-includes after repair.";
