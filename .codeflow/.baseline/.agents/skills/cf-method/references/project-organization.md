@@ -410,14 +410,21 @@ inside `acceptance.criteria`. The evidence after `|` is the commit alone,
 not a review URL or an explanation. The named commit must change that
 criterion and change planning records only. The completion must contain it.
 Other planning records in the same commit, such as the epic record, the epic
-plan or other task records, do not disqualify it. A criterion the amendment
-removes leaves the record, so the completion has no row for it and needs no
-waiver.
+plan or other task records, do not disqualify it. A planning record is a
+file under `project-management/` or `docs/plan/` that is not hidden, not a
+harness instruction file and not an adopter-facing path under the target's
+policy. The waiver accepts the commit for this criterion only: its other
+changes stay under their own rules, so a task pull request still changes no
+other task's criteria. A criterion the amendment removes leaves the record,
+so the completion has no row for it and needs no waiver.
 
 A task can name an amendment already on its integration target. Before its
 first landing, it can also name an amendment in its own task range. In that
 case the amendment meets the same test and is strictly after the range's
-merge-base and strictly before `reviewed` in commit ancestry. The amendment
+merge-base and strictly before `reviewed` in commit ancestry. In
+`codeflow task status`, a task whose declared integration line is not
+recorded at the default target's tip has no own range unless `--base` and
+`--into` pin that line. The amendment
 cannot be the reviewed commit or the completion commit. A range that
 reopens a completion that never landed keeps that own-range allowance,
 whatever caused the reopen. A range that reopens a landed completion cannot
