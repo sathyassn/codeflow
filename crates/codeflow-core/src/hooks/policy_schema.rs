@@ -812,8 +812,8 @@ pub const SCHEMA: [KeySpec; 77] = [
                 includes the conflict-marker check, and the release preflight \
                 where the project adopted it. It runs no `codeflow validate \
                 --docs` (`codeflow ci` checks the work graph) and no \
-                test-config target, so a push never waits for the heavy-work \
-                lock; cite `codeflow test --mode quick` when the pull request \
+                test-config target, so a push never waits for a heavy run; \
+                cite `codeflow test --mode quick` when the pull request \
                 is made ready. Tag and other non-branch pushes are outside the \
                 push set. Local-config tampering is outside the hook threat \
                 model; hosted CI checks the pushed commit.",
