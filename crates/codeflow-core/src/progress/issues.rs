@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use super::compute::{count_f64, mean, pull_for, stage, time_text, Stage};
-use super::inputs::{ForgeIn, Inputs, LedgerIn, TaskIn};
+use super::inputs::{ForgeIn, Inputs, LedgerIn, RequiredCheckIn, TaskIn};
 use super::model::{
     DecisionFact, EvidenceFact, IssueFact, IssuesFact, Known, LaneFact, LanesFact,
     OperatorItemFact, OperatorSet, PaceDay, PaceFact, SessionLaneFact, SourceCheck, Unblocker,
@@ -38,6 +38,10 @@ fn issue(
         source: "records".into(),
     }
 }
+
+/// The source of the required-check issues and of their evidence: the
+/// forge's runs and its required set, checked only when both were read.
+pub(super) const REQUIRED_SOURCE: &str = "required checks";
 
 /// The `owner/name` a `gh --repo` takes, for a GitHub repository.
 fn gh_repo(inputs: &Inputs) -> Option<&str> {
@@ -88,7 +92,14 @@ pub fn issues(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> IssuesFac
     attach_session(inputs, &mut tasks);
     let lanes = lane_issues(inputs, &now);
     let operator = operator_set(inputs, ids, &now);
-    let complete = operator.unchecked.is_empty() && required_unread(inputs, Some(ids)).is_none();
+    // An open task whose reported head was not read may carry issues
+    // there that no source here shows.
+    let heads_read = !inputs
+        .tasks
+        .iter()
+        .any(|task| ids.contains(&task.id) && task.head_unread.is_some());
+    let complete =
+        operator.unchecked.is_empty() && heads_read && required_unread(inputs, Some(ids)).is_none();
     IssuesFact {
         tasks,
         lanes,
@@ -183,14 +194,22 @@ fn task_issues(inputs: &Inputs, plan: &Plan, task: &TaskIn, now: &str, out: &mut
             _ => None,
         };
         if let Some(kind) = kind {
-            let detail = match &pull.required {
-                Ok(names) => format!(
+            let detail = match (&pull.required, &pull.producers_unread) {
+                (Ok(checks), None) => format!(
                     "pull request #{} required checks ({}) read as {}",
                     pull.number,
-                    names.join(", "),
+                    checks
+                        .iter()
+                        .map(RequiredCheckIn::label)
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     pull.required_checks
                 ),
-                Err(reason) => format!(
+                (Ok(_), Some(reason)) => format!(
+                    "pull request #{}: the runs of the apps its required checks name could not be read: {reason}",
+                    pull.number
+                ),
+                (Err(reason), _) => format!(
                     "pull request #{}: which checks are required could not be read: {reason}",
                     pull.number
                 ),
@@ -205,7 +224,9 @@ fn task_issues(inputs: &Inputs, plan: &Plan, task: &TaskIn, now: &str, out: &mut
                     name: Known::Value(format!("pull request #{}", pull.number)),
                 },
             );
-            fact.source = "forge".into();
+            // Judged from the runs and the required set together, so its
+            // source is checked only when both were read.
+            fact.source = REQUIRED_SOURCE.into();
             fact.command = Known::or_word(
                 gh_repo(inputs).map(|repo| format!("gh pr checks {} --repo {repo}", pull.number)),
                 "none",
@@ -474,7 +495,10 @@ fn records_problem(inputs: &Inputs) -> Option<String> {
     problems.extend(inputs.tasks.iter().filter_map(|task| {
         task.unknown
             .as_deref()
-            .filter(|reason| !reason.starts_with(super::gather::FORGE_UNREAD))
+            .filter(|reason| {
+                !reason.starts_with(super::gather::FORGE_UNREAD)
+                    && !reason.starts_with(super::gather::HEAD_UNREAD)
+            })
             .map(|reason| format!("{}: {reason}", task.id))
     }));
     (!problems.is_empty()).then(|| problems.join("; "))
@@ -603,7 +627,13 @@ pub fn pace(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> PaceFact {
         .collect();
     let lanes = plan.lanes_used.max(1);
     let planned = count_f64(lanes) * 24.0;
-    let known = inputs.history_read && scope.iter().any(|task| task.created.is_some());
+    // Each measure needs its own coverage: landings the history walk of
+    // every home; additions every task's creation date; open counts both,
+    // and every task's openness.
+    let known = inputs.history_read;
+    let dated = scope.iter().all(|task| task.created.is_some());
+    let added_known = known && dated;
+    let open_known = added_known && super::plan::membership_unknown(inputs, ids).is_none();
     let days = last_days(inputs.now);
     let day_of = |at: i64| time_text(at)[..10].to_string();
     let landed_on = |date: &str| -> Vec<String> {
@@ -639,12 +669,12 @@ pub fn pace(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> PaceFact {
             } else {
                 Known::unknown()
             },
-            added: if known {
+            added: if added_known {
                 Known::Value(added_on(date))
             } else {
                 Known::unknown()
             },
-            open_at_end: if known {
+            open_at_end: if open_known {
                 Known::Value(open_at(date))
             } else {
                 Known::unknown()
@@ -656,11 +686,11 @@ pub fn pace(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> PaceFact {
     PaceFact {
         days: per_day,
         landed_total: if known { Known::Value(landed_week) } else { Known::unknown() },
-        added_total: if known { Known::Value(added_week) } else { Known::unknown() },
+        added_total: if added_known { Known::Value(added_week) } else { Known::unknown() },
         lanes_observed: plan.lanes_used,
         observed_landing_rate_per_day: if known { Known::Value(count_f64(landed_week) / 7.0) } else { Known::unknown() },
         planned_capacity_rate_per_day: planned,
-        intake_rate_per_day: if known { Known::Value(count_f64(added_week) / 7.0) } else { Known::unknown() },
+        intake_rate_per_day: if added_known { Known::Value(count_f64(added_week) / 7.0) } else { Known::unknown() },
         basis: "landings from the home target's first-parent history, additions from record creation dates; the planned capacity is one task per lane-hour over the lanes used and is never lowered to the observed pace".into(),
     }
 }
@@ -669,9 +699,9 @@ pub fn pace(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> PaceFact {
 /// could not be read; while one is unread, a missing required check cannot
 /// be found and the issues view is not complete.
 fn required_unread(inputs: &Inputs, ids: Option<&BTreeSet<String>>) -> Option<String> {
-    let ForgeIn::Read { .. } = &inputs.forge else {
-        return None;
-    };
+    if let ForgeIn::Unverified { reason } = &inputs.forge {
+        return Some(format!("{}: {reason}", super::gather::FORGE_UNREAD));
+    }
     let unread: Vec<String> = inputs
         .tasks
         .iter()
@@ -681,6 +711,7 @@ fn required_unread(inputs: &Inputs, ids: Option<&BTreeSet<String>>) -> Option<St
             pull.required
                 .as_ref()
                 .err()
+                .or(pull.producers_unread.as_ref())
                 .map(|reason| format!("pull request #{}: {reason}", pull.number))
         })
         .collect();
@@ -728,7 +759,19 @@ pub fn evidence(inputs: &Inputs, plan: &Plan) -> Vec<EvidenceFact> {
     };
     let mut out = vec![
         evidence_entry("percents", "records", records_ok, &at, records),
-        evidence_entry("percents", "git", true, &at, None),
+        {
+            let heads: Vec<String> = inputs
+                .tasks
+                .iter()
+                .filter_map(|task| {
+                    task.head_unread
+                        .as_ref()
+                        .map(|reason| format!("{}: {reason}", task.id))
+                })
+                .collect();
+            let note = (!heads.is_empty()).then(|| heads.join("; "));
+            evidence_entry("percents", "git", note.is_none(), &at, note)
+        },
         evidence_entry(
             "locations",
             "git refs",
@@ -759,7 +802,7 @@ pub fn evidence(inputs: &Inputs, plan: &Plan) -> Vec<EvidenceFact> {
         evidence_entry("issues", "forge", forge.0, &forge.1, forge.2),
         {
             let unread = required_unread(inputs, None);
-            evidence_entry("issues", "required checks", unread.is_none(), &at, unread)
+            evidence_entry("issues", REQUIRED_SOURCE, unread.is_none(), &at, unread)
         },
         evidence_entry("issues", "ledger", ledger.0, &at, ledger.1),
         evidence_entry(
@@ -769,6 +812,18 @@ pub fn evidence(inputs: &Inputs, plan: &Plan) -> Vec<EvidenceFact> {
             &at,
             inputs.history_note.clone(),
         ),
+        {
+            // Additions and open counts need every task's creation date.
+            let undated: Vec<&str> = inputs
+                .tasks
+                .iter()
+                .filter(|task| task.created.is_none() && task.status != "cancelled")
+                .map(|task| task.id.as_str())
+                .collect();
+            let note = (!undated.is_empty())
+                .then(|| format!("no creation date on {}", undated.join(", ")));
+            evidence_entry("pace", "record creation dates", note.is_none(), &at, note)
+        },
     ];
     for (name, read) in &inputs.owed {
         let problem = match read {

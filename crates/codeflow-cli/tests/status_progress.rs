@@ -105,7 +105,8 @@ fn task_record(id: &str, status: &str, depends: &str, extra: &str) -> String {
 const EPIC: &str = "---\nid: EPC-001\ntitle: Demo epic\nstatus: active\ncreated: 2026-10-29\n---\n\n## Outcome\n\nThe demo ships.\n\n## Core work\n\n- TSK-001, TSK-002 and TSK-003.\n\n## Follow-on\n\n- TSK-004 and TSK-005.\n";
 
 /// The fake forge: the open pull request list, and for `main` one ruleset
-/// that requires `build` and an unprotected branch.
+/// that requires `build` and an unprotected branch. `TSK003_HEAD` is
+/// replaced with the head of TSK-003's branch, so the head is here.
 const PULLS: &str = r#"case "$1 $2" in
 "api repos/acme/demo/rules/branches/main?per_page=100")
   echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"build"}]}}]' ;;
@@ -113,7 +114,7 @@ const PULLS: &str = r#"case "$1 $2" in
   echo '{"name":"main","protected":false}' ;;
 "pr list")
   cat <<'JSON'
-[{"number":7,"title":"TSK-003 work","headRefName":"task/TSK-003-work","headRefOid":"0000000000000000000000000000000000000003","baseRefName":"main","isDraft":false,"statusCheckRollup":[{"name":"build","conclusion":"FAILURE"}]}]
+[{"number":7,"title":"TSK-003 work","headRefName":"task/TSK-003-work","headRefOid":"TSK003_HEAD","baseRefName":"main","isDraft":false,"statusCheckRollup":[{"name":"build","conclusion":"FAILURE"}]}]
 JSON
   ;;
 *) exit 1 ;;
@@ -199,7 +200,8 @@ fn fixture() -> Fixture {
         root,
         bin,
     };
-    fixture.gh(PULLS);
+    let head = git(&fixture.root, &["rev-parse", "task/TSK-003-work"]);
+    fixture.gh(&PULLS.replace("TSK003_HEAD", head.trim()));
     fixture
 }
 
@@ -548,7 +550,7 @@ fn the_facts_validate_against_the_shipped_schema() {
 
 /// FNV-1a over the shipped v1 schema's bytes, carriage returns left out
 /// so a CRLF checkout reads the same.
-const SCHEMA_DIGEST: u64 = 0xf987_96d8_f79f_57d7;
+const SCHEMA_DIGEST: u64 = 0x8307_4ce5_5e28_836b;
 
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes

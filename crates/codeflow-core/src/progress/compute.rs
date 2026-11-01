@@ -419,6 +419,10 @@ fn bind_ref(inputs: &Inputs, fact: &mut LocationFact, reference: Option<&super::
 }
 
 fn criteria(task: &TaskIn) -> Known<CriteriaFact> {
+    // The head was not read, so no block there is not proven absent.
+    if task.head_unread.is_some() {
+        return Known::unknown();
+    }
     task.acceptance
         .as_ref()
         .map_or_else(Known::not_recorded, |block| {
@@ -566,6 +570,7 @@ fn blank_task(id: &str) -> TaskIn {
         on_main: None,
         on_home_ref: None,
         unknown: Some("the record is unreadable".into()),
+        head_unread: None,
         record_on_line: false,
         landed_at: None,
     }

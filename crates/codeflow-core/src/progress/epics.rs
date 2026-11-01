@@ -12,7 +12,7 @@ use super::model::{
     ChainLanded, ChainPull, CheckRunFact, EpicFact, FeatureFact, HopFact, Known, LandingChain,
     LocationCounts, PullFact, StageCounts, StepFact, ThemeFact,
 };
-use super::plan::{done_window, is_open, not_estimable, Plan, Win};
+use super::plan::{done_window, is_open, not_estimable, openness_unknown, Plan, Win};
 
 /// One fact per epic the scope reaches, in id order.
 #[must_use]
@@ -182,7 +182,13 @@ fn landing_chain(inputs: &Inputs, plan: &Plan, line: &str, tasks: &[&TaskIn]) ->
                     draft: pull.draft,
                     checks: pull.checks.clone(),
                     required: pull.required_checks.clone(),
-                    required_note: Known::or_word(pull.required.clone().err(), "none"),
+                    required_note: Known::or_word(
+                        pull.required
+                            .clone()
+                            .err()
+                            .or_else(|| pull.producers_unread.clone()),
+                        "none",
+                    ),
                     runs: pull
                         .runs
                         .iter()
@@ -277,17 +283,24 @@ fn path(inputs: &Inputs, plan: &Plan, line: &str, tasks: &[&TaskIn]) -> Vec<Step
         .iter()
         .filter(|task| task.status != "cancelled")
         .all(|task| location(inputs, task).kind == "main");
-    let land = plan.finish(open.iter()).unwrap_or(Win::Estimable {
-        start: 0,
-        ends: [0; 3],
-        conditional: None,
-    });
+    // A task whose openness is not known keeps the landing step open and
+    // its window unknown: nothing on the path is done or dated over it.
+    let undetermined: Vec<String> = tasks.iter().filter_map(|t| openness_unknown(t)).collect();
+    let land = if undetermined.is_empty() {
+        plan.finish(open.iter()).unwrap_or(Win::Estimable {
+            start: 0,
+            ends: [0; 3],
+            conditional: None,
+        })
+    } else {
+        Win::NotEstimable(undetermined.join("; "))
+    };
     let mut steps = vec![step(
         plan,
         &format!("land the open units on {line}"),
         "agent",
         "agent work",
-        open.is_empty(),
+        open.is_empty() && undetermined.is_empty(),
         Some(&land),
         None,
     )];

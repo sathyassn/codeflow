@@ -194,10 +194,13 @@ the records on each target's tip, the fetched refs, the forge and the
 coordination ledger, with the readiness core that `work next` uses.
 
 - It writes nothing and never fetches. Refs are read as last fetched and
-  named with their fetch time; the forge is read once through the bounded
-  observer. A fact it could not read says so (`unknown`, `unverified`,
-  `not recorded`, `not yet estimable`) and is never omitted or shown as
-  zero.
+  named with their fetch time. The forge reads (the pull request list,
+  each base's required checks, and a head's check runs when a requirement
+  names an app) share the bounded observer's one network bound; a read
+  left without time is `unverified`. A fact it could not read says so
+  (`unknown`, `unverified`, `not recorded`, `not yet estimable`) and is
+  never omitted or shown as zero. `not recorded` means the source was read
+  and holds nothing.
 - Stage ladder, one percent per task: not started 0, in progress 20 (a
   claim or task commits), in review 50 (an open pull request), reviewed 75
   (an approving acceptance block that passes the acceptance rules against
@@ -208,8 +211,15 @@ coordination ledger, with the readiness core that `work next` uses.
 - An epic's and the scope's percent is the mean over their unique tasks;
   cancelled tasks are excluded and listed. A task whose home target cannot
   be read, whose status the ladder does not know, that the readiness core
-  cannot judge or judges invalid, or that is open while the forge was not
-  read has stage `unknown`, and every percent over it is `unknown`.
+  cannot judge or judges invalid, that is open while the forge was not
+  read, or whose reported pull request or branch head is not here has
+  stage `unknown`, and every percent over it is `unknown`; with the head
+  unread its criteria read `unknown` too. A pull request row the forge
+  answer lists without a readable number, branch, head, base, draft flag
+  or check list makes the whole forge read `unverified`, never a dropped
+  row. A task whose status the ladder does not know is neither open nor
+  done: the open counts and finish windows over it are `unknown`, and no
+  path step over it is done.
 - Locations: `main`, `line`, `pull request` (draft, open or approved at the
   reviewed SHA), `branch`, or `none` (`record on line` when only the record
   is there), each bound to the ref and fetch time it was read from. `main`
@@ -219,12 +229,20 @@ coordination ledger, with the readiness core that `work next` uses.
   and the time it was read. A skipped run is never a pass, and a forge
   answer at its 200-row read limit is `unverified`. Which checks are
   required is read from the base branch's rulesets and branch protection;
-  a required check with no run is `missing`. While that set cannot be
+  a required check with no run is `missing`. A requirement that names the
+  app that must produce it (`integration_id`, `app_id`) is met only by
+  that app's run on the head, so a same-named run from another app is
+  `missing`. While the required set or a required app's runs cannot be
   read, the required view is `unverified` and the issues view is not
   complete.
 - Pace counts a landing only where the history shows a record's status
-  change to `complete`. A status in history that cannot be read makes
-  that task's landing unproven and the pace `unknown`.
+  change to `complete` from an absent record or a status a task record
+  allows. A status in history that cannot be read, is missing or is not
+  an allowed status makes that task's landing unproven, its `main` or
+  `line` location `unverified` and the pace `unknown`. Landings need every
+  home target and record read; additions and open counts also need every
+  task's creation date, so an undated task leaves those `unknown` while
+  proven landings stay counted.
 - Windows are durations from the snapshot time, never dates, with their
   basis: an adopted forecast that covers the scope, else the planned
   throughput rule over the lanes observed (one lane assumed, and labelled
@@ -237,7 +255,9 @@ coordination ledger, with the readiness core that `work next` uses.
   ledger, each owed-item source, the forge, the session file) was checked;
   otherwise it is `not established` and names the source.
 - `--since` keeps every earlier fact the current snapshot could not
-  observe, with the time it was observed.
+  observe, with the time it was observed. A required-check issue rests on
+  both the runs and the required set, so it reads cleared only when both
+  were read again; otherwise it is kept as not observed.
 - `CODEFLOW_STATUS_AS_OF=<UTC time>` holds the snapshot time fixed, so two
   runs on one state print identical bytes.
 

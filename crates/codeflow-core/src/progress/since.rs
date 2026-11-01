@@ -367,6 +367,9 @@ pub fn delta(previous: &Value, current: &Value) -> Result<Value, String> {
     for ((family, key), (_, item)) in &now {
         let Some((_, earlier)) = before.get(&(family.clone(), key.clone())) else {
             let what = match family.as_str() {
+                "issue" if text(item, "/kind") == "required checks not read" => {
+                    "required checks not read"
+                }
                 "issue" if text(item, "/kind").starts_with("required check") => {
                     "check turned not green"
                 }

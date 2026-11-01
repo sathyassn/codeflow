@@ -13,7 +13,7 @@ use git2::{Oid, Repository};
 
 use super::inputs::{
     AcceptanceIn, BlockerIn, BranchIn, CheckRunIn, EpicIn, ForecastIn, ForgeIn, Inputs, LaneIn,
-    LedgerIn, OperatorItemIn, PullIn, RefIn, ScopeSpec, TaskIn, UnreadableIn,
+    LedgerIn, OperatorItemIn, PullIn, RefIn, RequiredCheckIn, ScopeSpec, TaskIn, UnreadableIn,
 };
 use super::owed::OwedSource;
 use crate::workgraph::history;
@@ -150,6 +150,10 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
         .map(|target| (target.clone(), remote_ref(&repo, target)))
         .collect();
     let current_target = current_target(&repo, &options.scope, &tasks, &ids, &default_branch);
+    // The pace counts every home's landings, so a home or record that was
+    // not read leaves the history unestablished.
+    let history_note = history_note(history.as_ref(), &read.losses, &read.unreadable);
+    let history_read = history_note.is_none();
     let mut inputs = Inputs {
         now,
         repository: crate::coord::reference::repository_identity(&root),
@@ -176,10 +180,8 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
         forecast: None,
         forecast_note: None,
         release_step: root.join("docs/releasing.md").is_file(),
-        history_read: history.as_ref().is_some_and(|walked| {
-            walked.reached && walked.uncertain.values().all(BTreeMap::is_empty)
-        }),
-        history_note: history_note(history.as_ref()),
+        history_read,
+        history_note,
         record_losses: read.losses,
     };
     let (forecast, note) = forecast(&root, &inputs);
@@ -623,9 +625,11 @@ struct TaskContext<'a> {
 /// How an open task's unknown stage starts when the forge was not read;
 /// the issues view reports that source as the forge, not the records.
 pub(super) const FORGE_UNREAD: &str = "the forge was not read";
+/// Why an open task's stage is unknown when its reported head is not here.
+pub(super) const HEAD_UNREAD: &str = "the head its pull request or branch reports cannot be read";
 
 /// The statuses the stage ladder knows.
-const KNOWN_STATUSES: [&str; 4] = ["todo", "blocked", "complete", "cancelled"];
+pub(super) const KNOWN_STATUSES: [&str; 4] = ["todo", "blocked", "complete", "cancelled"];
 
 /// The remote-tracking tip of `branch` on `origin`.
 fn remote_tip(repo: &Repository, branch: &str) -> Option<Oid> {
@@ -660,7 +664,9 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
         super::compute::select_pull(pulls, &record.id, &found.target, context.default_branch)
     });
     // The most advanced copy: the home tip once closed, else the head the
-    // pull request reports, else the branch head.
+    // pull request reports, else the branch head. A head that cannot be
+    // read leaves its acceptance unknown, whatever the home copy holds.
+    let mut head_unread = None;
     let (acceptance, follow_from) = if closed {
         let binding = Binding::Landed(match &context.landed {
             Ok(tasks) => tasks.get(&record.id).map_or_else(
@@ -688,34 +694,34 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
             (None, Some((_, head))) => Some(Ok(*head)),
             (None, None) => None,
         };
+        // The record as the head holds it, or why it cannot be read there.
+        let head = head.map(|head| {
+            head.and_then(|head| {
+                text_at(repo, head, &found.path)
+                    .map(|text| (head, text))
+                    .ok_or_else(|| format!("the record is not readable at the head {head}"))
+            })
+        });
         match head {
-            Some(Ok(head)) => match text_at(repo, head, &found.path) {
-                Some(text) => (
-                    acceptance(
-                        repo,
-                        &text,
-                        &found.path,
-                        Binding::Head {
-                            head,
-                            receiving: tip,
-                        },
-                    ),
-                    text,
+            Some(Ok((head, text))) => (
+                acceptance(
+                    repo,
+                    &text,
+                    &found.path,
+                    Binding::Head {
+                        head,
+                        receiving: tip,
+                    },
                 ),
-                None => (
-                    acceptance(
-                        repo,
-                        &found.text,
-                        &found.path,
-                        Binding::Missing(format!("the record is not readable at the head {head}")),
-                    ),
-                    found.text.clone(),
-                ),
-            },
-            Some(Err(reason)) => (
-                acceptance(repo, &found.text, &found.path, Binding::Missing(reason)),
-                found.text.clone(),
+                text,
             ),
+            Some(Err(reason)) => {
+                head_unread = Some(reason.clone());
+                (
+                    acceptance(repo, &found.text, &found.path, Binding::Missing(reason)),
+                    found.text.clone(),
+                )
+            }
             None => (None, found.text.clone()),
         }
     };
@@ -759,6 +765,10 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
         ))
     } else if closed {
         None
+    } else if let Some(reason) = &head_unread {
+        Some(format!(
+            "{HEAD_UNREAD}, so its acceptance and rung there are not known: {reason}"
+        ))
     } else {
         match (context.backlog, entry, context.forge_unread) {
             (None, _, _) => Some("the readiness core could not judge the targets".into()),
@@ -799,6 +809,7 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
         on_main: landed_on(context.default_tip),
         on_home_ref: landed_on(remote_tip(repo, &found.target)),
         unknown,
+        head_unread,
         record_on_line: !context.home_unread.contains_key(&record.id),
         landed_at: transition.map(|(time, _)| time),
     }
@@ -817,9 +828,12 @@ struct Walked {
     reached: bool,
 }
 
-/// A record's status in a blob: `Ok(None)` when it carries none, `Err`
-/// when the blob, its text or its frontmatter cannot be read.
-fn status_in(repo: &Repository, blob: Oid) -> Result<Option<String>, String> {
+/// A record's status in a blob: one of the statuses the record schema
+/// allows, or `Err` when the blob, its text or its frontmatter cannot be
+/// read, or its status is missing, not text or not an allowed status. A
+/// present record with no valid status proves no state, so it can never
+/// be the prior state of a transition.
+fn status_in(repo: &Repository, blob: Oid) -> Result<String, String> {
     let blob = repo
         .find_blob(blob)
         .map_err(|error| format!("blob {blob} cannot be read: {}", error.message()))?;
@@ -827,9 +841,19 @@ fn status_in(repo: &Repository, blob: Oid) -> Result<Option<String>, String> {
         .map_err(|_| format!("blob {} is not UTF-8 text", blob.id()))?;
     let (data, _) = crate::validate::parse_frontmatter(text.as_bytes())
         .map_err(|error| format!("blob {} frontmatter cannot be read: {error}", blob.id()))?;
-    // Read as `RecordView::parse` reads a record's status.
+    // Read as `RecordView::parse` reads a record's status, then held to
+    // the vocabulary the validator holds a task record to.
     let value = crate::validate::get_string_field(&data, "status");
-    Ok((!value.is_empty()).then_some(value))
+    if value.is_empty() {
+        return Err(format!("blob {} carries no status", blob.id()));
+    }
+    if !crate::validate::TASK_STATUS_VALUES.contains(&value.as_str()) {
+        return Err(format!(
+            "blob {} carries the status `{value}`, not one a task record allows",
+            blob.id()
+        ));
+    }
+    Ok(value)
 }
 
 /// Each home target's newest `complete` transition per task on the
@@ -883,11 +907,12 @@ fn landings(repo: &Repository, tips: &BTreeMap<String, Oid>, now: i64) -> Option
                 if landed.contains_key(&id) || uncertain.contains_key(&id) {
                     continue;
                 }
+                // Only a genuinely absent record is no prior state.
                 let read = |blob: Oid| -> Result<Option<String>, String> {
                     if blob.is_zero() {
                         Ok(None)
                     } else {
-                        status_in(repo, blob)
+                        status_in(repo, blob).map(Some)
                     }
                 };
                 match (read(delta.new_file().id()), read(delta.old_file().id())) {
@@ -918,9 +943,32 @@ fn landings(repo: &Repository, tips: &BTreeMap<String, Oid>, now: i64) -> Option
 }
 
 /// Why the pace history is not established, when it is not.
-fn history_note(walked: Option<&Walked>) -> Option<String> {
+fn history_note(
+    walked: Option<&Walked>,
+    losses: &[(Option<String>, String)],
+    unreadable: &[UnreadableIn],
+) -> Option<String> {
+    let gaps: Vec<String> = losses
+        .iter()
+        .map(|(_, reason)| reason.clone())
+        .chain(
+            unreadable
+                .iter()
+                .map(|record| format!("the record {} is unreadable", record.path)),
+        )
+        .collect();
+    // A home or record that was not read was not walked, so its landings
+    // are not in the counts.
+    let mut notes: Vec<String> = Vec::new();
+    if !gaps.is_empty() {
+        notes.push(format!(
+            "not every home and record was read: {}",
+            gaps.join("; ")
+        ));
+    }
     let Some(walked) = walked else {
-        return Some("the history walk of a home tip failed".into());
+        notes.push("the history walk of a home tip failed".into());
+        return Some(notes.join("; "));
     };
     let doubts: Vec<String> = walked
         .uncertain
@@ -931,12 +979,15 @@ fn history_note(walked: Option<&Walked>) -> Option<String> {
         })
         .collect();
     if !doubts.is_empty() {
-        return Some(format!(
+        notes.push(format!(
             "transitions not established: {}",
             doubts.join("; ")
         ));
     }
-    (!walked.reached).then(|| "the walk did not reach back past the pace window".into())
+    if !walked.reached {
+        notes.push("the walk did not reach back past the pace window".into());
+    }
+    (!notes.is_empty()).then(|| notes.join("; "))
 }
 
 /// Epic text helpers: the first `##` heading whose section names each task.
@@ -1086,8 +1137,9 @@ fn run_state(check: &serde_json::Value) -> String {
         .to_ascii_lowercase()
 }
 
-/// The check runs as read, and their summary (`checks::summary`).
-fn checks(rollup: Option<&serde_json::Value>) -> (String, Vec<CheckRunIn>) {
+/// The check runs as read, and their summary (`checks::summary`); `None`
+/// when the rollup is neither absent nor a list, or a run carries no name.
+fn checks(rollup: Option<&serde_json::Value>) -> Option<(String, Vec<CheckRunIn>)> {
     let text = |check: &serde_json::Value, key: &str| {
         check
             .get(key)
@@ -1095,25 +1147,64 @@ fn checks(rollup: Option<&serde_json::Value>) -> (String, Vec<CheckRunIn>) {
             .filter(|text| !text.is_empty())
             .map(str::to_string)
     };
-    let runs: Vec<CheckRunIn> = rollup
-        .and_then(serde_json::Value::as_array)
-        .map(|checks| {
-            checks
-                .iter()
-                .map(|check| CheckRunIn {
-                    name: text(check, "name")
-                        .or_else(|| text(check, "context"))
-                        .unwrap_or_else(|| "unnamed".into()),
-                    state: run_state(check),
-                    completed_at: text(check, "completedAt")
-                        .as_deref()
-                        .and_then(super::checks::parse_instant),
-                    required: None,
-                })
-                .collect()
+    let checks = match rollup {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(checks)) => checks.clone(),
+        Some(_) => return None,
+    };
+    let runs = checks
+        .iter()
+        .map(|check| {
+            Some(CheckRunIn {
+                name: text(check, "name").or_else(|| text(check, "context"))?,
+                state: run_state(check),
+                completed_at: text(check, "completedAt")
+                    .as_deref()
+                    .and_then(super::checks::parse_instant),
+                required: None,
+            })
         })
-        .unwrap_or_default();
-    (super::checks::summary(&runs).into(), runs)
+        .collect::<Option<Vec<_>>>()?;
+    Some((super::checks::summary(&runs).into(), runs))
+}
+
+/// One open pull request row of the forge answer, or the field that could
+/// not be read: a row the report cannot read is never dropped, because a
+/// dropped row could be the task's own pull request.
+fn pull_row(row: &serde_json::Value, ids: &BTreeSet<String>) -> Result<PullIn, &'static str> {
+    let text = |key: &'static str| {
+        row.get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or(key)
+    };
+    let head_ref = text("headRefName")?;
+    let suffix = head_ref.rsplit('/').next().unwrap_or("").to_string();
+    let (checks, runs) = checks(row.get("statusCheckRollup")).ok_or("statusCheckRollup")?;
+    Ok(PullIn {
+        number: row
+            .get("number")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or("number")?,
+        title: text("title")?,
+        head_sha: text("headRefOid")?,
+        base: text("baseRefName")?,
+        draft: row
+            .get("isDraft")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or("isDraft")?,
+        checks,
+        runs,
+        required: Err("not read yet".into()),
+        producers_unread: None,
+        required_checks: "unverified".into(),
+        task: ids
+            .iter()
+            .filter(|id| suffix == id.as_str() || suffix.starts_with(&format!("{id}-")))
+            .max_by_key(|id| id.len())
+            .cloned(),
+        head_ref,
+    })
 }
 
 /// The most open pull requests one forge read lists; a full page may hide
@@ -1122,6 +1213,9 @@ const FORGE_LIMIT: usize = 200;
 
 /// The open pull requests, read once through the bounded observer.
 fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> ForgeIn {
+    // One time bound for the whole forge observation: every read after
+    // the list gets only what is left of it.
+    let deadline = std::time::Instant::now() + options.forge_limit;
     let identity = crate::coord::reference::repository_identity(root);
     let Some(repository) = identity.strip_prefix("github.com/") else {
         return ForgeIn::Unverified {
@@ -1167,42 +1261,22 @@ fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> Fo
             ),
         };
     }
-    let text = |row: &serde_json::Value, key: &str| {
-        row.get(key)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
-    let mut pulls: Vec<PullIn> = rows
-        .iter()
-        .filter_map(|row| {
-            let head_ref = text(row, "headRefName");
-            let suffix = head_ref.rsplit('/').next().unwrap_or("").to_string();
-            let (checks, runs) = checks(row.get("statusCheckRollup"));
-            Some(PullIn {
-                number: row.get("number")?.as_u64()?,
-                title: text(row, "title"),
-                head_sha: text(row, "headRefOid"),
-                base: text(row, "baseRefName"),
-                draft: row
-                    .get("isDraft")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false),
-                checks,
-                runs,
-                required: Err("not read yet".into()),
-                required_checks: "unverified".into(),
-                task: ids
-                    .iter()
-                    .filter(|id| suffix == id.as_str() || suffix.starts_with(&format!("{id}-")))
-                    .max_by_key(|id| id.len())
-                    .cloned(),
-                head_ref,
-            })
-        })
-        .collect();
+    let mut pulls = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        match pull_row(row, ids) {
+            Ok(pull) => pulls.push(pull),
+            Err(field) => {
+                return ForgeIn::Unverified {
+                    reason: format!(
+                        "open pull request row {} of the forge answer has no readable `{field}`",
+                        index + 1
+                    ),
+                }
+            }
+        }
+    }
     pulls.sort_by_key(|pull| pull.number);
-    with_required(root, options, repository, &mut pulls);
+    with_required(root, options, repository, deadline, &mut pulls);
     ForgeIn::Read {
         read_at: now,
         pulls,
@@ -1210,39 +1284,59 @@ fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> Fo
 }
 
 /// Each task pull request's required set, read once per base it targets,
-/// and its runs and required view judged against it.
-fn with_required(root: &Path, options: &Options, repository: &str, pulls: &mut [PullIn]) {
-    // The required set, read once per base a task's pull request targets.
+/// the app-produced runs of its head when a requirement names an app, and
+/// its runs and required view judged against them. Every read shares the
+/// forge observation's one `deadline`.
+fn with_required(
+    root: &Path,
+    options: &Options,
+    repository: &str,
+    deadline: std::time::Instant,
+    pulls: &mut [PullIn],
+) {
     let bases: BTreeSet<String> = pulls
         .iter()
         .filter(|pull| pull.task.is_some())
         .map(|pull| pull.base.clone())
         .collect();
-    let required: BTreeMap<String, Result<Vec<String>, String>> = bases
+    let required: BTreeMap<String, Result<Vec<RequiredCheckIn>, String>> = bases
         .into_iter()
         .map(|base| {
-            let names = super::checks::required_names(
+            let checks = super::checks::required_checks(
                 root,
                 &options.gh_program,
-                options.forge_limit,
+                deadline,
                 repository,
                 &base,
             );
-            (base, names)
+            (base, checks)
         })
         .collect();
     for pull in pulls.iter_mut() {
         pull.required = required.get(&pull.base).cloned().unwrap_or_else(|| {
             Err("not read: the pull request carries no task in this repository".into())
         });
+        let bound = pull
+            .required
+            .as_ref()
+            .is_ok_and(|checks| checks.iter().any(|check| check.app.is_some()));
+        let produced = if bound {
+            super::checks::produced_runs(
+                root,
+                &options.gh_program,
+                deadline,
+                repository,
+                &pull.head_sha,
+            )
+        } else {
+            Ok(Vec::new())
+        };
+        pull.producers_unread = produced.as_ref().err().cloned();
         for run in &mut pull.runs {
-            run.required = pull
-                .required
-                .as_ref()
-                .ok()
-                .map(|names| names.contains(&run.name));
+            run.required = super::checks::run_required(&run.name, &pull.required, &produced);
         }
-        pull.required_checks = super::checks::required_summary(&pull.runs, &pull.required);
+        pull.required_checks =
+            super::checks::required_summary(&pull.runs, &pull.required, &produced);
     }
 }
 

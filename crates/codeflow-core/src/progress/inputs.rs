@@ -148,6 +148,10 @@ pub struct TaskIn {
     /// read, its status is not one the ladder knows, or the readiness core
     /// could not judge it); `None` when it can.
     pub unknown: Option<String>,
+    /// Why the head an open task's pull request or branch reports could
+    /// not be read: its acceptance and rung there are not known, so its
+    /// criteria and stage read unknown, never `not recorded`.
+    pub head_unread: Option<String>,
     /// The record exists on its home tip.
     pub record_on_line: bool,
     /// When the task landed on its home target, seconds since the epoch.
@@ -201,14 +205,37 @@ pub struct PullIn {
     pub checks: String,
     /// Each check run as read.
     pub runs: Vec<CheckRunIn>,
-    /// The check names the base requires, or why they could not be read.
-    pub required: Result<Vec<String>, String>,
-    /// The worst required check: `failed`, `pending`, `missing`, `skipped`
-    /// or `passed`; `none required`, or `unverified` when the required set
-    /// could not be read.
+    /// The checks the base requires, or why they could not be read.
+    pub required: Result<Vec<RequiredCheckIn>, String>,
+    /// Why the app-produced runs an app-bound requirement needs could not
+    /// be read; `None` when they were, or none was needed.
+    pub producers_unread: Option<String>,
+    /// The worst required check: `failed`, `unverified`, `pending`,
+    /// `missing`, `skipped` or `passed`; `none required`, or `unverified`
+    /// when the required set or a required app's runs could not be read.
     pub required_checks: String,
     /// The task id its head branch carries.
     pub task: Option<String>,
+}
+
+/// One check a base requires: its name and, when the requirement names
+/// one, the app that must produce it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RequiredCheckIn {
+    pub name: String,
+    /// The producing app's id; `None` when any producer satisfies it.
+    pub app: Option<u64>,
+}
+
+impl RequiredCheckIn {
+    /// The name, with its producer when one is required.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match self.app {
+            Some(app) => format!("{} (app {app})", self.name),
+            None => self.name.clone(),
+        }
+    }
 }
 
 /// What the forge read gave.

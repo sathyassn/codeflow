@@ -121,12 +121,21 @@ impl Repo {
             .iter()
             .map(|name| serde_json::json!({"context": name}))
             .collect();
+        self.forge_with(pulls, &Value::Array(checks), None);
+    }
+
+    /// A forge that lists `pulls`, requires `checks` (ruleset entries) on
+    /// `main`, and answers a head's check runs with `runs` when given; any
+    /// other read fails.
+    fn forge_with(&self, pulls: &Value, checks: &Value, runs: Option<&Value>) {
         let rules = serde_json::json!([{"type": "required_status_checks",
             "parameters": {"required_status_checks": checks}}]);
+        let runs = runs.map_or_else(|| "exit 1".to_string(), |runs| format!("echo '{runs}'"));
         self.gh(&format!(
             "case \"$1 $2\" in\n\
              \"api repos/acme/demo/rules/branches/main?per_page=100\") echo '{rules}' ;;\n\
              \"api repos/acme/demo/branches/main\") echo '{{\"name\":\"main\",\"protected\":false}}' ;;\n\
+             \"api repos/acme/demo/commits/\"*) {runs} ;;\n\
              \"pr list\") cat <<'JSON'\n{pulls}\nJSON\n;;\n\
              *) exit 1 ;;\nesac"
         ));
@@ -627,8 +636,9 @@ fn required_checks_are_read_and_never_assumed() {
         "required",
         &[("TSK-001", record("TSK-001", "todo", "main", ""))],
     );
+    let head = repo.git(&["rev-parse", "HEAD"]);
     let pulls = serde_json::json!([{"number": 1, "title": "Task", "headRefName": "task/TSK-001-work",
-        "headRefOid": "a".repeat(40), "baseRefName": "main", "isDraft": false,
+        "headRefOid": head, "baseRefName": "main", "isDraft": false,
         "statusCheckRollup": [{"name": "optional-lint", "conclusion": "SUCCESS",
             "completedAt": "2026-11-01T07:00:00-04:00"}]}]);
     repo.forge(&pulls, &["build"]);
@@ -728,4 +738,297 @@ fn since_keeps_lost_observations_with_their_own_times() {
         .unwrap_or_else(|| panic!("{}", after["since"]));
     assert_eq!(pull["earlier"]["runs"][0]["name"], "build");
     assert_eq!(pull["earlier_observed_at"], "2026-11-01T12:00:00Z");
+}
+
+/// The fail-closed classes of review round 03, each through the real CLI.
+fn task_pull(number: u64, head: &str, base: &str, rollup: &Value) -> Value {
+    serde_json::json!({"number": number, "title": "Task", "headRefName": "task/TSK-001-work",
+        "headRefOid": head, "baseRefName": base, "isDraft": false, "statusCheckRollup": rollup})
+}
+
+fn issue_kinds(value: &Value) -> Vec<String> {
+    value["issues"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["kind"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// R3 F1: a pull request whose head is not here leaves the task's
+/// criteria and stage unknown, even when the home copy has no block: the
+/// head was never read, so no block there is proven absent.
+#[test]
+fn an_unread_pull_request_head_leaves_criteria_and_stage_unknown() {
+    let repo = Repo::new(
+        "missing-head",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    repo.forge(
+        &serde_json::json!([task_pull(
+            1,
+            &"c".repeat(40),
+            "main",
+            &serde_json::json!([])
+        )]),
+        &[],
+    );
+    let value = repo.json(&["--task", "TSK-001"]);
+    let fact = &value["tasks"][0];
+    assert_eq!(fact["stage"], "unknown", "{fact}");
+    assert_eq!(fact["percent"], "unknown");
+    assert_eq!(fact["criteria"], "unknown", "{fact}");
+    assert_eq!(fact["context"]["open_pull_request"], 1);
+    assert_eq!(evidence(&value, "percents", "git")["checked"], false);
+    assert_eq!(value["issues"]["complete"], false);
+}
+
+/// R3 F1: a pull request row the report cannot read is never dropped: the
+/// forge read is unverified and an open task's stage unknown.
+#[test]
+fn a_malformed_pull_request_row_leaves_the_forge_unverified() {
+    let repo = Repo::new(
+        "malformed-row",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let mut row = task_pull(1, &"a".repeat(40), "main", &serde_json::json!([]));
+    row["number"] = Value::String("one".into());
+    repo.pulls(&serde_json::json!([row]));
+    let value = repo.json(&["--task", "TSK-001"]);
+    let forge = evidence(&value, "locations", "forge");
+    assert_eq!(forge["checked"], false, "{forge}");
+    assert!(
+        forge["note"].as_str().unwrap().contains("number"),
+        "{forge}"
+    );
+    let fact = &value["tasks"][0];
+    assert_eq!(fact["stage"], "unknown", "{fact}");
+    assert_eq!(fact["context"]["open_pull_request"], "unknown");
+}
+
+/// R3 F1: a task whose status the ladder does not know is neither open nor
+/// done: the open counts and finishes are unknown and the path's landing
+/// step is not done.
+#[test]
+fn an_unknown_status_leaves_the_finish_and_path_unknown() {
+    let repo = Repo::new(
+        "unknown-finish",
+        &[("TSK-001", record("TSK-001", "potato", "main", ""))],
+    );
+    let value = repo.json(&["--epic", "EPC-001"]);
+    for scenario in value["windows"]["scenarios"].as_array().unwrap() {
+        assert_eq!(scenario["open_tasks"], "unknown", "{scenario}");
+        assert_eq!(scenario["finish"]["state"], "not yet estimable");
+    }
+    let land = &value["epics"][0]["path_to_main"][0];
+    assert_eq!(land["done"], false, "{land}");
+    assert_eq!(land["window"]["state"], "not yet estimable");
+    assert_eq!(value["pace"]["days"][0]["open_at_end"], "unknown");
+}
+
+/// R3 F5: a requirement bound to an app is met only by that app's run: a
+/// same-named run from another app is missing, unread producers are
+/// unverified, and an unbound requirement still matches by name.
+#[test]
+fn a_required_check_counts_only_from_its_app() {
+    let repo = Repo::new(
+        "producer",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let pulls = serde_json::json!([task_pull(
+        1,
+        &"a".repeat(40),
+        "main",
+        &serde_json::json!([{"name": "build", "conclusion": "SUCCESS"}])
+    )]);
+    let bound = serde_json::json!([{"context": "build", "integration_id": 42}]);
+    let from = |app: u64| {
+        serde_json::json!({"total_count": 1, "check_runs": [{"name": "build", "app": {"id": app},
+            "status": "completed", "conclusion": "success"}]})
+    };
+    let chain = |value: &Value| value["epics"][0]["landing_chain"]["open"][0].clone();
+
+    repo.forge_with(&pulls, &bound, Some(&from(99)));
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(chain(&value)["required"], "missing", "{}", chain(&value));
+    assert_eq!(chain(&value)["runs"][0]["required"], false);
+    assert!(issue_kinds(&value).contains(&"required check missing".to_string()));
+
+    repo.forge_with(&pulls, &bound, Some(&from(42)));
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(chain(&value)["required"], "passed", "{}", chain(&value));
+    assert_eq!(chain(&value)["runs"][0]["required"], true);
+
+    repo.forge_with(&pulls, &bound, None);
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(chain(&value)["required"], "unverified", "{}", chain(&value));
+    assert_eq!(chain(&value)["runs"][0]["required"], "unknown");
+    assert_eq!(value["issues"]["complete"], false);
+
+    repo.forge_with(&pulls, &serde_json::json!([{"context": "build"}]), None);
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(chain(&value)["required"], "passed", "{}", chain(&value));
+}
+
+/// R3 F6: a prior record with no status, a status that is not text, or a
+/// status a record may not carry proves no prior state, so no landing.
+#[test]
+fn only_a_valid_prior_status_proves_a_landing() {
+    let base = record("TSK-001", "todo", "main", "");
+    for (name, prior) in [
+        ("no-status", base.replace("status: todo\n", "")),
+        (
+            "list-status",
+            base.replace("status: todo", "status: [todo]"),
+        ),
+        (
+            "unknown-status",
+            base.replace("status: todo", "status: potato"),
+        ),
+    ] {
+        let repo = Repo::new(name, &[("TSK-001", prior)]);
+        repo.record("TSK-001", &record("TSK-001", "complete", "main", ""));
+        repo.commit();
+        repo.sync("main");
+        let value = repo.json(&["--task", "TSK-001"]);
+        assert_eq!(
+            value["pace"]["landed_total"], "unknown",
+            "{name}: {}",
+            value["pace"]
+        );
+        assert_eq!(
+            value["tasks"][0]["location"]["state"], "unverified",
+            "{name}"
+        );
+    }
+}
+
+/// R3 F6: each pace measure needs its own coverage: a home that was not
+/// read leaves the landings unknown; an undated task leaves the additions
+/// and open counts unknown while the landings stay counted.
+#[test]
+fn pace_measures_need_every_home_and_every_date() {
+    let repo = Repo::new(
+        "pace-home",
+        &[
+            ("TSK-001", record("TSK-001", "todo", "main", "")),
+            (
+                "TSK-002",
+                record("TSK-002", "todo", "integration/missing", ""),
+            ),
+        ],
+    );
+    repo.record("TSK-001", &record("TSK-001", "complete", "main", ""));
+    repo.commit();
+    repo.sync("main");
+    let value = repo.json(&["--epic", "EPC-001"]);
+    assert_eq!(
+        value["pace"]["landed_total"], "unknown",
+        "{}",
+        value["pace"]
+    );
+    assert_eq!(evidence(&value, "pace", "git history")["checked"], false);
+
+    let undated = record("TSK-002", "todo", "main", "").replace("created: 2026-10-30\n", "");
+    let repo = Repo::new(
+        "pace-dates",
+        &[
+            ("TSK-001", record("TSK-001", "todo", "main", "")),
+            ("TSK-002", undated),
+        ],
+    );
+    let value = repo.json(&["--epic", "EPC-001"]);
+    assert_eq!(value["pace"]["landed_total"], 0, "{}", value["pace"]);
+    assert_eq!(value["pace"]["added_total"], "unknown");
+    assert_eq!(value["pace"]["intake_rate_per_day"], "unknown");
+    assert_eq!(value["pace"]["days"][6]["open_at_end"], "unknown");
+    assert_eq!(
+        evidence(&value, "pace", "record creation dates")["checked"],
+        false
+    );
+}
+
+/// R3 F7: losing only the required set keeps a red required check as not
+/// observed; it is never reported cleared.
+#[test]
+fn losing_the_required_set_never_clears_a_red_check() {
+    let repo = Repo::new(
+        "required-lost",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let pulls = serde_json::json!([task_pull(
+        1,
+        &"a".repeat(40),
+        "main",
+        &serde_json::json!([{"name": "build", "conclusion": "FAILURE"}])
+    )]);
+    repo.forge(&pulls, &["build"]);
+    let before = repo.json(&["--epic", "EPC-001"]);
+    assert!(issue_kinds(&before).contains(&"required check red".to_string()));
+    let previous = repo.base.join("before.json");
+    std::fs::write(&previous, before.to_string()).unwrap();
+    repo.pulls(&pulls);
+    let after = repo.json(&["--epic", "EPC-001", "--since", previous.to_str().unwrap()]);
+    let since = &after["since"];
+    assert!(
+        !since["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|change| change["change"] == "check cleared"),
+        "{since}"
+    );
+    assert!(
+        since["superseded"].as_array().unwrap().is_empty(),
+        "{since}"
+    );
+    let kept = since["not_observed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["family"] == "issue")
+        .unwrap_or_else(|| panic!("{since}"));
+    assert_eq!(kept["earlier"]["kind"], "required check red");
+    assert_eq!(kept["earlier_observed_at"], "2026-11-01T12:00:00Z");
+}
+
+/// R3 F8: the forge observation has one time bound: required-check reads
+/// for several bases share it, so stalled reads never multiply it.
+#[test]
+fn the_forge_observation_keeps_one_time_bound() {
+    let repo = Repo::new(
+        "forge-budget",
+        &[
+            ("TSK-001", record("TSK-001", "todo", "main", "")),
+            (
+                "TSK-002",
+                record("TSK-002", "todo", "integration/EPC-001-demo", ""),
+            ),
+        ],
+    );
+    repo.git(&["branch", "integration/EPC-001-demo"]);
+    repo.sync("integration/EPC-001-demo");
+    let pull = |number: u64, id: &str, base: &str| {
+        serde_json::json!({"number": number, "title": "Task", "headRefName": format!("task/{id}-work"),
+            "headRefOid": "a".repeat(40), "baseRefName": base, "isDraft": true, "statusCheckRollup": []})
+    };
+    let pulls = serde_json::json!([
+        pull(1, "TSK-001", "main"),
+        pull(2, "TSK-002", "integration/EPC-001-demo")
+    ]);
+    repo.gh(&format!(
+        "if [ \"$1 $2\" = \"pr list\" ]; then cat <<'JSON'\n{pulls}\nJSON\nelse exec sleep 25; fi"
+    ));
+    let start = std::time::Instant::now();
+    let value = repo.json(&["--epic", "EPC-001"]);
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(32),
+        "took {elapsed:?}"
+    );
+    assert_eq!(value["issues"]["complete"], false);
+    assert_eq!(
+        evidence(&value, "issues", "required checks")["checked"],
+        false
+    );
 }

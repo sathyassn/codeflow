@@ -1,17 +1,21 @@
 //! Check runs and the required-check view.
 //!
 //! The pull request list gives every run but not which checks are
-//! required. The required set is read per base branch from the forge's
-//! rules and branch protection, once each, through the bounded observer.
-//! A set that cannot be read is an error with its reason, never an empty
-//! set, so a missing required check is never reported as none required.
+//! required, nor which app produced a run. The required set is read per
+//! base branch from the forge's rules and branch protection, once each; a
+//! requirement bound to an app is judged only against that app's check
+//! runs, read per head. Every read shares the forge observation's one time
+//! bound. A read that fails is an error with its reason, never an empty
+//! set, so a missing required check is never reported as none required
+//! and a same-named run from another app is never taken as the required
+//! one.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::inputs::CheckRunIn;
+use super::inputs::{CheckRunIn, RequiredCheckIn};
 
 /// States of a run that has not finished.
 const PENDING: [&str; 6] = [
@@ -26,12 +30,11 @@ const PENDING: [&str; 6] = [
 /// States that are neither a failure nor unfinished.
 const SETTLED: [&str; 3] = ["success", "neutral", "skipped"];
 
-/// The summary of `runs`: `failed` when any failed, was cancelled or timed
-/// out, else `pending` when any has not finished, `missing` when none ran,
-/// `skipped` when any skipped (a skip is not a pass without reuse
-/// evidence), else `passed`.
-pub(super) fn summary<'a>(runs: impl IntoIterator<Item = &'a CheckRunIn>) -> &'static str {
-    let states: Vec<&str> = runs.into_iter().map(|run| run.state.as_str()).collect();
+/// The summary of run `states`: `failed` when any failed, was cancelled
+/// or timed out, else `pending` when any has not finished, `missing` when
+/// none ran, `skipped` when any skipped (a skip is not a pass without
+/// reuse evidence), else `passed`.
+fn summary_of(states: &[&str]) -> &'static str {
     if states.is_empty() {
         "missing"
     } else if states
@@ -48,43 +51,137 @@ pub(super) fn summary<'a>(runs: impl IntoIterator<Item = &'a CheckRunIn>) -> &'s
     }
 }
 
+/// The summary of `runs` (`summary_of`).
+pub(super) fn summary<'a>(runs: impl IntoIterator<Item = &'a CheckRunIn>) -> &'static str {
+    let states: Vec<&str> = runs.into_iter().map(|run| run.state.as_str()).collect();
+    summary_of(&states)
+}
+
+/// A check run with the app that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProducedRun {
+    pub name: String,
+    pub app: u64,
+    pub state: String,
+}
+
 /// The required view of a pull request's runs: `unverified` when the
 /// required set could not be read, `none required` when the base requires
-/// none, else the worst of the required checks, where a required check
-/// with no run is `missing`.
+/// none, else the worst of the required checks. A requirement any app
+/// satisfies is judged by name over `runs`; one bound to an app only over
+/// that app's `produced` runs, and `unverified` when those were not read.
+/// A required check with no run is `missing`.
 pub(super) fn required_summary(
     runs: &[CheckRunIn],
-    required: &Result<Vec<String>, String>,
+    required: &Result<Vec<RequiredCheckIn>, String>,
+    produced: &Result<Vec<ProducedRun>, String>,
 ) -> String {
-    let Ok(names) = required else {
+    let Ok(checks) = required else {
         return "unverified".into();
     };
-    if names.is_empty() {
+    if checks.is_empty() {
         return "none required".into();
     }
-    let per_name: Vec<&'static str> = names
+    let per_check: Vec<&'static str> = checks
         .iter()
-        .map(|name| summary(runs.iter().filter(|run| &run.name == name)))
+        .map(|check| match (check.app, produced) {
+            (None, _) => summary(runs.iter().filter(|run| run.name == check.name)),
+            (Some(_), Err(_)) => "unverified",
+            (Some(app), Ok(produced)) => {
+                let states: Vec<&str> = produced
+                    .iter()
+                    .filter(|run| run.name == check.name && run.app == app)
+                    .map(|run| run.state.as_str())
+                    .collect();
+                summary_of(&states)
+            }
+        })
         .collect();
-    ["failed", "pending", "missing", "skipped"]
+    ["failed", "unverified", "pending", "missing", "skipped"]
         .into_iter()
-        .find(|worst| per_name.contains(worst))
+        .find(|worst| per_check.contains(worst))
         .unwrap_or("passed")
         .into()
 }
 
-/// The most rules one read lists; a full page may hide more.
-const RULES_LIMIT: usize = 100;
+/// Whether a listed run named `name` is a required one: `Some(true)` when
+/// a requirement any app satisfies names it, or every run of that name
+/// came from the app its requirement names; `Some(false)` when none is
+/// required by that name or none came from the required app; `None` when
+/// the producers could not be read or differ.
+pub(super) fn run_required(
+    name: &str,
+    required: &Result<Vec<RequiredCheckIn>, String>,
+    produced: &Result<Vec<ProducedRun>, String>,
+) -> Option<bool> {
+    let checks = required.as_ref().ok()?;
+    if checks.iter().any(|c| c.app.is_none() && c.name == name) {
+        return Some(true);
+    }
+    let apps: Vec<u64> = checks
+        .iter()
+        .filter(|c| c.name == name)
+        .filter_map(|c| c.app)
+        .collect();
+    if apps.is_empty() {
+        return Some(false);
+    }
+    let produced = produced.as_ref().ok()?;
+    let named: Vec<&ProducedRun> = produced.iter().filter(|run| run.name == name).collect();
+    if named.iter().all(|run| apps.contains(&run.app)) && !named.is_empty() {
+        Some(true)
+    } else if named.iter().all(|run| !apps.contains(&run.app)) {
+        Some(false)
+    } else {
+        None
+    }
+}
 
-/// The check names `base` requires on `repository`, from its rulesets and
-/// its branch protection, or why they could not be read.
-pub(super) fn required_names(
+/// The most rules or check runs one read lists; a full page may hide more.
+const PAGE_LIMIT: usize = 100;
+
+/// One `gh api` read of `path` within what is left of `deadline`.
+fn api(root: &Path, gh: &std::ffi::OsStr, deadline: Instant, path: &str) -> Result<Value, String> {
+    let limit = deadline.saturating_duration_since(Instant::now());
+    if limit == Duration::ZERO {
+        return Err("not read: the forge observation's time bound was spent".into());
+    }
+    let mut command = crate::git::process(gh);
+    command
+        .current_dir(root)
+        .env("GH_PROMPT_DISABLED", "1")
+        .args(["api", path]);
+    let output = crate::coord::observe::command(command, limit).ok_or_else(|| {
+        "the read did not finish within the forge observation's time bound or could not start"
+            .to_string()
+    })?;
+    if !output.status.success() {
+        return Err("the read failed (offline or not signed in)".into());
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|_| "the answer was not the expected JSON".into())
+}
+
+/// A requirement's producer: `None` when any app satisfies it (absent,
+/// null, or the `-1` branch protection uses for any).
+fn producer(check: &Value, key: &str) -> Result<Option<u64>, ()> {
+    match check.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) if value.as_i64() == Some(-1) => Ok(None),
+        Some(value) => value.as_u64().map(Some).ok_or(()),
+    }
+}
+
+/// The checks `base` requires on `repository`, from its rulesets and its
+/// branch protection, each with the app it must come from when one is
+/// named, or why they could not be read.
+pub(super) fn required_checks(
     root: &Path,
     gh: &std::ffi::OsStr,
-    limit: Duration,
+    deadline: Instant,
     repository: &str,
     base: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<RequiredCheckIn>, String> {
     if base.is_empty()
         || !base
             .bytes()
@@ -94,28 +191,29 @@ pub(super) fn required_names(
             "the base branch `{base}` is not a name status reads required checks for"
         ));
     }
-    let read = |path: String| -> Result<Value, String> {
-        let mut command = crate::git::process(gh);
-        command
-            .current_dir(root)
-            .env("GH_PROMPT_DISABLED", "1")
-            .args(["api", &path]);
-        let output = crate::coord::observe::command(command, limit).ok_or_else(|| {
-            "the required-check read did not finish within its bound or could not start".to_string()
-        })?;
-        if !output.status.success() {
-            return Err("the required-check read failed (offline or not signed in)".into());
-        }
-        serde_json::from_slice(&output.stdout)
-            .map_err(|_| "the required-check answer was not the expected JSON".to_string())
+    let read = |path: String| {
+        api(root, gh, deadline, &path)
+            .map_err(|reason| format!("the required-check read: {reason}"))
     };
     let malformed = || "the required-check answer was not the expected JSON".to_string();
-    let mut names: Vec<String> = Vec::new();
+    let mut out: Vec<RequiredCheckIn> = Vec::new();
+    let mut push = |check: &Value, app_key: &str| -> Result<(), String> {
+        let name = check
+            .get("context")
+            .and_then(Value::as_str)
+            .ok_or_else(malformed)?;
+        let app = producer(check, app_key).map_err(|()| malformed())?;
+        out.push(RequiredCheckIn {
+            name: name.to_string(),
+            app,
+        });
+        Ok(())
+    };
     let rules = read(format!(
-        "repos/{repository}/rules/branches/{base}?per_page={RULES_LIMIT}"
+        "repos/{repository}/rules/branches/{base}?per_page={PAGE_LIMIT}"
     ))?;
     let rules = rules.as_array().ok_or_else(malformed)?;
-    if rules.len() >= RULES_LIMIT {
+    if rules.len() >= PAGE_LIMIT {
         return Err(format!(
             "the forge listed {} rules for `{base}`, its read limit, so more may exist",
             rules.len()
@@ -134,11 +232,7 @@ pub(super) fn required_names(
             .and_then(Value::as_array)
             .ok_or_else(malformed)?;
         for check in checks {
-            let context = check
-                .get("context")
-                .and_then(Value::as_str)
-                .ok_or_else(malformed)?;
-            names.push(context.to_string());
+            push(check, "integration_id")?;
         }
     }
     let branch = read(format!("repos/{repository}/branches/{base}"))?;
@@ -151,20 +245,74 @@ pub(super) fn required_names(
         if contexts.is_none() && checks.is_none() {
             return Err(malformed());
         }
-        for context in contexts.into_iter().flatten() {
-            names.push(context.as_str().ok_or_else(malformed)?.to_string());
-        }
+        let mut seen: Vec<String> = Vec::new();
         for check in checks.into_iter().flatten() {
-            let context = check
-                .get("context")
-                .and_then(Value::as_str)
-                .ok_or_else(malformed)?;
-            names.push(context.to_string());
+            push(check, "app_id")?;
+            if let Some(name) = check.get("context").and_then(Value::as_str) {
+                seen.push(name.to_string());
+            }
+        }
+        // `contexts` repeats the names `checks` lists, without their app.
+        for context in contexts.into_iter().flatten() {
+            let name = context.as_str().ok_or_else(malformed)?;
+            if !seen.iter().any(|seen| seen == name) {
+                push(&serde_json::json!({ "context": name }), "app_id")?;
+            }
         }
     }
-    names.sort();
-    names.dedup();
-    Ok(names)
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// The check runs on `sha` with the app that produced each, or why they
+/// could not be read.
+pub(super) fn produced_runs(
+    root: &Path,
+    gh: &std::ffi::OsStr,
+    deadline: Instant,
+    repository: &str,
+    sha: &str,
+) -> Result<Vec<ProducedRun>, String> {
+    if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("the head `{sha}` is not a commit id"));
+    }
+    let malformed = || "the check-run answer was not the expected JSON".to_string();
+    let answer = api(
+        root,
+        gh,
+        deadline,
+        &format!("repos/{repository}/commits/{sha}/check-runs?per_page={PAGE_LIMIT}"),
+    )
+    .map_err(|reason| format!("the check-run read: {reason}"))?;
+    let runs = answer
+        .get("check_runs")
+        .and_then(Value::as_array)
+        .ok_or_else(malformed)?;
+    let total = answer
+        .get("total_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(malformed)?;
+    if usize::try_from(total).map_or(true, |total| total > runs.len()) {
+        return Err(format!(
+            "the forge holds {total} check runs on the head and listed {}, so more may exist",
+            runs.len()
+        ));
+    }
+    runs.iter()
+        .map(|run| {
+            let text = |key: &str| run.get(key).and_then(Value::as_str);
+            Some(ProducedRun {
+                name: text("name")?.to_string(),
+                app: run.pointer("/app/id").and_then(Value::as_u64)?,
+                state: text("conclusion")
+                    .filter(|text| !text.is_empty())
+                    .or_else(|| text("status"))?
+                    .to_ascii_lowercase(),
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(malformed)
 }
 
 /// An RFC 3339 time with any offset and optional fraction, as seconds since
@@ -218,18 +366,50 @@ mod tests {
         }
     }
 
+    fn needs(name: &str, app: Option<u64>) -> RequiredCheckIn {
+        RequiredCheckIn {
+            name: name.into(),
+            app,
+        }
+    }
+
     #[test]
     fn a_required_check_with_no_run_is_missing_and_optional_success_does_not_hide_it() {
+        let none: Result<Vec<ProducedRun>, String> = Ok(Vec::new());
         let runs = [run("optional-lint", "success")];
+        let build = Ok(vec![needs("build", None)]);
+        assert_eq!(required_summary(&runs, &build, &none), "missing");
         assert_eq!(
-            required_summary(&runs, &Ok(vec!["build".into()])),
-            "missing"
+            required_summary(&runs, &Ok(Vec::new()), &none),
+            "none required"
         );
-        assert_eq!(required_summary(&runs, &Ok(Vec::new())), "none required");
-        assert_eq!(required_summary(&runs, &Err("unread".into())), "unverified");
+        assert_eq!(
+            required_summary(&runs, &Err("unread".into()), &none),
+            "unverified"
+        );
         let runs = [run("build", "success"), run("lint", "failure")];
-        assert_eq!(required_summary(&runs, &Ok(vec!["build".into()])), "passed");
+        assert_eq!(required_summary(&runs, &build, &none), "passed");
         assert_eq!(summary(&runs), "failed");
+    }
+
+    #[test]
+    fn a_requirement_bound_to_an_app_takes_only_that_apps_runs() {
+        let runs = [run("build", "success")];
+        let bound = Ok(vec![needs("build", Some(42))]);
+        let produced = |app| {
+            Ok(vec![ProducedRun {
+                name: "build".into(),
+                app,
+                state: "success".into(),
+            }])
+        };
+        assert_eq!(required_summary(&runs, &bound, &produced(99)), "missing");
+        assert_eq!(run_required("build", &bound, &produced(99)), Some(false));
+        assert_eq!(required_summary(&runs, &bound, &produced(42)), "passed");
+        assert_eq!(run_required("build", &bound, &produced(42)), Some(true));
+        let unread = Err("unread".into());
+        assert_eq!(required_summary(&runs, &bound, &unread), "unverified");
+        assert_eq!(run_required("build", &bound, &unread), None);
     }
 
     #[test]

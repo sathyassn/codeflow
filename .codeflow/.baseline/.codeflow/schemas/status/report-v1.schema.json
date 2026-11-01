@@ -1729,8 +1729,15 @@
           "type": "string"
         },
         "open_tasks": {
-          "type": "integer",
-          "minimum": 0
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "const": "unknown"
+            }
+          ]
         },
         "finish": {
           "$ref": "#/$defs/window"

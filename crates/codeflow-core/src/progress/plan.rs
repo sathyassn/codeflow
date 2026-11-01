@@ -49,6 +49,9 @@ pub struct Plan {
     forecast: Option<String>,
     /// Tasks added to the scope over the last seven days.
     pub(super) intake_added: Option<usize>,
+    /// Why whether every scope task is open is not known, when it is not:
+    /// the open count and every finish over it are then unknown.
+    pub(super) membership_unknown: Option<String>,
 }
 
 fn rank(state: Option<&str>) -> u8 {
@@ -64,6 +67,29 @@ fn rank(state: Option<&str>) -> u8 {
 /// A task's best chain so far: planning seconds, depth, and the
 /// predecessors on the duration and depth chains.
 type Best<'a> = (i64, usize, Option<&'a str>, Option<&'a str>);
+
+/// Why whether `task` is open cannot be known: its status is not one the
+/// stage ladder knows, so it is neither counted open nor ruled out.
+pub(super) fn openness_unknown(task: &TaskIn) -> Option<String> {
+    (!super::gather::KNOWN_STATUSES.contains(&task.status.as_str())).then(|| {
+        format!(
+            "whether {} is open is not known: its status `{}` is not one the stage ladder knows",
+            task.id, task.status
+        )
+    })
+}
+
+/// Why whether every task of `ids` is open cannot be known, when it
+/// cannot.
+pub(super) fn membership_unknown(inputs: &Inputs, ids: &BTreeSet<String>) -> Option<String> {
+    let reasons: Vec<String> = inputs
+        .tasks
+        .iter()
+        .filter(|task| ids.contains(&task.id))
+        .filter_map(openness_unknown)
+        .collect();
+    (!reasons.is_empty()).then(|| reasons.join("; "))
+}
 
 /// Open: not complete, not cancelled and not already landed.
 pub(super) fn is_open(task: &TaskIn) -> bool {
@@ -132,6 +158,7 @@ impl Plan {
             computed_at: time_text(inputs.now),
             forecast: covering.map(|forecast| forecast.path.clone()),
             intake_added: intake_added(inputs, ids),
+            membership_unknown: membership_unknown(inputs, ids),
         };
         plan.schedule(
             inputs,
@@ -448,6 +475,9 @@ impl Plan {
     /// The windows view with the two finish scenarios.
     #[must_use]
     pub fn windows_fact(&self) -> WindowsFact {
+        if let Some(reason) = &self.membership_unknown {
+            return self.unknown_windows(reason);
+        }
         let open: Vec<&String> = self.rows.iter().map(|row| &row.0).collect();
         let stops = self.finish(open.iter().copied());
         let stops_fact = stops.as_ref().map_or_else(
@@ -501,7 +531,7 @@ impl Plan {
                 ScenarioFact {
                     name: "intake stops",
                     rate: "the planned capacity rate over the lanes used".into(),
-                    open_tasks: open.len(),
+                    open_tasks: Known::Value(open.len()),
                     words: stops.as_ref().map_or_else(
                         || "nothing is open".into(),
                         |window| window_summary(&self.fact(window)).unwrap_or_else(|| "not yet estimable".into()),
@@ -512,11 +542,38 @@ impl Plan {
                 ScenarioFact {
                     name: "intake continues",
                     rate: "the planned capacity rate less the intake rate observed over the last seven days".into(),
-                    open_tasks: open.len(),
+                    open_tasks: Known::Value(open.len()),
                     finish: continues,
                     words,
                     intake_since_previous: Known::Word("no previous snapshot given".into()),
                 },
+            ],
+        }
+    }
+
+    /// Both scenarios when whether every scope task is open is not known:
+    /// no open count and no finish, with the reason.
+    fn unknown_windows(&self, reason: &str) -> WindowsFact {
+        let scenario = |name: &'static str, rate: &str| ScenarioFact {
+            name,
+            rate: rate.into(),
+            open_tasks: Known::unknown(),
+            finish: not_estimable(&self.computed_at, reason),
+            words: format!("no finish is given: {reason}"),
+            intake_since_previous: Known::Word("no previous snapshot given".into()),
+        };
+        WindowsFact {
+            basis_kind: self.basis_kind.into(),
+            basis: self.basis.clone(),
+            computed_at: self.computed_at.clone(),
+            lanes_used: self.lanes_used.max(1),
+            forecast: Known::or_word(self.forecast.clone(), "none covers the scope"),
+            scenarios: vec![
+                scenario("intake stops", "the planned capacity rate over the lanes used"),
+                scenario(
+                    "intake continues",
+                    "the planned capacity rate less the intake rate observed over the last seven days",
+                ),
             ],
         }
     }
@@ -713,15 +770,17 @@ fn intake_added(inputs: &Inputs, ids: &BTreeSet<String>) -> Option<usize> {
         return None;
     }
     let days = super::issues::last_days(inputs.now);
-    let dated: Vec<&TaskIn> = inputs
+    let scoped: Vec<&TaskIn> = inputs
         .tasks
         .iter()
-        .filter(|task| ids.contains(&task.id) && task.created.is_some())
+        .filter(|task| ids.contains(&task.id))
         .collect();
-    if dated.is_empty() {
+    // An undated task might have been added this week, so the count needs
+    // every task's date.
+    if scoped.is_empty() || scoped.iter().any(|task| task.created.is_none()) {
         return None;
     }
-    let added = dated
+    let added = scoped
         .iter()
         .filter(|task| {
             task.created

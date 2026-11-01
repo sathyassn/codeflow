@@ -35,6 +35,7 @@ fn task(id: &str, status: &str, state: Option<&str>) -> TaskIn {
         on_main: Some(false),
         on_home_ref: Some(true),
         unknown: None,
+        head_unread: None,
         record_on_line: true,
         landed_at: None,
     }
@@ -61,7 +62,11 @@ fn pull(number: u64, task: &str, draft: bool, checks: &str) -> PullIn {
         checks: checks.into(),
         runs: Vec::new(),
         // The base requires one check whose summary is `checks`.
-        required: Ok(vec!["build".into()]),
+        required: Ok(vec![super::inputs::RequiredCheckIn {
+            name: "build".into(),
+            app: None,
+        }]),
+        producers_unread: None,
         required_checks: checks.into(),
         task: Some(task.into()),
     }

@@ -399,7 +399,7 @@ pub struct ScenarioFact {
     pub name: &'static str,
     /// The rate the scenario uses, in words.
     pub rate: String,
-    pub open_tasks: usize,
+    pub open_tasks: Known<usize>,
     pub finish: WindowFact,
     pub words: String,
     pub intake_since_previous: Known<Vec<String>>,
