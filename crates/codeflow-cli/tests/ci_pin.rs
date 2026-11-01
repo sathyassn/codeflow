@@ -2039,8 +2039,10 @@ fn the_policy_workflow_documents_the_queue_limits() {
             );
         }
     }
+    // The header comment wraps lines, so read it as one run of words.
+    let header = POLICY.replace("\n# ", " ");
     assert!(
-        POLICY.contains("after that last read"),
+        header.contains("after that last read"),
         "the window is stated in the workflow"
     );
 }
