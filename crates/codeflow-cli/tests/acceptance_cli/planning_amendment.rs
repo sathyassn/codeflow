@@ -9,8 +9,7 @@ use super::*;
 
 /// TSK-001 targeting [`LINE`] with AC-1 removed, as an amendment leaves it.
 fn removed_task(status: &str, closeout: &str) -> String {
-    line_task("TSK-001", status, closeout)
-        .replace("- AC-1 When run, the system shall work.\n", "")
+    line_task("TSK-001", status, closeout).replace("- AC-1 When run, the system shall work.\n", "")
 }
 
 /// How the amendment leaves TSK-001's AC-1.
@@ -68,7 +67,8 @@ fn amendment(root: &Path, own: Own, extra: Extra) -> String {
             write(
                 root,
                 &record_path("TSK-002"),
-                &line_task("TSK-002", "todo", "Pending.\n").replace("shall work.", "shall still work."),
+                &line_task("TSK-002", "todo", "Pending.\n")
+                    .replace("shall work.", "shall still work."),
             );
         }
         Extra::Product => write(root, "src/sneak.rs", "pub fn sneak() {}\n"),
@@ -84,7 +84,11 @@ fn amendment(root: &Path, own: Own, extra: Extra) -> String {
 /// Complete TSK-001 with AC-1 waived by `by`, reviewed at `reviewed`, and
 /// run `codeflow ci` for the task pull request into [`LINE`].
 fn complete_and_judge(root: &Path, own: Own, reviewed: &str, by: &str) -> (i32, String) {
-    let own = if own == Own::Untouched { Own::Amended } else { own };
+    let own = if own == Own::Untouched {
+        Own::Amended
+    } else {
+        own
+    };
     // A removed criterion leaves the record, so the block has no row for
     // it to waive (`work.records` refuses a row the record does not have).
     let closeout = if own == Own::Removed {
@@ -113,7 +117,10 @@ fn on_target(own: Own, extra: Extra, name_merge: bool) -> (i32, String) {
     let amended = amendment(root, own, extra);
     let landed = land(root, "plan/amend");
     git(root, &["switch", "task/TSK-001-work"]);
-    git(root, &["merge", "--no-ff", "-m", "chore: merge the line", LINE]);
+    git(
+        root,
+        &["merge", "--no-ff", "-m", "chore: merge the line", LINE],
+    );
     write(root, "src/work.rs", "pub fn work_on_linux() {}\n");
     let reviewed = commit(root, "feat: work on Linux");
     let by = if name_merge { landed } else { amended };
@@ -147,12 +154,12 @@ fn a_task_waiver_names_an_epic_amendment_on_the_target() {
 }
 
 /// Issue 465: in the task's own range, an amendment of its own criterion
-/// may update the epic plan in the same commit.
+/// may update the epic plan in the same commit. A criterion the task's own
+/// pull request removes needs no waiver; `work.criteria_removal` asks the
+/// pull request body for its reason instead.
 #[test]
 fn an_own_range_waiver_may_update_the_plan_beside_the_record() {
-    for own in [Own::Amended, Own::Removed] {
-        assert_passes(&own_range(own, Extra::Plan), &format!("{own:?}"));
-    }
+    assert_passes(&own_range(Own::Amended, Extra::Plan), "amended");
 }
 
 /// Fail closed on both routes: the amendment changes planning records only
@@ -161,8 +168,16 @@ fn an_own_range_waiver_may_update_the_plan_beside_the_record() {
 fn a_task_waiver_refuses_a_mixed_or_unrelated_amendment() {
     let refusals = [
         (Own::Amended, Extra::Product, "also changes src/sneak.rs"),
-        (Own::Amended, Extra::Policy, "also changes .codeflow/policy.json"),
-        (Own::Untouched, Extra::Plan, "which does not amend AC-1 of TSK-001"),
+        (
+            Own::Amended,
+            Extra::Policy,
+            "also changes .codeflow/policy.json",
+        ),
+        (
+            Own::Untouched,
+            Extra::Plan,
+            "which does not amend AC-1 of TSK-001",
+        ),
     ];
     for (own, extra, needle) in refusals {
         assert_blocks(

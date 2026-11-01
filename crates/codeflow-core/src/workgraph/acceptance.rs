@@ -501,8 +501,8 @@ impl From<Vec<Finding>> for BindingResult {
 /// Closeout may differ in the reviewed segment. A clean task landing can
 /// transport that segment onto a line; a reopening range reviews its own
 /// work and takes no landing's review. `base` pins the range's anchored old review when supplied.
-/// A waiver names the criterion's record-only amendment on its target;
-/// `bind_completion_with_amendment` adds the task's own range.
+/// A waiver names a planning-only amendment of the criterion on its
+/// target; `bind_completion_with_amendment` adds the task's own range.
 #[must_use]
 pub fn bind_completion(
     repo: &Repository,
@@ -558,9 +558,10 @@ fn task_reopen_history(
 
 /// [`bind_completion`] with the own-task waiver allowance (TSK-184): in the
 /// task's own pull request, before the task was ever complete on its
-/// target, a waiver may also name a record-only amendment commit of this
-/// record in that range, after `own_range_base` and strictly before the
-/// reviewed commit. Once the pull request lands, that commit is on the
+/// target, a waiver may also name a planning-only amendment commit of this
+/// record's criterion in that range, after `own_range_base` and strictly
+/// before the reviewed commit. Like an amendment on the target, it may also
+/// change other planning records, such as the epic plan (issue 465). Once the pull request lands, that commit is on the
 /// target, so a line and the release judge accept the same waiver under
 /// the target rule. `None`, or a range that reopens a landed completion,
 /// keeps the target rule alone; a range that reopens only a completion it
@@ -2806,28 +2807,22 @@ fn waiver_problem(
         };
         if before_base || reviewed == Some(amendment) || !before_review {
             return Some(format!(
-                "names {}, which is not on the target or a record-only amendment strictly before the reviewed revision in this task's range; {ON_TARGET}; {WAIVER_ROUTE}",
+                "names {}, which is not on the target or an amendment strictly before the reviewed revision in this task's range; {ON_TARGET}; {WAIVER_ROUTE}",
                 evidence.trim()
             ));
         }
-        let Ok(commit) = repo.find_commit(amendment) else {
-            return Some("amendment cannot be read".into());
-        };
-        let paths = super::lifecycle::changed_paths(
-            repo,
-            &history::parent_id(repo, &commit, 0).map_or_else(|_| String::new(), |p| p.to_string()),
-            Some(&amendment.to_string()),
-        );
-        if paths.is_err()
-            || paths
-                .is_ok_and(|paths| paths.is_empty() || paths.iter().any(|path| path != &task.path))
-        {
-            return Some(format!(
-                "names {}, which must change only this task's record to count as an amendment in its own range, and is not on the target; {ON_TARGET}; {WAIVER_ROUTE}",
-                evidence.trim()
-            ));
-        }
+        // In its own range the amendment meets the same test as one on the
+        // target (issue 465): the checks below refuse it unless it changes
+        // planning records only and amends this criterion of this record,
+        // so it may update the epic plan beside the record.
     }
+    // A refusal of a commit off the target also says what the target route
+    // requires (TSK-340 AC-7).
+    let route = if off_target {
+        format!("; it is not on the target either: {ON_TARGET}; {WAIVER_ROUTE}")
+    } else {
+        String::new()
+    };
     let contains = match is_ancestor_or_same(repo, amendment, landing.commit()) {
         Ok(contains) => contains,
         Err(error) => return Some(error),
@@ -2872,7 +2867,7 @@ fn waiver_problem(
         Ok(None) => {}
         Ok(Some(path)) => {
             return Some(format!(
-                "names {}, which also changes {path}; a planning amendment changes planning records only",
+                "names {}, which also changes {path}; a planning amendment changes planning records only{route}",
                 evidence.trim()
             ));
         }
@@ -2901,7 +2896,7 @@ fn waiver_problem(
     match (criterion(parent), criterion(Some(amendment))) {
         (Some(before), Some(after)) if before != after => None,
         _ => Some(format!(
-            "names {}, which does not amend {id} of {}",
+            "names {}, which does not amend {id} of {}{route}",
             evidence.trim(),
             task.id
         )),
@@ -3928,7 +3923,7 @@ fn completions_received(
     let _judgment = history::judgment();
     let amendable = criteria.amends();
     // The task a task pull request is for may waive a criterion by a
-    // record-only amendment in its own range (TSK-184); no other record may.
+    // planning amendment in its own range (TSK-184); no other record may.
     let own_task = match criteria {
         Criteria::OwnTask(id) => Some(id.as_str()),
         _ => None,

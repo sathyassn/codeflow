@@ -1205,7 +1205,7 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
             &reopened,
             "strictly before the reviewed revision",
         ),
-        ("filed", &filed, "must change only this task's record"),
+        ("filed", &filed, "which does not amend AC-1 of TSK-002"),
     ] {
         let block = waived_block(dir.path(), name, &reopened, named);
         let refused = status(

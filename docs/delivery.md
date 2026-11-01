@@ -255,10 +255,13 @@ original SHA-256 digest, source commit and separate redaction review.
 A waiver is different: `AC-N: waived | <full amendment commit SHA>` under
 `acceptance.criteria` records a changed criterion result. The amendment
 changes that criterion and planning records only, and the completion
-contains it. A task may name an amendment on its target. Before its first
-landing, its own record-only amendment may also be after the range's
-merge-base and strictly before `reviewed` in ancestry, never equal to either
-endpoint. A range that reopens a completion that never landed keeps that
+contains it. Other planning records in the same commit, such as the epic
+record, the epic plan or other task records, do not disqualify it. A
+criterion the amendment removes leaves the record, so the completion has no
+row for it and needs no waiver. A task may name an amendment on its target.
+Before its first landing, its own amendment, under the same test, may also
+be after the range's merge-base and strictly before `reviewed` in ancestry,
+never equal to either endpoint. A range that reopens a completion that never landed keeps that
 own-range allowance, whatever caused the reopen; a range that reopens a
 landed completion does not. A waiver refused as not on the target says what
 that requires: a receiving line the run pins holds the commit (the pull
