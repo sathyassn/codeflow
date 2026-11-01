@@ -39,7 +39,7 @@ The release chain is the longest. Some records in these chains still read
 
 ## Technical
 
-70 decisions, 3 with `status: superseded`. A
+72 decisions, 3 with `status: superseded`. A
 decision is proposed, then accepted, and may later be superseded; its
 content is never rewritten, and only `superseded_by` or a dated note is added.
 
@@ -83,6 +83,7 @@ Two pages link back to the decisions:
 | Cross-vendor transport and delegation | [ADR-0037](decisions/ADR-0037-canonical-delegate-prompt-boundary.md) | require a canonical delegate prompt boundary | accepted | none |
 | Cross-vendor transport and delegation | [ADR-0059](decisions/ADR-0059-qualified-native-transport-fallback.md) | qualify native transport by capabilities instead of plugin exclusivity | accepted | none |
 | Cross-vendor transport and delegation | [ADR-0077](decisions/ADR-0077-another-model-family-is-reached-through-an-inter.md) | Another model family is reached through an interactive seat in a Herdr tab | accepted | none |
+| Cross-vendor transport and delegation | [ADR-0094](decisions/ADR-0094-lanes-as-recorded-sessions.md) | Lanes as recorded sessions | accepted | none |
 | Duo orchestration and quality | [ADR-0015](decisions/ADR-0015-duo-model-orchestration.md) | duo-model orchestration: the Claude and Codex develop flow (cf-model-orchestrator) | accepted | ADR-0023 |
 | Duo orchestration and quality | [ADR-0024](decisions/ADR-0024-stage-aware-duo-and-bounded-parallelism.md) | stage-aware duo default with bounded parallel worktrees | accepted | none |
 | Duo orchestration and quality | [ADR-0028](decisions/ADR-0028-evidence-routed-model-effort.md) | route model effort by evidence and task demand | accepted | none |
