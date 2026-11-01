@@ -4,12 +4,13 @@
 use std::collections::BTreeMap;
 
 use super::compute::{
-    count_stage, location, mean, pull_for, scope_epics, stage, theme, time_text, unreadable_reason,
+    count_stage, coverage_reason, location, mean, pull_for, scope_epics, stage, theme, time_text,
+    Stage,
 };
 use super::inputs::{EpicIn, ForgeIn, Inputs, TaskIn};
 use super::model::{
-    ChainLanded, ChainPull, EpicFact, FeatureFact, HopFact, Known, LandingChain, LocationCounts,
-    PullFact, StageCounts, StepFact, ThemeFact,
+    ChainLanded, ChainPull, CheckRunFact, EpicFact, FeatureFact, HopFact, Known, LandingChain,
+    LocationCounts, PullFact, StageCounts, StepFact, ThemeFact,
 };
 use super::plan::{done_window, is_open, not_estimable, Plan, Win};
 
@@ -42,16 +43,21 @@ fn epic(
     let (mut done, mut not_done, mut cancelled) = (Vec::new(), Vec::new(), Vec::new());
     let mut locations = LocationCounts::default();
     for task in tasks {
-        let Some((name, percent)) = stage(inputs, task) else {
-            cancelled.push(task.id.clone());
-            continue;
-        };
-        count_stage(&mut counts, name);
-        percents.push(percent);
-        if percent == 100 {
-            done.push(task.id.clone());
-        } else {
-            not_done.push(task.id.clone());
+        match stage(inputs, task) {
+            Stage::Excluded => {
+                cancelled.push(task.id.clone());
+                continue;
+            }
+            Stage::Unknown => not_done.push(task.id.clone()),
+            Stage::On(name, percent) => {
+                count_stage(&mut counts, name);
+                percents.push(percent);
+                if percent == 100 {
+                    done.push(task.id.clone());
+                } else {
+                    not_done.push(task.id.clone());
+                }
+            }
         }
         locations.denominator += 1;
         match location(inputs, task).kind {
@@ -63,7 +69,7 @@ fn epic(
             _ => locations.unknown += 1,
         }
     }
-    let unreadable = unreadable_reason(inputs, None);
+    let unreadable = coverage_reason(inputs, tasks, None);
     let percent = if unreadable.is_some() {
         None
     } else {
@@ -107,7 +113,7 @@ fn epic(
         not_done,
         cancelled,
         reasoning,
-        themes: themes(inputs, tasks),
+        themes: themes(inputs, record, tasks),
         location_counts: locations,
         landing_chain: landing_chain(inputs, plan, &line, tasks),
         path_to_main: path(inputs, plan, &line, tasks),
@@ -115,7 +121,7 @@ fn epic(
     }
 }
 
-fn themes(inputs: &Inputs, tasks: &[&TaskIn]) -> Vec<ThemeFact> {
+fn themes(inputs: &Inputs, record: Option<&EpicIn>, tasks: &[&TaskIn]) -> Vec<ThemeFact> {
     let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for task in tasks {
         grouped
@@ -125,7 +131,14 @@ fn themes(inputs: &Inputs, tasks: &[&TaskIn]) -> Vec<ThemeFact> {
     }
     grouped
         .into_iter()
-        .map(|(name, tasks)| ThemeFact { name, tasks })
+        .map(|(name, tasks)| ThemeFact {
+            about: Known::or_word(
+                record.and_then(|epic| epic.section_text.get(&name).cloned()),
+                "not recorded",
+            ),
+            name,
+            tasks,
+        })
         .collect()
 }
 
@@ -168,6 +181,16 @@ fn landing_chain(inputs: &Inputs, plan: &Plan, line: &str, tasks: &[&TaskIn]) ->
                     task: Known::or_word(pull.task.clone(), "none"),
                     draft: pull.draft,
                     checks: pull.checks.clone(),
+                    required: "not read",
+                    runs: pull
+                        .runs
+                        .iter()
+                        .map(|run| CheckRunFact {
+                            name: run.name.clone(),
+                            state: run.state.clone(),
+                            completed_at: Known::or_word(run.completed_at.clone(), "unknown"),
+                        })
+                        .collect(),
                 })
                 .collect();
             chain.sort_by_key(|pull| {
@@ -182,7 +205,7 @@ fn landing_chain(inputs: &Inputs, plan: &Plan, line: &str, tasks: &[&TaskIn]) ->
     };
     let mut landed: Vec<(Option<i64>, String)> = tasks
         .iter()
-        .filter(|task| stage(inputs, task).is_some_and(|(_, percent)| percent == 100))
+        .filter(|task| stage(inputs, task).percent() == Some(100))
         .map(|task| (task.landed_at, task.id.clone()))
         .collect();
     landed.sort();
@@ -204,7 +227,9 @@ fn shift(win: &Win, by: [i64; 3]) -> Win {
         Win::Estimable {
             ends, conditional, ..
         } => Win::Estimable {
-            start: ends[2],
+            // The step starts when the work before it can first end, so
+            // every end is at or after the start.
+            start: ends[0],
             ends: [ends[0] + by[0], ends[1] + by[1], ends[2] + by[2]],
             conditional: conditional.clone(),
         },

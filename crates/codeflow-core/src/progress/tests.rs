@@ -33,6 +33,8 @@ fn task(id: &str, status: &str, state: Option<&str>) -> TaskIn {
         acceptance: None,
         branch: None,
         on_main: Some(false),
+        on_home_ref: Some(true),
+        unknown: None,
         record_on_line: true,
         landed_at: None,
     }
@@ -57,6 +59,7 @@ fn pull(number: u64, task: &str, draft: bool, checks: &str) -> PullIn {
         base: LINE.into(),
         draft,
         checks: checks.into(),
+        runs: Vec::new(),
         task: Some(task.into()),
     }
 }
@@ -75,7 +78,9 @@ fn inputs() -> Inputs {
         total: 3,
         reviewed: "c".repeat(40),
         approved: true,
+        valid: true,
         bound: true,
+        note: None,
     });
     let mut landed = task("TSK-005", "complete", None);
     landed.landed_at = Some(NOW - 3_600);
@@ -116,6 +121,7 @@ fn inputs() -> Inputs {
             outcome: Some("the demo ships".into()),
             about: Some("about the demo".into()),
             sections: BTreeMap::from([("TSK-001".into(), "Tasks".into())]),
+            section_text: BTreeMap::from([("Tasks".into(), "The first slice.".into())]),
             capabilities: vec![("CAP-001".into(), "demo".into(), "Demo prose.".into())],
         }],
         unreadable: Vec::new(),
@@ -134,6 +140,7 @@ fn inputs() -> Inputs {
         forecast_note: None,
         release_step: false,
         history_read: true,
+        record_losses: Vec::new(),
     }
 }
 

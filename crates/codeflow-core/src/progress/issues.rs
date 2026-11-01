@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use super::compute::{count_f64, mean, pull_for, stage, time_text};
+use super::compute::{count_f64, mean, pull_for, stage, time_text, Stage};
 use super::inputs::{ForgeIn, Inputs, LedgerIn, TaskIn};
 use super::model::{
     DecisionFact, EvidenceFact, IssueFact, IssuesFact, Known, LaneFact, LanesFact,
@@ -11,6 +11,7 @@ use super::model::{
 };
 use super::owed::{OwedKind, OwedRead};
 use super::plan::{is_open, Plan, Win};
+use crate::delegate::shell_quote;
 
 fn word(text: &str) -> Known<String> {
     Known::Word(text.into())
@@ -134,7 +135,8 @@ fn task_issues(inputs: &Inputs, plan: &Plan, task: &TaskIn, now: &str, out: &mut
         );
         fact.command = Known::Value(format!(
             "cd {} && codeflow task status {} todo",
-            inputs.repo_path, task.id
+            shell_quote(&inputs.repo_path),
+            task.id
         ));
         out.push(fact);
     }
@@ -174,6 +176,7 @@ fn task_issues(inputs: &Inputs, plan: &Plan, task: &TaskIn, now: &str, out: &mut
             "failed" => Some("required check red"),
             "missing" => Some("required check missing"),
             "pending" => Some("required check pending"),
+            "skipped" => Some("check skipped without reuse evidence"),
             _ => None,
         };
         if let Some(kind) = kind {
@@ -217,7 +220,8 @@ fn task_issues(inputs: &Inputs, plan: &Plan, task: &TaskIn, now: &str, out: &mut
                 );
                 fact.command = Known::Value(format!(
                     "git -C {} log -1 {}",
-                    inputs.repo_path, branch.name
+                    shell_quote(&inputs.repo_path),
+                    shell_quote(&branch.name)
                 ));
                 out.push(fact);
             }
@@ -319,11 +323,7 @@ fn operator_set(inputs: &Inputs, ids: &BTreeSet<String>, now: &str) -> OperatorS
         checked: problem.is_none(),
         reason: Known::or_word(problem, "none"),
     };
-    let unreadable: Vec<&str> = inputs.unreadable.iter().map(|r| r.path.as_str()).collect();
-    sources.push(check(
-        "records",
-        (!unreadable.is_empty()).then(|| format!("unreadable: {}", unreadable.join(", "))),
-    ));
+    sources.push(check("records", records_problem(inputs)));
     for task in inputs
         .tasks
         .iter()
@@ -443,16 +443,38 @@ fn operator_set(inputs: &Inputs, ids: &BTreeSet<String>, now: &str) -> OperatorS
     }
 }
 
+/// Why the records source was not fully read, when it was not: an
+/// unreadable record, or a target whose records could not be listed or
+/// read.
+fn records_problem(inputs: &Inputs) -> Option<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let unreadable: Vec<&str> = inputs.unreadable.iter().map(|r| r.path.as_str()).collect();
+    if !unreadable.is_empty() {
+        problems.push(format!("unreadable: {}", unreadable.join(", ")));
+    }
+    problems.extend(
+        inputs
+            .record_losses
+            .iter()
+            .map(|(_, reason)| reason.clone()),
+    );
+    (!problems.is_empty()).then(|| problems.join("; "))
+}
+
 /// The lanes view.
 #[must_use]
 pub fn lanes(inputs: &Inputs, ids: &BTreeSet<String>, _plan: &Plan) -> LanesFact {
     let percent_of = |scope: &[String]| {
-        let percents: Vec<u32> = inputs
+        let stages: Vec<Stage> = inputs
             .tasks
             .iter()
             .filter(|task| scope.contains(&task.id))
-            .filter_map(|task| stage(inputs, task).map(|(_, p)| p))
+            .map(|task| stage(inputs, task))
             .collect();
+        if stages.contains(&Stage::Unknown) {
+            return None;
+        }
+        let percents: Vec<u32> = stages.into_iter().filter_map(Stage::percent).collect();
         mean(&percents)
     };
     let mut lanes = Vec::new();
@@ -614,8 +636,8 @@ pub fn pace(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> PaceFact {
     let added_week: usize = days.iter().map(|d| added_on(d).len()).sum();
     PaceFact {
         days: per_day,
-        landed_total: if known { Known::Value(scope.iter().filter(|t| stage(inputs, t).is_some_and(|(_, p)| p == 100)).count()) } else { Known::unknown() },
-        added_total: if known { Known::Value(scope.len()) } else { Known::unknown() },
+        landed_total: if known { Known::Value(landed_week) } else { Known::unknown() },
+        added_total: if known { Known::Value(added_week) } else { Known::unknown() },
         lanes_observed: plan.lanes_used,
         observed_landing_rate_per_day: if known { Known::Value(count_f64(landed_week) / 7.0) } else { Known::unknown() },
         planned_capacity_rate_per_day: planned,
@@ -648,7 +670,8 @@ fn evidence_entry(
 #[must_use]
 pub fn evidence(inputs: &Inputs, plan: &Plan) -> Vec<EvidenceFact> {
     let at = time_text(inputs.now);
-    let records_ok = inputs.unreadable.is_empty();
+    let records = records_problem(inputs);
+    let records_ok = records.is_none();
     let readiness_ok = inputs.readiness_problem.is_none();
     let forge = match &inputs.forge {
         ForgeIn::Read { read_at, .. } => (true, time_text(*read_at), None),
@@ -663,13 +686,7 @@ pub fn evidence(inputs: &Inputs, plan: &Plan) -> Vec<EvidenceFact> {
         LedgerIn::Read { .. } => (true, None),
     };
     let mut out = vec![
-        evidence_entry(
-            "percents",
-            "records",
-            records_ok,
-            &at,
-            (!records_ok).then(|| "a record could not be read".into()),
-        ),
+        evidence_entry("percents", "records", records_ok, &at, records),
         evidence_entry("percents", "git", true, &at, None),
         evidence_entry(
             "locations",

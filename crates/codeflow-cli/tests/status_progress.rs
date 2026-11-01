@@ -7,6 +7,8 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
+mod review;
+
 const AS_OF: &str = "2026-11-01T12:00:00Z";
 
 fn git(root: &Path, args: &[&str]) -> String {
@@ -517,10 +519,33 @@ fn the_facts_validate_against_the_shipped_schema() {
             "evidence"
         ]
     );
+    // The whole contract, nested objects included, is frozen: any field,
+    // enum or requirement change is a schema version change. Bump
+    // `schema_version`, ship a new schema file and update this digest.
+    assert_eq!(
+        fnv1a(include_bytes!(
+            "../../../assets/base/status/schemas/report-v1.schema.json"
+        )),
+        SCHEMA_DIGEST,
+        "the v1 status schema changed"
+    );
+}
+
+/// FNV-1a over the shipped v1 schema's bytes, carriage returns left out
+/// so a CRLF checkout reads the same.
+const SCHEMA_DIGEST: u64 = 0xccb0_8117_ae5c_3dd4;
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .filter(|byte| **byte != b'\r')
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+        })
 }
 
 /// The subset of JSON Schema the shipped schemas use: `type`, `const`,
-/// `enum`, `pattern` (anchored literal prefixes are not checked),
+/// `enum`, `pattern`,
 /// `required`, `properties`, `additionalProperties: false`, `items`,
 /// `anyOf` and local `$ref`.
 fn validate(root: &Value, schema: &Value, value: &Value, at: &str) -> Vec<String> {
@@ -540,6 +565,14 @@ fn validate(root: &Value, schema: &Value, value: &Value, at: &str) -> Vec<String
     if let Some(expected) = schema.get("const") {
         if expected != value {
             errors.push(format!("{at}: expected {expected}, got {value}"));
+        }
+    }
+    if let (Some(pattern), Some(text)) = (
+        schema.get("pattern").and_then(Value::as_str),
+        value.as_str(),
+    ) {
+        if !regex::Regex::new(pattern).unwrap().is_match(text) {
+            errors.push(format!("{at}: {text:?} does not match {pattern}"));
         }
     }
     if let Some(options) = schema.get("enum").and_then(Value::as_array) {

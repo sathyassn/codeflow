@@ -57,21 +57,40 @@ pub struct BlockerIn {
     pub revisit: Option<String>,
 }
 
-/// The record's one active acceptance block, as read from the most advanced
-/// copy of the record (the home tip once complete, else the task branch).
+/// The record's acceptance block, as read from the most advanced copy of
+/// the record (the home tip once complete, else the head the pull request
+/// or branch reports).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptanceIn {
-    /// Criteria whose result is `verified`.
+    /// The record's current criteria whose result is `verified`.
     pub verified: usize,
-    /// Criteria the record lists.
+    /// Criteria the record lists now.
     pub total: usize,
     /// The reviewed commit the block names.
     pub reviewed: String,
     /// The block's verdict is `approved`.
     pub approved: bool,
-    /// Bound to its reviewed commit by the rule CI uses: no change beyond
-    /// the record since that commit.
+    /// The record has one active block and it passes the structural
+    /// acceptance rules against the record's current criteria.
+    pub valid: bool,
+    /// Bound to its reviewed commit: for a closed task, its completion is
+    /// bound on the home target as the landing gate binds it; for an open
+    /// task, nothing but the record changed between the reviewed commit and
+    /// the reported head, and the criteria are the ones the review saw.
     pub bound: bool,
+    /// Why the block is invalid or not bound, when it is either.
+    pub note: Option<String>,
+}
+
+/// One check run of a pull request, as the forge reported it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckRunIn {
+    pub name: String,
+    /// `success`, `failure`, `pending`, `skipped`, `neutral`, `cancelled`
+    /// or another conclusion as read, lower case.
+    pub state: String,
+    /// When the run completed, as the forge gave it.
+    pub completed_at: Option<String>,
 }
 
 /// The task's work branch as git holds it.
@@ -115,9 +134,16 @@ pub struct TaskIn {
     pub follow_ups: Option<String>,
     pub acceptance: Option<AcceptanceIn>,
     pub branch: Option<BranchIn>,
-    /// The landing is on the trusted remote's default branch: `Some(true)`
-    /// on it, `Some(false)` not on it, `None` when the ref is missing.
+    /// The task's current completion is on the trusted remote's default
+    /// branch: its landing transition commit is reachable from that ref.
+    /// `None` when the ref or the transition cannot be read.
     pub on_main: Option<bool>,
+    /// The same proof against the remote ref of the task's home target.
+    pub on_home_ref: Option<bool>,
+    /// Why the task's stage cannot be known (its home target could not be
+    /// read, its status is not one the ladder knows, or the readiness core
+    /// could not judge it); `None` when it can.
+    pub unknown: Option<String>,
     /// The record exists on its home tip.
     pub record_on_line: bool,
     /// When the task landed on its home target, seconds since the epoch.
@@ -134,6 +160,8 @@ pub struct EpicIn {
     pub about: Option<String>,
     /// The `##` heading of the first section that names each task id.
     pub sections: BTreeMap<String, String>,
+    /// Each `##` heading's section text, for a theme's about.
+    pub section_text: BTreeMap<String, String>,
     /// Capability entries in `docs/capabilities.md` that list this epic:
     /// `(CAP-NNN, name, prose after its block)`.
     pub capabilities: Vec<(String, String, String)>,
@@ -164,9 +192,11 @@ pub struct PullIn {
     pub head_sha: String,
     pub base: String,
     pub draft: bool,
-    /// The required checks as read: `passed`, `failed`, `pending`,
-    /// `skipped`, `missing`.
+    /// The checks summary: `failed`, `pending`, `missing`, `skipped` or
+    /// `passed`, never erasing a failure or a skip.
     pub checks: String,
+    /// Each check run as read.
+    pub runs: Vec<CheckRunIn>,
     /// The task id its head branch carries.
     pub task: Option<String>,
 }
@@ -262,6 +292,12 @@ pub struct Inputs {
     pub forecast_note: Option<String>,
     /// The project keeps a release step (`docs/releasing.md`).
     pub release_step: bool,
-    /// The history walk of the home tips succeeded.
+    /// The history walk of the home tips succeeded and reached back past
+    /// the seven-day pace window.
     pub history_read: bool,
+    /// Record coverage lost: the target that could not be resolved or read
+    /// (`None` when the targets could not be listed at all), and why. A
+    /// loss that touches the scope makes its percents unknown and the
+    /// records source unchecked.
+    pub record_losses: Vec<(Option<String>, String)>,
 }

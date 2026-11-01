@@ -2030,7 +2030,8 @@ fn hook_command(run_id: &str, state_dir: &Path) -> String {
     )
 }
 
-fn shell_quote(value: &str) -> String {
+/// `value` as one POSIX shell word.
+pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 

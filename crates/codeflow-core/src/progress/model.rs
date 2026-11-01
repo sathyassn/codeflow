@@ -131,6 +131,8 @@ pub struct FeatureFact {
 #[derive(Debug, Clone, Serialize)]
 pub struct ThemeFact {
     pub name: String,
+    /// The epic section's text under the theme's heading, or `not recorded`.
+    pub about: Known<String>,
     pub tasks: Vec<String>,
 }
 
@@ -152,7 +154,21 @@ pub struct ChainPull {
     pub number: u64,
     pub task: Known<String>,
     pub draft: bool,
+    /// The summary of the runs: `failed`, `pending`, `missing`, `skipped`
+    /// or `passed`; a skip is never a pass.
     pub checks: String,
+    /// Which checks are required: `not read` (the forge read does not say).
+    pub required: &'static str,
+    /// Each check run as read.
+    pub runs: Vec<CheckRunFact>,
+}
+
+/// One check run of a pull request, as the forge reported it.
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckRunFact {
+    pub name: String,
+    pub state: String,
+    pub completed_at: Known<String>,
 }
 
 /// A landed task in the landing chain.
@@ -220,8 +236,12 @@ pub struct CriteriaFact {
     pub verified: usize,
     pub total: usize,
     pub reviewed: String,
-    /// `current` or `stale` (the head moved since the reviewed commit).
+    /// `current` (bound to its reviewed commit), `stale` (valid but not
+    /// bound) or `invalid` (not one active block that passes the
+    /// acceptance rules against the current criteria).
     pub state: &'static str,
+    /// Why the block is stale or invalid, or `none`.
+    pub note: Known<String>,
 }
 
 /// Where a task's work is.

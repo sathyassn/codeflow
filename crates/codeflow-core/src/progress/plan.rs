@@ -80,12 +80,21 @@ impl Plan {
             .filter(|task| ids.contains(&task.id) && is_open(task))
             .map(|task| (task.id.as_str(), task))
             .collect();
-        let order = topological(&open);
+        // Windows are scheduled over the scope and every open task before
+        // it, in or out of the scope, so an outside predecessor still
+        // delays its successors; the rows and paths stay the scope's.
+        let graph = with_predecessors(inputs, &open);
+        let graph_order = topological(&graph);
+        let order: Vec<String> = graph_order
+            .iter()
+            .filter(|id| open.contains_key(id.as_str()))
+            .cloned()
+            .collect();
         let (lanes_used, lane_map, observed) = lanes(inputs, ids);
         let covering = inputs
             .forecast
             .as_ref()
-            .filter(|forecast| open.keys().all(|id| forecast.ends.contains_key(*id)));
+            .filter(|forecast| graph.keys().all(|id| forecast.ends.contains_key(*id)));
         let (basis_kind, basis) = match (covering, observed) {
             (Some(forecast), _) => (
                 "forecast",
@@ -126,8 +135,8 @@ impl Plan {
         };
         plan.schedule(
             inputs,
-            &open,
-            &order,
+            &graph,
+            &graph_order,
             covering.map(|forecast| &forecast.ends),
         );
         plan.paths(inputs, &open, &order);
@@ -213,7 +222,7 @@ impl Plan {
             let (e, p, l) = forecast[&task.id];
             [e.max(preds[0]), p.max(preds[1]), l.max(preds[2])]
         } else {
-            let remaining = 100 - stage(inputs, task).map_or(0, |(_, percent)| i64::from(percent));
+            let remaining = 100 - i64::from(stage(inputs, task).percent().unwrap_or(0));
             let units = [UNIT_EARLIEST, UNIT_PLANNING, UNIT_LATEST];
             let mut ends = [0_i64; 3];
             for (index, heap) in free.iter_mut().enumerate() {
@@ -224,6 +233,9 @@ impl Plan {
             }
             ends
         };
+        // The start is the earliest the work can begin: its predecessors'
+        // earliest ends, and never after any of its own ends.
+        let start = ends.iter().copied().fold(preds[0], i64::min);
         let conditional = (task.status == "blocked" || task.state.as_deref() == Some("blocked"))
             .then(|| {
                 let reason = task
@@ -234,7 +246,7 @@ impl Plan {
                 format!("the blocker clearing: {reason}")
             });
         Win::Estimable {
-            start: preds[2],
+            start,
             ends,
             conditional,
         }
@@ -318,7 +330,7 @@ impl Plan {
                 .get(&task.id)
                 .map_or(0, |ends| (ends.1 - before).max(0));
         }
-        let remaining = 100 - stage(inputs, task).map_or(0, |(_, percent)| i64::from(percent));
+        let remaining = 100 - i64::from(stage(inputs, task).percent().unwrap_or(0));
         UNIT_PLANNING * remaining / 100
     }
 
@@ -582,6 +594,9 @@ fn no_basis(
     unreadable: &BTreeSet<&str>,
     done: &BTreeMap<String, Win>,
 ) -> Option<String> {
+    if let Some(reason) = &task.unknown {
+        return Some(format!("its stage is unknown: {reason}"));
+    }
     if task.state.is_none() || task.state.as_deref() == Some("invalid") {
         return Some("the readiness core could not judge the task".into());
     }
@@ -603,6 +618,29 @@ fn no_basis(
         }
     }
     None
+}
+
+/// `open` with every open task any of them waits on, transitively.
+fn with_predecessors<'a>(
+    inputs: &'a Inputs,
+    open: &BTreeMap<&'a str, &'a TaskIn>,
+) -> BTreeMap<&'a str, &'a TaskIn> {
+    let known = super::compute::by_id(inputs);
+    let mut graph = open.clone();
+    let mut pending: Vec<&str> = open.keys().copied().collect();
+    while let Some(id) = pending.pop() {
+        let task: &'a TaskIn = graph[id];
+        for dep in &task.depends_on {
+            let Some(before) = known.get(dep.as_str()).copied().filter(|t| is_open(t)) else {
+                continue;
+            };
+            if !graph.contains_key(before.id.as_str()) {
+                graph.insert(before.id.as_str(), before);
+                pending.push(before.id.as_str());
+            }
+        }
+    }
+    graph
 }
 
 /// Kahn's order: no task before a predecessor; among free tasks, active,

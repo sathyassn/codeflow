@@ -79,11 +79,15 @@ fn checked_sources(facts: &Value) -> BTreeMap<String, bool> {
             *slot = *slot && checked;
         }
     }
+    // A session file is observed only when this snapshot read one.
+    let session_read = facts.pointer("/lanes/session").is_some_and(Value::is_array);
+    let slot = out.entry("session file".to_string()).or_insert(true);
+    *slot = *slot && session_read;
     out
 }
 
 /// Each keyed item of one family: issues by subject and kind, operator
-/// items by source and id, tasks by id.
+/// items by source and id, session lanes by lane and task, tasks by id.
 fn keyed(facts: &Value) -> BTreeMap<(String, String), (String, Value)> {
     let mut out = BTreeMap::new();
     for list in ["/issues/tasks", "/issues/lanes"] {
@@ -112,6 +116,18 @@ fn keyed(facts: &Value) -> BTreeMap<(String, String), (String, Value)> {
             (text(item, "/source").to_string(), item.clone()),
         );
     }
+    for lane in facts
+        .pointer("/lanes/session")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let key = format!("{} {}", word(lane, "/lane"), word(lane, "/task"));
+        out.insert(
+            ("session lane".into(), key),
+            ("session".into(), lane.clone()),
+        );
+    }
     for task in facts
         .pointer("/tasks")
         .and_then(Value::as_array)
@@ -124,6 +140,15 @@ fn keyed(facts: &Value) -> BTreeMap<(String, String), (String, Value)> {
         );
     }
     out
+}
+
+/// A field as text: a string, or the JSON of anything else.
+fn word(value: &Value, pointer: &str) -> String {
+    match value.pointer(pointer) {
+        Some(Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
 }
 
 /// The event that replaced an earlier item no longer present.
@@ -147,6 +172,7 @@ fn replaced_by(family: &str, earlier: &Value, current: &Value) -> String {
             }
         }
         "operator item" => "resolved: its source no longer holds it".into(),
+        "session lane" => "the session file no longer holds it".into(),
         _ => "no longer in the scope the records give".into(),
     }
 }
@@ -169,7 +195,8 @@ fn unobserved(value: &Value) -> bool {
 }
 
 /// The fields of a retained item that were observed before and are not
-/// now: each kept with its earlier value, never dropped.
+/// now, at any depth (`context.last_moved`): each kept with its earlier
+/// value, never dropped.
 fn lost_fields(
     family: &str,
     key: &str,
@@ -177,26 +204,43 @@ fn lost_fields(
     current: &Value,
     earlier_at: &str,
 ) -> Vec<Value> {
+    let mut out = Vec::new();
+    lost_under(family, key, "", earlier, current, earlier_at, &mut out);
+    out
+}
+
+fn lost_under(
+    family: &str,
+    key: &str,
+    prefix: &str,
+    earlier: &Value,
+    current: &Value,
+    earlier_at: &str,
+    out: &mut Vec<Value>,
+) {
     let (Some(before), Some(now)) = (earlier.as_object(), current.as_object()) else {
-        return Vec::new();
+        return;
     };
-    before
-        .iter()
-        .filter(|(field, value)| {
-            now.get(*field)
-                .is_some_and(|now| unobserved(now) && !unobserved(value))
-        })
-        .map(|(field, value)| {
-            json!({
+    for (field, value) in before {
+        let Some(now) = now.get(field) else { continue };
+        let path = if prefix.is_empty() {
+            field.clone()
+        } else {
+            format!("{prefix}.{field}")
+        };
+        if unobserved(now) && !unobserved(value) {
+            out.push(json!({
                 "family": family,
                 "subject": key,
-                "field": field,
+                "field": path,
                 "earlier": value,
                 "earlier_observed_at": earlier_at,
                 "current": "unknown",
-            })
-        })
-        .collect()
+            }));
+        } else if value.is_object() && now.is_object() {
+            lost_under(family, key, &path, value, now, earlier_at, out);
+        }
+    }
 }
 
 /// The delta between `previous` and `current` facts.
@@ -225,6 +269,7 @@ pub fn delta(previous: &Value, current: &Value) -> Result<Value, String> {
                 "issue" => "issue opened",
                 "operator item" if text(item, "/source") == "session" => "decision recorded",
                 "operator item" => "operator item added",
+                "session lane" => "session lane recorded",
                 _ => "task added",
             };
             changes.push(json!({"change": what, "subject": key, "at": at}));
@@ -252,6 +297,7 @@ pub fn delta(previous: &Value, current: &Value) -> Result<Value, String> {
                 "issue" if text(earlier, "/kind") == "blocked" => "blocker cleared",
                 "issue" if text(earlier, "/kind").starts_with("required check") => "check cleared",
                 "operator item" => "operator item resolved",
+                "session lane" => "session lane cleared",
                 _ => "removed",
             };
             changes.push(json!({"change": what, "subject": key, "at": at}));

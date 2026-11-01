@@ -57,12 +57,52 @@ pub(super) fn pull_for<'a>(inputs: &'a Inputs, task: &TaskIn) -> Option<&'a Pull
         .min_by_key(|pull| pull.number)
 }
 
-/// A task's stage on the ladder and its percent; `None` for a cancelled
-/// task, which every denominator excludes.
-pub(super) fn stage(inputs: &Inputs, task: &TaskIn) -> Option<(&'static str, u32)> {
-    if task.status == "cancelled" {
-        return None;
+/// The seven days the pace view reads, in seconds.
+pub(super) const PACE_WINDOW_SECONDS: i64 = 7 * 86_400;
+
+/// A task's place on the stage ladder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Stage {
+    /// Cancelled: every denominator excludes it.
+    Excluded,
+    /// The stage cannot be known; any percent over it is unknown.
+    Unknown,
+    /// A rung and its percent.
+    On(&'static str, u32),
+}
+
+impl Stage {
+    /// The rung's name: `cancelled`, `unknown` or the rung.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Excluded => "cancelled",
+            Self::Unknown => "unknown",
+            Self::On(name, _) => name,
+        }
     }
+
+    /// The rung's percent, when the task is on a rung.
+    pub(super) fn percent(self) -> Option<u32> {
+        match self {
+            Self::On(_, percent) => Some(percent),
+            Self::Excluded | Self::Unknown => None,
+        }
+    }
+}
+
+/// A task's stage on the ladder: excluded when cancelled, unknown when its
+/// facts cannot place it (see [`TaskIn::unknown`]).
+pub(super) fn stage(inputs: &Inputs, task: &TaskIn) -> Stage {
+    if task.unknown.is_some() {
+        return Stage::Unknown;
+    }
+    if task.status == "cancelled" {
+        return Stage::Excluded;
+    }
+    rung(inputs, task).map_or(Stage::Unknown, |(name, percent)| Stage::On(name, percent))
+}
+
+fn rung(inputs: &Inputs, task: &TaskIn) -> Option<(&'static str, u32)> {
     if task.status == "complete" || task.state.as_deref() == Some("landed") {
         return Some(("landed", 100));
     }
@@ -143,9 +183,53 @@ pub(super) fn scope_epics(inputs: &Inputs) -> BTreeSet<String> {
     }
 }
 
+/// Why a percent over `tasks` is unknown, when it is: a record that may
+/// belong there is unreadable, a target their records live on could not be
+/// read, or a task's stage cannot be known.
+pub(super) fn coverage_reason(
+    inputs: &Inputs,
+    tasks: &[&TaskIn],
+    single_task: Option<&str>,
+) -> Option<String> {
+    if let Some(reason) = unreadable_reason(inputs, single_task) {
+        return Some(reason);
+    }
+    let targets: BTreeSet<&str> = tasks
+        .iter()
+        .map(|task| task.target.as_str())
+        .chain(
+            single_task
+                .is_none()
+                .then_some(inputs.current_target.as_str()),
+        )
+        .collect();
+    let lost: Vec<String> = inputs
+        .record_losses
+        .iter()
+        .filter(|(target, _)| {
+            target
+                .as_deref()
+                .is_none_or(|target| single_task.is_none() || targets.contains(target))
+        })
+        .map(|(_, reason)| reason.clone())
+        .collect();
+    if !lost.is_empty() {
+        return Some(format!("record coverage was lost: {}", lost.join("; ")));
+    }
+    let unknown: Vec<String> = tasks
+        .iter()
+        .filter_map(|task| {
+            task.unknown
+                .as_ref()
+                .map(|reason| format!("{}: {reason}", task.id))
+        })
+        .collect();
+    (!unknown.is_empty()).then(|| format!("a task's stage is unknown: {}", unknown.join("; ")))
+}
+
 /// Why an unreadable record makes a percent over `ids` unknown, when it
 /// does: a scope of one readable task is not touched by another record.
-pub(super) fn unreadable_reason(inputs: &Inputs, single_task: Option<&str>) -> Option<String> {
+fn unreadable_reason(inputs: &Inputs, single_task: Option<&str>) -> Option<String> {
     let relevant: Vec<&str> = inputs
         .unreadable
         .iter()
@@ -224,22 +308,41 @@ pub(super) fn location(inputs: &Inputs, task: &TaskIn) -> LocationFact {
         state: "unverified",
     };
     let landed = task.status == "complete" || task.state.as_deref() == Some("landed");
+    if let Some(reason) = &task.unknown {
+        fact.kind = "unknown";
+        fact.note = Known::Value(reason.clone());
+        return fact;
+    }
     if task.status == "cancelled" {
         fact.note = Known::Value("cancelled".into());
         return fact;
     }
     if landed {
-        let on_main = task.target == inputs.default_branch || task.on_main == Some(true);
-        let reference = if on_main {
-            inputs.default_ref.as_ref()
+        // Each location claim needs its proof: the landing transition is
+        // reachable from that remote ref.
+        let (kind, reference, proof) = if task.on_main == Some(true) {
+            ("main", inputs.default_ref.as_ref(), Some(true))
+        } else if task.target == inputs.default_branch {
+            ("main", inputs.default_ref.as_ref(), task.on_main)
         } else {
-            inputs.line_refs.get(&task.target)
+            ("line", inputs.line_refs.get(&task.target), task.on_home_ref)
         };
-        fact.kind = if on_main { "main" } else { "line" };
+        fact.kind = kind;
         bind_ref(inputs, &mut fact, reference);
-        if !on_main && task.on_main.is_none() {
-            fact.state = "unverified";
-            fact.note = Known::Value("the default branch ref is not present here".into());
+        match proof {
+            Some(true) => {}
+            Some(false) => {
+                fact.state = "unverified";
+                fact.note = Known::Value(format!(
+                    "the completion is not on {} yet",
+                    reference.map_or("the remote ref", |r| r.name.as_str())
+                ));
+            }
+            None => {
+                fact.state = "unverified";
+                fact.note =
+                    Known::Value("the remote ref or the landing commit could not be read".into());
+            }
         }
         return fact;
     }
@@ -310,7 +413,12 @@ fn criteria(task: &TaskIn) -> Known<CriteriaFact> {
                 verified: block.verified,
                 total: block.total,
                 reviewed: block.reviewed.clone(),
-                state: if block.bound { "current" } else { "stale" },
+                state: match (block.valid, block.bound) {
+                    (false, _) => "invalid",
+                    (true, true) => "current",
+                    (true, false) => "stale",
+                },
+                note: Known::or_word(block.note.clone(), "none"),
             })
         })
 }
@@ -363,10 +471,12 @@ fn task_fact(inputs: &Inputs, task: &TaskIn, plan: &super::plan::Plan) -> TaskFa
         status: Known::Value(task.status.clone()),
         target: Known::Value(task.target.clone()),
         state: Known::or_word(state.clone(), "unknown"),
-        stage: staged.map_or("cancelled", |(name, _)| name),
-        percent: staged.map_or(Known::Word("excluded".into()), |(_, percent)| {
-            Known::Value(f64::from(percent))
-        }),
+        stage: staged.name(),
+        percent: match staged {
+            Stage::Excluded => Known::Word("excluded".into()),
+            Stage::Unknown => Known::unknown(),
+            Stage::On(_, percent) => Known::Value(f64::from(percent)),
+        },
         criteria: criteria(task),
         context: ContextFact {
             outcome: Known::or_word(task.outcome.clone(), "not recorded"),
@@ -437,6 +547,8 @@ fn blank_task(id: &str) -> TaskIn {
         acceptance: None,
         branch: None,
         on_main: None,
+        on_home_ref: None,
+        unknown: Some("the record is unreadable".into()),
         record_on_line: false,
         landed_at: None,
     }
@@ -460,23 +572,30 @@ fn scope(inputs: &Inputs, ids: &BTreeSet<String>) -> ScopeFact {
     let mut counts = StageCounts::default();
     let mut percents = Vec::new();
     let mut cancelled = Vec::new();
-    for task in inputs.tasks.iter().filter(|task| ids.contains(&task.id)) {
+    let mut unknown = 0;
+    let scoped: Vec<&TaskIn> = inputs
+        .tasks
+        .iter()
+        .filter(|task| ids.contains(&task.id))
+        .collect();
+    for task in &scoped {
         match stage(inputs, task) {
-            Some((name, percent)) => {
+            Stage::On(name, percent) => {
                 count_stage(&mut counts, name);
                 percents.push(percent);
             }
-            None => cancelled.push(task.id.clone()),
+            Stage::Unknown => unknown += 1,
+            Stage::Excluded => cancelled.push(task.id.clone()),
         }
     }
     let single = match &inputs.scope {
         ScopeSpec::Task(id) => Some(id.as_str()),
         _ => None,
     };
-    let unreadable = unreadable_reason(inputs, single);
+    let unreadable = coverage_reason(inputs, &scoped, single);
     let reason = if let Some(reason) = unreadable {
         Some(reason)
-    } else if percents.is_empty() {
+    } else if percents.is_empty() && unknown == 0 {
         Some("no open or complete task in scope".into())
     } else {
         None
@@ -497,7 +616,7 @@ fn scope(inputs: &Inputs, ids: &BTreeSet<String>) -> ScopeFact {
             percents.len()
         ),
         stage_counts: counts,
-        tasks: percents.len(),
+        tasks: percents.len() + unknown,
         cancelled,
         unknown_reason: Known::or_word(reason, "none"),
     }

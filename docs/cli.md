@@ -598,17 +598,27 @@ name and branch must match; cross-repository pull requests are refused.
   never omitted or shown as zero.
   - Stage ladder, one percent per task: not started 0, in progress 20 (a
     claim or task commits), in review 50 (an open pull request), reviewed
-    75 (an approving acceptance block bound to the head), landed 100. An
-    epic's and the scope's percent is the mean over their unique tasks;
-    cancelled tasks are excluded and listed.
+    75 (an approving acceptance block that passes the acceptance rules
+    against the record's current criteria and is bound to the reported
+    head, or for a closed task bound as the landing gate binds it), landed
+    100. An epic's and the scope's percent is the mean over their unique
+    tasks; cancelled tasks are excluded and listed. A task whose home
+    target cannot be read, whose status the ladder does not know or that
+    the readiness core cannot judge has stage `unknown`, and every percent
+    over it is `unknown`.
   - Locations: `main`, `line`, `pull request` (draft, open or approved at
     the reviewed SHA), `branch`, or `none` (`record on line` when only the
     record is there), each bound to the ref and fetch time it was read
-    from.
+    from. `main` and `line` need the landing commit to be reachable from
+    that remote ref; otherwise the location is `unverified`.
+  - Check runs are kept one by one. A skipped run is never a pass, and a
+    forge answer at its 200-row read limit is `unverified`.
   - Windows are durations from the snapshot time, never dates, with their
     basis: an adopted forecast that covers the scope, else the planned
     throughput rule over the lanes observed (one lane assumed, and
-    labelled so, when none is observed). The scope finish is given for two
+    labelled so, when none is observed). A window's start is at or before
+    each of its ends, and open predecessors outside the scope still delay
+    it. The scope finish is given for two
     scenarios: intake stops, and intake continues at the last seven days'
     rate.
   - The operator set reads `none owed` only when every source (records, the

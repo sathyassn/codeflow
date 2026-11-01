@@ -12,8 +12,8 @@ use std::time::Duration;
 use git2::{Oid, Repository};
 
 use super::inputs::{
-    AcceptanceIn, BlockerIn, BranchIn, EpicIn, ForecastIn, ForgeIn, Inputs, LaneIn, LedgerIn,
-    OperatorItemIn, PullIn, RefIn, ScopeSpec, TaskIn, UnreadableIn,
+    AcceptanceIn, BlockerIn, BranchIn, CheckRunIn, EpicIn, ForecastIn, ForgeIn, Inputs, LaneIn,
+    LedgerIn, OperatorItemIn, PullIn, RefIn, ScopeSpec, TaskIn, UnreadableIn,
 };
 use super::owed::OwedSource;
 use crate::workgraph::readiness;
@@ -24,8 +24,6 @@ use crate::workgraph::work_start::{self, Record, RecordKind};
 const DEFAULT_SWEEP_MINUTES: i64 = 30;
 /// The most first-parent commits the history walk reads per tip.
 const HISTORY_LIMIT: usize = 5_000;
-/// How far back the history walk reads.
-const HISTORY_DAYS: i64 = 60;
 
 /// How `status` reads: the scope, a fixed snapshot time for tests and
 /// reproducible output, the session file and the owed-item sources.
@@ -107,24 +105,28 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
         Err(error) => (None, Some(error)),
     };
     let ids: BTreeSet<String> = read.tasks.keys().cloned().collect();
-    let worktrees = worktree_branches(&repo);
+    // The forge is read before the tasks: an open task's acceptance binds
+    // to the head its pull request reports.
+    let forge = forge(&root, options, now, &ids);
     let history = landings(&repo, &read.tips, now);
-    let default_records = default_tip_records(&repo, &default_branch);
+    let context = TaskContext {
+        repo: &repo,
+        backlog: backlog.as_ref(),
+        landed: readiness::target_tasks(&root),
+        worktrees: worktree_branches(&repo),
+        tips: &read.tips,
+        history: history.as_ref().map(|(landed, _)| landed),
+        pulls: match &forge {
+            ForgeIn::Read { pulls, .. } => Some(pulls.as_slice()),
+            ForgeIn::Unverified { .. } => None,
+        },
+        default_tip: remote_tip(&repo, &default_branch),
+        home_unread: &read.home_unread,
+    };
     let mut tasks: Vec<TaskIn> = read
         .tasks
         .values()
-        .map(|found| {
-            task_in(
-                &repo,
-                found,
-                backlog.as_ref(),
-                &worktrees,
-                &read.tips,
-                default_records.as_ref(),
-                history.as_ref(),
-                &default_branch,
-            )
-        })
+        .map(|found| task_in(&context, found))
         .collect();
     tasks.sort_by(|a, b| a.id.cmp(&b.id));
     let epics = read
@@ -139,7 +141,6 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
         .map(|target| (target.clone(), remote_ref(&repo, target)))
         .collect();
     let current_target = current_target(&repo, &options.scope, &tasks, &ids, &default_branch);
-    let forge = forge(&root, options, now, &ids);
     let mut inputs = Inputs {
         now,
         repository: crate::coord::reference::repository_identity(&root),
@@ -166,7 +167,8 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
         forecast: None,
         forecast_note: None,
         release_step: root.join("docs/releasing.md").is_file(),
-        history_read: history.is_some(),
+        history_read: history.as_ref().is_some_and(|(_, reached)| *reached),
+        record_losses: read.losses,
     };
     let (forecast, note) = forecast(&root, &inputs);
     inputs.forecast = forecast;
@@ -189,6 +191,10 @@ struct Read {
     unreadable: Vec<UnreadableIn>,
     /// Each declared target's bare name to the tip read.
     tips: BTreeMap<String, Oid>,
+    /// Record coverage lost: the target (none when the list failed), why.
+    losses: Vec<(Option<String>, String)>,
+    /// Tasks whose home target could not be read, to why.
+    home_unread: BTreeMap<String, String>,
 }
 
 fn task_id_of(path: &str) -> Option<String> {
@@ -197,29 +203,63 @@ fn task_id_of(path: &str) -> Option<String> {
 }
 
 /// Every task on the tip of its own declared target; epics from any tip,
-/// the default target's first.
+/// the default target's first. A target that cannot be listed, resolved or
+/// read is recorded as lost coverage, and a task whose home target was lost
+/// is kept from the first other tip that holds it, with its stage unknown.
 fn read_records(root: &Path, repo: &Repository) -> Read {
     let mut out = Read::default();
     let default = work_start::default_work_target(root).ok().flatten();
-    let mut targets: Vec<String> = readiness::declared_targets(root)
-        .map(|set| set.into_iter().collect())
-        .unwrap_or_default();
+    let mut targets: Vec<String> = match readiness::declared_targets(root) {
+        Ok(set) => set.into_iter().collect(),
+        Err(error) => {
+            out.losses.push((
+                None,
+                format!("the declared targets could not be listed: {error}"),
+            ));
+            Vec::new()
+        }
+    };
     if let Some(default) = &default {
         targets.retain(|target| target != default);
         targets.insert(0, default.clone());
     }
+    let mut lost: BTreeMap<String, String> = BTreeMap::new();
+    let mut elsewhere: BTreeMap<String, Found> = BTreeMap::new();
     let mut seen_unreadable = BTreeSet::new();
     for declared in &targets {
-        let Ok(Some((_, tip))) = readiness::resolve_target(root, repo, declared) else {
-            continue;
-        };
         let name = bare(declared);
-        out.tips.insert(name.clone(), tip);
-        let Ok(tree) = repo.find_commit(tip).and_then(|commit| commit.tree()) else {
-            continue;
+        let tip = match readiness::resolve_target(root, repo, declared) {
+            Ok(Some((_, tip))) => tip,
+            Ok(None) => {
+                lost.insert(name, format!("the target {declared} is not here"));
+                continue;
+            }
+            Err(error) => {
+                lost.insert(
+                    name,
+                    format!("the target {declared} cannot be resolved: {error}"),
+                );
+                continue;
+            }
         };
-        let Ok(records) = work_start::records_from_tree_lenient(repo, &tree) else {
-            continue;
+        out.tips.insert(name.clone(), tip);
+        let records = repo
+            .find_commit(tip)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.message().to_string())
+            .and_then(|tree| {
+                work_start::records_from_tree_lenient(repo, &tree)
+                    .map_err(|error| error.to_string())
+            });
+        let records = match records {
+            Ok(records) => records,
+            Err(error) => {
+                lost.insert(
+                    name,
+                    format!("the records on {declared} cannot be read: {error}"),
+                );
+                continue;
+            }
         };
         for entry in records {
             match entry.read {
@@ -242,16 +282,16 @@ fn read_records(root: &Path, repo: &Repository) -> Read {
                             .clone()
                             .or_else(|| default.clone())
                             .map_or_else(|| name.clone(), |target| bare(&target));
-                        if home == name && !out.tasks.contains_key(&record.id) {
-                            out.tasks.insert(
-                                record.id.clone(),
-                                Found {
-                                    record,
-                                    text,
-                                    path: entry.path,
-                                    target: home,
-                                },
-                            );
+                        let found = Found {
+                            path: entry.path,
+                            target: home.clone(),
+                            record,
+                            text,
+                        };
+                        if home == name {
+                            out.tasks.entry(found.record.id.clone()).or_insert(found);
+                        } else {
+                            elsewhere.entry(found.record.id.clone()).or_insert(found);
                         }
                     }
                     RecordKind::Spec => {}
@@ -259,8 +299,19 @@ fn read_records(root: &Path, repo: &Repository) -> Read {
             }
         }
     }
-    // A task whose own target is not here is read from the first tip that
-    // holds it, so it is never dropped.
+    for (id, found) in elsewhere {
+        if out.tasks.contains_key(&id) {
+            continue;
+        }
+        if let Some(reason) = lost.get(&found.target) {
+            out.home_unread.insert(id.clone(), reason.clone());
+            out.tasks.insert(id, found);
+        }
+    }
+    out.losses.extend(
+        lost.into_iter()
+            .map(|(target, reason)| (Some(target), reason)),
+    );
     out.unreadable.retain(|record| {
         record
             .task_id
@@ -278,25 +329,6 @@ fn remote_ref(repo: &Repository, branch: &str) -> RefIn {
         .ok()
         .map(|commit| commit.id().to_string());
     RefIn { name, sha }
-}
-
-/// The task statuses the trusted remote's default branch holds; `None`
-/// when that ref is not here.
-fn default_tip_records(repo: &Repository, default: &str) -> Option<BTreeMap<String, String>> {
-    let commit = repo
-        .find_reference(&format!("refs/remotes/origin/{default}"))
-        .and_then(|reference| reference.peel_to_commit())
-        .ok()?;
-    let tree = commit.tree().ok()?;
-    let records = work_start::records_from_tree_lenient(repo, &tree).ok()?;
-    Some(
-        records
-            .into_iter()
-            .filter_map(|entry| entry.read.ok())
-            .filter(|(record, _)| record.kind == RecordKind::Task)
-            .map(|(record, _)| (record.id, record.status))
-            .collect(),
-    )
 }
 
 /// Each linked worktree's checked-out branch to its path.
@@ -323,17 +355,13 @@ fn worktree_branches(repo: &Repository) -> BTreeMap<String, String> {
     out
 }
 
-/// A frontmatter value (`key: value`) of a record's text.
+/// A frontmatter string field of a record's text, read with the record
+/// parser (YAML, so a trailing comment is not part of the value).
 fn frontmatter(text: &str, key: &str) -> Option<String> {
-    let mut lines = text.lines();
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
-    lines
-        .take_while(|line| line.trim() != "---")
-        .find_map(|line| line.strip_prefix(&format!("{key}:")).map(str::trim))
-        .map(|value| value.trim_matches(['"', '\'']).to_string())
-        .filter(|value| !value.is_empty())
+    let (data, _) = crate::validate::parse_frontmatter(text.as_bytes()).ok()?;
+    let value = crate::validate::get_string_field(&data, key);
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 fn section(text: &str, heading: &str) -> Option<String> {
@@ -371,56 +399,146 @@ fn blocker(text: &str) -> Option<BlockerIn> {
     })
 }
 
-/// The active acceptance block of a record's text, with its binding.
-fn acceptance(
-    repo: &Repository,
-    text: &str,
-    path: &str,
-    head: Option<Oid>,
-    bound_on_tip: bool,
-) -> Option<AcceptanceIn> {
-    let block = record_text::acceptance_blocks(text)
-        .into_iter()
-        .filter_map(|fenced| fenced.parsed.ok())
-        .rfind(|block| !block.superseded)?;
-    let total = record_text::parse_criteria(text).items.len();
-    let verified = block
-        .criteria
+/// How a block's binding is judged.
+enum Binding {
+    /// A closed task: its completion bound on the home target as the
+    /// landing gate binds it (`readiness::target_tasks`), or why not.
+    Landed(Result<bool, String>),
+    /// An open task: bound to this head, the one its pull request or
+    /// branch reports.
+    Head(Oid),
+    /// An open task whose reported head is not here.
+    Missing(String),
+}
+
+/// The record's acceptance block: one active block that passes the
+/// structural acceptance rules against the record's current criteria
+/// (`record_text::check_acceptance`, the rule CI and `work_start` use),
+/// counted against those criteria only, and its binding.
+fn acceptance(repo: &Repository, text: &str, path: &str, binding: Binding) -> Option<AcceptanceIn> {
+    let blocks = record_text::acceptance_blocks(text);
+    let active: Vec<_> = blocks
         .iter()
-        .filter(|(_, result)| result.outcome == "verified")
+        .filter(|block| !block.is_superseded())
+        .collect();
+    if active.is_empty() {
+        return None;
+    }
+    let criteria = record_text::parse_criteria(text).items;
+    let total = criteria.len();
+    let parsed = match active.as_slice() {
+        [only] => only
+            .parsed
+            .as_ref()
+            .map_err(|_| "the active acceptance block cannot be parsed"),
+        _ => Err("the record has more than one active acceptance block"),
+    };
+    let block = match parsed {
+        Ok(block) => block,
+        Err(reason) => {
+            return Some(AcceptanceIn {
+                verified: 0,
+                total,
+                reviewed: "none".into(),
+                approved: false,
+                valid: false,
+                bound: false,
+                note: Some(reason.into()),
+            })
+        }
+    };
+    let verified = criteria
+        .iter()
+        .filter(|criterion| {
+            block
+                .criteria
+                .iter()
+                .any(|(id, result)| *id == criterion.id && result.outcome == "verified")
+        })
         .count();
-    let bound = bound_on_tip
-        || head.is_some_and(|head| only_record_since(repo, &block.reviewed, head, path));
+    let problems = record_text::check_acceptance(block, &criteria);
+    let (bound, note) = if problems.is_empty() {
+        match binding {
+            Binding::Landed(Ok(true)) => (true, None),
+            Binding::Landed(Ok(false)) => (
+                false,
+                Some(
+                    "the completion is not bound on its home target as the landing gate binds it"
+                        .into(),
+                ),
+            ),
+            Binding::Landed(Err(reason)) => (
+                false,
+                Some(format!("the binding could not be read: {reason}")),
+            ),
+            Binding::Head(head) => match head_binding(repo, &block.reviewed, head, path, &criteria)
+            {
+                Ok(()) => (true, None),
+                Err(reason) => (false, Some(reason)),
+            },
+            Binding::Missing(reason) => (false, Some(reason)),
+        }
+    } else {
+        (false, Some(problems.join("; ")))
+    };
     Some(AcceptanceIn {
         verified,
         total,
         reviewed: block.reviewed.clone(),
         approved: block.verdict == "approved",
+        valid: problems.is_empty(),
         bound,
+        note,
     })
 }
 
-/// No change beyond the record between the reviewed commit and `head`.
-fn only_record_since(repo: &Repository, reviewed: &str, head: Oid, path: &str) -> bool {
-    let Ok(reviewed) = Oid::from_str(reviewed).and_then(|oid| repo.find_commit(oid)) else {
-        return false;
-    };
-    let (Ok(old), Ok(new)) = (
-        reviewed.tree(),
-        repo.find_commit(head).and_then(|commit| commit.tree()),
-    ) else {
-        return false;
-    };
-    let Ok(diff) = repo.diff_tree_to_tree(Some(&old), Some(&new), None) else {
-        return false;
-    };
-    diff.deltas().all(|delta| {
+/// An open task's block binds to `head` when nothing but the record changed
+/// since the reviewed commit and the record's criteria are the ones the
+/// reviewed commit held.
+fn head_binding(
+    repo: &Repository,
+    reviewed: &str,
+    head: Oid,
+    path: &str,
+    criteria: &[record_text::Criterion],
+) -> Result<(), String> {
+    let review = Oid::from_str(reviewed)
+        .and_then(|oid| repo.find_commit(oid))
+        .map_err(|_| format!("the reviewed commit {reviewed} is not here"))?;
+    let (old, new) = (
+        review.tree().map_err(|error| error.message().to_string())?,
+        repo.find_commit(head)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.message().to_string())?,
+    );
+    let diff = repo
+        .diff_tree_to_tree(Some(&old), Some(&new), None)
+        .map_err(|error| error.message().to_string())?;
+    let only_record = diff.deltas().all(|delta| {
         delta
             .new_file()
             .path()
             .or_else(|| delta.old_file().path())
             .is_some_and(|changed| changed == Path::new(path))
-    })
+    });
+    if !only_record {
+        return Err(format!(
+            "the head {head} changed more than the record since the reviewed commit"
+        ));
+    }
+    let seen = text_at(repo, review.id(), path)
+        .map(|text| record_text::parse_criteria(&text).items)
+        .unwrap_or_default();
+    let pairs = |items: &[record_text::Criterion]| -> Vec<(String, String)> {
+        items
+            .iter()
+            .map(|c| (c.id.clone(), c.text.clone()))
+            .collect()
+    };
+    if pairs(&seen) != pairs(criteria) {
+        return Err("the criteria changed since the reviewed commit".into());
+    }
+    Ok(())
 }
 
 fn find_branch<'r>(repo: &'r Repository, name: &str) -> Option<git2::Commit<'r>> {
@@ -473,44 +591,98 @@ fn text_at(repo: &Repository, commit: Oid, path: &str) -> Option<String> {
     String::from_utf8(blob.content().to_vec()).ok()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn task_in(
-    repo: &Repository,
-    found: &Found,
-    backlog: Option<&readiness::Backlog>,
-    worktrees: &BTreeMap<String, String>,
-    tips: &BTreeMap<String, Oid>,
-    default_records: Option<&BTreeMap<String, String>>,
-    history: Option<&BTreeMap<String, i64>>,
-    default_branch: &str,
-) -> TaskIn {
+/// What every task's facts are read against, once.
+struct TaskContext<'a> {
+    repo: &'a Repository,
+    backlog: Option<&'a readiness::Backlog>,
+    /// The landing gate's view of each home target's records.
+    landed: Result<BTreeMap<String, readiness::TargetTask>, String>,
+    worktrees: BTreeMap<String, String>,
+    tips: &'a BTreeMap<String, Oid>,
+    /// Each home target's landing transitions, when the walk succeeded.
+    history: Option<&'a BTreeMap<String, BTreeMap<String, (i64, Oid)>>>,
+    /// The open pull requests, when the forge was read.
+    pulls: Option<&'a [PullIn]>,
+    /// The trusted remote's default branch tip.
+    default_tip: Option<Oid>,
+    home_unread: &'a BTreeMap<String, String>,
+}
+
+/// The statuses the stage ladder knows.
+const KNOWN_STATUSES: [&str; 4] = ["todo", "blocked", "complete", "cancelled"];
+
+/// The remote-tracking tip of `branch` on `origin`.
+fn remote_tip(repo: &Repository, branch: &str) -> Option<Oid> {
+    repo.find_reference(&format!("refs/remotes/origin/{branch}"))
+        .and_then(|reference| reference.peel_to_commit())
+        .ok()
+        .map(|commit| commit.id())
+}
+
+/// Whether `commit` is `tip` or an ancestor of it.
+fn reaches(repo: &Repository, tip: Oid, commit: Oid) -> bool {
+    tip == commit || repo.graph_descendant_of(tip, commit).unwrap_or(false)
+}
+
+fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
+    let repo = context.repo;
     let record = &found.record;
-    let entry = backlog.and_then(|b| b.entries.iter().find(|entry| entry.task_id == record.id));
-    let tip = tips.get(&found.target).copied();
+    let entry = context
+        .backlog
+        .and_then(|b| b.entries.iter().find(|entry| entry.task_id == record.id));
+    let tip = context.tips.get(&found.target).copied();
     let branch = entry
         .and_then(|entry| entry.branch_names.first())
-        .and_then(|name| branch_in(repo, name, tip, worktrees));
+        .and_then(|name| branch_in(repo, name, tip, &context.worktrees));
     let closed = matches!(record.status.as_str(), "complete" | "cancelled");
-    // The most advanced copy: the home tip once complete, else the branch.
+    let pull = context.pulls.and_then(|pulls| {
+        pulls
+            .iter()
+            .find(|pull| pull.task.as_deref() == Some(record.id.as_str()))
+    });
+    // The most advanced copy: the home tip once closed, else the head the
+    // pull request reports, else the branch head.
     let (acceptance, follow_from) = if closed {
-        (
-            acceptance(
-                repo,
-                &found.text,
-                &found.path,
-                None,
-                record.reviewed.is_some(),
+        let binding = Binding::Landed(match &context.landed {
+            Ok(tasks) => tasks.get(&record.id).map_or_else(
+                || Err("the task is not on its home target's remote ref".into()),
+                |task| Ok(task.accepted),
             ),
+            Err(reason) => Err(reason.clone()),
+        });
+        (
+            acceptance(repo, &found.text, &found.path, binding),
             found.text.clone(),
         )
-    } else if let Some((_, head)) = &branch {
-        let text = text_at(repo, *head, &found.path).unwrap_or_else(|| found.text.clone());
-        (
-            acceptance(repo, &text, &found.path, Some(*head), false),
-            text,
-        )
     } else {
-        (None, found.text.clone())
+        let head = match (pull, &branch) {
+            (Some(pull), _) => match Oid::from_str(&pull.head_sha)
+                .ok()
+                .filter(|oid| repo.find_commit(*oid).is_ok())
+            {
+                Some(oid) => Some(Ok(oid)),
+                None => Some(Err(format!(
+                    "the head {} pull request #{} reports is not here; fetch it",
+                    pull.head_sha, pull.number
+                ))),
+            },
+            (None, Some((_, head))) => Some(Ok(*head)),
+            (None, None) => None,
+        };
+        match head {
+            Some(Ok(head)) => {
+                let text = text_at(repo, head, &found.path).unwrap_or_else(|| found.text.clone());
+                (
+                    acceptance(repo, &text, &found.path, Binding::Head(head)),
+                    text,
+                )
+            }
+            Some(Err(reason)) => (
+                acceptance(repo, &found.text, &found.path, Binding::Missing(reason)),
+                found.text.clone(),
+            ),
+            None => (None, found.text.clone()),
+        }
     };
     let follow_ups = section(&follow_from, "## Follow-ups").or_else(|| {
         record_text::acceptance_blocks(&follow_from)
@@ -520,12 +692,37 @@ fn task_in(
             .map(|block| block.follow_ups)
             .filter(|text| !text.trim().is_empty() && text.trim() != "none")
     });
-    let on_main = default_records.map(|records| {
-        found.target == default_branch
-            || records
-                .get(&record.id)
-                .is_some_and(|status| status == "complete")
-    });
+    let transition = context
+        .history
+        .and_then(|history| history.get(&found.target))
+        .and_then(|landed| landed.get(&record.id))
+        .copied();
+    // Landed on a ref: the completion's transition commit is reachable
+    // from it. Not complete is never landed; unknown when the ref or the
+    // transition cannot be read.
+    let landed_on = |tip: Option<Oid>| -> Option<bool> {
+        if record.status != "complete" {
+            return tip.map(|_| false);
+        }
+        let (tip, (_, commit)) = (tip?, transition?);
+        Some(reaches(repo, tip, commit))
+    };
+    let unknown = if let Some(reason) = context.home_unread.get(&record.id) {
+        Some(reason.clone())
+    } else if !KNOWN_STATUSES.contains(&record.status.as_str()) {
+        Some(format!(
+            "the status `{}` is not one the stage ladder knows",
+            record.status
+        ))
+    } else if closed {
+        None
+    } else {
+        match (context.backlog, entry) {
+            (None, _) => Some("the readiness core could not judge the targets".into()),
+            (Some(_), None) => Some("the readiness core holds no state for the task".into()),
+            (Some(_), Some(_)) => None,
+        }
+    };
     TaskIn {
         id: record.id.clone(),
         title: record.title.clone(),
@@ -547,21 +744,27 @@ fn task_in(
         follow_ups,
         acceptance,
         branch: branch.map(|(branch, _)| branch),
-        on_main,
-        record_on_line: true,
-        landed_at: history.and_then(|landed| landed.get(&record.id).copied()),
+        on_main: landed_on(context.default_tip),
+        on_home_ref: landed_on(remote_tip(repo, &found.target)),
+        unknown,
+        record_on_line: !context.home_unread.contains_key(&record.id),
+        landed_at: transition.map(|(time, _)| time),
     }
 }
 
-/// When each task's record became `complete` on the first-parent history
-/// of its home tip, newest transition first; `None` when a walk fails.
+/// Each home target's newest `complete` transition per task on the
+/// first-parent history of its tip, with the commit that made it, and
+/// whether every walk reached back past the seven-day pace window (or the
+/// root). `None` when a walk fails.
+#[allow(clippy::type_complexity)]
 fn landings(
     repo: &Repository,
     tips: &BTreeMap<String, Oid>,
     now: i64,
-) -> Option<BTreeMap<String, i64>> {
+) -> Option<(BTreeMap<String, BTreeMap<String, (i64, Oid)>>, bool)> {
     let mut out = BTreeMap::new();
-    let floor = now - HISTORY_DAYS * 86_400;
+    let mut reached = true;
+    let floor = now - super::compute::PACE_WINDOW_SECONDS;
     let mut spec = git2::DiffOptions::new();
     spec.pathspec("project-management/tasks");
     let status = |blob: Oid| {
@@ -570,19 +773,21 @@ fn landings(
             .and_then(|blob| String::from_utf8(blob.content().to_vec()).ok())
             .and_then(|text| frontmatter(&text, "status"))
     };
-    for tip in tips.values().collect::<BTreeSet<_>>() {
+    for (target, tip) in tips {
+        let landed: &mut BTreeMap<String, (i64, Oid)> = out.entry(target.clone()).or_default();
         let mut commit = repo.find_commit(*tip).ok()?;
+        let mut walked_past = false;
         for _ in 0..HISTORY_LIMIT {
             if commit.time().seconds() < floor {
-                break;
+                walked_past = true;
             }
-            let Ok(parent) = commit.parent(0) else { break };
+            let parent = commit.parent(0).ok();
+            let old = match &parent {
+                Some(parent) => Some(parent.tree().ok()?),
+                None => None,
+            };
             let diff = repo
-                .diff_tree_to_tree(
-                    Some(&parent.tree().ok()?),
-                    Some(&commit.tree().ok()?),
-                    Some(&mut spec),
-                )
+                .diff_tree_to_tree(old.as_ref(), Some(&commit.tree().ok()?), Some(&mut spec))
                 .ok()?;
             for delta in diff.deltas() {
                 let Some(id) = delta
@@ -597,13 +802,20 @@ fn landings(
                 let was_complete = !delta.old_file().id().is_zero()
                     && status(delta.old_file().id()).as_deref() == Some("complete");
                 if now_complete && !was_complete {
-                    out.entry(id).or_insert(commit.time().seconds());
+                    landed
+                        .entry(id)
+                        .or_insert((commit.time().seconds(), commit.id()));
                 }
             }
+            let Some(parent) = parent else {
+                walked_past = true;
+                break;
+            };
             commit = parent;
         }
+        reached &= walked_past;
     }
-    Some(out)
+    Some((out, reached))
 }
 
 /// Epic text helpers: the first `##` heading whose section names each task.
@@ -682,6 +894,14 @@ fn epic_in(root: &Path, record: &Record, text: &str) -> EpicIn {
         outcome: section(text, "## Outcome"),
         about: about(text),
         sections: epic_sections(text),
+        section_text: text
+            .lines()
+            .filter_map(|line| line.strip_prefix("## "))
+            .filter_map(|heading| {
+                section(text, &format!("## {}", heading.trim()))
+                    .map(|body| (heading.trim().to_string(), body))
+            })
+            .collect(),
         capabilities: capabilities(root, &record.id),
     }
 }
@@ -728,45 +948,84 @@ fn sweep_seconds(root: &Path) -> i64 {
         * 60
 }
 
-/// The required checks as read: `missing` when none ran, `skipped` when
-/// every one skipped, never rewritten.
-fn checks(rollup: Option<&serde_json::Value>) -> String {
-    let Some(checks) = rollup.and_then(serde_json::Value::as_array) else {
-        return "missing".into();
-    };
-    let conclusions: Vec<String> = checks
-        .iter()
-        .map(|check| {
-            check
-                .get("conclusion")
-                .and_then(serde_json::Value::as_str)
-                .filter(|text| !text.is_empty())
-                .or_else(|| check.get("state").and_then(serde_json::Value::as_str))
-                .unwrap_or("")
-                .to_ascii_lowercase()
-        })
-        .collect();
-    if conclusions.is_empty() {
-        "missing".into()
-    } else if conclusions.iter().any(|c| {
-        c.is_empty()
-            || matches!(
-                c.as_str(),
-                "pending" | "queued" | "in_progress" | "expected"
-            )
-    }) {
-        "pending".into()
-    } else if conclusions.iter().all(|c| c == "skipped") {
-        "skipped".into()
-    } else if conclusions
-        .iter()
-        .all(|c| matches!(c.as_str(), "success" | "skipped" | "neutral"))
-    {
-        "passed".into()
-    } else {
-        "failed".into()
-    }
+/// A check run's state as read, lower case: the conclusion once it
+/// completed, else its status or state.
+fn run_state(check: &serde_json::Value) -> String {
+    check
+        .get("conclusion")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .or_else(|| check.get("state").and_then(serde_json::Value::as_str))
+        .or_else(|| check.get("status").and_then(serde_json::Value::as_str))
+        .unwrap_or("pending")
+        .to_ascii_lowercase()
 }
+
+/// The check runs as read, and their summary: `failed` when any failed,
+/// was cancelled or timed out, else `pending` when any has not finished,
+/// `missing` when none ran, `skipped` when any skipped (a skip is not a
+/// pass without reuse evidence), else `passed`.
+fn checks(rollup: Option<&serde_json::Value>) -> (String, Vec<CheckRunIn>) {
+    let text = |check: &serde_json::Value, key: &str| {
+        check
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    let runs: Vec<CheckRunIn> = rollup
+        .and_then(serde_json::Value::as_array)
+        .map(|checks| {
+            checks
+                .iter()
+                .map(|check| CheckRunIn {
+                    name: text(check, "name")
+                        .or_else(|| text(check, "context"))
+                        .unwrap_or_else(|| "unnamed".into()),
+                    state: run_state(check),
+                    completed_at: text(check, "completedAt"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let any = |states: &[&str]| runs.iter().any(|run| states.contains(&run.state.as_str()));
+    let summary = if runs.is_empty() {
+        "missing"
+    } else if runs.iter().any(|run| {
+        !matches!(
+            run.state.as_str(),
+            "success"
+                | "neutral"
+                | "skipped"
+                | "pending"
+                | "queued"
+                | "in_progress"
+                | "expected"
+                | "waiting"
+                | "requested"
+        )
+    }) {
+        "failed"
+    } else if any(&[
+        "pending",
+        "queued",
+        "in_progress",
+        "expected",
+        "waiting",
+        "requested",
+    ]) {
+        "pending"
+    } else if any(&["skipped"]) {
+        "skipped"
+    } else {
+        "passed"
+    };
+    (summary.into(), runs)
+}
+
+/// The most open pull requests one forge read lists; a full page may hide
+/// more, so it is reported unverified rather than as the whole set.
+const FORGE_LIMIT: usize = 200;
 
 /// The open pull requests, read once through the bounded observer.
 fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> ForgeIn {
@@ -788,7 +1047,7 @@ fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> Fo
             "--state",
             "open",
             "--limit",
-            "200",
+            &FORGE_LIMIT.to_string(),
             "--json",
             "number,title,headRefName,headRefOid,baseRefName,isDraft,statusCheckRollup",
         ]);
@@ -807,6 +1066,14 @@ fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> Fo
             reason: "the forge answer was not the expected JSON".into(),
         };
     };
+    if rows.len() >= FORGE_LIMIT {
+        return ForgeIn::Unverified {
+            reason: format!(
+                "the forge listed {} open pull requests, its read limit, so more may exist",
+                rows.len()
+            ),
+        };
+    }
     let text = |row: &serde_json::Value, key: &str| {
         row.get(key)
             .and_then(serde_json::Value::as_str)
@@ -818,6 +1085,7 @@ fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> Fo
         .filter_map(|row| {
             let head_ref = text(row, "headRefName");
             let suffix = head_ref.rsplit('/').next().unwrap_or("").to_string();
+            let (checks, runs) = checks(row.get("statusCheckRollup"));
             Some(PullIn {
                 number: row.get("number")?.as_u64()?,
                 title: text(row, "title"),
@@ -827,7 +1095,8 @@ fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> Fo
                     .get("isDraft")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false),
-                checks: checks(row.get("statusCheckRollup")),
+                checks,
+                runs,
                 task: ids
                     .iter()
                     .filter(|id| suffix == id.as_str() || suffix.starts_with(&format!("{id}-")))

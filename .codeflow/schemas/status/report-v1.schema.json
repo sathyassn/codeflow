@@ -1049,7 +1049,8 @@
             "verified",
             "total",
             "reviewed",
-            "state"
+            "state",
+            "note"
           ],
           "properties": {
             "label": {
@@ -1069,8 +1070,12 @@
             "state": {
               "enum": [
                 "current",
-                "stale"
+                "stale",
+                "invalid"
               ]
+            },
+            "note": {
+              "type": "string"
             }
           }
         },
@@ -1220,10 +1225,14 @@
             "additionalProperties": false,
             "required": [
               "name",
+              "about",
               "tasks"
             ],
             "properties": {
               "name": {
+                "type": "string"
+              },
+              "about": {
                 "type": "string"
               },
               "tasks": {
@@ -1301,7 +1310,9 @@
                       "number",
                       "task",
                       "draft",
-                      "checks"
+                      "checks",
+                      "required",
+                      "runs"
                     ],
                     "properties": {
                       "number": {
@@ -1315,7 +1326,39 @@
                         "type": "boolean"
                       },
                       "checks": {
-                        "type": "string"
+                        "enum": [
+                          "failed",
+                          "pending",
+                          "missing",
+                          "skipped",
+                          "passed"
+                        ]
+                      },
+                      "required": {
+                        "const": "not read"
+                      },
+                      "runs": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "name",
+                            "state",
+                            "completed_at"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string"
+                            },
+                            "completed_at": {
+                              "type": "string"
+                            }
+                          }
+                        }
                       }
                     }
                   }
