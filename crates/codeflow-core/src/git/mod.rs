@@ -43,6 +43,17 @@ pub fn command() -> std::process::Command {
     process("git")
 }
 
+/// Makes `command` read objects from this repository only: a partial
+/// clone's missing object is an error, never a fetch from the promisor
+/// remote, whatever the caller's environment holds (an inherited `false`
+/// is overwritten). The setting arrives in Git 2.45 and the
+/// diff prefetch honours it from 2.46, so a scan in a repository with a
+/// promisor remote checks the version first (`require_offline_objects`). Used by the local
+/// scans that must never reach the network.
+pub fn local_objects_only(command: &mut std::process::Command) -> &mut std::process::Command {
+    command.env("GIT_NO_LAZY_FETCH", "1")
+}
+
 /// A judging Git process whose repository is selected by its explicit path.
 /// Inherited location, namespace, object-store and command-config variables
 /// cannot steer these reads (`GIT_NAMESPACE` would select which refs a local
