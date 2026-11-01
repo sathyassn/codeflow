@@ -1,0 +1,11 @@
+id = "TSK-1129"
+uid = "07c23d29-fd97-4e08-8dea-5536c76ed855"
+kind = "TSK"
+title = "A task waiver accepts its own planning amendment that also updates the plan"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T10:35:30Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
