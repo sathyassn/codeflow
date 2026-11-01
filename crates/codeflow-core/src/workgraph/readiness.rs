@@ -215,7 +215,7 @@ type Resolved = Result<Option<(String, git2::Oid)>, String>;
 /// `work claim` and `work start` read one line. `Ok(None)` when the target
 /// resolves nowhere here; an error when the local branch and its upstream
 /// have diverged.
-fn resolve_target(repo_root: &Path, repo: &Repository, declared: &str) -> Resolved {
+pub(crate) fn resolve_target(repo_root: &Path, repo: &Repository, declared: &str) -> Resolved {
     let resolved = super::resolve_work_target_checked(repo_root, Some(declared))
         .map_err(|error| error.to_string())?;
     let Some(resolved) = resolved else {
@@ -800,7 +800,7 @@ fn landed_reason(status: &str) -> String {
     format!("its work has landed on its target but the record is still {status}")
 }
 
-fn fetched_at(repo: &Repository) -> Option<String> {
+pub(crate) fn fetched_at(repo: &Repository) -> Option<String> {
     let modified = std::fs::metadata(repo.commondir().join("FETCH_HEAD"))
         .and_then(|meta| meta.modified())
         .ok()?;
@@ -809,7 +809,7 @@ fn fetched_at(repo: &Repository) -> Option<String> {
 
 /// The declared targets of the task records in the working tree, as
 /// written, and the default target for records that declare none.
-fn declared_targets(repo_root: &Path) -> Result<BTreeSet<String>, String> {
+pub(crate) fn declared_targets(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     let mut ids = BTreeSet::new();
     let mut targets = BTreeSet::new();
     for path in crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))

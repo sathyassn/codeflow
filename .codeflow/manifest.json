@@ -1784,6 +1784,18 @@
       "sha256": "07ce3f87d460da5b834be48e72cfabb7c5a67139994755255fe02d34dad048ff",
       "exec": false
     },
+    ".codeflow/schemas/status/report-v1.schema.json": {
+      "src": "status/schemas/report-v1.schema.json",
+      "ownership": "managed",
+      "sha256": "0c5d71daab3eabaad7c51fb6aff22694a889353f0537b93ca0948c1e705bfdf6",
+      "exec": false
+    },
+    ".codeflow/schemas/status/session-v1.schema.json": {
+      "src": "status/schemas/session-v1.schema.json",
+      "ownership": "managed",
+      "sha256": "12013cd087c1fd6de9802569adb8ec81c703480f46b6884b28ef3f755f735c31",
+      "exec": false
+    },
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",

@@ -2903,13 +2903,71 @@ pub(crate) fn records_from_tree_matching(
     TREE_PARSES.with(|parses| parses.set(parses.get() + 1));
     let mut records = BTreeMap::new();
     let mut failure = None;
+    visit_tree_records(repo, tree, include, &mut |path, read| match read {
+        Ok((record, _)) => {
+            if records.insert(record.id.clone(), record).is_some() {
+                failure = Some(format!("{path}: duplicate work id"));
+                false
+            } else {
+                true
+            }
+        }
+        Err(error) => {
+            failure = Some(format!("{path}: {error}"));
+            false
+        }
+    })?;
+    if let Some(error) = failure {
+        return Err(WorkStartError::InvalidGraph(error));
+    }
+    Ok(records)
+}
+
+/// One record path on a tree: the parsed record with its text, or why it
+/// could not be read.
+#[derive(Debug, Clone)]
+pub(crate) struct TreeRecord {
+    pub(crate) path: String,
+    pub(crate) read: Result<(Record, String), String>,
+}
+
+/// Every record on a tree, readable or not, through the same bounded walk
+/// as [`records_from_tree`]. A reader that shows one unreadable record as
+/// unknown, rather than refusing the whole tree, uses this (TSK-1095).
+///
+/// # Errors
+///
+/// Returns the reason when the tree itself cannot be walked.
+pub(crate) fn records_from_tree_lenient(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+) -> Result<Vec<TreeRecord>, WorkStartError> {
+    let mut out = Vec::new();
+    visit_tree_records(repo, tree, |_, _| true, &mut |path, read| {
+        out.push(TreeRecord {
+            path: path.to_string(),
+            read,
+        });
+        true
+    })?;
+    Ok(out)
+}
+
+/// One record read: the record with its text, or why it could not be read.
+type RecordRead = Result<(Record, String), String>;
+
+/// Walk the record paths of `tree` and hand each record, read within its
+/// size bound, to `visit`, which returns whether to go on.
+fn visit_tree_records(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    include: impl Fn(&str, RecordKind) -> bool,
+    visit: &mut dyn FnMut(&str, RecordRead) -> bool,
+) -> Result<(), WorkStartError> {
     let odb = repo
         .odb()
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let walk_result = crate::git::walk_tree(repo, tree, &mut |name, entry| {
-        if failure.is_some() {
-            return crate::git::Walk::Stop;
-        }
         // A record path is valid text; a name that is not UTF-8 is never one,
         // and a tree with such a name is not walked into for records.
         let Ok(path) = name.rule_text() else {
@@ -2934,49 +2992,37 @@ pub(crate) fn records_from_tree_matching(
         if !include(path, kind) {
             return crate::git::Walk::Continue;
         }
-        // A record's size is read from its object header before its bytes,
-        // so a hostile tip cannot make every reader load it.
-        let size = match odb.read_header(entry.id()) {
-            Ok((size, _)) => size,
-            Err(error) => {
-                failure = Some(format!("{path}: cannot read record size: {error}"));
-                return crate::git::Walk::Stop;
-            }
-        };
-        if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
-            failure = Some(format!(
-                "{path}: record exceeds the 4 MiB bound for a work record"
-            ));
-            return crate::git::Walk::Stop;
-        }
-        let Ok(blob) = repo.find_blob(entry.id()) else {
-            failure = Some(format!("{path}: cannot read blob"));
-            return crate::git::Walk::Stop;
-        };
-        let Ok(content) = std::str::from_utf8(blob.content()) else {
-            failure = Some(format!("{path}: record is not UTF-8"));
-            return crate::git::Walk::Stop;
-        };
-        match parse_record(content, kind) {
-            Ok(record) => {
-                if records.insert(record.id.clone(), record).is_some() {
-                    failure = Some(format!("{path}: duplicate work id"));
-                    crate::git::Walk::Stop
-                } else {
-                    crate::git::Walk::Continue
-                }
-            }
-            Err(error) => {
-                failure = Some(format!("{path}: {error}"));
-                crate::git::Walk::Stop
-            }
+        if visit(path, read_tree_record(repo, &odb, entry.id(), kind)) {
+            crate::git::Walk::Continue
+        } else {
+            crate::git::Walk::Stop
         }
     });
-    if let Some(error) = failure {
-        return Err(WorkStartError::InvalidGraph(error));
+    walk_result.map_err(|error| WorkStartError::Repository(error.to_string()))
+}
+
+/// Read and parse one record blob. Its size is read from the object header
+/// before its bytes, so a hostile tip cannot make every reader load it.
+fn read_tree_record(
+    repo: &Repository,
+    odb: &git2::Odb<'_>,
+    id: git2::Oid,
+    kind: RecordKind,
+) -> Result<(Record, String), String> {
+    let size = odb
+        .read_header(id)
+        .map(|(size, _)| size)
+        .map_err(|error| format!("cannot read record size: {error}"))?;
+    if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
+        return Err("record exceeds the 4 MiB bound for a work record".to_string());
     }
-    walk_result.map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    Ok(records)
+    let blob = repo
+        .find_blob(id)
+        .map_err(|_| "cannot read blob".to_string())?;
+    let content =
+        std::str::from_utf8(blob.content()).map_err(|_| "record is not UTF-8".to_string())?;
+    let record = parse_record(content, kind)?;
+    Ok((record, content.to_string()))
 }
 
 pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
