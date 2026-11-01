@@ -1,0 +1,11 @@
+id = "TSK-1130"
+uid = "00c4bde8-80c5-42eb-aec2-035002ca8d25"
+kind = "TSK"
+title = "git-guard judges a hooks path inherited from the environment once the policy authority resolves"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T13:07:12Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
