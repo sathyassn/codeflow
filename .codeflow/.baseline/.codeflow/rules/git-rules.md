@@ -121,6 +121,37 @@ evidence attributes the failure to it. Only the finished body
 reaches `main`, via one human-reviewed PR that the operator merges. See
 cf-method, "Managing a body of work" (standard and full tiers).
 
+The integration landing gate follows the candidate's diff from the current
+line tip. `codeflow ci --base <line-tip> --head <candidate> --into <line>`
+reports its landing class. A **records-only** candidate needs
+`codeflow validate --docs`, `codeflow test --mode quick --all`, a clean
+`codeflow ci` on that range, the secret scan and the project's record checks.
+A **code** candidate keeps one full gate on the exact candidate. Protected
+release targets keep their full gate. A classification is not a passed check.
+
+`git.record_paths` in the line tip's `.codeflow/policy.json` declares the
+eligible paths. Defaults are task and epic Markdown under
+`project-management/tasks/` and `project-management/epics/`, and Markdown
+under `docs/`, plans included. The binary supplies these defaults when the
+key is absent; the shipped JSON omits the new key so older binaries can
+still read an updated scaffold. Upgrade the binary before declaring a
+custom list. An empty list disables the shorter path.
+Declarations admit only regular non-executable Markdown files outside the
+planning classifier's product, watched, instruction, hidden and template
+exclusions. Config and JSON stay code. A project marks Markdown that a build
+or check executes or treats as a contract in `product_paths` or
+`breaking_watch_paths`; a record declaration never overrides those lists.
+Both sides of a rename or copy must qualify. A mode change, symlink,
+submodule, unreadable diff or invalid config keeps the full gate.
+
+The landing evidence names the base, candidate, class and checks actually
+run. `codeflow integrate` records these under the shared Git directory at
+`codeflow/landings/<candidate>.json`; its records-only path runs validation,
+range CI, the built-in credential scan and the quick gate. Project and hosted
+secret scanners remain required where adopted. A PR landing carries the same
+evidence in its PR. CI reports its own executed checks and does not claim to
+have run the other landing checks.
+
 Direct commits on an epic line are refused at push. Move an unpushed one
 into a pull request: keep it on a task or planning branch, run
 `git reset --keep origin/integration/EPC-NNN-<slug>` on the line (the

@@ -34,6 +34,16 @@ pub fn designate_calling_binary(binary: PathBuf) {
     let _ = CALLING_BINARY.set(binary);
 }
 
+/// Start this CLI's binary for another command; library callers use PATH.
+#[must_use]
+pub fn codeflow_command() -> std::process::Command {
+    std::process::Command::new(
+        CALLING_BINARY
+            .get()
+            .map_or_else(|| PathBuf::from("codeflow"), Clone::clone),
+    )
+}
+
 /// A `git` process, with [`HOOK_BINARY_ENV`] set in its environment only,
 /// overwriting any inherited value, when this process designated itself.
 /// Every `git` codeflow starts is built here, so a hook git fires during a

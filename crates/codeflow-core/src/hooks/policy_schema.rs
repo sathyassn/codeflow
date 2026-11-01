@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 77] = [
+pub const SCHEMA: [KeySpec; 78] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -700,6 +700,13 @@ pub const SCHEMA: [KeySpec; 77] = [
                 as a possible short-name alias. Root AGENTS.md keeps its \
                 separate project-section exception. The shipped policy file \
                 omits this key.",
+    },
+    KeySpec {
+        path: "git.record_paths",
+        kind: KeyKind::StringList,
+        valid: "an array of repository-relative path globs",
+        purpose: "Markdown records eligible for the records-only integration landing class.",
+        notes: "Read from the line tip. Defaults to task and epic records and docs Markdown. An empty list disables the short path. Product and watched paths, instructions, configuration, mode changes and special files always require the full gate. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.direct_changes",
@@ -1261,11 +1268,28 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
     }
 }
 
+fn validate_record_paths(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    for entry in value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if let Err(error) = glob::Pattern::new(entry) {
+            errors.push(PolicyError {
+                key: path.to_string(),
+                message: format!("invalid glob {entry:?}: {error}"),
+            });
+        }
+    }
+}
+
 /// The value checks for the root-checkout keys that their kind alone does
 /// not catch: `git.root_branch` must be a branch name, and each
 /// `git.worktree_locations` entry must be a folder `doctor` can expand.
 fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     match path {
+        "git.record_paths" => validate_record_paths(path, value, errors),
         "git.document_indexes" => {
             for entry in value
                 .as_array()

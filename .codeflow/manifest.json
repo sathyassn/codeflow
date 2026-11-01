@@ -413,19 +413,19 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "8e433e049dcc2b03c31532cc394e23e058dc78517b110d7db0678440a984f2c7",
+      "sha256": "69519deaa1fca188ff4122a788f74c859dcd5342a49ec6149f6c7606df436e82",
       "exec": false
     },
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "dba8753a6d80f303f40d09a5f5f002720ac876c60186b8a9c24900be31f73ee5",
+      "sha256": "bfd993b81822a02a12f6f54fd35e005675779e1ced90e64ccaeb0c65cfb8e224",
       "exec": false
     },
     ".agents/skills/cf-method/references/delivery-process.md": {
       "src": "claude/skills/cf-method/references/delivery-process.md",
       "ownership": "managed",
-      "sha256": "741a73a0b9e583b8c1c451aac56bd7bcd9c47740f0292abb1768a033f547a319",
+      "sha256": "8fa895104d2e912db102e43000f73a66f80204f0899e4513cf67b0bc600ee65f",
       "exec": false
     },
     ".agents/skills/cf-method/references/issue-handling.md": {
@@ -455,7 +455,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "9347acc66e95bdcf7854327a505121263e22472a95650bdbaa8abd7af6f2f27d",
+      "sha256": "544e8cfb6ed998cec130f6247362539715035ee3fc1ab397570ecd4e5ac6e57a",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -797,7 +797,7 @@
     ".agents/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "225db0a109d6c9d15e6d5eb0b67b3d66774ea29ba28bd5662b9cbb4ebfb7d9d5",
+      "sha256": "f945d4b15171f490ad40ed62d576f059c5844d0c215458190b699c4daa37cc8f",
       "exec": false
     },
     ".agents/skills/cf-ship/references/pr-checks.md": {
@@ -809,7 +809,7 @@
     ".agents/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "9723c8652735426df425a837eadd59472406f5491940860775dbc92ed5e18ac5",
+      "sha256": "14dec0f3d7bc876c982b2745b309cadfa1ba7ff4dccd1dc4ed5fa3021485d1a7",
       "exec": false
     },
     ".agents/skills/cf-ship/references/release-integration.md": {
@@ -1259,19 +1259,19 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "8e433e049dcc2b03c31532cc394e23e058dc78517b110d7db0678440a984f2c7",
+      "sha256": "69519deaa1fca188ff4122a788f74c859dcd5342a49ec6149f6c7606df436e82",
       "exec": false
     },
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "dba8753a6d80f303f40d09a5f5f002720ac876c60186b8a9c24900be31f73ee5",
+      "sha256": "bfd993b81822a02a12f6f54fd35e005675779e1ced90e64ccaeb0c65cfb8e224",
       "exec": false
     },
     ".claude/skills/cf-method/references/delivery-process.md": {
       "src": "claude/skills/cf-method/references/delivery-process.md",
       "ownership": "managed",
-      "sha256": "741a73a0b9e583b8c1c451aac56bd7bcd9c47740f0292abb1768a033f547a319",
+      "sha256": "8fa895104d2e912db102e43000f73a66f80204f0899e4513cf67b0bc600ee65f",
       "exec": false
     },
     ".claude/skills/cf-method/references/issue-handling.md": {
@@ -1301,7 +1301,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "9347acc66e95bdcf7854327a505121263e22472a95650bdbaa8abd7af6f2f27d",
+      "sha256": "544e8cfb6ed998cec130f6247362539715035ee3fc1ab397570ecd4e5ac6e57a",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -1643,7 +1643,7 @@
     ".claude/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "225db0a109d6c9d15e6d5eb0b67b3d66774ea29ba28bd5662b9cbb4ebfb7d9d5",
+      "sha256": "f945d4b15171f490ad40ed62d576f059c5844d0c215458190b699c4daa37cc8f",
       "exec": false
     },
     ".claude/skills/cf-ship/references/pr-checks.md": {
@@ -1655,7 +1655,7 @@
     ".claude/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "9723c8652735426df425a837eadd59472406f5491940860775dbc92ed5e18ac5",
+      "sha256": "14dec0f3d7bc876c982b2745b309cadfa1ba7ff4dccd1dc4ed5fa3021485d1a7",
       "exec": false
     },
     ".claude/skills/cf-ship/references/release-integration.md": {
@@ -1727,19 +1727,19 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "c7309465214cc5766e253ce5942b9c4a417f426619233483b1d0712415ca3942",
+      "sha256": "080fc21ac7914636bab8b1aeac60dce3677cd96b1b9a1e877dd127f524e78193",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "f1cfb5b4ea40ee12811c0380237b0b0f510a8b954a0410ecc014f4775b37919e",
+      "sha256": "54092806e98bb1782e5d125ee00592e515db9c9fac41eda9e8986ac2ddbc968c",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {
       "src": "rules/worktrees.md",
       "ownership": "managed",
-      "sha256": "33f6fd2c614a9edbc7d5a5316689237880f078ca2d84b7c192423338a44e4128",
+      "sha256": "26d75958366704c362d29fc5c816931eb7dd00be82cae4426c60fe070d7ee976",
       "exec": false
     },
     ".codeflow/rules/writing.md": {
@@ -1841,7 +1841,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "90150e46b11288a0047d25de3b24afc3f764a5263514af143b4769993f97444a",
+      "sha256": "b6f135b83d52e82c6e846fd287edc521a4e0fbe3eff16d77feacdeb72ea0c416",
       "exec": false
     },
     "CLAUDE.md": {

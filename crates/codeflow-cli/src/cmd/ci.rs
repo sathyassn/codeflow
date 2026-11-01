@@ -722,6 +722,23 @@ pub fn run(args: &CiArgs) -> i32 {
             Some(change_class::classify(Some(&inventory), &project))
         }
     };
+    if let Some(base) = base_sha.as_deref() {
+        let mut decision =
+            codeflow_core::workgraph::landing_class::classify_landing(&root, base, &head);
+        let class = if line_target.starts_with("integration/") {
+            decision.class
+        } else {
+            decision.reason = "the target is not an integration line".into();
+            codeflow_core::workgraph::landing_class::LandingClass::Code
+        };
+        println!(
+            "codeflow ci: landing class: {}; required test gate: {}; {}",
+            class.name(),
+            class.gate_mode(),
+            codeflow_core::git::display_message(&decision.reason)
+        );
+        println!("codeflow ci: this run checks CI policy only; landing also requires validate --docs, the selected test gate and the secret scan");
+    }
     let work_class = if scope_ready {
         work_checks(
             &root,
@@ -2048,6 +2065,7 @@ fn print_source_banner(root: &Path) {
 /// check is reported but not fatal: a detached-head run without a CI branch
 /// variable is a legitimate state.
 fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
+    println!("codeflow ci: checks ran: {}", ran.join(", "));
     for t in tagged {
         let plane = match &t.sha {
             Some(sha) => format!("ci commit {}", short(sha)),
@@ -2351,40 +2369,8 @@ const LIGHT_SECTIONS: [&str; 2] = ["Summary", "Changes"];
 /// documentation.
 /// Everything unrecognized — code, config, CI yml, `Cargo.*`, `src/` — is a
 /// code change; in particular `.github/workflows/**` is CI config, not docs.
-fn is_docs_path(path: &str) -> bool {
-    // The path is an exact name (OS text rule, issue 79): trimming it would
-    // let `README.md` plus a carriage return borrow the `md` exemption.
-    let p = path;
-    let name = p.rsplit('/').next().unwrap_or(p);
-    // Instructions and shipped assets can change runtime/agent behavior even
-    // when their serialization is Markdown. Prefer extra evidence to a prose
-    // exemption for these contract surfaces.
-    if matches!(name, "AGENTS.md" | "CLAUDE.md" | "SKILL.md")
-        || p.starts_with("assets/")
-        || p.split('/').any(|part| {
-            matches!(
-                part,
-                ".agents" | ".claude" | ".codex" | ".grok" | ".codeflow"
-            )
-        })
-    {
-        return false;
-    }
-    let extension = Path::new(name)
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if name.to_ascii_uppercase().starts_with("LICENSE") && extension.is_empty() {
-        return true;
-    }
-    if p.starts_with(".github/ISSUE_TEMPLATE/") && matches!(extension.as_str(), "yml" | "yaml") {
-        return true;
-    }
-    matches!(extension.as_str(), "md" | "txt" | "rst" | "adoc")
-        || (p.starts_with("docs/")
-            && matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp"))
-}
+#[cfg(test)]
+use codeflow_core::workgraph::change_class::is_docs_path;
 
 /// Remove every `<!-- … -->` span (multi-line included). An unclosed comment
 /// swallows the rest of the text — exactly how a markdown renderer treats it.

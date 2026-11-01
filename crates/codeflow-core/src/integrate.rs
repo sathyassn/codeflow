@@ -13,6 +13,7 @@
 //! the hard line (charter §6.5).
 
 use crate::workgraph::history;
+use crate::workgraph::landing_class::{classify_landing, LandingClass};
 
 use std::path::{Path, PathBuf};
 
@@ -121,6 +122,10 @@ pub struct IntegrateOutcome {
     pub final_checkout: String,
     /// Non-fatal partial-success conditions that need human attention.
     pub warnings: Vec<String>,
+    /// Class selected from the pinned target-to-candidate diff.
+    pub landing_class: LandingClass,
+    /// Checks successfully executed for this landing.
+    pub checks: Vec<String>,
 }
 
 impl std::fmt::Display for IntegrateOutcome {
@@ -192,6 +197,8 @@ impl IntegrateOutcome {
                 )?;
             }
         }
+        writeln!(f, "  landing class: {}", self.landing_class.name())?;
+        writeln!(f, "  checks ran: {}", self.checks.join(", "))?;
         writeln!(f, "  checkout:  {}", display_text(&self.final_checkout))?;
         for warning in &self.warnings {
             writeln!(f, "  WARNING:   {}", display_line(warning))?;
@@ -298,10 +305,10 @@ pub fn integrate_with_mode(
         repo_root, &repo, branch, target, branch_oid, target_oid, &original, mode,
     )?;
 
-    // Stage 3: test gate (full mode), then the release structure of a
+    // Stage 3: selected landing checks, then the release structure of a
     // project that adopted CodeFlow's calculator (SPC-013 R-94).
-    let test_gate = run_test_stage(repo_root, &original)?;
-    run_release_structure(repo_root, &original, &tested_oid.to_string())?;
+    let (class, test_gate, checks) =
+        run_landing_checks(repo_root, &original, branch, target, target_oid, tested_oid)?;
 
     // The source must still match the head used to prepare the candidate,
     // and the old target must be an ancestor of the tested candidate.
@@ -380,6 +387,8 @@ pub fn integrate_with_mode(
         old_target_short,
         original,
         test_gate,
+        class,
+        checks,
     )
 }
 
@@ -532,9 +541,26 @@ fn finish_integration(
     old_target: String,
     original: String,
     test_gate: TestGateSummary,
+    landing_class: LandingClass,
+    checks: Vec<String>,
 ) -> Result<IntegrateOutcome, IntegrateError> {
     let new_target_oid = resolve_branch(repo, target)?;
     let mut warnings = refresh_target_worktrees(repo_root, target, old_target_oid, tested_oid);
+    let record = serde_json::json!({
+        "base": old_target_oid.to_string(), "head": tested_oid.to_string(),
+        "target": target, "class": landing_class, "checks_ran": checks,
+    });
+    let directory = repo.commondir().join("codeflow/landings");
+    if let Err(error) = std::fs::create_dir_all(&directory).and_then(|()| {
+        std::fs::write(
+            directory.join(format!("{tested_oid}.json")),
+            record.to_string(),
+        )
+    }) {
+        warnings.push(format!(
+            "landing succeeded but its local check record could not be written: {error}"
+        ));
+    }
     if let Err(message) = restore_checkout(repo_root, &original) {
         warnings.push(format!(
             "target ref advanced, but checkout restoration failed: {message}"
@@ -550,10 +576,11 @@ fn finish_integration(
         test_gate,
         final_checkout: current_checkout(repo_root).unwrap_or(original),
         warnings,
+        landing_class,
+        checks,
     })
 }
 
-/// Run the full-mode test gate; restores `original` checkout on failure.
 /// The structural release check of a project that adopted `CodeFlow`'s
 /// calculator, on the tested commit; any other project runs nothing.
 fn run_release_structure(
@@ -582,10 +609,128 @@ fn run_release_structure(
     })
 }
 
-fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, IntegrateError> {
+fn run_landing_checks(
+    repo_root: &Path,
+    original: &str,
+    branch: &str,
+    target: &str,
+    target_oid: git2::Oid,
+    tested_oid: git2::Oid,
+) -> Result<(LandingClass, TestGateSummary, Vec<String>), IntegrateError> {
+    let class = if target.starts_with("integration/") {
+        classify_landing(repo_root, &target_oid.to_string(), &tested_oid.to_string()).class
+    } else {
+        LandingClass::Code
+    };
+    let mut checks = Vec::new();
+    if class == LandingClass::RecordsOnly {
+        run_record_checks(repo_root, original, branch, target, target_oid, tested_oid)?;
+        checks.extend(["validate --docs", "ci range", "built-in secret scan"].map(str::to_string));
+    }
+    let test_gate = run_test_stage(repo_root, original, class.gate_mode())?;
+    if matches!(test_gate, TestGateSummary::Passed { .. }) {
+        checks.push(format!("test --mode {} --all", class.gate_mode()));
+    } else if class == LandingClass::RecordsOnly {
+        let _ = restore_checkout(repo_root, original);
+        return Err(IntegrateError::TestGateFailed {
+            summary: "records-only landing requires a completed quick gate".into(),
+        });
+    }
+    run_release_structure(repo_root, original, &tested_oid.to_string())?;
+    Ok((class, test_gate, checks))
+}
+
+fn run_record_checks(
+    root: &Path,
+    original: &str,
+    branch: &str,
+    target: &str,
+    base: git2::Oid,
+    head: git2::Oid,
+) -> Result<(), IntegrateError> {
+    let checked = (|| {
+        let base = base.to_string();
+        let head = head.to_string();
+        for arguments in [
+            vec!["validate", "--docs"],
+            vec![
+                "ci", "--base", &base, "--head", &head, "--branch", branch, "--into", target,
+            ],
+        ] {
+            let output = crate::git::codeflow_command()
+                .args(&arguments)
+                .current_dir(root)
+                .output()
+                .map_err(|error| error.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "{} failed ({}): {}{}",
+                    arguments.join(" "),
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+        scan_record_range(root, &base, &head)
+    })();
+    checked.map_err(|summary| {
+        let _ = restore_checkout(root, original);
+        IntegrateError::TestGateFailed { summary }
+    })
+}
+
+/// Scan every introduced commit, including changes later removed, with the
+/// same credential patterns as pre-commit. Never print matched content.
+fn scan_record_range(root: &Path, base: &str, head: &str) -> Result<(), String> {
+    let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
+    let mut walk = super::workgraph::history::revwalk(&repo).map_err(|error| error.to_string())?;
+    walk.push(git2::Oid::from_str(head).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    walk.hide(git2::Oid::from_str(base).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    for id in walk {
+        let commit = repo
+            .find_commit(id.map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        let tree = commit.tree().map_err(|error| error.to_string())?;
+        let parent = history::parent(&repo, &commit, 0)
+            .and_then(|parent| parent.tree())
+            .map_err(|error| error.to_string())?;
+        let diff = repo
+            .diff_tree_to_tree(Some(&parent), Some(&tree), None)
+            .map_err(|error| error.to_string())?;
+        for delta in diff.deltas() {
+            if delta.new_file().id().is_zero() {
+                continue;
+            }
+            let blob = repo
+                .find_blob(delta.new_file().id())
+                .map_err(|error| error.to_string())?;
+            let text = std::str::from_utf8(blob.content())
+                .map_err(|_| "secret scan cannot read non-UTF-8 content")?;
+            if text
+                .lines()
+                .any(|line| crate::hooks::scan::scan_line(line).is_some())
+            {
+                return Err(format!(
+                    "secret scan found a credential pattern in commit {}",
+                    commit.id()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_test_stage(
+    repo_root: &Path,
+    original: &str,
+    mode: &str,
+) -> Result<TestGateSummary, IntegrateError> {
     match run_gate_with_options(
         repo_root,
-        "full",
+        mode,
         &GateOptions {
             all: true,
             ..GateOptions::default()
@@ -597,9 +742,18 @@ fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, I
             passed,
             skipped,
             complete,
+            evidence_skipped,
             ..
         }) => {
-            if passed && complete && skipped.is_empty() && !results.is_empty() {
+            // `complete` denotes a full-mode run. The records path asks for
+            // every quick target (`all: true` above), with none omitted or
+            // satisfied by earlier candidate evidence.
+            if passed
+                && (complete || mode == "quick")
+                && evidence_skipped == 0
+                && skipped.is_empty()
+                && !results.is_empty()
+            {
                 return Ok(TestGateSummary::Passed {
                     targets: results.into_iter().map(|r| r.name).collect(),
                 });

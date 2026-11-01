@@ -10,12 +10,14 @@
 pub mod acceptance;
 pub mod allocate;
 pub mod amendment;
+pub mod change_class;
 pub mod classify;
 pub mod deps;
 mod format_id;
 pub mod history;
 mod history_graph;
 mod landing;
+pub mod landing_class;
 pub(crate) mod layout;
 pub mod lifecycle;
 pub mod light_paths;
