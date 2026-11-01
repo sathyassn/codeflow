@@ -726,6 +726,20 @@ const GIT_OUTPUT_PINS: [(&str, &str); 13] = [
     ("color.diff", "false"),
 ];
 
+/// Remove the settings a caller passes down (`git -c`, numbered
+/// `GIT_CONFIG_*` settings), which would outrank the scan's own.
+fn remove_caller_settings(command: &mut Command) {
+    command
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT");
+    for (name, _) in std::env::vars_os() {
+        let bytes = name.as_encoded_bytes();
+        if bytes.starts_with(b"GIT_CONFIG_KEY_") || bytes.starts_with(b"GIT_CONFIG_VALUE_") {
+            command.env_remove(&name);
+        }
+    }
+}
+
 /// Give a git process of the scan a configuration this hook controls.
 ///
 /// Command-line configuration a caller passes down (`git -c`, which git
@@ -741,20 +755,13 @@ const GIT_OUTPUT_PINS: [(&str, &str); 13] = [
 /// the pins do not set, such as `safe.directory`.
 fn pin_git_output(command: &mut Command, extra: &[(&str, OsString)]) {
     command
-        .env_remove("GIT_CONFIG_PARAMETERS")
-        .env_remove("GIT_CONFIG_COUNT")
         .env_remove("GIT_DIFF_OPTS")
         .env_remove("GIT_EXTERNAL_DIFF")
         .env("GIT_NO_REPLACE_OBJECTS", "1");
     // Missing objects of a partial clone are an error, never a fetch: the
     // scan makes no network request, and gitleaks' own git inherits this.
     crate::git::local_objects_only(command);
-    for (name, _) in std::env::vars_os() {
-        let bytes = name.as_encoded_bytes();
-        if bytes.starts_with(b"GIT_CONFIG_KEY_") || bytes.starts_with(b"GIT_CONFIG_VALUE_") {
-            command.env_remove(&name);
-        }
-    }
+    remove_caller_settings(command);
     let pins = GIT_OUTPUT_PINS
         .iter()
         .map(|(key, value)| (*key, OsString::from(value)))
@@ -863,16 +870,8 @@ fn git_refusal(version: &str, promisor: bool) -> Option<String> {
 /// for `git diff`.
 fn capability_query(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     let mut command = crate::git::command();
-    command
-        .env_remove("GIT_CONFIG")
-        .env_remove("GIT_CONFIG_PARAMETERS")
-        .env_remove("GIT_CONFIG_COUNT");
-    for (name, _) in std::env::vars_os() {
-        let bytes = name.as_encoded_bytes();
-        if bytes.starts_with(b"GIT_CONFIG_KEY_") || bytes.starts_with(b"GIT_CONFIG_VALUE_") {
-            command.env_remove(&name);
-        }
-    }
+    command.env_remove("GIT_CONFIG");
+    remove_caller_settings(&mut command);
     crate::git::local_objects_only(&mut command);
     command
         .args(args)
@@ -891,7 +890,10 @@ fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
     if !version.status.success() {
         return Err(format!("`git version` exited with {}", version.status));
     }
-    let version = String::from_utf8_lossy(&version.stdout).trim().to_string();
+    let version = std::str::from_utf8(&version.stdout)
+        .map_err(|_| "`git version` printed text that is not UTF-8".to_string())?;
+    let version = version.strip_suffix('\n').unwrap_or(version);
+    let version = version.strip_suffix('\r').unwrap_or(version).to_string();
     let config = capability_query(
         root,
         &[

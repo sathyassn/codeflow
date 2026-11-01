@@ -11613,3 +11613,230 @@ fn caller_configuration_cannot_hide_a_rename_from_gitleaks() {
         }
     }
 }
+
+/// The first `git` on `PATH`, as an absolute path.
+#[cfg(unix)]
+fn real_git_path() -> std::path::PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git on PATH")
+}
+
+/// A repository with a promisor remote whose `.gitattributes` blob is
+/// promised and absent, and one new staged file. Its remote's upload-pack is
+/// a wrapper that leaves `fetched` behind, so any fetch or transport process
+/// is seen. Returns the folder that keeps it, the repository and the marker.
+#[cfg(unix)]
+fn promisor_repository_missing_blobs() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf)
+{
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let upstream = root.path().join("upstream");
+    std::fs::create_dir_all(&upstream).unwrap();
+    init_repo(&upstream, "feat/x");
+    std::fs::write(upstream.join(".gitattributes"), "*.txt text\n").unwrap();
+    std::fs::write(upstream.join("a.txt"), "first\n").unwrap();
+    git(&upstream, &["add", "."]);
+    git(&upstream, &["commit", "-q", "-m", "chore: attributes"]);
+    git(&upstream, &["config", "uploadpack.allowFilter", "true"]);
+    git(
+        &upstream,
+        &["config", "uploadpack.allowAnySHA1InWant", "true"],
+    );
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q", "-b", "feat/x"]);
+    git(&work, &["config", "user.email", "t@example.com"]);
+    git(&work, &["config", "user.name", "t"]);
+    git(
+        &work,
+        &[
+            "remote",
+            "add",
+            "origin",
+            &format!("file://{}", upstream.display()),
+        ],
+    );
+    git(&work, &["config", "remote.origin.promisor", "true"]);
+    git(&work, &["config", "extensions.partialClone", "origin"]);
+    git(
+        &work,
+        &["fetch", "-q", "--filter=blob:none", "origin", "feat/x"],
+    );
+    git(&work, &["update-ref", "refs/heads/feat/x", "FETCH_HEAD"]);
+    git(
+        &work,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/feat/x",
+        ],
+    );
+    let fetched = root.path().join("fetched");
+    let upload = root.path().join("upload-pack-wrapper");
+    std::fs::write(
+        &upload,
+        format!(
+            "#!/bin/sh\ntouch '{}'\nexec '{}' upload-pack \"$@\"\n",
+            fetched.display(),
+            real_git_path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&upload, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        &work,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            upload.to_str().unwrap(),
+        ],
+    );
+    git(&work, &["read-tree", "HEAD"]);
+    std::fs::write(work.join("new.txt"), "added line\n").unwrap();
+    // Staged without attributes: `git add` would read the promised
+    // `.gitattributes` blob and fetch it before the test starts.
+    let stored = git_command()
+        .args(["hash-object", "-w", "--no-filters", "new.txt"])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    let sha = String::from_utf8(stored.stdout).unwrap().trim().to_string();
+    git(
+        &work,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{sha},new.txt"),
+        ],
+    );
+    assert!(!fetched.exists(), "the fixture itself must not fetch");
+    write_policy(
+        &work,
+        r#"{"schema_version":1,"git":{"secret_scan":"block","conflict_markers":"block","root_checkout_commits":"off"}}"#,
+    );
+    (root, work, fetched)
+}
+
+/// A `git` ahead of the real one on `PATH` that logs its arguments, reports
+/// `version` when given one, and fails the promisor-setting query when
+/// `fail_config` is set. Everything else goes to the real git.
+#[cfg(unix)]
+fn git_wrapper(folder: &Path, version: Option<&str>, fail_config: bool) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = folder.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = folder.join("git-calls.log");
+    let version_case = version.map_or(String::new(), |found| {
+        format!("  version) echo 'git version {found}'; exit 0;;\n")
+    });
+    let config_case = if fail_config {
+        "  config\\ --get-regexp*) echo 'config unreadable' >&2; exit 128;;\n"
+    } else {
+        ""
+    };
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n{version_case}{config_case}esac\nexec '{}' \"$@\"\n",
+            log.display(),
+            real_git_path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// Run the pre-commit or the merge (commit-msg) hook entry point in the
+/// repository, with the wrapper first on `PATH`.
+#[cfg(unix)]
+fn promisor_hook(work: &Path, wrapper: &Path, merge: bool, redirect_config: bool) -> Output {
+    let mut command = codeflow();
+    command.current_dir(work).env(
+        "PATH",
+        format!(
+            "{}:{}",
+            wrapper.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+    if merge {
+        let head = std::fs::read_to_string(work.join(".git/refs/heads/feat/x")).unwrap();
+        std::fs::write(work.join(".git/MERGE_HEAD"), head).unwrap();
+        std::fs::write(work.join(".git/MERGE_MSG"), "Merge branch 'side'\n").unwrap();
+        command.args(["git-hook", "commit-msg", ".git/MERGE_MSG"]);
+    } else {
+        command.args(["git-hook", "pre-commit"]);
+    }
+    if redirect_config {
+        command.env("GIT_CONFIG", "/dev/null");
+    }
+    command.output().unwrap()
+}
+
+/// R15-1 across the supported Git range, through the hook entry points on
+/// the pre-commit route (attribute lookup) and the merge route (staged
+/// listing): a repository with a promisor remote on a Git before 2.46, a
+/// redirected configuration file and an unreadable promisor setting all
+/// refuse before any object is read, and no fetch or transport process
+/// starts. A Git that is new enough is not refused by the decision.
+#[cfg(unix)]
+#[test]
+fn promisor_repositories_are_refused_before_an_object_read_on_both_routes() {
+    for merge in [false, true] {
+        let route = if merge { "merge" } else { "pre-commit" };
+        for (case, version, fail_config, redirect) in [
+            ("git 2.45", Some("2.45.2"), false, false),
+            (
+                "git 2.45, redirected config file",
+                Some("2.45.2"),
+                false,
+                true,
+            ),
+            ("unreadable setting", None, true, false),
+        ] {
+            let (keep, work, fetched) = promisor_repository_missing_blobs();
+            let wrapper = git_wrapper(keep.path(), version, fail_config);
+            let out = promisor_hook(&work, &wrapper, merge, redirect);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "{route} {case}: {stderr}");
+            let expected = if fail_config {
+                "cannot tell whether this repository fetches missing objects"
+            } else {
+                "upgrade git to 2.46 or later"
+            };
+            assert!(stderr.contains(expected), "{route} {case}: {stderr}");
+            assert!(
+                !fetched.exists(),
+                "{route} {case}: a fetch or transport process started; git calls:\n{}\n{stderr}",
+                std::fs::read_to_string(keep.path().join("git-calls.log")).unwrap_or_default()
+            );
+        }
+
+        // Git 2.46 passes the decision; the listing then reads no blob and
+        // never renames, and nothing is fetched.
+        let (keep, work, fetched) = promisor_repository_missing_blobs();
+        let wrapper = git_wrapper(keep.path(), Some("2.46.0"), false);
+        let out = promisor_hook(&work, &wrapper, merge, false);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("upgrade git to 2.46 or later"),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !fetched.exists(),
+            "{route}: a fetch or transport process started"
+        );
+        if merge {
+            let log = std::fs::read_to_string(keep.path().join("git-calls.log")).unwrap();
+            assert!(
+                log.lines()
+                    .any(|line| line.contains("--name-only") && line.contains("--no-renames")),
+                "{log}"
+            );
+        }
+    }
+}

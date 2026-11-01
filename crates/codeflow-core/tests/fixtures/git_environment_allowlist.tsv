@@ -213,3 +213,5 @@ crates/codeflow-core/src/hooks/gitleaks.rs	env_remove(&name)	2	TSK-412 removes, 
 crates/codeflow-core/src/hooks/gitleaks.rs	starts_with("GIT_CONFIG_KEY_")	1	TSK-412 selects inherited numbered settings for removal from the scan's git; a prefix test, no process change.
 crates/codeflow-core/src/hooks/gitleaks.rs	starts_with("GIT_CONFIG_VALUE_")	1	TSK-412 selects inherited numbered settings for removal from the scan's git; a prefix test, no process change.
 crates/codeflow-core/src/hooks/gitleaks.rs	env("GIT_CONFIG_COUNT",n.to_string())	1	TSK-412 sets the scan's git count to its pinned settings only, after the inherited ones are removed; the hook's own environment is unchanged.
+crates/codeflow-core/src/hooks/gitleaks.rs	env_remove("GIT_CONFIG")	1	TSK-412 removes the file redirection that only `git config` reads from the promisor-setting query, so it reads the repository setting the scan's git reads; the hook's own environment is unchanged.
+crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG","/dev/null")	1	TSK-412 regression redirects the configuration file on one fixture hook process, to show the promisor-setting query ignores it.

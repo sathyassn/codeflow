@@ -984,9 +984,13 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   text. This needs git 2.41 or later, as the CI scan does; an older git is a
   failed scan. The scan sets `GIT_NO_LAZY_FETCH=1` for gitleaks and every git it runs, overriding an
   inherited value, so in a partial clone a missing object is a failed scan
-  and never a fetch from the promisor remote. A partial clone also needs git
-  2.44 or later, the first release that honours that setting; an older git is
-  a failed scan there. The clone's own `.git/info/attributes` still applies, since
+  and never a fetch from the promisor remote. A repository with a promisor
+  remote (a partial clone) also needs git 2.46 or later: the setting arrives
+  in 2.45, but only 2.46 stops the diff prefetch from starting a fetch. Before
+  any staged object is read, the staged listing, the attribute lookup and the
+  scan read the repository's promisor setting in the scan's own configuration
+  view; an older git, or a setting that cannot be read, is a failed commit.
+  The clone's own `.git/info/attributes` still applies, since
   nothing committed or staged can change it. gitleaks cannot read a path
   with a backslash, double quote or control character reliably (it skips a
   name ending in a backslash), so a staged path with one is a failed scan
