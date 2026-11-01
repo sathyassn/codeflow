@@ -873,8 +873,11 @@ fn shared_outputs(target: &TargetConfig, root: &Path) -> Result<Vec<PathBuf>, Te
 /// Exclusive leases on the [`shared_outputs`] of `target`, one lock file per
 /// output under `<build output>/codeflow-gate/leases/`, taken in a fixed
 /// order so two runs never wait on each other in a cycle. A run whose output
-/// another run is writing waits for that target to finish, which its own
-/// timeout bounds; runs with no output in common never wait.
+/// another run is writing waits for that target to finish, at most the
+/// waiting target's own `timeout_seconds`, then the target is reported not
+/// run; runs with no output in common never wait.
+/// # Errors
+/// When a lease file cannot be opened, or a lease stays held past the bound.
 fn evidence_leases(
     target: &TargetConfig,
     root: &Path,
@@ -898,14 +901,24 @@ fn evidence_leases(
             .lock_file(&relative)
             .map_err(|error| super::delivery::evidence_refused(tree.path(), &relative, &error))?;
         if file.try_lock_exclusive().is_err() {
+            let bound = target.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
             eprintln!(
-                "[codeflow test] {}: another run is writing {}; waiting for it to finish",
+                "[codeflow test] {}: another run is writing {}; waiting up to {bound}s for it",
                 target.name,
                 crate::git::display_path(&path)
             );
-            file.lock_exclusive().map_err(|error| {
-                super::delivery::evidence_refused(tree.path(), &relative, &error)
-            })?;
+            let start = Instant::now();
+            while file.try_lock_exclusive().is_err() {
+                if start.elapsed() >= Duration::from_secs(bound) {
+                    return Err(TestingError::Io(std::io::Error::other(format!(
+                        "another run still wrote {} after {bound}s (the target's timeout_seconds); \
+                         lease: {}",
+                        crate::git::display_path(&path),
+                        crate::git::display_path(&tree.path().join(&relative))
+                    ))));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
         leases.push(file);
     }
@@ -1535,6 +1548,33 @@ mod tests {
         }
         assert_eq!(stopped, 2);
     }
+    /// A lease another run holds past the waiting target's timeout makes
+    /// the wait end with the target's bound named, never an unbounded wait.
+    #[test]
+    fn an_output_lease_wait_ends_at_the_targets_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut target = make_target("reporter", "true");
+        target.report = Some(crate::testing::config::ReportConfig {
+            format: crate::testing::config::ReportFormat::Junit,
+            path: "out/junit.xml".into(),
+            derive_from: None,
+        });
+        target.timeout_seconds = Some(1);
+        let held = evidence_leases(&target, dir.path(), dir.path(), "target").unwrap();
+        assert_eq!(held.len(), 1);
+        let start = Instant::now();
+        let refused = evidence_leases(&target, dir.path(), dir.path(), "target").unwrap_err();
+        assert!(start.elapsed() >= Duration::from_secs(1));
+        assert!(refused.to_string().contains("after 1s"), "{refused}");
+        drop(held);
+        assert_eq!(
+            evidence_leases(&target, dir.path(), dir.path(), "target")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     fn make_target(name: &str, command: &str) -> TargetConfig {
         TargetConfig {
             name: name.to_string(),

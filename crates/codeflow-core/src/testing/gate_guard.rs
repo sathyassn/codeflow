@@ -23,8 +23,9 @@
 //! lock exclusively; slot `n` is `full-gate-<n>.lock`. A lock that cannot
 //! be opened or a record that cannot be read refuses, naming the path and
 //! error (fail closed). The shipped Claude settings presets allow sandboxed
-//! writes to `~/.codeflow/locks` and `~/.codeflow/gate-runs` (TSK-216), and
-//! `codeflow doctor --check permissions` names any folder this process
+//! writes to `~/.codeflow/locks` only (TSK-216); no preset grants
+//! `~/.codeflow/gate-runs`, so a full gate that keeps its evidence runs
+//! outside the sandbox (issue 254). `codeflow doctor --check permissions` names any folder this process
 //! cannot write ([`unwritable_gate_dirs`]). A record that still names a
 //! holder while its slot is free was left by a process that died, and is
 //! reclaimed.
