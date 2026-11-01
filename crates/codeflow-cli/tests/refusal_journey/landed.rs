@@ -1966,7 +1966,7 @@ fn ac2_unresolved_authority_refuses_status_when_the_environment_sets_the_hooks_p
         .env("GIT_CONFIG_VALUE_0", &dir);
     let out = run_hook(process, repo.root(), "git-guard", "git status");
     assert_eq!(out.status.code(), Some(2), "{out:?}");
-    // The same environment naming a directory without the hook stays allowed.
+    // A command-scope hooks path refuses whatever its directory holds (TSK-1130).
     let empty = repo.root().join("env-empty");
     std::fs::create_dir_all(&empty).unwrap();
     let mut process = repo.command(&binary());
@@ -1975,5 +1975,5 @@ fn ac2_unresolved_authority_refuses_status_when_the_environment_sets_the_hooks_p
         .env("GIT_CONFIG_KEY_0", "core.hooksPath")
         .env("GIT_CONFIG_VALUE_0", &empty);
     let out = run_hook(process, repo.root(), "git-guard", "git status");
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
 }
