@@ -404,6 +404,7 @@ GATES_IF = re.compile(r"^\$\{\{ !cancelled\(\) && needs\.reuse\.outputs\.run == 
 REUSE_JOB = """\
     if: github.event_name == 'push'
     name: reuse a pull request verdict
+    needs: windows-image
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -426,11 +427,16 @@ REUSE_JOB = """\
           PUSHED_REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
+          WINDOWS_IMAGE_OS: ${{ needs.windows-image.outputs.os }}
+          WINDOWS_IMAGE_VERSION: ${{ needs.windows-image.outputs.version }}
         run: >-
           python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
           --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
           --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
-          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          --windows-image-os "$WINDOWS_IMAGE_OS" --windows-image-version "$WINDOWS_IMAGE_VERSION"
+          --push-only "reuse a pull request verdict" --push-only "read the Windows runner image"
+          --require "codeflow gates" --require windows
+          --line-skip 'codeflow gates (release ${{ matrix.part }})'
 """
 
 
