@@ -1,0 +1,11 @@
+id = "TSK-1159"
+uid = "cea9896a-478d-4119-a877-4892b50d67c1"
+kind = "TSK"
+title = "capability migrate resumes after interruption and a repaired merge passes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T23:37:08Z"
+target = "integration/EPC-026-the-capabilities-catalog"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
