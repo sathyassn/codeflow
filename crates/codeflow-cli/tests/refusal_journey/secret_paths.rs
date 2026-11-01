@@ -2,6 +2,21 @@
 //! fixtures: replay does not establish a harness's live dispatch or sandbox.
 use super::*;
 
+/// A control the line's rules allow may meet only the strict rule's own
+/// finding. Any finding from a line rule still fails the control.
+fn line_allows(out: &Output) -> bool {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    out.status.code() == Some(0)
+        || out.status.code() == Some(2)
+            && stderr.matches("policy rule ").count() == 1
+            && stderr.contains("policy rule security.text_guard (block)")
+}
+
+/// A planted refusal needs a line-rule finding, not just the strict rule.
+fn line_refuses(out: &Output) -> bool {
+    out.status.code() == Some(2) && !line_allows(out)
+}
+
 #[test]
 fn installed_hooks_refuse_secret_path_spellings_without_execution() {
     let project = Project::new();
@@ -221,12 +236,12 @@ fn tsk1002_review3_installed_routes_keep_the_same_verdicts() {
             assert!(!outputs.is_empty(), "{harness}: no installed hook ran");
             if refuse {
                 assert!(
-                    outputs.iter().any(|out| out.status.code() == Some(2)),
+                    outputs.iter().any(line_refuses),
                     "{harness}: {line}: {outputs:?}"
                 );
             } else {
                 assert!(
-                    outputs.iter().all(|out| out.status.success()),
+                    outputs.iter().all(line_allows),
                     "{harness}: {line}: {outputs:?}"
                 );
             }
@@ -293,8 +308,7 @@ fn tsk1002_ac14_installed_hooks_classify_every_planted_case() {
                 out.status.code() == Some(2)
                     && String::from_utf8_lossy(&out.stderr).contains(expected_rule)
             });
-            if (refuse && !refused) || (!refuse && outputs.iter().any(|out| !out.status.success()))
-            {
+            if (refuse && !refused) || (!refuse && outputs.iter().any(|out| !line_allows(out))) {
                 wrong.push(format!(
                     "{harness}: AC-{ac}: expected refuse={refuse}: {line:?}: {outputs:?}"
                 ));

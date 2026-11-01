@@ -280,6 +280,19 @@ fn user_prompt_submit_wires_the_stable_advisory_entry() {
 #[allow(dead_code)]
 mod guard_forms;
 
+/// TSK-397: the strict text rule, the default, refuses a word filled in at
+/// run time that it cannot resolve. An ordinary line this journey expects
+/// to pass may be refused for that reason alone; the relaxed rule's
+/// decisions, the line's, are proven by the `text_guard_invariant` replay.
+#[cfg(unix)]
+fn strict_run_time_refusal(out: &std::process::Output) -> bool {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    out.status.code() == Some(2)
+        && stderr.matches("policy rule ").count() == 1
+        && stderr.contains("policy rule security.text_guard (block)")
+        && stderr.contains("the strict text rule cannot verify the run-time argument")
+}
+
 /// Run the shipped Codex exec-guard wiring through the shell, as Codex
 /// does, with a Bash tool call for `command` on stdin.
 #[cfg(unix)]
@@ -710,12 +723,17 @@ fn the_codex_exec_guard_wiring_judges_composed_deletions_and_help() {
             !stderr.contains("codeflow-cli-installer.sh"),
             "{form}: {stderr}"
         );
-        assert!(!stderr.contains("codeflow update"), "{form}: {stderr}");
+        assert!(
+            !stderr.contains("then run codeflow update"),
+            "{form}: {stderr}"
+        );
     }
     for command in guard_forms::PROJECT_DELETIONS {
         let out = run_codex_exec_guard(root, command);
-        assert_eq!(out.status.code(), Some(0), "{command}");
-        assert!(out.stderr.is_empty(), "{command}");
+        if !strict_run_time_refusal(&out) {
+            assert_eq!(out.status.code(), Some(0), "{command}");
+            assert!(out.stderr.is_empty(), "{command}");
+        }
     }
     for (help, twin) in guard_forms::HELP_PAIRS {
         let out = run_codex_exec_guard(root, help);
@@ -744,7 +762,8 @@ fn the_codex_exec_guard_wiring_holds_the_round_four_probes() {
     for (case, command, expect) in guard_forms::REVIEW_ROUND_FOUR_PROBES {
         let out = run_codex_exec_guard(root, command);
         let want = if *expect == Expect::Allowed { 0 } else { 2 };
-        if out.status.code() != Some(want) {
+        let strict = *expect == Expect::Allowed && strict_run_time_refusal(&out);
+        if out.status.code() != Some(want) && !strict {
             wrong.push(format!(
                 "{case} ({expect:?}): {command} -> {:?} {}",
                 out.status.code(),

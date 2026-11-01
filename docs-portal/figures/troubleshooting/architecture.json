@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "Which check inspects which surface, and which checks can fail?",
-    "idea": "The twenty-five checks fall into six groups by the surface they read, and only ten of them can fail; the other fifteen warn at most.",
-    "title": "The twenty-five checks, by what they read",
+    "idea": "The twenty-six checks fall into six groups by the surface they read, and only twelve of them can fail; the other fourteen warn at most.",
+    "title": "The twenty-six checks, by what they read",
     "kicker": "Doctor checks",
-    "caption": "A FAIL comes only from hooks, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
+    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
     "states": [
       {
         "name": "canfail",
@@ -23,22 +23,22 @@
     ],
     "facts": [
       {
-        "claim": "ten checks can fail",
+        "claim": "twelve checks can fail",
         "source": "docs/troubleshooting.md#technical",
         "derive": "the fail sentence",
         "check": {
           "kind": "contains",
-          "text": "Ten checks can fail: `hooks`, `config`, `permissions`,"
+          "text": "Twelve checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
         },
         "value": true
       },
       {
-        "claim": "the other fifteen warn at most",
+        "claim": "the other fourteen warn at most",
         "source": "docs/troubleshooting.md#technical",
         "derive": "the warn sentence",
         "check": {
           "kind": "contains",
-          "text": "The other fifteen warn"
+          "text": "other fourteen warn at most"
         },
         "value": true
       },
@@ -196,7 +196,7 @@
           ]
         },
         {
-          "state": "warnonly",
+          "state": "canfail",
           "shape": "circle",
           "cx": 239,
           "cy": 93,
@@ -210,6 +210,23 @@
           "style": "mono",
           "for": [
             "g1c4"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 404,
+          "cy": 93,
+          "r": 7,
+          "id": "g1c5"
+        },
+        {
+          "text": "sandbox",
+          "x": 420,
+          "y": 98,
+          "style": "mono",
+          "for": [
+            "g1c5"
           ]
         },
         {
@@ -707,7 +724,7 @@
           ]
         },
         {
-          "state": "warnonly",
+          "state": "canfail",
           "shape": "circle",
           "cx": 184,
           "cy": 169,
@@ -721,6 +738,23 @@
           "style": "mono",
           "for": [
             "g1c4"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 262,
+          "cy": 141,
+          "r": 7,
+          "id": "g1c5"
+        },
+        {
+          "text": "sandbox",
+          "x": 276,
+          "y": 146,
+          "style": "mono",
+          "for": [
+            "g1c5"
           ]
         },
         {
@@ -1084,7 +1118,7 @@
         ],
         [
           "Harness wiring",
-          "none",
+          "`guard-timeouts`, `sandbox`",
           "`claude`, `codex`, `grok`, `startup-files`"
         ],
         [

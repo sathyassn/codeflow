@@ -19,6 +19,38 @@ use host_isolation::{git_command, isolate_clone, isolate_git};
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
+#[path = "hooks_cli/text_rule.rs"]
+mod text_rule;
+
+/// TSK-397: under the strict text rule, the default this suite runs in,
+/// once a line's directory is unknown, the exec guard refuses a word filled in at
+/// run time given to any program; git-guard does not judge it.
+fn run_time_word_refusal(out: &Output) -> bool {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    out.status.code() == Some(2)
+        && stderr.matches("policy rule ").count() == 1
+        && stderr.contains("policy rule security.text_guard (block)")
+        && stderr.contains("cannot verify the run-time argument")
+}
+
+/// TSK-397: a control the line's rules allow. Under the strict text rule,
+/// the default this suite runs in, the exec guard may refuse it with the
+/// strict rule's own finding only; a refusal by any of the line's rules adds
+/// a finding of its own, so the control still fails if the line refuses it.
+fn line_allows(out: &Output) -> bool {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    out.status.code() == Some(0)
+        || out.status.code() == Some(2)
+            && stderr.matches("policy rule ").count() == 1
+            && stderr.contains("policy rule security.text_guard (block)")
+}
+
+/// TSK-397: a refusal by one of the line's rules, so a control the line
+/// must refuse is not satisfied by the strict text rule's own finding.
+fn line_refuses(out: &Output) -> bool {
+    out.status.code() == Some(2) && !line_allows(out)
+}
+
 #[cfg(unix)]
 struct RestorePermissions {
     path: std::path::PathBuf,
@@ -61,6 +93,9 @@ fn codeflow() -> Command {
 /// Isolate a command from the developer's environment: its Codeflow home,
 /// and every Git setting, variable and file of the host (`isolate_git`).
 fn isolated_codeflow(mut cmd: Command) -> Command {
+    // Its exec-guard expectations are the strict rule's, the default; the
+    // relaxed rule's decisions are proven by the `text_guard_invariant`
+    // replay.
     isolate_git(&mut cmd);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
@@ -2349,7 +2384,23 @@ fn assignment_prefixes_do_not_hide_git_paths_containing_equals() {
     }
 }
 
+/// TSK-397: the exec guard's strict rule refuses these lines the closing
+/// rule allows, in the tightened outcome this suite runs in; no program,
+/// `echo`, `printf` and `cd` included, is exempt by name (design D, C15-2).
+const CLOSING_RULE_RUN_TIME_COSTS: &[&str] = &[
+    "export PATH=$PATH:/x; git status",
+    "git log -1 \"$((1+1))\"",
+    "export FOO=$(pwd); git push origin task/x",
+    "export PATH=$PATH:/x",
+    ": ${FOO:=bar}",
+    "V=1; echo $V",
+    "cd \"$HOME/src/x\" && git push origin task/x",
+    "printf '%s' \"${HOME}\"; git push origin task/x",
+    "echo \"${HOME:-/x}\"",
+];
+
 #[test]
+#[allow(clippy::too_many_lines)] // One fixture keeps each refusal beside the read it must not catch.
 fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/config");
@@ -2435,6 +2486,15 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
                         .current_dir(dir.path()),
                     &guard_payload(command, dir.path()),
                 );
+                if hook == "exec-guard"
+                    && expected == 0
+                    && CLOSING_RULE_RUN_TIME_COSTS.contains(command)
+                {
+                    if !run_time_word_refusal(&out) {
+                        failures.push(format!("{hook}: {command}: {out:?}"));
+                    }
+                    continue;
+                }
                 let diagnostic = String::from_utf8_lossy(&out.stderr);
                 if out.status.code() != Some(expected)
                     || (command.contains("arr=(1 2); git") && !diagnostic.contains("arr"))
@@ -2570,6 +2630,12 @@ fn unresolved_configuration_writes_refuse_in_both_guards() {
                 codeflow().args(["hook", hook]).current_dir(dir.path()),
                 &guard_payload(command, dir.path()),
             );
+            // TSK-397: a run-time word given to `export` or `echo` in the
+            // tightened outcome this suite runs in.
+            if hook == "exec-guard" {
+                assert!(run_time_word_refusal(&out), "{command}: {out:?}");
+                continue;
+            }
             assert_eq!(
                 out.status.code(),
                 Some(0),
@@ -2752,6 +2818,15 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
         assert_eq!(out.status.code(), Some(2), "should block: {command}");
     }
 
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "exec-guard"])
+            .current_dir(dir.path()),
+        &guard_payload("rm -rf ./build", dir.path()),
+    );
+    assert!(out.status.success(), "should allow: rm -rf ./build");
+    // TSK-397: `rm` given a run-time word is judged by the directory check,
+    // never as a dangerous deletion.
     for command in ["rm -rf ~/code/app/target", "rm -rf $HOME/code/app/build"] {
         let out = run_with_stdin(
             codeflow()
@@ -2759,7 +2834,11 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
                 .current_dir(dir.path()),
             &guard_payload(command, dir.path()),
         );
-        assert!(out.status.success(), "should allow: {command}");
+        assert!(run_time_word_refusal(&out), "{command}: {out:?}");
+        assert!(
+            !String::from_utf8_lossy(&out.stderr).contains("security.dangerous_commands"),
+            "{command}"
+        );
     }
 }
 
@@ -8565,7 +8644,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "find . -name '*.py' -exec python3 -m py_compile {} +",
         "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
         "python3 tool.py -v -n3 -o out.json",
-        "cd src && python3 app.py settings.json",
+        "cd ./src && python3 app.py notes.txt",
         "find . -name '*.rs' -execdir python3 lint.py {} +",
         "find src -execdir python3 lint.py notes.txt \\;",
         "cd .codex && python3 -c 'print(1)'",
@@ -8909,10 +8988,47 @@ fn exec_guard_contract_3(dir: &Path, command: &str) -> Output {
     )
 }
 
+#[test]
+fn exec_guard_keeps_the_starting_directory_after_cd() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    enforced_repo(&root);
+    std::fs::create_dir(root.join("src")).unwrap();
+    for (line, allowed) in [
+        ("cd src && python3 tool.py ..", false),
+        ("cd src && python3 tool.py ../.claude/settings.json", false),
+        ("cd src; python3 tool.py ..", false),
+        ("cd src || python3 tool.py ..", false),
+        ("(cd src) && python3 tool.py ..", false),
+        (
+            "cd src && - && python3 tool.py .claude/settings.json",
+            false,
+        ),
+        (
+            "CDPATH+=.claude && cd src && python3 tool.py ../settings.json",
+            false,
+        ),
+        ("cd ./src && python3 tool.py settings.json", false),
+        ("popd && python3 tool.py settings.json", false),
+        ("cd && python3 tool.py settings.json", false),
+    ] {
+        let output = exec_guard_contract_3(&root, line);
+        if allowed {
+            assert!(
+                output.status.success(),
+                "{line}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        } else {
+            assert!(interpreter_argument_refused(&output), "{line}: {output:?}");
+        }
+    }
+}
+
 fn interpreter_argument_refused(output: &Output) -> bool {
     let err = String::from_utf8_lossy(&output.stderr);
     output.status.code() == Some(2)
-        && err.contains("git.hook_integrity")
+        && (err.contains("git.hook_integrity") || err.contains("security.text_guard"))
         && err.contains("interpreter")
         && !err.contains("interpreter code")
 }
@@ -9279,22 +9395,56 @@ fn guards_read_a_search_pattern_as_text() {
         // A preprocessor over a root that holds nothing protected.
         "rg --pre pdftotext needle docs/".to_string(),
     ];
+    // TSK-397 design D: this suite runs in the tightened outcome, whose
+    // strict rule exempts no program by name, so a run-time word given to
+    // any search tool keeps its words judged. Those forms refuse as the
+    // strict rule's accepted cost; the baseline keeps the line's decisions.
+    let mut cost = Vec::new();
     for form in ["'/CHANGELOG.md$'", "'^/etc/.*'", "\"$HOME/x\""] {
+        let run_time = form.starts_with('"');
         for tool in ["rg", "grep", "egrep", "fgrep", "git grep", "ag"] {
-            allowed.push(format!("{tool} {form} docs"));
+            let positional = format!("{tool} {form} docs");
+            if run_time {
+                cost.push(positional);
+            } else {
+                allowed.push(positional);
+            }
             // `ag` has no `-e`, and `git grep` no `--regexp`.
             if tool != "ag" {
-                allowed.push(format!("{tool} -e {form} docs"));
+                let valued = format!("{tool} -e {form} docs");
+                if run_time {
+                    cost.push(valued);
+                } else {
+                    allowed.push(valued);
+                }
             }
             if !matches!(tool, "ag" | "git grep") {
-                allowed.push(format!("{tool} --regexp {form} docs"));
+                let long = format!("{tool} --regexp {form} docs");
+                if run_time {
+                    cost.push(long);
+                } else {
+                    allowed.push(long);
+                }
             }
             if tool != "git grep" {
-                allowed.push(format!("rg --files | xargs {tool} {form}"));
+                let appended = format!("rg --files | xargs {tool} {form}");
+                if run_time {
+                    cost.push(appended);
+                } else {
+                    allowed.push(appended);
+                }
             }
         }
     }
     let mut wrong = Vec::new();
+    for command in &cost {
+        let out = run("exec-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        // The strict rule's own refusal takes `security.text_guard`.
+        if out.status.code() != Some(2) || !err.contains("security.text_guard") {
+            wrong.push(format!("exec-guard should refuse: {command}: {err}"));
+        }
+    }
     for command in &allowed {
         for hook in ["exec-guard", "git-guard"] {
             let out = run(hook, command);
@@ -9749,13 +9899,16 @@ fn shell_expansions_preserve_checkout_protection() {
         "W=.worktrees/w || W=src; python3 tool.py $W",
         "PWD=$PWD/.worktrees/w; cd docs && python3 tool.py $OLDPWD",
         "D=.worktrees/w; if false; then D=src; else python3 tool.py $D; fi",
+        // TSK-397: `true` may be a shell function that changes directory, so
+        // the directory is unknown after it, and no variable is trusted then.
+        "D=src; if true; then python3 tool.py $D/app.py; fi",
+        "if true; then python3 tool.py $PWD/src/app.py; fi",
     ] {
         cases.push(("exec-guard", line.into(), true));
     }
     for line in [
         r#"for f in src/*.py; do python3 lint.py "$f"; done"#,
-        "D=src; if true; then python3 tool.py $D/app.py; fi",
-        "if true; then python3 tool.py $PWD/src/app.py; fi",
+        "D=src; python3 tool.py $D/app.py",
     ] {
         cases.push(("exec-guard", line.into(), false));
     }
@@ -9805,7 +9958,9 @@ fn shell_expansions_preserve_checkout_protection() {
                 output.status.code()
             );
             if output.status.code() != Some(expected)
-                || (refuse && !stderr.contains("git.hook_integrity"))
+                || (refuse
+                    && !stderr.contains("git.hook_integrity")
+                    && !stderr.contains("security.text_guard"))
             {
                 wrong.push(format!("{guard}: expected {expected}: {line}: {stderr}"));
             }
@@ -10443,6 +10598,13 @@ fn shell_expansions_round_four_review_matrix() {
         std::fs::write(root.join(file), "print(1)\n").unwrap();
     }
     let mut failures = Vec::new();
+    // Accepted cost (TSK-397): `eval "echo $PWD"`,
+    // `eval -- "rm -rf $PWD/build"` and `eval - 'rm -rf $PWD/build'` refuse
+    // under exec-guard. `eval` parses its text again, expanding `$PWD`
+    // there, so a directory name holding `;` could run code, and the guard
+    // cannot follow the directory on such a line. Under TSK-397's one rule
+    // (operator decision, 2026-10-27), `rm`, `ln`, `source` and a shell's
+    // `-c` given a run-time word refuse there too.
     for (matrix, source) in [
         (
             "ordinary",
@@ -10661,8 +10823,8 @@ fn review_guard_cases(finding: u8) {
             );
             let code = output.status.code();
             if !matches!(code, Some(0 | 2))
-                || (!refuse && code != Some(0))
-                || (refuse && guard == owner && code != Some(2))
+                || (!refuse && !line_allows(&output))
+                || (refuse && guard == owner && line_allows(&output))
             {
                 wrong.push(format!(
                     "F{finding}: {guard}: expected refuse={refuse}, owner={owner}: {line:?}: {output:?}"
@@ -10811,11 +10973,11 @@ fn guard_classification_cases(ac: u8) {
                 "{guard}: {output:?}"
             );
             if guard == guard_cases::refusing_guard(ac, line) {
-                refused = output.status.code() == Some(2);
+                refused = !line_allows(&output);
             }
             if !refuse {
                 assert!(
-                    output.status.success(),
+                    line_allows(&output),
                     "ordinary command refused by {guard}: {line}: {output:?}"
                 );
             }
