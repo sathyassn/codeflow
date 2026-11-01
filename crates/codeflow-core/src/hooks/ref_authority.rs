@@ -605,19 +605,46 @@ pub fn read_only_git_runs_nothing(command: &str, cwd: &Path) -> bool {
 
 /// Whether no `post-index-change` hook exists where Git looks for hooks: a
 /// read-only call that refreshes the index runs it, and the runner catalog
-/// does not list hook files. A hooks path that cannot be read refuses.
+/// does not list hook files. The hooks directory comes from the effective
+/// configuration Git itself lists, so a `core.hooksPath` set through the
+/// environment counts. A configuration that cannot be read, or a path
+/// spelling that cannot be resolved with certainty (`~user`, `%(prefix)`,
+/// an empty value), refuses.
 fn no_index_change_hook(cwd: &Path) -> bool {
     let Ok(Some(repo)) = super::repo::open(cwd) else {
         return false;
     };
-    let Ok(config) = repo.config() else {
+    let Ok(config) = crate::security::git_config::read(
+        cwd,
+        &[],
+        &crate::security::git_config::Environment::new(),
+    ) else {
         return false;
     };
-    let hooks = match config.get_path("core.hooksPath") {
-        Ok(path) if path.is_absolute() => path,
-        Ok(path) => repo.workdir().unwrap_or_else(|| repo.path()).join(path),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => repo.commondir().join("hooks"),
-        Err(_) => return false,
+    let hooks = match config.get_all("core.hooksPath").last() {
+        None => repo.commondir().join("hooks"),
+        Some((_, _, value)) => {
+            let Ok(value) = std::str::from_utf8(value) else {
+                return false;
+            };
+            let path = if let Some(rest) = value.strip_prefix("~/") {
+                let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
+                    return false;
+                };
+                std::path::PathBuf::from(home).join(rest)
+            } else if value.is_empty() || value.starts_with('~') || value.starts_with("%(") {
+                return false;
+            } else {
+                std::path::PathBuf::from(value)
+            };
+            // Git runs hooks from the top of the working tree (the git
+            // directory when bare), so a relative path starts there.
+            if path.is_absolute() {
+                path
+            } else {
+                repo.workdir().unwrap_or_else(|| repo.path()).join(path)
+            }
+        }
     };
     matches!(
         std::fs::symlink_metadata(hooks.join("post-index-change")),

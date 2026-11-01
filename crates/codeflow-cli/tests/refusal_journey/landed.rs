@@ -1949,3 +1949,31 @@ fn ac2_unresolved_authority_refuses_status_when_the_index_change_hook_exists() {
     let out = repo.hook("git-guard", "git status");
     assert_eq!(out.status.code(), Some(2), "{out:?}");
 }
+
+#[test]
+fn ac2_unresolved_authority_refuses_status_when_the_environment_sets_the_hooks_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = unresolved_authority_repo();
+    let dir = repo.root().join("env-hooks");
+    std::fs::create_dir_all(&dir).unwrap();
+    let hook = dir.join("post-index-change");
+    std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut process = repo.command(&binary());
+    process
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", &dir);
+    let out = run_hook(process, repo.root(), "git-guard", "git status");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    // The same environment naming a directory without the hook stays allowed.
+    let empty = repo.root().join("env-empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let mut process = repo.command(&binary());
+    process
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", &empty);
+    let out = run_hook(process, repo.root(), "git-guard", "git status");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
