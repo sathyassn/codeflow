@@ -1968,11 +1968,12 @@ fn moving_the_local_target_does_not_move_the_anchor() {
 /// name earns no authority. TSK-001 declares `integration/EPC-009-rogue`,
 /// which no epic or policy at `main` names. The verb refuses a side-branch
 /// landing on it, a clean merge of it after the review, and a waiver whose
-/// batched amendment was made on it.
+/// amendment was made on it, batched with the epic or of the record alone
+/// (issue 465: commits on that line are not the task's own range).
 #[test]
 fn an_unrecorded_integration_line_earns_no_authority() {
     const ROGUE: &str = "integration/EPC-009-rogue";
-    for case in ["landing", "stacking", "waiver"] {
+    for case in ["landing", "stacking", "waiver", "record-only waiver"] {
         let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
         let root = dir.path();
         let path = record_path("TSK-001");
@@ -2010,14 +2011,16 @@ fn an_unrecorded_integration_line_earns_no_authority() {
                     &path,
                     &on_line.replacen("shall work.", "shall mostly work.", 1),
                 );
-                let epic = "project-management/epics/EPC-001.md";
-                let epic_text = std::fs::read_to_string(root.join(epic)).unwrap();
-                write(
-                    root,
-                    epic,
-                    &epic_text.replace("An outcome.", "An amended outcome."),
-                );
-                let amendment = commit(root, "docs(records): batched amendment");
+                if case == "waiver" {
+                    let epic = "project-management/epics/EPC-001.md";
+                    let epic_text = std::fs::read_to_string(root.join(epic)).unwrap();
+                    write(
+                        root,
+                        epic,
+                        &epic_text.replace("An outcome.", "An amended outcome."),
+                    );
+                }
+                let amendment = commit(root, "docs(records): amend on the line");
                 write(root, &path, &on_line);
                 commit(root, "docs(records): restore TSK-001 AC-1");
                 git(root, &["switch", "-c", "task/TSK-001-review", ROGUE]);
@@ -6964,7 +6967,7 @@ mod imports;
 #[path = "acceptance_cli/epic_line.rs"]
 mod epic_line;
 
-#[path = "acceptance_cli/sync_merges.rs"]
-mod sync_merges;
 #[path = "acceptance_cli/planning_amendment.rs"]
 mod planning_amendment;
+#[path = "acceptance_cli/sync_merges.rs"]
+mod sync_merges;
