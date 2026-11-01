@@ -287,6 +287,11 @@ pub struct Manifest {
     /// it, put back with its content.
     #[serde(default)]
     pub wrapper_prior_mode: Option<u32>,
+    /// The permission bits the install gave the editor wrapper, so a mode
+    /// the person set afterwards is recognised as theirs (security review
+    /// round 3).
+    #[serde(default)]
+    pub wrapper_mode: Option<u32>,
     /// While a write is under way, the hash of the session file it
     /// replaces, so an interrupted refresh still leaves the earlier
     /// install recognisable (security review round 2).
@@ -657,6 +662,20 @@ fn offer_rc_lines(
     Ok(())
 }
 
+/// The permission bits `--uninstall` gives back to a wrapper that predates
+/// the install: the person's current bits when they changed them after the
+/// install, so a mode they tightened is never loosened again (security
+/// review round 3), else the bits it had before the install.
+fn wrapper_restore_mode(manifest: &Manifest, now: Option<u32>) -> Option<u32> {
+    let installed = manifest
+        .wrapper_mode
+        .or(manifest.wrapper_prior_mode.map(|mode| mode | 0o100));
+    match (now, installed) {
+        (Some(now), Some(installed)) if now != installed => Some(now),
+        _ => manifest.wrapper_prior_mode,
+    }
+}
+
 /// Write the editor wrapper, executable, and print the VS Code setting
 /// that uses it; the person adds the setting, since editor settings files
 /// may hold comments this command cannot keep.
@@ -670,8 +689,13 @@ fn write_wrapper(layout: &Layout, manifest: &mut Manifest) -> bool {
             return false;
         }
     };
-    if manifest.wrapper.is_none() && manifest.wrapper_prior_mode.is_none() {
-        manifest.wrapper_prior_mode = existing_mode;
+    if manifest.wrapper.is_none() {
+        if manifest.wrapper_prior_mode.is_none() {
+            manifest.wrapper_prior_mode = existing_mode;
+        }
+    } else {
+        // A reinstall adopts a mode the person changed after the install.
+        manifest.wrapper_prior_mode = wrapper_restore_mode(manifest, existing_mode);
     }
     if let Err(why) = write_owned(layout, manifest, Owned::Wrapper, WRAPPER) {
         println!("{why}");
@@ -689,6 +713,11 @@ fn write_wrapper(layout: &Layout, manifest: &mut Manifest) -> bool {
             println!("Cannot make {} executable: {err}", layout.wrapper.display());
             return false;
         }
+        manifest.wrapper_mode = Some(mode);
+        if let Err(why) = save_manifest(layout, manifest) {
+            println!("{why}");
+            return false;
+        }
     }
     println!("  Wrote {}. To have the VS Code extension start Claude Code with the session file, add this to your VS Code user settings:", layout.wrapper.display());
     println!(
@@ -702,6 +731,12 @@ fn write_wrapper(layout: &Layout, manifest: &mut Manifest) -> bool {
 /// and the startup-file line, each only on a typed yes. Returns the exit
 /// code.
 pub fn install(input: &mut impl BufRead, layout: &Layout) -> i32 {
+    // Before anything is written: a change of the user settings file while
+    // the record holds additions to another one is refused (SEC-07-R3).
+    if let Err(why) = user_settings::check_target(&layout.bypass.user, &layout.user_record) {
+        println!("{why}. Nothing written.");
+        return 1;
+    }
     let mut manifest = match read_manifest(layout) {
         Ok(manifest) => manifest,
         Err(why) => {
@@ -823,7 +858,7 @@ pub fn uninstall(layout: &Layout) -> i32 {
             &manifest.wrapper,
             &manifest.wrapper_was,
             &manifest.wrapper_prior,
-            manifest.wrapper_prior_mode,
+            wrapper_restore_mode(&manifest, file_mode(&layout.wrapper).ok().flatten()),
         ),
         (
             &layout.session,
@@ -1491,6 +1526,75 @@ mod tests {
             "# mine\n"
         );
         assert_eq!(mode(&layout.wrapper), 0o640);
+
+        // Security review round 3: the person tightens the wrapper after
+        // the install. Uninstall keeps their bits, with or without a
+        // reinstall in between, and never puts back the looser 0640.
+        for reinstall in [false, true] {
+            std::fs::set_permissions(&layout.wrapper, std::fs::Permissions::from_mode(0o640))
+                .unwrap();
+            assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 0);
+            assert_eq!(mode(&layout.wrapper), 0o740);
+            std::fs::set_permissions(&layout.wrapper, std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            if reinstall {
+                assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 0);
+                assert_eq!(mode(&layout.wrapper), 0o700);
+            }
+            assert_eq!(uninstall(&layout), 0);
+            assert_eq!(
+                std::fs::read_to_string(&layout.wrapper).unwrap(),
+                "# mine\n"
+            );
+            assert_eq!(mode(&layout.wrapper), 0o700, "reinstall: {reinstall}");
+        }
+    }
+
+    /// Security review round 3 (SEC-07-R3-TARGET), through install: after
+    /// an install that changed user file A, an install against B (another
+    /// `CLAUDE_CONFIG_DIR`) is refused before it writes anything, and
+    /// uninstall reverts A only.
+    #[test]
+    fn install_refuses_a_new_user_file_while_the_record_names_another() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout_a = layout(dir.path(), "/bin/zsh");
+        let a = layout_a.bypass.user.clone();
+        std::fs::create_dir_all(a.parent().unwrap()).unwrap();
+        std::fs::write(&a, r#"{"sandbox": {"enabled": false}}"#).unwrap();
+        // No to bypass and the startup line, yes to the sandbox switch.
+        assert_eq!(
+            install(&mut "no\nno\nyes\nno\nno\n".as_bytes(), &layout_a),
+            0
+        );
+        assert_eq!(read(&a)["sandbox"]["enabled"], true);
+
+        let mut layout_b = layout(dir.path(), "/bin/zsh");
+        let b = dir.path().join("custom-claude/settings.json");
+        std::fs::create_dir_all(b.parent().unwrap()).unwrap();
+        let b_text = r#"{"sandbox": {"enabled": true}}"#;
+        std::fs::write(&b, b_text).unwrap();
+        layout_b.bypass.user = b.clone();
+        let session = std::fs::read_to_string(&layout_b.session).unwrap();
+        let manifest = std::fs::read_to_string(&layout_b.manifest).unwrap();
+        let record = std::fs::read_to_string(&layout_b.user_record).unwrap();
+        assert_eq!(
+            install(&mut "no\nno\nyes\nyes\nyes\n".as_bytes(), &layout_b),
+            1
+        );
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), b_text);
+        assert_eq!(std::fs::read_to_string(&layout_b.session).unwrap(), session);
+        assert_eq!(
+            std::fs::read_to_string(&layout_b.manifest).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            std::fs::read_to_string(&layout_b.user_record).unwrap(),
+            record
+        );
+
+        assert_eq!(uninstall(&layout_b), 0);
+        assert_eq!(read(&a)["sandbox"]["enabled"], false);
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), b_text);
     }
 
     /// Review nit: the record is written before each change, so an install

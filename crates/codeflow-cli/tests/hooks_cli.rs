@@ -11275,7 +11275,6 @@ fn exec_guard_refuses_every_gh_api_delete_and_unread_form() {
         "gh api repos/o/r -H 'X-HTTP-Method-Override: DELETE'",
         "gh api repos/o/r -X \"$M\"",
         "gh api repos/o/r $FLAGS",
-        "gh api repos/o/r --metod POST",
         "gh auth status -at",
         "gh auth status --show-token=true",
     ] {
@@ -11336,12 +11335,110 @@ fn exec_guard_asks_before_every_gh_api_write() {
     }
     for command in [
         "gh api repos/o/r/pulls/1 --jq .head.sha",
-        "gh api search/issues -X GET -f q=repo:o/r",
         "gh api repos/o/r -X get",
         "gh pr view 1",
     ] {
         let out = exec_guard_from(dir.path(), command, false);
         assert_eq!(out.status.code(), Some(0), "{command}");
+        assert!(
+            out.stdout.is_empty(),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
+fn assert_asks(dir: &Path, command: &str) {
+    let out = exec_guard_from(dir, command, false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{command}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let answer: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("{command}: no ask answer ({e}): {stdout}"));
+    assert_eq!(
+        answer["hookSpecificOutput"]["permissionDecision"], "ask",
+        "{command}"
+    );
+}
+
+/// TSK-1070 security review round 3 (SEC-05): exec-guard no longer models
+/// gh's argument grammar. A `gh api` call is a read only in one narrow
+/// plain form; a DELETE in any spelling or position is refused, every
+/// other form asks, and a `gh auth` call with the token flag anywhere or an
+/// option before its subcommand is refused. Each round-3 attack runs
+/// through the full hook.
+#[test]
+fn exec_guard_holds_the_round_three_gh_attacks() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        // A superseded help flag must not hide the DELETE (R3-HELP).
+        "gh api repos/o/r -X=DeLeTe --help --help=false",
+        "gh api repos/o/r -X=DeLeTe --help=false --help",
+        // Options before `api` (R3-DISPATCH).
+        "gh -X=DeLeTe api repos/o/r",
+        "gh -X DELETE api repos/o/r",
+        "gh --method=dElEtE api repos/o/r",
+        // A DELETE override with an explicit GET, in both orders.
+        "gh api repos/o/r -X GET -H X-HTTP-Method-Override:dElEtE",
+        "gh api repos/o/r -H X-HTTP-Method-Override:dElEtE -X GET",
+        // The token flag in any position, and options before the auth
+        // subcommand (R3-DISPATCH).
+        "gh auth --show-token=true status",
+        "gh auth -t status",
+        "gh auth status --SHOW-TOKEN",
+        "gh auth status -aT",
+        "gh --hostname github.com auth status",
+        "gh -R o/r auth status",
+        "gh auth -h github.com status",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("security.outward_actions"), "{command}: {err}");
+    }
+    for command in [
+        // A superseded help flag must not hide a write (R3-HELP).
+        "gh api repos/o/r -X PoSt --help --help=false",
+        "gh api repos/o/r -X PoSt --help=false --help",
+        "gh api repos/o/r --help",
+        "gh api repos/o/r -h",
+        // An override header never lowers the wire method (R3-HEADER).
+        "gh api repos/o/r/actions/runs/1/rerun -X PoSt -H X-HTTP-Method-Override:GET",
+        "gh api repos/o/r/actions/runs/1/rerun -H X-HTTP-Method-Override:GET -X PoSt",
+        "gh api repos/o/r -H Accept:application/json",
+        // Options before `api` (R3-DISPATCH).
+        "gh --hostname=example.invalid api repos/o/r",
+        "gh -R o/r api repos/o/r",
+        "gh -X PoSt api repos/o/r",
+        // Outside the plain read form.
+        "gh api search/issues -X GET -f q=repo:o/r",
+        "gh api repos/o/r -X HEAD",
+        "gh api repos/o/r -XGET",
+        "gh api repos/o/r --metod POST",
+        "gh api repos/o/r --verbose",
+    ] {
+        assert_asks(dir.path(), command);
+    }
+    for command in [
+        "gh api repos/o/r",
+        "gh api repos/o/r -X GET --paginate --slurp -q .name",
+        "gh api repos/o/r --method=GET --jq=.name -i --silent",
+        "gh auth status",
+        "gh auth status -a -h github.com",
+        "gh -R o/r pr view 1",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert!(
             out.stdout.is_empty(),
             "{command}: {}",

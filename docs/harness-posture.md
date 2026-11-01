@@ -65,18 +65,30 @@ amends ADR-0029's retry).
   another host: extensions, aliases, `gh config set`, `gh auth status
   --show-token`, codespaces, keys, secrets, variables, `gh repo clone`,
   `gh browse`, `--receive-pack`, `--exec` and `ext::` remotes.
-- A list of spellings never closes, so exec-guard reads every `gh api`
-  and `gh auth status` call by gh's own option grammar: separated,
-  attached and `=` values, short-option bundles, and the method in any
-  case, as gh upper-cases it before sending. It refuses a DELETE in any
-  form, including a method-override header, and `gh auth status` with the
-  token flag in any bundle. It answers Claude Code with a prompt (the
-  `ask` decision, which Claude Code shows in bypass mode too) for a `gh
-  api` write method, a field or input body, GraphQL, an absolute URL
-  endpoint and `--hostname`. It refuses a form it cannot read for
-  certain: a word the shell fills in, an option `gh` does not have, a
-  second endpoint. The `forge_write` ask rules and the DELETE denies in
-  the presets name the common spellings as a second layer.
+- A list of spellings never closes, and neither does a model of gh's
+  option grammar (TSK-1070 security review round 3), so exec-guard judges
+  `gh api` and `gh auth` against one narrow allowlist and asks or refuses
+  everything else:
+  - A `gh api` call runs without a prompt only in the plain read form:
+    `api` is the first word after `gh`, one endpoint that is not GraphQL
+    or an absolute URL, an explicit method only as `-X GET`, `--method
+    GET` or `--method=GET`, and otherwise only `-q`/`--jq`,
+    `-t`/`--template`, `--cache`, `-i`/`--include`, `--paginate`,
+    `--slurp` and `--silent`, each as a separate word or a long `=` form.
+  - Every other `gh api` form gets a prompt (the `ask` decision, which
+    Claude Code shows in bypass mode too): a write method, a field or
+    input body (with `-X GET` too), any header, `--help`, `--input`,
+    `--hostname`, GraphQL, an absolute URL, an attached or bundled short
+    option, an option before `api`, and any option outside the list.
+  - A `gh api` call with a word naming DELETE anywhere (the method word,
+    an option with it attached, or a header value, in any case) is
+    refused, and so is a `gh auth` call with the token flag anywhere
+    (`--show-token` or a short option word holding `t`) or with an option
+    before its subcommand.
+  - A word the shell fills in is refused, in a `gh api` or `gh auth` call
+    or as the `gh` subcommand.
+  - The `forge_write` ask rules and the DELETE denies in the presets name
+    the common spellings as a second layer.
 - Excluded commands do not inherit the host list: an excluded `gh` or
   `git push` reaches whatever host it names. The prompt covers `gh api`
   with `--hostname` or an absolute URL; `gh` with `GH_HOST` or a `-R

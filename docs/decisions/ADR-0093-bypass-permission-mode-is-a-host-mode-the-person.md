@@ -126,13 +126,19 @@ decision 2026-10-31):
   outward write the deny rules cannot name, and an unattended session is
   refused. Codex gets no rule for it, since its `never` approval has no
   prompt. Text rules cannot close the list of spellings (`-X PoSt`,
-  `-X=DeLeTe`, `-iXDELETE` passed them), so exec-guard reads each `gh api`
-  call by gh's own option grammar and answers Claude Code with the same
-  `ask` decision for a write, GraphQL, an absolute URL or `--hostname`; a
-  hook `ask` prompts in bypass too (live check, Claude Code 2.1.316). It
-  refuses a DELETE in any form and a form it cannot read for certain
-  (TSK-1070 security review round 2). The shipped ask and deny rules stay
-  as a second layer for the common spellings.
+  `-X=DeLeTe`, `-iXDELETE` passed them), and a model of gh's option
+  grammar did not close either (a superseded `--help`, an override
+  header, an option before `api`; TSK-1070 security review round 3). So
+  exec-guard treats a `gh api` call as a read only in one narrow plain
+  form (`api` first, one REST endpoint, at most an explicit GET, and only
+  the output options `--jq`, `--template`, `--cache`, `--include`,
+  `--paginate`, `--slurp` and `--silent`) and answers Claude Code with the
+  same `ask` decision for every other form, fields with `-X GET`
+  included; a hook `ask` prompts in bypass too (live check, Claude Code
+  2.1.316). It refuses a word naming DELETE anywhere in a `gh api` call, a
+  `gh auth` call with the token flag anywhere or an option before its
+  subcommand, and a word the shell fills in. The shipped ask and deny
+  rules stay as a second layer for the common spellings.
 - The Read tool and the sandbox deny the token stores of `gh`, git,
   Docker, gcloud, Azure, npm and the macOS keychains.
 - The `secret` and `credentials` name rules match exact secret names and

@@ -2894,14 +2894,17 @@ fn perl_attached_code(arg: &str) -> Option<&str> {
 }
 
 /// The `gh` calls whose family depends on their options: a visibility
-/// change, and `gh api` and `gh auth status`, read by gh's own grammar,
-/// never a list of spellings (TSK-1070 security review round 2).
+/// change, and `gh api` and `gh auth`, judged against one narrow allowlist
+/// rather than a model of gh's grammar (TSK-1070 security review round 3).
+/// `rest` is every word after `gh`.
 fn gh_family(
+    rest: &[String],
     sub: &str,
     body: &[String],
     out: &mut Parsed,
     source: &dyn Fn() -> Result<Option<PathBuf>, String>,
 ) -> Result<(), String> {
+    use super::gh_api::{Auth, Intent};
     if sub == "repo"
         && body.first().is_some_and(|s| s == "edit")
         && body
@@ -2910,22 +2913,41 @@ fn gh_family(
     {
         out.families.push(("account", source()?));
     }
-    if sub == "api" {
-        match super::gh_api::api_intent(body) {
-            super::gh_api::Intent::Read => {}
-            super::gh_api::Intent::Delete => out.families.push(("account", source()?)),
-            super::gh_api::Intent::Write(why) => out.gh_writes.push(format!("`gh api` {why}")),
-            super::gh_api::Intent::Unread(why) => {
-                out.unread_gh.push(format!("`gh api`: {why}"));
-            }
-        }
+    let Some(first) = rest.first() else {
+        return Ok(());
+    };
+    if crate::hooks::git_guard::expands(first) {
+        out.unread_gh.push(format!(
+            "`gh {first}`: the subcommand is filled in by the shell, so the guard cannot see which runs"
+        ));
+        return Ok(());
     }
-    if sub == "auth" && body.first().is_some_and(|s| s == "status") {
-        match super::gh_api::auth_status_shows_token(&body[1..]) {
-            Ok(false) => {}
-            Ok(true) => out.families.push(("forge_exec", source()?)),
-            Err(why) => out.unread_gh.push(format!("`gh auth status`: {why}")),
-        }
+    // An option before the subcommand: which word gh takes as the
+    // subcommand depends on which options take a value, so a call that
+    // could be `gh api` or `gh auth` is never read as a plain one.
+    let leading = first.starts_with('-');
+    let api = if leading {
+        rest.iter()
+            .any(|w| w == "api")
+            .then(|| super::gh_api::api_after_options(rest))
+    } else {
+        (sub == "api").then(|| super::gh_api::api_intent(body))
+    };
+    match api {
+        None | Some(Intent::Read) => {}
+        Some(Intent::Delete) => out.families.push(("account", source()?)),
+        Some(Intent::Write(why)) => out.gh_writes.push(format!("`gh api` {why}")),
+        Some(Intent::Unread(why)) => out.unread_gh.push(format!("`gh api`: {why}")),
+    }
+    let auth = if leading {
+        rest.iter().any(|w| w == "auth").then_some(Auth::Refused)
+    } else {
+        (sub == "auth").then(|| super::gh_api::auth_intent(body))
+    };
+    match auth {
+        None | Some(Auth::Plain) => {}
+        Some(Auth::Refused) => out.families.push(("forge_exec", source()?)),
+        Some(Auth::Unread(why)) => out.unread_gh.push(format!("`gh auth`: {why}")),
     }
     Ok(())
 }
@@ -2998,7 +3020,7 @@ fn direct_family(
         }
     }
     if name == "gh" {
-        gh_family(sub, body, out, &source)?;
+        gh_family(rest, sub, body, out, &source)?;
     }
     if name.starts_with("git-credential-") {
         out.families.push(("account", source()?));
