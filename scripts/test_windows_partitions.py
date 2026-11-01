@@ -648,9 +648,9 @@ class CoverageShardTests(unittest.TestCase):
     """TSK-270 AC-2: the Linux coverage shards use this planner with their
     own measurements, results directories and per-shard test lists."""
 
-    def test_the_real_coverage_data_is_balanced_over_two_shards(self):
+    def test_the_real_coverage_data_is_balanced_over_four_shards(self):
         plan = wp.Plan(wp.load(cs.DATA))
-        self.assertEqual(plan.count, 2)
+        self.assertEqual(plan.count, 4)
         mean = sum(plan.estimates) / plan.count
         self.assertLessEqual(max(plan.estimates), mean * 1.05)
 
