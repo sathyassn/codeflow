@@ -402,8 +402,11 @@ fn catalog_data_alone_moves_resolution_fallback_and_open_duties() {
     let design = repo.resolved("design", "claude-code", "none", &[], true);
     for result in [&review, &design] {
         assert_pinned_launches(&catalog, result);
-        assert_eq!(result["participants"][0]["effort"], "high");
     }
+    // ADR-0095: review starts at the model's vendor default (medium for the
+    // Codex primary); design keeps its high floor.
+    assert_eq!(review["participants"][0]["effort"], "medium");
+    assert_eq!(design["participants"][0]["effort"], "high");
     assert_eq!(review["participants"][0]["seat"], codex_id);
 
     // A catalog-only change moves the requested selector and effort.

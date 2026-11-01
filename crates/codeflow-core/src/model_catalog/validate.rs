@@ -25,19 +25,13 @@ fn unique<'a>(values: impl Iterator<Item = &'a str>, label: &str) -> Result<(), 
     Ok(())
 }
 
-pub(super) fn floor(duty: &str, seat: bool) -> Effort {
+pub(super) fn floor(duty: &str) -> Effort {
     if duty == "xhigh-reasoning" {
         Effort::Xhigh
-    } else if seat
-        || !matches!(
-            duty,
-            "bounded-execution"
-                | "light-execution"
-                | "evidence-collection"
-                | "engineering-implementation"
-                | "design-implementation"
-        )
-    {
+    } else if matches!(duty, "design" | "reasoning-support") {
+        // Design and deep reasoning exist for work that needs the stronger
+        // setting; every other duty starts at the vendor default (medium) and
+        // is raised by a high trigger (ADR-0095).
         Effort::High
     } else {
         Effort::Medium
@@ -332,7 +326,7 @@ impl Catalog {
                     return Err(format!("unsupported alternative harness {harness}"));
                 }
             }
-            if alternative.effort < floor(duty, !matches!(alternative.target, Target::Line(_))) {
+            if alternative.effort < floor(duty) {
                 return Err(format!("duty {duty} default below its effort floor"));
             }
             if duty == "design" && alternative.target != Target::Seat(self.design_owner.clone()) {

@@ -179,10 +179,21 @@ fn evidence_requires_record() {
     );
 }
 #[test]
-fn seat_defaults_cannot_be_medium_but_bounded_workers_can() {
+fn seat_defaults_can_be_medium_but_design_and_reasoning_cannot() {
+    // ADR-0095: seats start at the model's vendor default; only design and
+    // reasoning-support keep a high floor.
+    let mut value = fixture();
+    value["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    parse(&value).expect("a medium orchestrating seat is valid");
     assert_invalid(
         |v| {
-            v["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] =
+            v["duties"]["design"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+        },
+        "below its effort floor",
+    );
+    assert_invalid(
+        |v| {
+            v["duties"]["reasoning-support"]["required"][0]["alternatives"][0]["effort"] =
                 json!("medium");
         },
         "below its effort floor",
@@ -191,6 +202,21 @@ fn seat_defaults_cannot_be_medium_but_bounded_workers_can() {
         resolved("bounded-execution").participants[0].effort,
         Effort::Medium
     );
+}
+#[test]
+fn high_trigger_raises_a_medium_seat_to_high() {
+    let mut value = fixture();
+    value["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    let mut req = request("orchestrate", &observed);
+    let plain = c.resolve(&req).unwrap();
+    let triggers = ["material".to_string()];
+    req.trigger_facts = &triggers;
+    let raised = c.resolve(&req).unwrap();
+    // A seat whose versions offer medium starts there; the trigger raises it.
+    assert_eq!(plain.participants[0].effort, Effort::Medium);
+    assert_eq!(raised.participants[0].effort, Effort::High);
 }
 #[test]
 fn unknown_trigger_and_unknown_route_are_rejected() {
@@ -1286,9 +1312,9 @@ fn missing_optional_second_opinion_does_not_open_filled_independent_review() {
 fn resolution_revalidates_public_catalog_mutations() {
     let mut c = catalog();
     let observed = BTreeMap::new();
-    let req = request("orchestrate", &observed);
+    let req = request("design", &observed);
     assert!(!c.resolve(&req).unwrap().is_open());
-    c.duties.get_mut("orchestrate").unwrap().required[0].alternatives[0].effort = Effort::Medium;
+    c.duties.get_mut("design").unwrap().required[0].alternatives[0].effort = Effort::Medium;
     assert!(c
         .resolve(&req)
         .unwrap_err()

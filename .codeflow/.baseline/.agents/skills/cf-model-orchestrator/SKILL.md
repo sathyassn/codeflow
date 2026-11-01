@@ -124,6 +124,17 @@ asks for just that.
   usage; workers replace no primary or named reviewer. Use the strongest
   capable permitted reasoning route, direct xhigh on trigger, and select
   effort per unit.
+- **Effort by model, raised by need.** Every session and worker starts at its
+  model's vendor-recommended default effort, the effort `codeflow models
+  resolve` returns, and every launch passes it explicitly. Raise to high, or
+  xhigh where the model offers it, only for a named reason: a high or xhigh
+  trigger, a hard build, a security review or a stuck diagnosis. An
+  orchestrating, director or coordinator session stays at the default.
+- **The highest-cost reasoning model directs; it never executes.** Use it
+  only for key review, analysis and direction (design, architecture and
+  planning decisions). Each run names its deliverable and its end and is
+  closed when done; execution goes to the lower-cost lines. No executor,
+  builder or collector route binds it.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.

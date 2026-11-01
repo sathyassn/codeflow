@@ -314,7 +314,7 @@ impl Catalog {
         if !version.efforts.contains(&request.effort) {
             return Err("unsupported effort; never clamped".into());
         }
-        if request.effort < floor(request.duty, request.seat.is_some()) {
+        if request.effort < floor(request.duty) {
             return Err("effort below duty floor".into());
         }
         for exclusion in request.exclusions.iter().filter(|e| e.fresh_native) {
@@ -686,8 +686,7 @@ impl Catalog {
                     &family.harnesses[0]
                 }
             });
-            let effort = if seat.is_none()
-                && alternative.effort < Effort::High
+            let effort = if alternative.effort < Effort::High
                 && self
                     .high_triggers
                     .iter()
@@ -901,7 +900,7 @@ impl Catalog {
         if route.effort != record.route.effort {
             return Err("OPERATOR_OVERRIDE effort mismatch".into());
         }
-        if route.effort < floor("design", true) {
+        if route.effort < floor("design") {
             return Err("OPERATOR_OVERRIDE effort below design duty floor".into());
         }
         let harness = route

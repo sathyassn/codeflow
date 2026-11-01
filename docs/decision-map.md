@@ -92,6 +92,7 @@ Two pages link back to the decisions:
 | Duo orchestration and quality | [ADR-0035](decisions/ADR-0035-capability-routed-duo-execution.md) | route duo execution by verified per-task capability | accepted | none |
 | Duo orchestration and quality | [ADR-0038](decisions/ADR-0038-critical-path-deferral-stewardship.md) | preserve critical-path focus without reflexive deferral or escalation | accepted | none |
 | Duo orchestration and quality | [ADR-0056](decisions/ADR-0056-high-primary-effort-with-bounded-workers.md) | High primary effort with bounded workers | accepted | none |
+| Duo orchestration and quality | [ADR-0095](decisions/ADR-0095-default-effort-follows-each-vendor-s-recommendat.md) | Default effort follows each vendor's recommendation | accepted | none |
 | Duo orchestration and quality | [ADR-0087](decisions/ADR-0087-effort-is-each-person-s-setting-not-the-project.md) | Effort is each person's setting, not the project's | accepted | none |
 | Duo orchestration and quality | [ADR-0060](decisions/ADR-0060-accountable-worker-delegation.md) | separate primary accountability from worker execution | accepted | none |
 | Model and harness qualification | [ADR-0027](decisions/ADR-0027-native-interactive-model-evaluation.md) | qualify model and harness bindings with native-interactive evaluations | accepted | none |

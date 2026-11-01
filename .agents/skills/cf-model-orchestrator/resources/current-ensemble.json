@@ -366,7 +366,7 @@
                 "kind": "host-seat"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             }
           ],
           "relation": "any",
@@ -386,7 +386,7 @@
                 "id": "claude-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             }
           ],
           "relation": "any",
@@ -401,7 +401,7 @@
                 "id": "codex-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             }
           ],
           "relation": "any",
@@ -441,7 +441,7 @@
                 "id": "codex-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             },
             {
               "target": {
@@ -629,7 +629,7 @@
                 "id": "codex-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             },
             {
               "target": {
@@ -637,7 +637,7 @@
                 "id": "claude-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             }
           ],
           "relation": "opposite-author",
@@ -677,7 +677,7 @@
                 "id": "codex-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             }
           ],
           "relation": "any",
@@ -692,7 +692,7 @@
                 "id": "claude-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             }
           ],
           "relation": "any",
@@ -740,7 +740,7 @@
                 "id": "codex-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             },
             {
               "target": {
@@ -748,7 +748,7 @@
                 "id": "claude-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             }
           ],
           "relation": "opposite-author",
@@ -798,7 +798,7 @@
                 "id": "codex-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             }
           ],
           "relation": "any",
@@ -826,7 +826,7 @@
                 "id": "codex-primary"
               },
               "harness": null,
-              "effort": "high"
+              "effort": "medium"
             },
             {
               "target": {
@@ -854,7 +854,7 @@
                 "id": "codex-primary"
               },
               "harness": "codex-app",
-              "effort": "high"
+              "effort": "medium"
             },
             {
               "target": {
@@ -862,7 +862,7 @@
                 "id": "claude-primary"
               },
               "harness": "claude-code",
-              "effort": "high"
+              "effort": "medium"
             }
           ],
           "relation": "opposite-author",
@@ -874,7 +874,9 @@
   },
   "high_triggers": [
     "complex or difficult architecture, technical, planning, or design work, whether greenfield or improving existing systems",
-    "material ambiguity or complexity beyond a bounded routine worker's qualified medium scope"
+    "material ambiguity or complexity beyond a bounded routine worker's qualified medium scope",
+    "security-sensitive change or security review",
+    "stuck diagnosis after a bounded probe on a new hypothesis"
   ],
   "xhigh_triggers": [
     "capability-sensitive or long-horizon work",
@@ -896,10 +898,10 @@
   "rules": [
     "Resolve every duty with codeflow models resolve and launch only the pinned id it returns; an alias never launches a seat.",
     "Primary seats retain independent planning and approval duties.",
-    "High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker.",
+    "High triggers set a minimum reasoning level for a unit: they raise a seat or worker below high to high, and never spawn a redundant high worker for a primary already at high.",
     "The standing pair is the usual quality floor; extra catalog families never vote silently.",
-    "A high primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
-    "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at high and keeps approval. With no such worker the obligation stays open and the trigger is unmet.",
+    "A primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
+    "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat keeps its effort and its approval. With no such worker the obligation stays open and the trigger is unmet.",
     "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     "Internal workers never replace a primary or named cross-lineage reviewer.",
     "Cross-family entry always invokes the receiving qualified primary at default effort as ROLE: peer; only that primary dispatches its own same-family ROLE: worker escalation. A caller never selects a foreign worker directly.",
@@ -907,7 +909,8 @@
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",
     "The design owner seat's first line owns design direction, real design and fidelity approval. A later line of that seat designs as a committed project co-owner or by a task-specific OPERATOR_OVERRIDE, and otherwise orchestrates, plans and reviews as a reduced-assurance fallback.",
-    "Default effort is high, not a ceiling: complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task at high or xhigh; design follows the design owner rule.",
+    "Default effort follows each vendor's recommended default (medium for Opus, Sonnet and the Codex primaries; a model's own default, high for Fable, otherwise) and is not a ceiling: raise to high, or xhigh on Codex, only when a trigger or a specific task needs it, such as a hard build, a security review or a stuck diagnosis, never by default for an orchestrating, director or coordinator session; complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task at high or xhigh; design follows the design owner rule.",
+    "The highest-cost reasoning line, fable in this ensemble, serves only key review, analysis and direction (design, architecture and planning decisions) and never executes: each run names its deliverable and its end and is closed when done, and execution goes to opus or sonnet. No execution or evidence-collection duty routes to it.",
     "Assess triggers before work and as difficulty changes. An xhigh_trigger permits direct xhigh without a failed high attempt; routine well-specified work does not escalate automatically. Novelty is not a trigger; complexity and difficulty are.",
     "A designation is not qualification: report it as designated, full suite not run, until an exact full-suite binding record exists.",
     "An observed id that differs from the pinned id inherits no designation and no evidence.",

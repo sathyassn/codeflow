@@ -596,7 +596,7 @@ fn managed_catalog_uses_only_capability_supported_harnesses() {
     }
     assert!(!catalog.xhigh_triggers.is_empty());
     assert!(catalog.rules.iter().any(|rule| {
-        rule == "High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker."
+        rule == "High triggers set a minimum reasoning level for a unit: they raise a seat or worker below high to high, and never spawn a redundant high worker for a primary already at high."
     }), "high reasoning floor must not mandate redundant escalation");
     // The Grok trigger policy is today's routing policy until the operator answers Q4.
     let policy: serde_json::Value = serde_json::from_str(&read(
@@ -610,6 +610,74 @@ fn managed_catalog_uses_only_capability_supported_harnesses() {
         .lines
         .iter()
         .all(|line| line.adoption == Adoption::Manual));
+}
+
+/// ADR-0095: seats start at their model's vendor default effort, and the
+/// highest-cost reasoning line (fable) never takes an execution route.
+#[test]
+fn managed_catalog_sets_effort_by_model_and_keeps_fable_off_execution() {
+    let catalog: serde_json::Value = serde_json::from_str(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ))
+    .expect("catalog");
+    let seat_lines = |seat: &str| -> Vec<String> {
+        catalog["seats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == seat)
+            .map(|s| serde_json::from_value(s["lines"].clone()).unwrap())
+            .unwrap_or_default()
+    };
+    let execution = [
+        "engineering-implementation",
+        "bounded-execution",
+        "light-execution",
+        "evidence-collection",
+        "design-implementation",
+    ];
+    for (duty, body) in catalog["duties"].as_object().unwrap() {
+        let mut participants: Vec<&serde_json::Value> =
+            body["required"].as_array().unwrap().iter().collect();
+        for triggered in body["triggered"].as_array().unwrap() {
+            participants.push(&triggered["participant"]);
+        }
+        for participant in participants {
+            for alternative in participant["alternatives"].as_array().unwrap() {
+                let target = &alternative["target"];
+                let effort = alternative["effort"].as_str().unwrap();
+                let lines = match target["kind"].as_str().unwrap() {
+                    "line" => vec![target["id"].as_str().unwrap().to_string()],
+                    "seat" => seat_lines(target["id"].as_str().unwrap()),
+                    _ => Vec::new(),
+                };
+                if execution.contains(&duty.as_str()) {
+                    assert!(
+                        !lines.iter().any(|l| l == "fable"),
+                        "{duty}: an execution route reaches the fable line"
+                    );
+                }
+                // Seats of the Claude and Codex families start at medium,
+                // except the design duty, which keeps its high floor.
+                if target["kind"] == "seat" && duty != "design" {
+                    let seat = target["id"].as_str().unwrap();
+                    let want = if seat == "grok-primary" {
+                        "high"
+                    } else {
+                        "medium"
+                    };
+                    assert_eq!(effort, want, "{duty}: {seat} default effort");
+                }
+                if target["kind"] == "host-seat" {
+                    assert_eq!(effort, "medium", "{duty}: host default effort");
+                }
+            }
+        }
+    }
+    assert!(catalog["rules"].as_array().unwrap().iter().any(|rule| rule
+        .as_str()
+        .unwrap()
+        .starts_with("The highest-cost reasoning line, fable in this ensemble, serves only key review, analysis and direction")));
 }
 
 #[test]
@@ -721,7 +789,7 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
         "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
         "Claude produces design in its native interactive session regardless of host.",
         "A changed concrete binding requires native-interactive qualification before promotion.",
-        "A high primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
+        "A primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
         "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     ] {
         assert!(
@@ -751,7 +819,9 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
         "Never combine apparently separate limits",
         "is a reassignment: it is recorded and reviewed by one other-lineage seat",
         "permitted worker change",
-        "Default effort is high for primary seats, not a ceiling",
+        "Default effort follows each vendor's recommended default",
+        "Raise a seat or worker to high, or xhigh on Codex, only when a trigger or a specific task needs it",
+        "The highest-cost reasoning model (Fable in this ensemble) is used only for key review, analysis and direction",
         "strongest capable permitted same-family reasoning route",
         "An xhigh trigger requires the owning primary to obtain xhigh reasoning",
         "Delegate substantial, well-specified routine implementation",
