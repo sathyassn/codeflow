@@ -1050,6 +1050,8 @@ fn work_checks<'a>(
     acceptance::dispatch(
         root,
         git,
+        // The pre-push hand-off: the hook's advertisement, no pull request.
+        names.advertisement.is_some() && !pr_context && pr_body.is_none(),
         pr_body,
         range_parts.as_ref(),
         names,
