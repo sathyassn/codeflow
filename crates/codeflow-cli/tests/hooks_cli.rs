@@ -11260,6 +11260,57 @@ fn gitleaks_engine_warns_at_warn_and_the_builtin_scan_still_runs() {
     assert!(!fake.path().join("ran").exists());
 }
 
+/// AC-5: the secret scan and its gitleaks runner make no network request.
+/// The hook's policy-authority step (TSK-1077) is the one step that may ask
+/// the configured remote, once, when the remote has no tracking ref, and it
+/// refuses fail closed when the remote cannot be asked. With a tracking ref
+/// the hook never contacts the remote, so the scan is reached and refuses
+/// on its own finding although the remote URL cannot be reached.
+#[cfg(unix)]
+#[test]
+fn gitleaks_scan_makes_no_network_call_and_authority_refuses_when_the_remote_cannot_be_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(dir.path(), &engine_policy("block"));
+    std::fs::write(dir.path().join("ok.txt"), "nothing sensitive\n").unwrap();
+    git(dir.path(), &["add", "ok.txt"]);
+    // Port 9 refuses at once; nothing listens there.
+    git(
+        dir.path(),
+        &["remote", "add", "origin", "http://127.0.0.1:9/none.git"],
+    );
+    let empty = tempfile::tempdir().unwrap();
+
+    // No tracking ref: the authority step asks the remote, cannot, refuses.
+    let out = pre_commit_with_path(dir.path(), empty.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("git.path_policy"), "{stderr}");
+    assert!(stderr.contains("could not be asked"), "{stderr}");
+    assert!(stderr.contains("git fetch origin"), "{stderr}");
+    // The scan still runs beside the refused authority step.
+    assert!(stderr.contains("git.secret_scan_engine"), "{stderr}");
+
+    // A tracking ref (what git fetch leaves): no remote contact, so the
+    // only refusal left is the engine's own, for the missing binary.
+    git(dir.path(), &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(
+        dir.path(),
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    let out = pre_commit_with_path(dir.path(), empty.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("git.secret_scan_engine"), "{stderr}");
+    assert!(stderr.contains("gitleaks is not on PATH"), "{stderr}");
+    assert!(!stderr.contains("could not be asked"), "{stderr}");
+    assert!(!stderr.contains("git.path_policy"), "{stderr}");
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_reports_where_it_looked_for_gitleaks_and_the_pin() {

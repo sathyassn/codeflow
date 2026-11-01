@@ -966,7 +966,11 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   `gitleaks` binary in a folder on `PATH`. A package manager's build, such as
   Homebrew's, has another checksum. `codeflow doctor --check secret-engine`
   reports the folders searched, the checksum and version found and the pin.
-  The hook never downloads anything and makes no network request.
+  The hook never downloads anything, and the secret scan and the gitleaks
+  runner make no network request. One earlier step can: when the configured
+  remote has no tracking ref, the policy-authority step asks the remote once
+  whether it advertises any ref (TSK-1077) and refuses fail closed if it
+  cannot. `git fetch` creates the tracking refs and ends the question.
 - **Rules and exemptions.** gitleaks reads `.gitleaksignore` and
   `.gitleaks.toml` from the working tree, the only copies before a commit
   exists. `GITLEAKS_CONFIG` and `GITLEAKS_CONFIG_TOML` from the shell are
