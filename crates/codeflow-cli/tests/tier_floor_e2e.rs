@@ -548,6 +548,13 @@ fn push_set_blocks_a_bad_push_at_every_tier() {
             "seed the destination",
         );
         git_ok(&root, &["fetch", "-q", "origin"], "fetch the destination");
+        // Git before 2.48 records no remote HEAD on fetch, and the default
+        // branch is the only policy authority (ADR-0091).
+        git_ok(
+            &root,
+            &["remote", "set-head", "origin", &start],
+            "remote set-head",
+        );
 
         // `init` already committed the scaffold; add one reviewed change.
         let good = ["-m", "chore: add a base file"];
