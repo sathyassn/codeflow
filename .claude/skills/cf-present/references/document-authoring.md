@@ -21,6 +21,7 @@ Every document is a closed JSON object, version 1 or 2:
 {
   "schema_version": 2,
   "title": "Review the account recovery plan",
+  "summary": "Which recovery path to build, and what the failure canary still owes.",
   "language": "en",
   "provenance": {
     "task_id": "TSK-042",
@@ -31,7 +32,9 @@ Every document is a closed JSON object, version 1 or 2:
 }
 ```
 
-`language` and each provenance ID are optional. Use provenance only when a real
+The title is a name a reader would recognise among others, never a question;
+the one-line purpose goes in `summary`, which the page shows under the title.
+`summary`, `language` and each provenance ID are optional. Use provenance only when a real
 durable record exists. Every block ID is unique across the whole nested tree,
 starts with an alphanumeric character, and contains at most 64 ASCII letters,
 digits, `.`, `_`, or `-`. Preserve an ID across revisions only when the block
@@ -42,13 +45,13 @@ still represents the same conceptual item.
 | Information shape | Block | Use it for |
 |---|---|---|
 | a relationship the reader must see | `figure` | the default primary carrier: a figure-grammar declaration in one of the nine families, drawn by the runtime with its legend, caption and table twin |
-| connected explanation | `narrative` | short Markdown passages that need continuity |
+| anchor, section title and lead | `narrative` | the anchor list, a `## ` section heading with a lead of one or two lines, or a passage of at most three sentences |
 | enumerable points | `bullets` | steps, findings, criteria, or concise options |
 | exceptional emphasis | `callout` | one material note, risk, success, warning, or danger |
 | peer alternatives | `comparison` | two to four genuinely comparable directions |
 | choice or open question | `decision` | in version 2, a question with 2 to 8 options the reviewer answers; in version 1, a decision with its `status` |
 | typed questions | `form` | version 2 only: fields the reviewer answers on the page, stored for the agent |
-| exact rows and columns | `table` | mappings, measurements, or evidence matrices |
+| exact rows and columns | `table` | reference detail in a `disclosure` after the figures: mappings, measurements, or evidence matrices; never the carrier of a concept |
 | verification state | `status` | pass, fail, pending, or not-run evidence |
 | source text | `code` / `diff` | inspectable code or a unified change |
 | hierarchy | `tree` | ownership, composition, or repository structure |
@@ -78,6 +81,14 @@ surface has not earned its visual claim.
 
 ### Narrative and bullets
 
+A section opens with a narrative block whose Markdown starts with a `## `
+heading naming the topic in plain words, then a lead of one or two lines.
+The heading renders as the section title and labels the section list:
+
+```json
+{"type":"narrative","id":"life-head","markdown":"## How one follow-up lives\n\nThe path above is the normal case. A follow-up can also wait, be dropped with a reason, or reopen."}
+```
+
 ```json
 {"type":"narrative","id":"outcome","markdown":"The migration is ready for review."}
 ```
@@ -87,6 +98,10 @@ surface has not earned its visual claim.
 ```
 
 ### Comparison and decision
+
+A comparison block suits peers whose difference is in their words. When
+options differ in a path, a step or a boundary, draw the difference as a
+figure instead (`figure-grammar.md`, "Composing a figure").
 
 ```json
 {
@@ -137,8 +152,10 @@ a family from the nine, the authored binding, a title and a caption, at most
 draws and shows the refusal in place of the figure. `present check` also checks
 composition dimensions and fact-check kinds from the same rule data as the
 renderer, including the 720-unit wide limit and JSON-source checks. It warns
-when a Concept section has no figure or when narrative text dominates; these
-warnings do not refuse a document.
+when a Concept section has no figure, when narrative text dominates, when a
+title is a question and when prose carries a known mannered pattern; these
+warnings do not refuse a document (`references/visual-craft.md`, "The
+pre-handoff check").
 Present draws authored figures only, and it draws each fact as declared: only
 the portal re-derives facts from their sources, so cite sources a reviewer
 can check. A document draws at most 24 figure blocks.

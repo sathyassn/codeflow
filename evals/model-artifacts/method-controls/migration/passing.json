@@ -4,6 +4,16 @@
   "language": "en",
   "blocks": [
     {
+      "type": "narrative",
+      "id": "anchor",
+      "markdown": "## What you are looking at\n\n- **What:** the two ways to move the orders table to its new schema.\n- **Why it matters:** the orders service records every customer order, so any downtime stops orders.\n- **Where it stands:** both rehearsed; dual write under peak load was not run.\n- **You decide:** which option to build."
+    },
+    {
+      "type": "narrative",
+      "id": "downtime-head",
+      "markdown": "## Downtime against the window\n\nEach option's downtime against the 30 minute policy."
+    },
+    {
       "type": "figure",
       "id": "downtime",
       "declaration": {

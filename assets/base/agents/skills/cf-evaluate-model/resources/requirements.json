@@ -1985,8 +1985,8 @@
           "markers": [
             "JSON is only the handoff format",
             "order of `blocks[]` = order of attention",
-            "the stage 3 carrier is the first block",
-            "the page walked top to bottom in plain words"
+            "one figure that shows every part the document covers",
+            "walk the page top to bottom in plain words"
           ]
         },
         {
@@ -2784,19 +2784,19 @@
     {
       "id": "CF-METH-004",
       "level": "hard",
-      "statement": "A present document puts its governing carrier first so the reader sees the relationship before reading, walks the altitudes as a path, and ends with one ask.",
+      "statement": "A present document opens with a few anchor lines and then one figure of the whole, so the reader sees the relationship before reading any part, walks the altitudes as a path, and ends with one decision.",
       "sources": [
         {
           "path": ".agents/skills/cf-present/resources/explanation-method.md",
           "markers": [
-            "A present document walks the same altitudes as a path, with Architecture only when a second structural view is needed, and ends with one ask."
+            "It opens with an anchor and a picture of the whole, then takes the order understanding grows: the familiar problem, the new model, how it behaves, the decision."
           ]
         },
         {
           "path": ".agents/skills/cf-present/resources/how-presentation-works.md",
           "markers": [
             "order of `blocks[]` = order of attention",
-            "A structural figure first means they start by *seeing* a relationship."
+            "A few anchor lines, then the picture of the whole, means they know why they are looking"
           ]
         }
       ]

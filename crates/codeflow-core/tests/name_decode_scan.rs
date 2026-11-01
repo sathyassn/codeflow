@@ -5423,6 +5423,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "prose",
     ),
+    // Trims a title for an advisory writing warning's message only; no path or identifier is normalized and no document is refused.
+    (
+        "crates/codeflow-present/src/document.rs",
+        "title_warning",
+        "trim",
+        1,
+        "prose",
+    ),
+    // Reads whether a title ends in a question mark for an advisory writing warning only; no path or identifier is normalized and no document is refused.
+    (
+        "crates/codeflow-present/src/document.rs",
+        "writing_warnings",
+        "trim_end",
+        1,
+        "prose",
+    ),
     // Removes trailing output LF while constructing canonical human Markdown text; original source/IDs are unchanged.
     (
         "crates/codeflow-present/src/document.rs",

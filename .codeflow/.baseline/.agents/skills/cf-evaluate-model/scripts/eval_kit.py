@@ -3408,6 +3408,9 @@ def subject_environment(trial_dir: Path, subject_codeflow: Path, hidden: list[Pa
             "CODEFLOW_HOME": str(trial_dir / "home" / ".codeflow"),
             **{variable: str(evaluator_homes()[harness]) for harness, variable in EVALUATOR_HOME_VARIABLES.items()},
             "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            # A trial runs the harness version it records: no update is
+            # installed into the disposable home during the session.
+            "DISABLE_AUTOUPDATER": "1",
             "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-" + hashlib.sha256(str(trial_dir).encode()).hexdigest()[:24],
             "GROK_MEMORY": "0",
             "GROK_LOG_FILE": str(trial_dir / "home" / "grok.log"),

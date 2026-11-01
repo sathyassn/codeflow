@@ -1,0 +1,55 @@
+{
+  "schema_version": 2,
+  "title": "Job retries in the orders worker",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "anchor",
+      "markdown": "## What you are looking at\n\n- **What:** how the orders worker retries a failed job (issue 41).\n- **Why it matters:** in staging, 4 of 1,200 jobs failed three times and none was lost.\n- **Where it stands:** staged; retry load during a payments outage was not measured.\n- **You decide:** sign off on the design or not."
+    },
+    {
+      "type": "narrative",
+      "id": "steps-head",
+      "markdown": "## The retry steps\n\nEach step of a retry, in order."
+    },
+    {
+      "type": "table",
+      "id": "steps",
+      "title": "Retry steps",
+      "columns": [
+        "Step",
+        "What happens"
+      ],
+      "rows": [
+        [
+          "lease",
+          "a worker holds the job for 5 minutes"
+        ],
+        [
+          "attempt",
+          "one run"
+        ],
+        [
+          "third failure",
+          "dead-letter queue"
+        ]
+      ]
+    },
+    {
+      "type": "decision",
+      "id": "ask",
+      "title": "Sign off on the retry design?",
+      "markdown": "Choose one.",
+      "options": [
+        {
+          "value": "yes",
+          "label": "Sign off"
+        },
+        {
+          "value": "no",
+          "label": "Not yet"
+        }
+      ]
+    }
+  ]
+}
