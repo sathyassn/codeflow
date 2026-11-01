@@ -1456,7 +1456,7 @@ fn reserve_runs_exact_arguments_beside_a_gate() {
 #[test]
 fn concurrent_heavy_targets_share_the_configured_workers_while_light_work_runs() {
     let dir = repo(
-        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"worker_budget":8},"targets":[
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"host_jobs":8,"worker_budget":8},"targets":[
       {"name":"a","timeout_seconds":5,"heavy":true,"runner":"custom","modes":{"quick":{"command":"echo $CARGO_BUILD_JOBS:$NEXTEST_TEST_THREADS:$RUST_TEST_THREADS:$CODEFLOW_ORACLE_WORKERS > a; while ! test -f b; do sleep 0.01; done; test -f light || sleep 0.2"}}},
       {"name":"b","timeout_seconds":5,"heavy":true,"runner":"custom","modes":{"quick":{"command":"echo $CARGO_BUILD_JOBS:$NEXTEST_TEST_THREADS:$RUST_TEST_THREADS:$CODEFLOW_ORACLE_WORKERS > b; while ! test -f a; do sleep 0.01; done; test -f light || sleep 0.2"}}},
       {"name":"light","timeout_seconds":5,"heavy":false,"runner":"custom","modes":{"quick":{"command":"touch light"}}}
@@ -1562,7 +1562,7 @@ fn killing_heavy_quick_fallback_and_reservation_reaps_each_command_group() {
 #[test]
 fn a_heavy_target_waits_for_its_requested_share_without_blocking_light_work() {
     let dir = repo(
-        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"worker_budget":8},"targets":[
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":3,"host_jobs":8,"worker_budget":8},"targets":[
       {"name":"first","timeout_seconds":5,"heavy":true,"workers":8,"runner":"custom","modes":{"quick":{"command":"test \"$CARGO_BUILD_JOBS\" = 8 && touch first-start && sleep 0.3 && touch first-done"}}},
       {"name":"second","timeout_seconds":5,"heavy":true,"workers":4,"runner":"custom","modes":{"quick":{"command":"test -f first-done && test \"$CARGO_BUILD_JOBS\" = 4"}}},
       {"name":"light","timeout_seconds":5,"heavy":false,"runner":"custom","modes":{"quick":{"command":"while ! test -f first-start; do sleep 0.01; done; test ! -f first-done"}}}
