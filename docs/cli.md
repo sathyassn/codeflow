@@ -557,26 +557,14 @@ worktree; a root checkout is refused before candidate preparation. A head
 already contained in the target needs no new merge commit. The subject names
 both refs: `Merge branch '<branch>' into <target>`.
 
-For an `integration/` target, the diff from its pinned tip selects the gate.
-Declared regular Markdown records use `validate --docs`, range `ci`, the
-built-in credential scan, each target in the test config's
-`execution.record_checks` (full mode) and every quick target. Other
-candidates run every full target. `git.record_paths` comes from the target
-tip; product and watched paths, instructions, configuration, mode changes and
-special files on a record path cannot qualify. An unproven class uses full.
-Non-integration, protected and release targets (`integration/release-*` or
-`git.release_branch_pattern`) retain full. The credential scan reads the
-lines each introduced commit adds and waives only a commit-qualified
-fingerprint in the target tip's `.gitleaksignore`; a refusal names the
-commit, path and line. The outcome names the class and checks actually run,
-also saved at `<git-common-dir>/codeflow/landings/<candidate>.json`. Projects
-still run their adopted secret scanners. `codeflow ci` reports the selected
-class and its own checks; it does not execute or certify the other gates.
+For an `integration/` target, the diff from its pinned tip selects the gate:
+records-only checks or the full gate, as `.codeflow/rules/git-rules.md`,
+"Bodies of work", lists them. The outcome names the class and checks run,
+also saved at `<git-common-dir>/codeflow/landings/<candidate>.json`.
 
 Both modes advance the local target only after the gate and the adopted
 release structure check pass. They refuse failed, skipped or incomplete gates; a
 code candidate with no gate targets lands with the loud not-test-verified warning.
-The records-only path requires a completed quick gate.
 They also refuse if the source or target moved while testing. A conflict or
 failed gate leaves the target unchanged and restores the original checkout. The command does not push; the operator or
 primary handles the remote landing through the project's PR flow.

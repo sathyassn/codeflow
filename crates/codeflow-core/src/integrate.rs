@@ -771,7 +771,10 @@ fn scan_record_range(root: &Path, base: &str, head: &str) -> Result<(), String> 
         // A merge brings in lines its parents already carry; only a line it
         // adds against every parent (a conflict resolution) is its own.
         let mut hits: Option<Vec<(String, u32, String)>> = None;
-        for index in 0..commit.parent_count().max(1) {
+        let parents = history::parents(&repo, &commit)
+            .map_err(|error| error.to_string())?
+            .len();
+        for index in 0..parents.max(1) {
             let parent = history::parent(&repo, &commit, index)
                 .and_then(|parent| parent.tree())
                 .map_err(|error| error.to_string())?;

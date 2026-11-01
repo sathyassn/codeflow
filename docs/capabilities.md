@@ -233,10 +233,7 @@ section of `.codeflow/policy.json`.
   the gate-context token for protected-branch advances, and the guard's refusal
   of override variables set in-session.
 - Secret scanning fails closed.
-- Integration candidates whose exact diff changes only declared Markdown records
-  use validation, range CI, the secret scan and the quick gate. The shared path
-  classifier keeps code, config, watched surfaces and unproven ranges on full;
-  `codeflow ci` and local landing evidence name the class (TSK-1151).
+- Records-only landings use record checks, not the full gate (TSK-1151).
 - Agent sessions are judged by the landed policy on the remote, so a local
   edit, commit or branch cannot relax the session checks. The authority is
   the default branch at one commit, never a line or a guess (ADR-0091).
