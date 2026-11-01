@@ -86,8 +86,10 @@ convenience and nothing depends on them. The existing floors hold for every
 role: the git floor, protected branches, operator-only merges to `main` and
 independent review by the other lineage.
 
-Accepted by the operator on 2026-10-31 on the reviewed page (version 9)
-with the recommended answers: the names Director, Coordinator and Lane with
+Accepted by the operator on 2026-10-31, on the proposal "Director,
+Coordinators and Lanes" version 8 and the clarifications agreed afterwards
+on its decision page "Coordination hierarchy", with the recommended
+answers: the names Director, Coordinator and Lane with
 Seat for the session on a lane; two supervision levels; same-family lanes
 as recorded interactive sessions; schema version 2 in one cutover; the
 report data shipped now, with the cf-present view and the Claude report
