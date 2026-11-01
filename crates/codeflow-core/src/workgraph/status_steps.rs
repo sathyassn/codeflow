@@ -197,7 +197,7 @@ impl<'r> Walker<'r> {
         }
     }
 
-    fn parents(&self, commit: Oid) -> Result<Vec<Oid>, Unreadable> {
+    fn guarded_parents(&self, commit: Oid) -> Result<Vec<Oid>, Unreadable> {
         let found = self
             .repo
             .find_commit(commit)
@@ -267,7 +267,7 @@ impl<'r> Walker<'r> {
             .map_err(|error| Unreadable::git(&error))?;
         let mut problems = Vec::new();
         for commit in commits {
-            let parents = self.parents(commit)?;
+            let parents = self.guarded_parents(commit)?;
             for (index, parent) in parents.iter().enumerate() {
                 if self.blob(commit)? == self.blob(*parent)? {
                     continue;
@@ -307,7 +307,7 @@ impl<'r> Walker<'r> {
     }
 
     fn judge_step(&mut self, commit: Oid, index: usize) -> Result<bool, Unreadable> {
-        let parents = self.parents(commit)?;
+        let parents = self.guarded_parents(commit)?;
         let parent = parents[index];
         // A deletion is no status step; the record rules judge it.
         let Some(to) = self.status(commit)? else {
@@ -343,7 +343,7 @@ impl<'r> Walker<'r> {
                 break;
             }
             chain.push(point);
-            let parents = self.parents(point)?;
+            let parents = self.guarded_parents(point)?;
             let Some(first) = parents.first() else {
                 return Ok(false);
             };
@@ -353,7 +353,7 @@ impl<'r> Walker<'r> {
             return Ok(false);
         }
         for step in chain {
-            if self.blob(step)? == self.blob(self.parents(step)?[0])? {
+            if self.blob(step)? == self.blob(self.guarded_parents(step)?[0])? {
                 continue;
             }
             if !self.step(step, 0)? {
