@@ -31,9 +31,10 @@ fn parse_line(command: &str, cwd: Option<&Path>) -> (Parsed, Parsed) {
 }
 
 /// What the person is asked before the line runs: each `gh api` call on
-/// it that writes or reaches another host (the `forge_write` family, read
-/// by gh's own option grammar). Empty when the outward-action check is
-/// off.
+/// it outside the one plain read form (the `forge_write` family). The
+/// guard does not model gh's option grammar; it admits only that narrow
+/// form of literal words and asks for the rest. Empty when the
+/// outward-action check is off.
 pub(crate) fn asks_at(command: &str, levels: &SecuritySection, cwd: Option<&Path>) -> Vec<String> {
     if !levels.outward_actions.is_active() {
         return Vec::new();
