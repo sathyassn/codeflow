@@ -1,0 +1,11 @@
+id = "TSK-1144"
+uid = "4f4553d4-16eb-47aa-9360-6c273a96dd3b"
+kind = "TSK"
+title = "The bootstrap guide and adopter docs walk each stage step by step"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:51:58Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
