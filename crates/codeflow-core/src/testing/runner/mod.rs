@@ -897,8 +897,11 @@ fn evidence_leases(
     for path in shared {
         let key = super::delivery::digest(path.as_os_str().as_encoded_bytes());
         let relative = format!("{folder}/{}.lock", &key[..32]);
+        // Opened or created with read access only, as the gate locks are:
+        // on Windows a creating handle with `DELETE` access makes every
+        // other run's open fail with a sharing violation instead of waiting.
         let file = tree
-            .lock_file(&relative)
+            .create_read_only(&relative)
             .map_err(|error| super::delivery::evidence_refused(tree.path(), &relative, &error))?;
         if file.try_lock_exclusive().is_err() {
             let bound = target.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
@@ -1564,8 +1567,10 @@ mod tests {
         assert_eq!(held.len(), 1);
         let start = Instant::now();
         let refused = evidence_leases(&target, dir.path(), dir.path(), "target").unwrap_err();
-        assert!(start.elapsed() >= Duration::from_secs(1));
+        // The refusal must be the bound, not an open that failed at once
+        // (on Windows a sharing violation did, before the read-only open).
         assert!(refused.to_string().contains("after 1s"), "{refused}");
+        assert!(start.elapsed() >= Duration::from_secs(1));
         drop(held);
         assert_eq!(
             evidence_leases(&target, dir.path(), dir.path(), "target")
