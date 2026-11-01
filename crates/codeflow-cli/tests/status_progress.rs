@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
+#[path = "status_progress/review.rs"]
 mod review;
 
 const AS_OF: &str = "2026-11-01T12:00:00Z";
@@ -470,7 +471,7 @@ fn cited_commands_carry_the_repository_path_from_another_folder() {
         .find(|issue| issue["kind"] == "blocked")
         .expect("the blocked task is an issue");
     let command = blocked["command"].as_str().unwrap();
-    assert!(command.starts_with("cd /"), "{command}");
+    assert!(command.starts_with("cd '/"), "{command}");
     assert_eq!(
         blocked["recommended_action"],
         "revisit: when the vendor replies"

@@ -258,13 +258,14 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow status` | | Generated status view: branch, worktrees, in-flight work, capabilities |
 | | `--capabilities` | Show the full capability table (default: counts by status). |
 | | `--delivery` | Show the capability-delivery rollup: each capability's epics with their open/total task counts and next actionable tasks. |
-| | `--task <TSK-NNN>` | Progress of one task: its stage and percent, location, window and issues. |
-| | `--epic <EPC-NNN>` | Progress of an epic; repeat the flag for several. |
-| | `--line <BRANCH>` | Progress of every task whose home is that integration line. |
-| | `--json` | Print the progress facts as versioned JSON (`report-v1.schema.json`). With no scope flag, the scope is every open epic on the current target. |
-| | `--session <FILE>` | Merge a coordinating session's facts (`session-v1.schema.json`) into the lanes view, labelled `session`. |
-| | `--since <FILE>` | Report what changed since a previous `--json` snapshot of the same repository and scope. |
-| | `--present`, `--md` | The report views (TSK-1098); refused together with `--json` by name. |
+| | `--task <TSK-NNN>` | Progress of one task. |
+| | `--epic <EPC-NNN>...` | Progress of an epic; repeat for several. |
+| | `--line <BRANCH>` | Progress of every task whose home is this integration line. |
+| | `--json` | Print the progress facts as versioned JSON (report-v1). |
+| | `--present` | Reserved for the cf-present report view (TSK-1098); refused for now. |
+| | `--md` | Reserved for the Markdown report view (TSK-1098); refused for now. |
+| | `--session <FILE>` | Merge a session facts file (session-v1) into the lanes view. |
+| | `--since <FILE>` | Report what changed since a previous `--json` snapshot. |
 | `codeflow recall <QUERY>` | | Search project memory: ledger, session summaries, ADRs, epics, capabilities |
 | | `--all` | Search every repo in the user registry, not just the current one. |
 | | `--rebuild` | Drop the index for the searched repos and re-sync (the index is a rebuildable cache). |
@@ -590,42 +591,9 @@ name and branch must match; cross-repository pull requests are refused.
   worktrees and unattached local branches. It is local git evidence and never
   stands in for a check that the owner is done (ADR-0044).
 - `codeflow status` with a scope flag, `--json`, `--session` or `--since`
-  prints the progress view instead; with none of them the text view is
-  unchanged. It writes nothing and never fetches: refs are read as last
-  fetched and named with their fetch time, and the forge is read once
-  through the bounded observer. A fact it could not read says so
-  (`unknown`, `unverified`, `not recorded`, `not yet estimable`); it is
-  never omitted or shown as zero.
-  - Stage ladder, one percent per task: not started 0, in progress 20 (a
-    claim or task commits), in review 50 (an open pull request), reviewed
-    75 (an approving acceptance block that passes the acceptance rules
-    against the record's current criteria and is bound to the reported
-    head, or for a closed task bound as the landing gate binds it), landed
-    100. An epic's and the scope's percent is the mean over their unique
-    tasks; cancelled tasks are excluded and listed. A task whose home
-    target cannot be read, whose status the ladder does not know or that
-    the readiness core cannot judge has stage `unknown`, and every percent
-    over it is `unknown`.
-  - Locations: `main`, `line`, `pull request` (draft, open or approved at
-    the reviewed SHA), `branch`, or `none` (`record on line` when only the
-    record is there), each bound to the ref and fetch time it was read
-    from. `main` and `line` need the landing commit to be reachable from
-    that remote ref; otherwise the location is `unverified`.
-  - Check runs are kept one by one. A skipped run is never a pass, and a
-    forge answer at its 200-row read limit is `unverified`.
-  - Windows are durations from the snapshot time, never dates, with their
-    basis: an adopted forecast that covers the scope, else the planned
-    throughput rule over the lanes observed (one lane assumed, and
-    labelled so, when none is observed). A window's start is at or before
-    each of its ends, and open predecessors outside the scope still delay
-    it. The scope finish is given for two
-    scenarios: intake stops, and intake continues at the last seven days'
-    rate.
-  - The operator set reads `none owed` only when every source (records, the
-    ledger, each owed-item source, the forge, the session file) was
-    checked; otherwise it is `not established` and names the source.
-  - `CODEFLOW_STATUS_AS_OF=<UTC time>` holds the snapshot time fixed, so
-    two runs on one state print identical bytes.
+  prints the progress view instead. It writes nothing and never fetches;
+  [Reading where work stands](delivery.md#reading-where-work-stands) gives
+  its stage ladder, locations, windows and unknowns.
 - `codeflow recall` searches through bundled SQLite full-text search (FTS5) and
   names the sources it could not cover.
 - `recall --all` reads the user registry at `~/.codeflow/registry.json`, which

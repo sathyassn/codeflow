@@ -208,7 +208,7 @@ fn a_forge_read_at_its_limit_is_unverified() {
         .unwrap();
     assert_eq!(forge["checked"], false);
     assert!(
-        forge["reason"].as_str().unwrap().contains("read limit"),
+        forge["note"].as_str().unwrap().contains("read limit"),
         "{forge}"
     );
 }

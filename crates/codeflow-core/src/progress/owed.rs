@@ -70,7 +70,7 @@ pub enum OwedRead {
 pub trait OwedSource {
     /// The source's name as the report prints it (`activation`,
     /// `deferred results`).
-    fn name(&self) -> &str;
+    fn label(&self) -> &str;
     /// Read the source once.
     fn read(&self) -> OwedRead;
 }

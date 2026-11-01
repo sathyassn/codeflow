@@ -4064,6 +4064,262 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // A blank capability prose block prints as not recorded in the progress report; Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/epics.rs",
+        "epic",
+        "trim",
+        1,
+        "display",
+    ),
+    // Blank blocker fields print as not recorded in the progress report; Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "blocker",
+        "trim",
+        2,
+        "display",
+    ),
+    // Capability prose shown in the progress report; the entries themselves come from capability::parse_capabilities. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "capabilities",
+        "lines",
+        1,
+        "display",
+    ),
+    // Finds the shown prose after an entry's id line and trims it for the progress report. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "capabilities",
+        "trim",
+        2,
+        "display",
+    ),
+    // Finds the fence that closes a capability entry to show the prose after it. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "capabilities",
+        "trim_start",
+        1,
+        "display",
+    ),
+    // An unread HEAD falls back to the scope's default target, which only labels the progress report. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "current_target",
+        "obtain-absent:head",
+        1,
+        "display",
+    ),
+    // Epic section headings shown as theme text in the progress report. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "epic_in",
+        "lines",
+        1,
+        "display",
+    ),
+    // Epic section headings shown as theme text in the progress report. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "epic_in",
+        "trim",
+        2,
+        "display",
+    ),
+    // Groups an epic's tasks under the heading that names them, for the report's themes. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "epic_sections",
+        "lines",
+        1,
+        "display",
+    ),
+    // Groups an epic's tasks under the heading that names them, for the report's themes. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "epic_sections",
+        "trim",
+        1,
+        "display",
+    ),
+    // A branch that cannot be read shows no branch facts, so the task reads as not started or unknown; it never adds progress. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "find_branch",
+        "obtain-absent:find_reference",
+        1,
+        "display",
+    ),
+    // A branch that cannot be read shows no branch facts, so the task reads as not started or unknown; it never adds progress. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "find_branch",
+        "obtain-absent:peel_to_commit",
+        1,
+        "display",
+    ),
+    // A YAML string value from validate::parse_frontmatter; a blank value reads as not recorded in the progress report. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "frontmatter",
+        "trim",
+        1,
+        "display",
+    ),
+    // An unreadable record blob gives no status at that commit, so no landing is counted for it and the pace stays lower or not established.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "landings",
+        "obtain-absent:find_blob",
+        1,
+        "unproven",
+    ),
+    // An unreadable tip or parent fails the whole walk (None), and the report says the history was not read and the pace is not established.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "landings",
+        "obtain-absent:find_commit",
+        2,
+        "unproven",
+    ),
+    // A record blob that is not UTF-8 gives no status at that commit, so no landing is counted for it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "landings",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // An ancestry the guarded reader cannot prove is None, and the task's location is unknown, never landed.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "reaches",
+        "obtain-absent:descendant_of",
+        1,
+        "unproven",
+    ),
+    // An unread remote-tracking ref shows no SHA in the progress report. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "remote_ref",
+        "obtain-absent:find_reference",
+        1,
+        "display",
+    ),
+    // No remote tip leaves the landing on main or on the home line unproven, so a task is never placed there without it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "remote_tip",
+        "obtain-absent:find_reference",
+        1,
+        "unproven",
+    ),
+    // Normalizes a record section's line ends for the text the progress report shows. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "section",
+        "lines",
+        1,
+        "display",
+    ),
+    // Normalizes a record section's text for the progress report; a blank section reads as not recorded. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "section",
+        "trim",
+        1,
+        "display",
+    ),
+    // Normalizes a record section's line ends for the text the progress report shows. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "section",
+        "trim_end",
+        1,
+        "display",
+    ),
+    // An unread project.toml uses the default sweep interval for the report's window estimates. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "sweep_seconds",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // Only labels an unreadable record with its task id; a path that is not UTF-8 is still listed as unreadable, without an id. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "task_id_of",
+        "obtain-absent:to_str",
+        1,
+        "display",
+    ),
+    // A pull request head that is not here gives Binding::Missing, so the criteria read as not reviewed.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "task_in",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // A pull request head SHA that does not parse gives Binding::Missing, so the criteria read as not reviewed.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "task_in",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // Blank follow-ups text reads as none in the progress report. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "task_in",
+        "trim",
+        2,
+        "display",
+    ),
+    // An unreadable record at the head gives Binding::Missing, and at the reviewed commit gives no criteria, so head_binding fails; either way the criteria read as not reviewed.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "text_at",
+        "obtain-absent:find_blob",
+        1,
+        "unproven",
+    ),
+    // An unreadable record at the head gives Binding::Missing, and at the reviewed commit gives no criteria, so head_binding fails; either way the criteria read as not reviewed.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "text_at",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // An unreadable record at the head gives Binding::Missing, and at the reviewed commit gives no criteria, so head_binding fails; either way the criteria read as not reviewed.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "text_at",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // An unreadable record at the head gives Binding::Missing, and at the reviewed commit gives no criteria, so head_binding fails; either way the criteria read as not reviewed.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "text_at",
+        "obtain-absent:get_path",
+        1,
+        "unproven",
+    ),
+    // A linked worktree whose HEAD cannot be read is not shown as where its branch is checked out. Only shapes the progress report codeflow status prints; it exits 0 on any report and no gate, record or transition reads it.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "worktree_branches",
+        "obtain-absent:head",
+        1,
+        "display",
+    ),
     // An ancestry error drops that proof; the item becomes Removable only through the separate patch-equivalence proof, otherwise RetainUnproven.
     (
         "crates/codeflow-core/src/status.rs",
@@ -7065,6 +7321,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/security/deletion.rs", "Reader::change_dir", "is_dir", 1, "Metadata classification failure sets may_fail and preserves both shell outcomes, never removes the target candidate."),
     ("crates/codeflow-core/src/security/deletion.rs", "Reader::glob_paths", "is_dir", 1, "A failed directory listing is ignored only for proven absence or successfully obtained non-directory metadata; other failures keep expansion unproven."),
     ("crates/codeflow-core/src/security/prose.rs", "plain_target", "is_file", 1, "FileType is obtained from successful metadata after proven absence handling; unreadable targets do not certify prose."),
+    ("crates/codeflow-core/src/progress/gather.rs", "collect", "is_file", 1, "Only decides whether the progress report names the release step from docs/releasing.md; codeflow status exits 0 on any report and nothing gates on it."),
     ("crates/codeflow-core/src/status.rs", "collect_delivery", "is_dir", 1, "Feeds only the status delivery rollup; codeflow status prints the view and always exits 0."),
     ("crates/codeflow-core/src/status.rs", "collect_work", "is_dir", 1, "Feeds only a status note and summary counts; codeflow status prints the view and always exits 0."),
     ("crates/codeflow-core/src/testing/evidence.rs", "fingerprint_key", "is_file", 1, "Type check on metadata from an opened no-follow descriptor; failure to obtain metadata or a non-regular file denies fingerprint evidence and runs the target."),

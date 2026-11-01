@@ -16,6 +16,7 @@ use super::inputs::{
     LedgerIn, OperatorItemIn, PullIn, RefIn, ScopeSpec, TaskIn, UnreadableIn,
 };
 use super::owed::OwedSource;
+use crate::workgraph::history;
 use crate::workgraph::readiness;
 use crate::workgraph::record_text;
 use crate::workgraph::work_start::{self, Record, RecordKind};
@@ -86,6 +87,8 @@ fn parse_time(text: &str) -> Option<i64> {
 /// refused; every other unreadable source is reported inside the inputs.
 pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
     let repo = Repository::discover(start).map_err(|error| error.message().to_string())?;
+    // One overlay and shallow-boundary snapshot for every history read.
+    let _judgment = history::judgment();
     let root = repo
         .workdir()
         .ok_or_else(|| "the repository has no worktree".to_string())?
@@ -162,7 +165,7 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
         owed: options
             .owed
             .iter()
-            .map(|source| (source.name().to_string(), source.read()))
+            .map(|source| (source.label().to_string(), source.read()))
             .collect(),
         forecast: None,
         forecast_note: None,
@@ -206,6 +209,7 @@ fn task_id_of(path: &str) -> Option<String> {
 /// the default target's first. A target that cannot be listed, resolved or
 /// read is recorded as lost coverage, and a task whose home target was lost
 /// is kept from the first other tip that holds it, with its stage unknown.
+#[allow(clippy::too_many_lines)]
 fn read_records(root: &Path, repo: &Repository) -> Read {
     let mut out = Read::default();
     let default = work_start::default_work_target(root).ok().flatten();
@@ -344,11 +348,11 @@ fn worktree_branches(repo: &Repository) -> BTreeMap<String, String> {
         let Ok(opened) = Repository::open_from_worktree(&worktree) else {
             continue;
         };
-        if let Some(branch) = opened
-            .head()
-            .ok()
-            .and_then(|head| head.shorthand().ok().map(str::to_string))
-        {
+        if let Some(branch) = opened.head().ok().map(|head| {
+            crate::git::name::reference_shorthand(&head)
+                .display()
+                .to_string()
+        }) {
             out.insert(branch, worktree.path().display().to_string());
         }
     }
@@ -555,12 +559,17 @@ fn branch_in(
     worktrees: &BTreeMap<String, String>,
 ) -> Option<(BranchIn, Oid)> {
     let commit = find_branch(repo, name)?;
-    let mut walk = repo.revwalk().ok()?;
+    // The guarded reader refuses grafts, replace refs and a shallow cut.
+    let mut walk = history::revwalk(repo).ok()?;
     walk.push(commit.id()).ok()?;
     if let Some(tip) = tip {
         walk.hide(tip).ok()?;
     }
-    let commits_ahead = walk.take(HISTORY_LIMIT).count();
+    let commits_ahead = walk
+        .take(HISTORY_LIMIT)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?
+        .len();
     let local = name.split_once('/').map_or(name, |(remote, rest)| {
         if repo.find_remote(remote).is_ok() {
             rest
@@ -591,6 +600,9 @@ fn text_at(repo: &Repository, commit: Oid, path: &str) -> Option<String> {
     String::from_utf8(blob.content().to_vec()).ok()
 }
 
+/// Each home target's tasks to their newest landing: time and commit.
+type Landings = BTreeMap<String, BTreeMap<String, (i64, Oid)>>;
+
 /// What every task's facts are read against, once.
 struct TaskContext<'a> {
     repo: &'a Repository,
@@ -600,7 +612,7 @@ struct TaskContext<'a> {
     worktrees: BTreeMap<String, String>,
     tips: &'a BTreeMap<String, Oid>,
     /// Each home target's landing transitions, when the walk succeeded.
-    history: Option<&'a BTreeMap<String, BTreeMap<String, (i64, Oid)>>>,
+    history: Option<&'a Landings>,
     /// The open pull requests, when the forge was read.
     pulls: Option<&'a [PullIn]>,
     /// The trusted remote's default branch tip.
@@ -620,10 +632,15 @@ fn remote_tip(repo: &Repository, branch: &str) -> Option<Oid> {
 }
 
 /// Whether `commit` is `tip` or an ancestor of it.
-fn reaches(repo: &Repository, tip: Oid, commit: Oid) -> bool {
-    tip == commit || repo.graph_descendant_of(tip, commit).unwrap_or(false)
+/// `None` when the guarded reader cannot prove the ancestry either way.
+fn reaches(repo: &Repository, tip: Oid, commit: Oid) -> Option<bool> {
+    if tip == commit {
+        return Some(true);
+    }
+    history::descendant_of(repo, tip, commit).ok()
 }
 
+#[allow(clippy::too_many_lines)]
 fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
     let repo = context.repo;
     let record = &found.record;
@@ -670,13 +687,21 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
             (None, None) => None,
         };
         match head {
-            Some(Ok(head)) => {
-                let text = text_at(repo, head, &found.path).unwrap_or_else(|| found.text.clone());
-                (
+            Some(Ok(head)) => match text_at(repo, head, &found.path) {
+                Some(text) => (
                     acceptance(repo, &text, &found.path, Binding::Head(head)),
                     text,
-                )
-            }
+                ),
+                None => (
+                    acceptance(
+                        repo,
+                        &found.text,
+                        &found.path,
+                        Binding::Missing(format!("the record is not readable at the head {head}")),
+                    ),
+                    found.text.clone(),
+                ),
+            },
             Some(Err(reason)) => (
                 acceptance(repo, &found.text, &found.path, Binding::Missing(reason)),
                 found.text.clone(),
@@ -705,7 +730,7 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
             return tip.map(|_| false);
         }
         let (tip, (_, commit)) = (tip?, transition?);
-        Some(reaches(repo, tip, commit))
+        reaches(repo, tip, commit)
     };
     let unknown = if let Some(reason) = context.home_unread.get(&record.id) {
         Some(reason.clone())
@@ -756,12 +781,7 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
 /// first-parent history of its tip, with the commit that made it, and
 /// whether every walk reached back past the seven-day pace window (or the
 /// root). `None` when a walk fails.
-#[allow(clippy::type_complexity)]
-fn landings(
-    repo: &Repository,
-    tips: &BTreeMap<String, Oid>,
-    now: i64,
-) -> Option<(BTreeMap<String, BTreeMap<String, (i64, Oid)>>, bool)> {
+fn landings(repo: &Repository, tips: &BTreeMap<String, Oid>, now: i64) -> Option<(Landings, bool)> {
     let mut out = BTreeMap::new();
     let mut reached = true;
     let floor = now - super::compute::PACE_WINDOW_SECONDS;
@@ -781,7 +801,12 @@ fn landings(
             if commit.time().seconds() < floor {
                 walked_past = true;
             }
-            let parent = commit.parent(0).ok();
+            // The guarded reader: a commit with no parent is the root; an
+            // unreadable or unverified parent fails the walk.
+            let parent = match history::parents(repo, &commit).ok()?.first() {
+                Some(oid) => Some(repo.find_commit(*oid).ok()?),
+                None => None,
+            };
             let old = match &parent {
                 Some(parent) => Some(parent.tree().ok()?),
                 None => None,
@@ -925,7 +950,11 @@ fn current_target(
     let head = repo
         .head()
         .ok()
-        .and_then(|head| head.shorthand().ok().map(str::to_string))
+        .map(|head| {
+            crate::git::name::reference_shorthand(&head)
+                .display()
+                .to_string()
+        })
         .unwrap_or_default();
     if readiness::is_landing_target(&head) {
         return head;

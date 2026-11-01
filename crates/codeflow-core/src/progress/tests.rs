@@ -325,7 +325,7 @@ fn a_blocked_predecessor_orders_before_its_waiting_successor() {
     assert!(blocked["command"]
         .as_str()
         .unwrap()
-        .starts_with("cd /repo && "));
+        .starts_with("cd '/repo' && "));
     assert_eq!(value["issues"]["operator"]["state"], "owed");
 }
 
@@ -421,7 +421,7 @@ fn pace_counts_landings_and_additions_per_day() {
 struct Double(&'static str, OwedRead);
 
 impl OwedSource for Double {
-    fn name(&self) -> &str {
+    fn label(&self) -> &str {
         self.0
     }
     fn read(&self) -> OwedRead {
@@ -432,7 +432,7 @@ impl OwedSource for Double {
 fn owed(inputs: &mut Inputs, sources: &[Double]) {
     inputs.owed = sources
         .iter()
-        .map(|source| (source.name().to_string(), source.read()))
+        .map(|source| (source.label().to_string(), source.read()))
         .collect();
 }
 

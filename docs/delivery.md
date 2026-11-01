@@ -185,12 +185,48 @@ pull request cites the full gate by run id and revision, and the review
 verdict lives on the pull request, so the evidence survives the cleanup of
 worktrees and build directories.
 
+### Reading where work stands
+
 Where work stands is read, never stored. `codeflow status --epic EPC-NNN`
 (or `--task`, `--line`, and `--json` for the versioned facts) derives each
 task's stage, location, place in the order, lane, window and issues from
 the records on each target's tip, the fetched refs, the forge and the
-coordination ledger, with the readiness core that `work next` uses; see
-[the CLI reference](cli.md#remember-notes).
+coordination ledger, with the readiness core that `work next` uses.
+
+- It writes nothing and never fetches. Refs are read as last fetched and
+  named with their fetch time; the forge is read once through the bounded
+  observer. A fact it could not read says so (`unknown`, `unverified`,
+  `not recorded`, `not yet estimable`) and is never omitted or shown as
+  zero.
+- Stage ladder, one percent per task: not started 0, in progress 20 (a
+  claim or task commits), in review 50 (an open pull request), reviewed 75
+  (an approving acceptance block that passes the acceptance rules against
+  the record's current criteria and is bound to the reported head, or for
+  a closed task bound as the landing gate binds it), landed 100.
+- An epic's and the scope's percent is the mean over their unique tasks;
+  cancelled tasks are excluded and listed. A task whose home target cannot
+  be read, whose status the ladder does not know or that the readiness
+  core cannot judge has stage `unknown`, and every percent over it is
+  `unknown`.
+- Locations: `main`, `line`, `pull request` (draft, open or approved at the
+  reviewed SHA), `branch`, or `none` (`record on line` when only the record
+  is there), each bound to the ref and fetch time it was read from. `main`
+  and `line` need the landing commit to be reachable from that remote ref;
+  otherwise the location is `unverified`.
+- Check runs are kept one by one. A skipped run is never a pass, and a
+  forge answer at its 200-row read limit is `unverified`.
+- Windows are durations from the snapshot time, never dates, with their
+  basis: an adopted forecast that covers the scope, else the planned
+  throughput rule over the lanes observed (one lane assumed, and labelled
+  so, when none is observed). A start is at or before each end, and open
+  predecessors outside the scope still delay a window. The scope finish is
+  given for two scenarios: intake stops, and intake continues at the last
+  seven days' rate.
+- The operator set reads `none owed` only when every source (records, the
+  ledger, each owed-item source, the forge, the session file) was checked;
+  otherwise it is `not established` and names the source.
+- `CODEFLOW_STATUS_AS_OF=<UTC time>` holds the snapshot time fixed, so two
+  runs on one state print identical bytes.
 
 ### Completed work imported from another line
 

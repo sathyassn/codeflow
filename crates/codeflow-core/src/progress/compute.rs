@@ -99,12 +99,13 @@ pub(super) fn stage(inputs: &Inputs, task: &TaskIn) -> Stage {
     if task.status == "cancelled" {
         return Stage::Excluded;
     }
-    rung(inputs, task).map_or(Stage::Unknown, |(name, percent)| Stage::On(name, percent))
+    let (name, percent) = rung(inputs, task);
+    Stage::On(name, percent)
 }
 
-fn rung(inputs: &Inputs, task: &TaskIn) -> Option<(&'static str, u32)> {
+fn rung(inputs: &Inputs, task: &TaskIn) -> (&'static str, u32) {
     if task.status == "complete" || task.state.as_deref() == Some("landed") {
-        return Some(("landed", 100));
+        return ("landed", 100);
     }
     let approved = task
         .acceptance
@@ -112,16 +113,16 @@ fn rung(inputs: &Inputs, task: &TaskIn) -> Option<(&'static str, u32)> {
         .is_some_and(|block| block.approved && block.bound);
     let pull = pull_for(inputs, task);
     if approved && (pull.is_some() || task.branch.is_some()) {
-        return Some(("reviewed", 75));
+        return ("reviewed", 75);
     }
     if pull.is_some() {
-        return Some(("in review", 50));
+        return ("in review", 50);
     }
     let commits = task.branch.as_ref().is_some_and(|b| b.commits_ahead > 0);
     if commits || task.state.as_deref() == Some("active") {
-        return Some(("in progress", 20));
+        return ("in progress", 20);
     }
-    Some(("not started", 0))
+    ("not started", 0)
 }
 
 pub(super) fn count_stage(counts: &mut StageCounts, stage: &str) {

@@ -41,11 +41,11 @@ pub struct StatusArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// Open the progress report in cf-present (TSK-1098)
+    /// Reserved for the cf-present report view (TSK-1098); refused for now
     #[arg(long)]
     pub present: bool,
 
-    /// Print the progress report as Markdown (TSK-1098)
+    /// Reserved for the Markdown report view (TSK-1098); refused for now
     #[arg(long)]
     pub md: bool,
 
@@ -128,7 +128,15 @@ fn run_progress(root: &std::path::Path, args: &StatusArgs) -> i32 {
     }
     let mut options = Options::new(args.scope());
     options.session.clone_from(&args.session);
-    if let Ok(text) = std::env::var(AS_OF_ENV) {
+    let as_of = match std::env::var(AS_OF_ENV) {
+        Ok(text) => Some(text),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!("codeflow status: {AS_OF_ENV} is not UTF-8 text");
+            return 2;
+        }
+    };
+    if let Some(text) = as_of {
         let Ok(Ok(at)) = codeflow_core::coord::parse_time(&text).map(i64::try_from) else {
             eprintln!("codeflow status: {AS_OF_ENV} `{text}` is not a UTC time of the form YYYY-MM-DDTHH:MM:SSZ");
             return 2;
