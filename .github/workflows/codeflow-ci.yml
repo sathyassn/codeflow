@@ -76,9 +76,36 @@ jobs:
   # part's apt cache for this runner image, so main's caches stay current.
   # Pull request runs skip this job and are never affected. Its token reads
   # runs, caches and pull requests and writes nothing.
+  #
+  # TSK-359: the same reuse covers pushes to integration/** lines, and every
+  # pull request run records what it tested (the `provenance` job below, one
+  # record from an Ubuntu runner and one from a Windows runner). The push
+  # reuses a run only when its pull request number, base line, head, merge
+  # tree, this workflow file's blob and both runner images equal the push's;
+  # the Windows image of the push comes from the `windows-image` job. The
+  # `reuse` job runs scripts/ci-reuse.py only when its SHA-256 equals the
+  # pin below, so a change to the decider needs the same reviewed edit to
+  # this workflow (scripts/gate-parity.py checks the pin against the file).
+  windows-image:
+    if: github.event_name == 'push'
+    name: read the Windows runner image
+    runs-on: windows-latest
+    timeout-minutes: 5
+    outputs:
+      os: ${{ steps.image.outputs.os }}
+      version: ${{ steps.image.outputs.version }}
+    steps:
+      - name: Name the runner image
+        id: image
+        shell: bash
+        run: |
+          echo "os=${ImageOS:-}" >> "$GITHUB_OUTPUT"
+          echo "version=${ImageVersion:-}" >> "$GITHUB_OUTPUT"
+
   reuse:
     if: github.event_name == 'push'
     name: reuse a pull request verdict
+    needs: windows-image
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -101,11 +128,85 @@ jobs:
           PUSHED_REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: >-
-          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
-          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
-          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
-          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          WINDOWS_IMAGE_OS: ${{ needs.windows-image.outputs.os }}
+          WINDOWS_IMAGE_VERSION: ${{ needs.windows-image.outputs.version }}
+          DECIDER_SHA256: 5f66d1edfdcf9b4db0ee48ae0eda480e7aa41eb0059502be5081bdead94953b0
+        run: |
+          actual=$(sha256sum scripts/ci-reuse.py | cut -d ' ' -f 1)
+          if [ "$actual" != "$DECIDER_SHA256" ]; then
+            echo "ci-reuse: every job runs: scripts/ci-reuse.py ($actual) is not the script this workflow pins ($DECIDER_SHA256); changing it needs the same reviewed edit to this workflow"
+            exit 0
+          fi
+          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT" \
+            --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF" \
+            --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}" \
+            --windows-image-os "$WINDOWS_IMAGE_OS" --windows-image-version "$WINDOWS_IMAGE_VERSION" \
+            --push-only "reuse a pull request verdict" --push-only "read the Windows runner image" \
+            --require "codeflow gates" --require windows
+
+  # The pull request run records what it tested, in artifacts of its own run,
+  # for the reuse job above (TSK-359): the pull request number, the base
+  # line, the merge commit and its tree, the base and head commits, the blob
+  # of this workflow file and the runner image of the job that wrote it.
+  # Reuse reads each record from GitHub's list of this run's artifacts and
+  # refuses any value that differs from the push. Push runs skip this job.
+  provenance:
+    if: github.event_name == 'pull_request'
+    name: record the tested merge (${{ matrix.artifact }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: ci-provenance
+            runner: ubuntu-24.04
+            python: python3
+          - artifact: ci-provenance-windows
+            runner: windows-latest
+            python: python
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 2
+      - name: Write what this run tested
+        shell: bash
+        env:
+          PULL: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          REPOSITORY: ${{ github.repository }}
+          PYTHON: ${{ matrix.python }}
+        run: |
+          set -eu
+          path="${WORKFLOW_REF#"$REPOSITORY"/}"
+          path="${path%%@*}"
+          mkdir -p "$RUNNER_TEMP/provenance"
+          "$PYTHON" -I - "$RUNNER_TEMP/provenance/provenance.json" "$path" <<'PY'
+          import json, os, subprocess, sys
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+          parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()[1:]
+          if len(parents) != 2:
+              sys.exit(f"the tested commit is not a merge of a base and a head: {parents}")
+          record = {"schema": 1, "pull": int(os.environ["PULL"]), "base_ref": os.environ["BASE_REF"],
+                    "base_commit": parents[0], "head_commit": parents[1], "merge_commit": git("rev-parse", "HEAD"),
+                    "merge_tree": git("rev-parse", "HEAD^{tree}"), "workflow": sys.argv[2],
+                    "workflow_blob": git("rev-parse", f"HEAD:{sys.argv[2]}"),
+                    "image_os": os.environ.get("ImageOS", ""), "image_version": os.environ.get("ImageVersion", "")}
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump(record, handle, indent=2)
+          PY
+          cat "$RUNNER_TEMP/provenance/provenance.json"
+      - name: Keep the record with this run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/provenance/provenance.json
+          retention-days: 14
+          if-no-files-found: error
 
   # The release binary every gate part runs `codeflow test` with is built
   # once here and shared as an artifact, never rebuilt per part (TSK-449).
