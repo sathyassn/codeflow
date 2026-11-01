@@ -1,0 +1,11 @@
+id = "TSK-1157"
+uid = "1b4a50c1-89fc-4ace-a725-ebe9f73cb09e"
+kind = "TSK"
+title = "The local full gate runs coverage as parallel shards"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T22:00:51Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
