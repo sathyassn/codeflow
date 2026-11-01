@@ -1,0 +1,11 @@
+id = "TSK-1143"
+uid = "44689704-05f2-4a19-8ad9-785d4ab75ea7"
+kind = "TSK"
+title = "An adopting project gets a bootstrap epic for its initial capability catalog"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:51:41Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
