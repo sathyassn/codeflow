@@ -435,7 +435,9 @@ line tip).
   result depends on nothing else running. It starts only when no other heavy
   run holds the host, and no heavy run starts while it runs. So an exclusive
   target and an ordinary heavy run can each delay the other, within the run's
-  bound, and are then reported not run. No other target runs alone.
+  bound. After the bound a full or essential run refuses, and a quick heavy
+  target and the exclusive target are recorded not run. No other target runs
+  alone.
 - A cheap targeted check, a named test target in the worktree's own target
   directory, runs freely.
 - Any session, in any worktree, may run the gates its work needs, within what

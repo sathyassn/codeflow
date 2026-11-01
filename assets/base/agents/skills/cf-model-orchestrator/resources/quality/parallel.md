@@ -23,7 +23,9 @@ from observed capacity and preserves headroom; reduce fan-out before swap
 pressure, duplicate caches or builds, or context dilution affects evidence
 quality. Heavy test and build runs need no coordinator cap: each takes a
 coordination slot and, past the host's job budget, runs with fewer jobs, so
-lanes never wait for one another. Never use concurrent writers in one worktree, and never
+lanes never wait for one another, except that a `host_exclusive` target and
+ordinary heavy runs can delay each other (workflow-discipline "Lanes and
+capacity"). Never use concurrent writers in one worktree, and never
 rebase a shared integration branch.
 
 Reviewed task heads land as the `cf-method` skill's "Managing a body of

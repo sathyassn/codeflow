@@ -156,7 +156,8 @@ available CPU, memory, disk, and tool limits, monitors pressure, and reduces
 fan-out before swapping or context sprawl degrade quality. It sets no cap on
 heavy build and test runs: each takes a coordination slot and, past the
 host's job budget, runs with fewer jobs (workflow-discipline "Lanes and
-capacity"), so an independent heavy run is never deferred. Dependent work stays sequential.
+capacity"), so an independent heavy run is never deferred, except that a
+`host_exclusive` target and ordinary heavy runs can delay each other. Dependent work stays sequential.
 
 For a multi-task body, integrate through `integration/<epic>` in small
 batches, and serialize each landing: one candidate at a time. Before review,

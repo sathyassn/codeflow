@@ -270,7 +270,9 @@ This guidance adds no setting and grants no approval.
 ## Multi-session coordination
 
 Lanes run in parallel. Every heavy run takes a coordination slot and, past the
-host's job budget, runs with fewer jobs, so no lane waits for another lane's run; keep each
+host's job budget, runs with fewer jobs, so no lane waits for another lane's run, except that a `host_exclusive`
+target and ordinary heavy runs can delay each other (workflow-discipline
+"Lanes and capacity"); keep each
 lane's build output separate. Only a dependency orders work: a dependent task
 builds on its predecessor's exact reviewed head, and the predecessor lands
 first. Use the host's capacity to size how many lanes to start.
