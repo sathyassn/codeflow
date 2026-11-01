@@ -267,9 +267,12 @@ fn run_configured(
     project_dir: &Path,
     mode: &str,
     options: &GateOptions,
-    (mut targets, execution, effective_mode): (Vec<TargetConfig>, ExecutionConfig, String),
+    (mut targets, mut execution, effective_mode): (Vec<TargetConfig>, ExecutionConfig, String),
     config_digest: &str,
 ) -> Result<GateOutcome, TestingError> {
+    if let Some(seconds) = options.heavy_wait_seconds {
+        execution.heavy_wait_seconds = seconds;
+    }
     delivery::check_only(project_dir, &targets, &effective_mode, &options.only)?;
     let home = crate::registry::codeflow_home();
     let selection = delivery::select(&targets, &effective_mode, options);
