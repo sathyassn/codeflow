@@ -419,3 +419,33 @@ fn unreadable_settings_shapes_refuse_promptly() {
         "{out:?}"
     );
 }
+
+/// Grok review 01, finding 1: a command body Git runs from its own options
+/// (`git rebase -x`) is judged under the call's rule. Under the strict
+/// default both bodies refuse with the strict rule's finding; under relaxed
+/// the line's rule allows the first, as it allows the same line typed
+/// directly, and a marked retry keeps it strict.
+#[test]
+fn git_operand_bodies_take_the_rule_of_the_call() {
+    const ASSIGNED: &str = "git rebase -x 'D=./build; rm -rf $D' HEAD~1";
+    const DIRECTORY: &str = r#"git rebase -x 'cd ~ && cd "$p"' HEAD~1"#;
+    let strict = tempfile::tempdir().unwrap();
+    published(strict.path(), DEFAULT);
+    for command in [ASSIGNED, DIRECTORY] {
+        let out = exec_guard(strict.path(), command, false);
+        assert_eq!(out.status.code(), Some(2), "{command}: {out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr)
+                .contains("policy rule security.text_guard (block)"),
+            "{command}: {out:?}"
+        );
+    }
+    let relaxed = tempfile::tempdir().unwrap();
+    published(relaxed.path(), RELAXED);
+    let retried = exec_guard(relaxed.path(), ASSIGNED, true);
+    assert_eq!(retried.status.code(), Some(2), "{retried:?}");
+    if !cfg!(windows) {
+        let out = exec_guard(relaxed.path(), ASSIGNED, false);
+        assert!(out.status.success(), "{out:?}");
+    }
+}

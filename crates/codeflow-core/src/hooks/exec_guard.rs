@@ -224,10 +224,11 @@ pub fn evaluate_ruled(
         integrity,
         cwd,
         root,
+        outcome,
         &mut violations,
     );
     violations.extend(program_violations(
-        command, posix, levels, integrity, cwd, root,
+        command, posix, levels, integrity, cwd, root, outcome,
     ));
     violations.extend(runs);
     if !prose && levels.privilege_escalation.is_active() {
@@ -278,6 +279,8 @@ pub fn evaluate_ruled(
 /// `git config` write, judged as a command of its own in each directory it
 /// may run in, or refused when its value or that directory cannot be
 /// established (TSK-1002 Fable reviews 13 and 14, Codex reviews 12 and 13).
+/// Each program takes the call's outcome, so a strict call judges it
+/// strictly (TSK-397 Grok review 01).
 fn program_violations(
     command: &str,
     posix: bool,
@@ -285,12 +288,13 @@ fn program_violations(
     integrity: PolicyLevel,
     cwd: &std::path::Path,
     root: &std::path::Path,
+    outcome: &super::sandbox_state::Outcome,
 ) -> Vec<Violation> {
     match crate::security::git_preflight::program_runs(command, cwd) {
         Ok(runs) => runs
             .iter()
             .flat_map(|(program, directory)| {
-                evaluate_in(program, posix, levels, integrity, directory, root)
+                evaluate_ruled(program, posix, levels, integrity, directory, root, outcome)
             })
             .collect(),
         Err(why) => vec![Violation::new(
@@ -310,6 +314,9 @@ fn program_violations(
 /// bodies joins `line` when it has no finding yet. A runner the guard
 /// cannot read refuses, under hook integrity when that rule is on and as
 /// an unverified secret read otherwise.
+/// Each body takes the call's outcome, so a strict call judges it strictly
+/// (TSK-397 Grok review 01).
+#[allow(clippy::too_many_arguments)]
 fn runner_violations(
     command: &str,
     posix: bool,
@@ -317,6 +324,7 @@ fn runner_violations(
     integrity: PolicyLevel,
     cwd: &std::path::Path,
     root: &std::path::Path,
+    outcome: &super::sandbox_state::Outcome,
     line: &mut Vec<Violation>,
 ) -> Vec<Violation> {
     if RUNNER_BODY.get() {
@@ -333,7 +341,7 @@ fn runner_violations(
             bodies
                 .iter()
                 .flat_map(|(body, directory)| {
-                    evaluate_in(body, posix, levels, integrity, directory, root)
+                    evaluate_ruled(body, posix, levels, integrity, directory, root, outcome)
                 })
                 .collect()
         }
@@ -620,6 +628,34 @@ mod tests {
                     "{nested}: {found:?}"
                 );
             }
+        }
+    }
+
+    /// TSK-397 H-1: a command holding a NUL byte refuses in both outcomes
+    /// with one always-blocking hook-integrity finding, before the rest of
+    /// the command is judged (`rm -rf /` after it adds no finding).
+    #[test]
+    fn a_nul_byte_refuses_in_both_outcomes_before_any_other_check() {
+        let section = SecuritySection::default();
+        let root = std::env::current_dir().unwrap();
+        for outcome in [
+            super::super::sandbox_state::Outcome::Relaxed,
+            super::super::sandbox_state::Outcome::Strict("a test trigger".into()),
+        ] {
+            let found = evaluate_ruled(
+                "echo a\0b; rm -rf /",
+                true,
+                &section,
+                PolicyLevel::Off,
+                &root,
+                &root,
+                &outcome,
+            );
+            assert_eq!(found.len(), 1, "{outcome:?}: {found:?}");
+            assert_eq!(found[0].rule, "git.hook_integrity", "{found:?}");
+            assert!(found[0].level_fixed, "{found:?}");
+            assert_eq!(found[0].level, PolicyLevel::Block, "{found:?}");
+            assert!(found[0].message.contains("NUL byte"), "{found:?}");
         }
     }
 
