@@ -151,10 +151,12 @@ or another task's criteria change rides in the batched epic amendment with
 one other-lineage reviewer; ordinary in-node detail needs neither. Each
 parallel task gets one owner, branch, and worktree; never let two sessions write the same
 worktree or concurrently edit a shared contract, schema, migration, or other
-merge hotspot. The host sets a bounded
-concurrency cap from available CPU, memory, disk, and tool limits, monitors
-pressure, and reduces fan-out before swapping, duplicate heavyweight builds,
-or context sprawl degrade quality. Dependent work stays sequential.
+merge hotspot. The host sizes browser and model-session lanes from
+available CPU, memory, disk, and tool limits, monitors pressure, and reduces
+fan-out before swapping or context sprawl degrade quality. It sets no cap on
+heavy build and test runs: each takes a slot of the host's capacity or runs
+with a smaller job count (workflow-discipline "Lanes and capacity"), so an
+independent heavy run is never deferred. Dependent work stays sequential.
 
 For a multi-task body, integrate through `integration/<epic>` in small
 batches, and serialize each landing: one candidate at a time. Before review,

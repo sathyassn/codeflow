@@ -285,23 +285,28 @@ dangerously_allow_all_unix_sockets = false
 # same home grant (a test keeps them equal), and the startup stub with it
 # still cannot read or run anything. `codeflow doctor --preflight` runs
 # `codex sandbox` with the launch overrides and managed config from the main
-# checkout root, writes a probe file in the folders capacity slots are taken in and in
+# checkout root, writes a probe file in the lock folders and in
 # the common `.git` objects and refs, and fails when any of them is not
 # writable.
 #
 # `~/.codeflow/locks` is writable so a builder can take a capacity slot for
 # `codeflow reserve` and the heavy quick targets. Every heavy run takes one
 # free slot of the host's capacity; when none is free the run takes a smaller
-# job count and never waits. The folder is an advisory coordination boundary,
-# not a security boundary: a builder can still hold, delete or replace slot
-# state, which at most changes how many runs share the host. Capacity
-# admission refuses to guess when it cannot read that state.
+# job count and never waits; only a target declared `host_exclusive: true`
+# starts alone, and then waits for the host only within the run's bound. The
+# folder is an advisory coordination boundary, not a security boundary: a
+# builder can still hold, delete or replace slot state, which can change how
+# many runs share the host and can make admission refuse to start. Slot state
+# is never authenticated evidence, and admission refuses to guess when it
+# cannot read it.
 #
 # `~/.codeflow/gate-runs` stays unwritable to builder and review seats
-# (TSK-337 AC-5, decided 2026-10-27): evidence for a landing candidate is
-# written by the primary. The gate copies run artifacts into that folder, and later
-# gates read its run records as a green base without authenticating them, so
-# a seat that could write it could plant a record a later gate trusts. A
+# (TSK-337 AC-5, decided 2026-10-27). A full run copies its artifacts into
+# that folder, so a seat cannot complete a full run that keeps its evidence;
+# that run happens outside the seat sandbox until an engine change gives a
+# builder its own supported route. Run records are reports only: since
+# TSK-1044 none earns selection credit (ADR-0089), but a seat that could
+# write the folder could plant reports that mislead a reader. A
 # builder runs `codeflow reserve` and quick-mode heavy targets, which need
 # only `~/.codeflow/locks` for their capacity slot. Nothing else under the
 # home folder is writable; a relocated `CODEFLOW_HOME` is not covered.

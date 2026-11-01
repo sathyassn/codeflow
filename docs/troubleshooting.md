@@ -86,7 +86,7 @@ Each row below is one check, in the order doctor prints it.
 | `startup-files` | The shell startup class (issue 86) and the default git configuration files in `.claude/settings.json` (the `Edit` denies and the sandbox `denyWrite` entries) and in the profile `.codex/config.toml` selects and in `cf-builder`, read through `extends` with the nearest entry winning, as listed rules; whether `ZDOTDIR` or `XDG_CONFIG_HOME` is moved from its default; then the `source` and `.` lines of `~/.bashrc`, `~/.bash_profile`, `~/.profile`, `~/.zshenv`, `~/.zprofile` and `~/.zshrc`, each read once up to 256 KiB and never followed | Warn: a settings file is absent, unreadable or lacks entries of the class, or the Codex config selects another profile, sets `sandbox_mode`, or lets the selected profile or `cf-builder` write a class path or a path above or below one, in any spelling of the home, so that harness's sandbox does not deny every startup write. Warn: `ZDOTDIR` or `XDG_CONFIG_HOME` is moved or relative, so the startup files there have no generated deny. Warn: a startup file sources a literal path outside the class, or a path the check cannot read (a variable other than `$HOME`, a glob or a substitution), where an agent could plant a definition no rule protects. This check never fails doctor, and it cannot observe whether a harness enforces the rules it lists | For the settings, run `codeflow update`, resolving any `.new` file it writes. For a write grant in a profile, remove it from `.codex/config.toml`. For a moved directory, add deny rules for it to the harness settings yourself, or set the variable back to its default. All findings print together. For a sourced file, move what the named line sources into a protected startup path such as `~/.zsh/`, `~/.bashrc.d/` or `~/.config/fish/conf.d/`, or inline it |
 | `sandbox` | The text rule the exec guard applies (ADR-0088), through the function the hook uses, for a session started at the project root; the policy; the CodeFlow state root against the project, the temporary directory and every Claude settings layer's `allowWrite` and `additionalDirectories` | Fail: the policy cannot be read, or a Claude write grant reaches the state root. Note: `text rule: strict` with the reason, or `text rule: relaxed by operator choice, not verified` with the ref it was read from, which is the remote-tracking state as last fetched; either way, the level each kind of finding takes; Codex and Grok write grants are not checked | Nothing for the strict rule. To relax it, the operator lands `security.text_guard: relaxed` in `.codeflow/policy.json` on every protected ref the hook reads, then fetches; a `relaxed` in the working copy, a local branch or tag, or a repository without a remote is not honoured |
 | `config` | Every `.json` file under `.codeflow/`, parsed recursively | Warn: `.codeflow/` does not exist. Fail: a listed file does not parse, or the directory could not be scanned | Run `codeflow init` when the directory is missing. Repair the JSON in each listed file |
-| `permissions` | The owner write bit on `.codeflow/`, on Unix only, then whether this process can write the directories essential and full gates write outside the worktree: the lock directories (`locks/` under the CodeFlow home and `codeflow/` under the git common directory) and `gate-runs/` under the CodeFlow home. Says so when it runs inside the Claude Code sandbox (`SANDBOX_RUNTIME` set). Also reports what the `cf-builder` and `cf-guard` profiles in `.codex/config.toml` grant on `~/.codeflow/locks` and `~/.codeflow/gate-runs`, following `extends` and counting a grant on a covering folder; that report reads configuration and never changes the result. Inside a Codex seat (`CODEX_SANDBOX` set), an unwritable `gate-runs/` is reported as by design, since full gates stay with the primary | Fail: `.codeflow/` is not writable. Warn: a named gate directory is not writable, so `codeflow test --mode essential` or `--mode full` refuses with `gate lock unavailable` or fails to keep its evidence | Give the owner write permission on `.codeflow/`. For a gate directory, inside the Claude sandbox the operator adds it to `sandbox.filesystem.allowWrite` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs the gate outside the sandbox. Inside a Codex seat (`CODEX_SANDBOX` set), a review seat writes neither folder by design, so `codeflow reserve` and quick-mode heavy targets run in a builder seat relaunched with the builder launch in cf-model-orchestrator's `resources/routing/transport.md`; `codeflow doctor --preflight` checks that launch |
+| `permissions` | The owner write bit on `.codeflow/`, on Unix only, then whether this process can write the directories essential and full gates write outside the worktree: the lock directories (`locks/` under the CodeFlow home and `codeflow/` under the git common directory) and `gate-runs/` under the CodeFlow home. Says so when it runs inside the Claude Code sandbox (`SANDBOX_RUNTIME` set). Also reports what the `cf-builder` and `cf-guard` profiles in `.codex/config.toml` grant on `~/.codeflow/locks` and `~/.codeflow/gate-runs`, following `extends` and counting a grant on a covering folder; that report reads configuration and never changes the result. Inside a Codex seat (`CODEX_SANDBOX` set), an unwritable `gate-runs/` is reported as by design, since a seat sandbox cannot keep gate evidence there | Fail: `.codeflow/` is not writable. Warn: a named gate directory is not writable, so `codeflow test --mode essential` or `--mode full` refuses with `gate lock unavailable` or fails to keep its evidence | Give the owner write permission on `.codeflow/`. For a gate directory, inside the Claude sandbox the operator adds it to `sandbox.filesystem.allowWrite` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs the gate outside the sandbox. Inside a Codex seat (`CODEX_SANDBOX` set), a review seat writes neither folder by design, so `codeflow reserve` and quick-mode heavy targets run in a builder seat relaunched with the builder launch in cf-model-orchestrator's `resources/routing/transport.md`; `codeflow doctor --preflight` checks that launch |
 | `policy-source` | Where the agent guards read `.codeflow/policy.json` and `.codeflow/project.toml`: the remote's default branch as last fetched, named by `refs/remotes/<remote>/HEAD`, at one commit; `HEAD` (or the working copy on an unborn `HEAD`) only for initialization, a remote that advertises no refs, or local only, no remote. It never fetches; with no tracking refs it asks the remote whether it has any | Fail: the source cannot be read, such as several remotes without an `origin`, an unset remote HEAD or one that names no tracking branch, a dangling remote HEAD, or no tracking refs for a remote that has refs. Ok names the authority ref and its commit, or the labelled state, and any local policy drift | Run `git fetch`. For an unset remote HEAD, the operator runs `git remote set-head <remote> -a` ([enforcement planes](architecture/enforcement-planes.md#in-session-guards)) |
 | `network` | Whether `host` is on PATH, then a two-second lookup of github.com. When `SANDBOX_RUNTIME` is set, as in the Claude Code sandbox, which has no direct DNS and carries traffic through its proxy, an HTTPS request to github.com with `curl` instead, which passes only on an HTTP 2xx or 3xx answer | Warn: the probe tool is missing so the probe was skipped, or the probe failed; the message quotes the error or the HTTP status, such as a 403 from a proxy that refuses the host | Nothing is required. Install the probe tool to enable the probe, or restore the connection |
 | `delegates` | `codex` and `claude` on PATH, `codex login status`, `codex mcp list`, `claude mcp list`, `claude plugin list --json` for an enabled `codex@openai-codex` plugin, and `tmux` on PATH | Warn: cross-vendor delegation is partly unavailable. It is optional, and the message lists each gap | Apply the step each gap names: `codex login`, run the named list command, install `codex@openai-codex` in Claude Code and run `/codex:setup`, or put the missing tool on PATH. Then confirm access with an interactive canary, since status output alone does not prove it. When `SANDBOX_RUNTIME` is set, the presets deny sandboxed commands the Codex auth file, so a failed `codex login status` that does not say it is signed out is a note that quotes the failure and leaves the sign-in unconfirmed: run `codeflow doctor --check delegates` outside the sandbox to check it. An explicit "Not logged in" is a sign-in to fix there too |
@@ -103,32 +103,40 @@ Each row below is one check, in the order doctor prints it.
 | `id-registry` | The shared id registry on the fetched refs, when durable work tracking is on; it never fetches | Fail: the registry cannot be read or shows damage. Warn: an id no ref can place, tracking state that cannot be read, or a registry without host rules (reduced assurance). Ok when tracking is off | Resolve each finding named (`codeflow ids admit` registers an unplaced id, `codeflow ids retarget <id>` renumbers a collision), then confirm with `codeflow ids check`. Run `codeflow remote protect` to apply the host rules |
 | `adopter-fit` | The effective `git.pr_sections` level and its origin, a kept PR template's pending mapping decision, and the `[release] backend` in `.codeflow/project.toml` against the release tools found | Fail: the release backend is invalid or unreadable. Warn: a mapping decision is pending, policy provenance does not parse, or the backend and a detected release tool disagree | Record the decision in `git.pr_section_mapping.decided` (accepted, refused or custom), or set `[release] backend` to the one version authority the project uses, then rerun `codeflow doctor --check adopter-fit` |
 
-### Capacity for heavy work
+### Lock for heavy work
 
-Heavy work runs in parallel within the host's capacity. Every heavy run
-(full, essential, heavy quick targets and `codeflow reserve`) takes one free
-slot of N. N is computed from the host's cores and free memory, and a project
-can set it in `.codeflow/test-config.json`. Gates in other worktrees and
-projects take their own slots, so two gates can run at once.
+Essential and full gates hold both `full-gate.lock` files for the whole run:
+`locks/full-gate.lock` under the CodeFlow home and `codeflow/full-gate.lock`
+under the git common directory. The home lock spans repositories; the common
+directory lock spans a repository's worktrees. A second gate refuses before
+starting a target and names the holder's process, mode and directory.
+`gate lock unavailable` means a directory cannot be opened or written;
+`codeflow doctor --check permissions` names the paths to repair.
 
-When no slot is free, a run never waits and never skips a target: it runs
-with a smaller job count. A slow run on a busy host is the sign of this, not
-a hang. A target declared `host_exclusive: true` runs alone on the host, and
-it is the only kind of target that does; use it only for a check whose result
-changes when anything else runs.
+Quick gates can run light targets while another gate holds the lock. Declare
+`"heavy": true` on targets that compile or run substantial parallel work, or
+`"heavy": false` for light checks. Undeclared targets in a configured quick
+mode use `execution.quick_default_class`, which accepts `"light"` (the
+default) or `"heavy"`. A project with substantial undeclared quick suites
+can set it to `"heavy"` and set `execution.heavy_wait_seconds` to a bounded
+wait. An explicit target declaration
+takes precedence. When there are no quick targets and quick falls back to
+essential, undeclared targets are heavy. Heavy quick targets wait up to
+`execution.heavy_wait_seconds` (default zero), then refuse if the lock is
+still held. The result names the light targets that ran. Pre-push runs no
+quick target, so it never waits for the lock.
 
-Declare `"heavy": true` on targets that compile or run substantial parallel
-work, or `"heavy": false` for light checks. Quick runs light targets beside
-any gate, and pre-push runs no quick target, so neither waits for a gate.
+Read the holder's process, worktree, mode and start time with
+`codeflow test --lock-status`. This reads both records without taking a
+lock, changing a record or starting a target. A killed gate can leave a
+stale record; the displayed snapshot does not replace admission's OS-lock
+and live-process-group checks.
 
-Run a direct heavy command with `codeflow reserve -- cargo build` to take a
-slot for it. `--timeout-seconds` sets the command deadline. Arguments after
-`--` reach the executable unchanged. The wrapper ends its command's process
-group when it exits or is killed. Use the worktree's own Cargo target
-directory.
-
-When the capacity state cannot be read, the run refuses instead of guessing;
-`codeflow doctor --check permissions` names the directories to repair.
+Run a direct heavy command with `codeflow reserve -- cargo build` to take
+the same locks. `--wait-seconds` sets a bounded wait, and
+`--timeout-seconds` sets the command deadline. Arguments after `--` reach
+the executable unchanged. The wrapper ends its command's process group
+when it exits or is killed. Use the worktree's own Cargo target directory.
 
 `execution.worker_budget`, when configured, divides workers among ready
 heavy targets and records their Cargo, nextest, Rust-test and shell-oracle
@@ -140,11 +148,13 @@ defaults. This repository sets nine workers and gives clippy a separate
 Each Cargo producer takes the full budget to avoid package-cache and
 build-directory waits; light checks still run beside it.
 
-Direct commands outside the wrapper and other applications also consume
-resources, and slots do not make the machine otherwise quiet. Declared heavy
-targets and reserved commands end their process groups when the controller
-exits. On Unix, other targets can outlive a killed gate and keep their
-slot until they end.
+The unchanged lock names also exclude full runs of a 3.1 binary. Essential
+runs of 3.1 take no lock and can still overlap. Direct commands outside the
+wrapper and other applications can also consume resources: the lock does
+not make the machine otherwise quiet. Declared heavy targets and reserved
+commands end their process groups when the controller exits. On Unix,
+other targets can outlive a killed gate; the lock refuses new heavy work
+until they end.
 
 ### Fix a failing check
 

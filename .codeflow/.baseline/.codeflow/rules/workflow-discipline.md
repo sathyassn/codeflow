@@ -417,15 +417,24 @@ when asked or when a capacity or deadline decision needs it.
 Size parallel lanes from the host's observed memory and CPU. Nothing in
 CodeFlow makes one piece of work wait for another that could run beside it;
 only correctness orders work (a dependency, or one landing at a time on a
-line tip). Every heavy run (the full gate, essential, heavy quick targets
-and `codeflow reserve -- <command>`) takes one free slot of the host's
-capacity. The slot count is computed from cores and free memory and can be
-set in the project's test config. When no slot is free, a run never waits
-or skips: it runs with a smaller job count. A target declared
-`host_exclusive: true` runs alone on the host, and nothing else is exclusive.
-A cheap targeted check, a named test target in the worktree's own target
-directory, runs freely. Any session, in any worktree, may run the gates its
-work needs.
+line tip).
+
+- Every heavy run (the full gate, essential, heavy quick targets and
+  `codeflow reserve -- <command>`) takes one free slot of N. N is computed
+  from the host's cores and free memory, and `execution.host_jobs` in the
+  project's test config overrides it.
+- When no slot is free, a run never waits or skips: it runs with a smaller
+  job count.
+- A target declared `host_exclusive: true` is the one exception, because its
+  result depends on nothing else running. It starts when no other heavy run
+  holds the host, no heavy run starts while it runs, and it waits for that
+  only within the run's bound, then is reported not run. No other target
+  runs alone.
+- A cheap targeted check, a named test target in the worktree's own target
+  directory, runs freely.
+- Any session, in any worktree, may run the gates its work needs, within what
+  its sandbox can write. A seat sandbox cannot write the gate evidence
+  folder, so a full gate that must keep evidence runs outside it.
 
 ## Planning
 

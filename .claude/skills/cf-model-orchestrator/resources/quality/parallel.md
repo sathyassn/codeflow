@@ -7,7 +7,8 @@ the one field list for parallel work; record it in the plan:
 PARALLEL_TASKS:        <from the approved task graph; never a second copy>
 OWNER_BRANCH_WORKTREE: <one writer, branch and worktree per task>
 HOTSPOT_OWNER:         <one owner, or sequential work, per shared hotspot>
-CONCURRENCY_CAP:       <from observed CPU, memory, disk and tool limits>
+CONCURRENCY_CAP:       <browser and model sessions, from observed CPU, memory,
+                        disk and tool limits; heavy runs are admitted by capacity>
 UI_RESOURCES:          <per concurrent UI task: browser profile or context,
                         endpoints, test-data namespace, artifact directory,
                         retention and teardown check>

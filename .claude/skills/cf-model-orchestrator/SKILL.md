@@ -230,7 +230,7 @@ Start by running `codeflow doctor --preflight` and reading it: it prints the
 seat, sandbox and tool evidence the steps below ask for, each value marked
 configured, observed or unavailable, whether the installed Codex
 accepts the builder launch's profile, and whether that launch gives a
-builder seat its capacity-slot and commit writes from the main checkout root; it
+builder seat its lock folder and commit writes from the main checkout root; it
 exits 1 when it observed either fail. When it could not run that check, it
 says builder readiness is not established and exits 0; that line is
 information, never readiness evidence. It cannot establish the live model
