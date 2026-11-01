@@ -1026,14 +1026,6 @@ MAX_TIMEOUT_MINUTES = 45
 CALLER_LINE = re.compile(r"^ {4}[\"']?uses[\"']?:", re.M)
 CALLER_TARGET = re.compile(r"^ {4}[\"']?uses[\"']?:[ \t]*(?:\"([^\"]*)\"|'([^']*)'|([^\s#]*))[ \t]*(?:#.*)?$", re.M)
 WORKFLOW_DIRS = (Path(".github/workflows"), Path("assets/base/ci"))
-# A shipped template cannot size a job that runs the adopter's own commands.
-# Each exemption names its reason; a stale one (the job is gone) is drift.
-UNBOUNDED_BY_DESIGN = {
-    "assets/base/ci/codeflow-ci.yml": {
-        "gates": "runs the adopter's own suite, whose length only the adopter knows",
-        "candidate": "tracked in TSK-254 follow-up notes; bound it when this job is next edited",
-    },
-}
 
 
 def jobs_section(workflow: str) -> dict[str, str]:
@@ -1062,21 +1054,14 @@ def caller_problems(name: str, text: str, where: str, seen: frozenset[str]) -> l
     return [f"job '{name}'{where} calls `{target}`, whose own jobs are not all bounded: {callee}"] if callee else []
 
 
-def timeout_problems(workflow: str, label: str = "", exempt: dict[str, str] | None = None,
+def timeout_problems(workflow: str, label: str = "",
                      seen: frozenset[str] = frozenset()) -> list[str]:
     jobs, unparsed = parse_jobs(workflow)
     where = f" in {label}" if label else ""
-    exempt = exempt or {}
     problems = [] if jobs else [f"the workflow{where} has no `jobs:` section to check for timeouts"]
     problems += [f"the workflow{where}: {p}" for p in unparsed]
-    for name in exempt:
-        if name not in jobs:
-            problems.append(f"{label or 'the workflow'} exempts job '{name}' from a timeout but has no such job; "
-                            "drop the stale exemption")
     for name, text in jobs.items():
         problems += job_structure_problems(name, text, where)
-        if name in exempt:
-            continue
         if CALLER_LINE.search(text):
             problems += caller_problems(name, text, where, seen)
             continue
@@ -1109,8 +1094,7 @@ def all_timeout_problems() -> list[str]:
     files = workflow_files()
     problems = [] if files else ["no workflow files were found to check for timeouts"]
     for relative in files:
-        problems += timeout_problems(repository_text(ROOT / relative), relative.as_posix(),
-                                     UNBOUNDED_BY_DESIGN.get(relative.as_posix()))
+        problems += timeout_problems(repository_text(ROOT / relative), relative.as_posix())
     return problems
 
 
