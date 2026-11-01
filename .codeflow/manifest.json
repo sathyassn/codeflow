@@ -1727,7 +1727,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "c7309465214cc5766e253ce5942b9c4a417f426619233483b1d0712415ca3942",
+      "sha256": "45eec558691c7e03d2e5dc288147c798cec029f7346ccbd591055c1d7a3ce83e",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
