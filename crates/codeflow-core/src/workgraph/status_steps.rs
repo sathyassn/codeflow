@@ -272,8 +272,10 @@ impl<'r> Walker<'r> {
             if entry.kind() != Some(git2::ObjectType::Blob) {
                 continue;
             }
-            if let Some(name) = entry
-                .name()
+            // A name that is not UTF-8 cannot be a record id's file.
+            let name = crate::git::GitName::from_bytes(entry.name_bytes());
+            if let Some(name) = name
+                .rule_text()
                 .ok()
                 .filter(|name| names_record(name, &self.id))
             {
@@ -319,7 +321,14 @@ impl<'r> Walker<'r> {
             let epic_dirs = epics
                 .iter()
                 .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
-                .filter_map(|entry| entry.name().ok().map(str::to_string))
+                .filter_map(|entry| {
+                    // No record path runs through a directory whose name is
+                    // not UTF-8, so such a directory holds no record.
+                    crate::git::GitName::from_bytes(entry.name_bytes())
+                        .rule_text()
+                        .ok()
+                        .map(str::to_string)
+                })
                 .collect::<Vec<_>>();
             for epic in epic_dirs {
                 let (dir, wanted) = match self.kind {
