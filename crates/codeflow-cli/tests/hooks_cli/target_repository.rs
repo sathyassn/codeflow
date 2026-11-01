@@ -123,6 +123,64 @@ fn refused(out: &Output) -> bool {
         && String::from_utf8_lossy(&out.stderr).contains("git.hook_integrity")
 }
 
+/// TSK-1130: a `core.hooksPath` the hook process inherits through
+/// `GIT_CONFIG_COUNT` or `GIT_CONFIG_PARAMETERS` replaces the repository
+/// hooks for every git call, as the same assignment written in the command
+/// does. Both guards refuse a git call under it, and still allow the same
+/// call under no such variable, under an unrelated inherited key, and a line
+/// that runs no git.
+#[test]
+fn tsk1130_an_inherited_hooks_path_refuses_git_in_both_guards() {
+    let f = Fixture::new();
+    let hooks = f.temp.path().join("env-hooks");
+    std::fs::create_dir(&hooks).unwrap();
+    std::fs::write(hooks.join("post-index-change"), "#!/bin/sh\nexit 0\n").unwrap();
+    let dir = shell_path(&hooks);
+    let run = |hook: &str, cwd: &Path, command: &str, env: &[(&str, &str)]| {
+        let mut cmd = f.guard_command(cwd, hook);
+        for (name, value) in env {
+            cmd.env(name, value);
+        }
+        run_with_stdin(&mut cmd, &guard_payload(command, cwd))
+    };
+    let parameters = format!("'core.hookspath'='{dir}'");
+    let inherited: [Vec<(&str, &str)>; 2] = [
+        vec![
+            ("GIT_CONFIG_COUNT", "1"),
+            ("GIT_CONFIG_KEY_0", "core.hooksPath"),
+            ("GIT_CONFIG_VALUE_0", dir.as_str()),
+        ],
+        vec![("GIT_CONFIG_PARAMETERS", parameters.as_str())],
+    ];
+    for hook in ["git-guard", "exec-guard"] {
+        for cwd in [&f.root, &f.linked] {
+            for env in &inherited {
+                for command in ["git status", "git log -1"] {
+                    let out = run(hook, cwd, command, env);
+                    assert!(refused(&out), "{hook} {command} {env:?}: {out:?}");
+                    assert!(
+                        String::from_utf8_lossy(&out.stderr).contains("core.hooksPath"),
+                        "{hook} {command}: {out:?}"
+                    );
+                }
+            }
+            let benign = [
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "user.name"),
+                ("GIT_CONFIG_VALUE_0", "someone"),
+            ];
+            for (command, env) in [
+                ("git status", &[][..]),
+                ("git status", &benign[..]),
+                ("echo ok", &inherited[0][..]),
+            ] {
+                let out = run(hook, cwd, command, env);
+                assert!(line_allows(&out), "{hook} {command} {env:?}: {out:?}");
+            }
+        }
+    }
+}
+
 /// Issue #342 commands are classified from a linked task worktree. None of
 /// the payloads run, including the absolute temporary destinations.
 #[test]

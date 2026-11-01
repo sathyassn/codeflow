@@ -1787,6 +1787,15 @@ configuration-dependent actions unverifiable. Literal configuration
 destinations refuse append writes too. A dynamic value for a known unrelated
 destination, such as `export PATH=$PATH:/x`, is allowed.
 
+A `core.hooksPath` that Git reads in the command scope also refuses a Git call,
+whether the command text writes it or the hook process inherited it through
+`GIT_CONFIG_COUNT` or `GIT_CONFIG_PARAMETERS` (TSK-1130). It replaces the
+repository hooks that the enforcement plane installs for that call. The guard
+reads the scope from the same effective-configuration read that lists the
+other settings, so an unreadable configuration refuses too. A hooks path from a
+repository, global or system file is the operator's own configuration and is
+not judged by this rule; git-guard and exec-guard apply it alike.
+
 On a line with a configuration-dependent Git decision, the guards refuse any
 non-Git segment that mentions a configuration variable except as a plain
 `$NAME` or `${NAME}` read. This backstop applies to aliases, pushes, other

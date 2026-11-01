@@ -606,6 +606,7 @@ fn configured_commands(
     let settings = configuration_options(args)?;
     let config = crate::security::git_config::read(cwd, &settings, &config_environment(env))?;
     transport(args, &config)?;
+    command_scope_hooks_path(&config)?;
     for path in config
         .sources
         .iter()
@@ -795,6 +796,27 @@ fn transport(
     }
     if direct || configured {
         return Err("an ext:: transport command requires unclassified percent expansion".into());
+    }
+    Ok(())
+}
+
+/// Refuse a `core.hooksPath` that Git takes from the command scope: the
+/// environment (`GIT_CONFIG_COUNT`, `GIT_CONFIG_PARAMETERS`) or a `-c`
+/// option. It replaces the hooks the enforcement plane installs for this
+/// call, and the guard already refuses the same assignment when the command
+/// text writes it (TSK-1130). A value from a repository, global or system
+/// file is the operator's own configuration and is not judged here.
+fn command_scope_hooks_path(
+    config: &crate::security::git_config::EffectiveConfig,
+) -> Result<(), String> {
+    if config
+        .get_all("core.hooksPath")
+        .iter()
+        .any(|(scope, _, _)| *scope == "command")
+    {
+        return Err(
+            "core.hooksPath is set in the command scope (the environment or -c), which replaces the repository hooks; unset GIT_CONFIG_COUNT, GIT_CONFIG_PARAMETERS or the option".into(),
+        );
     }
     Ok(())
 }
@@ -2318,6 +2340,55 @@ mod tests {
     fn written(verb: &str, line: &str) -> Vec<String> {
         let rest: Vec<String> = line.split_whitespace().map(str::to_string).collect();
         restored_paths(verb, &rest).unwrap()
+    }
+
+    fn repository() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let init = crate::git::command()
+            .args(["init", "-q"])
+            .current_dir(root.path())
+            .status()
+            .unwrap();
+        assert!(init.success());
+        root
+    }
+
+    fn call(root: &Path, words: &[&str]) -> Result<Vec<String>, String> {
+        let args: Vec<String> = words.iter().map(ToString::to_string).collect();
+        configured_commands(
+            &args,
+            root,
+            &crate::security::git_config::Environment::new(),
+            &[],
+        )
+    }
+
+    #[test]
+    fn a_hooks_path_in_the_command_scope_refuses() {
+        let root = repository();
+        let refused = call(root.path(), &["-c", "core.hooksPath=/elsewhere", "status"])
+            .expect_err("a command-scope hooks path replaces the repository hooks");
+        assert!(refused.contains("command scope"), "{refused}");
+    }
+
+    #[test]
+    fn a_hooks_path_in_a_repository_file_is_not_judged() {
+        let root = repository();
+        let set = crate::git::command()
+            .args(["config", "core.hooksPath", "/elsewhere"])
+            .current_dir(root.path())
+            .status()
+            .unwrap();
+        assert!(set.success());
+        assert!(call(root.path(), &["status"]).is_ok());
+        assert!(call(root.path(), &["-c", "user.name=x", "status"]).is_ok());
+    }
+
+    #[test]
+    fn an_unreadable_configuration_refuses() {
+        let root = repository();
+        std::fs::write(root.path().join(".git/config"), b"[broken\n").unwrap();
+        assert!(call(root.path(), &["status"]).is_err());
     }
 
     #[test]
