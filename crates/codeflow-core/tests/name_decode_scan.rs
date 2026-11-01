@@ -396,6 +396,22 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
+    // the stdout and stderr of a failed record check, shown in the refusal, never compared
+    (
+        "codeflow-core/src/integrate.rs",
+        "run_record_checks",
+        "from_utf8_lossy",
+        2,
+        "display",
+    ),
+    // `LandingClass::name` is a fixed ASCII label (records-only or code), not a git name
+    (
+        "codeflow-core/src/integrate.rs",
+        "IntegrateOutcome::write_block",
+        "name",
+        1,
+        "display",
+    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/integrate.rs",
@@ -2014,7 +2030,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
     // parse_raw returns unproven None for raw metadata that is not UTF-8 (git's own ASCII modes and status); range_inventory converts None to cannot-read Err and ci::run refuses. The path field is kept as GitName bytes, not decoded.
     (
-        "crates/codeflow-cli/src/cmd/ci/change_class.rs",
+        "crates/codeflow-core/src/workgraph/change_class.rs",
         "parse_raw",
         "obtain-absent:from_utf8",
         1,

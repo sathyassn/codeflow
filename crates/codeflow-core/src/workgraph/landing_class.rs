@@ -202,10 +202,14 @@ fn records_only(root: &Path, base: &str, head: &str) -> Result<(), String> {
         let mut special: Option<String> = None;
         tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
             if matches!(entry.filemode(), 0o120_000 | 0o160_000) {
-                let name = String::from_utf8_lossy(entry.name_bytes());
-                let path = format!("{dir}{name}");
-                if link_reaches_records(&path, &scopes, &patterns) {
-                    special = Some(path);
+                let name = crate::git::GitName::from_bytes(entry.name_bytes());
+                // A link whose name is not UTF-8 cannot be judged against the
+                // record globs, so it withholds the class.
+                let reaches = name.rule_text().map_or(true, |name| {
+                    link_reaches_records(&format!("{dir}{name}"), &scopes, &patterns)
+                });
+                if reaches {
+                    special = Some(format!("{dir}{}", name.display()));
                     return git2::TreeWalkResult::Abort;
                 }
             }
@@ -220,8 +224,7 @@ fn records_only(root: &Path, base: &str, head: &str) -> Result<(), String> {
         })?;
         if let Some(path) = special {
             return Err(format!(
-                "{} is a symbolic link or submodule on a record path",
-                crate::git::display_text(&path)
+                "{path} is a symbolic link or submodule on a record path"
             ));
         }
     }

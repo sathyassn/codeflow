@@ -896,10 +896,13 @@ fn line_tip_fingerprints(
         .map_err(|error| error.to_string())?;
     let text = std::str::from_utf8(blob.content())
         .map_err(|_| ".gitleaksignore at the line tip is not UTF-8")?;
+    // One fingerprint per line, as gitleaks writes them; no other
+    // whitespace is stripped, so a padded entry matches nothing.
     Ok(text
-        .lines()
+        .split('\n')
         .filter_map(|line| {
-            let (commit, rest) = line.trim().split_once(':')?;
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let (commit, rest) = line.split_once(':')?;
             if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return None;
             }
