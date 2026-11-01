@@ -2276,13 +2276,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // gh splits a header at the first colon and trims both sides with Go's strings.TrimSpace, which also removes Unicode space, so the method override is read as gh reads it (TSK-1070 security review round 2).
+    // A DELETE word is refused even with surrounding Unicode space, since gh trims a header value with Go's strings.TrimSpace; trimming more only widens a refusal (TSK-1070 security review round 3).
     (
         "crates/codeflow-core/src/security/gh_api.rs",
-        "api_intent",
+        "names_delete",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // A jq program admitted by the field-selector check still runs through jq, which rejects any space it does not lex; trimming here can only admit a program jq then refuses (TSK-1070 security review round 4).
+    (
+        "crates/codeflow-core/src/security/gh_api.rs",
+        "is_field_selector",
         "trim",
         2,
-        "format-contract",
+        "schema-reject-only",
     ),
     // This handler runs after the blocking guard verdict; malformed already-produced JSON chooses the textual denial message, retaining nonzero exit/refusal.
     (

@@ -738,10 +738,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
     let (step_input, step_bound) = (out.literal_input.clone(), out.input.bound);
     for (stage, segment) in segments.into_iter().enumerate() {
         stage_input(out, &segment, (stage, stages), (&step_input, step_bound));
-        let generated = out.generated.len();
-        out.generated
-            .extend(crate::hooks::git_guard::shell_generated_words(&segment));
-        gh_segment(&segment, out);
+        let generated = enter_segment(&segment, out);
         let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
         let before = words.len();
         strip_reserved_words(&mut words);
@@ -3155,6 +3152,17 @@ fn perl_attached_code(arg: &str) -> Option<&str> {
     None
 }
 
+/// Record the words the shell builds in `segment` and judge a `gh` it
+/// names; returns the mark to truncate [`Parsed::generated`] back to when
+/// the segment is done (TSK-1070 security review round 6).
+fn enter_segment(segment: &str, out: &mut Parsed) -> usize {
+    let mark = out.generated.len();
+    out.generated
+        .extend(crate::hooks::git_guard::shell_generated_words(segment));
+    gh_segment(segment, out);
+    mark
+}
+
 /// A segment that names `gh` in any word position, judged without knowing
 /// which program runs it (TSK-1070 security review round 6): every word
 /// after it is read for an output program, and `gh` with arguments run by
@@ -4895,6 +4903,19 @@ mod tests {
         ] {
             for wrapper in &WRAPPERS[..11] {
                 let command = wrapper.replace("{}", command);
+                // A runner that can supply gh's arguments refuses it
+                // (TSK-1070 security review round 6).
+                if command.contains(" gh ")
+                    && ["xargs", "find", "npx"]
+                        .iter()
+                        .any(|runner| wrapper.starts_with(runner))
+                {
+                    assert!(
+                        !evaluate(&command, &SecuritySection::default()).is_empty(),
+                        "{command}"
+                    );
+                    continue;
+                }
                 if command == "env -i git push origin task/x" {
                     let findings = evaluate(&command, &SecuritySection::default());
                     assert!(
