@@ -199,3 +199,14 @@ If all target commands pass but tracked files change during the gate, the
 block names those files. Review and commit the intended generated changes,
 then rerun the gate on the resulting checkout. A gate error names the error
 itself, including failures that occur after the configuration has loaded.
+
+## Every command is refused because the policy authority is unresolved
+
+The guards read policy from the remote's default branch. When
+`refs/remotes/origin/HEAD` is unset or unreadable they refuse commands and
+edits, naming the ref. Read-only git (`git status`, `log`, `diff`, `show`,
+`rev-parse` and the other commands in the
+[policy reference](policy-reference.md#read-only-git-while-the-policy-authority-is-unresolved))
+still passes, so you can inspect the repository. To clear it, the operator
+runs `git remote set-head origin -a`, or `git fetch origin` on git 2.48 or
+later; `codeflow doctor --check policy-source` shows the state.

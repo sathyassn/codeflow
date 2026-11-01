@@ -508,6 +508,85 @@ pub fn recovery_fetch(command: &str, root: &Path) -> bool {
         && recovery_args(root, &words[1..])
 }
 
+/// The git subcommands that stay allowed while the policy authority cannot
+/// be resolved (TSK-1104): the read-only set the guard already allows for an
+/// unresolved target, without `help`, which starts a configured viewer
+/// program. None of them writes refs, configuration, hooks or the working
+/// tree.
+const READ_ONLY_UNRESOLVED: &[&str] = &[
+    "status",
+    "diff",
+    "log",
+    "show",
+    "rev-parse",
+    "ls-files",
+    "ls-tree",
+    "merge-base",
+    "for-each-ref",
+    "show-ref",
+    "cat-file",
+    "check-ignore",
+    "version",
+];
+
+/// Long options that can run a program, write a file or read outside the
+/// repository. A shortened spelling (`--ext`) counts as the full name.
+const REFUSED_LONG_OPTIONS: &[&str] = &[
+    "--output",
+    "--ext-diff",
+    "--textconv",
+    "--paginate",
+    "--open-files-in-pager",
+    "--no-index",
+    "--exec-path",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+    "--filters",
+    "--show-signature",
+];
+
+fn refused_option(word: &str) -> bool {
+    let Some(long) = word.strip_prefix("--") else {
+        return word == "-O" || word.starts_with("-O");
+    };
+    let name = format!("--{}", long.split('=').next().unwrap_or(long));
+    REFUSED_LONG_OPTIONS
+        .iter()
+        .any(|full| (full.starts_with(&name) && name.len() >= 3) || name.starts_with(full))
+}
+
+/// Whether a command line is only read-only git, safe to run while the
+/// policy authority cannot be resolved. It is a closed form and it never
+/// asks a shell parser: the line may hold only plain word characters and
+/// the separators `;` and `&&`; every part must be `git <subcommand> ...`
+/// with a subcommand from `READ_ONLY_UNRESOLVED`, no git global option,
+/// and none of `REFUSED_LONG_OPTIONS`. Quotes, variables, substitutions,
+/// redirects, pipes, globs, leading assignments and launchers all fail it.
+#[must_use]
+pub fn read_only_git(command: &str) -> bool {
+    let plain = |c: char| c.is_ascii_alphanumeric() || " \t._/:=@%,+-~^;&".contains(c);
+    if command.trim().is_empty() || !command.chars().all(plain) {
+        return false;
+    }
+    let normalized = command.replace("&&", ";");
+    if normalized.contains('&') {
+        return false;
+    }
+    normalized.split(';').all(|part| {
+        let words: Vec<&str> = part.split_whitespace().collect();
+        let [first, sub, rest @ ..] = words.as_slice() else {
+            return false;
+        };
+        *first == "git"
+            && READ_ONLY_UNRESOLVED.contains(sub)
+            && rest
+                .iter()
+                .all(|word| !refused_option(word) && !word.starts_with('~') && !word.contains("%G"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

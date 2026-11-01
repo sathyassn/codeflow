@@ -422,8 +422,10 @@ fn git_guard(stdin: &str) -> i32 {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
                 return 0;
             }
-            eprintln!("codeflow git-guard: {error}", error = shown(&error));
-            return 2;
+            if unresolved_read_only(command, &error) {
+                return 0;
+            }
+            return authority_refusal(&error);
         }
     };
     let policy = &authority.policy;
@@ -492,6 +494,29 @@ fn git_guard(stdin: &str) -> i32 {
         &authority.source,
     );
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
+}
+
+/// Read-only git passes while the policy authority cannot be resolved
+/// (TSK-1104); the unresolved state is disclosed and nothing else is let by.
+fn unresolved_read_only(command: &str, error: &str) -> bool {
+    if !codeflow_core::hooks::ref_authority::read_only_git(command) {
+        return false;
+    }
+    eprintln!(
+        "codeflow: policy authority unresolved, so only read-only git passes: {error}",
+        error = shown(&error)
+    );
+    true
+}
+
+/// The git-guard refusal for an unresolved policy authority: the error, and
+/// the read-only git that stays allowed.
+fn authority_refusal(error: &str) -> i32 {
+    eprintln!(
+        "codeflow git-guard: {error}; read-only git (status, log, diff, show, rev-parse and the like) stays allowed meanwhile",
+        error = shown(&error)
+    );
+    2
 }
 
 /// A git-guard refusal for an input it cannot read: the error, escaped.
@@ -657,6 +682,9 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         Ok(value) => value,
         Err(error) => {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
+                return 0;
+            }
+            if unresolved_read_only(command, &error) {
                 return 0;
             }
             let _ = term_writeln!(err, "codeflow hook: {error}", error = shown(&error));

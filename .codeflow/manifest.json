@@ -659,7 +659,7 @@
     ".agents/skills/cf-plan/SKILL.md": {
       "src": "agents/skills/cf-plan/SKILL.md",
       "ownership": "managed",
-      "sha256": "401b921e11ccaa312416050fd6e2e9010556b1b562387528d1816ce290cd2231",
+      "sha256": "0818355e24924b5d31a67a7db0e493b5afc8640aab2fa8f53a84276517c54ec8",
       "exec": false
     },
     ".agents/skills/cf-present/SKILL.md": {
@@ -1505,7 +1505,7 @@
     ".claude/skills/cf-plan/SKILL.md": {
       "src": "agents/skills/cf-plan/SKILL.md",
       "ownership": "managed",
-      "sha256": "401b921e11ccaa312416050fd6e2e9010556b1b562387528d1816ce290cd2231",
+      "sha256": "0818355e24924b5d31a67a7db0e493b5afc8640aab2fa8f53a84276517c54ec8",
       "exec": false
     },
     ".claude/skills/cf-present/SKILL.md": {

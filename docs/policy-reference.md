@@ -2065,3 +2065,36 @@ written by hand.
 | `pre-merge-commit` | A merge commit onto a protected branch that is not a fast forward | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
 | `reference-transaction` | A fast-forward merge, hard reset or branch delete on a protected branch | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
 | `pre-push` | A push, force-push or delete to a protected branch, and branch naming | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
+
+## Read-only git while the policy authority is unresolved
+
+When the policy authority cannot be resolved (for example `refs/remotes/origin/HEAD`
+is unset), the agent guards refuse every Bash call and every edit, because no
+policy can be read. One exception holds so an agent can still look at the
+repository (TSK-1104): git-guard and exec-guard pass a line made only of the
+commands below. The refusal names the ref and the clearing step
+(`git remote set-head origin -a` or `git fetch`) and says read-only git stays
+allowed.
+
+- **Allowed:** `git status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`,
+  `ls-tree`, `merge-base`, `for-each-ref`, `show-ref`, `cat-file`,
+  `check-ignore` and `version`, joined only by `;` or `&&`. This is the set
+  git-guard already allows for an unresolved target, without `help`, which
+  starts a configured viewer program. None of these writes refs,
+  configuration, hooks or the working tree.
+- **Form:** the line holds only letters, digits, spaces and `._/:=@%,+-~^;&`,
+  and each part starts with `git` and the subcommand. Quotes, variables,
+  substitutions, redirects, pipes, globs, leading assignments and launchers
+  (`env`, `sh -c`) all fail it, so no shell construct is ever interpreted in
+  this state.
+- **Still refused:** git global options (`-c`, `-C`, `--git-dir`), and the
+  options `--output`, `--ext-diff`, `--textconv`, `--filters`,
+  `--paginate`, `--open-files-in-pager`, `--no-index`, `--show-signature`
+  and a `%G` format (also in any shortened spelling such as `--ext`), because
+  each can run a program, write a file or read outside the repository; any
+  redirect to a path; `--exec-path`; every mutating command; edits through
+  edit-guard, an unrelated file included.
+- **Not changed:** the one-fetch recovery, and the verdicts once the
+  authority resolves. A program already named by repository configuration
+  (`core.fsmonitor`, a configured pager) is as before: writing that
+  configuration is refused as a hook-integrity write.
