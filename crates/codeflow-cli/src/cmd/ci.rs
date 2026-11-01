@@ -723,21 +723,19 @@ pub fn run(args: &CiArgs) -> i32 {
         }
     };
     if let Some(base) = base_sha.as_deref() {
-        let mut decision =
-            codeflow_core::workgraph::landing_class::classify_landing(&root, base, &head);
-        let class = if line_target.starts_with("integration/") {
-            decision.class
-        } else {
-            decision.reason = "the target is not an integration line".into();
-            codeflow_core::workgraph::landing_class::LandingClass::Code
-        };
+        let decision = codeflow_core::workgraph::landing_class::classify_landing_into(
+            &root,
+            base,
+            &head,
+            &line_target,
+        );
         println!(
             "codeflow ci: landing class: {}; required test gate: {}; {}",
-            class.name(),
-            class.gate_mode(),
+            decision.class.name(),
+            decision.class.gate_mode(),
             codeflow_core::git::display_message(&decision.reason)
         );
-        println!("codeflow ci: this run checks CI policy only; landing also requires validate --docs, the selected test gate and the secret scan");
+        println!("codeflow ci: this run checks CI policy only; landing also requires validate --docs, the selected test gate and the secret scan, and for a records-only class the project's execution.record_checks");
     }
     let work_class = if scope_ready {
         work_checks(

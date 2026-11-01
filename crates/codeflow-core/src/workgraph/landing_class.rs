@@ -62,6 +62,78 @@ pub fn classify_landing(root: &Path, base: &str, head: &str) -> LandingDecision 
     }
 }
 
+/// [`classify_landing`] for a landing into `target`. Only an unprotected
+/// integration line that is not a release line can take the records-only
+/// class: a protected branch or a name matching the built-in release pattern
+/// or a `git.release_branch_pattern` (from the line tip's policy or the
+/// checkout's) keeps the full gate. Any policy that cannot be read selects
+/// the full gate.
+#[must_use]
+pub fn classify_landing_into(root: &Path, base: &str, head: &str, target: &str) -> LandingDecision {
+    match full_gate_target(root, base, target) {
+        Some(reason) => LandingDecision {
+            class: LandingClass::Code,
+            reason,
+        },
+        None => classify_landing(root, base, head),
+    }
+}
+
+/// Why `target` keeps the full gate whatever the diff, or `None`.
+fn full_gate_target(root: &Path, base: &str, target: &str) -> Option<String> {
+    if !target.starts_with("integration/") {
+        return Some("the target is not an integration line".into());
+    }
+    let shown = crate::git::display_text(target);
+    let tip = match line_policy(root, base) {
+        Ok(policy) => policy,
+        Err(error) => return Some(format!("the line tip's policy cannot be read: {error}")),
+    };
+    let checkout = match crate::hooks::policy::Policy::load(root) {
+        Ok(policy) => policy,
+        Err(error) => return Some(format!("the checkout's policy cannot be read: {error}")),
+    };
+    for policy in [&tip, &checkout] {
+        if policy.git.branch_is_protected_any_case(target) {
+            return Some(format!("{shown} is a protected branch"));
+        }
+        for pattern in [
+            Some(super::release_line::BUILTIN_PATTERN),
+            policy.git.release_branch_pattern.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            match glob::Pattern::new(pattern) {
+                Ok(glob) if glob.matches(target) => {
+                    return Some(format!(
+                        "{shown} matches the release pattern {}",
+                        crate::git::display_text(pattern)
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    return Some(format!("the release pattern cannot be read: {error}"));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The policy at the line tip, or the defaults when the tip has none.
+fn line_policy(root: &Path, base: &str) -> Result<crate::hooks::policy::Policy, String> {
+    crate::hooks::landed_policy::policy_text_at(root, base)?
+        .map(|text| {
+            crate::hooks::policy_schema::validate_policy_str(&text)
+                .map_err(|errors| format!("invalid target policy: {errors:?}"))?;
+            serde_json::from_str::<crate::hooks::policy::Policy>(&text)
+                .map_err(|error| error.to_string())
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
 fn records_only(root: &Path, base: &str, head: &str) -> Result<(), String> {
     super::history::check_command(root)?;
     let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
@@ -80,37 +152,13 @@ fn records_only(root: &Path, base: &str, head: &str) -> Result<(), String> {
     }
     let base_id = base.id().to_string();
     let project = project_paths(root, &base_id)?;
-    let policy = crate::hooks::landed_policy::policy_text_at(root, &base_id)?
-        .map(|text| {
-            crate::hooks::policy_schema::validate_policy_str(&text)
-                .map_err(|errors| format!("invalid target policy: {errors:?}"))?;
-            serde_json::from_str::<crate::hooks::policy::Policy>(&text)
-                .map_err(|error| error.to_string())
-        })
-        .transpose()?
-        .unwrap_or_default();
+    let policy = line_policy(root, &base_id)?;
     let patterns = policy
         .git
         .record_paths
         .iter()
         .map(|pattern| glob::Pattern::new(pattern).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
-    // Existing links anywhere in either tree can redirect a tool reading a
-    // documentation path. Reuse the planning class's conservative boundary.
-    for commit in [&base, &head] {
-        let tree = commit.tree().map_err(|error| error.to_string())?;
-        let mut special = false;
-        tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
-            if matches!(entry.filemode(), 0o120_000 | 0o160_000) {
-                special = true;
-            }
-            git2::TreeWalkResult::Ok
-        })
-        .map_err(|error| error.to_string())?;
-        if special {
-            return Err("a candidate or line tree contains a symbolic link or submodule".into());
-        }
-    }
     let output = super::history::command()
         .arg("-C")
         .arg(root)
@@ -133,7 +181,73 @@ fn records_only(root: &Path, base: &str, head: &str) -> Result<(), String> {
         return Err(format!("cannot read candidate diff: {}", output.status));
     }
     let entries = parse_raw(&output.stdout).ok_or("cannot parse candidate diff")?;
-    classify_entries(&entries, &patterns, &project)
+    classify_entries(&entries, &patterns, &project)?;
+    // A link can redirect a tool reading a record only when it sits under a
+    // declared record folder or on a folder a changed record resolves
+    // through. Links elsewhere, such as a root `CLAUDE.md -> AGENTS.md`,
+    // cannot, so they do not withhold the class.
+    let mut scopes: Vec<String> = policy
+        .git
+        .record_paths
+        .iter()
+        .map(|p| literal_dir(p))
+        .collect();
+    for entry in &entries {
+        if let Ok(path) = entry.path.rule_text() {
+            scopes.push(path.to_string());
+        }
+    }
+    for commit in [&base, &head] {
+        let tree = commit.tree().map_err(|error| error.to_string())?;
+        let mut special: Option<String> = None;
+        tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if matches!(entry.filemode(), 0o120_000 | 0o160_000) {
+                let name = String::from_utf8_lossy(entry.name_bytes());
+                let path = format!("{dir}{name}");
+                if link_reaches_records(&path, &scopes, &patterns) {
+                    special = Some(path);
+                    return git2::TreeWalkResult::Abort;
+                }
+            }
+            git2::TreeWalkResult::Ok
+        })
+        .or_else(|error| {
+            if special.is_some() {
+                Ok(())
+            } else {
+                Err(error.to_string())
+            }
+        })?;
+        if let Some(path) = special {
+            return Err(format!(
+                "{} is a symbolic link or submodule on a record path",
+                crate::git::display_text(&path)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The folder part of a glob before its first wildcard, ending in `/`, or
+/// the empty string (the whole tree) when the glob has no literal folder.
+fn literal_dir(pattern: &str) -> String {
+    let literal = &pattern[..pattern.find(['*', '?', '[']).unwrap_or(pattern.len())];
+    literal
+        .rfind('/')
+        .map_or_else(String::new, |end| literal[..=end].to_string())
+}
+
+/// Whether a link at `path` sits on a record path: it matches a record glob,
+/// lies under a declared record folder, or is a folder that a record folder
+/// or a changed path resolves through.
+fn link_reaches_records(path: &str, scopes: &[String], patterns: &[glob::Pattern]) -> bool {
+    let folder = format!("{path}/");
+    patterns.iter().any(|pattern| pattern.matches(path))
+        || scopes.iter().any(|scope| {
+            ((scope.ends_with('/') || scope.is_empty()) && path.starts_with(scope.as_str()))
+                || scope.starts_with(&folder)
+                || scope == path
+        })
 }
 
 fn classify_entries(
@@ -149,11 +263,9 @@ fn classify_entries(
             .path
             .rule_text()
             .map_err(|_| "a changed path is not UTF-8")?;
-        if !regular(entry)
-            || (entry.old_mode != "000000"
-                && entry.new_mode != "000000"
-                && entry.old_mode != entry.new_mode)
-        {
+        // `regular` admits only 000000 and 100644 on each side, so a mode
+        // change between two present files cannot pass it.
+        if !regular(entry) {
             return Err(format!(
                 "{} changes mode or is not a regular non-executable file",
                 crate::git::display_text(path)

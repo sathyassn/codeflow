@@ -559,13 +559,18 @@ both refs: `Merge branch '<branch>' into <target>`.
 
 For an `integration/` target, the diff from its pinned tip selects the gate.
 Declared regular Markdown records use `validate --docs`, range `ci`, the
-built-in credential scan and every quick target. Other candidates run every
-full target. `git.record_paths` comes from the target tip; product and watched
-paths, instructions, configuration, mode changes and special files cannot
-qualify. An unproven class uses full. Non-integration targets retain full.
-The outcome names the class and checks actually run, also saved at
-`<git-common-dir>/codeflow/landings/<candidate>.json`. Projects still run their
-adopted secret scanners and record checks. `codeflow ci` reports the selected
+built-in credential scan, each target in the test config's
+`execution.record_checks` (full mode) and every quick target. Other
+candidates run every full target. `git.record_paths` comes from the target
+tip; product and watched paths, instructions, configuration, mode changes and
+special files on a record path cannot qualify. An unproven class uses full.
+Non-integration, protected and release targets (`integration/release-*` or
+`git.release_branch_pattern`) retain full. The credential scan reads the
+lines each introduced commit adds and waives only a commit-qualified
+fingerprint in the target tip's `.gitleaksignore`; a refusal names the
+commit, path and line. The outcome names the class and checks actually run,
+also saved at `<git-common-dir>/codeflow/landings/<candidate>.json`. Projects
+still run their adopted secret scanners. `codeflow ci` reports the selected
 class and its own checks; it does not execute or certify the other gates.
 
 Both modes advance the local target only after the gate and the adopted

@@ -1727,7 +1727,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "080fc21ac7914636bab8b1aeac60dce3677cd96b1b9a1e877dd127f524e78193",
+      "sha256": "3d1363eaee85d5969f10c86e0d7b76fdfcf78fc3cd9c36cf340812b51cd6f791",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -1739,7 +1739,7 @@
     ".codeflow/rules/worktrees.md": {
       "src": "rules/worktrees.md",
       "ownership": "managed",
-      "sha256": "26d75958366704c362d29fc5c816931eb7dd00be82cae4426c60fe070d7ee976",
+      "sha256": "2b81448b0ca8ee7d650e99ccd832ca2e192db3b95243ddc5dee40c712cb974a2",
       "exec": false
     },
     ".codeflow/rules/writing.md": {

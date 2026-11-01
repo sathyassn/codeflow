@@ -55,6 +55,10 @@
       "scripts/fixtures/coverage-merge/**",
       "scripts/test_gate_portal_windows.py"
     ],
+    "record_checks": [
+      "docs-validation",
+      "docs-portal"
+    ],
     "worker_budget": 9,
     "heavy_wait_seconds": 1800
   },

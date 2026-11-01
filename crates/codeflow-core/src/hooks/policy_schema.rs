@@ -704,7 +704,7 @@ pub const SCHEMA: [KeySpec; 78] = [
     KeySpec {
         path: "git.record_paths",
         kind: KeyKind::StringList,
-        valid: "an array of repository-relative path globs",
+        valid: "an array of repository-relative path globs (the `glob` crate's syntax, where `*` also crosses `/`)",
         purpose: "Markdown records eligible for the records-only integration landing class.",
         notes: "Read from the line tip. Defaults to task and epic records and docs Markdown. An empty list disables the short path. Product and watched paths, instructions, configuration, mode changes and special files always require the full gate. The shipped policy file does not list it, so an older binary never meets the key.",
     },

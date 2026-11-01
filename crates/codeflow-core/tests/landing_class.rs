@@ -206,3 +206,75 @@ fn a_diverged_candidate_cannot_use_its_merge_base_as_the_line_tip() {
         LandingClass::Code
     );
 }
+
+#[test]
+fn protected_and_release_targets_keep_the_full_gate() {
+    use codeflow_core::workgraph::landing_class::classify_landing_into;
+    for (policy, target, class, reason) in [
+        (
+            "{}",
+            "integration/EPC-001-notes",
+            LandingClass::RecordsOnly,
+            "declared",
+        ),
+        (
+            "{}",
+            "integration/release-4.0",
+            LandingClass::Code,
+            "release pattern",
+        ),
+        ("{}", "main", LandingClass::Code, "not an integration line"),
+        (
+            r#"{"git":{"protected_branches":["main","integration/locked"]}}"#,
+            "integration/locked",
+            LandingClass::Code,
+            "protected",
+        ),
+        (
+            r#"{"git":{"release_branch_pattern":"integration/stable-*"}}"#,
+            "integration/stable-4",
+            LandingClass::Code,
+            "release pattern",
+        ),
+    ] {
+        let (dir, base) = fixture(policy);
+        write(dir.path(), "docs/guide.md", "Changed\n");
+        commit(dir.path());
+        let actual = classify_landing_into(dir.path(), &base, "HEAD", target);
+        assert_eq!(actual.class, class, "{target}: {}", actual.reason);
+        assert!(
+            actual.reason.contains(reason),
+            "{target}: {}",
+            actual.reason
+        );
+    }
+}
+
+#[test]
+fn only_links_on_record_paths_withhold_the_class() {
+    for (link, class) in [
+        ("CLAUDE.md", LandingClass::RecordsOnly),
+        ("tools/vendor", LandingClass::RecordsOnly),
+        ("docs/img/source", LandingClass::Code),
+        ("project-management", LandingClass::Code),
+    ] {
+        let (dir, _) = fixture("{}");
+        let object = git(dir.path(), &["rev-parse", "HEAD:src/source.rs"]);
+        git(
+            dir.path(),
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("120000,{object},{link}"),
+            ],
+        );
+        git(dir.path(), &["commit", "-qm", "test: add a link"]);
+        let base = git(dir.path(), &["rev-parse", "HEAD"]);
+        git(dir.path(), &["checkout", "-q", "--", "."]);
+        write(dir.path(), "docs/guide.md", "Changed\n");
+        git(dir.path(), &["add", "docs/guide.md"]);
+        git(dir.path(), &["commit", "-qm", "test: change a record"]);
+        decision(dir.path(), &base, class);
+    }
+}

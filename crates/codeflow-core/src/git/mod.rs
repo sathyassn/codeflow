@@ -35,6 +35,9 @@ pub fn designate_calling_binary(binary: PathBuf) {
 }
 
 /// Start this CLI's binary for another command; library callers use PATH.
+/// A library caller that never designated a binary (a test calling
+/// `integrate()` directly) therefore runs whatever `codeflow` PATH names,
+/// which can be an older release; the CLI always designates itself.
 #[must_use]
 pub fn codeflow_command() -> std::process::Command {
     std::process::Command::new(

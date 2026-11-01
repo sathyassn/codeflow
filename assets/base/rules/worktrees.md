@@ -165,8 +165,10 @@ there, and inspects each landing merge: a clean merge does not reopen unit
 review; a hand-resolved product hunk returns its task to a whole-unit
 review at its new head (cf-method "Land in batches" where installed). Then
 the landing class in `git-rules.md`, "Bodies of work", selects the checks:
-records-only candidates run validation, the quick gate, range CI, the secret
-scan and project record checks; every other candidate runs one full gate.
+records-only candidates run validation, range CI, the secret scan, the
+targets in `execution.record_checks` and the quick gate; every other
+candidate, and any candidate for a protected or release target, runs one
+full gate.
 The exact candidate's class and executed checks are attached to the PRs it
 covers; a standalone PR is its own
 candidate. A red gate is diagnosed first: a member and its dependents are

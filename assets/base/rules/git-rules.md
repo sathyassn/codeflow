@@ -124,10 +124,14 @@ cf-method, "Managing a body of work" (standard and full tiers).
 The integration landing gate follows the candidate's diff from the current
 line tip. `codeflow ci --base <line-tip> --head <candidate> --into <line>`
 reports its landing class. A **records-only** candidate needs
-`codeflow validate --docs`, `codeflow test --mode quick --all`, a clean
-`codeflow ci` on that range, the secret scan and the project's record checks.
-A **code** candidate keeps one full gate on the exact candidate. Protected
-release targets keep their full gate. A classification is not a passed check.
+`codeflow validate --docs`, a clean `codeflow ci` on that range, the
+built-in secret scan of every introduced commit, each target the project
+lists in `execution.record_checks` of `.codeflow/test-config.json` (run in
+full mode) and `codeflow test --mode quick --all`.
+A **code** candidate keeps one full gate on the exact candidate. A protected
+target, or one matching the release branch pattern (`integration/release-*`
+or `git.release_branch_pattern`), keeps its full gate whatever the diff. A
+classification is not a passed check.
 
 `git.record_paths` in the line tip's `.codeflow/policy.json` declares the
 eligible paths. Defaults are task and epic Markdown under
@@ -141,14 +145,17 @@ planning classifier's product, watched, instruction, hidden and template
 exclusions. Config and JSON stay code. A project marks Markdown that a build
 or check executes or treats as a contract in `product_paths` or
 `breaking_watch_paths`; a record declaration never overrides those lists.
-Both sides of a rename or copy must qualify. A mode change, symlink,
-submodule, unreadable diff or invalid config keeps the full gate.
+Both sides of a rename or copy must qualify. A mode change, a symlink or
+submodule under a declared record folder or on a folder a changed record
+resolves through, an unreadable diff or invalid config keeps the full gate.
 
 The landing evidence names the base, candidate, class and checks actually
 run. `codeflow integrate` records these under the shared Git directory at
 `codeflow/landings/<candidate>.json`; its records-only path runs validation,
-range CI, the built-in credential scan and the quick gate. Project and hosted
-secret scanners remain required where adopted. A PR landing carries the same
+range CI, the built-in credential scan, the declared record checks and the
+quick gate. The built-in scan waives a hit only for a commit-qualified
+fingerprint in `.gitleaksignore` at the line tip. Project and hosted secret
+scanners remain required where adopted. A PR landing carries the same
 evidence in its PR. CI reports its own executed checks and does not claim to
 have run the other landing checks.
 
