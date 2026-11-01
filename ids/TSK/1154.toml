@@ -1,0 +1,11 @@
+id = "TSK-1154"
+uid = "a3d20aca-122d-4a5f-b807-85cf606e0110"
+kind = "TSK"
+title = "A landing candidate accepts a task's own criteria change that its pull request already judged"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T21:19:44Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
