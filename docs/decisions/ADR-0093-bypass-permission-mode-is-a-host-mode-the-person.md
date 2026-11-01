@@ -146,7 +146,13 @@ decision 2026-10-31):
   call for these options, with no `--` stop and no model of where gh's
   options end (an option can take `--` as its value; review round 5), so
   any word that could be one must be a jq flag with a selector program,
-  and it accepts the refusal of some harmless calls that this causes. The shipped ask and deny
+  and it accepts the refusal of some harmless calls that this causes.
+  Because the shell can build an argument the guard never sees (brace
+  expansion turned `{--jq,env}` into two; review round 6), a `gh` call
+  runs only when every argument word is literal: a word the shell
+  builds, or `gh` run with arguments by a program other than a plain
+  launcher (`xargs`, `find -exec`, `parallel`), refuses the call on every
+  verb, while quoted literals stay allowed. The shipped ask and deny
   rules stay as a second layer for the common spellings.
 - The Read tool and the sandbox deny the token stores of `gh`, git,
   Docker, gcloud, Azure, npm and the macOS keychains.

@@ -855,7 +855,7 @@ catalog! {
     /// template), which gh runs outside the Claude sandbox with its
     /// environment (TSK-1070 security review round 4).
     GH_OUTPUT_PROGRAM = Step::Edit(".codeflow/policy.json"),
-        "select fields with a plain path such as `--jq .head.sha` or `--jq '.[].name'`, or read the `--json` output as gh prints it; filters, functions, variables and templates are refused because gh evaluates them outside the sandbox with the GitHub token in its environment, and a pipe into `jq` keeps the call sandboxed, where gh has no token; the check is `security.secret_reads` in `.codeflow/policy.json`, which the operator owns";
+        "write every `gh` argument as a literal word, quoting any that holds pattern characters, with no variable, substitution, glob, brace or `xargs` supplier; select fields with a plain path such as `--jq .head.sha` or `--jq '.[].name'`, or read the `--json` output as gh prints it; filters, functions, variables and templates are refused because gh evaluates them outside the sandbox with the GitHub token in its environment, and a pipe into `jq` keeps the call sandboxed, where gh has no token; the check is `security.secret_reads` in `.codeflow/policy.json`, which the operator owns";
 
     /// A recursive read or glob whose complete selected paths cannot be inspected.
     SECRET_SELECTION = Step::Edit(".codeflow/policy.json"),

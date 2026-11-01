@@ -11468,6 +11468,75 @@ fn exec_guard_reads_every_gh_word_for_an_output_program() {
     }
 }
 
+/// TSK-1070 security review round 6 (SEC-09-R6-SHELL-ARGV): a `gh` call
+/// runs only when every argument word is provably literal. A word the
+/// shell builds, in any class, and arguments a runner supplies are
+/// refused on every verb; quoted literals stay allowed. Both hook payload
+/// shapes.
+#[test]
+fn exec_guard_refuses_gh_arguments_the_shell_builds() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for codex in [false, true] {
+        for command in [
+            // The reported payload.
+            "gh pr view 458 --json number {--jq,env}",
+            // Brace expansion, nested and combined.
+            "gh pr view 458 --json number {--jq,{env,x}}",
+            "gh pr view 458 --json number --j{q,x} env",
+            "gh run list --json name -{q,x}env",
+            // Parameter expansion and word splitting, quoted or not.
+            "gh pr view 458 --json number $FLAGS",
+            "gh pr view 458 --json number --jq \"$P\"",
+            "gh issue list --json title ${OPTS}",
+            // Arrays and positional arguments.
+            "gh pr view 458 --json number \"${args[@]}\"",
+            "gh pr view 458 --json number \"$@\"",
+            // Command substitution and backquotes.
+            "gh pr view 458 --json number $(printf -- '--jq env')",
+            "gh pr view 458 --json number `printf -- --jq` env",
+            // Globs, extended globs and tilde.
+            "gh pr view 458 --json number --j?",
+            "gh pr view 458 --json number --jq*",
+            "gh pr view 458 --json number @(--jq) env",
+            "gh pr view 458 --json number ~/x",
+            // Runners that supply the arguments.
+            "printf '%s\\n' --jq env | xargs gh pr view 458 --json number",
+            "find . -name x -exec gh pr view 458 --json number {} +",
+            "printf -- '--jq env' | parallel gh pr view 458 --json number",
+            "parallel gh pr view 458 --json number ::: --jq env",
+            "sudo gh pr view 458 --json number",
+            // Every verb, not only api.
+            "gh api repos/o/r {--jq,env}",
+            "gh release view v1 --json name {--jq,env}",
+        ] {
+            let out = exec_guard_from(dir.path(), command, codex);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{codex} {command}: {err}");
+        }
+        // Quoted literals hold pattern characters as text.
+        for command in [
+            "gh pr view 458 --json number --jq '.number'",
+            "gh run view 1 --json jobs --jq '.jobs[].databaseId'",
+            "gh pr list --json number --jq '.[] | .number'",
+            "gh pr create -t 'fix: keep {braces} and $dollars (literal)' -b 'body *'",
+            "gh issue create --title \"a ~tilde\" --body 'x'",
+            "gh pr view 458 --json title,number",
+            "env GH_PAGER=cat gh pr view 458 --json number",
+            "timeout 60 gh run watch 1",
+            "command -v gh",
+        ] {
+            let out = exec_guard_from(dir.path(), command, codex);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{codex} {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
 fn assert_asks(dir: &Path, command: &str) {
     let out = exec_guard_from(dir, command, false);
     let stdout = String::from_utf8_lossy(&out.stdout);

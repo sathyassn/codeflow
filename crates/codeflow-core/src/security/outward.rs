@@ -198,6 +198,10 @@ struct Parsed {
     /// `gh` calls whose options the guard cannot read for certain, with the
     /// reason (TSK-1070 security review round 2): refused.
     unread_gh: Vec<String>,
+    /// The words the shell builds in the segments being read, outermost
+    /// first (TSK-1070 security review round 6): a `gh` call among them
+    /// has arguments the guard cannot see, so it is refused.
+    generated: Vec<String>,
     /// `gh api` calls that write or reach another host, with the reason:
     /// the person is asked before they run.
     gh_writes: Vec<String>,
@@ -734,6 +738,10 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
     let (step_input, step_bound) = (out.literal_input.clone(), out.input.bound);
     for (stage, segment) in segments.into_iter().enumerate() {
         stage_input(out, &segment, (stage, stages), (&step_input, step_bound));
+        let generated = out.generated.len();
+        out.generated
+            .extend(crate::hooks::git_guard::shell_generated_words(&segment));
+        gh_segment(&segment, out);
         let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
         let before = words.len();
         strip_reserved_words(&mut words);
@@ -822,6 +830,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
                 }
             }
         }
+        out.generated.truncate(generated);
     }
     out.literal_input = step_input;
     out.input.bound = step_bound;
@@ -2921,6 +2930,48 @@ fn perl_attached_code(arg: &str) -> Option<&str> {
     None
 }
 
+/// A segment that names `gh` in any word position, judged without knowing
+/// which program runs it (TSK-1070 security review round 6): every word
+/// after it is read for an output program, and `gh` with arguments run by
+/// a program other than a known launcher (`env`, `timeout`, `command` and
+/// the like) is refused, since a runner such as `parallel` or `xargs` can
+/// hand gh arguments from its input or its own options that the guard
+/// cannot establish.
+fn gh_segment(segment: &str, out: &mut Parsed) {
+    let words = crate::hooks::git_guard::command_argv(segment);
+    let Some(at) = words
+        .iter()
+        .position(|word| crate::hooks::git_guard::launcher_name(word) == "gh")
+    else {
+        return;
+    };
+    if let Some(why) = super::gh_api::output_code(&words[at + 1..]) {
+        out.gh_code.push(why);
+    }
+    let program = crate::hooks::git_guard::strip_launchers(&words)
+        .map(|(program, _)| crate::hooks::git_guard::launcher_name(program));
+    if at + 1 < words.len() && program != Some("gh") {
+        out.gh_code.push(format!(
+            "`{}` runs gh, so the guard cannot see the arguments gh receives",
+            program.unwrap_or(words[0].as_str())
+        ));
+    }
+}
+
+/// Why the shell or a runner, rather than the written words, decides the
+/// arguments of this `gh` call, or `None` (TSK-1070 security review round
+/// 6).
+fn gh_unproven(out: &Parsed) -> Option<String> {
+    if let Some(word) = out.generated.first() {
+        return Some(format!(
+            "the shell builds the word `{word}` when the command runs, so the guard cannot see the arguments gh receives"
+        ));
+    }
+    out.supplier.as_ref().map(|_| {
+        "`xargs` or `find` supplies gh's arguments, so the guard cannot see them".to_string()
+    })
+}
+
 /// The `gh` calls whose family depends on their options: a visibility
 /// change, and `gh api` and `gh auth`, judged against one narrow allowlist
 /// rather than a model of gh's grammar (TSK-1070 security review round 3).
@@ -2942,6 +2993,9 @@ fn gh_family(
         out.families.push(("account", source()?));
     }
     if let Some(why) = super::gh_api::output_code(rest) {
+        out.gh_code.push(why);
+    }
+    if let Some(why) = gh_unproven(out) {
         out.gh_code.push(why);
     }
     let Some(first) = rest.first() else {

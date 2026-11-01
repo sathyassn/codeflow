@@ -104,7 +104,18 @@ amends ADR-0029's retry).
     `gh issue` `create` and `edit`, and another word in that call can
     still refuse it. This refuses some harmless calls, such as a value
     holding `q` or `t` attached to a short option (`-Ftitle=x`); spell
-    the value as a separate word. For anything richer, read the `--json`
+    the value as a separate word.
+  - A `gh` call runs only when every argument word is literal (review
+    round 6: `{--jq,env}` became two arguments the guard never saw). A
+    word the shell builds is refused on every `gh` verb: a variable or
+    word splitting, an array or positional argument, a command
+    substitution or backquote, a glob or extended glob, a tilde, and
+    brace expansion. So is `gh` with arguments run by any program other
+    than a plain launcher such as `env` or `timeout` (`xargs`,
+    `find -exec`, `parallel`, `sudo`), and every word after `gh` is read
+    for output programs whatever program runs it. Quote a word that
+    holds pattern characters: a quoted literal stays allowed.
+    For anything richer, read the `--json`
     output as gh prints it: a pipe into `jq` keeps the call sandboxed,
     where gh has no token.
   - The `forge_write` ask rules and the DELETE denies in the presets name

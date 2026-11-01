@@ -13384,6 +13384,12 @@ impl ShellWord {
         let equals = self.unquoted_prefix > 0 && self.text.starts_with('=');
         !(self.pattern || self.splits || equals)
     }
+
+    /// Whether the word holds exactly the text written, with no expansion
+    /// even inside double quotes ([`shell_generated_words`]).
+    fn verbatim(&self) -> bool {
+        self.literal() && !self.expands && !super::git_target::has_substitution(&self.text)
+    }
 }
 
 /// Up to `max` digits of `radix` read from the front of `chars` without
@@ -13687,6 +13693,20 @@ pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
             (word.text, literal)
         })
         .unzip()
+}
+
+/// The words of `segment`'s argument vector that the shell builds when
+/// the command runs rather than passing them as written (TSK-1070
+/// security review round 6): any `$` or backquote expansion, quoted or
+/// not, including a command substitution the segment reader replaced,
+/// any pattern, brace or tilde syntax outside quotes, and a leading zsh
+/// `=` expansion. A quoted literal (`'{.a}'`, `"x y"`) is verbatim.
+pub(crate) fn shell_generated_words(segment: &str) -> Vec<String> {
+    argv_words(segment)
+        .into_iter()
+        .filter(|word| !word.verbatim())
+        .map(|word| word.text)
+        .collect()
 }
 
 /// The words of [`command_argv`] with their parse.
