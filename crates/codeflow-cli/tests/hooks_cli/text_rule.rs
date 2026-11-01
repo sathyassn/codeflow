@@ -215,7 +215,9 @@ fn local_relaxed(root: &Path) -> String {
 }
 
 /// SEC01-2: a remote `HEAD` that points outside the remote's namespace, at
-/// a local branch or a tag, does not select relaxed.
+/// a local branch or a tag, does not select relaxed. Since TSK-1077 the
+/// policy authority itself refuses such a `HEAD`, so the call is refused
+/// before any rule is chosen.
 #[test]
 fn a_remote_head_outside_the_remote_keeps_strict() {
     for target in ["refs/heads/relaxed", "refs/tags/relaxed-tag"] {
@@ -227,9 +229,9 @@ fn a_remote_head_outside_the_remote_keeps_strict() {
         )
         .unwrap();
         let out = exec_guard(dir.path(), EVERYDAY, false);
-        assert!(run_time_word_refusal(&out), "{target}: {out:?}");
+        assert_eq!(out.status.code(), Some(2), "{target}: {out:?}");
         assert!(
-            String::from_utf8_lossy(&out.stderr).contains("outside refs/remotes/origin/"),
+            String::from_utf8_lossy(&out.stderr).contains("not a branch of origin"),
             "{target}: {out:?}"
         );
     }
