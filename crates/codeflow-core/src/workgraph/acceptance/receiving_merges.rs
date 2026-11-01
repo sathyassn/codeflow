@@ -70,9 +70,11 @@ pub(super) fn findings(
     let project = super::super::amendment::project_at(repo, base)?;
     let mut found = Vec::new();
     for (merge, first) in merges {
+        // The range's base is already the receiving line's work: a task
+        // branch that re-merges its target line brings nothing new from it.
         let mut hide: Vec<String> = reviewed
             .iter()
-            .chain(std::iter::once(&first))
+            .chain([&first, &base])
             .map(ToString::to_string)
             .collect();
         for home in &homes {
