@@ -815,7 +815,7 @@ fn command_scope_hooks_path(
         .any(|(scope, _, _)| *scope == "command")
     {
         return Err(
-            "core.hooksPath is set in the command scope (the environment or -c), which replaces the repository hooks; unset GIT_CONFIG_COUNT, GIT_CONFIG_PARAMETERS or the option".into(),
+            "core.hooksPath is set in the command scope (the environment or -c), which replaces the repository hooks; unset the inherited Git configuration variables or the option".into(),
         );
     }
     Ok(())
