@@ -207,13 +207,30 @@ class DecisionTests(unittest.TestCase):
                      ".github/workflows/codeflow-ci.yml"):
             with self.subTest(path=path):
                 self.assertIn("cache inputs", self.skipped(git=FakeGit(changed=["README.md", path])))
-        self.assertEqual(decide(git=FakeGit(changed=["README.md", "scripts/ci-reuse.py"])), 77)
+        self.assertEqual(decide(git=FakeGit(changed=["README.md", "scripts/test_ci_reuse.py"])), 77)
+
+    def test_a_push_that_changes_the_decider_runs_everything(self):
+        # The workflow also pins the decider's hash; either alone refuses.
+        self.assertIn("scripts/ci-reuse.py", self.skipped(git=FakeGit(changed=["README.md", "scripts/ci-reuse.py"])))
+        self.assertTrue(reuse.cache_input("scripts/ci-reuse.py"))
 
     def test_no_pull_request_or_an_unmerged_or_other_one_runs_everything(self):
         for pulls in ([], [{"number": 1, "merged_at": None, "merge_commit_sha": PUSHED, "head": {"sha": HEAD}}],
                       [{"number": 1, "merged_at": "x", "merge_commit_sha": MAIN, "head": {"sha": HEAD}}]):
             with self.subTest(pulls=pulls):
                 self.assertIn("reuse needs exactly one", self.skipped(api=FakeApi(pulls=pulls)))
+
+    def test_two_merged_pull_requests_for_one_commit_run_everything(self):
+        merged = {"number": 95, "merged_at": "x", "merge_commit_sha": PUSHED, "head": {"sha": HEAD},
+                  "base": {"ref": "main"}}
+        self.assertIn("2 merged pull requests", self.skipped(api=FakeApi(pulls=[merged, {**merged, "number": 96}])))
+
+    def test_a_draft_run_whose_verdicts_were_skipped_runs_everything(self):
+        # A draft pull request run ends its verdicts neutral (skipped), and
+        # skips the gate jobs; it must never stand in for a ready run.
+        draft = [job("secret scan"), job("codeflow gates", "skipped"), job("windows", "skipped"),
+                 job("reuse a pull request verdict", "skipped")]
+        self.assertIn("'codeflow gates'", self.skipped(api=FakeApi(jobs={77: draft})))
 
     def test_a_failed_cancelled_running_or_missing_run_runs_everything(self):
         for runs in ([run(conclusion="failure")], [run(conclusion="cancelled")],
@@ -259,8 +276,20 @@ class DecisionTests(unittest.TestCase):
                 self.assertIn("pull_request run of #95 into main",
                               self.skipped(api=FakeApi(runs=[run(pull_requests=associations)])))
 
+    def test_the_skipped_release_job_name_is_the_workflow_text_unexpanded(self):
+        # The script, not a shell argument, holds the name, so Actions never
+        # evaluates the `${{ }}`. GitHub records the skipped matrix job under
+        # its `name:` text as written (run 41335856425).
+        workflow = (ROOT / ".github" / "workflows" / "codeflow-ci.yml").read_text()
+        self.assertIn(f"    name: {RELEASE_JOB}\n", workflow)
+        self.assertEqual(reuse.LINE_SKIPS, frozenset({RELEASE_JOB}))
+        self.assertNotIn("--line-skip", workflow)
+
     def test_the_release_parts_may_be_skipped_on_a_line_only(self):
         jobs = [*GREEN_JOBS, job(RELEASE_JOB, "skipped")]
+        default = reuse.decide("push", PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, FakeGit(), FakeApi(base=LINE, jobs={77: jobs}),
+                               APT_KEY, LINE_REF, IMAGES, WORKFLOW_TEXT)
+        self.assertEqual(default, 77)
         self.assertEqual(decide(api=FakeApi(base=LINE, jobs={77: jobs}), ref=LINE_REF), 77)
         self.assertIn("release", self.skipped(api=FakeApi(jobs={77: jobs})))
         self.assertIn("release", self.skipped(api=FakeApi(base=LINE, jobs={77: jobs}), ref=LINE_REF, line_skips=frozenset()))

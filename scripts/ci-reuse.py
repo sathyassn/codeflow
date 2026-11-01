@@ -26,7 +26,8 @@ never from a pull request's branch name or other text it controls:
    head, and main only moves forward;
 5. the push changes none of the build cache inputs (the toolchain, the cargo
    and npm lock files, the manifests, and this workflow, which names the
-   cache keys and what each job builds), so a push that invalidates the
+   cache keys and what each job builds) and does not change this decider,
+   whose hash the workflow also pins, so a push that invalidates the
    caches, or adds a job whose cache main lacks, still runs and saves them on
    main for later pull requests;
 6. the pushed line or main already holds the present part's apt cache for
@@ -97,7 +98,13 @@ MAX_PROVENANCE_BYTES = 65536
 # coverage shards' cache).
 CACHE_INPUTS = ("rust-toolchain", "rust-toolchain.toml", ".cargo/config.toml",
                 "*Cargo.toml", "*Cargo.lock", "*package-lock.json", "*.node-version",
-                ".github/workflows/codeflow-ci.yml")
+                ".github/workflows/codeflow-ci.yml", "scripts/ci-reuse.py")
+# The release parts are skipped in a pull request run into an integration line
+# and in a push to it. GitHub records a skipped matrix job under its unexpanded
+# `name:` text, so this is that text exactly (a test reads it from the
+# workflow); handling it here keeps `${{ }}` out of the workflow's shell
+# arguments, which Actions would evaluate before the script saw them.
+LINE_SKIPS = frozenset({"codeflow gates (release ${{ matrix.part }})"})
 
 
 # The Playwright version the present part reads, and the lock it must equal
@@ -213,7 +220,7 @@ def read_provenance(api, run: dict, head: str, name: str = PROVENANCE):
 def decide(event: str, sha: str, workflow_path: str, push_only: set[str], required: set[str], git, api,
            apt_key: str, ref: str, images: dict[str, tuple[str, str]] | None = None,
            workflow_text: str | None = None,
-           line_skips: frozenset[str] = frozenset()) -> int:
+           line_skips: frozenset[str] = LINE_SKIPS) -> int:
     """The id of the pull request run whose verdict the push reuses; raises
     Skip with the reason when the push must run every job."""
     if event != "push":
@@ -481,8 +488,6 @@ def main() -> int:
     parser.add_argument("--windows-image-version", default="", help="the Windows runner's ImageVersion")
     parser.add_argument("--push-only", action="append", default=[], help="a job that runs only on a push")
     parser.add_argument("--require", action="append", default=[], help="a verdict job the reused run must have")
-    parser.add_argument("--line-skip", action="append", default=[],
-                        help="a job a push to an integration line skips as well, so its skip is no failure")
     parser.add_argument("--api", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
     args = parser.parse_args()
     try:
@@ -492,8 +497,7 @@ def main() -> int:
         run = decide(args.event, args.sha, path, set(args.push_only), set(args.require), Git(),
                      Api(args.api, args.repo, os.environ.get("GH_TOKEN", "")), key, args.ref,
                      {PROVENANCE: (args.image_os, args.image_version),
-                      PROVENANCE_WINDOWS: (args.windows_image_os, args.windows_image_version)}, text,
-                     frozenset(args.line_skip))
+                      PROVENANCE_WINDOWS: (args.windows_image_os, args.windows_image_version)}, text)
     except Skip as reason:
         print(f"ci-reuse: every job runs: {reason}")
         return 0
