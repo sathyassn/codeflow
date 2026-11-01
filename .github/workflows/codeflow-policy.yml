@@ -26,13 +26,28 @@
 # registry check; with durable work tracking off, `codeflow ids check` passes
 # with a note.
 #
-# Pull request runs share one concurrency group per pull request, so a newer
-# event (a push, then a body edit seconds later) cancels the run it
-# supersedes. The judging run reads the pull request's body from the API
-# when it runs, never from its event, so the newest body is judged whichever
-# run survives. Push, schedule and dispatch runs each get a group of their
-# own run and are never cancelled: a registry run is never replaced by a
-# newer queued event.
+# Pull request runs share one concurrency group per pull request, and no
+# event cancels or replaces a run: `cancel-in-progress` is false and
+# `queue: max` keeps every pending run, so a push followed by a body edit
+# seconds later leaves both runs to finish and the push's required "commit
+# standards" check completed, never cancelled. (`cancel-in-progress: false`
+# alone is not enough: the default queue holds one pending run and cancels
+# it when a newer one arrives.) Limits: a group queues at most 100 runs, and
+# a run that arrives past that is cancelled, so the newest push fails closed
+# until the check is re-run; `queue` is a 2026 key that some linters reject
+# (actionlint releases up to 1.7.12), so ignore that message in the linter's
+# configuration rather than removing the key.
+#
+# A run judges the head, base branch and body as it reads them, so a queued
+# run can judge a pull request that has changed since its event. The last
+# step reads the pull request again and fails the run, with its own
+# message, when the head, the base branch or the body changed while it
+# judged them; the run queued by that change decides. It fails closed when
+# that read fails. A change made after that last read, before the run ends,
+# is judged by the run that change queued. The body is logged as a sha256
+# digest, never as text. Each run makes two API reads on the job's token.
+# Push, schedule and dispatch runs each get a group of their own run, so a
+# registry run is never replaced by a newer queued event.
 #
 # This repository's copy: CodeFlow is its own first consumer, so the install
 # step builds the target branch's own source in place of the pinned release.
@@ -53,7 +68,8 @@ permissions:
 
 concurrency:
   group: ${{ github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   commit-lint:
@@ -107,6 +123,7 @@ jobs:
       # delivered late, or a re-run), so only the current body is the newest.
       # The text is written as a step output under a random delimiter and is
       # never interpolated into a script.
+      # A sha256 digest of that text is its other output.
       - name: Read the pull request's current body
         id: body
         if: github.event_name == 'pull_request_target'
@@ -124,6 +141,15 @@ jobs:
             jq -r '.body // ""' "${RUNNER_TEMP}/pull.json"
             echo "${delimiter}"
           } >> "$GITHUB_OUTPUT"
+          # The body is logged as a digest, never as text; the last step
+          # compares a new digest with this one.
+          if command -v sha256sum >/dev/null 2>&1; then
+            digest=$(jq -r '.body // ""' "${RUNNER_TEMP}/pull.json" | sha256sum | cut -d ' ' -f 1)
+          else
+            digest=$(jq -r '.body // ""' "${RUNNER_TEMP}/pull.json" | shasum -a 256 | cut -d ' ' -f 1)
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "pull request body judged: sha256 ${digest}"
 
       # The PR body reaches `codeflow ci` through `env:`, never interpolated
       # into the script, so an untrusted body cannot inject shell.
@@ -183,3 +209,42 @@ jobs:
           python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
             --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows \
             --wait "$wait"
+
+      # The last read. The run judged the head, base branch and body it read
+      # above; if any changed while it ran, this run fails with its own
+      # message and the run queued by that change decides. The base commit is
+      # not compared, since a push to the base branch fires no pull request
+      # event. A failed or unreadable read fails the run, never passes it.
+      - name: the pull request is unchanged since it was judged
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          JUDGED_HEAD: ${{ github.event.pull_request.head.sha }}
+          JUDGED_BASE: ${{ github.event.pull_request.base.ref }}
+          JUDGED_DIGEST: ${{ steps.body.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! curl -fsSL --retry 3 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull-after.json"; then
+            echo "::error::cannot read the pull request again, so this run cannot show that what it judged is current; it fails closed; re-run the check"; exit 1
+          fi
+          if ! head=$(jq -er '.head.sha' "${RUNNER_TEMP}/pull-after.json") \
+            || ! base=$(jq -er '.base.ref' "${RUNNER_TEMP}/pull-after.json") \
+            || ! body=$(jq -r '.body // ""' "${RUNNER_TEMP}/pull-after.json" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d ' ' -f 1); then
+            echo "::error::the pull request read at the end of this run is unreadable, so this run fails closed; re-run the check"; exit 1
+          fi
+          if [ -z "$JUDGED_DIGEST" ]; then
+            echo "::error::this run recorded no body digest, so it cannot show that the body is unchanged; it fails closed; re-run the check"; exit 1
+          fi
+          if [ "$head" != "$JUDGED_HEAD" ]; then
+            echo "::error::the pull request head changed while this run judged it (judged ${JUDGED_HEAD}, now ${head}); the run queued by the new head decides"; exit 1
+          fi
+          if [ "$base" != "$JUDGED_BASE" ]; then
+            echo "::error::the pull request base branch changed while this run judged it (judged ${JUDGED_BASE}, now ${base}); the run queued by that change decides"; exit 1
+          fi
+          if [ "$body" != "$JUDGED_DIGEST" ]; then
+            echo "::error::the pull request body changed while this run judged it (judged sha256 ${JUDGED_DIGEST}, now ${body}); the run queued by that edit decides"; exit 1
+          fi
+          echo "the pull request head, base branch and body are unchanged since this run judged them"
