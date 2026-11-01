@@ -186,3 +186,24 @@ pub(super) fn judging_policy(
         raw: Ok(Some(raw)),
     })
 }
+
+/// The size and ignored-file rules (TSK-323), read with their policy keys,
+/// the project kind and the `.gitignore` files at the authority commit,
+/// never the range or the working copy; a policy that commit lacks gives
+/// the shipped defaults. A run with no authority commit (neither
+/// `--policy-from` nor a base) cannot judge them and says so, rather than
+/// reading them at the head it is judging (TSK-1077, ADR-0091).
+///
+/// # Errors
+/// No authority commit, or as `ContentRules::at_authority`.
+pub(super) fn content_rules(
+    root: &Path,
+    authority: Option<&Authority>,
+) -> Result<codeflow_core::hooks::path_policy::ContentRules, String> {
+    let Some(authority) = authority else {
+        return Err(
+            "the size and ignored-file rules are read at the authority commit, and this run has none; pass --base or --policy-from".into(),
+        );
+    };
+    codeflow_core::hooks::path_policy::ContentRules::at_authority(root, authority.sha())
+}

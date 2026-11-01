@@ -18,6 +18,11 @@ pub struct LandedPolicy {
     /// and local only).
     pub authority: Option<Authority>,
     pub local_differs: bool,
+    /// The commit the policy and project settings were read at: the
+    /// authority's, or `HEAD`'s in the labelled states; `None` when they
+    /// came from the working copy. The size and ignored-file rules
+    /// (TSK-323) read their project kind and ignore rules here.
+    pub commit: Option<git2::Oid>,
 }
 
 /// The default branch the policy was read from, bound to one commit.
@@ -109,6 +114,7 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
     let (policy, project) = at_commit(&repo, oid, &shown)?;
     let mut landed = finish(root, policy, project, shown)?;
     landed.authority = Some(authority);
+    landed.commit = Some(oid);
     Ok(landed)
 }
 
@@ -210,7 +216,9 @@ fn unestablished(repo: &Repository, root: &Path, reason: &str) -> Result<LandedP
                 .map_err(|e| format!("cannot read policy source HEAD: {e}"))?
                 .id();
             let (policy, project) = at_commit(repo, oid, "HEAD")?;
-            finish(root, policy, project, format!("HEAD ({reason})"))
+            let mut landed = finish(root, policy, project, format!("HEAD ({reason})"))?;
+            landed.commit = Some(oid);
+            Ok(landed)
         }
         Err(error)
             if matches!(
@@ -231,6 +239,7 @@ fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
         source: source.into(),
         authority: None,
         local_differs: false,
+        commit: None,
     })
 }
 
@@ -248,6 +257,7 @@ fn finish(
         source,
         authority: None,
         local_differs,
+        commit: None,
     })
 }
 
@@ -295,6 +305,31 @@ pub fn policy_text_at(root: &Path, rev: &str) -> Result<Option<String>, String> 
         .and_then(|o| o.peel_to_tree())
         .map_err(|e| format!("cannot read policy source {shown}: {e}"))?;
     file_in(&repo, &tree, ".codeflow/policy.json", &shown)
+}
+
+/// The policy an authority commit holds, checked against the schema before
+/// it is read, or the shipped defaults when the commit has no policy file.
+/// The size and ignored-file rules read their keys here, so a value the
+/// schema refuses, such as `null` for a rule object, stops the check
+/// instead of reading as an absent key.
+///
+/// # Errors
+/// The commit or its policy cannot be read, or the policy is invalid.
+pub fn checked_policy_at(repo: &Repository, commit: git2::Oid) -> Result<Policy, String> {
+    let rev = commit.to_string();
+    let short = &rev[..rev.len().min(9)];
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|commit| commit.tree())
+        .map_err(|e| format!("cannot read policy source {short}: {e}"))?;
+    let Some(text) = file_in(repo, &tree, ".codeflow/policy.json", short)? else {
+        return Ok(Policy::default());
+    };
+    super::policy_schema::validate_policy_str(&text).map_err(|errors| {
+        let shown: Vec<_> = errors.iter().map(ToString::to_string).collect();
+        format!("invalid policy at {short}: {}", shown.join("; "))
+    })?;
+    serde_json::from_str(&text).map_err(|e| format!("invalid policy at {short}: {e}"))
 }
 
 /// The text of the regular file at `path` in `tree`: `None` when the tree
@@ -497,6 +532,51 @@ pub fn staged_paths(
         &super::path_policy::PathPolicy::from_git(local)?,
         PathPolicySource::WorkingCopy,
     ))
+}
+
+/// [`staged_paths`] and the size and ignored-file rules from one read of
+/// the authority: the policy, project kind and ignore rules of the one
+/// commit the policy was read at. The content rules take nothing from the
+/// working copy, a line or a guessed branch.
+///
+/// # Errors
+/// Either policy source, a path declaration or the authority commit cannot
+/// be read.
+pub fn staged_rules(
+    root: &Path,
+    local: &super::policy::GitPolicy,
+) -> Result<
+    (
+        super::path_policy::PathPolicy,
+        super::path_policy::ContentRules,
+    ),
+    String,
+> {
+    let landed = load(root)?;
+    let paths = compose_paths(
+        super::path_policy::PathPolicy::from_git(&landed.policy.git)?,
+        &super::path_policy::PathPolicy::from_git(local)?,
+        PathPolicySource::WorkingCopy,
+    );
+    let Some(repo) = super::repo::open(root)? else {
+        return Err("the repository cannot be opened".into());
+    };
+    let content = match landed.commit {
+        Some(commit) => {
+            let policy = checked_policy_at(&repo, commit)?;
+            super::path_policy::ContentRules::at(&repo, &policy.git, Some(commit), None)?
+        }
+        // Before the first commit: the working copy's settings, the only
+        // ones that exist, with no ignore rule (labelled local only or
+        // initialization).
+        None => super::path_policy::ContentRules::at(
+            &repo,
+            &landed.policy.git,
+            None,
+            landed.project.as_ref(),
+        )?,
+    };
+    Ok((paths, content))
 }
 
 #[cfg(test)]

@@ -531,7 +531,14 @@ pub fn run(args: &CiArgs) -> i32 {
     );
 
     match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
-        codeflow_core::hooks::path_policy::range(&root, range.base_sha.as_deref(), &head, &paths)
+        let size_and_ignore = judging::content_rules(&root, authority.as_ref())?;
+        codeflow_core::hooks::path_policy::range_with(
+            &root,
+            range.base_sha.as_deref(),
+            &head,
+            &paths,
+            Some(&size_and_ignore),
+        )
     }) {
         Ok(paths) => {
             for note in paths.notes {
@@ -549,6 +556,7 @@ pub fn run(args: &CiArgs) -> i32 {
             if configured.path_policy.is_active() {
                 ran.push("path-policy");
             }
+            ran.push("size-and-ignore");
         }
         Err(error) => tagged.push(TaggedViolation {
             sha: None,

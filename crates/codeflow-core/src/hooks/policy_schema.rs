@@ -99,6 +99,8 @@ pub enum KeyKind {
     RetryEntries,
     /// Path denial declarations with explained exceptions.
     PathRules,
+    /// The size or ignored-file rule object (TSK-323).
+    ContentRule,
 }
 
 impl KeyKind {
@@ -112,7 +114,7 @@ impl KeyKind {
             Self::String => "string",
             Self::Enum(_) => "enum",
             Self::Profiles => "profile list",
-            Self::SectionMapping => "object",
+            Self::SectionMapping | Self::ContentRule => "object",
             Self::RetryEntries => "entry list",
             Self::PathRules => "path rule list",
         }
@@ -161,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 74] = [
+pub const SCHEMA: [KeySpec; 76] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -755,6 +757,18 @@ pub const SCHEMA: [KeySpec; 74] = [
         valid: "{prefix, allow: [{path, reason}]} entries",
         purpose: "Refuse every change under root-anchored component prefixes.",
         notes: "Exceptions come only from the default branch at one commit; a working copy adds denials only, and line-only or branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.ignored_files", kind: KeyKind::ContentRule,
+        valid: "{level: off | warn | allow | block, allow: [{path, reason}]}",
+        purpose: "Report or refuse a new or changed file that the policy authority's .gitignore files exclude.",
+        notes: "Absent means level warn. Read with the policy and the .gitignore files of the authority's tree, never the working tree or the change: a .gitignore edit in the change admits nothing, and a tracked file is still judged. Matching follows git, with ASCII case ignored. An allow entry names a root-relative prefix with a reason. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.max_file_bytes", kind: KeyKind::ContentRule,
+        valid: "{limit: bytes, at least 1 (default 10485760), except_under: [root-relative directory]}",
+        purpose: "Refuse a new or changed file larger than the limit; one over 1 MiB warns.",
+        notes: "Absent: a file over 1 MiB warns and one over 10 MiB is refused where the authority's project settings hold file_size_rule, which a fresh `codeflow init` writes; elsewhere, as in a project `codeflow update` brought forward, both are report lines. Setting either field opts in and replaces that part of the default; except_under exempts files beneath a directory, never one named file. Sizes are of the blob git records, so a Git LFS path is sized by its pointer. A refusal names the admission routes. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.secret_scan",
@@ -1410,6 +1424,7 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
         KeyKind::SectionMapping => validate_mapping(path, value, errors),
         KeyKind::RetryEntries => validate_retry_entries(path, value, errors),
         KeyKind::PathRules => validate_path_rules(path, value, errors),
+        KeyKind::ContentRule => validate_content_rule(path, value, errors),
         KeyKind::Enum(values) => {
             if !value.as_str().is_some_and(|s| values.contains(&s)) {
                 errors.push(PolicyError::invalid_value(
@@ -1438,6 +1453,21 @@ fn validate_path_rules(path: &str, value: &Value, errors: &mut Vec<PolicyError>)
         .map_err(|e| e.to_string())
         .and_then(|git| super::path_policy::PathPolicy::from_git(&git))
     {
+        nested_error(errors, path, &error);
+    }
+}
+
+fn validate_content_rule(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let checked = if path == "git.ignored_files" {
+        serde_json::from_value::<super::path_policy::IgnoredFiles>(value.clone())
+            .map_err(|e| e.to_string())
+            .and_then(|rule| rule.allowed().map(drop))
+    } else {
+        serde_json::from_value::<super::path_policy::MaxFileBytes>(value.clone())
+            .map_err(|e| e.to_string())
+            .and_then(|rule| rule.resolved().map(drop))
+    };
+    if let Err(error) = checked {
         nested_error(errors, path, &error);
     }
 }
@@ -1688,8 +1718,10 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 9] = [
+        const OPTIONAL: [&str; 11] = [
             "git.pr_section_mapping",
+            "git.ignored_files",
+            "git.max_file_bytes",
             "git.release_branch_pattern",
             "git.clean_regenerable",
             "security.interpreter_scan",
