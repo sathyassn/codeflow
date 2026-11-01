@@ -341,7 +341,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "d7ac2e8970ac81072524d60921b8f5d8d6f176ff4ef7642b968ae6450fe568c6",
+      "sha256": "5387e01415b7073b271633b324ede4daa99f1fc534f0038fcae5fe99b80e27da",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -641,7 +641,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "c4236ff46ee180e45dfca2514797c91b57f0c80843c2f34739114896dd3d3057",
+      "sha256": "82fb0c41ccdd8ee858a3968fa31b4ef0914aed0694635b273fb718acb600b10f",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1187,7 +1187,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "d7ac2e8970ac81072524d60921b8f5d8d6f176ff4ef7642b968ae6450fe568c6",
+      "sha256": "5387e01415b7073b271633b324ede4daa99f1fc534f0038fcae5fe99b80e27da",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1487,7 +1487,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "c4236ff46ee180e45dfca2514797c91b57f0c80843c2f34739114896dd3d3057",
+      "sha256": "82fb0c41ccdd8ee858a3968fa31b4ef0914aed0694635b273fb718acb600b10f",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1733,7 +1733,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "0ac2b7a361d7822ba10f90d8ec8c2049be5b9fdccb22f165fe148eee15b44885",
+      "sha256": "0f1f0fa4462d3f7610e77ef8e20f164080f023bf2822c6b4b8f07776a3f6c7b6",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {
@@ -1787,7 +1787,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "796b96b33d0ac592b65d0d3424973a879800e8630bcab61c6d20d4f846833d2d",
+      "sha256": "e7a99f95d29779a04cf5b42535d0b42d7324440cf192ebced1b20fefd4fd9ee5",
       "exec": false
     },
     ".codex/hooks.json": {

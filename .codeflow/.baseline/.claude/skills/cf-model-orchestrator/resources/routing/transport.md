@@ -72,10 +72,13 @@ grant, the lock folder, and its local binding off, which keeps
 private, link-local and cloud metadata destinations refused as for a
 review seat; Codex merges both into that profile. A builder seat cannot
 serve on a local port, so tests that do run on the primary. A builder
-runs `codeflow reserve` and quick-mode heavy targets, each taking one
-free capacity slot of the host (a smaller job count when none is free,
-never a wait; a `host_exclusive: true` target alone waits, within the run's
-bound). `~/.codeflow/gate-runs` is not writable to any Codex seat, so a
+runs `codeflow reserve` and quick-mode heavy targets, each admitted at
+once with a coordination slot and a share of the host's job budget (a
+smaller job count when the host is busy, never a wait). Only a
+`host_exclusive: true` target changes that: while it runs no heavy run
+starts, and it starts only when none is running, so either kind of run can
+be delayed within the run's bound and then reported not run.
+`~/.codeflow/gate-runs` is not writable to any Codex seat, so a
 full run that keeps its evidence happens outside a seat sandbox.
 `codeflow doctor --preflight` checks that the installed Codex accepts
 these overrides and that, from the main checkout root with managed

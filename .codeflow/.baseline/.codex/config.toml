@@ -289,11 +289,12 @@ dangerously_allow_all_unix_sockets = false
 # the common `.git` objects and refs, and fails when any of them is not
 # writable.
 #
-# `~/.codeflow/locks` is writable so a builder can take a capacity slot for
-# `codeflow reserve` and the heavy quick targets. Every heavy run takes one
-# free slot of the host's capacity; when none is free the run takes a smaller
-# job count and never waits; only a target declared `host_exclusive: true`
-# starts alone, and then waits for the host only within the run's bound. The
+# `~/.codeflow/locks` is writable so a builder can take a coordination slot
+# for `codeflow reserve` and the heavy quick targets. Every heavy run is
+# admitted at once with a slot and a share of the host's job budget; when the
+# host is busy the run takes a smaller job count and never waits. Only a
+# target declared `host_exclusive: true` changes that: while it runs no heavy
+# run starts, so either kind of run can be delayed within the run's bound. The
 # folder is an advisory coordination boundary, not a security boundary: a
 # builder can still hold, delete or replace slot state, which can change how
 # many runs share the host and can make admission refuse to start. Slot state
@@ -308,7 +309,7 @@ dangerously_allow_all_unix_sockets = false
 # TSK-1044 none earns selection credit (ADR-0089), but a seat that could
 # write the folder could plant reports that mislead a reader. A
 # builder runs `codeflow reserve` and quick-mode heavy targets, which need
-# only `~/.codeflow/locks` for their capacity slot. Nothing else under the
+# only `~/.codeflow/locks` for their coordination slot. Nothing else under the
 # home folder is writable; a relocated `CODEFLOW_HOME` is not covered.
 [permissions.cf-builder]
 extends = "cf-guard"

@@ -419,17 +419,22 @@ CodeFlow makes one piece of work wait for another that could run beside it;
 only correctness orders work (a dependency, or one landing at a time on a
 line tip).
 
-- Every heavy run (the full gate, essential, heavy quick targets and
-  `codeflow reserve -- <command>`) takes one free slot of N. N is computed
-  from the host's cores and free memory, and `execution.host_jobs` in the
-  project's test config overrides it.
-- When no slot is free, a run never waits or skips: it runs with a smaller
-  job count.
+- The host has a job budget: its cores, lowered when free memory cannot give
+  each job about 1 GiB, or `execution.host_jobs` when the project sets it.
+  Every heavy run (the full gate, essential, heavy quick targets and
+  `codeflow reserve -- <command>`) is admitted at once and takes a
+  coordination slot in the lock folder, which records that it is running.
+  The slot is not the budget.
+- A run uses its own width (its worker budget, else the whole job budget)
+  while the active runs fit the budget at that width. When more runs are
+  active, it starts at once with the budget divided among them, at least one
+  job. A run never waits for another run and never skips a target for lack of
+  capacity.
 - A target declared `host_exclusive: true` is the one exception, because its
-  result depends on nothing else running. It starts when no other heavy run
-  holds the host, no heavy run starts while it runs, and it waits for that
-  only within the run's bound, then is reported not run. No other target
-  runs alone.
+  result depends on nothing else running. It starts only when no other heavy
+  run holds the host, and no heavy run starts while it runs. So an exclusive
+  target and an ordinary heavy run can each delay the other, within the run's
+  bound, and are then reported not run. No other target runs alone.
 - A cheap targeted check, a named test target in the worktree's own target
   directory, runs freely.
 - Any session, in any worktree, may run the gates its work needs, within what

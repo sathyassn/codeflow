@@ -1456,12 +1456,12 @@
     {
       "id": "CF-PAR-001",
       "level": "hard",
-      "statement": "Parallel work is bounded by host resources, has one owner/branch/worktree per task, serializes shared contracts and integration, and gates the exact batch candidate once before the integration line moves.",
+      "statement": "Parallel browser and model-session lanes are sized from host resources, heavy test and build runs are admitted by host capacity instead of a coordinator cap, work has one owner/branch/worktree per task, serializes shared contracts and integration, and gates the exact batch candidate once before the integration line moves.",
       "sources": [
         {
           "path": ".codeflow/rules/worktrees.md",
           "markers": [
-            "bounded concurrency cap",
+            "sizes browser and model-session lanes",
             "one owner, branch, and worktree",
             "serialize each landing"
           ]
