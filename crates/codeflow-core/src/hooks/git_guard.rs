@@ -297,6 +297,23 @@ pub struct HookPayload {
 pub struct ToolInput {
     #[serde(default)]
     pub command: Option<String>,
+    /// Claude Code's unsandboxed retry flag, as sent (verified on Claude
+    /// Code 2.1.312, TSK-397 design D Part B).
+    #[serde(default, rename = "dangerouslyDisableSandbox")]
+    pub dangerously_disable_sandbox: Option<serde_json::Value>,
+}
+
+impl ToolInput {
+    /// Whether the call asks to run outside the sandbox. An absent field,
+    /// `null` and `false` do not ask; any other value does (`true`, a
+    /// number, a string, an object or an array), so a value of another type
+    /// tightens rather than passes.
+    #[must_use]
+    pub fn sandbox_retry(&self) -> bool {
+        self.dangerously_disable_sandbox
+            .as_ref()
+            .is_some_and(|value| !value.is_null() && value != &serde_json::Value::Bool(false))
+    }
 }
 
 /// Why a hook payload was not read.
@@ -7637,6 +7654,9 @@ fn quote_words(words: &[String]) -> String {
 /// integrity checks read those wrappers on their own ([`wrapped_violation`]).
 /// Empty for any other program.
 pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
+    if !COMMAND_CARRIERS.contains(&name) {
+        return Vec::new();
+    }
     let judged = |words: &[String]| {
         strip_launchers(words).is_some_and(|(program, _)| basename(program) == "git")
             || !carried_commands(words).is_empty()
@@ -14106,23 +14126,31 @@ pub(crate) fn is_shell_modifier(name: &str) -> bool {
 /// `stdbuf`, `ionice`, `caffeinate` and `xcrun`, any path form, and the
 /// GNU-prefixed names of the coreutils ones ([`launcher_name`]).
 fn is_prefix_launcher(t: &str) -> bool {
-    is_shell_modifier(t)
-        || matches!(
-            launcher_name(t),
-            "command"
-                | "builtin"
-                | "exec"
-                | "nohup"
-                | "time"
-                | "nice"
-                | "timeout"
-                | "stdbuf"
-                | "ionice"
-                | "caffeinate"
-                | "xcrun"
-                | "arch"
-        )
+    is_shell_modifier(t) || PREFIX_LAUNCHERS.contains(&launcher_name(t))
 }
+
+/// The prefix launchers [`is_prefix_launcher`] recognises by name. The exec
+/// guard's lexer must know each as a wrapper too, which a test asserts.
+pub(crate) const PREFIX_LAUNCHERS: &[&str] = &[
+    "command",
+    "builtin",
+    "exec",
+    "nohup",
+    "time",
+    "nice",
+    "timeout",
+    "stdbuf",
+    "ionice",
+    "caffeinate",
+    "xcrun",
+    "arch",
+];
+
+/// The programs [`launcher_commands`] reads a carried command from. The exec
+/// guard's lexer must know each as a wrapper too, which a test asserts.
+pub(crate) const COMMAND_CARRIERS: &[&str] = &[
+    "flock", "script", "watch", "parallel", "setsid", "unbuffer", "xargs", "find",
+];
 
 /// Skip the options of a prefix launcher starting at `idx` and return the
 /// index of the command it runs: `command -p`, `exec -c -l -a NAME`,

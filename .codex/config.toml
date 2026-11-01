@@ -128,6 +128,10 @@ glob_scan_max_depth = 6
 "~/.zprofile.zwc" = "read"
 "~/.zshrc.zwc" = "read"
 "~/.zlogin.zwc" = "read"
+# The CodeFlow authority directory is read only (TSK-397 design D, H-5):
+# it is reserved for operator-written records and the policy baseline, and
+# no session writes it.
+"~/.codeflow/authority" = "read"
 "~/.zlogout.zwc" = "read"
 "~/.zsh" = "read"
 "~/.oh-my-zsh/custom" = "read"

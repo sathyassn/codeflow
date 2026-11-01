@@ -30,6 +30,44 @@ pub(crate) fn read_regular_to_string(path: &Path) -> std::io::Result<String> {
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
+/// The bytes of `path`, following a link, read only when it resolves to a
+/// regular file of at most `maximum_bytes`. The open never waits: on Unix it
+/// is non-blocking, so a fifo swapped in after the type check opens at once
+/// and the descriptor's own type check refuses it. A missing path keeps
+/// `NotFound`; a directory, fifo, device or oversized file is
+/// `InvalidData`. The hook reads its policy and project settings this way,
+/// so no input shape can hold it (TSK-397 security review SEC01-3).
+pub(crate) fn read_bounded_following(path: &Path, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
+    let refuse =
+        |what: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_string());
+    let before = std::fs::metadata(path)?;
+    if !before.is_file() {
+        return Err(refuse("not a regular file"));
+    }
+    if before.len() > maximum_bytes {
+        return Err(refuse(&format!("larger than {maximum_bytes} bytes")));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() {
+        return Err(refuse("not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum_bytes {
+        return Err(refuse(&format!("larger than {maximum_bytes} bytes")));
+    }
+    Ok(bytes)
+}
+
 pub(crate) fn read_bounded_regular(path: &Path, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
     read_bounded_regular_with_hook(path, maximum_bytes, || Ok(()))
 }

@@ -248,6 +248,27 @@ impl StartupPaths {
     }
 }
 
+/// The Claude sandbox `denyWrite` spelling of an `Edit(...)` deny: `~/` stays
+/// under the home, `//` is an absolute path, `/` (the permission-rule
+/// spelling of the project root) becomes `./`, and a trailing `/**` names
+/// the directory itself. `None` for a pattern with no plain path
+/// (`//**/name`), since the Linux sandbox skips an entry with a wildcard.
+#[must_use]
+pub fn edit_deny_write_path(rule: &str) -> Option<String> {
+    let inner = rule.strip_prefix("Edit(")?.strip_suffix(')')?;
+    let inner = inner.strip_suffix("/**").unwrap_or(inner);
+    if inner.contains(['*', '?', '[', '{']) {
+        return None;
+    }
+    if let Some(rest) = inner.strip_prefix("~/") {
+        return Some(format!("~/{rest}"));
+    }
+    if let Some(rest) = inner.strip_prefix("//") {
+        return Some(format!("/{rest}"));
+    }
+    inner.strip_prefix('/').map(|rest| format!("./{rest}"))
+}
+
 /// The embedded action table, parsed once.
 ///
 /// # Panics
@@ -373,10 +394,14 @@ impl ActionTable {
             }
         }
         let deny_write = array_at(filesystem, "denyWrite");
+        // The enforcement paths as explicit `denyWrite` entries (TSK-397
+        // design D, H-4), so the floor does not rest on the `Edit(...)`
+        // mirror alone and doctor can read it.
         for path in self
-            .startup_paths
-            .sandbox_write_denies()
-            .into_iter()
+            .claude_edit_denies
+            .iter()
+            .filter_map(|rule| edit_deny_write_path(rule))
+            .chain(self.startup_paths.sandbox_write_denies())
             .chain(self.git_config_paths.sandbox_write_denies())
             .chain(self.sandbox_write_denies.iter().cloned())
         {

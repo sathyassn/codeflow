@@ -151,6 +151,7 @@
       "Edit(~/.claude/settings.local.json)",
       "Edit(~/.codex/hooks.json)",
       "Edit(~/.grok/trusted_folders.toml)",
+      "Edit(~/.codeflow/authority/**)",
       "Bash(sudo *)",
       "Bash(su *)",
       "Bash(doas *)",

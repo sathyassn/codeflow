@@ -239,6 +239,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_STARTUP_RELOCATED", Excluded(HumanAuthority)),
     // The operator decides which configuration inputs to repair or remove.
     ("DOCTOR_GIT_CONFIG_INCLUDES", Excluded(HumanAuthority)),
+    // Settings the guard cannot read are the operator's to confirm.
+    ("DOCTOR_TEXT_RULE_UNSEEN", Excluded(HumanAuthority)),
     ("GUARD_UNCLASSIFIABLE", Runs),
     ("GUARD_UNRESOLVED", Runs),
     ("GUARD_ALIAS", Runs),

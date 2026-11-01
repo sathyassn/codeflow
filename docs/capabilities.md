@@ -283,11 +283,12 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   the default branch, and pull requests with strict, pinned checks guard it,
   the integration lines and each other protected branch. It never weakens a
   rule and reports what the plan cannot apply.
-- `codeflow doctor` runs twenty-four health checks on the repository and the
+- `codeflow doctor` runs twenty-five health checks on the repository and the
   tools around it, including the default branch's host rules.
 
 | Doctor check | Reports |
 |---|---|
+| Sandbox configuration (ADR-0088) | the text rule the exec guard applies in this project, decided by the hook's own function: strict with its reason, or relaxed by operator choice with the ref it was read from; a failure when the policy cannot be read or when a Claude write grant reaches the CodeFlow state root; otherwise a note |
 | Git configuration includes | Included files that may be writable, and configuration the bounded reader cannot verify; include-file writes remain unguarded |
 | Always-loaded instruction size | a warning when the `AGENTS.md` chain Codex loads for any directory, root to nested, exceeds Codex's instruction limit: `project_doc_max_bytes` from the project's `.codex/config.toml` when set, else 32 KiB |
 | Reading sizes (ADR-0083) | the kernel and the per-task reading chain in bytes, each shipped skill and agent body and the always-loaded instruction set in lines, against advisory guidelines with a stated basis (500 lines for a body, 200 for the always-loaded set, 160 KiB for the chain, the kernel derived from the Codex limit), or a project's own `[reading]` values in `.codeflow/project.toml`: information within them, a note above them that names the detail to move behind a trigger, never a warning or a failure; a skill or agent description over the API's 1,024 characters warns; when the installed skills' read edges differ from the map the binary ships, the chain is information naming both versions |

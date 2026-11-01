@@ -916,7 +916,8 @@
   "Edit(/.codeflow/project.toml)",
   "Edit(~/.claude/settings.local.json)",
   "Edit(~/.codex/hooks.json)",
-  "Edit(~/.grok/trusted_folders.toml)"
+  "Edit(~/.grok/trusted_folders.toml)",
+  "Edit(~/.codeflow/authority/**)"
  ],
  "sandbox_env_denies": [
   "XAI_API_KEY",

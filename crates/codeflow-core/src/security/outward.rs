@@ -17,7 +17,7 @@ pub(crate) fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation
 }
 
 /// The line read once, with the commands in its interpreter code.
-fn read_line(command: &str, cwd: Option<&Path>) -> (Parsed, Parsed) {
+fn parse_line(command: &str, cwd: Option<&Path>) -> (Parsed, Parsed) {
     let mut parsed = Parsed::default();
     visit(command, cwd, 0, &mut parsed);
     let mut embedded = Parsed::default();
@@ -38,7 +38,7 @@ pub(crate) fn asks_at(command: &str, levels: &SecuritySection, cwd: Option<&Path
     if !levels.outward_actions.is_active() {
         return Vec::new();
     }
-    let (parsed, embedded) = read_line(command, cwd);
+    let (parsed, embedded) = parse_line(command, cwd);
     let mut asks = parsed.gh_writes;
     asks.extend(embedded.gh_writes);
     asks.sort();
@@ -70,7 +70,7 @@ pub(crate) fn evaluate_at(
     levels: &SecuritySection,
     cwd: Option<&Path>,
 ) -> Vec<Violation> {
-    let (parsed, embedded) = read_line(command, cwd);
+    let (parsed, embedded) = parse_line(command, cwd);
     let mut unread_gh = parsed.unread_gh;
     unread_gh.extend(embedded.unread_gh);
     unread_gh.sort();
@@ -874,8 +874,12 @@ fn visit_segments(command: &str, positioned: bool) -> Vec<String> {
 /// Every directory a line may run an interpreter in (TSK-302 review round
 /// 2): the session directory and each one a directory change anywhere on
 /// the line may reach, applied in order to every directory listed before
-/// it, whether or not it succeeds. `unknown` is set when a change cannot be
-/// resolved, so a command may run anywhere.
+/// it, whether or not it succeeds. Only a process's own directory option
+/// (`env -C`, `git -C`) adds a listed directory. A shell directory change
+/// (`cd`, `chdir`, `pushd`, `popd`), and anything that can run one the
+/// guard does not read (`eval`, `source`, `.`, a `trap` action, an
+/// `alias`), makes the set unknown instead (TSK-397). `unknown` is also
+/// set when a change cannot be resolved, so a command may run anywhere.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct DirSet {
     pub(crate) dirs: Vec<PathBuf>,
@@ -888,9 +892,9 @@ const DIR_SET_LIMIT: usize = 64;
 impl DirSet {
     /// Apply one change: a literal directory joins every listed one, a
     /// change the guard cannot resolve makes the set unknown.
-    pub(crate) fn change(&mut self, change: &DirChange) {
+    pub(crate) fn change(&mut self, change: &DirChange, strict: bool) {
         match change {
-            DirChange::To(target) => {
+            DirChange::To(target) if !strict => {
                 let Some(next) = self
                     .dirs
                     .iter()
@@ -904,6 +908,48 @@ impl DirSet {
                     if !self.dirs.contains(&dir) {
                         if self.dirs.len() == DIR_SET_LIMIT {
                             self.unknown = true;
+                        } else {
+                            self.dirs.push(dir);
+                        }
+                    }
+                }
+            }
+            DirChange::To(target) => {
+                let mut resolved = false;
+                let mut unjoinable = false;
+                let next: Vec<PathBuf> = self
+                    .dirs
+                    .iter()
+                    .flat_map(|dir| {
+                        let mut next = vec![lexical_join(dir, target)];
+                        // Keep the spelled reading and the physical one, which
+                        // resolves a link before its `..`.
+                        let mut physical = |path: PathBuf, next: &mut Vec<PathBuf>| {
+                            if let Ok(found) = std::fs::canonicalize(path) {
+                                resolved = true;
+                                next.push(found);
+                            }
+                        };
+                        physical(dir.join(target), &mut next);
+                        // The line's reading too: a join it cannot make
+                        // (a namespace operand, an absent or unreadable
+                        // component before a `..`) is unknown here as well.
+                        match physical_join(dir, target) {
+                            Some(joined) => next.push(joined),
+                            None => unjoinable = true,
+                        }
+                        next
+                    })
+                    .collect();
+                // No reading reaches an existing directory, so where the
+                // process lands is unknown.
+                if !resolved || unjoinable {
+                    self.unknown = true;
+                }
+                for dir in next {
+                    if !self.dirs.contains(&dir) {
+                        if self.dirs.len() == DIR_SET_LIMIT {
+                            self.unknown = true;
                             break;
                         }
                         self.dirs.push(dir);
@@ -913,6 +959,39 @@ impl DirSet {
             DirChange::Unknown => self.unknown = true,
         }
     }
+}
+
+/// Whether the line names the shell's `cd` search path, in bash or zsh
+/// spelling.
+fn mentions_cdpath(command: &str) -> bool {
+    let command = &super::shell_lex::lex(command).text;
+    // Read the line as the shell would spell a name: quotes and
+    // backslashes removed and parameter expansions dropped, so `CD''PATH`,
+    // `CD\PATH` and `CD${E}PATH` count (TSK-397 Grok review finding 3).
+    let mut name = String::with_capacity(command.len());
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' | '\\' => {}
+            '$' if chars.peek() == Some(&'{') => {
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                }
+            }
+            '$' => {
+                while chars
+                    .peek()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+                {
+                    chars.next();
+                }
+            }
+            c => name.push(c),
+        }
+    }
+    name.contains("CDPATH") || name.contains("cdpath")
 }
 
 /// `dir` joined with `target`, `.` and `..` removed by spelling, as the
@@ -1040,6 +1119,11 @@ pub(crate) enum DirChange {
 ///   `env -S`, and `sudo` are unknown.
 /// - `git -C DIR` counts as a change.
 /// - Any other program cannot move the shell, so it makes no change.
+///
+/// This is the modelled grammar the command walk follows. Whether a command
+/// may also move the shell somewhere the guard cannot see is a separate
+/// question, [`read_line`], which `line_directories` asks of the line
+/// (TSK-397).
 pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChange> {
     let mut found = Vec::new();
     launcher_changes(words, home, 0, &mut found);
@@ -1142,7 +1226,7 @@ fn launcher_option(launcher: &str, option: &str) -> Option<bool> {
 /// starts, or `None` for an option the grammar does not know. A long
 /// option's value may follow `=`; a short one's may be attached
 /// (`-n5`, `-oL`), or be the next word.
-fn skip_launcher_options(launcher: &str, rest: &[String]) -> Option<usize> {
+pub(crate) fn skip_launcher_options(launcher: &str, rest: &[String]) -> Option<usize> {
     let mut at = 0;
     while let Some(word) = rest.get(at) {
         if word == "--" {
@@ -1174,6 +1258,27 @@ fn skip_launcher_options(launcher: &str, rest: &[String]) -> Option<usize> {
         return None;
     }
     Some(at)
+}
+
+/// GNU `xargs` options whose value is optional: attached with `=` they take
+/// one, bare they take none, while the grammar above (and other `xargs`
+/// builds) read the next word as their value. The two readings name
+/// different programs, so neither is guessed.
+const XARGS_OPTIONAL_VALUES: &[&str] = &["--replace", "--eof", "--max-lines"];
+
+/// [`skip_launcher_options`] for a reader that must not guess: `None` when a
+/// bare optional-value `xargs` option makes the program word ambiguous
+/// (TSK-397 SR9-3). The headless reader and the strict branch use it; the
+/// baseline directory reader keeps the line's grammar.
+pub(crate) fn skip_launcher_options_exact(launcher: &str, rest: &[String]) -> Option<usize> {
+    let from = skip_launcher_options(launcher, rest)?;
+    let ambiguous = launcher == "xargs"
+        && rest.get(..from).is_some_and(|options| {
+            options
+                .iter()
+                .any(|w| XARGS_OPTIONAL_VALUES.contains(&w.as_str()))
+        });
+    (!ambiguous).then_some(from)
 }
 
 /// Read env's options: flags, `-u NAME`, `-C DIR` in every spelling and
@@ -1401,7 +1506,88 @@ fn cd_destination(
     }
 }
 
-/// Whether the words after an unmodeled program hold a directory-change
+/// Shell variables whose value is code the shell runs on its own: bash's
+/// `PROMPT_COMMAND` and the zsh hook arrays. A plain assignment to one is
+/// read by [`read_line`]; an array or subscript spelling is a program word
+/// there, which is unknown anyway.
+const HOOK_VARIABLES: &[&str] = &[
+    "PROMPT_COMMAND",
+    "precmd_functions",
+    "preexec_functions",
+    "chpwd_functions",
+    "periodic_functions",
+    "zshaddhistory_functions",
+    "zshexit_functions",
+];
+
+/// The launchers [`read_line`] reads through by their own option grammar,
+/// by their base name (a path or GNU-prefixed name maps to it). The strict
+/// branch keeps the words after each one judged, which
+/// `no_program_keeps_its_words_to_itself` asserts.
+pub(crate) const LEXER_LAUNCHERS: &[&str] = &[
+    "command",
+    "exec",
+    "nohup",
+    "nice",
+    "stdbuf",
+    "time",
+    "xargs",
+    "caffeinate",
+    "xcrun",
+    "ionice",
+    "timeout",
+    "env",
+    "noglob",
+    "nocorrect",
+];
+
+/// What the shell runs on a lexed line: whether any command may move it
+/// somewhere the guard cannot follow, and each interpreter call's operands.
+/// A program word counts only when fully unquoted and literal, and only an
+/// interpreter or a modeled launcher read through its own option grammar
+/// (`nice -n 5`, `timeout 5`, `env -u X`, `command -p`) is known not to
+/// move the shell; any other word may be a shell function (TSK-397).
+pub(crate) fn read_line(lexed: &super::shell_lex::Lexed) -> super::shell_lex::Reading {
+    let launcher = |program: &str, rest: &[String]| -> Option<usize> {
+        let name = crate::hooks::git_guard::launcher_name(program);
+        if !LEXER_LAUNCHERS.contains(&name) {
+            return None;
+        }
+        match name {
+            "timeout" => skip_launcher_options_exact(name, rest).map(|from| from + 1),
+            "env" => env_options(
+                rest,
+                &|operand| directory_operand(operand, None),
+                &mut Vec::new(),
+            ),
+            "noglob" | "nocorrect" => Some(0),
+            _ => skip_launcher_options_exact(name, rest),
+        }
+    };
+    super::shell_lex::read(
+        lexed,
+        &launcher,
+        &|word| program_is_interpreter(word),
+        &|rest| hides_a_directory_change(rest),
+        HOOK_VARIABLES,
+    )
+}
+
+/// Whether `word`, as written, names an interpreter (`python3`,
+/// `/usr/bin/node`); an expanded, globbed or braced word does not. Only
+/// the families the strict branch was designed and reviewed with count:
+/// a word such as `make`, which the line's rule reads as an interpreter
+/// for its code, may still be a profile function that moves the shell
+/// (TSK-397 security review SF-3), so it keeps the directory unknown.
+fn program_is_interpreter(word: &str) -> bool {
+    !crate::hooks::git_guard::unresolved_word(word)
+        && !crate::hooks::git_guard::has_glob(word)
+        && !word.contains(['{', '}'])
+        && interpreter_family(word.rsplit('/').next().unwrap_or(word))
+            .is_some_and(|family| matches!(family, "python" | "node" | "nodejs" | "perl" | "ruby"))
+}
+
+/// Whether the words after an interpreter call hold a directory-change
 /// token: `cd`, `chdir`, `pushd` or `popd`, or `-C` or `--chdir` in any
 /// spelling after an env-like word.
 fn hides_a_directory_change(rest: &[String]) -> bool {
@@ -1421,26 +1607,65 @@ fn hides_a_directory_change(rest: &[String]) -> bool {
 
 /// The directory set of `command` from `cwd`: every simple command the
 /// line runs, nested bodies included, read in order.
-pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -> DirSet {
+///
+/// `strict` selects the strict branch of TSK-397 design D: the directory is
+/// also unknown wherever the shell's own lexing shows a command that may
+/// move it. The baseline (`false`) is the line's rule unchanged.
+pub(crate) fn line_directories(
+    command: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    strict: bool,
+) -> DirSet {
+    // A line that names `CDPATH` or `cdpath` may set it in a form this
+    // parser does not read (`+=`, `export`, `declare`, arrays, `read`,
+    // `printf -v`), and its search paths may not be enumerable, so the
+    // directory a later `cd` reaches is unknown (TSK-397 review F2).
+    // Whether anything on the line may move the shell somewhere the guard
+    // cannot follow is read from the shell's own lexing of the line
+    // (TSK-397): an opaque construct, a current-shell substitution, a
+    // `CDPATH` mention, or any command that is not a fully unquoted,
+    // literal interpreter call through the modeled launchers.
     let mut set = DirSet {
         dirs: vec![cwd.to_path_buf()],
-        unknown: false,
+        unknown: strict && {
+            let lexed = super::shell_lex::lex(command);
+            lexed.opaque
+                || lexed.current_shell
+                || mentions_cdpath(&lexed.text)
+                || read_line(&lexed).moves
+        },
     };
     // The shared walk supplies the directory before each command. Apply the
     // legacy launcher reader locally, rather than combining every change with
     // all earlier alternatives (which invents exponentially many directories).
+    // Every command on the line is read, the ones after the last interpreter
+    // call included: a loop runs its condition again after its body (`while
+    // python3 w.py f; do cd .claude; done`), so text order is not run order,
+    // and a shell directory change or unmodeled command in any step makes the
+    // set unknown (TSK-397 security review SF-6).
+    // When nothing on the line can move the shell, every command runs in
+    // the starting directory, so a step the walk cannot place (a loop body,
+    // which it reads conservatively) is that directory, not an unknown one.
+    let stays = strict && !set.unknown;
     let mut seen = std::collections::HashSet::from([cwd.to_path_buf()]);
     for step in super::composed::paths::commands(command, cwd, home) {
         let mut local = DirSet {
             dirs: step.cwd.into_iter().collect(),
             unknown: false,
         };
-        local.unknown = local.dirs.is_empty();
+        if local.dirs.is_empty() {
+            if stays {
+                local.dirs.push(cwd.to_path_buf());
+            } else {
+                local.unknown = true;
+            }
+        }
         for segment in expand_commands(&step.text) {
             let mut words = command_argv(&segment);
             strip_reserved_words(&mut words);
             for change in dir_changes(&words, home) {
-                local.change(&change);
+                local.change(&change, strict);
             }
         }
         set.unknown |= local.unknown;
@@ -4891,7 +5116,7 @@ mod r22_tests {
                     skipped.push(format!("{shell}: {line} (zsh only)"));
                     continue;
                 }
-                let set = line_directories(line, &root, Some(&home));
+                let set = line_directories(line, &root, Some(&home), false);
                 let output = Command::new(shell)
                     .arg("-c")
                     .arg(&script)
