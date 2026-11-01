@@ -172,8 +172,8 @@ waive the clarity, safety, review or protected-branch conditions.
    candidate, and that look is not a unit review), and runs one full gate on
    that exact candidate. It lands through one of two
    sanctioned modes: **Local**, `codeflow integrate <candidate> --into
-   integration/<…>` on a candidate cut from the current line tip (serialized,
-   runs the non-selective full gate, keeps the tested tip); or **PR** into the
+   integration/<…>` on a candidate cut from the current line tip (one
+   landing at a time on a tip, runs the non-selective full gate, keeps the tested tip); or **PR** into the
    integration branch, merged by the primary once the candidate's
    `codeflow test --mode full --all` gate is complete and green and the PR's
    required checks pass. The PR cites the gate run by its id and

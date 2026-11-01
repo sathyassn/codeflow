@@ -17,13 +17,15 @@ Parallel eligibility comes from graph topology, but fan-out still requires a
 critical-path benefit and safe isolation; do not parallelize a short task when
 coordination costs more than it saves. Shared schemas, migrations, lockfiles,
 generated registries, and other conflict hotspots have a single owner or run
-sequentially. The coordinator caps concurrent heavy builds, browsers, and
-model sessions from observed capacity and preserves headroom; reduce fan-out
-before swap pressure, duplicate caches or builds, or context dilution affects
-evidence quality. Never use concurrent writers in one worktree, and never
+sequentially. The coordinator sizes concurrent browsers and model sessions
+from observed capacity and preserves headroom; reduce fan-out before swap
+pressure, duplicate caches or builds, or context dilution affects evidence
+quality. Heavy test and build runs need no coordinator cap: each takes a slot
+of the host's capacity or runs with a smaller job count, so lanes never wait
+for one another. Never use concurrent writers in one worktree, and never
 rebase a shared integration branch.
 
 Reviewed task heads land as the `cf-method` skill's "Managing a body of
 work" states; passing task-local checks does not prove the integration.
-Lane sizing and the queue classes are the discipline rules' "Lanes and
-queues".
+Lane sizing and capacity admission are the discipline rules' "Lanes and
+capacity".

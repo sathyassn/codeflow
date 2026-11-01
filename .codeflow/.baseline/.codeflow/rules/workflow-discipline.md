@@ -201,8 +201,9 @@ mutation testing, or project-owned architecture fitness checks only from the
 orchestrator's evidence triggers; `none selected` is valid and is written
 nowhere per task, and normal scenario coverage remains mandatory. Builders
 run targeted tests as they go and `codeflow test --mode quick` once before
-ready, and cite them with the revision and the command; the full gate runs once on each exact landing candidate, one
-at a time, and a standalone PR is its own candidate. Adopted push and CI
+ready, and cite them with the revision and the command; the full gate runs once on each exact landing candidate (one candidate lands
+at a time, while building and testing elsewhere continue), and a standalone PR
+is its own candidate. Adopted push and CI
 gates still run, and completed evidence is reused only for the same tree.
 Honor what the gate reports; the project's policy sets its level.
 
@@ -411,15 +412,20 @@ or person-days, never scale a human estimate by an AI speed multiplier, and
 never extrapolate from a slow pace. Estimation is optional: offer it only
 when asked or when a capacity or deadline decision needs it.
 
-## Lanes and queues
+## Lanes and capacity
 
-Size parallel lanes from the host's observed memory and CPU. A cheap
-targeted check, a named test target in the worktree's own target directory,
-runs freely and never waits in a queue. Heavy work (the full gate,
-essential, heavy quick targets and direct heavy Cargo commands) takes
-resource admission through the gate lock, or through
-`codeflow reserve -- <command>` for a direct command. Only the primary runs
-the full gate.
+Size parallel lanes from the host's observed memory and CPU. Nothing in
+CodeFlow makes one piece of work wait for another that could run beside it;
+only correctness orders work (a dependency, or one landing at a time on a
+line tip). Every heavy run (the full gate, essential, heavy quick targets
+and `codeflow reserve -- <command>`) takes one free slot of the host's
+capacity. The slot count is computed from cores and free memory and can be
+set in the project's test config. When no slot is free, a run never waits
+or skips: it runs with a smaller job count. A target declared
+`host_exclusive: true` runs alone on the host, and nothing else is exclusive.
+A cheap targeted check, a named test target in the worktree's own target
+directory, runs freely. Any session, in any worktree, may run the gates its
+work needs.
 
 ## Planning
 

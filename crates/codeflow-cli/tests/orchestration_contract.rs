@@ -2656,7 +2656,7 @@ fn planned_work_speed_rule_has_one_home_and_pointers() {
         "Once work is planned into an epic and tasks with criteria, builders execute it without re-planning, re-litigating settled decisions or confirmation work for its own sake.",
         "The operator set the throughput expectation as an explicit decision of 2026-10-23: each build lane delivers at least one planned task to ready-for-review per hour, preferably two.",
         "Quality is not traded for speed: the criteria, the tests that prove them and real security stay.",
-        "run targeted tests in the worktree and the quick gate once before ready, and never run the full gate locally;",
+        "run targeted tests in the worktree and the quick gate once before ready, and leave the full gate to the landing candidate unless the task needs it earlier (a whole gate is not routine evidence, and any worktree may run one);",
         "push once, at ready, and never rerun a check on an unchanged tree;",
         "report any stop longer than 15 minutes at once;",
         "The coordinator starts every task whose edges allow, up to host capacity, measures each lane's time on its task at every sweep and acts on any lane past an hour.",

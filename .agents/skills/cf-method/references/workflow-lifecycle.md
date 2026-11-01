@@ -92,7 +92,9 @@ speed: the criteria, the tests that prove them and real security stay.
 A builder keeps to these practices:
 
 - run targeted tests in the worktree and the quick gate once before ready,
-  and never run the full gate locally;
+  and leave the full gate to the landing candidate unless the task needs it
+  earlier (a whole gate is not routine evidence, and any worktree may run
+  one);
 - push once, at ready, and never rerun a check on an unchanged tree;
 - keep the PR body lean: the criteria with file:line and the test evidence;
 - report any stop longer than 15 minutes at once;

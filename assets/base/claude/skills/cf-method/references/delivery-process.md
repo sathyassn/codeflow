@@ -264,7 +264,6 @@ reviewer; another task's criteria are never changed from this PR.
 - A later task may build on a predecessor's exact reviewed head before that
   predecessor lands, named with `--on TSK-A@<sha>`. The predecessor still
   lands first; a change to it after review means rebase and recheck.
-- Landing has priority: a new build starts only while no landing can proceed.
 
 ### Task states
 
