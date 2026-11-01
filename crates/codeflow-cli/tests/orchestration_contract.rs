@@ -596,7 +596,7 @@ fn managed_catalog_uses_only_capability_supported_harnesses() {
     }
     assert!(!catalog.xhigh_triggers.is_empty());
     assert!(catalog.rules.iter().any(|rule| {
-        rule == "High triggers set a minimum reasoning level for a unit: they raise a seat or worker below high to high, and never spawn a redundant high worker for a primary already at high."
+        rule == "High triggers are named needs applied to one lane: they raise that lane's seat or worker below high to high, never the orchestrating director or coordinator session, and never spawn a redundant high worker for a primary already at high."
     }), "high reasoning floor must not mandate redundant escalation");
     // The Grok trigger policy is today's routing policy until the operator answers Q4.
     let policy: serde_json::Value = serde_json::from_str(&read(
@@ -658,8 +658,8 @@ fn managed_catalog_sets_effort_by_model_and_keeps_fable_off_execution() {
                     );
                 }
                 // Seats of the Claude and Codex families start at medium,
-                // except the design duty, which keeps its high floor.
-                if target["kind"] == "seat" && duty != "design" {
+                // design included (ADR-0095).
+                if target["kind"] == "seat" {
                     let seat = target["id"].as_str().unwrap();
                     let want = if seat == "grok-primary" {
                         "high"
@@ -678,6 +678,16 @@ fn managed_catalog_sets_effort_by_model_and_keeps_fable_off_execution() {
         .as_str()
         .unwrap()
         .starts_with("The highest-cost reasoning line, fable in this ensemble, serves only key review, analysis and direction")));
+    // High triggers are the operator's named needs, not categories that
+    // would raise every seat (ADR-0095).
+    let triggers: Vec<String> = serde_json::from_value(catalog["high_triggers"].clone()).unwrap();
+    assert_eq!(triggers.len(), 3, "{triggers:?}");
+    for (trigger, need) in triggers
+        .iter()
+        .zip(["hard build", "security review", "stuck diagnosis"])
+    {
+        assert!(trigger.contains(need), "{trigger} names {need}");
+    }
 }
 
 #[test]
@@ -820,7 +830,7 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
         "is a reassignment: it is recorded and reviewed by one other-lineage seat",
         "permitted worker change",
         "Default effort follows each vendor's recommended default",
-        "Raise a seat or worker to high, or xhigh on Codex, only when a trigger or a specific task needs it",
+        "Raise a seat or worker to high, or xhigh on Codex, only when a named need applies to that lane",
         "The highest-cost reasoning model (Fable in this ensemble) is used only for key review, analysis and direction",
         "strongest capable permitted same-family reasoning route",
         "An xhigh trigger requires the owning primary to obtain xhigh reasoning",

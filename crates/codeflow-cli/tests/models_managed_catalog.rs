@@ -404,9 +404,9 @@ fn catalog_data_alone_moves_resolution_fallback_and_open_duties() {
         assert_pinned_launches(&catalog, result);
     }
     // ADR-0095: review starts at the model's vendor default (medium for the
-    // Codex primary); design keeps its high floor.
+    // Codex primary and for Opus); design has no high floor.
     assert_eq!(review["participants"][0]["effort"], "medium");
-    assert_eq!(design["participants"][0]["effort"], "high");
+    assert_eq!(design["participants"][0]["effort"], "medium");
     assert_eq!(review["participants"][0]["seat"], codex_id);
 
     // A catalog-only change moves the requested selector and effort.
@@ -508,11 +508,12 @@ fn bucket_exclusion_moves_the_fallback_and_no_codex_leaves_review_open() {
 }
 
 #[test]
-fn xhigh_trigger_keeps_the_design_seat_at_high_and_adds_a_worker() {
+fn xhigh_trigger_keeps_the_design_seat_at_its_default_and_adds_a_worker() {
     let catalog = managed();
     let owner = catalog["design_owner"].as_str().unwrap().to_owned();
     let repo = Repo::new(&catalog);
-    // An xhigh trigger keeps the design seat at high and adds an xhigh worker.
+    // An xhigh trigger keeps the design seat at its default (medium for Opus,
+    // ADR-0095) and adds an xhigh worker.
     let trigger = catalog["xhigh_triggers"][0].as_str().unwrap();
     let design = repo.resolved(
         "design",
@@ -522,7 +523,7 @@ fn xhigh_trigger_keeps_the_design_seat_at_high_and_adds_a_worker() {
         true,
     );
     assert_eq!(design["participants"][0]["seat"], owner.as_str());
-    assert_eq!(design["participants"][0]["effort"], "high");
+    assert_eq!(design["participants"][0]["effort"], "medium");
     let worker = &design["obligations"][0];
     assert_eq!(worker["participant"], format!("xhigh-reasoning:{owner}"));
     assert_eq!(worker["effort"], "xhigh");

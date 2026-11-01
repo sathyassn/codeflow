@@ -28,10 +28,10 @@ fn unique<'a>(values: impl Iterator<Item = &'a str>, label: &str) -> Result<(), 
 pub(super) fn floor(duty: &str) -> Effort {
     if duty == "xhigh-reasoning" {
         Effort::Xhigh
-    } else if matches!(duty, "design" | "reasoning-support") {
-        // Design and deep reasoning exist for work that needs the stronger
-        // setting; every other duty starts at the vendor default (medium) and
-        // is raised by a high trigger (ADR-0095).
+    } else if duty == "reasoning-support" {
+        // The stronger-reasoning request exists for work that needs it; every
+        // other duty, design included, starts at the model's vendor default
+        // and is raised only by a named trigger on that lane (ADR-0095).
         Effort::High
     } else {
         Effort::Medium

@@ -127,9 +127,10 @@ asks for just that.
 - **Effort by model, raised by need.** Every session and worker starts at its
   model's vendor-recommended default effort, the effort `codeflow models
   resolve` returns, and every launch passes it explicitly. Raise to high, or
-  xhigh where the model offers it, only for a named reason: a high or xhigh
-  trigger, a hard build, a security review or a stuck diagnosis. An
-  orchestrating, director or coordinator session stays at the default.
+  xhigh where the model offers it, only for a named need applied to that
+  lane: a hard build, a security review or a stuck diagnosis. Design starts
+  at the default too. An orchestrating, director or coordinator session
+  stays at the default whatever triggers apply.
 - **The highest-cost reasoning model directs; it never executes.** Use it
   only for key review, analysis and direction (design, architecture and
   planning decisions). Each run names its deliverable and its end and is

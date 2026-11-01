@@ -97,9 +97,10 @@ Default effort follows each vendor's recommended default for the bound
 model, as the current ensemble records it (in this ensemble: medium for Opus,
 Sonnet and the Codex lines, and high for Fable, whose lowest effort is high).
 It is not a ceiling. Raise a seat or worker to high, or xhigh on Codex, only
-when a trigger or a specific task needs it, such as a hard build, a security
-review or a stuck diagnosis, and never by default for an orchestrating,
-director or coordinator session. A primary already at the needed effort
+when a named need applies to that lane, such as a hard build, a security
+review or a stuck diagnosis, and never by default or by category for an
+orchestrating, director or coordinator session. Design starts at the model's
+default like any other lane. A primary already at the needed effort
 performs suitable reasoning directly. The highest-cost reasoning model (Fable
 in this ensemble) is used only for key review, analysis and direction
 (design, architecture and planning decisions), never to execute; each of its
@@ -110,9 +111,9 @@ available and the unit is separable enough to inspect; direct primary
 execution remains valid for a tiny warm-context change, inseparable
 unresolved reasoning, material risk, an unavailable route, or bounded
 recovery. Record the concrete reason whenever substantial routine work is
-retained. Complex architecture and technical planning use the strongest
-capable permitted same-family reasoning route at high or xhigh from the active
-binding's permitted routes. An xhigh trigger requires the owning primary to
+retained. A unit named a hard build in architecture or technical planning
+uses the strongest capable permitted same-family reasoning route at high or
+xhigh from the active binding's permitted routes. An xhigh trigger requires the owning primary to
 obtain xhigh reasoning through a supported same-family worker route; do not
 spend a high attempt merely to fail first. The primary critically integrates worker
 findings and retains approvals. If no required capable route is available,

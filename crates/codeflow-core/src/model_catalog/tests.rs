@@ -179,18 +179,16 @@ fn evidence_requires_record() {
     );
 }
 #[test]
-fn seat_defaults_can_be_medium_but_design_and_reasoning_cannot() {
-    // ADR-0095: seats start at the model's vendor default; only design and
-    // reasoning-support keep a high floor.
+fn seat_and_design_defaults_can_be_medium_but_reasoning_cannot() {
+    // ADR-0095: seats and design start at the model's vendor default; only
+    // reasoning-support, the stronger-reasoning request, keeps a high floor.
     let mut value = fixture();
     value["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
-    parse(&value).expect("a medium orchestrating seat is valid");
-    assert_invalid(
-        |v| {
-            v["duties"]["design"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
-        },
-        "below its effort floor",
-    );
+    value["duties"]["design"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    let c = parse(&value).expect("medium orchestrating and design seats are valid");
+    let observed = BTreeMap::new();
+    let design = c.resolve(&request("design", &observed)).unwrap();
+    assert_eq!(design.participants[0].effort, Effort::Medium);
     assert_invalid(
         |v| {
             v["duties"]["reasoning-support"]["required"][0]["alternatives"][0]["effort"] =
@@ -204,19 +202,73 @@ fn seat_defaults_can_be_medium_but_design_and_reasoning_cannot() {
     );
 }
 #[test]
-fn high_trigger_raises_a_medium_seat_to_high() {
+fn high_trigger_raises_a_medium_lane_but_never_the_orchestrating_session() {
     let mut value = fixture();
     value["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    for alternative in value["duties"]["unit-review"]["required"][0]["alternatives"]
+        .as_array_mut()
+        .unwrap()
+    {
+        alternative["effort"] = json!("medium");
+    }
     let c = parse(&value).unwrap();
     let observed = BTreeMap::new();
-    let mut req = request("orchestrate", &observed);
-    let plain = c.resolve(&req).unwrap();
     let triggers = ["material".to_string()];
-    req.trigger_facts = &triggers;
-    let raised = c.resolve(&req).unwrap();
-    // A seat whose versions offer medium starts there; the trigger raises it.
-    assert_eq!(plain.participants[0].effort, Effort::Medium);
-    assert_eq!(raised.participants[0].effort, Effort::High);
+    // A review lane starts at medium; the named trigger raises that lane.
+    let mut review = request("unit-review", &observed);
+    assert_eq!(
+        c.resolve(&review).unwrap().participants[0].effort,
+        Effort::Medium
+    );
+    review.trigger_facts = &triggers;
+    assert_eq!(
+        c.resolve(&review).unwrap().participants[0].effort,
+        Effort::High
+    );
+    // The orchestrating (director or coordinator) session stays at its
+    // default whatever trigger facts are passed.
+    let mut host = request("orchestrate", &observed);
+    host.trigger_facts = &triggers;
+    assert_eq!(
+        c.resolve(&host).unwrap().participants[0].effort,
+        Effort::Medium
+    );
+}
+fn medium_binding(effort: &str) -> crate::model_qualification::QualifiedBinding {
+    let mut b = binding();
+    b.requested.effort = effort.into();
+    b.observed.effort = effort.into();
+    b
+}
+#[test]
+fn project_binding_accepts_the_medium_default_and_keeps_a_bound_high() {
+    let mut value = fixture();
+    value["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    let selection = ProjectSelection::parse(
+        br#"{"schema_version":1,"bindings":[{"role":"claude-judgment-primary","binding_id":"orchid-approved"}]}"#,
+    )
+    .unwrap();
+    let observed = BTreeMap::new();
+    for (bound, want) in [("medium", Effort::Medium), ("high", Effort::High)] {
+        let mut c = parse(&value).unwrap();
+        c.bindings = vec![medium_binding(bound)];
+        c.selection = Some(selection.clone());
+        // The selection itself validates at the bound effort.
+        selection
+            .resolve(
+                &c,
+                &c.bindings,
+                "claude-judgment-primary",
+                "claude-code",
+                want,
+            )
+            .unwrap()
+            .unwrap();
+        let result = c.resolve(&request("orchestrate", &observed)).unwrap();
+        assert!(!result.is_open(), "{bound}: {:?}", result.open);
+        assert_eq!(result.participants[0].effort, want, "{bound} binding");
+        assert_eq!(result.participants[0].pinned_id, "orchid-one-pin");
+    }
 }
 #[test]
 fn unknown_trigger_and_unknown_route_are_rejected() {
@@ -639,13 +691,13 @@ fn override_exclusion_and_identity_drift_remain_open() {
     assert!(override_result(Some(&record), &record.route, &catalog(), &[], &observed).is_open());
 }
 #[test]
-fn override_unsupported_and_below_floor_efforts_remain_open() {
+fn override_unsupported_efforts_remain_open() {
     let mut c = catalog();
     c.lines[1].versions[0].efforts = vec![Effort::High];
     let mut record = override_record();
     record.route.effort = Effort::Xhigh;
     assert!(override_result(Some(&record), &record.route, &c, &[], &BTreeMap::new()).is_open());
-    record.route.effort = Effort::Medium;
+    record.route.effort = Effort::Low;
     assert!(override_result(
         Some(&record),
         &record.route,
@@ -881,6 +933,9 @@ fn project_schema_one_binding_is_exact_in_role_harness_and_effort() {
             Effort::High
         )
         .is_err());
+    // ADR-0095: a request above the bound effort is not covered by the
+    // binding's evidence and stays refused; a medium request keeps the
+    // bound high.
     assert!(selection
         .resolve(
             &c,
@@ -890,6 +945,17 @@ fn project_schema_one_binding_is_exact_in_role_harness_and_effort() {
             Effort::Xhigh
         )
         .is_err());
+    let kept = selection
+        .resolve(
+            &c,
+            &records,
+            "claude-judgment-primary",
+            "claude-code",
+            Effort::Medium,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.effort, "high");
 }
 #[test]
 fn project_selection_rejects_raw_selectors_missing_records_and_partial_application() {
@@ -1029,6 +1095,8 @@ fn remaining_alternatives_include_eligible_seat_fallbacks() {
 fn high_trigger_escalates_worker_without_raising_seat() {
     let observed = BTreeMap::new();
     let facts = vec!["material".into()];
+    // The fixture's orchestrating host is already high; a trigger neither
+    // lowers it nor adds an obligation, and it raises the medium worker.
     for duty in ["light-execution", "orchestrate"] {
         let mut req = request(duty, &observed);
         req.trigger_facts = &facts;
@@ -1264,7 +1332,9 @@ fn route_less_override_leaves_eligible_design_open() {
 }
 
 #[test]
-fn override_floor_is_explicitly_the_design_duty_floor() {
+fn override_at_the_vendor_default_medium_resolves() {
+    // ADR-0095: design has no duty floor above the model's default, so a
+    // medium OPERATOR_OVERRIDE on a model that offers medium resolves.
     let mut record = override_record();
     record.route.effort = Effort::Medium;
     let result = override_result(
@@ -1274,11 +1344,8 @@ fn override_floor_is_explicitly_the_design_duty_floor() {
         &[],
         &BTreeMap::new(),
     );
-    assert!(result.is_open());
-    assert_eq!(
-        result.open[0].reasons,
-        ["OPERATOR_OVERRIDE effort below design duty floor"]
-    );
+    assert!(!result.is_open(), "{:?}", result.open);
+    assert_eq!(result.participants[0].effort, Effort::Medium);
 }
 
 #[test]
@@ -1312,9 +1379,10 @@ fn missing_optional_second_opinion_does_not_open_filled_independent_review() {
 fn resolution_revalidates_public_catalog_mutations() {
     let mut c = catalog();
     let observed = BTreeMap::new();
-    let req = request("design", &observed);
-    assert!(!c.resolve(&req).unwrap().is_open());
-    c.duties.get_mut("design").unwrap().required[0].alternatives[0].effort = Effort::Medium;
+    let req = request("reasoning-support", &observed);
+    assert!(c.resolve(&req).is_ok());
+    c.duties.get_mut("reasoning-support").unwrap().required[0].alternatives[0].effort =
+        Effort::Medium;
     assert!(c
         .resolve(&req)
         .unwrap_err()

@@ -43,10 +43,12 @@ of ADR-0056 and all of ADR-0087 stand.
   GPT-6.1 Sol and GPT-6 Luna; high for Fable 5.1, whose lowest effort is
   high; high for Grok 4.7. Every launch passes that effort explicitly.
 - **When to raise.** A seat or worker goes to high (xhigh where the model
-  offers it) only for a named reason: a high or xhigh trigger, a hard build, a
-  security review or a stuck diagnosis. The catalog adds two high triggers for
-  the last two. An orchestrating, director or coordinator session stays at
-  the default.
+  offers it) only for a named need applied to that lane: a hard build, a
+  security review or a stuck diagnosis. The catalog's high triggers are
+  exactly those three; the two earlier category triggers (complex or
+  difficult work, material ambiguity) are removed, so a category never
+  raises every seat. The resolver never raises the orchestrating director or
+  coordinator session by trigger; it stays at the default.
 - **The highest-cost reasoning model directs and never executes.** In this
   ensemble that is Fable. It serves key review, analysis and direction
   (design, architecture and planning decisions). Each run names its
@@ -54,13 +56,20 @@ of ADR-0056 and all of ADR-0087 stand.
   Sonnet. No execution or evidence-collection duty routes to it, and a test
   holds that.
 - **Catalog.** Seat-targeted duties in `current-ensemble.json` carry medium,
-  except Grok seats at high and the design duty at high. The duty floor is
-  medium for every duty except `design` and `reasoning-support`, which keep
-  high, and `xhigh-reasoning`, which keeps xhigh. A high trigger now raises a
-  seat-targeted participant to high as it already raised a line-targeted
-  one. A seat at medium resolves only to a line that supports medium, so the
-  Claude seat at medium resolves to Opus, and Fable is reached only through
-  high-effort review, reasoning and design routes.
+  design included, except Grok seats at high. The duty floor is medium for
+  every duty except `reasoning-support`, the stronger-reasoning request,
+  which keeps high, and `xhigh-reasoning`, which keeps xhigh; a design
+  OPERATOR_OVERRIDE has no separate floor. A high trigger raises a
+  seat-targeted participant on that lane as it already raised a
+  line-targeted one. A seat at medium resolves only to a line that supports
+  medium, so the Claude seat at medium resolves to Opus, and Fable is
+  reached only through high-effort review, reasoning and consultation
+  routes.
+- **Project bindings.** A binding in `.codeflow/model-selection.json` pins
+  the model and its qualified effort. It accepts a request at or below that
+  effort, the vendor-default request included, and resolves at the bound
+  effort. A request above the bound effort is refused, because the binding's
+  evidence does not cover it.
 
 ## Consequences
 
