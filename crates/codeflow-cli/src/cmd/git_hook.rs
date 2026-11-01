@@ -472,6 +472,7 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
         codeflow_core::error::HookError::Config(format!("cannot read staged files: {why}"))
     };
     let out = codeflow_core::git::command()
+        .env("GIT_NO_LAZY_FETCH", "1")
         .arg("-C")
         .arg(root)
         .args(["diff", "--cached", "--name-only", "-z"])

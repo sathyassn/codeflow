@@ -230,6 +230,7 @@ pub fn marker_sizes(
         return Ok(BTreeMap::new());
     }
     let mut command = crate::git::command();
+    crate::git::local_objects_only(&mut command);
     command.arg("-C").arg(root);
     let from = match source {
         AttrSource::Index {

@@ -982,7 +982,11 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   every path, so a `.gitattributes` entry (`-diff`, `binary` or a `textconv`
   driver) cannot hide a staged line and a file holding a NUL byte is read as
   text. This needs git 2.41 or later, as the CI scan does; an older git is a
-  failed scan. The clone's own `.git/info/attributes` still applies, since
+  failed scan. The scan sets `GIT_NO_LAZY_FETCH=1` for gitleaks and every git it runs, overriding an
+  inherited value, so in a partial clone a missing object is a failed scan
+  and never a fetch from the promisor remote. A partial clone also needs git
+  2.44 or later, the first release that honours that setting; an older git is
+  a failed scan there. The clone's own `.git/info/attributes` still applies, since
   nothing committed or staged can change it. gitleaks cannot read a path
   with a backslash, double quote or control character reliably (it skips a
   name ending in a backslash), so a staged path with one is a failed scan

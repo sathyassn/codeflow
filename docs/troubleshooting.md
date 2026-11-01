@@ -193,7 +193,7 @@ reasons.
   private folder or git's trace was replaced while it ran, its report could not be read, a
   staged path holds a backslash, double quote or control character that
   gitleaks cannot read, or git is older than 2.41 and cannot stop a
-  `.gitattributes` entry from hiding staged lines. The message names which; rename the path, upgrade git or
+  `.gitattributes` entry from hiding staged lines, a partial clone is on git older than 2.44, or a partial clone is missing an object the staged diff needs. The message names which; rename the path, upgrade git or
   fix the cause, then commit again.
 
 A merge Git concludes itself is scanned in `commit-msg`, since Git runs no

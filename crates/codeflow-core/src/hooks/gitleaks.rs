@@ -604,6 +604,7 @@ mod private {
 fn git_dir(root: &Path) -> Result<std::path::PathBuf, String> {
     let out = crate::git::command()
         .args(["rev-parse", "--absolute-git-dir"])
+        .env("GIT_NO_LAZY_FETCH", "1")
         .current_dir(root)
         .stdin(std::process::Stdio::null())
         .output()
@@ -745,6 +746,9 @@ fn pin_git_output(command: &mut Command, extra: &[(&str, OsString)]) {
         .env_remove("GIT_DIFF_OPTS")
         .env_remove("GIT_EXTERNAL_DIFF")
         .env("GIT_NO_REPLACE_OBJECTS", "1");
+    // Missing objects of a partial clone are an error, never a fetch: the
+    // scan makes no network request, and gitleaks' own git inherits this.
+    crate::git::local_objects_only(command);
     for (name, _) in std::env::vars_os() {
         let bytes = name.as_encoded_bytes();
         if bytes.starts_with(b"GIT_CONFIG_KEY_") || bytes.starts_with(b"GIT_CONFIG_VALUE_") {
@@ -815,6 +819,35 @@ fn unreadable_staged_path(root: &Path) -> Result<Option<String>, String> {
 /// (`GIT_ATTR_SOURCE`), the version the managed CI scan requires too.
 const MIN_GIT: (u32, u32) = (2, 41);
 
+/// The oldest git that honours `GIT_NO_LAZY_FETCH`. An older git ignores the
+/// setting, which is harmless unless the repository is a partial clone, where
+/// it could fetch a missing object during the scan.
+const MIN_GIT_PARTIAL_CLONE: (u32, u32) = (2, 44);
+
+/// Whether the scan must be refused for this git: it is too old for the
+/// attribute pinning, or the repository is a partial clone and git cannot be
+/// kept from fetching its missing objects. Returns the refusal reason.
+fn git_refusal(version: &str, partial_clone: bool) -> Option<String> {
+    let found = git_version(version);
+    if found.is_none_or(|found| found < MIN_GIT) {
+        return Some(format!(
+            "{version} cannot read attributes from a named tree, so a \
+             .gitattributes entry could hide staged lines from gitleaks; \
+             upgrade git to {}.{} or later",
+            MIN_GIT.0, MIN_GIT.1
+        ));
+    }
+    if partial_clone && found.is_some_and(|found| found < MIN_GIT_PARTIAL_CLONE) {
+        return Some(format!(
+            "this repository fetches missing objects on demand (a promisor \
+             remote), and {version} cannot be kept from doing that during the \
+             scan; upgrade git to {}.{} or later",
+            MIN_GIT_PARTIAL_CLONE.0, MIN_GIT_PARTIAL_CLONE.1
+        ));
+    }
+    None
+}
+
 /// Git attributes for the gitleaks run, so the staged diff it reads shows
 /// every staged line as text, as the CI scan's `--text --no-textconv` does.
 ///
@@ -836,6 +869,7 @@ impl TextAttributes {
         let git = |args: &[&str]| -> Result<String, String> {
             let out = crate::git::command()
                 .args(args)
+                .env("GIT_NO_LAZY_FETCH", "1")
                 .current_dir(root)
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -850,13 +884,14 @@ impl TextAttributes {
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
         };
         let version = git(&["version"])?;
-        if git_version(&version).is_none_or(|found| found < MIN_GIT) {
-            return Err(format!(
-                "{version} cannot read attributes from a named tree, so a \
-                 .gitattributes entry could hide staged lines from gitleaks; \
-                 upgrade git to {}.{} or later",
-                MIN_GIT.0, MIN_GIT.1
-            ));
+        let partial_clone = git(&[
+            "config",
+            "--get-regexp",
+            r"^(extensions\.partialclone|remote\..*\.promisor)$",
+        ])
+        .is_ok_and(|found| !found.is_empty());
+        if let Some(reason) = git_refusal(&version, partial_clone) {
+            return Err(reason);
         }
         let empty_tree = git(&["hash-object", "-t", "tree", "--stdin"])?;
         Ok(Self { empty_tree })
@@ -1102,6 +1137,18 @@ mod tests {
             first_line(b"\nERR [git] fatal: bad\x1b[31m\nnext").as_deref(),
             Some("ERR [git] fatal: bad\\u{1b}[31m")
         );
+    }
+
+    #[test]
+    fn an_old_git_is_refused_only_for_a_partial_clone_below_2_44() {
+        let old = "git version 2.43.0";
+        assert!(git_refusal(old, false).is_none());
+        let reason = git_refusal(old, true).expect("a partial clone needs 2.44");
+        assert!(reason.contains("2.44"), "{reason}");
+        assert!(git_refusal("git version 2.44.0", true).is_none());
+        assert!(git_refusal("git version 2.53.0 (Apple Git-1)", true).is_none());
+        assert!(git_refusal("git version 2.40.1", false).is_some());
+        assert!(git_refusal("not git", false).is_some());
     }
 
     #[test]

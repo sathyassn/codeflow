@@ -4020,6 +4020,152 @@ mod tests {
             }
         }
 
+        /// A partial clone whose staged change to `docs/legacy.json` needs
+        /// the promised HEAD blob, which is not on disk. The clone's
+        /// `uploadpack` is a wrapper that leaves `fetched` behind, so any
+        /// fetch or transport process is seen. Returns the clone, the marker
+        /// and the folders that keep them alive.
+        #[cfg(unix)]
+        fn partial_clone_missing_a_promised_blob(
+        ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+            use std::os::unix::fs::PermissionsExt;
+            let root = tempfile::tempdir().unwrap();
+            let upstream = root.path().join("upstream");
+            std::fs::create_dir_all(&upstream).unwrap();
+            init_repo(&upstream, "main");
+            let notes = "a line of the legacy notes\n".repeat(100);
+            stage(&upstream, "docs/legacy.json", &format!("{{\n{notes}}}\n"));
+            git(&upstream, &["commit", "-q", "-m", "chore: legacy file"]);
+            git(&upstream, &["config", "uploadpack.allowFilter", "true"]);
+            git(
+                &upstream,
+                &["config", "uploadpack.allowAnySHA1InWant", "true"],
+            );
+            let clone = root.path().join("work");
+            std::fs::create_dir_all(&clone).unwrap();
+            let url = format!("file://{}", upstream.display());
+            // A partial repository built without `git clone`: a promisor
+            // remote and a blob-less fetch.
+            git(&clone, &["init", "-q", "-b", "main"]);
+            git(&clone, &["remote", "add", "origin", &url]);
+            git(&clone, &["config", "remote.origin.promisor", "true"]);
+            git(&clone, &["config", "extensions.partialClone", "origin"]);
+            git(
+                &clone,
+                &["fetch", "-q", "--filter=blob:none", "origin", "main"],
+            );
+            git(&clone, &["update-ref", "refs/heads/main", "FETCH_HEAD"]);
+            git(&clone, &["config", "user.email", "t@example.com"]);
+            git(&clone, &["config", "user.name", "t"]);
+            let fetched = root.path().join("fetched");
+            let wrapper = root.path().join("upload-pack-wrapper");
+            std::fs::write(
+                &wrapper,
+                format!(
+                    "#!/bin/sh\ntouch '{}'\nexec git upload-pack \"$@\"\n",
+                    fetched.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            git(
+                &clone,
+                &[
+                    "config",
+                    "remote.origin.uploadpack",
+                    wrapper.to_str().unwrap(),
+                ],
+            );
+            // The index holds HEAD's tree (no blob is read) and then a new
+            // version of the file, written locally.
+            git(&clone, &["read-tree", "HEAD"]);
+            let blob = clone.join("new-blob");
+            std::fs::write(&blob, format!("{{\n{HASH_LINE}}}\n")).unwrap();
+            let out = crate::git::command()
+                .args(["hash-object", "-w", "new-blob"])
+                .current_dir(&clone)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            let sha = String::from_utf8(out.stdout).unwrap().trim().to_string();
+            std::fs::remove_file(&blob).unwrap();
+            git(
+                &clone,
+                &[
+                    "update-index",
+                    "--cacheinfo",
+                    &format!("100644,{sha},docs/legacy.json"),
+                ],
+            );
+            (root, clone, fetched)
+        }
+
+        /// A Git that is not told to stay offline fetches the promised blob
+        /// to show the staged patch, and the official pinned binary scan
+        /// must not: on the pre-commit route and on the automatic-merge
+        /// route (`MERGE_MSG`) the scan is refused as incomplete, and no
+        /// fetch or transport process starts, even when the environment
+        /// says `GIT_NO_LAZY_FETCH=0`.
+        #[cfg(unix)]
+        #[test]
+        fn test_pinned_gitleaks_never_fetches_a_missing_object() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let policy = engine_policy(PolicyLevel::Block);
+
+            // The control: plain git fetches here, so the fixture is a
+            // partial clone that would reach the remote.
+            let (_keep, clone, fetched) = partial_clone_missing_a_promised_blob();
+            let out = crate::git::command()
+                .args(["diff", "--cached", "--name-only"])
+                .current_dir(&clone)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env_remove("GIT_NO_LAZY_FETCH")
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            let renamed = crate::git::command()
+                .args(["diff", "--cached"])
+                .current_dir(&clone)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env_remove("GIT_NO_LAZY_FETCH")
+                .output()
+                .unwrap();
+            assert!(renamed.status.success());
+            assert!(
+                fetched.exists(),
+                "the control must fetch, or the fixture proves nothing"
+            );
+
+            for route in ["pre-commit", "commit-msg"] {
+                let (_keep, clone, fetched) = partial_clone_missing_a_promised_blob();
+                std::env::set_var("GIT_NO_LAZY_FETCH", "0");
+                let report = if route == "pre-commit" {
+                    pre_commit_engine(&clone, &policy, false, false, &engine).unwrap()
+                } else {
+                    let merge = clone.join(".git/MERGE_MSG");
+                    std::fs::write(&merge, "Merge branch 'side'\n").unwrap();
+                    commit_msg_secret_scan_engine(&clone, &policy, &merge, &engine).unwrap()
+                };
+                std::env::remove_var("GIT_NO_LAZY_FETCH");
+                assert!(
+                    !fetched.exists(),
+                    "{route}: a fetch or transport process started"
+                );
+                let refused = secret_findings(&report)
+                    .iter()
+                    .any(|v| v.level == PolicyLevel::Block);
+                assert!(refused, "{route}: a missing object must refuse: {report:?}");
+            }
+        }
         /// The official pinned binary on the automatic-merge route, when
         /// `CODEFLOW_TEST_GITLEAKS_DIR` names it: commit-msg with Git's
         /// `MERGE_MSG` refuses the hash line and a name ending in a
