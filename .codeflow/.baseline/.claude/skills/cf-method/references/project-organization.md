@@ -409,10 +409,14 @@ A waiver is a criterion result in the fenced `yaml` acceptance block under
 inside `acceptance.criteria`. The evidence after `|` is the commit alone,
 not a review URL or an explanation. The named commit must change that
 criterion and change planning records only. The completion must contain it.
+Other planning records in the same commit, such as the epic record, the epic
+plan or other task records, do not disqualify it. A criterion the amendment
+removes leaves the record, so the completion has no row for it and needs no
+waiver.
 
 A task can name an amendment already on its integration target. Before its
 first landing, it can also name an amendment in its own task range. In that
-case the amendment changes only its record and is strictly after the range's
+case the amendment meets the same test and is strictly after the range's
 merge-base and strictly before `reviewed` in commit ancestry. The amendment
 cannot be the reviewed commit or the completion commit. A range that
 reopens a completion that never landed keeps that own-range allowance,
