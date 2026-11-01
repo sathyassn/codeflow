@@ -849,8 +849,24 @@ fn word_count(source: &str) -> usize {
     ReaderText::of(source, &[]).words()
 }
 
+/// The `##` section names the shipped template defines. A diagnostic prints
+/// a heading from the body only when it is one of these (compared without
+/// regard to case, and printed in the template's spelling): any other
+/// heading is the author's text, and the policy run's log must carry none
+/// of the body (TSK-1040).
+const TEMPLATE_SECTIONS: [&str; 5] = ["Summary", "Changes", "Testing", "Reviews", "Release impact"];
+
+/// `heading` in the template's spelling, or `None` when the template has no
+/// such section.
+fn known_section(heading: &str) -> Option<&'static str> {
+    TEMPLATE_SECTIONS
+        .into_iter()
+        .find(|name| name.eq_ignore_ascii_case(heading))
+}
+
 /// The length warning's message for an over-long body: the count, the limit
-/// and the three largest `##` sections with their word counts. `None` at or
+/// and the three largest `##` sections with their word counts. A section
+/// the template does not define is counted but never named. `None` at or
 /// under `limit`, or when `limit` is `0` (the warning turned off).
 fn length_message(limit: usize, body: &str, sections: &[Section<'_>]) -> Option<String> {
     if limit == 0 {
@@ -866,12 +882,12 @@ fn length_message(limit: usize, body: &str, sections: &[Section<'_>]) -> Option<
     if total <= limit {
         return None;
     }
-    let mut largest: Vec<(&str, usize)> = sections
+    let mut largest: Vec<(Option<&str>, usize)> = sections
         .iter()
         .filter(|section| section.depth == HeadingLevel::H2)
         .map(|section| {
             (
-                section.name.trim(),
+                known_section(section.name.trim()),
                 reader.words_in(section.start, section.end),
             )
         })
@@ -882,7 +898,10 @@ fn length_message(limit: usize, body: &str, sections: &[Section<'_>]) -> Option<
     let named = largest
         .iter()
         .take(3)
-        .map(|(name, words)| format!("## {name} ({words} words)"))
+        .map(|(name, words)| match name {
+            Some(name) => format!("## {name} ({words} words)"),
+            None => format!("an unlisted section ({words} words)"),
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let sections = if named.is_empty() {
@@ -2492,14 +2511,14 @@ mod tests {
             "an unended comment hides the rest of the body"
         );
         let sections = format!(
-            "## First\n<!-- a\n\nb -->\n{}\n## Second\n{}\n",
+            "## Changes\n<!-- a\n\nb -->\n{}\n## Testing\n{}\n",
             words(400),
             words(700)
         );
         let message =
             length_message(BODY_WORD_LIMIT, &sections, &super::sections(&sections)).unwrap();
         assert!(
-            message.ends_with("## Second (700 words), ## First (400 words)"),
+            message.ends_with("## Testing (700 words), ## Changes (400 words)"),
             "{message}"
         );
     }
@@ -2523,16 +2542,16 @@ mod tests {
     #[test]
     fn section_counts_keep_references_defined_elsewhere() {
         let body = format!(
-            "## Images\n![alt text of an image][img] and [a link here][lnk]\n\n## Big\n{}\n## Links\n[img]: x.png\n[lnk]: https://example.com\n",
+            "## Summary\n![alt text of an image][img] and [a link here][lnk]\n\n## Changes\n{}\n## Reviews\n[img]: x.png\n[lnk]: https://example.com\n",
             words(BODY_WORD_LIMIT + 100),
         );
         let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         let named = message.split("largest sections: ").nth(1).unwrap();
         assert!(
-            named.starts_with("## Big (1100 words), ## Images (4 words)"),
+            named.starts_with("## Changes (1100 words), ## Summary (4 words)"),
             "{message}"
         );
-        assert!(!named.contains("## Links"), "{message}");
+        assert!(!named.contains("## Reviews"), "{message}");
         assert!(message.contains("is 1107 words"), "{message}");
     }
 
@@ -2540,7 +2559,7 @@ mod tests {
     #[test]
     fn length_message_keeps_body_order_between_equal_sections() {
         let body = format!(
-            "## First\n{}\n## Second\n{}\n## Third\n{}\n## Fourth\n{}\n",
+            "## Summary\n{}\n## Changes\n{}\n## Testing\n{}\n## Reviews\n{}\n",
             words(400),
             words(400),
             words(400),
@@ -2548,7 +2567,9 @@ mod tests {
         );
         let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         assert!(
-            message.ends_with("## First (400 words), ## Second (400 words), ## Third (400 words)"),
+            message.ends_with(
+                "## Summary (400 words), ## Changes (400 words), ## Testing (400 words)"
+            ),
             "{message}"
         );
     }
@@ -2590,6 +2611,30 @@ mod tests {
         );
         assert!(!message.contains("Detail"), "{message}");
         assert!(!message.contains("Summary"), "{message}");
+    }
+
+    /// TSK-1040: a heading the template does not define is the author's own
+    /// text; it is counted and never printed. A template heading is printed
+    /// in the template's spelling whatever its case.
+    #[test]
+    fn length_message_never_prints_a_heading_the_template_lacks() {
+        let body = format!(
+            "## Canary Heading Zq9\n{}\n## testing\n{}\n## Another Odd One\n{}\n",
+            words(700),
+            words(200),
+            words(300),
+        );
+        let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
+        let named = message.split("largest sections: ").nth(1).unwrap();
+        assert_eq!(
+            named,
+            "an unlisted section (700 words), an unlisted section (300 words), ## Testing (200 words)",
+            "{message}"
+        );
+        assert!(
+            !message.contains("Canary") && !message.contains("Odd"),
+            "{message}"
+        );
     }
 
     #[test]

@@ -218,7 +218,8 @@ jobs:
       # delivered late, or a re-run), so only the current body is the newest.
       # The text is written to a file in the runner's temp directory, never to
       # a step output, an `env:` value or an argument, so it cannot reach the
-      # log; the step's outputs are the file's path and its sha256 digest.
+      # log. The path is fixed (`pr-body.md` in the runner's temp directory)
+      # and the step's only output is the file's sha256 digest.
       - name: Read the pull request's current body
         id: body
         if: github.event_name == 'pull_request_target'

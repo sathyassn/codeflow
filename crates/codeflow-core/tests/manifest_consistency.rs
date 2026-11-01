@@ -718,9 +718,10 @@ fn ci_templates_never_resolve_codeflow_through_a_cargo_bin() {
 
 /// Codex EPC-017 review, finding 5: the PR-body check (structure and the
 /// ADR-0067 characters) must rerun when the body is edited after opening,
-/// and the body keeps reaching `codeflow ci` through `env:`, never inline.
+/// and the body reaches `codeflow ci` as a file (TSK-1040), never inline
+/// and never through `env:`.
 #[test]
-fn shipped_ci_rechecks_an_edited_pr_body_through_env() {
+fn shipped_ci_rechecks_an_edited_pr_body_through_a_file() {
     // The PR-body check runs in the enforcing workflow on
     // `pull_request_target` (TSK-107, SPC-013 R-113).
     let workflow = std::fs::read_to_string(repo_root().join("assets/base/ci/codeflow-policy.yml"))

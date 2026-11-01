@@ -171,8 +171,9 @@ pub struct CiArgs {
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
-/// `--pr-body` nor `--pr-body-file` is given (the GitHub policy workflow sets
-/// it from the pull request's current body, read by its `body` step).
+/// `--pr-body` nor `--pr-body-file` is given. The GitHub policy workflow does
+/// not use it: the runner prints a step's environment, so that workflow writes
+/// the body to a file and passes `--pr-body-file` (TSK-1040).
 const PR_BODY_ENV: &str = "CODEFLOW_PR_BODY";
 
 /// Whether the pull request is a draft (`true` or `false`), for a host

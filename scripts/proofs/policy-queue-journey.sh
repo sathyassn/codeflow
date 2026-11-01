@@ -14,9 +14,9 @@
 #     .github/workflows/codeflow-policy.yml (cancel-in-progress: false,
 #     queue: max) on its default branch, with "commit standards" required;
 #   - `gh` logged in for that repository with a token that can push a
-#     branch, open and edit pull requests and read Actions runs
-#     (classic scope `repo`; fine-grained: Contents, Pull requests and
-#     Actions read/write on that one repository);
+#     branch, open and edit pull requests and read Actions runs and checks
+#     (classic scope `repo`; fine-grained: Contents and Pull requests
+#     write, Actions read and Checks read on that one repository);
 #   - a local clone of that repository as the current directory, with a
 #     clean tree and the default branch checked out.
 # The script never runs git credential commands. It leaves the pull request
