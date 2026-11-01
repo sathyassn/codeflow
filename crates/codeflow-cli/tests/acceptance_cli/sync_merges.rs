@@ -279,3 +279,33 @@ fn a_completion_that_edits_product_code_still_blocks_in_every_form() {
         assert_blocks(&result, form, &["TSK-001", TOOL]);
     }
 }
+
+/// Review round 02 on PR 469: after a clean sync, an ordinary commit edits
+/// TSK-001's acceptance block and adds product code. The refusal names the
+/// product change and calls the sync "the merge", never "the landing
+/// merge": the sync is not on a trusted receiving line.
+#[test]
+fn a_completion_edited_after_a_clean_sync_never_calls_the_sync_a_landing() {
+    let fixture = fixture(Case::Clean);
+    let root = fixture.dir.path();
+    let path = root.join(record_path("TSK-001"));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("pr/1#review"), "{text}");
+    std::fs::write(&path, text.replace("pr/1#review", "pr/1#review-edited")).unwrap();
+    write(root, "src/later.txt", "later product work\n");
+    let late = commit(root, "feat: later unreviewed work");
+    let result = pull_request(&fixture, &late);
+    assert_blocks(
+        &result,
+        "an edit after the sync",
+        &[
+            "the completion also changes src/later.txt",
+            &format!("a completion after the merge {}", fixture.task_sync),
+        ],
+    );
+    assert!(
+        !result.1.contains("the landing merge"),
+        "calls the sync a landing: {}",
+        result.1
+    );
+}

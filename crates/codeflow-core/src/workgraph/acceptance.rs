@@ -1687,18 +1687,25 @@ fn task_landing(
     let Ok(second) = history::parent_id(repo, &merge, 1) else {
         return unreadable("the landing merge");
     };
+    // Only a merge on a trusted receiving line is a landing (TSK-340).
+    let untrusted = untrusted_landing(repo, merge.id(), reviewed, receiving);
     // A completion that changes product code is refused first, landing or
-    // not: an unverified line binds it at the range head and names that
-    // change (TSK-433). A merge that edits a completion never reaches here
-    // (TSK-1066), so this refusal never calls a sync "the landing merge".
+    // not, so an unverified line binds it at the range head and names that
+    // change (TSK-433). The refusal calls the merge a landing only when the
+    // trust check found one, so a sync is never "the landing merge"
+    // (TSK-1066).
     if let Some(path) = completion {
+        let label = if untrusted.is_none() {
+            "the landing merge"
+        } else {
+            "the merge"
+        };
         return Landed::Refused(format!(
-            "{COMPLETION_CHANGES} {path}; a completion after the landing merge {} of the reviewed commit {reviewed} changes planning records only",
+            "{COMPLETION_CHANGES} {path}; a completion after {label} {} of the reviewed commit {reviewed} changes planning records only",
             merge.id()
         ));
     }
-    // Only a merge on a trusted receiving line is a landing (TSK-340).
-    if let Some(why) = untrusted_landing(repo, merge.id(), reviewed, receiving) {
+    if let Some(why) = untrusted {
         return Landed::NotALanding(why);
     }
     if let Err(error) = check_after_landing(
