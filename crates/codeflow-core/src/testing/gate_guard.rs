@@ -99,6 +99,12 @@ pub const LOCK_FILE: &str = "full-gate.lock";
 /// never written through (TSK-1003).
 pub const RECORD_FILE: &str = "full-gate.record";
 
+/// File name of the record lock beside each lock. Its OS lock is held while
+/// a process reads, merges and renames the holder record, so a reserve and
+/// the nested run under it never drop a group line the other just added
+/// (TSK-1128). Like the gate lock, it is only opened read only and locked.
+const RECORD_LOCK_FILE: &str = "full-gate.record.lock";
+
 /// A held heavy-work lock. The locks release when this value drops (or when
 /// the process exits); a clean drop also clears the holder record.
 #[derive(Debug)]
@@ -165,15 +171,22 @@ impl Drop for GateLock {
             // inside the lock file, which a pre-3.2 gate may have left. Live
             // groups a nested run added stay, so the lock is not free while
             // they run (TSK-1128).
-            let kept = entry
-                .as_ref()
-                .and_then(|entry| foreign_live_groups(path, entry).ok())
-                .unwrap_or_default();
-            let mut text = String::new();
-            for group in kept {
-                let _ = writeln!(text, "group={group}");
+            let clear = || {
+                let kept = entry
+                    .as_ref()
+                    .and_then(|entry| foreign_live_groups(path, entry).ok())
+                    .unwrap_or_default();
+                let mut text = String::new();
+                for group in kept {
+                    let _ = writeln!(text, "group={group}");
+                }
+                let _ = write_record(path, &text);
+            };
+            // Without the record lock the rewrite still runs: the record is
+            // best effort here, and an unlocked rewrite is the old floor.
+            if with_record_lock(path, clear).is_err() {
+                clear();
             }
-            let _ = write_record(path, &text);
         }
         // AcquiredFile explicitly unlocks before its descriptor closes.
     }
@@ -507,6 +520,8 @@ pub(crate) mod interleave {
         Opened,
         /// The OS lock is taken.
         Locked,
+        /// A record rewrite has read the record and not yet written it.
+        RecordRead,
     }
 
     type Step = Box<dyn FnMut(Point)>;
@@ -1076,43 +1091,7 @@ fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) -> Result<(), String> {
         change(&mut lock.groups);
         lock.recorded.extend(lock.groups.iter().copied());
         for path in &lock.paths {
-            // Keep the holder lines of an inherited record and every live
-            // group another process added (TSK-1128); a record that cannot
-            // be read keeps only this lock's own lines.
-            let (base, foreign) = match record_parts(path, &lock.trusted) {
-                Ok((base, groups)) => (
-                    if lock.inherited {
-                        base
-                    } else {
-                        lock.record.clone()
-                    },
-                    groups
-                        .into_iter()
-                        .filter(|group| !lock.recorded.contains(group) && group_alive(*group))
-                        .collect::<Vec<_>>(),
-                ),
-                Err(error) if lock.inherited => {
-                    failures.push(format!(
-                        "the holder record beside {} could not be read to add target process groups: {error}",
-                        crate::git::display_path(path)
-                    ));
-                    continue;
-                }
-                Err(_) => (lock.record.clone(), Vec::new()),
-            };
-            let mut text = base;
-            for group in foreign.iter().chain(&lock.groups) {
-                // Writing to a String cannot fail.
-                let _ = writeln!(text, "group={group}");
-            }
-            // A new record renamed into place. A missed write weakens the
-            // killed-gate check, so it is reported, never ignored (TSK-1003).
-            if let Err(error) = write_record(path, &text) {
-                failures.push(format!(
-                    "the gate lock record beside {} could not be updated with target process groups: {error}",
-                    crate::git::display_path(path)
-                ));
-            }
+            failures.extend(rewrite_serialized(lock, path));
         }
     }
     if failures.is_empty() {
@@ -1120,6 +1099,96 @@ fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) -> Result<(), String> {
     } else {
         Err(failures.join("; "))
     }
+}
+
+/// Rewrite the record beside `path` for `lock`: its holder lines (the
+/// holder's own for an inherited lock), every live group another process
+/// added, then this lock's groups. The caller holds the record lock.
+fn rewrite_record(lock: &Held, path: &Path) -> Result<(), String> {
+    // Keep the holder lines of an inherited record and every live
+    // group another process added (TSK-1128); a record that cannot
+    // be read keeps only this lock's own lines.
+    let read = record_parts(path, &lock.trusted);
+    #[cfg(test)]
+    interleave::at(interleave::Point::RecordRead);
+    let (base, foreign) = match read {
+        Ok((base, groups)) => (
+            if lock.inherited {
+                base
+            } else {
+                lock.record.clone()
+            },
+            groups
+                .into_iter()
+                .filter(|group| !lock.recorded.contains(group) && group_alive(*group))
+                .collect::<Vec<_>>(),
+        ),
+        Err(error) if lock.inherited => {
+            return Err(format!(
+                "the holder record beside {} could not be read to add target process groups: {error}",
+                crate::git::display_path(path)
+            ));
+        }
+        Err(_) => (lock.record.clone(), Vec::new()),
+    };
+    let mut text = base;
+    for group in foreign.iter().chain(&lock.groups) {
+        // Writing to a String cannot fail.
+        let _ = writeln!(text, "group={group}");
+    }
+    // A new record renamed into place. A missed write weakens the
+    // killed-gate check, so it is reported, never ignored (TSK-1003).
+    write_record(path, &text).map_err(|error| {
+        format!(
+            "the gate lock record beside {} could not be updated with target process groups: {error}",
+            crate::git::display_path(path)
+        )
+    })
+}
+
+/// Rewrite the record beside `path` for `lock` under the record lock, so a
+/// late rewrite still keeps the groups another process added. Without the
+/// record lock the rewrite runs unlocked, as before, and the missing
+/// serialization is reported. Returns the failures to report.
+fn rewrite_serialized(lock: &Held, path: &Path) -> Vec<String> {
+    match with_record_lock(path, || rewrite_record(lock, path)) {
+        Ok(Ok(())) => Vec::new(),
+        Ok(Err(failure)) => vec![failure],
+        Err(error) => {
+            let mut failures = vec![format!(
+                "the record lock beside {} could not be taken, so the record was rewritten without it: {error}",
+                crate::git::display_path(path)
+            )];
+            failures.extend(rewrite_record(lock, path).err());
+            failures
+        }
+    }
+}
+
+/// Run `rewrite` while holding the OS lock of the record lock file beside
+/// the gate lock at `lock`, waiting up to five seconds for another rewrite
+/// to finish. A holder keeps it only for one read, merge and rename, and
+/// the OS releases it if that process dies.
+fn with_record_lock<T>(lock: &Path, rewrite: impl FnOnce() -> T) -> std::io::Result<T> {
+    let record_lock = lock.with_file_name(RECORD_LOCK_FILE);
+    let (anchor, relative) = lock_anchor(&record_lock)?;
+    let guard = crate::contained::Tree::open(anchor)?.create_read_only(&relative)?;
+    let start = std::time::Instant::now();
+    loop {
+        match os_lock::try_lock(&guard) {
+            Ok(()) => break,
+            Err(error)
+                if os_lock::is_contended(&error)
+                    && start.elapsed() < std::time::Duration::from_secs(5) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let result = rewrite();
+    os_lock::unlock(&guard);
+    Ok(result)
 }
 
 /// Process groups named in a holder record that still have a live process.
@@ -1738,6 +1807,92 @@ mod tests {
         drop(holder);
     }
 
+    /// TSK-1128 (Grok round 02, N6): a rewrite that read the record before
+    /// another process added a group line still keeps that line, because
+    /// both rewrites hold the record lock from read to rename.
+    #[cfg(unix)]
+    #[test]
+    fn a_late_record_rewrite_keeps_a_group_added_meanwhile() {
+        use std::os::unix::process::CommandExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let dirs = dirs(tmp.path());
+        let lock = acquire_in_turn(&dirs, &work, "reserve", None).unwrap();
+        let path = lock.paths[0].clone();
+        let trusted = trusted_dirs(&work);
+        // Live process groups stand for the reserve's command and the
+        // nested run's target; a rewrite drops only groups that ended.
+        let spawn = || {
+            std::process::Command::new("sleep")
+                .arg("30")
+                .process_group(0)
+                .spawn()
+                .unwrap()
+        };
+        let (mut command, mut target) = (spawn(), spawn());
+        let (mine, foreign) = (command.id(), target.id());
+        let own = Held {
+            id: u64::MAX,
+            paths: vec![path.clone()],
+            record: "pid=1\nmode=reserve\n".to_string(),
+            groups: BTreeSet::from([mine]),
+            recorded: BTreeSet::from([mine]),
+            inherited: false,
+            trusted: trusted.clone(),
+            descriptors: Vec::new(),
+        };
+        // At the rewrite's read, a nested run (an inherited lock) adds the
+        // target's group. Give it a moment: unserialized, it
+        // finishes before the late rewrite renames its stale merge.
+        let adder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let slot = adder.clone();
+        let (other_path, other_trusted) = (path.clone(), trusted.clone());
+        interleave::set(move |point| {
+            if point != interleave::Point::RecordRead || slot.borrow().is_some() {
+                return;
+            }
+            let (path, trusted) = (other_path.clone(), other_trusted.clone());
+            let (done, finished) = std::sync::mpsc::channel();
+            *slot.borrow_mut() = Some(std::thread::spawn(move || {
+                let nested = Held {
+                    id: u64::MAX - 1,
+                    paths: vec![path.clone()],
+                    record: String::new(),
+                    groups: BTreeSet::from([foreign]),
+                    recorded: BTreeSet::from([foreign]),
+                    inherited: true,
+                    trusted,
+                    descriptors: Vec::new(),
+                };
+                assert_eq!(rewrite_serialized(&nested, &path), Vec::<String>::new());
+                let _ = done.send(());
+            }));
+            let _ = finished.recv_timeout(std::time::Duration::from_millis(300));
+        });
+        let failures = rewrite_serialized(&own, &path);
+        interleave::clear();
+        assert_eq!(failures, Vec::<String>::new());
+        let other = adder.borrow_mut().take().expect("the other rewrite ran");
+        other.join().unwrap();
+        let record = std::fs::read_to_string(record_path(&path)).unwrap();
+        for child in [&mut command, &mut target] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert!(
+            record
+                .lines()
+                .any(|line| line == format!("group={foreign}")),
+            "the group added meanwhile was dropped: {record}"
+        );
+        assert!(
+            record.lines().any(|line| line == format!("group={mine}")),
+            "{record}"
+        );
+        drop(lock);
+    }
+
     /// TSK-1128 AC-7: an earlier waiter takes the lock before a later one;
     /// stale and dropped tickets stop counting; a malformed ticket refuses.
     #[test]
@@ -2270,6 +2425,7 @@ mod tests {
             interleave::set(move |point| match point {
                 interleave::Point::Opened => std::fs::remove_file(&*e).unwrap(),
                 interleave::Point::Locked => std::fs::hard_link(&*s, &*e).unwrap(),
+                interleave::Point::RecordRead => {}
             });
             let result = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"));
             interleave::clear();

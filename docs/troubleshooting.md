@@ -158,7 +158,9 @@ the OS lock shows they are the holder's own; a value set any other way
 falls back to ordinary admission. The nested run adds its targets'
 process groups to the holder's record and leaves those still running
 there when it ends, so if the nested run is killed and the reserve ends
-while a target survives, the next gate refuses until that target exits.
+while a target survives, the next gate refuses until that target exits. Each rewrite of the holder record holds the OS lock of
+`full-gate.record.lock` beside it from read to rename, so the reserve and
+the nested run never drop a group line the other just added.
 Full and essential gates under a reserve still take
 the lock themselves and refuse. On Windows a nested quick run waits or
 refuses as a direct one does.
