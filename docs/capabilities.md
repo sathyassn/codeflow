@@ -241,6 +241,7 @@ Other checks on these planes:
 | Check | Key and default | What it judges |
 |---|---|---|
 | Blocked names and protected paths (TSK-322) | `git.path_policy`, block | Staged changes and every introduced commit; two-parent merges use remerge changes. `git.blocked_names` matches at any depth, `git.protected_paths` at the root. Landed denials persist when a branch removes them; branch-only exceptions grant no access. Gate inputs remain exempt, and the existing secret scan stays separate |
+| Ignored and large files (TSK-323) | `git.ignored_files`, warn; `git.max_file_bytes`, absent | The same introduced files, judged with the key, the project kind and the `.gitignore` files at the policy authority, never the change. An ignored file warns, and a tracked one is still judged. A file over 1 MiB warns and one over 10 MiB is refused in a new scaffold; in an updated project both are report lines until it sets `git.max_file_bytes`. Sizes are of the recorded blob, so a Git LFS path passes by its pointer. A refusal names the admission routes |
 | Unresolved conflict markers (TSK-170) | `git.conflict_markers`, block | The lines a change adds to a text file: in pre-commit over the staged diff, and in `codeflow ci` over the range, which also catches a marker left while resolving `git rebase --continue`. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in `.gitattributes` |
 | En and em dashes (ADR-0067) | `policy_characters`, warn; CodeFlow's own policy sets block | Added lines. The scan skips a file only when its bytes equal the whole-file managed asset the running binary ships for that path, so unmodified scaffold content never trips it and a project record proves nothing |
 | Pull request sections by change class (TSK-135) | `pr_sections` | Read from one checked merge-base tree diff that includes merge resolutions, deletions, both rename sides and file modes. A range of only regular Markdown under `docs/` or `project-management/`, outside every shared path set (product and watched contract paths from the checkout and the target, shipped templates, the record schema, dependency manifests, hooks, instructions and CI), needs Summary and Changes, under a mapped heading where the project accepted a mapping. An absent Release impact there reads as no impact unless a commit is marked breaking. The Release impact section is required only on a pull request into a protected branch or one that carries a breaking commit; elsewhere it is optional and checked when present (ADR-0076). A range that cannot be listed is code |
@@ -276,10 +277,10 @@ epics: [EPC-001, EPC-002, EPC-003, EPC-020, EPC-022, EPC-023, EPC-024]
 adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 ```
 
-- `codeflow remote protect` applies the policy's `protected_branches` to the
-  provider. On GitHub it requires a PR and the required checks on an
-  up-to-date branch, blocks force-push and deletion, and reports anything
-  the plan tier cannot apply.
+- `codeflow remote protect` writes GitHub rulesets it owns: one role moves
+  the default branch, and pull requests with strict, pinned checks guard it,
+  the integration lines and each other protected branch. It never weakens a
+  rule and reports what the plan cannot apply.
 - `codeflow doctor` runs twenty-five health checks on the repository and the
   tools around it, including the default branch's host rules.
 

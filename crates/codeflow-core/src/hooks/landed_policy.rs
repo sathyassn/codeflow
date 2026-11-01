@@ -27,6 +27,10 @@ pub struct LandedPolicy {
     /// when the remote-tracking checks found a reason (TSK-397 security review
     /// SEC01-2).
     pub tracking_doubt: Option<String>,
+    /// The default branch commits the policy was read at, or `HEAD` before
+    /// the first fetch; empty when it came from the working copy. The size
+    /// and ignored-file rules read their project kind and ignore rules here.
+    pub commits: Vec<git2::Oid>,
     remote_head_advice: Option<String>,
 }
 
@@ -91,7 +95,9 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
             return working(root, &format!("working copy (unborn HEAD; {reason})"));
         }
         let (policy, project) = at(&repo, "HEAD")?;
-        return finish(root, policy, project, format!("HEAD ({reason})"), false);
+        let mut authority = finish(root, policy, project, format!("HEAD ({reason})"), false)?;
+        authority.commits = vec![commit_of(&repo, "HEAD")?];
+        return Ok(authority);
     }
     let remote = remote.ok_or("populated tracking namespace has no configured remote")?;
     let (defaults, fallback) = default_sources(&repo, remote)?;
@@ -151,6 +157,10 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
     let doubt = tracking_doubt(&repo, remote, &read);
     let mut authority = finish(root, policy, project, sources, doubt.is_none())?;
     authority.tracking_doubt = doubt;
+    authority.commits = defaults
+        .iter()
+        .map(|source| commit_of(&repo, source))
+        .collect::<Result<_, _>>()?;
     if fallback {
         authority.remote_head_advice = Some(format!(
             "operator advice: git remote set-head {remote} --auto; without remote HEAD the default is assumed to be main or master; custom defaults need set-head"
@@ -321,6 +331,18 @@ fn linked_ref_file(base: &Path, name: &str) -> Option<String> {
     None
 }
 
+fn commit_of(repo: &Repository, reference: &str) -> Result<git2::Oid, String> {
+    repo.revparse_single(reference)
+        .and_then(|o| o.peel_to_commit())
+        .map(|c| c.id())
+        .map_err(|e| {
+            format!(
+                "cannot read policy source {}: {e}",
+                crate::git::display_text(reference)
+            )
+        })
+}
+
 fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
     Ok(LandedPolicy {
         policy: Policy::load_effective(root)?.0,
@@ -329,6 +351,7 @@ fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
         local_differs: false,
         remote_tracked: false,
         tracking_doubt: None,
+        commits: Vec::new(),
         remote_head_advice: None,
     })
 }
@@ -349,6 +372,7 @@ fn finish(
         local_differs,
         remote_tracked,
         tracking_doubt: None,
+        commits: Vec::new(),
         remote_head_advice: None,
     })
 }
@@ -391,6 +415,27 @@ fn same_inputs(local: &Policy, authority: &Policy) -> Result<bool, String> {
 pub fn policy_text_at(root: &Path, rev: &str) -> Result<Option<String>, String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     read_at(&repo, rev, ".codeflow/policy.json")
+}
+
+/// The policy an authority commit holds, checked against the schema before
+/// it is read, or the shipped defaults when the commit has no policy file.
+/// The size and ignored-file rules read their keys here, so a value the
+/// schema refuses, such as `null` for a rule object, stops the check
+/// instead of reading as an absent key.
+///
+/// # Errors
+/// The commit or its policy cannot be read, or the policy is invalid.
+pub fn checked_policy_at(repo: &Repository, commit: git2::Oid) -> Result<Policy, String> {
+    let rev = commit.to_string();
+    let Some(text) = read_at(repo, &rev, ".codeflow/policy.json")? else {
+        return Ok(Policy::default());
+    };
+    let short = &rev[..rev.len().min(9)];
+    policy_schema::validate_policy_str(&text).map_err(|errors| {
+        let shown: Vec<_> = errors.iter().map(ToString::to_string).collect();
+        format!("invalid policy at {short}: {}", shown.join("; "))
+    })?;
+    serde_json::from_str(&text).map_err(|e| format!("invalid policy at {short}: {e}"))
 }
 
 fn read_at(repo: &Repository, reference: &str, path: &str) -> Result<Option<String>, String> {
@@ -814,6 +859,55 @@ pub fn staged_paths(
         &super::path_policy::PathPolicy::from_git(local)?,
         PathPolicySource::WorkingCopy,
     ))
+}
+
+/// [`staged_paths`] and the size and ignored-file rules from one read of
+/// the authority. The content rules take nothing from the working copy.
+///
+/// # Errors
+/// Either policy source, a path declaration or an authority commit cannot
+/// be read.
+pub fn staged_rules(
+    root: &Path,
+    local: &super::policy::GitPolicy,
+) -> Result<
+    (
+        super::path_policy::PathPolicy,
+        super::path_policy::ContentRules,
+    ),
+    String,
+> {
+    let landed = load(root)?;
+    let paths = compose_paths(
+        super::path_policy::PathPolicy::from_git(&landed.policy.git)?,
+        &super::path_policy::PathPolicy::from_git(local)?,
+        PathPolicySource::WorkingCopy,
+    );
+    let Some(repo) = super::repo::open(root)? else {
+        return Err("the repository cannot be opened".into());
+    };
+    // Each default-branch commit is read whole, with its own policy, project
+    // settings and ignore rules, and the stricter rules win. A declared
+    // integration line supplies none of them.
+    let mut content: Option<super::path_policy::ContentRules> = None;
+    for commit in &landed.commits {
+        let policy = checked_policy_at(&repo, *commit)?;
+        let rules = super::path_policy::ContentRules::at(&repo, &policy.git, Some(*commit), None)?;
+        content = Some(match content {
+            Some(kept) => kept.stricter(rules),
+            None => rules,
+        });
+    }
+    let content = match content {
+        Some(content) => content,
+        None => super::path_policy::ContentRules::at(
+            &repo,
+            &landed.policy.git,
+            None,
+            landed.project.as_ref(),
+        )?,
+    };
+    Ok((paths, content))
 }
 
 #[cfg(test)]

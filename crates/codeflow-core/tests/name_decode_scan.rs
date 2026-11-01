@@ -471,7 +471,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Only unsuccessful gh stdout/stderr is displayed; successful output carrying repository identity is decoded strictly and errors refuse API dispatch.
     (
         "codeflow-core/src/remote.rs",
-        "GithubProvider::run_gh",
+        "run_gh",
         "from_utf8_lossy",
         2,
         "display",
@@ -1693,6 +1693,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "PathPolicy::from_git",
         "trim",
         2,
+        "schema-reject-only",
+    ),
+    // Rejects a blank allowance reason only; the allowed path keeps its
+    // exact components and uses the comparison spelling in normalize.
+    (
+        "crates/codeflow-core/src/hooks/path_policy.rs",
+        "IgnoredFiles::allowed",
+        "trim",
+        1,
         "schema-reject-only",
     ),
     // A reader error blocks active integrity unless authority or integrity
@@ -3707,10 +3716,66 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Trims the combined stderr/stdout message only for a failed gh command; exit status determines the result.
     (
         "crates/codeflow-core/src/remote.rs",
-        "GithubProvider::run_gh",
+        "run_gh",
         "trim",
         1,
         "display",
+    ),
+    // The first line of a gh failure, shown in a refusal or note; the failure itself decides.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "first_line",
+        "lines",
+        1,
+        "display",
+    ),
+    // The first line of a gh failure, shown in a refusal or note; the failure itself decides.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "first_line",
+        "trim",
+        1,
+        "display",
+    ),
+    // A rule parameter missing from a ruleset body reads as a `?` placeholder in the report line only.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "describe",
+        "obtain-absent:as_str",
+        2,
+        "display",
+    ),
+    // A write answer that does not parse reads as Null, whose bypass list differs from the one sent, so the ruleset is reported unconfirmed, never applied.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "GithubProvider::apply_owned",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // A bypass actor's missing type or mode is shown as a placeholder in a report or failure line; the non-empty list alone decides.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "actors_text",
+        "obtain-absent:as_str",
+        2,
+        "display",
+    ),
+    // A branch policy without a name or type reads `?`, which never equals the default branch, so the environment is reported, never passed.
+    (
+        "crates/codeflow-core/src/doctor/remote_perimeter.rs",
+        "authority_environment",
+        "obtain-absent:as_str",
+        2,
+        "unproven",
+    ),
+    // An environment or branch-policy answer that does not parse reads as Null: no deployment policy (admits every branch) or no policies, both reported, never passed.
+    (
+        "crates/codeflow-core/src/doctor/remote_perimeter.rs",
+        "authority_environment",
+        "obtain-absent:from_str",
+        2,
+        "unproven",
     ),
     // Trims subprocess stderr for a workspace-operation error.
     (
