@@ -26,10 +26,13 @@ use super::classification::{range_changes, root_branch_at, Class, Range};
 /// head, and a range resolves. `class` is the pull request's validated
 /// class, when it was classified. `body` is the pull request body, which
 /// gives the reason for each criterion a task removes from its own record.
+/// `push` is true for the pre-push hook's hand-off, never for a pull
+/// request check.
 #[allow(clippy::too_many_arguments)] // The run's shared state and the stacked heads, passed once.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
+    push: bool,
     body: Option<&str>,
     range: Option<&Range<'_>>,
     names: &super::Names<'_>,
@@ -68,13 +71,18 @@ pub(super) fn dispatch(
                 codeflow_core::git::display_text(branch),
                 codeflow_core::git::display_text(range.target)
             );
+            let sync_tip = if push {
+                line_sync_tip(root, git, range, names)
+            } else {
+                None
+            };
             pull_request_findings_into(
                 root,
                 range.base,
                 range.head,
                 &criteria,
                 names.candidate,
-                (Some(names.branch), Some(range.target)),
+                (Some(names.branch), Some(range.target), sync_tip.as_deref()),
                 stacked,
             )
         }),
@@ -118,6 +126,35 @@ pub(super) fn dispatch(
             },
         )),
     }
+}
+
+/// The target line's tip as the destination advertises it, for the pre-push
+/// hand-off of a task branch (TSK-1149). Pushing keeps work durable; the
+/// review of a hand-resolved sync of the branch's own line belongs to the
+/// pull request check at ready and at landing, which never asks for this
+/// tip. `None`, which keeps every merge judged, when the pushed branch is
+/// protected or folds onto a protected name, carries no task, or the
+/// destination does not advertise the target under that exact name.
+fn line_sync_tip(
+    root: &Path,
+    git: &GitPolicy,
+    range: &Range<'_>,
+    names: &super::Names<'_>,
+) -> Option<String> {
+    let (Some(url), Some(listed)) = (names.destination, names.advertisement) else {
+        return None;
+    };
+    let branch = names.branch;
+    if git.branch_is_protected_any_case(branch) || git.branch_folds_onto_protected(branch) {
+        return None;
+    }
+    if !matches!(task_id_from_branch(root, branch), Ok(Some(_))) {
+        return None;
+    }
+    let destination = release_line::from_advertisement(url, listed).ok()?;
+    release_line::advertised_tip_here(root, &destination, range.target)
+        .ok()
+        .map(|tip| tip.to_string())
 }
 
 /// The release-range judgement (SPC-013 R-120), or `None` for an ordinary

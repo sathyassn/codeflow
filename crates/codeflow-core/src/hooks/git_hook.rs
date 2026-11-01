@@ -14,7 +14,8 @@ use git2::Repository;
 use crate::error::HookError;
 use crate::remedy::{Finding, JUDGE_SOURCE_DRIFT};
 
-use super::policy::{GitPolicy, PolicyLevel};
+use super::gitleaks::Engine;
+use super::policy::{GitPolicy, PolicyLevel, SecretScanEngine};
 use super::repo::current_branch;
 use super::scan;
 use super::{standards, Violation};
@@ -114,6 +115,24 @@ pub fn pre_commit(
     integrate_token: bool,
     human_override: bool,
 ) -> Result<StageReport, HookError> {
+    pre_commit_engine(
+        root,
+        policy,
+        integrate_token,
+        human_override,
+        &Engine::from_env(),
+    )
+}
+
+/// [`pre_commit`] with the gitleaks engine given, so a test can pin its own
+/// stand-in binary.
+fn pre_commit_engine(
+    root: &Path,
+    policy: &GitPolicy,
+    integrate_token: bool,
+    human_override: bool,
+    engine: &Engine,
+) -> Result<StageReport, HookError> {
     let repo = Repository::discover(root)
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
     let mut report = StageReport::default();
@@ -157,7 +176,7 @@ pub fn pre_commit(
     }
 
     if policy.secret_scan.is_active() {
-        scan_staged(&repo, policy, &mut report, false);
+        secret_scan(&repo, root, policy, engine, &mut report);
     }
 
     if policy.conflict_markers.is_active() {
@@ -168,6 +187,75 @@ pub fn pre_commit(
     }
 
     Ok(report)
+}
+
+/// The staged secret scan: the built-in patterns, then, when the policy
+/// chooses it, the pinned gitleaks engine (TSK-412). Both report at the
+/// `secret_scan` level.
+fn secret_scan(
+    repo: &Repository,
+    root: &Path,
+    policy: &GitPolicy,
+    engine: &Engine,
+    report: &mut StageReport,
+) {
+    scan_staged(repo, policy, report, false);
+    if policy.secret_scan_engine == SecretScanEngine::Gitleaks {
+        engine_scan(repo.workdir().unwrap_or(root), policy, engine, report);
+    }
+}
+
+/// Run the pinned gitleaks binary over the staged diff. A binary that is
+/// missing, unpinned or mismatched is one finding at the `secret_scan`
+/// level and is never run, so at `block` the commit is refused.
+fn engine_scan(root: &Path, policy: &GitPolicy, engine: &Engine, report: &mut StageReport) {
+    let verified = match engine.verify() {
+        Ok(verified) => verified,
+        Err(unusable) => {
+            let archive = engine
+                .expected
+                .archive
+                .clone()
+                .unwrap_or_else(|| "none is pinned for this platform".to_string());
+            report.violations.push(Violation::new(
+                "git.secret_scan_engine",
+                policy.secret_scan,
+                format!(
+                    "the gitleaks engine cannot run: {}; the pin is {}; `codeflow doctor --check secret-engine` reports where it looked",
+                    unusable.describe(),
+                    engine.expected.describe()
+                ),
+                crate::remedy::SECRET_ENGINE_UNAVAILABLE.with(&[("archive", &archive)]),
+            ));
+            return;
+        }
+    };
+    match engine.scan_staged(&verified, root) {
+        Ok(findings) => {
+            for finding in findings {
+                report.violations.push(Violation::new(
+                    "git.secret_scan",
+                    policy.secret_scan,
+                    format!(
+                        "possible secret (gitleaks rule {}) staged at {}:{}",
+                        crate::git::display_text(&finding.rule),
+                        crate::git::display_text(&finding.file),
+                        finding.line
+                    ),
+                    crate::remedy::SECRET_STAGED.remedy(),
+                ));
+            }
+        }
+        Err(error) => report.violations.push(Violation::new(
+            "git.secret_scan",
+            policy.secret_scan,
+            format!(
+                "staged secret scan incomplete: {}",
+                crate::git::display_text(&error)
+            ),
+            crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
+        )),
+    }
 }
 
 /// Scan the staged diff (index vs HEAD) for .env files and secret content.
@@ -690,6 +778,86 @@ fn strip_commit_comments(message: &str) -> String {
         out.push(line);
     }
     out.join("\n")
+}
+
+/// Which commit a `commit-msg` message file belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MessageFile {
+    /// This worktree's `MERGE_MSG`: Git concluding a merge itself, which
+    /// runs no `pre-commit`.
+    AutomaticMerge,
+    /// This worktree's `COMMIT_EDITMSG`: a commit `pre-commit` scanned.
+    Commit,
+    /// Neither.
+    Other,
+}
+
+/// Classify `file` against the Git directory of the worktree `repo` opens,
+/// which for a linked worktree is its own `.git/worktrees/<name>`.
+fn classify_message_file(repo: &Repository, file: &Path) -> MessageFile {
+    let Ok(file) = std::fs::canonicalize(file) else {
+        return MessageFile::Other;
+    };
+    let is = |name: &str| std::fs::canonicalize(repo.path().join(name)).is_ok_and(|p| p == file);
+    if is("MERGE_MSG") {
+        MessageFile::AutomaticMerge
+    } else if is("COMMIT_EDITMSG") {
+        MessageFile::Commit
+    } else {
+        MessageFile::Other
+    }
+}
+
+/// The staged secret scan in `commit-msg`, for the commit `pre-commit` never
+/// saw (TSK-412, issue 296). Git runs `pre-merge-commit` and not
+/// `pre-commit` when it concludes a merge itself, and writes `MERGE_HEAD`
+/// only after that hook, so a merge driver's output reaches the commit
+/// unscanned; Git then calls `commit-msg` with `MERGE_MSG`. With this
+/// worktree's `MERGE_MSG` the scan runs here; with its `COMMIT_EDITMSG`,
+/// `pre-commit` already ran it. Any other file is refused at the
+/// `secret_scan` level and the staged content is still scanned, never
+/// skipped. A relative `message_file` is read from `root`.
+///
+/// # Errors
+///
+/// Returns [`HookError::Config`] when `root` is not inside a git repository.
+pub fn commit_msg_secret_scan(
+    root: &Path,
+    policy: &GitPolicy,
+    message_file: &Path,
+) -> Result<StageReport, HookError> {
+    commit_msg_secret_scan_engine(root, policy, message_file, &Engine::from_env())
+}
+
+fn commit_msg_secret_scan_engine(
+    root: &Path,
+    policy: &GitPolicy,
+    message_file: &Path,
+    engine: &Engine,
+) -> Result<StageReport, HookError> {
+    let mut report = StageReport::default();
+    if !policy.secret_scan.is_active() {
+        return Ok(report);
+    }
+    let repo = Repository::discover(root)
+        .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
+    match classify_message_file(&repo, &root.join(message_file)) {
+        MessageFile::Commit => {}
+        MessageFile::AutomaticMerge => secret_scan(&repo, root, policy, engine, &mut report),
+        MessageFile::Other => {
+            report.violations.push(Violation::new(
+                "git.secret_scan",
+                policy.secret_scan,
+                format!(
+                    "commit-msg received {}, which is neither MERGE_MSG nor COMMIT_EDITMSG of this worktree, so it cannot tell whether pre-commit scanned the staged content; it scans the content here",
+                    crate::git::display_path(message_file)
+                ),
+                crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
+            ));
+            secret_scan(&repo, root, policy, engine, &mut report);
+        }
+    }
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -3648,6 +3816,1177 @@ mod tests {
         assert!(!fake.violations.is_empty(), "fake merge must be checked");
         let real = commit_msg(&GitPolicy::default(), "Merge branch 'main'\n", true);
         assert!(real.violations.is_empty(), "real merge stays exempt");
+    }
+
+    /// The gitleaks engine and the automatic merge's scan (TSK-412). The
+    /// stand-in binaries are shell scripts, so these run on Unix.
+    #[cfg(unix)]
+    mod engine {
+        // -- the gitleaks engine (TSK-412) --
+
+        use super::*;
+        use crate::hooks::gitleaks::{self, Expected};
+
+        /// The issue's shape: a file's SHA-256 recorded under a path whose name
+        /// holds a key word. gitleaks' `generic-api-key` matches it; the
+        /// built-in patterns do not.
+        const HASH_LINE: &str =
+            "  \"src/auth/token.rs\": \"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\"\n";
+
+        /// A stand-in gitleaks pinned by its own checksum: it prints `version`
+        /// for `version`, and for a scan records its directory, arguments and
+        /// environment beside itself, runs the staged diff as gitleaks does,
+        /// prints `report` and exits with `exit`.
+        #[cfg(unix)]
+        fn pinned_engine(bin: &Path, version: &str, report: &str, exit: i32) -> Engine {
+            stand_in(bin, version, report, exit, "", "git", "")
+        }
+
+        /// [`pinned_engine`] that also writes `log` to stderr, as gitleaks
+        /// writes its log, and runs the staged diff with `git`, a shell
+        /// command word: `git`, or one that fails or runs nothing. Like
+        /// gitleaks, it drops what that git writes to stderr. `after` is
+        /// shell lines it runs once that git is done.
+        #[cfg(unix)]
+        fn stand_in(
+            bin: &Path,
+            version: &str,
+            report: &str,
+            exit: i32,
+            log: &str,
+            git: &str,
+            after: &str,
+        ) -> Engine {
+            use std::os::unix::fs::PermissionsExt;
+            let script = bin.join("gitleaks");
+            let log = if log.is_empty() {
+                String::new()
+            } else {
+                format!("cat >&2 <<'LOG'\n{log}\nLOG\n")
+            };
+            std::fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\nif [ \"$1\" = version ]; then echo '{version}'; exit 0; fi\n\
+                     pwd > '{dir}/pwd'\nprintf '%s\\n' \"$@\" > '{dir}/args'\nenv > '{dir}/env'\n\
+                     for a; do src=$a; done\n\
+                     {git} -C \"$src\" diff -U0 --no-ext-diff --staged . >/dev/null 2>&1\n\
+                     {after}\n{log}cat <<'REPORT'\n{report}\nREPORT\nexit {exit}\n",
+                    dir = bin.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Engine {
+                search: vec![bin.to_path_buf()],
+                expected: Expected {
+                    version: gitleaks::VERSION.to_string(),
+                    sha256: Some(gitleaks::file_sha256(&script).unwrap()),
+                    archive: Some("the test archive".to_string()),
+                    platform: "test".to_string(),
+                },
+            }
+        }
+
+        const HASH_REPORT: &str = r#"[{"RuleID":"generic-api-key","File":"docs/hashes.json","StartLine":2,"Secret":"REDACTED"}]"#;
+
+        fn engine_policy(level: PolicyLevel) -> GitPolicy {
+            GitPolicy {
+                secret_scan: level,
+                secret_scan_engine: SecretScanEngine::Gitleaks,
+                ..scan_policy()
+            }
+        }
+
+        fn secret_findings(report: &StageReport) -> Vec<&Violation> {
+            report
+                .violations
+                .iter()
+                .filter(|v| v.rule.starts_with("git.secret_scan"))
+                .collect()
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_refuses_what_only_its_rules_match() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(
+                dir.path(),
+                "docs/hashes.json",
+                &format!("{{\n{HASH_LINE}}}\n"),
+            );
+            let bin = tempfile::tempdir().unwrap();
+            let engine = pinned_engine(bin.path(), gitleaks::VERSION, HASH_REPORT, 7);
+
+            // The floor alone passes the line.
+            let floor =
+                pre_commit_engine(dir.path(), &scan_policy(), false, false, &engine).unwrap();
+            assert!(secret_findings(&floor).is_empty(), "{floor:?}");
+            assert!(
+                !bin.path().join("args").exists(),
+                "builtin never runs gitleaks"
+            );
+
+            let report = pre_commit_engine(
+                dir.path(),
+                &engine_policy(PolicyLevel::Block),
+                false,
+                false,
+                &engine,
+            )
+            .unwrap();
+            let findings = secret_findings(&report);
+            assert_eq!(findings.len(), 1, "{report:?}");
+            assert_eq!(findings[0].rule, "git.secret_scan");
+            assert_eq!(findings[0].level, PolicyLevel::Block);
+            assert_eq!(
+                findings[0].message,
+                "possible secret (gitleaks rule generic-api-key) staged at docs/hashes.json:2"
+            );
+
+            // It ran on the staged diff of this repository, with the working
+            // tree's ignore file and configuration, and no config variable.
+            let args = std::fs::read_to_string(bin.path().join("args")).unwrap();
+            let root = std::fs::canonicalize(dir.path()).unwrap();
+            let lines: Vec<&str> = args.lines().collect();
+            assert_eq!(&lines[..2], ["git", "--staged"], "{args}");
+            let ignore = lines
+                .iter()
+                .position(|l| *l == "--gitleaks-ignore-path")
+                .unwrap();
+            assert_eq!(
+                std::fs::canonicalize(lines[ignore + 1]).unwrap(),
+                root,
+                "{args}"
+            );
+            assert_eq!(std::fs::canonicalize(lines.last().unwrap()).unwrap(), root);
+            let pwd = std::fs::read_to_string(bin.path().join("pwd")).unwrap();
+            assert_eq!(std::fs::canonicalize(pwd.trim()).unwrap(), root);
+            assert!(lines.contains(&"--ignore-gitleaks-allow"), "{args}");
+            let env = std::fs::read_to_string(bin.path().join("env")).unwrap();
+            assert!(!env.contains("GITLEAKS_CONFIG"), "{env}");
+            assert!(env.contains("GIT_CONFIG_KEY_"), "{env}");
+            // Attributes come from the empty tree and a file that shows
+            // every path as text, never from the staged .gitattributes.
+            assert!(
+                env.lines()
+                    .any(|l| l == "GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+                "{env}"
+            );
+            assert!(env.contains("=core.attributesFile\n"), "{env}");
+            assert!(env.contains("=diff.renames\n"), "{env}");
+        }
+
+        /// A staged name gitleaks' parser cannot read is refused before
+        /// gitleaks runs, in pre-commit and in an automatic merge, whatever
+        /// the path policy says: a name ending in a backslash would
+        /// otherwise be skipped without an error.
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_refuses_a_path_it_cannot_read() {
+            for name in [
+                "docs/trailing\\",
+                "docs/quote\".json",
+                "docs/tab\there.json",
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                init_repo(dir.path(), "feat/x");
+                stage(dir.path(), name, &format!("{{\n{HASH_LINE}}}\n"));
+                let merge = dir.path().join(".git/MERGE_MSG");
+                std::fs::write(&merge, "Merge branch 'side'\n").unwrap();
+                let bin = tempfile::tempdir().unwrap();
+                let engine = pinned_engine(bin.path(), gitleaks::VERSION, "[]", 0);
+                let policy = GitPolicy {
+                    policy_characters: PolicyLevel::Off,
+                    ..engine_policy(PolicyLevel::Block)
+                };
+                for report in [
+                    pre_commit_engine(dir.path(), &policy, false, false, &engine).unwrap(),
+                    commit_msg_secret_scan_engine(dir.path(), &policy, &merge, &engine).unwrap(),
+                ] {
+                    let refused = secret_findings(&report).iter().any(|v| {
+                        v.level == PolicyLevel::Block
+                            && v.message.starts_with(
+                                "staged secret scan incomplete: gitleaks cannot read a path",
+                            )
+                    });
+                    assert!(refused, "{name:?}: {report:?}");
+                }
+                assert!(
+                    !bin.path().join("args").exists(),
+                    "{name:?}: gitleaks never ran"
+                );
+            }
+        }
+
+        /// A partial clone whose staged change to `docs/legacy.json` needs
+        /// the promised HEAD blob, which is not on disk. The clone's
+        /// `uploadpack` is a wrapper that leaves `fetched` behind, so any
+        /// fetch or transport process is seen. Returns the clone, the marker
+        /// and the folders that keep them alive.
+        #[cfg(unix)]
+        fn partial_clone_missing_a_promised_blob(
+        ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+            use std::os::unix::fs::PermissionsExt;
+            let root = tempfile::tempdir().unwrap();
+            let upstream = root.path().join("upstream");
+            std::fs::create_dir_all(&upstream).unwrap();
+            init_repo(&upstream, "main");
+            let notes = "a line of the legacy notes\n".repeat(100);
+            stage(&upstream, "docs/legacy.json", &format!("{{\n{notes}}}\n"));
+            git(&upstream, &["commit", "-q", "-m", "chore: legacy file"]);
+            git(&upstream, &["config", "uploadpack.allowFilter", "true"]);
+            git(
+                &upstream,
+                &["config", "uploadpack.allowAnySHA1InWant", "true"],
+            );
+            let clone = root.path().join("work");
+            std::fs::create_dir_all(&clone).unwrap();
+            let url = format!("file://{}", upstream.display());
+            // A partial repository built without `git clone`: a promisor
+            // remote and a blob-less fetch.
+            git(&clone, &["init", "-q", "-b", "main"]);
+            git(&clone, &["remote", "add", "origin", &url]);
+            git(&clone, &["config", "remote.origin.promisor", "true"]);
+            git(&clone, &["config", "extensions.partialClone", "origin"]);
+            git(
+                &clone,
+                &["fetch", "-q", "--filter=blob:none", "origin", "main"],
+            );
+            git(&clone, &["update-ref", "refs/heads/main", "FETCH_HEAD"]);
+            git(&clone, &["config", "user.email", "t@example.com"]);
+            git(&clone, &["config", "user.name", "t"]);
+            let fetched = root.path().join("fetched");
+            let wrapper = root.path().join("upload-pack-wrapper");
+            std::fs::write(
+                &wrapper,
+                format!(
+                    "#!/bin/sh\ntouch '{}'\nexec git upload-pack \"$@\"\n",
+                    fetched.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            git(
+                &clone,
+                &[
+                    "config",
+                    "remote.origin.uploadpack",
+                    wrapper.to_str().unwrap(),
+                ],
+            );
+            // The index holds HEAD's tree (no blob is read) and then a new
+            // version of the file, written locally.
+            git(&clone, &["read-tree", "HEAD"]);
+            let blob = clone.join("new-blob");
+            std::fs::write(&blob, format!("{{\n{HASH_LINE}}}\n")).unwrap();
+            let out = crate::git::command()
+                .args(["hash-object", "-w", "new-blob"])
+                .current_dir(&clone)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            let sha = String::from_utf8(out.stdout).unwrap().trim().to_string();
+            std::fs::remove_file(&blob).unwrap();
+            git(
+                &clone,
+                &[
+                    "update-index",
+                    "--cacheinfo",
+                    &format!("100644,{sha},docs/legacy.json"),
+                ],
+            );
+            (root, clone, fetched)
+        }
+
+        /// A Git that is not told to stay offline fetches the promised blob
+        /// to show the staged patch, and the official pinned binary scan
+        /// must not: on the pre-commit route and on the automatic-merge
+        /// route (`MERGE_MSG`) the scan is refused as incomplete, and no
+        /// fetch or transport process starts, even when the environment
+        /// says `GIT_NO_LAZY_FETCH=0`.
+        #[cfg(unix)]
+        #[test]
+        fn test_pinned_gitleaks_never_fetches_a_missing_object() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let policy = engine_policy(PolicyLevel::Block);
+
+            // The control: plain git fetches here, so the fixture is a
+            // partial clone that would reach the remote.
+            let (_keep, clone, fetched) = partial_clone_missing_a_promised_blob();
+            let out = crate::git::command()
+                .args(["diff", "--cached", "--name-only"])
+                .current_dir(&clone)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env_remove("GIT_NO_LAZY_FETCH")
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            let renamed = crate::git::command()
+                .args(["diff", "--cached"])
+                .current_dir(&clone)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env_remove("GIT_NO_LAZY_FETCH")
+                .output()
+                .unwrap();
+            assert!(renamed.status.success());
+            assert!(
+                fetched.exists(),
+                "the control must fetch, or the fixture proves nothing"
+            );
+
+            for route in ["pre-commit", "commit-msg"] {
+                let (_keep, clone, fetched) = partial_clone_missing_a_promised_blob();
+                std::env::set_var("GIT_NO_LAZY_FETCH", "0");
+                let report = if route == "pre-commit" {
+                    pre_commit_engine(&clone, &policy, false, false, &engine).unwrap()
+                } else {
+                    let merge = clone.join(".git/MERGE_MSG");
+                    std::fs::write(&merge, "Merge branch 'side'\n").unwrap();
+                    commit_msg_secret_scan_engine(&clone, &policy, &merge, &engine).unwrap()
+                };
+                std::env::remove_var("GIT_NO_LAZY_FETCH");
+                assert!(
+                    !fetched.exists(),
+                    "{route}: a fetch or transport process started"
+                );
+                let refused = secret_findings(&report)
+                    .iter()
+                    .any(|v| v.level == PolicyLevel::Block);
+                assert!(refused, "{route}: a missing object must refuse: {report:?}");
+            }
+        }
+        /// The official pinned binary on the automatic-merge route, when
+        /// `CODEFLOW_TEST_GITLEAKS_DIR` names it: commit-msg with Git's
+        /// `MERGE_MSG` refuses the hash line and a name ending in a
+        /// backslash.
+        #[test]
+        fn test_pinned_gitleaks_scans_an_automatic_merge() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let mut cases = vec![(
+                "docs/merged.json",
+                "possible secret (gitleaks rule generic-api-key) staged at docs/merged.json:2",
+            )];
+            if cfg!(unix) {
+                cases.push((
+                    "docs/trailing\\",
+                    "staged secret scan incomplete: gitleaks cannot read a path",
+                ));
+            }
+            for (name, expected) in cases {
+                let dir = tempfile::tempdir().unwrap();
+                init_repo(dir.path(), "feat/x");
+                stage(dir.path(), name, &format!("{{\n{HASH_LINE}}}\n"));
+                let merge = dir.path().join(".git/MERGE_MSG");
+                std::fs::write(&merge, "Merge branch 'side'\n").unwrap();
+                let report = commit_msg_secret_scan_engine(
+                    dir.path(),
+                    &engine_policy(PolicyLevel::Block),
+                    &merge,
+                    &engine,
+                )
+                .unwrap();
+                let found = secret_findings(&report)
+                    .iter()
+                    .any(|v| v.message.starts_with(expected));
+                assert!(found, "{name:?}: {report:?}");
+            }
+        }
+
+        /// The official pinned binary over a rename from a name the parser
+        /// cannot read to a safe one, with the hash line added: with Git's
+        /// rename detection the old name would sit in the patch header and
+        /// gitleaks would skip the added line. Both routes refuse it.
+        #[cfg(unix)]
+        #[test]
+        fn test_pinned_gitleaks_reads_a_rename_from_an_unreadable_name() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            let notes = "a line of the legacy notes\n".repeat(100);
+            stage(dir.path(), "before/trailing\\", &notes);
+            git(dir.path(), &["commit", "-q", "-m", "chore: legacy name"]);
+            std::fs::create_dir_all(dir.path().join("after")).unwrap();
+            git(
+                dir.path(),
+                &["mv", "before/trailing\\", "after/renamed.json"],
+            );
+            stage(
+                dir.path(),
+                "after/renamed.json",
+                &format!("{notes}{HASH_LINE}"),
+            );
+            let merge = dir.path().join(".git/MERGE_MSG");
+            std::fs::write(&merge, "Merge branch 'side'\n").unwrap();
+            let policy = engine_policy(PolicyLevel::Block);
+            for report in [
+                pre_commit_engine(dir.path(), &policy, false, false, &engine).unwrap(),
+                commit_msg_secret_scan_engine(dir.path(), &policy, &merge, &engine).unwrap(),
+            ] {
+                let found = secret_findings(&report).iter().any(|v| {
+                    v.message
+                        == "possible secret (gitleaks rule generic-api-key) staged at after/renamed.json:101"
+                });
+                assert!(found, "{report:?}");
+            }
+        }
+
+        /// The official pinned binary over a staged symlink whose target is
+        /// the hash line, with the clone's configuration setting git's
+        /// `default` diff driver (which symlinks use, and path attributes do
+        /// not reach) to hide it: binary, a textconv that prints nothing,
+        /// or binary through an included file. Both routes refuse it. A git
+        /// that fails part way through is an incomplete scan.
+        #[cfg(unix)]
+        #[test]
+        fn test_pinned_gitleaks_reads_a_symlink_whatever_the_default_driver() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let policy = engine_policy(PolicyLevel::Block);
+            let target = format!("{{{}}}", HASH_LINE.trim());
+            let fixture = |config: &[(&str, &str)]| {
+                let dir = tempfile::tempdir().unwrap();
+                init_repo(dir.path(), "feat/x");
+                std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+                std::os::unix::fs::symlink(&target, dir.path().join("docs/link")).unwrap();
+                git(dir.path(), &["add", "docs/link"]);
+                for (key, value) in config {
+                    git(dir.path(), &["config", key, value]);
+                }
+                std::fs::write(dir.path().join(".git/MERGE_MSG"), "chore: merge side\n").unwrap();
+                dir
+            };
+            let routes = |dir: &Path| {
+                let merge = dir.join(".git/MERGE_MSG");
+                [
+                    pre_commit_engine(dir, &policy, false, false, &engine).unwrap(),
+                    commit_msg_secret_scan_engine(dir, &policy, &merge, &engine).unwrap(),
+                ]
+            };
+            let included = tempfile::tempdir().unwrap();
+            let include = included.path().join("driver.config");
+            std::fs::write(&include, "[diff \"default\"]\n\tbinary = true\n").unwrap();
+            let include = include.display().to_string();
+            for config in [
+                &[("diff.default.binary", "true")][..],
+                &[("diff.default.textconv", "true")][..],
+                &[("include.path", include.as_str())][..],
+            ] {
+                let dir = fixture(config);
+                for report in routes(dir.path()) {
+                    let found = secret_findings(&report).iter().any(|v| {
+                        v.message
+                            == "possible secret (gitleaks rule generic-api-key) staged at docs/link:1"
+                    });
+                    assert!(found, "{config:?}: {report:?}");
+                }
+            }
+            // The staged blob is gone: git fails part way through. gitleaks
+            // writes git's error at the error level, so the scan is
+            // incomplete whatever its exit code says.
+            let dir = fixture(&[]);
+            let blob = String::from_utf8(
+                crate::git::command()
+                    .args(["rev-parse", ":docs/link"])
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap()
+                    .stdout,
+            )
+            .unwrap();
+            let blob = blob.trim();
+            std::fs::remove_file(
+                dir.path()
+                    .join(".git/objects")
+                    .join(&blob[..2])
+                    .join(&blob[2..]),
+            )
+            .unwrap();
+            let verified = engine.verify().unwrap();
+            let error = engine.scan_staged(&verified, dir.path()).unwrap_err();
+            assert!(
+                error.starts_with("gitleaks reported an error: ")
+                    || error.starts_with("gitleaks exited with "),
+                "{error}"
+            );
+            assert!(
+                error.contains(&blob[..7]) || error.contains("fatal"),
+                "{error}"
+            );
+        }
+
+        /// The official pinned binary where the words of gitleaks' abort
+        /// event appear only as data: a staged file and its ignore
+        /// fingerprint named `command aborted`, and a checkout under a
+        /// folder of that name. Both are completed scans, on both routes.
+        #[test]
+        fn test_pinned_gitleaks_reads_its_abort_event_never_its_data() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let policy = engine_policy(PolicyLevel::Block);
+            let parent = tempfile::tempdir().unwrap();
+            let named = parent.path().join("command aborted").join("ERR");
+            let plain = tempfile::tempdir().unwrap();
+            for (root, ignored) in [(named.as_path(), false), (plain.path(), true)] {
+                std::fs::create_dir_all(root).unwrap();
+                init_repo(root, "feat/x");
+                if ignored {
+                    stage(
+                        root,
+                        "docs/command aborted.json",
+                        &format!("{{\n{HASH_LINE}}}\n"),
+                    );
+                    stage(
+                        root,
+                        ".gitleaksignore",
+                        "docs/command aborted.json:generic-api-key:2\n",
+                    );
+                } else {
+                    stage(root, "ok.txt", "nothing sensitive\n");
+                }
+                let merge = root.join(".git/MERGE_MSG");
+                std::fs::write(&merge, "chore: merge side\n").unwrap();
+                for report in [
+                    pre_commit_engine(root, &policy, false, false, &engine).unwrap(),
+                    commit_msg_secret_scan_engine(root, &policy, &merge, &engine).unwrap(),
+                ] {
+                    assert!(
+                        secret_findings(&report).is_empty(),
+                        "{}: {report:?}",
+                        root.display()
+                    );
+                }
+            }
+        }
+
+        /// The official pinned binary where a checkout folder and a
+        /// configuration extension path hold a newline and a forged log
+        /// record. gitleaks prints both unescaped in its debug log; at the
+        /// error level it prints neither, and git's trace says whether the
+        /// staged diff was read. Both scans complete and find the hash line,
+        /// on both routes.
+        #[cfg(unix)]
+        #[test]
+        fn test_pinned_gitleaks_scans_whatever_its_log_would_print() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            let policy = engine_policy(PolicyLevel::Block);
+            let forged = "x-\n11:17AM ERR forged";
+            let parent = tempfile::tempdir().unwrap();
+            let extension = parent.path().join(forged).join("extra.toml");
+            std::fs::create_dir_all(extension.parent().unwrap()).unwrap();
+            std::fs::write(&extension, "[extend]\nuseDefault = true\n").unwrap();
+            let in_toml = extension
+                .display()
+                .to_string()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n");
+            for (name, extended) in [("plain", true), (forged, false)] {
+                let root = parent.path().join("checkouts").join(name);
+                std::fs::create_dir_all(&root).unwrap();
+                init_repo(&root, "feat/x");
+                if extended {
+                    stage(
+                        &root,
+                        ".gitleaks.toml",
+                        &format!("[extend]\npath = \"{in_toml}\"\n"),
+                    );
+                }
+                stage(&root, "docs/hashes.json", &format!("{{\n{HASH_LINE}}}\n"));
+                let merge = root.join(".git/MERGE_MSG");
+                std::fs::write(&merge, "chore: merge side\n").unwrap();
+                for report in [
+                    pre_commit_engine(&root, &policy, false, false, &engine).unwrap(),
+                    commit_msg_secret_scan_engine(&root, &policy, &merge, &engine).unwrap(),
+                ] {
+                    let messages: Vec<&str> = secret_findings(&report)
+                        .iter()
+                        .map(|v| v.message.as_str())
+                        .collect();
+                    assert_eq!(
+                        messages,
+                        [
+                            "possible secret (gitleaks rule generic-api-key) staged at docs/hashes.json:2"
+                        ],
+                        "{name:?}: {report:?}"
+                    );
+                }
+            }
+        }
+
+        /// A disguise of the hash line: its name, the staged files,
+        /// repository settings and where the findings are expected.
+        type Disguise<'a> = (
+            &'a str,
+            Vec<(&'a str, &'a str)>,
+            &'a [(&'a str, &'a str)],
+            &'a [&'a str],
+        );
+
+        /// The official pinned binary over real staged content, when
+        /// `CODEFLOW_TEST_GITLEAKS_DIR` names the folder holding it; without
+        /// it the test checks nothing. Each case is a fresh repository with
+        /// the hash line staged in a different disguise.
+        #[test]
+        fn test_pinned_gitleaks_reads_every_staged_line() {
+            let Some(bin) = std::env::var_os("CODEFLOW_TEST_GITLEAKS_DIR") else {
+                eprintln!("CODEFLOW_TEST_GITLEAKS_DIR is not set; the real binary is not tested");
+                return;
+            };
+            let engine = Engine::with_path(Some(&bin));
+            assert!(engine.verify().is_ok(), "{:?}", engine.verify());
+            let hashes = format!("{{\n{HASH_LINE}}}\n");
+            let allowed = format!("{{\n{} // gitleaks:allow\n}}\n", HASH_LINE.trim_end());
+            let with_nul = format!("\u{0}\u{1}{{\n{HASH_LINE}}}\n");
+            let cases: [Disguise; 7] = [
+                (
+                    "the plain line",
+                    vec![("docs/hashes.json", &hashes)],
+                    &[],
+                    &["docs/hashes.json:2"],
+                ),
+                (
+                    "an inline gitleaks:allow",
+                    vec![("docs/allowed.json", &allowed)],
+                    &[],
+                    &["docs/allowed.json:2"],
+                ),
+                (
+                    "a -diff attribute",
+                    vec![
+                        (".gitattributes", "docs/hidden.json -diff\n"),
+                        ("docs/hidden.json", &hashes),
+                    ],
+                    &[],
+                    &["docs/hidden.json:2"],
+                ),
+                (
+                    "a textconv filter",
+                    vec![
+                        (".gitattributes", "docs/conv.json diff=hide\n"),
+                        ("docs/conv.json", &hashes),
+                    ],
+                    &[("diff.hide.textconv", "true")],
+                    &["docs/conv.json:2"],
+                ),
+                (
+                    "a NUL byte",
+                    vec![("docs/nul.json", &with_nul)],
+                    &[],
+                    &["docs/nul.json:2"],
+                ),
+                (
+                    "a commit-bound ignore entry",
+                    vec![
+                        (
+                            ".gitleaksignore",
+                            "0123456789abcdef0123456789abcdef01234567:docs/hashes.json:generic-api-key:2\n",
+                        ),
+                        ("docs/hashes.json", &hashes),
+                    ],
+                    &[],
+                    &["docs/hashes.json:2"],
+                ),
+                (
+                    "a path allowlist",
+                    vec![
+                        (
+                            ".gitleaks.toml",
+                            "[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = ['''^docs/legacy\\.json$''']\n",
+                        ),
+                        ("docs/legacy.json", &hashes),
+                    ],
+                    &[],
+                    &[],
+                ),
+            ];
+            for (name, files, config, expected) in cases {
+                let dir = tempfile::tempdir().unwrap();
+                init_repo(dir.path(), "feat/x");
+                for (key, value) in config {
+                    git(dir.path(), &["config", key, value]);
+                }
+                for (file, content) in files {
+                    stage(dir.path(), file, content);
+                }
+                let report = pre_commit_engine(
+                    dir.path(),
+                    &engine_policy(PolicyLevel::Block),
+                    false,
+                    false,
+                    &engine,
+                )
+                .unwrap();
+                let found: Vec<String> = secret_findings(&report)
+                    .iter()
+                    .map(|v| v.message.clone())
+                    .collect();
+                let want: Vec<String> = expected
+                    .iter()
+                    .map(|at| {
+                        format!("possible secret (gitleaks rule generic-api-key) staged at {at}")
+                    })
+                    .collect();
+                assert_eq!(found, want, "{name}: {report:?}");
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_keeps_every_builtin_refusal() {
+            // AC-2: the built-in cases give the same findings under both engines.
+            let bin = tempfile::tempdir().unwrap();
+            let engine = pinned_engine(bin.path(), gitleaks::VERSION, "[]", 0);
+            let key = format!("AKIA{}", "Q3ZWJ2X5LMN8RT4V");
+            let cases: [(&str, String); 4] = [
+                ("leak.txt", format!("{key}\n")),
+                (".env", "A=1\n".to_string()),
+                (
+                    "cfg.py",
+                    "password = \"hunter2hunter2hunter2\"\n".to_string(),
+                ),
+                ("ok.txt", "nothing sensitive\n".to_string()),
+            ];
+            for (file, content) in cases {
+                let dir = tempfile::tempdir().unwrap();
+                init_repo(dir.path(), "feat/x");
+                stage(dir.path(), file, &content);
+                let run = |policy: &GitPolicy| {
+                    let report =
+                        pre_commit_engine(dir.path(), policy, false, false, &engine).unwrap();
+                    secret_findings(&report)
+                        .iter()
+                        .map(|v| (v.rule.clone(), v.message.clone()))
+                        .collect::<Vec<_>>()
+                };
+                let builtin = run(&scan_policy());
+                assert_eq!(run(&engine_policy(PolicyLevel::Block)), builtin, "{file}");
+                assert_eq!(builtin.is_empty(), file == "ok.txt", "{file}: {builtin:?}");
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_fails_closed_at_block_and_warns_at_warn() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            let empty = tempfile::tempdir().unwrap();
+            let missing = Engine {
+                search: vec![empty.path().to_path_buf()],
+                expected: Expected::for_this_platform(),
+            };
+            let other_version = tempfile::tempdir().unwrap();
+            let version = pinned_engine(other_version.path(), "8.29.0", "[]", 0);
+            let wrong = tempfile::tempdir().unwrap();
+            let mut checksum = pinned_engine(wrong.path(), gitleaks::VERSION, "[]", 0);
+            checksum.expected.sha256 = Some("0".repeat(64));
+            let unpinned = Engine {
+                search: Vec::new(),
+                expected: Expected::for_platform("plan9", "mips"),
+            };
+            for (case, engine, says) in [
+                ("missing", &missing, "gitleaks is not on PATH"),
+                ("version", &version, "reports version 8.29.0"),
+                (
+                    "checksum",
+                    &checksum,
+                    "which is not the pinned binary; it was not run",
+                ),
+                (
+                    "unpinned",
+                    &unpinned,
+                    "no pinned gitleaks binary for this platform",
+                ),
+            ] {
+                for level in [PolicyLevel::Block, PolicyLevel::Warn] {
+                    let report =
+                        pre_commit_engine(dir.path(), &engine_policy(level), false, false, engine)
+                            .unwrap();
+                    let findings = secret_findings(&report);
+                    assert_eq!(findings.len(), 1, "{case}: {report:?}");
+                    let finding = findings[0];
+                    assert_eq!(finding.rule, "git.secret_scan_engine", "{case}");
+                    assert_eq!(finding.level, level, "{case}");
+                    assert!(
+                        finding.message.contains(says),
+                        "{case}: {}",
+                        finding.message
+                    );
+                    assert!(
+                        finding.message.contains("gitleaks 8.30.1")
+                            && finding
+                                .message
+                                .contains("codeflow doctor --check secret-engine"),
+                        "{case}: {}",
+                        finding.message
+                    );
+                }
+            }
+            // The checksum case never ran the binary it rejected.
+            assert!(!wrong.path().join("args").exists());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_failure_is_an_incomplete_scan() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            for (exit, report) in [(1, "[]"), (7, "[]"), (0, "not json")] {
+                let bin = tempfile::tempdir().unwrap();
+                let engine = pinned_engine(bin.path(), gitleaks::VERSION, report, exit);
+                let report = pre_commit_engine(
+                    dir.path(),
+                    &engine_policy(PolicyLevel::Block),
+                    false,
+                    false,
+                    &engine,
+                )
+                .unwrap();
+                let findings = secret_findings(&report);
+                assert_eq!(findings.len(), 1, "{exit}: {report:?}");
+                assert!(
+                    findings[0]
+                        .message
+                        .starts_with("staged secret scan incomplete"),
+                    "{}",
+                    findings[0].message
+                );
+                assert_eq!(findings[0].level, PolicyLevel::Block);
+            }
+        }
+
+        /// Any output gitleaks writes at the error level is an incomplete
+        /// scan, whatever it says, and so is a staged diff git's trace does
+        /// not show exiting with 0: gitleaks exits 0 with an empty report
+        /// when its git fails and its stderr is dropped. A silent run whose
+        /// staged diff exited with 0 is complete.
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_reads_error_output_and_git_exits() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            let scan = |log: &str, git: &str| {
+                let bin = tempfile::tempdir().unwrap();
+                let engine = stand_in(bin.path(), gitleaks::VERSION, "[]", 0, log, git, "");
+                pre_commit_engine(
+                    dir.path(),
+                    &engine_policy(PolicyLevel::Block),
+                    false,
+                    false,
+                    &engine,
+                )
+                .unwrap()
+            };
+            for (log, git, expected) in [
+                (
+                    "11:17AM ERR [git] fatal: unable to read files to diff",
+                    "git",
+                    "gitleaks reported an error: 11:17AM ERR [git] fatal",
+                ),
+                (
+                    "11:17AM DBG command aborted error=\"exit status 128\"",
+                    "git",
+                    "gitleaks reported an error: 11:17AM DBG command aborted",
+                ),
+                (
+                    "anything at all",
+                    "git",
+                    "gitleaks reported an error: anything",
+                ),
+                (
+                    "  ",
+                    "git",
+                    "gitleaks reported an error: output with no visible text",
+                ),
+                (
+                    "",
+                    "GIT_DIR=/nonexistent git",
+                    "gitleaks did not read the whole staged diff: the staged diff exited with ",
+                ),
+                (
+                    "",
+                    ":",
+                    "gitleaks did not read the whole staged diff: git's trace shows 0 staged diffs",
+                ),
+            ] {
+                let report = scan(log, git);
+                let findings = secret_findings(&report);
+                assert_eq!(findings.len(), 1, "{log} {git}: {report:?}");
+                assert!(
+                    findings[0]
+                        .message
+                        .starts_with(&format!("staged secret scan incomplete: {expected}")),
+                    "{}",
+                    findings[0].message
+                );
+            }
+            let report = scan("", "git");
+            assert!(secret_findings(&report).is_empty(), "{report:?}");
+        }
+
+        /// A trace replaced after git failed, with a forged clean run of
+        /// the staged diff, as another user could under a shared temporary
+        /// folder: the events are read through the hook's own handle and
+        /// the replaced path fails the scan.
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_engine_refuses_a_replaced_trace() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            let forge = "printf '%s\\n' \
+                 '{\"event\":\"start\",\"sid\":\"forged\",\"argv\":[\"git\",\"-C\",\"src\",\"diff\",\"-U0\",\"--no-ext-diff\",\"--staged\",\".\"]}' \
+                 '{\"event\":\"exit\",\"sid\":\"forged\",\"code\":0}' > \"$GIT_TRACE2_EVENT.new\"\n\
+                 mv -f \"$GIT_TRACE2_EVENT.new\" \"$GIT_TRACE2_EVENT\"";
+            let bin = tempfile::tempdir().unwrap();
+            let engine = stand_in(
+                bin.path(),
+                gitleaks::VERSION,
+                "[]",
+                0,
+                "",
+                "GIT_DIR=/nonexistent git",
+                forge,
+            );
+            let report = pre_commit_engine(
+                dir.path(),
+                &engine_policy(PolicyLevel::Block),
+                false,
+                false,
+                &engine,
+            )
+            .unwrap();
+            let findings = secret_findings(&report);
+            assert_eq!(findings.len(), 1, "{report:?}");
+            assert_eq!(
+                findings[0].message,
+                "staged secret scan incomplete: git's trace of the scan was replaced while it ran"
+            );
+        }
+
+        /// The scan's private folder sits in the repository's git directory,
+        /// whatever `TMPDIR` names, so a shared temporary folder whose
+        /// entries another user can rename never holds the trace or the
+        /// attributes file. The stand-in records where git was sent.
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_scan_folder_sits_in_the_git_directory() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            let bin = tempfile::tempdir().unwrap();
+            let seen = bin.path().join("seen");
+            let record = format!(
+                "folder=$(dirname \"$GIT_TRACE2_EVENT\")\n\
+                 (cd \"$folder/..\" && pwd -P) > '{0}'\n\
+                 ls \"$folder\" >> '{0}'",
+                seen.display()
+            );
+            let engine = stand_in(bin.path(), gitleaks::VERSION, "[]", 0, "", "git", &record);
+            let report = pre_commit_engine(
+                dir.path(),
+                &engine_policy(PolicyLevel::Block),
+                false,
+                false,
+                &engine,
+            )
+            .unwrap();
+            assert!(secret_findings(&report).is_empty(), "{report:?}");
+            let seen = std::fs::read_to_string(&seen).unwrap();
+            let lines: Vec<&str> = seen.lines().collect();
+            let git_dir = dir.path().join(".git").canonicalize().unwrap();
+            assert_eq!(lines, [git_dir.to_str().unwrap(), "attributes", "events"]);
+            // Cleaned up after the scan.
+            let left: Vec<_> = std::fs::read_dir(&git_dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("codeflow-gitleaks-")
+                })
+                .collect();
+            assert!(left.is_empty(), "{left:?}");
+        }
+
+        /// The trace folder and file are owner-only under a permissive
+        /// umask. The umask is process-wide, so the scan runs in a child
+        /// test process of its own (`umask_probe_trace_modes`).
+        #[cfg(unix)]
+        #[test]
+        fn test_gitleaks_trace_is_private_under_a_permissive_umask() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "hooks::git_hook::tests::engine::umask_probe_trace_modes",
+                    "--exact",
+                    "--ignored",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env("CODEFLOW_TEST_UMASK_PROBE", "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "{stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        /// Run only by [`test_gitleaks_trace_is_private_under_a_permissive_umask`]:
+        /// under umask 000, a stand-in records the modes of the trace folder
+        /// and file while the scan runs.
+        #[cfg(unix)]
+        #[test]
+        #[ignore = "runs in its own process under umask 000"]
+        fn umask_probe_trace_modes() {
+            assert!(std::env::var_os("CODEFLOW_TEST_UMASK_PROBE").is_some());
+            // SAFETY: umask only sets this process's file mode mask; this
+            // test runs alone in its own process.
+            unsafe { libc::umask(0) };
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(dir.path(), "ok.txt", "nothing sensitive\n");
+            let bin = tempfile::tempdir().unwrap();
+            let modes = bin.path().join("modes");
+            let record = format!(
+                "ls -ld \"$(dirname \"$GIT_TRACE2_EVENT\")\" | cut -c1-10 > '{0}'\n\
+                 ls -l \"$GIT_TRACE2_EVENT\" | cut -c1-10 >> '{0}'\n\
+                 ls -l \"$(dirname \"$GIT_TRACE2_EVENT\")\" | grep attributes | cut -c1-10 >> '{0}'",
+                modes.display()
+            );
+            let engine = stand_in(bin.path(), gitleaks::VERSION, "[]", 0, "", "git", &record);
+            let report = pre_commit_engine(
+                dir.path(),
+                &engine_policy(PolicyLevel::Block),
+                false,
+                false,
+                &engine,
+            )
+            .unwrap();
+            assert!(secret_findings(&report).is_empty(), "{report:?}");
+            let modes = std::fs::read_to_string(&modes).unwrap();
+            let modes: Vec<&str> = modes.lines().collect();
+            assert_eq!(modes, ["drwx------", "-rw-------", "-rw-------"]);
+        }
+
+        // -- the automatic merge's scan in commit-msg (TSK-412 AC-7) --
+
+        #[cfg(unix)]
+        #[test]
+        fn test_commit_msg_scans_only_the_automatic_merge() {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path(), "feat/x");
+            stage(
+                dir.path(),
+                "leak.txt",
+                &format!("AKIA{}\n", "Q3ZWJ2X5LMN8RT4V"),
+            );
+            let git_dir = dir.path().join(".git");
+            let merge = git_dir.join("MERGE_MSG");
+            let commit = git_dir.join("COMMIT_EDITMSG");
+            let other = dir.path().join("message.txt");
+            for file in [&merge, &commit, &other] {
+                std::fs::write(file, "feat: x\n").unwrap();
+            }
+            let bin = tempfile::tempdir().unwrap();
+            let engine = pinned_engine(bin.path(), gitleaks::VERSION, "[]", 0);
+            let scan = |policy: &GitPolicy, file: &Path| {
+                commit_msg_secret_scan_engine(dir.path(), policy, file, &engine).unwrap()
+            };
+
+            // Git's MERGE_MSG: the automatic merge, scanned here.
+            let report = scan(&scan_policy(), &merge);
+            assert_eq!(secret_findings(&report).len(), 1, "{report:?}");
+            assert!(secret_findings(&report)[0].message.contains("leak.txt:1"));
+            // A relative spelling of the same file is the same file.
+            let report = scan(&scan_policy(), Path::new(".git/MERGE_MSG"));
+            assert_eq!(secret_findings(&report).len(), 1, "{report:?}");
+            // With the gitleaks engine, it runs too.
+            let report = scan(&engine_policy(PolicyLevel::Block), &merge);
+            assert_eq!(secret_findings(&report).len(), 1, "{report:?}");
+            assert!(
+                bin.path().join("args").exists(),
+                "the engine ran for the merge"
+            );
+
+            // COMMIT_EDITMSG: pre-commit already scanned it.
+            assert!(secret_findings(&scan(&scan_policy(), &commit)).is_empty());
+
+            // Any other file: refused with a diagnostic, and still scanned.
+            let report = scan(&scan_policy(), &other);
+            let findings = secret_findings(&report);
+            assert_eq!(findings.len(), 2, "{report:?}");
+            assert!(findings
+                .iter()
+                .any(|v| v.message.contains("neither MERGE_MSG nor COMMIT_EDITMSG")));
+
+            // An inactive scan reads nothing.
+            let off = GitPolicy {
+                secret_scan: PolicyLevel::Off,
+                ..scan_policy()
+            };
+            assert!(secret_findings(&scan(&off, &other)).is_empty());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn test_commit_msg_reads_merge_msg_of_a_linked_worktree() {
+            let dir = tempfile::tempdir().unwrap();
+            let tree = feature_worktree(dir.path());
+            stage(&tree, "leak.txt", &format!("AKIA{}\n", "Q3ZWJ2X5LMN8RT4V"));
+            let engine = Engine::with_path(None);
+            let own = git2::Repository::open(&tree)
+                .unwrap()
+                .path()
+                .join("MERGE_MSG");
+            std::fs::write(&own, "Merge x\n").unwrap();
+            let report =
+                commit_msg_secret_scan_engine(&tree, &scan_policy(), &own, &engine).unwrap();
+            assert_eq!(secret_findings(&report).len(), 1, "{report:?}");
+
+            // The main checkout's MERGE_MSG is another worktree's file.
+            let main = dir.path().join(".git/MERGE_MSG");
+            std::fs::write(&main, "Merge x\n").unwrap();
+            let report =
+                commit_msg_secret_scan_engine(&tree, &scan_policy(), &main, &engine).unwrap();
+            assert!(secret_findings(&report)
+                .iter()
+                .any(|v| v.message.contains("neither MERGE_MSG nor COMMIT_EDITMSG")));
+        }
     }
 }
 
