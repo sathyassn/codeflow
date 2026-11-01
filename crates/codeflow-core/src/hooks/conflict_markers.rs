@@ -229,7 +229,12 @@ pub fn marker_sizes(
     if paths.is_empty() {
         return Ok(BTreeMap::new());
     }
+    // The attribute lookup can read an absent promised blob: decide first
+    // whether this repository and git allow a read that never fetches.
+    super::gitleaks::require_offline_objects(root)
+        .map_err(|reason| AttrError::Failed(format!("git check-attr: {reason}")))?;
     let mut command = crate::git::command();
+    super::gitleaks::pin_object_reader(&mut command);
     command.arg("-C").arg(root);
     let from = match source {
         AttrSource::Index {
