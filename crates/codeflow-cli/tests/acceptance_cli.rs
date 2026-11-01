@@ -6963,3 +6963,6 @@ mod imports;
 
 #[path = "acceptance_cli/epic_line.rs"]
 mod epic_line;
+
+#[path = "acceptance_cli/sync_merges.rs"]
+mod sync_merges;

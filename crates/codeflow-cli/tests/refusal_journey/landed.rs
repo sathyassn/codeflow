@@ -21,6 +21,7 @@ fn commands(value: &serde_json::Value, out: &mut Vec<String>) {
 }
 
 use serde_json::json;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -66,7 +67,9 @@ impl Repo {
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE");
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("PAGER")
+            .env_remove("GIT_PAGER");
         c
     }
     fn git(&self, args: &[&str]) -> String {
@@ -780,8 +783,10 @@ fn ac2_the_last_tracking_ref_cannot_be_removed() {
     // authority, so only the plain recovery fetch passes; the operator
     // repairs HEAD with `git remote set-head`.
     repo.check("git-guard", "git fetch origin", 0);
+    // Read-only git passes while the authority is unresolved (TSK-1104).
+    repo.check("git-guard", "git status", 0);
     for command in [
-        "git status",
+        "git commit --allow-empty -m x",
         "git fetch --prune origin",
         "git config --get remote.origin.url",
     ] {
@@ -1299,7 +1304,8 @@ fn r4_custom_default_without_remote_head_names_tried_refs_and_recovery() {
         "HEAD",
         "refs/heads/trunk",
     ]);
-    let out = repo.check("git-guard", "git status", 2);
+    repo.check("git-guard", "git status", 0);
+    let out = repo.check("git-guard", "git commit --allow-empty -m x", 2);
     let text = String::from_utf8_lossy(&out.stderr);
     for part in [
         "refs/remotes/origin/HEAD",
@@ -1330,7 +1336,8 @@ fn r4_an_existing_remote_head_with_a_missing_target_does_not_fall_back() {
         "refs/remotes/origin/HEAD",
         "refs/remotes/origin/trunk",
     ]);
-    let out = repo.check("git-guard", "git status", 2);
+    repo.check("git-guard", "git status", 0);
+    let out = repo.check("git-guard", "git commit --allow-empty -m x", 2);
     assert!(String::from_utf8_lossy(&out.stderr).contains("git fetch origin"));
 }
 
@@ -1493,7 +1500,8 @@ fn r4_review_broken_candidates_and_remote_head_refuse() {
                 .unwrap();
             }
         }
-        repo.check("git-guard", "git status", 2);
+        repo.check("git-guard", "git status", 0);
+        repo.check("git-guard", "git commit --allow-empty -m x", 2);
     }
 }
 
@@ -1688,4 +1696,284 @@ fn r5_policy_relaxation_names_the_default_branch_and_requires_its_landing() {
         repo.git(&["fetch", "-q", "origin", branch]);
         repo.check("git-guard", "git branch -D main", expected);
     }
+}
+
+fn edit_guard_write(repo: &Repo, file: &str) -> Output {
+    let mut child = repo
+        .command(&binary())
+        .args(["hook", "edit-guard"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(
+        child.stdin.take().unwrap(),
+        "{}",
+        json!({"tool_name":"Write","cwd":repo.root(),"tool_input":{"file_path":repo.root().join(file),"content":"x"}})
+    )
+    .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// A remote that has refs but no `origin/HEAD`: the authority is unset.
+fn unresolved_authority_repo() -> Repo {
+    let repo = Repo::new();
+    repo.remote();
+    repo.policy("block");
+    repo.git(&["add", ".codeflow/policy.json"]);
+    repo.git(&["commit", "-qm", "chore: policy"]);
+    repo.git(&["push", "-q", "origin", "HEAD:trunk"]);
+    assert!(!repo
+        .command("git")
+        .args(["rev-parse", "--verify", "refs/remotes/origin/HEAD"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    repo
+}
+
+const READ_ONLY_UNRESOLVED: &[&str] = &[
+    "git status",
+    "git diff HEAD",
+    "git log -1",
+    "git show HEAD",
+    "git rev-parse HEAD",
+    "git ls-files",
+    "git ls-tree HEAD",
+    "git merge-base HEAD HEAD",
+    "git for-each-ref",
+    "git show-ref",
+    "git cat-file -p HEAD",
+    "git check-ignore -v x",
+    "git version",
+    "git status && git log -1 ; git rev-parse HEAD",
+];
+
+const REFUSED_UNRESOLVED: &[&str] = &[
+    "git commit --allow-empty -m x",
+    "git push origin task/x",
+    "git checkout -b y",
+    "git branch z",
+    "git config user.name x",
+    "git update-ref refs/heads/z HEAD",
+    "git remote set-head origin -a",
+    "git help status",
+    "git status --help",
+    "git log --help",
+    "git diff --he",
+    "git status > out.txt",
+    "git status && git commit --allow-empty -m x",
+    "git status ; rm -rf x",
+    "git log | cat",
+    "git log $(id)",
+    "git log `id`",
+    "git log '--output=f'",
+    "git log --output=f",
+    "git log --outp=f",
+    "git diff --ext-diff",
+    "git diff --ext",
+    "git diff --textconv",
+    "git log --paginate",
+    "git diff --no-index a b",
+    "git cat-file --filters HEAD:f",
+    "git log --show-signature",
+    "git log --format=%GS",
+    "git -c core.pager=sh log",
+    "git -C . status",
+    "git --git-dir=.git status",
+    "GIT_PAGER=sh git log",
+    "env git status",
+    "sh -c 'git status'",
+    "echo ok",
+];
+
+#[test]
+fn ac2_unresolved_authority_allows_exactly_the_read_only_git_set() {
+    let repo = unresolved_authority_repo();
+    // Fail before: every one of these was refused with the authority error.
+    for hook in ["git-guard", "exec-guard"] {
+        for cmd in READ_ONLY_UNRESOLVED {
+            let out = repo.hook(hook, cmd);
+            assert_eq!(out.status.code(), Some(0), "{hook}: {cmd}");
+        }
+        for cmd in REFUSED_UNRESOLVED {
+            let out = repo.hook(hook, cmd);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {cmd}");
+        }
+    }
+    // The refusal names the ref and the clearing step, and says what stays
+    // allowed.
+    let out = repo.check("git-guard", "git commit --allow-empty -m x", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("refs/remotes/origin/HEAD"), "{text}");
+    assert!(text.contains("git remote set-head origin -a"), "{text}");
+    assert!(text.contains("read-only git"), "{text}");
+    // exec-guard's refusal carries the same sentence.
+    let out = repo.check("exec-guard", "echo ok", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("read-only git"), "{text}");
+    assert!(text.contains("git remote set-head origin -a"), "{text}");
+    // Edits are not read-only and keep refusing, an unrelated file included.
+    let out = edit_guard_write(&repo, "notes.txt");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    // The sanctioned fetch recovery still passes.
+    repo.check("git-guard", "git fetch origin", 0);
+}
+
+#[test]
+fn ac4_amendment_in_flight_with_a_resolved_authority_judges_by_the_default_branch() {
+    // A task record with one target on origin/main and another on the
+    // branch: records are no longer a policy source, so nothing refuses.
+    let repo = Repo::new();
+    repo.remote();
+    repo.policy("block");
+    std::fs::create_dir_all(repo.root().join("project-management/tasks")).unwrap();
+    let record =
+        |target: &str| format!("---\nid: TSK-1\nintegration_target: \"{target}\"\n---\n# TSK-1\n");
+    std::fs::write(
+        repo.root().join("project-management/tasks/TSK-1.md"),
+        record("main"),
+    )
+    .unwrap();
+    repo.git(&["add", "."]);
+    repo.git(&["commit", "-qm", "chore: landed"]);
+    repo.git(&["push", "-q", "origin", "HEAD:main"]);
+    repo.git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+    ]);
+    repo.git(&["switch", "-qc", "plan/amend"]);
+    std::fs::write(
+        repo.root().join("project-management/tasks/TSK-1.md"),
+        record("integration/EPC-024-x"),
+    )
+    .unwrap();
+    repo.git(&["add", "."]);
+    repo.git(&["commit", "-qm", "docs(records): retarget"]);
+    repo.git(&["switch", "-qc", "task/x2"]);
+    for hook in ["git-guard", "exec-guard"] {
+        for cmd in ["git status", "git log -1", "git rev-parse HEAD"] {
+            repo.check(hook, cmd, 0);
+        }
+    }
+    assert_eq!(edit_guard_write(&repo, "notes.txt").status.code(), Some(0));
+    // Mutating verdicts follow the default branch authority.
+    repo.check("git-guard", "git push origin HEAD:main", 2);
+    let out = repo.check("git-guard", "git commit --allow-empty -m x", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("git.root_checkout_commits"), "{text}");
+    assert!(!text.contains("disagree"), "{text}");
+    // A fetch changes nothing a records difference caused.
+    repo.check("git-guard", "git fetch origin", 0);
+    repo.check("git-guard", "git status", 0);
+    repo.check("git-guard", "git push origin HEAD:main", 2);
+}
+
+#[test]
+fn ac6_unset_origin_head_journey_reads_pass_commit_names_set_head_then_clears() {
+    let repo = unresolved_authority_repo();
+    let mut report = String::new();
+    for cmd in ["git status", "git log -1", "git rev-parse HEAD"] {
+        for hook in ["git-guard", "exec-guard"] {
+            let out = repo.hook(hook, cmd);
+            writeln!(report, "{hook} `{cmd}` -> {:?}", out.status.code()).unwrap();
+            assert_eq!(out.status.code(), Some(0), "{report}");
+        }
+    }
+    let out = repo.hook("git-guard", "git commit --allow-empty -m x");
+    writeln!(report, "git-guard commit -> {:?}", out.status.code()).unwrap();
+    assert_eq!(out.status.code(), Some(2), "{report}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git remote set-head origin -a"));
+    repo.git(&["remote", "set-head", "origin", "trunk"]);
+    // After the clearing step every verdict is the ordinary one.
+    let out = repo.check("git-guard", "git commit --allow-empty -m x", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("git.root_checkout_commits"), "{text}");
+    repo.check("git-guard", "git push origin HEAD:main", 2);
+    repo.check("exec-guard", "echo ok", 0);
+    assert_eq!(edit_guard_write(&repo, "notes.txt").status.code(), Some(0));
+    println!("{report}");
+}
+
+#[test]
+fn ac2_unresolved_authority_still_refuses_a_git_call_that_runs_a_configured_program() {
+    for (key, command) in [
+        ("core.fsmonitor", "git status"),
+        ("diff.external", "git diff HEAD"),
+        ("diff.x.textconv", "git diff HEAD"),
+        ("core.pager", "git log -1"),
+    ] {
+        let repo = unresolved_authority_repo();
+        // The plain call is allowed before the setting exists.
+        for hook in ["git-guard", "exec-guard"] {
+            assert_eq!(repo.hook(hook, command).status.code(), Some(0), "{hook}");
+        }
+        repo.git(&["config", key, "/bin/echo"]);
+        for hook in ["git-guard", "exec-guard"] {
+            let out = repo.hook(hook, command);
+            assert_eq!(out.status.code(), Some(2), "{key}: {hook}: {out:?}");
+        }
+    }
+    // A program named by the hook process environment.
+    let repo = unresolved_authority_repo();
+    for (name, command) in [
+        ("GIT_EXTERNAL_DIFF", "git diff HEAD"),
+        ("GIT_PAGER", "git log -1"),
+    ] {
+        let mut process = repo.command(&binary());
+        process.env(name, "/bin/echo");
+        let out = run_hook(process, repo.root(), "git-guard", command);
+        assert_eq!(out.status.code(), Some(2), "{name}: {out:?}");
+    }
+    // Configuration injected through the environment.
+    let mut process = repo.command(&binary());
+    process
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
+        .env("GIT_CONFIG_VALUE_0", "/bin/echo");
+    let out = run_hook(process, repo.root(), "git-guard", "git status");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+}
+
+#[test]
+fn ac2_unresolved_authority_refuses_status_when_the_index_change_hook_exists() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = unresolved_authority_repo();
+    let hook = repo.root().join(".git/hooks/post-index-change");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = repo.hook("git-guard", "git status");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+}
+
+#[test]
+fn ac2_unresolved_authority_refuses_status_when_the_environment_sets_the_hooks_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = unresolved_authority_repo();
+    let dir = repo.root().join("env-hooks");
+    std::fs::create_dir_all(&dir).unwrap();
+    let hook = dir.join("post-index-change");
+    std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut process = repo.command(&binary());
+    process
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", &dir);
+    let out = run_hook(process, repo.root(), "git-guard", "git status");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    // The same environment naming a directory without the hook stays allowed.
+    let empty = repo.root().join("env-empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let mut process = repo.command(&binary());
+    process
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", &empty);
+    let out = run_hook(process, repo.root(), "git-guard", "git status");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
