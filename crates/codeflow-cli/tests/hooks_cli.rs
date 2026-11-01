@@ -12037,12 +12037,29 @@ fn trace_path(wrapper: &Path) -> std::path::PathBuf {
 /// helper, or the fixture's upload-pack wrapper).
 #[cfg(unix)]
 fn trace_starts(folder: &Path) -> (usize, Vec<String>) {
+    trace_starts_from(folder, false)
+}
+
+/// Like `trace_starts`; with `from_hook` it counts only the events after Git
+/// started the `pre-commit` hook, so Git's own work before the hook (which
+/// codeflow does not control) is left out.
+#[cfg(unix)]
+fn trace_starts_from(folder: &Path, from_hook: bool) -> (usize, Vec<String>) {
     let text = std::fs::read_to_string(folder.join("trace2.json")).unwrap_or_default();
     let (mut started, mut fetches) = (0, Vec::new());
+    let mut in_scope = !from_hook;
     for line in text.lines() {
         let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
+        if event["event"].as_str() == Some("child_start")
+            && event["hook_name"].as_str() == Some("pre-commit")
+        {
+            in_scope = true;
+        }
+        if !in_scope {
+            continue;
+        }
         if !matches!(event["event"].as_str(), Some("start" | "child_start")) {
             continue;
         }
@@ -12133,7 +12150,7 @@ fn inherited_promisor_settings_never_reach_the_attribute_reader() {
 #[cfg(unix)]
 #[test]
 fn installed_hooks_refuse_a_promisor_commit_on_an_old_git() {
-    let (keep, work, fetched) = promisor_repository_missing_blobs();
+    let (keep, work, _fetched) = promisor_repository_missing_blobs();
     wire_scan_hooks(&work);
     let before = git_command()
         .args(["rev-parse", "HEAD"])
@@ -12142,9 +12159,24 @@ fn installed_hooks_refuse_a_promisor_commit_on_an_old_git() {
         .unwrap()
         .stdout;
     let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
+    // Git puts its own exec path first on a hook's PATH, ahead of any
+    // wrapper folder, so the wrapper must be the `git` of a copy of the exec
+    // path: every helper linked from the real one, `git` the wrapper.
+    let exec = keep.path().join("exec");
+    std::fs::create_dir_all(&exec).unwrap();
+    let real_exec = git_command().arg("--exec-path").output().unwrap().stdout;
+    let real_exec = std::path::PathBuf::from(String::from_utf8(real_exec).unwrap().trim());
+    for entry in std::fs::read_dir(&real_exec).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() != "git" {
+            std::os::unix::fs::symlink(entry.path(), exec.join(entry.file_name())).unwrap();
+        }
+    }
+    std::fs::copy(wrapper.join("git"), exec.join("git")).unwrap();
     let out = git_command()
         .args(["commit", "-m", "feat: add a staged file"])
         .current_dir(&work)
+        .env("GIT_EXEC_PATH", &exec)
         .env("LC_ALL", "C")
         .env("CODEFLOW_HOME", isolated_home())
         .env("GIT_TRACE2_EVENT", trace_path(&wrapper))
@@ -12174,11 +12206,14 @@ fn installed_hooks_refuse_a_promisor_commit_on_an_old_git() {
         .unwrap()
         .stdout;
     assert_eq!(before, after, "no commit was made");
-    assert!(!fetched.exists(), "upload-pack started");
-    let (started, fetches) = trace_starts(keep.path());
+    // `git commit` itself reads the promised objects (and fetches them)
+    // before it starts the hook; that is Git's own work, outside codeflow, so
+    // the marker file cannot tell the two apart. Only the processes started
+    // from the hook onward are codeflow's, and those are observed.
+    let (started, transports) = trace_starts_from(keep.path(), true);
     assert!(
         started > 0,
-        "Trace2 saw no process: the observation is blind"
+        "Trace2 saw no process after the hook started: the observation is blind"
     );
-    assert_eq!(fetches, Vec::<String>::new());
+    assert_eq!(transports, Vec::<String>::new());
 }
