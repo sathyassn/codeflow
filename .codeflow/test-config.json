@@ -56,7 +56,7 @@
       "scripts/test_gate_portal_windows.py"
     ],
     "worker_budget": 9,
-    "heavy_wait_seconds": 0
+    "heavy_wait_seconds": 1800
   },
   "defaults": {
     "coverage": []
