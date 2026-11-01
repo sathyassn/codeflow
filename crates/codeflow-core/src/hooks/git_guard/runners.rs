@@ -2487,11 +2487,23 @@ mod tests {
         assert!(call(root.path(), &["-c", "user.name=x", "status"]).is_ok());
     }
 
+    fn location_verdict(root: &Path, variables: &[(&str, &str)]) -> Result<(), String> {
+        let inherited: crate::security::git_config::Environment = variables
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+        crate::security::git_config::inherited_location_is_own(
+            root,
+            &[],
+            &crate::security::git_config::Environment::new(),
+            &inherited,
+        )
+    }
+
     #[test]
     fn a_repository_location_the_caller_chose_refuses() {
         let root = repository();
         let other = repository();
-        let own_git = root.path().join(".git").to_string_lossy().into_owned();
         let other_git = other.path().join(".git").to_string_lossy().into_owned();
         let other_tree = other.path().to_string_lossy().into_owned();
         for (name, value) in [
@@ -2499,29 +2511,78 @@ mod tests {
             ("GIT_COMMON_DIR", other_git.as_str()),
             ("GIT_WORK_TREE", other_tree.as_str()),
         ] {
-            let inherited = [(name.to_string(), value.to_string())]
-                .into_iter()
-                .collect();
-            let refused = crate::security::git_config::inherited_location_is_own(
-                root.path(),
-                &[],
-                &crate::security::git_config::Environment::new(),
-                &inherited,
-            )
-            .expect_err(name);
+            let refused = location_verdict(root.path(), &[(name, value)]).expect_err(name);
             assert!(refused.contains(name), "{refused}");
         }
-        // The variable naming the repository the guard found itself is not
-        // a move, and neither is no variable.
-        let own: crate::security::git_config::Environment =
-            [("GIT_DIR".to_string(), own_git)].into_iter().collect();
-        assert!(crate::security::git_config::inherited_location_is_own(
-            root.path(),
-            &[],
-            &crate::security::git_config::Environment::new(),
-            &own
-        )
-        .is_ok());
+        assert!(call(root.path(), &["status"]).is_ok());
+    }
+
+    #[test]
+    fn only_the_exact_path_git_prints_for_this_repository_is_allowed() {
+        let root = repository();
+        let real = root.path().canonicalize().unwrap();
+        let tree = real.to_string_lossy().into_owned();
+        let git_dir = real.join(".git").to_string_lossy().into_owned();
+        // The absolute path Git prints, for each variable.
+        for variables in [
+            vec![("GIT_DIR", git_dir.as_str())],
+            vec![("GIT_COMMON_DIR", git_dir.as_str())],
+            vec![("GIT_WORK_TREE", tree.as_str())],
+            vec![("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")],
+        ] {
+            location_verdict(root.path(), &variables)
+                .unwrap_or_else(|why| panic!("{variables:?}: {why}"));
+        }
+        // A link to this repository resolves again when the command runs.
+        #[cfg(unix)]
+        {
+            let scratch = tempfile::tempdir().unwrap();
+            let link = scratch.path().join("link");
+            std::os::unix::fs::symlink(real.join(".git"), &link).unwrap();
+            let link_text = link.to_string_lossy().into_owned();
+            let refused = location_verdict(root.path(), &[("GIT_DIR", link_text.as_str())])
+                .expect_err("a link to this repository");
+            assert!(refused.contains("exactly"), "{refused}");
+        }
+        // A relative spelling and a trailing separator are other spellings.
+        for (name, value) in [
+            ("GIT_DIR", ".git"),
+            ("GIT_DIR", &format!("{git_dir}/")),
+            ("GIT_WORK_TREE", "."),
+            ("GIT_WORK_TREE", &format!("{tree}/.")),
+        ] {
+            location_verdict(root.path(), &[(name, value)]).expect_err(&format!("{name}={value}"));
+        }
+    }
+
+    #[test]
+    fn discovery_that_cannot_be_compared_refuses() {
+        // No repository here: the probe fails with and without the variable.
+        let empty = tempfile::tempdir().unwrap();
+        assert!(
+            location_verdict(empty.path(), &[("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")]).is_err()
+        );
+    }
+
+    #[test]
+    fn a_worktree_hooks_path_is_repository_owned() {
+        let root = repository();
+        for args in [
+            vec!["config", "extensions.worktreeConfig", "true"],
+            vec![
+                "config",
+                "--worktree",
+                "core.hooksPath",
+                "/repository-owned",
+            ],
+        ] {
+            let set = crate::git::command()
+                .args(&args)
+                .current_dir(root.path())
+                .status()
+                .unwrap();
+            assert!(set.success(), "{args:?}");
+        }
         assert!(call(root.path(), &["status"]).is_ok());
     }
 

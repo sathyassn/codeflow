@@ -352,6 +352,20 @@ fn tsk1130_an_inherited_repository_location_refuses_git_in_both_guards() {
         (&f.root, shell_path(&f.root.join(".git"))),
         (&f.linked, shell_path(&f.root.join(".git/worktrees/w"))),
     ];
+    let common = shell_path(&f.root.join(".git"));
+    // A link to this repository's own Git directory, retargeted later to
+    // another repository whose hook is executable, is the same variable: the
+    // guard must refuse it before any retarget, since Git resolves it again
+    // when the command runs.
+    #[cfg(unix)]
+    let link = {
+        use std::os::unix::fs::PermissionsExt;
+        let hook = other.join(".git/hooks/post-index-change");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        f.temp.path().join("git-dir-link")
+    };
     for hook in ["git-guard", "exec-guard"] {
         for (cwd, own_git) in &own {
             for (name, value) in moved {
@@ -362,9 +376,44 @@ fn tsk1130_an_inherited_repository_location_refuses_git_in_both_guards() {
                     "{hook} {name}: {out:?}"
                 );
             }
-            for env in [&[][..], &[("GIT_DIR", own_git.as_str())][..]] {
+            let tree = shell_path(cwd);
+            let allowed: [&[(&str, &str)]; 6] = [
+                &[],
+                &[("GIT_DIR", own_git.as_str())],
+                &[("GIT_COMMON_DIR", common.as_str())],
+                &[("GIT_WORK_TREE", tree.as_str())],
+                &[("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")],
+                &[
+                    ("GIT_DIR", own_git.as_str()),
+                    ("GIT_WORK_TREE", tree.as_str()),
+                ],
+            ];
+            for env in allowed {
                 let out = run(hook, cwd, env);
                 assert!(line_allows(&out), "{hook} {env:?}: {out:?}");
+            }
+            // Other spellings of this repository refuse.
+            let relative = [("GIT_DIR", ".git")];
+            let trailing = format!("{own_git}/");
+            for env in [&relative[..], &[("GIT_DIR", trailing.as_str())][..]] {
+                let out = run(hook, cwd, env);
+                assert!(refused(&out), "{hook} {env:?}: {out:?}");
+            }
+            #[cfg(unix)]
+            {
+                let _ = std::fs::remove_file(&link);
+                std::os::unix::fs::symlink(own_git, &link).unwrap();
+                let link_text = shell_path(&link);
+                let env = [("GIT_DIR", link_text.as_str())];
+                let before = run(hook, cwd, &env);
+                assert!(
+                    refused(&before),
+                    "{hook} link to this repository: {before:?}"
+                );
+                std::fs::remove_file(&link).unwrap();
+                std::os::unix::fs::symlink(other.join(".git"), &link).unwrap();
+                let after = run(hook, cwd, &env);
+                assert!(refused(&after), "{hook} link retargeted: {after:?}");
             }
         }
     }

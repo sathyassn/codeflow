@@ -447,8 +447,14 @@ pub(crate) fn repository_of(
     }
 }
 
-/// The variables that move Git's repository, common directory or work tree.
-const LOCATION_VARIABLES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+/// The variables that move Git's repository, common directory or work tree,
+/// or the way Git discovers the repository from the working directory.
+const LOCATION_VARIABLES: [&str; 4] = [
+    "GIT_DIR",
+    "GIT_COMMON_DIR",
+    "GIT_WORK_TREE",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+];
 
 /// The location variables this process inherited, with their values.
 /// A value that is not text refuses, since it cannot be compared.
@@ -468,10 +474,17 @@ pub(crate) fn process_location() -> Result<Environment, String> {
 /// Refuse a call whose repository location the caller chose (TSK-1130). The
 /// repository whose `local` and `worktree` configuration the guards trust is
 /// the one Git finds from the working directory. When `inherited` says the
-/// process environment (or `environment`) sets `GIT_DIR`, `GIT_COMMON_DIR` or
-/// `GIT_WORK_TREE`, Git may read another repository's configuration and
-/// hooks. This asks Git for the Git directory, common directory and work tree
-/// with and without those variables, and refuses unless the answers match.
+/// process environment sets one of the location variables, Git may read
+/// another repository's configuration and hooks. Two checks, both failing
+/// closed:
+///
+/// 1. Git is asked for the Git directory, common directory and work tree with
+///    and without those variables, and the answers must match.
+/// 2. `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` must also be byte for
+///    byte the absolute path Git printed without them. A symlink, a relative
+///    path or another spelling of the same place resolves again when the
+///    command runs, so it is never accepted on what it resolves to now.
+///
 /// A probe that fails refuses.
 pub(crate) fn inherited_location_is_own(
     cwd: &Path,
@@ -497,24 +510,38 @@ pub(crate) fn inherited_location_is_own(
     );
     let as_given = location(cwd, globals, &given, false)?;
     let own = location(cwd, globals, environment, true)?;
-    if as_given == own {
-        Ok(())
-    } else {
-        Err(format!(
+    let canonical = |lines: &[String]| -> Vec<PathBuf> {
+        lines
+            .iter()
+            .map(|line| std::fs::canonicalize(line).unwrap_or_else(|_| PathBuf::from(line)))
+            .collect()
+    };
+    if canonical(&as_given) != canonical(&own) {
+        return Err(format!(
             "{} in the environment moves the repository Git uses away from the one the guard found from the working directory; unset it",
             set.join(", ")
-        ))
+        ));
     }
+    for (name, at) in [("GIT_DIR", 0), ("GIT_COMMON_DIR", 1), ("GIT_WORK_TREE", 2)] {
+        if set.contains(&name) && inherited.get(name) != own.get(at) {
+            return Err(format!(
+                "{name} in the environment is not exactly the absolute path Git finds from the working directory; a link, a relative path or another spelling can point elsewhere by the time the command runs; unset it"
+            ));
+        }
+    }
+    Ok(())
 }
 
-/// Git's answer for the repository location from `cwd`, canonical, with the
-/// location variables kept (`clean` false) or removed (`clean` true).
+/// Git's answer for the repository location from `cwd`, as Git prints it:
+/// the Git directory, the common directory and the work tree (empty when
+/// there is none), with the location variables kept (`clean` false) or
+/// removed (`clean` true).
 fn location(
     cwd: &Path,
     globals: &[String],
     environment: &Environment,
     clean: bool,
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<Vec<String>, String> {
     let run = |tail: &[&str]| -> Result<Vec<u8>, String> {
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut command = crate::git::command();
@@ -548,13 +575,18 @@ fn location(
     let top = run(&["rev-parse", "--show-toplevel"])
         .and_then(text)
         .unwrap_or_default();
-    Ok(dirs
+    let mut lines: Vec<String> = dirs
         .strip_suffix('\n')
         .unwrap_or(&dirs)
         .split('\n')
-        .chain(top.strip_suffix('\n').unwrap_or(&top).split('\n'))
-        .map(|line| std::fs::canonicalize(line).unwrap_or_else(|_| PathBuf::from(line)))
-        .collect())
+        .map(str::to_string)
+        .collect();
+    lines.push(top.strip_suffix('\n').unwrap_or(&top).to_string());
+    if lines.len() == 3 {
+        Ok(lines)
+    } else {
+        Err("cannot read the Git repository paths".into())
+    }
 }
 
 pub(crate) fn bounded_output(

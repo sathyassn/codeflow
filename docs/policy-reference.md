@@ -1803,11 +1803,13 @@ To keep a custom hooks directory, set it in the repository's own
 configuration. The repository whose `local` and `worktree` values count is
 the one Git finds from the working directory, which the caller cannot
 choose. When the hook process environment sets `GIT_DIR`, `GIT_COMMON_DIR`
-or `GIT_WORK_TREE`, the guards ask Git for the Git directory, common
-directory and work tree with and without those variables, and refuse
-unless the answers match; a probe that fails refuses. A variable that names
-the repository Git finds anyway is allowed. git-guard and exec-guard apply
-the rules alike.
+or `GIT_WORK_TREE`, or `GIT_DISCOVERY_ACROSS_FILESYSTEM`, the guards ask
+Git for the Git directory, common directory and work tree with and without
+those variables, and refuse unless the answers match; a probe that fails
+refuses. The first three must also equal, byte for byte, the absolute path
+Git prints without them: a link, a relative path or another spelling of this
+repository resolves again when the command runs, so it refuses even while it
+points here. git-guard and exec-guard apply the rules alike.
 
 On a line with a configuration-dependent Git decision, the guards refuse any
 non-Git segment that mentions a configuration variable except as a plain
