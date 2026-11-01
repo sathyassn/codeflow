@@ -795,8 +795,8 @@ class CoverageShardControls(unittest.TestCase):
 
     def test_the_committed_jobs_match_the_config_and_plan(self):
         self.assertEqual(self.problems(), [])
-        self.assertEqual(parity.planned_partitions(parity.SHARD_DATA), 2)
-        self.assertIn("        shard: [1, 2]\n", WORKFLOW)
+        self.assertEqual(parity.planned_partitions(parity.SHARD_DATA), 4)
+        self.assertIn("        shard: [1, 2, 3, 4]\n", WORKFLOW)
 
     def test_a_shard_that_runs_less_or_another_command_is_refused(self):
         run = 'cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow -E'
@@ -816,12 +816,12 @@ class CoverageShardControls(unittest.TestCase):
                                                          "        run: cargo llvm-cov"))
 
     def test_a_shard_set_that_misses_or_exceeds_the_plan_is_refused(self):
-        for matrix in ("        shard: [1]\n", "        shard: [1, 2, 3]\n", "        shard: [1, 1]\n"):
+        for matrix in ("        shard: [1, 2]\n", "        shard: [1, 2, 3, 4, 5]\n", "        shard: [1, 1, 3, 4]\n"):
             with self.subTest(matrix=matrix):
-                self.assert_problem(self.EXACT, WORKFLOW.replace("        shard: [1, 2]\n", matrix))
+                self.assert_problem(self.EXACT, WORKFLOW.replace("        shard: [1, 2, 3, 4]\n", matrix))
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory) / "times.json"
-            data.write_text(json.dumps({"partitions": 3}))
+            data.write_text(json.dumps({"partitions": 5}))
             self.assert_problem(self.EXACT, data=data)
 
     def test_the_config_commands_drive_the_jobs(self):
@@ -843,16 +843,16 @@ class CoverageShardControls(unittest.TestCase):
         self.assert_problem("must require exactly present-web-build", cfg=mutated(requires))
 
     def test_a_report_that_could_pass_without_every_shard_or_the_floor_is_refused(self):
-        merge = "--floor-from .codeflow/test-config.json --shards 2 target/coverage/data"
+        merge = "--floor-from .codeflow/test-config.json --shards 4 target/coverage/data"
         self.assertIn(merge, WORKFLOW)
         controls = {
-            "a fixed floor": WORKFLOW.replace(merge, "--floor 80 --shards 2 target/coverage/data"),
-            "one shard": WORKFLOW.replace(merge, "--floor-from .codeflow/test-config.json --shards 1 target/coverage/data"),
+            "a fixed floor": WORKFLOW.replace(merge, "--floor 80 --shards 4 target/coverage/data"),
+            "a short shard count": WORKFLOW.replace(merge, "--floor-from .codeflow/test-config.json --shards 3 target/coverage/data"),
             "a forgiven merge": WORKFLOW.replace(merge, merge + " || true"),
             "a skipped journey step": WORKFLOW.replace(
                 "      - name: journey gate\n        if: ${{ !cancelled() }}\n",
                 "      - name: journey gate\n        if: false\n"),
-            "one shard's list": WORKFLOW.replace(" target/coverage/results/coverage-shard-2/tests.json", ""),
+            "one shard's list": WORKFLOW.replace(" target/coverage/results/coverage-shard-4/tests.json", ""),
             "a report that runs on skipped shards": WORKFLOW.replace(
                 "    if: always() && needs.gates-coverage.result != 'skipped' && (",
                 "    if: always() && ("),
