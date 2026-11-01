@@ -335,17 +335,47 @@ fn read_record(path: &Path) -> Result<Record, String> {
         .map_err(|err| format!("{} is not a valid record ({err})", path.display()))
 }
 
-/// Copy the user file to a new backup next to it; returns the backup path.
+/// Copy the user file to a new backup in the `backups` folder beside it
+/// (`~/.claude/backups`, which the shipped presets deny to the Read tool
+/// and the sandbox, as they deny the user file itself; security review
+/// SEC-08), readable by its owner only. Each backup gets a new name, so a
+/// second backup in the same second never replaces the first. Returns the
+/// backup path.
 fn backup(user: &Path) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let bytes = std::fs::read(user)?;
+    let dir = user
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("backups");
+    std::fs::create_dir_all(&dir)?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default();
-    let mut name = user.as_os_str().to_os_string();
-    name.push(format!(".codeflow-backup-{stamp}"));
-    let target = PathBuf::from(name);
-    std::fs::copy(user, &target)?;
-    Ok(target)
+    for n in 0..1000 {
+        // The name is joined as bytes, never decoded.
+        let mut file_name = user.file_name().unwrap_or_default().to_os_string();
+        file_name.push(format!(".codeflow-backup-{stamp}-{n}"));
+        let target = dir.join(file_name);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&target) {
+            Ok(mut file) => {
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+                return Ok(target);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Err(std::io::Error::other("no free backup name"))
 }
 
 fn write_json(path: &Path, value: &Value) -> std::io::Result<()> {
@@ -430,15 +460,22 @@ pub fn offer(
             }
         }
     }
-    if let Err(err) = write_json(user, &root) {
-        println!("  Cannot write {}: {err}", user.display());
-        return 1;
-    }
+    // The record goes first: if the user file then cannot be written, the
+    // record names entries that are not there, which removal skips; the
+    // other order could leave additions nothing records.
     record.file = Some(user.to_path_buf());
     record.items.extend(accepted);
     let text = serde_json::to_string_pretty(&record).unwrap_or_default() + "\n";
     if let Err(err) = super::write_atomic(record_path, &text) {
-        println!("  Cannot write {}: {err}", record_path.display());
+        println!(
+            "  Cannot write {}: {err}. Nothing written to {}.",
+            record_path.display(),
+            user.display()
+        );
+        return 1;
+    }
+    if let Err(err) = write_json(user, &root) {
+        println!("  Cannot write {}: {err}", user.display());
         return 1;
     }
     println!(
@@ -567,7 +604,7 @@ mod tests {
         assert!(strings(&after["sandbox"]["excludedCommands"]).contains(&json!("herdr *")));
         assert!(strings(&after["sandbox"]["filesystem"]["denyRead"]).contains(&json!("~/.ssh")));
         assert_eq!(after["model"], "opus");
-        let backups = std::fs::read_dir(user.parent().unwrap())
+        let backups = std::fs::read_dir(user.parent().unwrap().join("backups"))
             .unwrap()
             .filter(|e| {
                 e.as_ref()
@@ -689,6 +726,58 @@ mod tests {
             r#"{"model": "opus"}"#
         );
         assert_eq!(std::fs::read_to_string(&record).unwrap(), "{ not json");
+    }
+
+    /// Security review SEC-08: backups go to the `backups` folder the
+    /// presets deny to reads, owner-only, and two in the same second keep
+    /// both earlier versions.
+    #[cfg(unix)]
+    #[test]
+    fn backups_are_private_and_never_replace_each_other() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("settings.json");
+        std::fs::write(&user, "first").unwrap();
+        let one = backup(&user).unwrap();
+        std::fs::write(&user, "second").unwrap();
+        let two = backup(&user).unwrap();
+        assert_ne!(one, two);
+        assert_eq!(std::fs::read_to_string(&one).unwrap(), "first");
+        assert_eq!(std::fs::read_to_string(&two).unwrap(), "second");
+        for path in [&one, &two] {
+            assert_eq!(path.parent().unwrap(), dir.path().join("backups"));
+            let mode = std::fs::metadata(path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{}", path.display());
+        }
+    }
+
+    /// The record is written before the user file, so a user file that
+    /// cannot be written leaves no unrecorded addition.
+    #[cfg(unix)]
+    #[test]
+    fn the_record_is_written_before_the_user_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("record.json");
+        let preset = preset();
+        // An absent user file under a read-only folder: the record is
+        // written first and the user file write then fails.
+        let locked = dir.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        let user = locked.join("settings.json");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let code = offer(
+            &mut "yes\nno\nno\nno\n".as_bytes(),
+            &user,
+            &record,
+            &preset,
+            ALL,
+        );
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(code, 1);
+        assert!(record.exists(), "the record precedes the user write");
+        assert!(!user.exists());
+        assert_eq!(remove(&record), 0);
     }
 
     #[test]

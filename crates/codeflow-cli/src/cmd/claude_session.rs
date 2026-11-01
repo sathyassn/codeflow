@@ -161,6 +161,17 @@ fn union(shipped: &[Value], existing: &Value) -> Value {
     Value::Array(out)
 }
 
+/// Exclusions an earlier build of this command wrote and the security
+/// review narrowed (TSK-1070 SEC-03): a reinstall drops them, so a session
+/// file never keeps a wider exclusion than the shipped list.
+const RETIRED_EXCLUSIONS: [&str; 5] = [
+    "gh *",
+    "gh pr *",
+    "gh run *",
+    "gh issue *",
+    "git -C * push *",
+];
+
 /// The session settings: the existing file's own entries kept, the shipped
 /// exclusions and hosts added, the locks set, and bypass mode set or
 /// removed by the person's answer.
@@ -179,13 +190,19 @@ pub fn session_settings(existing: Option<&Value>, bypass: bool) -> Value {
         _ => Map::new(),
     };
     new_sandbox.insert("enabled".into(), json!(true));
+    // A missing sandbox, such as Linux without bubblewrap, stops the
+    // session instead of running commands unsandboxed; this file is
+    // CodeFlow's alone, so no other project or platform inherits it
+    // (security review SEC-04).
+    new_sandbox.insert("failIfUnavailable".into(), json!(true));
     new_sandbox.insert("allowUnsandboxedCommands".into(), json!(false));
+    let mut kept_exclusions = old_sandbox["excludedCommands"].clone();
+    if let Some(entries) = kept_exclusions.as_array_mut() {
+        entries.retain(|e| !e.as_str().is_some_and(|s| RETIRED_EXCLUSIONS.contains(&s)));
+    }
     new_sandbox.insert(
         "excludedCommands".into(),
-        union(
-            &strings(&sandbox["excludedCommands"]),
-            &old_sandbox["excludedCommands"],
-        ),
+        union(&strings(&sandbox["excludedCommands"]), &kept_exclusions),
     );
     let old_network = &old_sandbox["network"];
     let mut network = match old_network.clone() {
@@ -256,6 +273,16 @@ pub struct Manifest {
     pub wrapper: Option<String>,
     /// Each startup file a line was added to, with the line.
     pub rc: Vec<RcEntry>,
+    /// The session file's content before the first install wrote it, put
+    /// back by `--uninstall`; `None` when there was no file.
+    #[serde(default)]
+    pub session_prior: Option<String>,
+    /// The script's content before the first install wrote it.
+    #[serde(default)]
+    pub script_prior: Option<String>,
+    /// The editor wrapper's content before the first install wrote it.
+    #[serde(default)]
+    pub wrapper_prior: Option<String>,
 }
 
 /// One startup-file line the install added.
@@ -294,22 +321,149 @@ fn preset() -> Value {
 
 /// Replace `path` with `text` through a temporary file. A link, such as a
 /// startup file kept in a dotfiles directory, is followed so the file it
-/// points at is written and the link stays.
+/// points at is written and the link stays. The temporary file is a new,
+/// exclusively created name beside the target, so a planted file or link
+/// of that name is never written through (security review SEC-06). An
+/// existing file keeps its permission bits; a new one is readable by its
+/// owner only.
 fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
     let resolved = match std::fs::canonicalize(path) {
         Ok(target) => target,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
         Err(err) => return Err(err),
     };
     let path = resolved.as_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let permissions = match std::fs::metadata(path) {
+        Ok(meta) => Some(meta.permissions()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err),
+    };
+    let (temp, mut file) = create_unique(parent, path.file_name().unwrap_or_default())?;
+    let written = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| match permissions {
+            Some(permissions) => std::fs::set_permissions(&temp, permissions),
+            None => Ok(()),
+        })
+        .and_then(|()| std::fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
     }
-    let mut temp = path.as_os_str().to_os_string();
-    temp.push(".codeflow-tmp");
-    let temp = PathBuf::from(temp);
-    std::fs::write(&temp, text)?;
-    std::fs::rename(&temp, path)
+    written
+}
+
+/// A new file beside the target, created with `create_new` (which fails
+/// on any existing entry, a link included) under a name nobody can know in
+/// advance, with owner-only permissions.
+fn create_unique(dir: &Path, name: &std::ffi::OsStr) -> std::io::Result<(PathBuf, std::fs::File)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut last = None;
+    for _ in 0..64 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        // The name is joined as bytes, never decoded.
+        let mut file_name = std::ffi::OsString::from(".");
+        file_name.push(name);
+        file_name.push(format!(
+            ".codeflow-{}-{nanos}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let temp = dir.join(file_name);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&temp) {
+            Ok(file) => return Ok((temp, file)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => last = Some(err),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free temporary name")))
+}
+
+/// Save the install record. It is written before each change it records,
+/// so an interrupted install leaves nothing unrecorded: a recorded change
+/// that never happened is harmless to `--uninstall`, which removes only
+/// what matches the record.
+fn save_manifest(layout: &Layout, manifest: &Manifest) -> Result<(), String> {
+    let record = serde_json::to_string_pretty(manifest).unwrap_or_default() + "\n";
+    write_atomic(&layout.manifest, &record)
+        .map_err(|err| format!("Cannot write {}: {err}", layout.manifest.display()))
+}
+
+/// The content at `path` that predates Codeflow, for `prior`: read once,
+/// on the first install over a file this command did not write.
+fn note_prior(
+    path: &Path,
+    recorded: Option<&String>,
+    prior: &mut Option<String>,
+) -> Result<(), String> {
+    if recorded.is_some() || prior.is_some() {
+        return Ok(());
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            *prior = Some(text);
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("Cannot read {}: {err}", path.display())),
+    }
+}
+
+/// Write one of Codeflow's files: note what it replaces, record the new
+/// content's hash, then write.
+fn write_owned(
+    layout: &Layout,
+    manifest: &mut Manifest,
+    which: Owned,
+    text: &str,
+) -> Result<(), String> {
+    let (path, recorded, prior) = match which {
+        Owned::Session => (
+            &layout.session,
+            &mut manifest.session,
+            &mut manifest.session_prior,
+        ),
+        Owned::Script => (
+            &layout.script,
+            &mut manifest.script,
+            &mut manifest.script_prior,
+        ),
+        Owned::Wrapper => (
+            &layout.wrapper,
+            &mut manifest.wrapper,
+            &mut manifest.wrapper_prior,
+        ),
+    };
+    note_prior(path, recorded.as_ref(), prior)?;
+    *recorded = Some(sha(text.as_bytes()));
+    let path = path.clone();
+    save_manifest(layout, manifest)?;
+    write_atomic(&path, text).map_err(|err| format!("Cannot write {}: {err}", path.display()))
+}
+
+/// The files `--install` owns.
+#[derive(Clone, Copy)]
+enum Owned {
+    Session,
+    Script,
+    Wrapper,
 }
 
 fn ask(input: &mut impl BufRead, question: &str) -> bool {
@@ -362,20 +516,20 @@ fn remove_line(file: &Path, line: &str) -> std::io::Result<usize> {
 
 /// Offer the startup-file line for each of the person's startup files,
 /// adding it only on a typed yes and recording it in `manifest`.
-fn offer_rc_lines(input: &mut impl BufRead, layout: &Layout, manifest: &mut Manifest) {
+fn offer_rc_lines(
+    input: &mut impl BufRead,
+    layout: &Layout,
+    manifest: &mut Manifest,
+) -> Result<(), String> {
     let line = rc_line();
     if layout.rc_files.is_empty() {
         println!("  Your shell is not zsh or bash, so no startup file is offered. To load the function, source {} from your shell's startup file.", layout.script.display());
     }
     for file in &layout.rc_files {
         if has_line(file, &line) {
+            // A line this command did not add stays the person's: it is
+            // not recorded, so `--uninstall` leaves it (SEC-07).
             println!("  {} already sources it.", file.display());
-            if !manifest.rc.iter().any(|e| &e.file == file) {
-                manifest.rc.push(RcEntry {
-                    file: file.clone(),
-                    line: line.clone(),
-                });
-            }
             continue;
         }
         println!(
@@ -390,27 +544,31 @@ fn offer_rc_lines(input: &mut impl BufRead, layout: &Layout, manifest: &mut Mani
             );
             continue;
         }
-        if let Err(err) = append_line(file, &line) {
-            println!("  Cannot change {}: {err}", file.display());
-            continue;
-        }
         manifest.rc.push(RcEntry {
             file: file.clone(),
             line: line.clone(),
         });
+        save_manifest(layout, manifest)?;
+        if let Err(err) = append_line(file, &line) {
+            println!("  Cannot change {}: {err}", file.display());
+            manifest.rc.pop();
+            save_manifest(layout, manifest)?;
+            continue;
+        }
         println!(
             "  Added. Open a new terminal, or run: . {}",
             layout.script.display()
         );
     }
+    Ok(())
 }
 
 /// Write the editor wrapper, executable, and print the VS Code setting
 /// that uses it; the person adds the setting, since editor settings files
 /// may hold comments this command cannot keep.
 fn write_wrapper(layout: &Layout, manifest: &mut Manifest) -> bool {
-    if let Err(err) = write_atomic(&layout.wrapper, WRAPPER) {
-        println!("Cannot write {}: {err}", layout.wrapper.display());
+    if let Err(why) = write_owned(layout, manifest, Owned::Wrapper, WRAPPER) {
+        println!("{why}");
         return false;
     }
     #[cfg(unix)]
@@ -418,7 +576,6 @@ fn write_wrapper(layout: &Layout, manifest: &mut Manifest) -> bool {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&layout.wrapper, std::fs::Permissions::from_mode(0o755));
     }
-    manifest.wrapper = Some(sha(WRAPPER.as_bytes()));
     println!("  Wrote {}. To have the VS Code extension start Claude Code with the session file, add this to your VS Code user settings:", layout.wrapper.display());
     println!(
         "    \"claudeCode.claudeProcessWrapper\": \"{}\"",
@@ -481,30 +638,26 @@ pub fn install(input: &mut impl BufRead, layout: &Layout) -> i32 {
     let settings = session_settings(existing.as_ref(), bypass);
     let mut text = serde_json::to_string_pretty(&settings).unwrap_or_default();
     text.push('\n');
-    if let Err(err) = write_atomic(&layout.session, &text) {
-        println!("Cannot write {}: {err}", layout.session.display());
+    if let Err(why) = write_owned(layout, &mut manifest, Owned::Session, &text) {
+        println!("{why}");
         return 1;
     }
-    manifest.session = Some(sha(text.as_bytes()));
     println!(
         "  Wrote {}{}.",
         layout.session.display(),
         if bypass { " with bypass mode" } else { "" }
     );
-    if let Err(err) = write_atomic(&layout.script, SCRIPT) {
-        println!("Cannot write {}: {err}", layout.script.display());
+    if let Err(why) = write_owned(layout, &mut manifest, Owned::Script, SCRIPT) {
+        println!("{why}");
         return 1;
     }
-    manifest.script = Some(sha(SCRIPT.as_bytes()));
     println!("  Wrote {}.", layout.script.display());
     if !write_wrapper(layout, &mut manifest) {
         return 1;
     }
 
-    offer_rc_lines(input, layout, &mut manifest);
-    let record = serde_json::to_string_pretty(&manifest).unwrap_or_default() + "\n";
-    if let Err(err) = write_atomic(&layout.manifest, &record) {
-        println!("Cannot write {}: {err}", layout.manifest.display());
+    if let Err(why) = offer_rc_lines(input, layout, &mut manifest) {
+        println!("{why}");
         return 1;
     }
     let preset = preset();
@@ -543,10 +696,10 @@ pub fn uninstall(layout: &Layout) -> i32 {
             }
         }
     }
-    for (path, recorded) in [
-        (&layout.script, &manifest.script),
-        (&layout.wrapper, &manifest.wrapper),
-        (&layout.session, &manifest.session),
+    for (path, recorded, prior) in [
+        (&layout.script, &manifest.script, &manifest.script_prior),
+        (&layout.wrapper, &manifest.wrapper, &manifest.wrapper_prior),
+        (&layout.session, &manifest.session, &manifest.session_prior),
     ] {
         match std::fs::read(path) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -555,11 +708,18 @@ pub fn uninstall(layout: &Layout) -> i32 {
                 code = 1;
             }
             Ok(bytes) if recorded.as_deref() == Some(sha(&bytes).as_str()) => {
-                if let Err(err) = std::fs::remove_file(path) {
-                    println!("  Cannot remove {}: {err}", path.display());
-                    code = 1;
-                } else {
-                    println!("  Removed {}.", path.display());
+                // A file that was there before the install gets its old
+                // content back; one the install created is removed.
+                let done = match prior {
+                    Some(text) => write_atomic(path, text).map(|()| "Restored"),
+                    None => std::fs::remove_file(path).map(|()| "Removed"),
+                };
+                match done {
+                    Ok(verb) => println!("  {verb} {}.", path.display()),
+                    Err(err) => {
+                        println!("  Cannot change {}: {err}", path.display());
+                        code = 1;
+                    }
                 }
             }
             Ok(_) => println!(
@@ -809,7 +969,9 @@ mod tests {
                 .current_dir(cwd)
                 .env("HOME", &home)
                 .env("PATH", &path)
-                .env_remove("CODEFLOW_SESSION_SETTINGS")
+                // Inherited, as from a parent session: only the function
+                // may pass it on, and only with the file.
+                .env("CODEFLOW_SESSION_SETTINGS", "1")
                 .output()
                 .unwrap();
             (
@@ -864,8 +1026,9 @@ mod tests {
     }
 
     /// The editor wrapper adds the session file only inside a Codeflow
-    /// project with the file present, and otherwise runs the editor's
-    /// command unchanged, never refusing.
+    /// project, refuses there when the file is missing or another settings
+    /// file is passed (as the function does), runs the command unchanged
+    /// anywhere else, and never passes on an inherited marker.
     #[cfg(unix)]
     #[test]
     fn the_editor_wrapper_adds_the_file_only_where_it_can() {
@@ -890,23 +1053,36 @@ mod tests {
             .unwrap();
         assert!(status.success());
         std::fs::write(adopted.join(".codeflow/project.toml"), "").unwrap();
-        let run = |cwd: &Path, args: &[&str]| {
+        // An inherited marker is set for every start, so only the wrapper
+        // can make it 1.
+        let attempt = |cwd: &Path, args: &[&str]| {
             let out = std::process::Command::new("sh")
                 .arg(&wrapper)
                 .arg(&exe)
                 .args(args)
                 .current_dir(cwd)
                 .env("HOME", &home)
-                .env_remove("CODEFLOW_SESSION_SETTINGS")
+                .env("CODEFLOW_SESSION_SETTINGS", "1")
                 .output()
                 .unwrap();
-            assert!(out.status.success());
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
+            (
+                out.status.success(),
+                String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            )
         };
-        // No session file yet: unchanged.
-        assert_eq!(
-            run(&adopted, &["--output-format", "stream-json"]),
-            "MARK=unset ARGS=--output-format stream-json"
+        let run = |cwd: &Path, args: &[&str]| {
+            let (ok, stdout, stderr) = attempt(cwd, args);
+            assert!(ok, "{stderr}");
+            stdout
+        };
+        // No session file yet: refused with the way out named, as the
+        // function refuses.
+        let (ok, stdout, stderr) = attempt(&adopted, &["--output-format", "stream-json"]);
+        assert!(!ok && stdout.is_empty(), "{stdout}");
+        assert!(
+            stderr.contains("codeflow claude-session --install"),
+            "{stderr}"
         );
         let session = home.join(".codeflow/claude/session.json");
         std::fs::create_dir_all(session.parent().unwrap()).unwrap();
@@ -918,10 +1094,15 @@ mod tests {
                 session.display()
             )
         );
-        assert_eq!(
-            run(&adopted, &["--settings", "x.json"]),
-            "MARK=unset ARGS=--settings x.json"
-        );
+        // Another settings file would replace CodeFlow's: refused.
+        for args in [
+            &["--settings", "x.json"][..],
+            &["--settings=x.json", "-p"][..],
+        ] {
+            let (ok, stdout, stderr) = attempt(&adopted, args);
+            assert!(!ok && stdout.is_empty(), "{args:?}: {stdout}");
+            assert!(stderr.contains("only one --settings"), "{stderr}");
+        }
         assert_eq!(
             run(dir.path(), &["auth", "status"]),
             "MARK=unset ARGS=auth status"
@@ -973,5 +1154,113 @@ mod tests {
         assert!(!layout.session.exists());
         assert_eq!(uninstall(&layout), 1);
         assert!(layout.manifest.exists());
+    }
+
+    /// Security review SEC-04: the session file stops the session when the
+    /// sandbox cannot run, over an earlier `false`, and a reinstall drops
+    /// the exclusions the review narrowed while keeping the person's own.
+    #[test]
+    fn the_session_file_fails_closed_and_drops_retired_exclusions() {
+        let existing = json!({"sandbox": {
+            "failIfUnavailable": false,
+            "excludedCommands": ["gh run *", "gh pr *", "docker *"]
+        }});
+        let out = session_settings(Some(&existing), false);
+        assert_eq!(out["sandbox"]["failIfUnavailable"], true);
+        let excluded = strings(&out["sandbox"]["excludedCommands"]);
+        assert!(!excluded.contains(&json!("gh run *")));
+        assert!(!excluded.contains(&json!("gh pr *")));
+        assert!(excluded.contains(&json!("gh run view *")));
+        assert!(excluded.contains(&json!("docker *")));
+        assert_eq!(
+            session_settings(None, false)["sandbox"]["failIfUnavailable"],
+            true
+        );
+    }
+
+    /// Security review SEC-06: a file or link planted at a temporary name
+    /// is never written through, an existing file keeps its permission
+    /// bits, and a new file is owner-only.
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_temporary_file_is_never_written_through() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("zshrc");
+        std::fs::write(&target, "export A=1\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::write(&elsewhere, "untouched\n").unwrap();
+        for name in ["zshrc.codeflow-tmp", ".zshrc.codeflow-tmp"] {
+            std::os::unix::fs::symlink(&elsewhere, dir.path().join(name)).unwrap();
+        }
+        write_atomic(&target, "export B=2\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "export B=2\n");
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "untouched\n");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&target), 0o600, "the existing mode is kept");
+        let fresh = dir.path().join("new/session.json");
+        write_atomic(&fresh, "{}\n").unwrap();
+        assert_eq!(mode(&fresh), 0o600, "a new file is owner-only");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("codeflow-") && !n.ends_with("codeflow-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// Security review SEC-07: a startup-file line that was already there,
+    /// and session, script and wrapper files that predate the install,
+    /// survive an uninstall.
+    #[test]
+    fn uninstall_keeps_what_was_there_before_the_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = layout(dir.path(), "/bin/zsh");
+        let rc = layout.rc_files[0].clone();
+        let had = format!("export A=1\n{}\n", rc_line());
+        std::fs::write(&rc, &had).unwrap();
+        for (path, text) in [
+            (&layout.session, "{\"mine\": true}\n"),
+            (&layout.script, "# mine\n"),
+            (&layout.wrapper, "# my wrapper\n"),
+        ] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        // The line is there, so only the bypass question is asked.
+        assert_eq!(install(&mut "no\n".as_bytes(), &layout), 0);
+        assert_eq!(read(&layout.session)["mine"], true);
+        assert_eq!(std::fs::read_to_string(&layout.script).unwrap(), SCRIPT);
+        // A second install records nothing new as the person's.
+        assert_eq!(install(&mut "no\n".as_bytes(), &layout), 0);
+        assert_eq!(uninstall(&layout), 0);
+        assert_eq!(std::fs::read_to_string(&rc).unwrap(), had);
+        assert_eq!(
+            std::fs::read_to_string(&layout.session).unwrap(),
+            "{\"mine\": true}\n"
+        );
+        assert_eq!(std::fs::read_to_string(&layout.script).unwrap(), "# mine\n");
+        assert_eq!(
+            std::fs::read_to_string(&layout.wrapper).unwrap(),
+            "# my wrapper\n"
+        );
+        assert!(!layout.manifest.exists());
+    }
+
+    /// Review nit: the record is written before each change, so an install
+    /// that stops part way leaves what it wrote recorded for removal.
+    #[test]
+    fn an_interrupted_install_leaves_its_writes_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = layout(dir.path(), "/bin/zsh");
+        // A folder where the script goes stops the install after the
+        // session file.
+        std::fs::create_dir_all(layout.script.join("blocker")).unwrap();
+        assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 1);
+        assert!(layout.session.exists());
+        assert!(layout.manifest.exists(), "the session file is recorded");
+        uninstall(&layout);
+        assert!(!layout.session.exists());
     }
 }

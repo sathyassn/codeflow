@@ -39,10 +39,15 @@ amends ADR-0029's retry).
 - `sandbox.excludedCommands` names the commands that need host state.
   `gh` reads its token from `~/.config/gh`, which the sandbox denies, and
   fails TLS verification under the macOS sandbox, so the subcommands
-  CodeFlow uses run outside it: `gh pr`, `gh run`, `gh issue`, `gh api`,
-  `gh repo view`, `gh release view`, `gh release list`, `gh search` and
-  `gh auth status`. `git push *` covers a plain push, which asks `gh` for
-  the HTTPS credential and runs the pre-push hook.
+  CodeFlow uses run outside it: `gh pr` view, list, checks, diff, status,
+  create, comment, edit, ready, review and merge; `gh run` view, list,
+  watch, rerun and cancel; `gh issue` view, list, status, create, comment,
+  edit, close and reopen; `gh api`, `gh repo view`, `gh release view`,
+  `gh release list`, `gh search` and `gh auth status`. Verbs that change
+  this machine stay sandboxed: `gh run download` extracts an archive,
+  and `gh pr checkout` and `gh issue develop` run git (TSK-1070 security
+  review). `git push *` covers a plain push, which asks `gh` for the
+  HTTPS credential and runs the pre-push hook.
 - An entry matches only when every command in the call matches it. A pipe,
   a file redirect, a `cd`, `git -C <path>`, an environment prefix or a
   `$(...)` keeps the whole call sandboxed (Claude Code sandboxing docs and
@@ -57,8 +62,18 @@ amends ADR-0029's retry).
   another host: extensions, aliases, `gh config set`, `gh auth status
   --show-token`, codespaces, keys, secrets, variables, `gh repo clone`,
   `gh browse`, `--receive-pack`, `--exec` and `ext::` remotes. The
-  `forge_write` ask rules prompt for every `gh api` write in every mode
-  (ADR-0093). The sandbox denies writes to `.codeflow/git-hooks` in any
+  `forge_write` ask rules prompt in every mode (ADR-0093) for a `gh api`
+  write method in any spelling (`-X POST`, `-XPOST`, `-X=post`,
+  `--method=PATCH`), a field or input body, separated or attached
+  (`-f body=x`, `-fbody=x`, `--field=x`), a bundle led by `-i`, GraphQL
+  after any flags, and `--hostname`.
+- Excluded commands do not inherit the host list: an excluded `gh` or
+  `git push` reaches whatever host it names. The `--hostname` ask covers
+  `gh api`; `gh` with `GH_HOST` or a `-R host/owner/repo` and a push to a
+  remote URL on another host have no rule of their own, so such a call can
+  carry data off the host list; `gh` sends a token only to a host it holds
+  one for.
+  The sandbox denies writes to `.codeflow/git-hooks` in any
   checkout, since a push runs those hooks outside it, and removes
   `GH_TOKEN`, `GITHUB_TOKEN`, `NPM_TOKEN` and `NODE_AUTH_TOKEN` from every
   sandboxed command.

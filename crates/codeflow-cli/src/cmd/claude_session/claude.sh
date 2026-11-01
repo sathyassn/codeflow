@@ -15,7 +15,8 @@ claude() {
   _codeflow_top=$(command git rev-parse --show-toplevel 2>/dev/null) || _codeflow_top=
   if [ -z "$_codeflow_top" ] || [ ! -f "$_codeflow_top/.codeflow/project.toml" ]; then
     unset _codeflow_top
-    command claude "$@"
+    # An inherited marker would claim settings this start does not pass.
+    CODEFLOW_SESSION_SETTINGS= command claude "$@"
     return
   fi
   unset _codeflow_top

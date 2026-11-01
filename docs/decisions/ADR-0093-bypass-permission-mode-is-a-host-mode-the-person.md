@@ -74,8 +74,15 @@ yes, with a backup and a record in `~/.codeflow/claude-user-settings.json`.
 Claude Code keeps only the last of several `--settings` flags, so the
 function refuses a person's own `--settings` rather than lose CodeFlow's.
 For the VS Code extension the install writes a process wrapper with the
-same rule, named by the extension's `claudeCode.claudeProcessWrapper`
-setting, which the person adds. A start neither can catch (the desktop
+same rule, refusals included, named by the extension's
+`claudeCode.claudeProcessWrapper` setting, which the person adds. The
+session file also sets `failIfUnavailable`, so a missing sandbox stops
+the session; it is CodeFlow's file only, so no other project or platform
+inherits it. The shipped presets deny the session file, the function,
+the wrapper and the install records to the Edit and Write tools and to
+sandboxed writes, as shell startup files, and the install records each
+change before making it and puts back what was there before
+(TSK-1070 security review, 2026-10-31). A start neither can catch (the desktop
 app, `command claude`) is warned by the session-start hook, shown to the
 person and to the model; it is not refused, since a refusal would leave
 the session unable to act. `cf-customize`
@@ -159,6 +166,9 @@ decision 2026-10-31):
   `.claude/settings.local.json` (`sandbox.excludedCommands`,
   `sandbox.network.allowedDomains`). Removing a merged worktree, which the
   sandbox's `.git` and `.claude` write denies stop, goes to the operator.
+- Excluded commands do not inherit the host list. The ask rules cover
+  `gh api --hostname`; `gh` with `GH_HOST` or a `-R` naming another host,
+  and a push to a remote URL on another host, have no rule of their own.
 - Whether PreToolUse hooks run under bypass is not stated in Claude Code's
   docs, so the canary proves it in each live session rather than this record
   asserting it.

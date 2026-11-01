@@ -236,20 +236,22 @@ fn session_orient(stdin: &str) -> i32 {
             // The digest quotes branch names and record text: a block, each
             // line written under the sink rule (TSK-388).
             let mut text = digest.as_str().to_string();
-            let mut warning = None;
-            // The digest's own off-switch also silences the guidance block.
-            if !digest.is_empty() {
-                warning = session_settings_warning(
-                    std::env::var_os("CLAUDECODE").is_some(),
-                    std::env::var(super::claude_session::MARKER_VAR)
-                        .ok()
-                        .as_deref(),
-                );
-                if let Some(warning) = &warning {
-                    text.push('\n');
-                    text.push_str(warning);
+            // The warning does not depend on the digest: its off-switch
+            // silences only the digest and the guidance block.
+            let warning = session_settings_warning(
+                std::env::var_os("CLAUDECODE").is_some(),
+                std::env::var(super::claude_session::MARKER_VAR)
+                    .ok()
+                    .as_deref(),
+            );
+            if let Some(warning) = &warning {
+                if !text.is_empty() {
                     text.push('\n');
                 }
+                text.push_str(warning);
+                text.push('\n');
+            }
+            if !digest.is_empty() {
                 let source = guidance::payload_source(stdin).unwrap_or_default();
                 if let Some(block) = guidance::session_guidance(&root, &source) {
                     text.push('\n');

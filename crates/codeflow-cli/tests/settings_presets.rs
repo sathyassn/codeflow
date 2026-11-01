@@ -831,7 +831,7 @@ fn authenticated_tool_configuration_remains_available() {
         assert!(deny.iter().any(|d| d == "Read(~/.config/gh/**)"), "{name}");
         let excluded = value["sandbox"]["excludedCommands"].as_array().unwrap();
         assert!(
-            excluded.iter().any(|entry| entry == "gh pr *"),
+            excluded.iter().any(|entry| entry == "gh pr view *"),
             "{name}: gh cannot read its configuration inside the sandbox"
         );
     }
@@ -1001,11 +1001,35 @@ fn escalation_additions_leave_prohibitions_and_sandbox_unchanged() {
     }
 }
 
-/// The tools the shipped sandbox runs outside it by name (TSK-1070).
-const SHIPPED_EXCLUDED_COMMANDS: [&str; 10] = [
-    "gh pr *",
-    "gh run *",
-    "gh issue *",
+/// The tools the shipped sandbox runs outside it by name (TSK-1070): only
+/// `gh` verbs that change nothing on this machine (security review SEC-03:
+/// `gh run download` extracts an archive, `gh pr checkout` and
+/// `gh issue develop` run git, so they stay sandboxed).
+const SHIPPED_EXCLUDED_COMMANDS: [&str; 31] = [
+    "gh pr view *",
+    "gh pr list *",
+    "gh pr checks *",
+    "gh pr diff *",
+    "gh pr status *",
+    "gh pr create *",
+    "gh pr comment *",
+    "gh pr edit *",
+    "gh pr ready *",
+    "gh pr review *",
+    "gh pr merge *",
+    "gh run view *",
+    "gh run list *",
+    "gh run watch *",
+    "gh run rerun *",
+    "gh run cancel *",
+    "gh issue view *",
+    "gh issue list *",
+    "gh issue status *",
+    "gh issue create *",
+    "gh issue comment *",
+    "gh issue edit *",
+    "gh issue close *",
+    "gh issue reopen *",
     "gh api *",
     "gh repo view *",
     "gh release view *",
@@ -1338,10 +1362,14 @@ fn the_generator_reproduces_the_reference_samples() {
                 .retain(|name| !departure.added_env.iter().any(|s| name == s));
         }
         if key == "families" {
-            embedded[key]
-                .as_array_mut()
-                .unwrap()
-                .retain(|f| !departure.added_families.iter().any(|id| f["id"] == *id));
+            let families = embedded[key].as_array_mut().unwrap();
+            families.retain(|f| !departure.added_families.iter().any(|id| f["id"] == *id));
+            for family in families {
+                family["claude"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|rule| !departure.added_rules.iter().any(|r| rule == r));
+            }
         }
         assert_eq!(
             embedded[key], reference[key],
@@ -1383,6 +1411,9 @@ struct Departure {
     added_stores: Vec<String>,
     added_env: Vec<&'static str>,
     added_families: Vec<&'static str>,
+    /// Rules TSK-1070's security review added to a family the reference
+    /// already had: the other spellings of a `gh api` DELETE (SEC-05).
+    added_rules: Vec<String>,
 }
 
 impl Departure {
@@ -1412,6 +1443,7 @@ impl Departure {
                 .iter()
                 .chain(&added_family_rules)
                 .chain(&self.added_denies)
+                .chain(&self.added_rules)
                 .any(|s| rule == s)
         });
         deny.extend(
@@ -1430,6 +1462,14 @@ impl Departure {
             .remove("denyWrite");
     }
 }
+
+/// The `gh api` DELETE spellings the reference samples deny.
+const REFERENCE_DELETE_FORMS: [&str; 4] = [
+    "-X DELETE",
+    "-XDELETE",
+    "--method DELETE",
+    "--method=DELETE",
+];
 
 fn tsk1070_departure() -> Departure {
     let table = actions::table();
@@ -1462,6 +1502,20 @@ fn tsk1070_departure() -> Departure {
         added_stores: stores.iter().map(|(_, s)| (*s).to_string()).collect(),
         added_env: vec!["GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN"],
         added_families: vec!["forge_exec", "forge_write"],
+        added_rules: table
+            .families
+            .iter()
+            .flat_map(|f| f.claude.iter())
+            .filter(|rule| {
+                rule.starts_with("Bash(gh api ")
+                    && rule.to_ascii_uppercase().contains("DELETE")
+                    && !REFERENCE_DELETE_FORMS.iter().any(|form| {
+                        *rule == &format!("Bash(gh api {form}*)")
+                            || *rule == &format!("Bash(gh api * {form}*)")
+                    })
+            })
+            .cloned()
+            .collect(),
     }
 }
 
@@ -1520,7 +1574,7 @@ const FORGE_READS: [&str; 6] = [
 ];
 
 /// `gh api` writes that prompt in every mode (TSK-1070).
-const FORGE_WRITES: [&str; 8] = [
+const FORGE_WRITES: [&str; 22] = [
     "gh api -X POST repos/o/r/issues",
     "gh api repos/o/r/issues -X PATCH",
     "gh api --method=PUT repos/o/r/x",
@@ -1529,6 +1583,22 @@ const FORGE_WRITES: [&str; 8] = [
     "gh api repos/o/r/x --input body.json",
     "gh api -XPOST repos/o/r/x",
     "gh api graphql -f query=x",
+    // TSK-1070 SEC-05: attached values, `=` and lowercase spellings, an
+    // `-i` bundle, graphql after other flags and another host.
+    "gh api repos/o/r/issues/1/comments -fbody=x",
+    "gh api repos/o/r/issues/1/comments -Fbody=x",
+    "gh api -fbody=x repos/o/r/issues/1/comments",
+    "gh api repos/o/r/x --field=body=x",
+    "gh api repos/o/r/x --raw-field=body=x",
+    "gh api -X=POST repos/o/r/x",
+    "gh api repos/o/r/x -Xpost",
+    "gh api repos/o/r/x --method patch",
+    "gh api repos/o/r/x --method=put",
+    "gh api -iXPOST repos/o/r/x",
+    "gh api repos/o/r/x -ifbody=x",
+    "gh api -H 'Accept: x' graphql -f query=x",
+    "gh api --hostname example.invalid /",
+    "gh api / --hostname=example.invalid",
 ];
 
 /// AC-2: a representative command per family, each denied.
@@ -1577,6 +1647,9 @@ const FAMILY_EXAMPLES: [(&str, &[&str]); 8] = [
             "git push --mirror",
             "git credential fill",
             "gh api -X DELETE repos/o/r",
+            "gh api -X=DELETE repos/o/r",
+            "gh api repos/o/r --method delete",
+            "gh api repos/o/r -Xdelete",
         ],
     ),
     (
@@ -1702,6 +1775,44 @@ fn rule_covers_path(pattern: &str, path: &str) -> bool {
     match pattern.strip_prefix('/') {
         Some(anchored) => path_matches(anchored, path),
         None => path_matches(pattern, path),
+    }
+}
+
+/// TSK-1070 SEC-02: Codeflow's launcher files under the home (the shell
+/// function, the editor wrapper, the session file and the install records)
+/// are denied to the Edit and Write tools and to sandboxed writes.
+#[test]
+fn launcher_files_are_denied_to_edits_and_sandboxed_writes() {
+    const LAUNCHER_FILES: [&str; 5] = [
+        ".codeflow/shell/claude.sh",
+        ".codeflow/shell/claude-wrapper.sh",
+        ".codeflow/claude/session.json",
+        ".codeflow/claude/install.json",
+        ".codeflow/claude-user-settings.json",
+    ];
+    for name in preset_files() {
+        let value = load(&name);
+        let deny = perm_array(&value, "deny");
+        let writes: Vec<String> = value["sandbox"]["filesystem"]["denyWrite"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        for file in LAUNCHER_FILES {
+            assert!(
+                deny.iter()
+                    .filter_map(|rule| rule.strip_prefix("Edit(~/")?.strip_suffix(')'))
+                    .any(|pattern| path_matches(pattern, file)),
+                "{name}: no Edit deny covers ~/{file}"
+            );
+            assert!(
+                writes.iter().any(|entry| entry
+                    .strip_prefix("~/")
+                    .is_some_and(|dir| file == dir || file.starts_with(&format!("{dir}/")))),
+                "{name}: no sandbox write deny covers ~/{file}"
+            );
+        }
     }
 }
 
@@ -2613,7 +2724,7 @@ fn status_line_without_jq_prints_folder_and_branch() {
             .unwrap_or_else(|| panic!("{tool} not on PATH"))
     };
     let bin = status_folder("bin", false);
-    for tool in ["cat", "basename", "git"] {
+    for tool in ["cat", "basename", "git", "tr"] {
         std::os::unix::fs::symlink(find(tool), bin.join(tool)).unwrap();
     }
     let repo = status_folder("repo-nojq", true);
@@ -2647,7 +2758,8 @@ fn status_line_without_jq_prints_folder_and_branch() {
 /// Review of PR 368: the line hands the status JSON to `jq` byte for byte,
 /// so a backslash in a path or name, or an escaped control character, stays
 /// literal under `/bin/sh` instead of turning into an escape or a parse
-/// error.
+/// error. Since TSK-1070 SEC-01 a tab shows as a space and other control
+/// characters are removed.
 #[cfg(unix)]
 #[test]
 fn status_line_keeps_backslashes_and_escapes_literal() {
@@ -2690,7 +2802,8 @@ fn status_line_keeps_backslashes_and_escapes_literal() {
             assert_eq!(
                 visible(&out),
                 format!(
-                    "Opus 5.5 (claude-opus-5-5) | v2.3.1 | {style} | {folder}{branch} | ctx:1k/1000k (0%)\n"
+                    "Opus 5.5 (claude-opus-5-5) | v2.3.1 | {} | {folder}{branch} | ctx:1k/1000k (0%)\n",
+                    style.replace('\t', " ")
                 ),
                 "{preset}"
             );
@@ -2965,7 +3078,7 @@ fn status_line_without_jq_ignores_the_new_fields() {
             .unwrap_or_else(|| panic!("{tool} not on PATH"))
     };
     let bin = status_folder("bin-rich", false);
-    for tool in ["cat", "basename", "git"] {
+    for tool in ["cat", "basename", "git", "tr"] {
         std::os::unix::fs::symlink(find(tool), bin.join(tool)).unwrap();
     }
     let repo = status_folder("rich-nojq", true);
@@ -3013,4 +3126,128 @@ fn no_shipped_permission_rule_ends_in_the_legacy_prefix_form() {
             }
         }
     }
+}
+
+/// Runs `command` under `shell -c` in `folder` with `json` on stdin; returns
+/// stdout and stderr.
+#[cfg(unix)]
+fn run_under(shell: &str, command: &str, folder: &Path, json: &str) -> (String, String) {
+    use std::io::Write;
+    let mut child = std::process::Command::new(shell)
+        .args(["-c", command])
+        .current_dir(folder)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("shell runs");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(json.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// TSK-1070 SEC-01: no status JSON field is ever evaluated by the shell.
+/// A folder name carrying the field separator and a command substitution
+/// in arithmetic position (the security review's canary) prints as plain
+/// text under `/bin/sh` and Bash in every preset, control characters and
+/// all other text from the JSON are stripped, and a non-numeric, negative
+/// or zero count falls back to safe numbers instead of reaching the shell.
+#[cfg(unix)]
+#[test]
+fn status_line_never_evaluates_status_text() {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    assert!(has_jq(&path), "this test needs jq on PATH");
+    let repo = status_folder("inject", true);
+    let marker = repo.join("CODEFLOW_ARITH_CANARY");
+    let payload = format!(
+        "/tmp/x\u{1f}1\u{1f}2\u{1f}3\u{1f}4\u{1f}5\u{1f}6\u{1f}a[$(printf CODEFLOW_ARITH_CANARY >&2; touch {})0]",
+        marker.display()
+    );
+    let hostile = serde_json::json!({
+        "model": {"id": "id\u{1b}[31m$(id)", "display_name": "Opus\u{7}\n5.5"},
+        "version": "`touch x`",
+        "output_style": {"name": "a\u{1f}b"},
+        "workspace": {"current_dir": payload, "git_worktree": "wt\u{1b}]0;t\u{7}"},
+        "effort": {"level": "$((1+1))"},
+        "pr": {"number": "1$(id)", "review_state": "x\u{9b}31m"},
+        "rate_limits": {"five_hour": {"used_percentage": "a[$(id)]"}, "seven_day": {"used_percentage": -5}},
+        "context_window": {
+            "context_window_size": "x[$(id)]",
+            "current_usage": {"input_tokens": "a[$(id)0]", "cache_read_input_tokens": -1,
+                "cache_creation_input_tokens": 1e300, "output_tokens": 2000}
+        }
+    })
+    .to_string();
+    for shell in ["/bin/sh", "/bin/bash"] {
+        if !Path::new(shell).is_file() {
+            continue;
+        }
+        for preset in preset_files() {
+            let command = load(&preset)["statusLine"]["command"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let (out, err) = run_under(shell, &command, &repo, &hostile);
+            assert!(
+                !err.contains("CODEFLOW_ARITH_CANARY"),
+                "{shell} {preset}: {err}"
+            );
+            assert!(err.is_empty(), "{shell} {preset}: stderr {err:?}");
+            assert!(!marker.exists(), "{shell} {preset}: the payload ran");
+            let shown = visible(&out);
+            assert!(
+                shown.ends_with('\n') && shown.matches('\n').count() == 1,
+                "{shell} {preset}: {shown:?}"
+            );
+            for byte in shown.trim_end_matches('\n').chars() {
+                assert!(
+                    !byte.is_control(),
+                    "{shell} {preset}: control {byte:?} in {shown:?}"
+                );
+            }
+            assert!(
+                shown.contains("ctx:2k/200k (1%)"),
+                "{shell} {preset}: {shown:?}"
+            );
+            assert!(
+                !shown.contains("5h ") && !shown.contains("7d "),
+                "{shell} {preset}: {shown:?}"
+            );
+            assert!(shown.contains("wt:wt]0;t"), "{shell} {preset}: {shown:?}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+/// TSK-1070 SEC-01: without jq the fallback prints the folder with its
+/// control characters removed.
+#[cfg(unix)]
+#[test]
+fn status_line_fallback_strips_control_characters() {
+    let base = status_folder("fallback", false);
+    let folder = base.join("a\u{1b}[31mb\u{7}c");
+    std::fs::create_dir_all(&folder).unwrap();
+    let bin = base.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for tool in ["cat", "basename", "git", "tr", "printf"] {
+        let found = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join(tool))
+            .find(|p| p.is_file());
+        if let Some(found) = found {
+            let _ = std::os::unix::fs::symlink(found, bin.join(tool));
+        }
+    }
+    for preset in preset_files() {
+        let (out, _) = run_status_line(&preset, &folder, "{}", bin.as_os_str());
+        assert_eq!(out, "a[31mbc | jq not found\n", "{preset}");
+    }
+    let _ = std::fs::remove_dir_all(base);
 }

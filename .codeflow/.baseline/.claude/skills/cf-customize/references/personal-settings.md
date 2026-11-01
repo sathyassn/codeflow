@@ -102,7 +102,8 @@ So the mode is the person's choice, made outside the repository:
   runs in their own terminal and `codeflow init` offers after the
   `bypassPermissions` preset answer. It writes CodeFlow's session file,
   `~/.codeflow/claude/session.json`, with the sandbox locks
-  (`enabled`, `allowUnsandboxedCommands: false`), the shipped exclusions,
+  (`enabled`, `failIfUnavailable`, so a missing sandbox stops the session,
+  and `allowUnsandboxedCommands: false`), the shipped exclusions,
   the host list with `strictAllowlist`, and the shipped deny and ask
   rules, file denies and hidden token variables, so a repository cannot
   remove them from a session; it sets
@@ -114,15 +115,21 @@ So the mode is the person's choice, made outside the repository:
   from `~/.zshrc` or `~/.bashrc`, and adds that line only on a second yes,
   recorded in `~/.codeflow/claude/install.json`.
   `codeflow claude-session --uninstall` removes that line and the files
-  it wrote, where unchanged.
+  it wrote, where unchanged; a file that was there before the install gets
+  its old content back, and a line that was already there stays. The
+  install records each change before making it, writes through a new
+  temporary file and keeps an existing file's permissions. The shipped
+  presets deny these files to the Edit and Write tools and to sandboxed
+  writes, so a session cannot change what later sessions start with.
 - The same install then offers optional additions to the person's own
   `~/.claude/settings.json`, which apply to every session on the machine,
   one item at a time: `sandbox.enabled: true` (macOS, Linux and WSL2; never
   `failIfUnavailable`), the home credential-file denies, the hidden token
   variables, and, when `herdr` is installed, the Herdr exclusion with its
   denies. Each item shows the entries it would add and is merged only on a
-  typed yes. The file as it was is kept next to it as
-  `settings.json.codeflow-backup-<time>`, and
+  typed yes. The file as it was is kept, readable by the person only, as
+  `backups/settings.json.codeflow-backup-<time>-<n>` beside it, a folder
+  the shipped presets deny to reads, and
   `~/.codeflow/claude-user-settings.json` records what was added, so
   `--uninstall` removes only those entries. Bypass mode and the host list
   are never written there.
@@ -142,8 +149,9 @@ So the mode is the person's choice, made outside the repository:
   `~/.codeflow/shell/claude-wrapper.sh` and prints the user setting
   `"claudeCode.claudeProcessWrapper"` that makes the extension start
   Claude Code through it, with the same rule as the function; the person
-  adds the setting. The wrapper never refuses, because an editor cannot
-  show its message.
+  adds the setting. Like the function, the wrapper refuses to start in a
+  CodeFlow project when the session file is missing or the editor passes
+  its own `--settings`, and the editor reports the failed start.
 - The desktop app, an editor without the wrapper and `command claude`
   start without the file. CodeFlow's session-start hook then shows the
   person a warning that names the restart and gives it to the model as
@@ -176,7 +184,7 @@ shell startup files, so the session hands the person
 | Permission prompts and the auto-mode classifier | nothing judges intent; the docs say bypass "offers no protection against prompt injection or unintended actions" beyond the rules above |
 | Allow rules | they have no effect, since everything not denied runs |
 | Protected-path prompts (`.git`, `.claude`) | writes there run without a prompt, except where a deny rule covers the file |
-| The prompt on an excluded command | the excluded `gh` subcommands and a plain `git push` run outside the sandbox without asking, except a `gh api` write (a POST, PUT or PATCH, a field, an input body or GraphQL), which an ask rule prompts for in every mode; the guards still judge each one |
+| The prompt on an excluded command | the excluded `gh` subcommands and a plain `git push` run outside the sandbox without asking, except a `gh api` write (a POST, PUT or PATCH in any spelling, a field or input body separated or attached, a bundle led by `-i`, GraphQL) or a `gh api --hostname` call, which an ask rule prompts for in every mode; the guards still judge each one |
 | The prompt on an unlisted host | without the session file, a sandboxed command reaches a host off `sandbox.network.allowedDomains` without asking, since a project file cannot set `sandbox.network.strictAllowlist`. The session file sets it with the host list, because under it Claude Code ignores the project's list. The private-range `deniedDomains` stay refused in every mode |
 
 Another tool that needs host state, or another host, is added in

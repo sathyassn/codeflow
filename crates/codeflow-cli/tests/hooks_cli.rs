@@ -4738,6 +4738,49 @@ fn session_orient_warns_a_claude_start_without_the_session_file() {
     assert_eq!(String::from_utf8(out.stdout).unwrap(), digest);
 }
 
+/// TSK-1070 review: the warning does not depend on the digest, so a
+/// project that turns the digest off still shows it.
+#[test]
+fn session_orient_warns_with_the_digest_turned_off() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let cf = dir.path().join(".codeflow");
+    std::fs::create_dir_all(&cf).unwrap();
+    std::fs::write(
+        cf.join("project.toml"),
+        "tier = \"full\"\n[orient]\nenabled = false\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "-A"]);
+    git(dir.path(), &["commit", "-qm", "chore: off"]);
+    let quiet = run_with_stdin(
+        codeflow()
+            .args(["hook", "session-orient"])
+            .current_dir(dir.path())
+            .env("CLAUDECODE", "1")
+            .env("CODEFLOW_SESSION_SETTINGS", "1"),
+        &start_payload("startup"),
+    );
+    assert!(quiet.stdout.is_empty(), "the digest is off");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "session-orient"])
+            .current_dir(dir.path())
+            .env("CLAUDECODE", "1"),
+        &start_payload("startup"),
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let warning = json["systemMessage"].as_str().unwrap();
+    assert!(warning.starts_with("codeflow: WARNING"), "{warning}");
+    assert_eq!(
+        json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap(),
+        format!("{warning}\n")
+    );
+}
+
 /// AC-1: no tier (not a scaffolded project) and a garbled payload keep the
 /// plain digest; an event-less payload is a session start, as before.
 #[test]
