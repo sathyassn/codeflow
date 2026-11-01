@@ -18,26 +18,22 @@ fn hooked_git(root: &Path) -> Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
-        .env("CODEFLOW_HOME", isolated_home());
-    for key in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "CODEFLOW_PR_BODY",
-        "GITHUB_EVENT_NAME",
-        "GITHUB_HEAD_REF",
-        "GITHUB_BASE_REF",
-        "CI_PIPELINE_SOURCE",
-        "CI_MERGE_REQUEST_IID",
-        "BITBUCKET_PR_ID",
-        "CLAUDECODE",
-        "CODEX_SESSION_ID",
-        "CODEX_THREAD_ID",
-        "CODEX_CI",
-        "GROK_SESSION_ID",
-    ] {
-        cmd.env_remove(key);
-    }
+        .env("CODEFLOW_HOME", isolated_home())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_NAME")
+        .env_remove("GITHUB_HEAD_REF")
+        .env_remove("GITHUB_BASE_REF")
+        .env_remove("CI_PIPELINE_SOURCE")
+        .env_remove("CI_MERGE_REQUEST_IID")
+        .env_remove("BITBUCKET_PR_ID")
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CODEX_CI")
+        .env_remove("GROK_SESSION_ID");
     cmd
 }
 
