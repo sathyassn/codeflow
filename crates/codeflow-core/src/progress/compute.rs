@@ -50,10 +50,23 @@ pub(super) fn pull_for<'a>(inputs: &'a Inputs, task: &TaskIn) -> Option<&'a Pull
     let ForgeIn::Read { pulls, .. } = &inputs.forge else {
         return None;
     };
+    select_pull(pulls, &task.id, &task.target, &inputs.default_branch)
+}
+
+/// The one rule that picks a task's pull request, shared by the gatherer
+/// (which binds acceptance to it) and the report (which shows it): the
+/// lowest-numbered open pull request for the task into its home target or
+/// the default branch.
+pub(super) fn select_pull<'a>(
+    pulls: &'a [PullIn],
+    task: &str,
+    target: &str,
+    default_branch: &str,
+) -> Option<&'a PullIn> {
     pulls
         .iter()
-        .filter(|pull| pull.task.as_deref() == Some(task.id.as_str()))
-        .filter(|pull| pull.base == task.target || pull.base == inputs.default_branch)
+        .filter(|pull| pull.task.as_deref() == Some(task))
+        .filter(|pull| pull.base == target || pull.base == default_branch)
         .min_by_key(|pull| pull.number)
 }
 
@@ -486,7 +499,10 @@ fn task_fact(inputs: &Inputs, task: &TaskIn, plan: &super::plan::Plan) -> TaskFa
             state: Known::or_word(state, "unknown"),
             window: Known::or_word(super::plan::window_summary(&window), "not yet estimable"),
             last_moved: Known::or_word(last_moved, "unknown"),
-            open_pull_request: Known::or_word(pull, "none"),
+            open_pull_request: match &inputs.forge {
+                ForgeIn::Read { .. } => Known::or_word(pull, "none"),
+                ForgeIn::Unverified { .. } => Known::unknown(),
+            },
         },
         location,
         lane: Known::or_word(lane, "none"),

@@ -4168,11 +4168,19 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // An unreadable record blob gives no status at that commit, so no landing is counted for it and the pace stays lower or not established.
+    // A reviewed SHA that does not parse or is not here is an Err, so the block does not bind and the criteria read as not reviewed.
     (
         "crates/codeflow-core/src/progress/gather.rs",
-        "landings",
-        "obtain-absent:find_blob",
+        "head_binding",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // A reviewed SHA that does not parse or is not here is an Err, so the block does not bind and the criteria read as not reviewed.
+    (
+        "crates/codeflow-core/src/progress/gather.rs",
+        "head_binding",
+        "obtain-absent:from_str",
         1,
         "unproven",
     ),
@@ -4182,14 +4190,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "landings",
         "obtain-absent:find_commit",
         2,
-        "unproven",
-    ),
-    // A record blob that is not UTF-8 gives no status at that commit, so no landing is counted for it.
-    (
-        "crates/codeflow-core/src/progress/gather.rs",
-        "landings",
-        "obtain-absent:from_utf8",
-        1,
         "unproven",
     ),
     // An ancestry the guarded reader cannot prove is None, and the task's location is unknown, never landed.

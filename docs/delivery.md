@@ -201,30 +201,43 @@ coordination ledger, with the readiness core that `work next` uses.
 - Stage ladder, one percent per task: not started 0, in progress 20 (a
   claim or task commits), in review 50 (an open pull request), reviewed 75
   (an approving acceptance block that passes the acceptance rules against
-  the record's current criteria and is bound to the reported head, or for
-  a closed task bound as the landing gate binds it), landed 100.
+  the record's current criteria and binds as the landing gate binds it:
+  the reviewed commit is the head of the pull request the report shows,
+  or its ancestor, with only the record's status and Closeout changed
+  since), landed 100.
 - An epic's and the scope's percent is the mean over their unique tasks;
   cancelled tasks are excluded and listed. A task whose home target cannot
-  be read, whose status the ladder does not know or that the readiness
-  core cannot judge has stage `unknown`, and every percent over it is
-  `unknown`.
+  be read, whose status the ladder does not know, that the readiness core
+  cannot judge or judges invalid, or that is open while the forge was not
+  read has stage `unknown`, and every percent over it is `unknown`.
 - Locations: `main`, `line`, `pull request` (draft, open or approved at the
   reviewed SHA), `branch`, or `none` (`record on line` when only the record
   is there), each bound to the ref and fetch time it was read from. `main`
   and `line` need the landing commit to be reachable from that remote ref;
   otherwise the location is `unverified`.
-- Check runs are kept one by one. A skipped run is never a pass, and a
-  forge answer at its 200-row read limit is `unverified`.
+- Check runs are kept one by one, each with its completion time in UTC
+  and the time it was read. A skipped run is never a pass, and a forge
+  answer at its 200-row read limit is `unverified`. Which checks are
+  required is read from the base branch's rulesets and branch protection;
+  a required check with no run is `missing`. While that set cannot be
+  read, the required view is `unverified` and the issues view is not
+  complete.
+- Pace counts a landing only where the history shows a record's status
+  change to `complete`. A status in history that cannot be read makes
+  that task's landing unproven and the pace `unknown`.
 - Windows are durations from the snapshot time, never dates, with their
   basis: an adopted forecast that covers the scope, else the planned
   throughput rule over the lanes observed (one lane assumed, and labelled
-  so, when none is observed). A start is at or before each end, and open
-  predecessors outside the scope still delay a window. The scope finish is
+  so, when none is observed). A window starts at the snapshot or at its
+  predecessors' latest end, every end runs from that start, and open
+  predecessors outside the scope still delay it. The scope finish is
   given for two scenarios: intake stops, and intake continues at the last
   seven days' rate.
 - The operator set reads `none owed` only when every source (records, the
   ledger, each owed-item source, the forge, the session file) was checked;
   otherwise it is `not established` and names the source.
+- `--since` keeps every earlier fact the current snapshot could not
+  observe, with the time it was observed.
 - `CODEFLOW_STATUS_AS_OF=<UTC time>` holds the snapshot time fixed, so two
   runs on one state print identical bytes.
 

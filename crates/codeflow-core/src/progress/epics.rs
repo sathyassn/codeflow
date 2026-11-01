@@ -167,7 +167,7 @@ fn landing_chain(inputs: &Inputs, plan: &Plan, line: &str, tasks: &[&TaskIn]) ->
             .unwrap_or(usize::MAX)
     };
     let open = match &inputs.forge {
-        ForgeIn::Read { pulls, .. } => {
+        ForgeIn::Read { pulls, read_at } => {
             let mut chain: Vec<ChainPull> = pulls
                 .iter()
                 .filter(|pull| pull.base == line)
@@ -181,14 +181,20 @@ fn landing_chain(inputs: &Inputs, plan: &Plan, line: &str, tasks: &[&TaskIn]) ->
                     task: Known::or_word(pull.task.clone(), "none"),
                     draft: pull.draft,
                     checks: pull.checks.clone(),
-                    required: "not read",
+                    required: pull.required_checks.clone(),
+                    required_note: Known::or_word(pull.required.clone().err(), "none"),
                     runs: pull
                         .runs
                         .iter()
                         .map(|run| CheckRunFact {
                             name: run.name.clone(),
                             state: run.state.clone(),
-                            completed_at: Known::or_word(run.completed_at.clone(), "unknown"),
+                            required: Known::or_word(run.required, "unknown"),
+                            completed_at: Known::or_word(
+                                run.completed_at.map(time_text),
+                                "unknown",
+                            ),
+                            observed_at: time_text(*read_at),
                         })
                         .collect(),
                 })
@@ -227,10 +233,10 @@ fn shift(win: &Win, by: [i64; 3]) -> Win {
         Win::Estimable {
             ends, conditional, ..
         } => Win::Estimable {
-            // The step starts when the work before it can first end, so
-            // every end is at or after the start.
-            start: ends[0],
-            ends: [ends[0] + by[0], ends[1] + by[1], ends[2] + by[2]],
+            // AC-5: the step starts at the latest end of the work before
+            // it, and each scenario's end runs from that start.
+            start: ends[2],
+            ends: [ends[2] + by[0], ends[2] + by[1], ends[2] + by[2]],
             conditional: conditional.clone(),
         },
         Win::NotEstimable(reason) => Win::NotEstimable(reason.clone()),

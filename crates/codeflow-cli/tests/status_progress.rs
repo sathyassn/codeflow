@@ -104,9 +104,20 @@ fn task_record(id: &str, status: &str, depends: &str, extra: &str) -> String {
 
 const EPIC: &str = "---\nid: EPC-001\ntitle: Demo epic\nstatus: active\ncreated: 2026-10-29\n---\n\n## Outcome\n\nThe demo ships.\n\n## Core work\n\n- TSK-001, TSK-002 and TSK-003.\n\n## Follow-on\n\n- TSK-004 and TSK-005.\n";
 
-const PULLS: &str = r#"cat <<'JSON'
-[{"number":7,"title":"TSK-003 work","headRefName":"task/TSK-003-work","headRefOid":"0000000000000000000000000000000000000003","baseRefName":"main","isDraft":false,"statusCheckRollup":[{"conclusion":"FAILURE"}]}]
-JSON"#;
+/// The fake forge: the open pull request list, and for `main` one ruleset
+/// that requires `build` and an unprotected branch.
+const PULLS: &str = r#"case "$1 $2" in
+"api repos/acme/demo/rules/branches/main?per_page=100")
+  echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"build"}]}}]' ;;
+"api repos/acme/demo/branches/main")
+  echo '{"name":"main","protected":false}' ;;
+"pr list")
+  cat <<'JSON'
+[{"number":7,"title":"TSK-003 work","headRefName":"task/TSK-003-work","headRefOid":"0000000000000000000000000000000000000003","baseRefName":"main","isDraft":false,"statusCheckRollup":[{"name":"build","conclusion":"FAILURE"}]}]
+JSON
+  ;;
+*) exit 1 ;;
+esac"#;
 
 /// One epic with a task at each stage: TSK-001 not started, TSK-002 in
 /// progress in its own worktree, TSK-003 in review with a red check,
@@ -330,7 +341,10 @@ fn status_writes_nothing_and_never_fetches() {
     assert!(before == tree(&fx.root), "the repository changed");
     let log = std::fs::read_to_string(&fx.log).unwrap();
     assert!(
-        log.lines().all(|line| line.starts_with("pr list ")),
+        log.lines().all(|line| line.starts_with("pr list ")
+            || (line.starts_with("api repos/")
+                && !line.contains(" -X")
+                && !line.contains("--method"))),
         "the forge was only read: {log}"
     );
 }
@@ -534,7 +548,7 @@ fn the_facts_validate_against_the_shipped_schema() {
 
 /// FNV-1a over the shipped v1 schema's bytes, carriage returns left out
 /// so a CRLF checkout reads the same.
-const SCHEMA_DIGEST: u64 = 0xccb0_8117_ae5c_3dd4;
+const SCHEMA_DIGEST: u64 = 0xf987_96d8_f79f_57d7;
 
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes

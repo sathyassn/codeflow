@@ -89,8 +89,12 @@ pub struct CheckRunIn {
     /// `success`, `failure`, `pending`, `skipped`, `neutral`, `cancelled`
     /// or another conclusion as read, lower case.
     pub state: String,
-    /// When the run completed, as the forge gave it.
-    pub completed_at: Option<String>,
+    /// When the run completed, in seconds; `None` when not given or not a
+    /// time.
+    pub completed_at: Option<i64>,
+    /// Whether the base requires this check; `None` when the required set
+    /// could not be read.
+    pub required: Option<bool>,
 }
 
 /// The task's work branch as git holds it.
@@ -197,6 +201,12 @@ pub struct PullIn {
     pub checks: String,
     /// Each check run as read.
     pub runs: Vec<CheckRunIn>,
+    /// The check names the base requires, or why they could not be read.
+    pub required: Result<Vec<String>, String>,
+    /// The worst required check: `failed`, `pending`, `missing`, `skipped`
+    /// or `passed`; `none required`, or `unverified` when the required set
+    /// could not be read.
+    pub required_checks: String,
     /// The task id its head branch carries.
     pub task: Option<String>,
 }
@@ -295,6 +305,8 @@ pub struct Inputs {
     /// The history walk of the home tips succeeded and reached back past
     /// the seven-day pace window.
     pub history_read: bool,
+    /// Why the history is not established, when it is not.
+    pub history_note: Option<String>,
     /// Record coverage lost: the target that could not be resolved or read
     /// (`None` when the targets could not be listed at all), and why. A
     /// loss that touches the scope makes its percents unknown and the

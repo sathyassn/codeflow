@@ -157,8 +157,12 @@ pub struct ChainPull {
     /// The summary of the runs: `failed`, `pending`, `missing`, `skipped`
     /// or `passed`; a skip is never a pass.
     pub checks: String,
-    /// Which checks are required: `not read` (the forge read does not say).
-    pub required: &'static str,
+    /// The worst required check: `failed`, `pending`, `missing`, `skipped`
+    /// or `passed`; `none required`, or `unverified` when the required set
+    /// could not be read.
+    pub required: String,
+    /// Why the required set could not be read, or `none`.
+    pub required_note: Known<String>,
     /// Each check run as read.
     pub runs: Vec<CheckRunFact>,
 }
@@ -168,7 +172,12 @@ pub struct ChainPull {
 pub struct CheckRunFact {
     pub name: String,
     pub state: String,
+    /// Whether the base requires it, or `unknown`.
+    pub required: Known<bool>,
+    /// When it completed, in UTC, or `unknown`.
     pub completed_at: Known<String>,
+    /// When the forge read that reported it ran.
+    pub observed_at: String,
 }
 
 /// A landed task in the landing chain.

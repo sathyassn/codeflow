@@ -128,6 +128,23 @@ fn keyed(facts: &Value) -> BTreeMap<(String, String), (String, Value)> {
             ("session".into(), lane.clone()),
         );
     }
+    // Pull requests on each epic's landing chain, with their check runs.
+    for pull in facts
+        .pointer("/epics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|epic| {
+            epic.pointer("/landing_chain/open")
+                .and_then(Value::as_array)
+        })
+        .flatten()
+    {
+        out.insert(
+            ("pull request".into(), format!("#{}", word(pull, "/number"))),
+            ("forge".into(), pull.clone()),
+        );
+    }
     for task in facts
         .pointer("/tasks")
         .and_then(Value::as_array)
@@ -173,6 +190,7 @@ fn replaced_by(family: &str, earlier: &Value, current: &Value) -> String {
         }
         "operator item" => "resolved: its source no longer holds it".into(),
         "session lane" => "the session file no longer holds it".into(),
+        "pull request" => "the forge no longer lists it open".into(),
         _ => "no longer in the scope the records give".into(),
     }
 }
@@ -194,51 +212,138 @@ fn unobserved(value: &Value) -> bool {
         || value.get("state").and_then(Value::as_str) == Some("unverified")
 }
 
+/// The keys that hold when a fact was observed, nearest first.
+const OBSERVED_KEYS: [&str; 4] = ["observed_at", "read_at", "last_check", "checked_at"];
+
+/// When `value` itself was observed: its own observation time, else the
+/// first one among its fields, breadth first. `None` when it carries none.
+fn observed_at(value: &Value) -> Option<String> {
+    let mut queue = std::collections::VecDeque::from([value]);
+    while let Some(next) = queue.pop_front() {
+        if let Some(object) = next.as_object() {
+            for key in OBSERVED_KEYS {
+                if let Some(at) = object
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|at| crate::coord::parse_time(at).is_ok())
+                {
+                    return Some(at.to_string());
+                }
+            }
+            queue.extend(object.values());
+        } else if let Some(items) = next.as_array() {
+            queue.extend(items);
+        }
+    }
+    None
+}
+
 /// The fields of a retained item that were observed before and are not
-/// now, at any depth (`context.last_moved`): each kept with its earlier
-/// value, never dropped.
+/// now, at any depth (`context.last_moved`, `runs[build]`), absent or
+/// reading unknown: each kept with its earlier value and the time that
+/// value was observed, never dropped.
 fn lost_fields(
     family: &str,
     key: &str,
     earlier: &Value,
     current: &Value,
-    earlier_at: &str,
+    fallback: &str,
+    absent_is_lost: bool,
 ) -> Vec<Value> {
     let mut out = Vec::new();
-    lost_under(family, key, "", earlier, current, earlier_at, &mut out);
+    let at = observed_at(earlier).unwrap_or_else(|| fallback.to_string());
+    let walk = Walk {
+        family,
+        key,
+        absent_is_lost,
+    };
+    walk.lost_under("", earlier, Some(current), &at, &mut out);
     out
 }
 
-fn lost_under(
-    family: &str,
-    key: &str,
-    prefix: &str,
-    earlier: &Value,
-    current: &Value,
-    earlier_at: &str,
-    out: &mut Vec<Value>,
-) {
-    let (Some(before), Some(now)) = (earlier.as_object(), current.as_object()) else {
-        return;
-    };
-    for (field, value) in before {
-        let Some(now) = now.get(field) else { continue };
-        let path = if prefix.is_empty() {
-            field.clone()
-        } else {
-            format!("{prefix}.{field}")
+/// One retained item's comparison.
+struct Walk<'a> {
+    family: &'a str,
+    key: &'a str,
+    /// A gone field counts as lost (its source was not checked).
+    absent_is_lost: bool,
+}
+
+/// An array element's key: its `name`, `number` or `id`, else its index.
+fn element_key(index: usize, item: &Value) -> String {
+    ["name", "number", "id"]
+        .iter()
+        .find_map(|field| {
+            item.get(field).filter(|v| !v.is_null()).map(|v| match v {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            })
+        })
+        .unwrap_or_else(|| index.to_string())
+}
+
+impl Walk<'_> {
+    fn lost(&self, out: &mut Vec<Value>, path: &str, value: &Value, at: &str) {
+        out.push(json!({
+            "family": self.family,
+            "subject": self.key,
+            "field": path,
+            "earlier": value,
+            "earlier_observed_at": observed_at(value).unwrap_or_else(|| at.to_string()),
+            "current": "unknown",
+        }));
+    }
+
+    fn lost_under(
+        &self,
+        path: &str,
+        earlier: &Value,
+        current: Option<&Value>,
+        at: &str,
+        out: &mut Vec<Value>,
+    ) {
+        let Some(now) = current else {
+            if self.absent_is_lost && !unobserved(earlier) && !path.is_empty() {
+                self.lost(out, path, earlier, at);
+            }
+            return;
         };
-        if unobserved(now) && !unobserved(value) {
-            out.push(json!({
-                "family": family,
-                "subject": key,
-                "field": path,
-                "earlier": value,
-                "earlier_observed_at": earlier_at,
-                "current": "unknown",
-            }));
-        } else if value.is_object() && now.is_object() {
-            lost_under(family, key, &path, value, now, earlier_at, out);
+        if unobserved(now) && !unobserved(earlier) && !path.is_empty() {
+            self.lost(out, path, earlier, at);
+            return;
+        }
+        let join = |field: &str| {
+            if path.is_empty() {
+                field.to_string()
+            } else {
+                format!("{path}.{field}")
+            }
+        };
+        match (earlier, now) {
+            (Value::Object(before), Value::Object(after)) => {
+                let at = observed_at(earlier).unwrap_or_else(|| at.to_string());
+                for (field, value) in before {
+                    self.lost_under(&join(field), value, after.get(field), &at, out);
+                }
+            }
+            (Value::Array(before), Value::Array(after)) => {
+                let keyed: BTreeMap<String, &Value> = after
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| (element_key(index, item), item))
+                    .collect();
+                for (index, value) in before.iter().enumerate() {
+                    let element = element_key(index, value);
+                    self.lost_under(
+                        &format!("{path}[{element}]"),
+                        value,
+                        keyed.get(&element).copied(),
+                        at,
+                        out,
+                    );
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -275,7 +380,18 @@ pub fn delta(previous: &Value, current: &Value) -> Result<Value, String> {
             changes.push(json!({"change": what, "subject": key, "at": at}));
             continue;
         };
-        not_observed.extend(lost_fields(family, key, earlier, item, &earlier_at));
+        // A field or element that is gone counts as lost only while its
+        // source was not checked; with the source checked it is a change.
+        let source = &before[&(family.clone(), key.clone())].0;
+        let absent_is_lost = !checked.get(family_source(source)).copied().unwrap_or(false);
+        not_observed.extend(lost_fields(
+            family,
+            key,
+            earlier,
+            item,
+            &earlier_at,
+            absent_is_lost,
+        ));
         if family == "task" {
             let (was, is) = (text(earlier, "/stage"), text(item, "/stage"));
             if was != "landed" && is == "landed" {
@@ -314,7 +430,7 @@ pub fn delta(previous: &Value, current: &Value) -> Result<Value, String> {
                 "subject": key,
                 "source": source,
                 "earlier": earlier,
-                "earlier_observed_at": earlier_at,
+                "earlier_observed_at": observed_at(earlier).unwrap_or_else(|| earlier_at.clone()),
                 "current": "unknown",
             }));
         }

@@ -60,6 +60,9 @@ fn pull(number: u64, task: &str, draft: bool, checks: &str) -> PullIn {
         draft,
         checks: checks.into(),
         runs: Vec::new(),
+        // The base requires one check whose summary is `checks`.
+        required: Ok(vec!["build".into()]),
+        required_checks: checks.into(),
         task: Some(task.into()),
     }
 }
@@ -140,6 +143,7 @@ fn inputs() -> Inputs {
         forecast_note: None,
         release_step: false,
         history_read: true,
+        history_note: None,
         record_losses: Vec::new(),
     }
 }
@@ -530,6 +534,7 @@ fn red_and_pending_checks_and_stale_claims_are_issues() {
     let mut inputs = inputs();
     if let ForgeIn::Read { pulls, .. } = &mut inputs.forge {
         pulls[1].checks = "failed".into();
+        pulls[1].required_checks = "failed".into();
     }
     inputs.tasks[1].branch.as_mut().unwrap().commits_ahead = 0;
     inputs.tasks[1].branch.as_mut().unwrap().head_time = NOW - 7_200;

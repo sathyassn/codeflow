@@ -88,7 +88,7 @@ pub fn issues(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> IssuesFac
     attach_session(inputs, &mut tasks);
     let lanes = lane_issues(inputs, &now);
     let operator = operator_set(inputs, ids, &now);
-    let complete = operator.unchecked.is_empty();
+    let complete = operator.unchecked.is_empty() && required_unread(inputs, Some(ids)).is_none();
     IssuesFact {
         tasks,
         lanes,
@@ -172,21 +172,33 @@ fn task_issues(inputs: &Inputs, plan: &Plan, task: &TaskIn, now: &str, out: &mut
         out.push(fact);
     }
     if let (Some(pull), ForgeIn::Read { read_at, .. }) = (pull_for(inputs, task), &inputs.forge) {
-        let kind = match pull.checks.as_str() {
+        // Only the required set decides these; an optional run never
+        // stands in for a required one.
+        let kind = match pull.required_checks.as_str() {
             "failed" => Some("required check red"),
             "missing" => Some("required check missing"),
             "pending" => Some("required check pending"),
-            "skipped" => Some("check skipped without reuse evidence"),
+            "skipped" => Some("required check skipped without reuse evidence"),
+            "unverified" => Some("required checks not read"),
             _ => None,
         };
         if let Some(kind) = kind {
+            let detail = match &pull.required {
+                Ok(names) => format!(
+                    "pull request #{} required checks ({}) read as {}",
+                    pull.number,
+                    names.join(", "),
+                    pull.required_checks
+                ),
+                Err(reason) => format!(
+                    "pull request #{}: which checks are required could not be read: {reason}",
+                    pull.number
+                ),
+            };
             let mut fact = issue(
                 &task.id,
                 kind,
-                format!(
-                    "pull request #{} checks read as {}",
-                    pull.number, pull.checks
-                ),
+                detail,
                 Known::Value(time_text(*read_at)),
                 Unblocker {
                     kind: "ci run",
@@ -458,6 +470,13 @@ fn records_problem(inputs: &Inputs) -> Option<String> {
             .iter()
             .map(|(_, reason)| reason.clone()),
     );
+    // A task the records or the readiness core could not judge.
+    problems.extend(inputs.tasks.iter().filter_map(|task| {
+        task.unknown
+            .as_deref()
+            .filter(|reason| !reason.starts_with(super::gather::FORGE_UNREAD))
+            .map(|reason| format!("{}: {reason}", task.id))
+    }));
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
@@ -646,6 +665,28 @@ pub fn pace(inputs: &Inputs, ids: &BTreeSet<String>, plan: &Plan) -> PaceFact {
     }
 }
 
+/// Why the required checks of an open pull request in scope (`None`: any)
+/// could not be read; while one is unread, a missing required check cannot
+/// be found and the issues view is not complete.
+fn required_unread(inputs: &Inputs, ids: Option<&BTreeSet<String>>) -> Option<String> {
+    let ForgeIn::Read { .. } = &inputs.forge else {
+        return None;
+    };
+    let unread: Vec<String> = inputs
+        .tasks
+        .iter()
+        .filter(|task| ids.is_none_or(|ids| ids.contains(&task.id)) && is_open(task))
+        .filter_map(|task| {
+            let pull = pull_for(inputs, task)?;
+            pull.required
+                .as_ref()
+                .err()
+                .map(|reason| format!("pull request #{}: {reason}", pull.number))
+        })
+        .collect();
+    (!unread.is_empty()).then(|| unread.join("; "))
+}
+
 fn evidence_entry(
     measure: &'static str,
     source: &str,
@@ -716,8 +757,18 @@ pub fn evidence(inputs: &Inputs, plan: &Plan) -> Vec<EvidenceFact> {
             inputs.forecast_note.clone(),
         ),
         evidence_entry("issues", "forge", forge.0, &forge.1, forge.2),
+        {
+            let unread = required_unread(inputs, None);
+            evidence_entry("issues", "required checks", unread.is_none(), &at, unread)
+        },
         evidence_entry("issues", "ledger", ledger.0, &at, ledger.1),
-        evidence_entry("pace", "git history", inputs.history_read, &at, None),
+        evidence_entry(
+            "pace",
+            "git history",
+            inputs.history_read,
+            &at,
+            inputs.history_note.clone(),
+        ),
     ];
     for (name, read) in &inputs.owed {
         let problem = match read {

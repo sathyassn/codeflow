@@ -1312,6 +1312,7 @@
                       "draft",
                       "checks",
                       "required",
+                      "required_note",
                       "runs"
                     ],
                     "properties": {
@@ -1335,7 +1336,15 @@
                         ]
                       },
                       "required": {
-                        "const": "not read"
+                        "enum": [
+                          "failed",
+                          "pending",
+                          "missing",
+                          "skipped",
+                          "passed",
+                          "none required",
+                          "unverified"
+                        ]
                       },
                       "runs": {
                         "type": "array",
@@ -1345,7 +1354,9 @@
                           "required": [
                             "name",
                             "state",
-                            "completed_at"
+                            "required",
+                            "completed_at",
+                            "observed_at"
                           ],
                           "properties": {
                             "name": {
@@ -1354,11 +1365,34 @@
                             "state": {
                               "type": "string"
                             },
+                            "required": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "const": "unknown"
+                                }
+                              ]
+                            },
                             "completed_at": {
-                              "type": "string"
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/time"
+                                },
+                                {
+                                  "const": "unknown"
+                                }
+                              ]
+                            },
+                            "observed_at": {
+                              "$ref": "#/$defs/time"
                             }
                           }
                         }
+                      },
+                      "required_note": {
+                        "type": "string"
                       }
                     }
                   }

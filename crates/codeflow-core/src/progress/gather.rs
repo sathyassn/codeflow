@@ -118,12 +118,18 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
         landed: readiness::target_tasks(&root),
         worktrees: worktree_branches(&repo),
         tips: &read.tips,
-        history: history.as_ref().map(|(landed, _)| landed),
+        history: history.as_ref().map(|walked| &walked.landed),
+        uncertain: history.as_ref().map(|walked| &walked.uncertain),
         pulls: match &forge {
             ForgeIn::Read { pulls, .. } => Some(pulls.as_slice()),
             ForgeIn::Unverified { .. } => None,
         },
         default_tip: remote_tip(&repo, &default_branch),
+        default_branch: &default_branch,
+        forge_unread: match &forge {
+            ForgeIn::Read { .. } => None,
+            ForgeIn::Unverified { reason } => Some(reason.as_str()),
+        },
         home_unread: &read.home_unread,
     };
     let mut tasks: Vec<TaskIn> = read
@@ -170,7 +176,10 @@ pub fn collect(start: &Path, options: &Options) -> Result<Inputs, String> {
         forecast: None,
         forecast_note: None,
         release_step: root.join("docs/releasing.md").is_file(),
-        history_read: history.as_ref().is_some_and(|(_, reached)| *reached),
+        history_read: history.as_ref().is_some_and(|walked| {
+            walked.reached && walked.uncertain.values().all(BTreeMap::is_empty)
+        }),
+        history_note: history_note(history.as_ref()),
         record_losses: read.losses,
     };
     let (forecast, note) = forecast(&root, &inputs);
@@ -409,8 +418,8 @@ enum Binding {
     /// landing gate binds it (`readiness::target_tasks`), or why not.
     Landed(Result<bool, String>),
     /// An open task: bound to this head, the one its pull request or
-    /// branch reports.
-    Head(Oid),
+    /// branch reports, with its home target's tip for clean re-merges.
+    Head { head: Oid, receiving: Option<Oid> },
     /// An open task whose reported head is not here.
     Missing(String),
 }
@@ -475,11 +484,12 @@ fn acceptance(repo: &Repository, text: &str, path: &str, binding: Binding) -> Op
                 false,
                 Some(format!("the binding could not be read: {reason}")),
             ),
-            Binding::Head(head) => match head_binding(repo, &block.reviewed, head, path, &criteria)
-            {
-                Ok(()) => (true, None),
-                Err(reason) => (false, Some(reason)),
-            },
+            Binding::Head { head, receiving } => {
+                match head_binding(repo, &block.reviewed, head, receiving, path, text) {
+                    Ok(()) => (true, None),
+                    Err(reason) => (false, Some(reason)),
+                }
+            }
             Binding::Missing(reason) => (false, Some(reason)),
         }
     } else {
@@ -496,53 +506,37 @@ fn acceptance(repo: &Repository, text: &str, path: &str, binding: Binding) -> Op
     })
 }
 
-/// An open task's block binds to `head` when nothing but the record changed
-/// since the reviewed commit and the record's criteria are the ones the
-/// reviewed commit held.
+/// An open task's block binds to `head` by the landing gate's own binding
+/// predicate (`acceptance::open_head_problem`): the reviewed commit is the
+/// head or its ancestor, and only the record's status and Closeout changed
+/// after it, apart from clean re-merges of the home target.
 fn head_binding(
     repo: &Repository,
     reviewed: &str,
     head: Oid,
+    receiving: Option<Oid>,
     path: &str,
-    criteria: &[record_text::Criterion],
+    text: &str,
 ) -> Result<(), String> {
-    let review = Oid::from_str(reviewed)
-        .and_then(|oid| repo.find_commit(oid))
-        .map_err(|_| format!("the reviewed commit {reviewed} is not here"))?;
-    let (old, new) = (
-        review.tree().map_err(|error| error.message().to_string())?,
-        repo.find_commit(head)
-            .and_then(|commit| commit.tree())
-            .map_err(|error| error.message().to_string())?,
-    );
-    let diff = repo
-        .diff_tree_to_tree(Some(&old), Some(&new), None)
-        .map_err(|error| error.message().to_string())?;
-    let only_record = diff.deltas().all(|delta| {
-        delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path())
-            .is_some_and(|changed| changed == Path::new(path))
-    });
-    if !only_record {
-        return Err(format!(
-            "the head {head} changed more than the record since the reviewed commit"
-        ));
+    let reviewed = Oid::from_str(reviewed)
+        .ok()
+        .filter(|oid| repo.find_commit(*oid).is_ok())
+        .ok_or_else(|| format!("the reviewed commit {reviewed} is not here"))?;
+    let task = crate::workgraph::lifecycle::RecordView::parse(
+        crate::workgraph::work_start::RecordKind::Task,
+        path,
+        text,
+    )?;
+    match crate::workgraph::acceptance::open_head_problem(
+        repo,
+        &task,
+        head,
+        reviewed,
+        &receiving.into_iter().collect::<Vec<_>>(),
+    ) {
+        None => Ok(()),
+        Some(problem) => Err(problem),
     }
-    let seen = text_at(repo, review.id(), path)
-        .map(|text| record_text::parse_criteria(&text).items)
-        .unwrap_or_default();
-    let pairs = |items: &[record_text::Criterion]| -> Vec<(String, String)> {
-        items
-            .iter()
-            .map(|c| (c.id.clone(), c.text.clone()))
-            .collect()
-    };
-    if pairs(&seen) != pairs(criteria) {
-        return Err("the criteria changed since the reviewed commit".into());
-    }
-    Ok(())
 }
 
 fn find_branch<'r>(repo: &'r Repository, name: &str) -> Option<git2::Commit<'r>> {
@@ -613,12 +607,22 @@ struct TaskContext<'a> {
     tips: &'a BTreeMap<String, Oid>,
     /// Each home target's landing transitions, when the walk succeeded.
     history: Option<&'a Landings>,
+    /// Each home target's tasks whose newest transition is uncertain.
+    uncertain: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
     /// The open pull requests, when the forge was read.
     pulls: Option<&'a [PullIn]>,
     /// The trusted remote's default branch tip.
     default_tip: Option<Oid>,
+    /// The default branch's name, for the shared pull request rule.
+    default_branch: &'a str,
+    /// Why the forge was not read, when it was not.
+    forge_unread: Option<&'a str>,
     home_unread: &'a BTreeMap<String, String>,
 }
+
+/// How an open task's unknown stage starts when the forge was not read;
+/// the issues view reports that source as the forge, not the records.
+pub(super) const FORGE_UNREAD: &str = "the forge was not read";
 
 /// The statuses the stage ladder knows.
 const KNOWN_STATUSES: [&str; 4] = ["todo", "blocked", "complete", "cancelled"];
@@ -653,9 +657,7 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
         .and_then(|name| branch_in(repo, name, tip, &context.worktrees));
     let closed = matches!(record.status.as_str(), "complete" | "cancelled");
     let pull = context.pulls.and_then(|pulls| {
-        pulls
-            .iter()
-            .find(|pull| pull.task.as_deref() == Some(record.id.as_str()))
+        super::compute::select_pull(pulls, &record.id, &found.target, context.default_branch)
     });
     // The most advanced copy: the home tip once closed, else the head the
     // pull request reports, else the branch head.
@@ -689,7 +691,15 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
         match head {
             Some(Ok(head)) => match text_at(repo, head, &found.path) {
                 Some(text) => (
-                    acceptance(repo, &text, &found.path, Binding::Head(head)),
+                    acceptance(
+                        repo,
+                        &text,
+                        &found.path,
+                        Binding::Head {
+                            head,
+                            receiving: tip,
+                        },
+                    ),
                     text,
                 ),
                 None => (
@@ -717,8 +727,16 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
             .map(|block| block.follow_ups)
             .filter(|text| !text.trim().is_empty() && text.trim() != "none")
     });
+    // An uncertain transition is no transition: no landing time and no
+    // location proof rests on it.
+    let doubted = context.uncertain.is_none_or(|uncertain| {
+        uncertain
+            .get(&found.target)
+            .is_some_and(|ids| ids.contains_key(&record.id))
+    });
     let transition = context
         .history
+        .filter(|_| !doubted)
         .and_then(|history| history.get(&found.target))
         .and_then(|landed| landed.get(&record.id))
         .copied();
@@ -742,10 +760,19 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
     } else if closed {
         None
     } else {
-        match (context.backlog, entry) {
-            (None, _) => Some("the readiness core could not judge the targets".into()),
-            (Some(_), None) => Some("the readiness core holds no state for the task".into()),
-            (Some(_), Some(_)) => None,
+        match (context.backlog, entry, context.forge_unread) {
+            (None, _, _) => Some("the readiness core could not judge the targets".into()),
+            (Some(_), None, _) => Some("the readiness core holds no state for the task".into()),
+            (Some(_), Some(entry), _) if entry.state == readiness::State::Invalid => Some(format!(
+                "the readiness core judges the records invalid: {}",
+                entry.reason
+            )),
+            // An open pull request moves the rung, so an unread forge
+            // leaves an open task's stage unknown.
+            (Some(_), Some(_), Some(reason)) => Some(format!(
+                "{FORGE_UNREAD}, so an open pull request cannot be ruled out: {reason}"
+            )),
+            (Some(_), Some(_), None) => None,
         }
     };
     TaskIn {
@@ -777,24 +804,53 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
     }
 }
 
+/// What the landing walk established.
+struct Walked {
+    /// Each home target's tasks to their newest proven `complete`
+    /// transition.
+    landed: Landings,
+    /// Each home target's tasks whose newest transition could not be
+    /// established, to why: a status before or after a change could not be
+    /// read, so no landing is counted or inferred for them.
+    uncertain: BTreeMap<String, BTreeMap<String, String>>,
+    /// Every walk reached back past the seven-day pace window (or the root).
+    reached: bool,
+}
+
+/// A record's status in a blob: `Ok(None)` when it carries none, `Err`
+/// when the blob, its text or its frontmatter cannot be read.
+fn status_in(repo: &Repository, blob: Oid) -> Result<Option<String>, String> {
+    let blob = repo
+        .find_blob(blob)
+        .map_err(|error| format!("blob {blob} cannot be read: {}", error.message()))?;
+    let text = std::str::from_utf8(blob.content())
+        .map_err(|_| format!("blob {} is not UTF-8 text", blob.id()))?;
+    let (data, _) = crate::validate::parse_frontmatter(text.as_bytes())
+        .map_err(|error| format!("blob {} frontmatter cannot be read: {error}", blob.id()))?;
+    // Read as `RecordView::parse` reads a record's status.
+    let value = crate::validate::get_string_field(&data, "status");
+    Ok((!value.is_empty()).then_some(value))
+}
+
 /// Each home target's newest `complete` transition per task on the
-/// first-parent history of its tip, with the commit that made it, and
-/// whether every walk reached back past the seven-day pace window (or the
-/// root). `None` when a walk fails.
-fn landings(repo: &Repository, tips: &BTreeMap<String, Oid>, now: i64) -> Option<(Landings, bool)> {
-    let mut out = BTreeMap::new();
-    let mut reached = true;
+/// first-parent history of its tip, with the commit that made it. A change
+/// whose status before or after cannot be read makes that task uncertain
+/// rather than a transition, unless a newer proven transition was already
+/// found. `None` when a walk fails.
+fn landings(repo: &Repository, tips: &BTreeMap<String, Oid>, now: i64) -> Option<Walked> {
+    let mut walked = Walked {
+        landed: BTreeMap::new(),
+        uncertain: BTreeMap::new(),
+        reached: true,
+    };
     let floor = now - super::compute::PACE_WINDOW_SECONDS;
     let mut spec = git2::DiffOptions::new();
     spec.pathspec("project-management/tasks");
-    let status = |blob: Oid| {
-        repo.find_blob(blob)
-            .ok()
-            .and_then(|blob| String::from_utf8(blob.content().to_vec()).ok())
-            .and_then(|text| frontmatter(&text, "status"))
-    };
     for (target, tip) in tips {
-        let landed: &mut BTreeMap<String, (i64, Oid)> = out.entry(target.clone()).or_default();
+        let landed: &mut BTreeMap<String, (i64, Oid)> =
+            walked.landed.entry(target.clone()).or_default();
+        let uncertain: &mut BTreeMap<String, String> =
+            walked.uncertain.entry(target.clone()).or_default();
         let mut commit = repo.find_commit(*tip).ok()?;
         let mut walked_past = false;
         for _ in 0..HISTORY_LIMIT {
@@ -823,13 +879,31 @@ fn landings(repo: &Repository, tips: &BTreeMap<String, Oid>, now: i64) -> Option
                 else {
                     continue;
                 };
-                let now_complete = status(delta.new_file().id()).as_deref() == Some("complete");
-                let was_complete = !delta.old_file().id().is_zero()
-                    && status(delta.old_file().id()).as_deref() == Some("complete");
-                if now_complete && !was_complete {
-                    landed
-                        .entry(id)
-                        .or_insert((commit.time().seconds(), commit.id()));
+                // A newer proven transition or an earlier doubt decides.
+                if landed.contains_key(&id) || uncertain.contains_key(&id) {
+                    continue;
+                }
+                let read = |blob: Oid| -> Result<Option<String>, String> {
+                    if blob.is_zero() {
+                        Ok(None)
+                    } else {
+                        status_in(repo, blob)
+                    }
+                };
+                match (read(delta.new_file().id()), read(delta.old_file().id())) {
+                    (Ok(now), Ok(before)) => {
+                        let complete =
+                            |status: &Option<String>| status.as_deref() == Some("complete");
+                        if complete(&now) && !complete(&before) {
+                            landed.insert(id, (commit.time().seconds(), commit.id()));
+                        }
+                    }
+                    (Err(reason), _) | (_, Err(reason)) => {
+                        uncertain.insert(
+                            id,
+                            format!("its status at {} cannot be read: {reason}", commit.id()),
+                        );
+                    }
                 }
             }
             let Some(parent) = parent else {
@@ -838,9 +912,31 @@ fn landings(repo: &Repository, tips: &BTreeMap<String, Oid>, now: i64) -> Option
             };
             commit = parent;
         }
-        reached &= walked_past;
+        walked.reached &= walked_past;
     }
-    Some((out, reached))
+    Some(walked)
+}
+
+/// Why the pace history is not established, when it is not.
+fn history_note(walked: Option<&Walked>) -> Option<String> {
+    let Some(walked) = walked else {
+        return Some("the history walk of a home tip failed".into());
+    };
+    let doubts: Vec<String> = walked
+        .uncertain
+        .iter()
+        .flat_map(|(target, ids)| {
+            ids.iter()
+                .map(move |(id, reason)| format!("{id} on {target}: {reason}"))
+        })
+        .collect();
+    if !doubts.is_empty() {
+        return Some(format!(
+            "transitions not established: {}",
+            doubts.join("; ")
+        ));
+    }
+    (!walked.reached).then(|| "the walk did not reach back past the pace window".into())
 }
 
 /// Epic text helpers: the first `##` heading whose section names each task.
@@ -990,10 +1086,7 @@ fn run_state(check: &serde_json::Value) -> String {
         .to_ascii_lowercase()
 }
 
-/// The check runs as read, and their summary: `failed` when any failed,
-/// was cancelled or timed out, else `pending` when any has not finished,
-/// `missing` when none ran, `skipped` when any skipped (a skip is not a
-/// pass without reuse evidence), else `passed`.
+/// The check runs as read, and their summary (`checks::summary`).
 fn checks(rollup: Option<&serde_json::Value>) -> (String, Vec<CheckRunIn>) {
     let text = |check: &serde_json::Value, key: &str| {
         check
@@ -1012,44 +1105,15 @@ fn checks(rollup: Option<&serde_json::Value>) -> (String, Vec<CheckRunIn>) {
                         .or_else(|| text(check, "context"))
                         .unwrap_or_else(|| "unnamed".into()),
                     state: run_state(check),
-                    completed_at: text(check, "completedAt"),
+                    completed_at: text(check, "completedAt")
+                        .as_deref()
+                        .and_then(super::checks::parse_instant),
+                    required: None,
                 })
                 .collect()
         })
         .unwrap_or_default();
-    let any = |states: &[&str]| runs.iter().any(|run| states.contains(&run.state.as_str()));
-    let summary = if runs.is_empty() {
-        "missing"
-    } else if runs.iter().any(|run| {
-        !matches!(
-            run.state.as_str(),
-            "success"
-                | "neutral"
-                | "skipped"
-                | "pending"
-                | "queued"
-                | "in_progress"
-                | "expected"
-                | "waiting"
-                | "requested"
-        )
-    }) {
-        "failed"
-    } else if any(&[
-        "pending",
-        "queued",
-        "in_progress",
-        "expected",
-        "waiting",
-        "requested",
-    ]) {
-        "pending"
-    } else if any(&["skipped"]) {
-        "skipped"
-    } else {
-        "passed"
-    };
-    (summary.into(), runs)
+    (super::checks::summary(&runs).into(), runs)
 }
 
 /// The most open pull requests one forge read lists; a full page may hide
@@ -1126,6 +1190,8 @@ fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> Fo
                     .unwrap_or(false),
                 checks,
                 runs,
+                required: Err("not read yet".into()),
+                required_checks: "unverified".into(),
                 task: ids
                     .iter()
                     .filter(|id| suffix == id.as_str() || suffix.starts_with(&format!("{id}-")))
@@ -1136,9 +1202,47 @@ fn forge(root: &Path, options: &Options, now: i64, ids: &BTreeSet<String>) -> Fo
         })
         .collect();
     pulls.sort_by_key(|pull| pull.number);
+    with_required(root, options, repository, &mut pulls);
     ForgeIn::Read {
         read_at: now,
         pulls,
+    }
+}
+
+/// Each task pull request's required set, read once per base it targets,
+/// and its runs and required view judged against it.
+fn with_required(root: &Path, options: &Options, repository: &str, pulls: &mut [PullIn]) {
+    // The required set, read once per base a task's pull request targets.
+    let bases: BTreeSet<String> = pulls
+        .iter()
+        .filter(|pull| pull.task.is_some())
+        .map(|pull| pull.base.clone())
+        .collect();
+    let required: BTreeMap<String, Result<Vec<String>, String>> = bases
+        .into_iter()
+        .map(|base| {
+            let names = super::checks::required_names(
+                root,
+                &options.gh_program,
+                options.forge_limit,
+                repository,
+                &base,
+            );
+            (base, names)
+        })
+        .collect();
+    for pull in pulls.iter_mut() {
+        pull.required = required.get(&pull.base).cloned().unwrap_or_else(|| {
+            Err("not read: the pull request carries no task in this repository".into())
+        });
+        for run in &mut pull.runs {
+            run.required = pull
+                .required
+                .as_ref()
+                .ok()
+                .map(|names| names.contains(&run.name));
+        }
+        pull.required_checks = super::checks::required_summary(&pull.runs, &pull.required);
     }
 }
 

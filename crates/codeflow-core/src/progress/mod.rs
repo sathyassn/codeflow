@@ -9,6 +9,7 @@
 //! versioned [`model::Facts`] without further reads. Nothing here writes:
 //! no ref, record, ledger, cache or forge state changes.
 
+mod checks;
 pub mod compute;
 pub mod epics;
 pub mod gather;

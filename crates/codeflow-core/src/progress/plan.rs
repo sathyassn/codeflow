@@ -206,36 +206,32 @@ impl Plan {
         forecast: Option<&BTreeMap<String, (i64, i64, i64)>>,
         free: &mut [BinaryHeap<std::cmp::Reverse<i64>>; 3],
     ) -> Win {
-        let mut preds = [0_i64; 3];
+        // AC-5: the start is the as-of moment or the predecessors' latest
+        // end, and every scenario's end runs from that one start.
+        let mut start = 0_i64;
         for dep in task
             .depends_on
             .iter()
             .filter(|dep| open.contains_key(dep.as_str()))
         {
             if let Some(Win::Estimable { ends, .. }) = self.windows.get(dep) {
-                for (slot, end) in preds.iter_mut().zip(ends) {
-                    *slot = (*slot).max(*end);
-                }
+                start = start.max(ends[2]);
             }
         }
         let ends = if let Some(forecast) = forecast {
             let (e, p, l) = forecast[&task.id];
-            [e.max(preds[0]), p.max(preds[1]), l.max(preds[2])]
+            [e.max(start), p.max(start), l.max(start)]
         } else {
             let remaining = 100 - i64::from(stage(inputs, task).percent().unwrap_or(0));
             let units = [UNIT_EARLIEST, UNIT_PLANNING, UNIT_LATEST];
             let mut ends = [0_i64; 3];
             for (index, heap) in free.iter_mut().enumerate() {
                 let lane = heap.pop().map_or(0, |std::cmp::Reverse(at)| at);
-                let start = lane.max(preds[index]);
-                ends[index] = start + units[index] * remaining / 100;
+                ends[index] = lane.max(start) + units[index] * remaining / 100;
                 heap.push(std::cmp::Reverse(ends[index]));
             }
             ends
         };
-        // The start is the earliest the work can begin: its predecessors'
-        // earliest ends, and never after any of its own ends.
-        let start = ends.iter().copied().fold(preds[0], i64::min);
         let conditional = (task.status == "blocked" || task.state.as_deref() == Some("blocked"))
             .then(|| {
                 let reason = task
