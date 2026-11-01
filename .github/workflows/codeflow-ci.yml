@@ -396,21 +396,21 @@ jobs:
   # rust-coverage target names, reads the Rust journeys from the shards'
   # results and checks that each listed test ran in exactly its one shard.
   # Locally, `codeflow test` still runs the one rust-coverage command.
-  # Both shards build the same thing, so only the first saves the cache.
-  # Timeouts: a shard is planned at about 11 minutes of tests (14 at most)
+  # All four shards build the same thing, so only the first saves the cache.
+  # Timeouts: a shard is planned at about 6 minutes of tests (14 at most)
   # after a build and setup of about 4 to 6 minutes, and gets the Windows
   # partitions' 30; the report job only reads files and fails a shard past
   # the 24 minute margin (TSK-1063).
   gates-coverage:
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    name: codeflow gates (coverage ${{ matrix.shard }} of 2)
+    name: codeflow gates (coverage ${{ matrix.shard }} of 4)
     needs: reuse
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Install the differential shells
@@ -515,7 +515,7 @@ jobs:
       # rust-coverage target's --fail-under-lines.
       - name: Line coverage of the whole suite
         shell: bash
-        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 2 target/coverage/data
+        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 4 target/coverage/data
 
       # The journey-gate target's command, on the shards' results.
       - name: journey gate
@@ -530,7 +530,7 @@ jobs:
       - name: Every test ran in exactly one shard
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json --results target/coverage/results
+        run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json target/coverage/results/coverage-shard-3/tests.json target/coverage/results/coverage-shard-4/tests.json --results target/coverage/results
 
   # The required check runs on every event, even when a part
   # fails, is cancelled or did not run. Draft integration pull requests and
