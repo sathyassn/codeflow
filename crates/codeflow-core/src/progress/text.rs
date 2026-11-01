@@ -21,11 +21,18 @@ fn percent(value: &Known<f64>) -> String {
     }
 }
 
+fn rate(value: &Known<f64>) -> String {
+    match value {
+        Known::Value(value) => format!("{value:.1}"),
+        Known::Word(word) => word.clone(),
+    }
+}
+
 fn window(window: &WindowFact) -> String {
+    // The full basis prints once, under Windows; each window names its kind.
     let basis = format!(
-        "basis: {} ({}), computed {}",
+        "basis: {}, computed {}",
         word(&window.basis_kind),
-        word(&window.basis),
         window.computed_at
     );
     match window_summary(window) {
@@ -205,6 +212,7 @@ pub fn render(facts: &Facts) -> String {
         "\nWindows ({}, {} lane(s)):",
         facts.windows.basis_kind, facts.windows.lanes_used
     );
+    let _ = writeln!(out, "  basis: {}", facts.windows.basis);
     for scenario in &facts.windows.scenarios {
         let _ = writeln!(
             out,
@@ -244,9 +252,9 @@ pub fn render(facts: &Facts) -> String {
     let _ = writeln!(
         out,
         "\nPace: landed {} per day observed, planned capacity {} per day, intake {} per day",
-        word(&facts.pace.observed_landing_rate_per_day),
-        facts.pace.planned_capacity_rate_per_day,
-        word(&facts.pace.intake_rate_per_day)
+        rate(&facts.pace.observed_landing_rate_per_day),
+        rate(&Known::Value(facts.pace.planned_capacity_rate_per_day)),
+        rate(&facts.pace.intake_rate_per_day)
     );
     out
 }
