@@ -13,7 +13,7 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
-    is_correction, pull_request_findings_judged, Criteria, Finding, AUTHORITY_NOTE, FROZEN_RULE,
+    is_correction, pull_request_findings_into, Criteria, Finding, AUTHORITY_NOTE, FROZEN_RULE,
     IMPORT_RULE, REMOVAL_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
@@ -68,13 +68,13 @@ pub(super) fn dispatch(
                 codeflow_core::git::display_text(branch),
                 codeflow_core::git::display_text(range.target)
             );
-            pull_request_findings_judged(
+            pull_request_findings_into(
                 root,
                 range.base,
                 range.head,
                 &criteria,
                 names.candidate,
-                Some(names.branch),
+                (Some(names.branch), Some(range.target)),
                 stacked,
             )
         }),
