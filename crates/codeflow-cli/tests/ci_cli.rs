@@ -764,6 +764,108 @@ fn ci_long_body_warns_without_blocking() {
     }
 }
 
+/// TSK-1040: the policy workflow's log must carry the pull request body only
+/// as a digest, so the real `codeflow ci` prints no text from the body, even
+/// for an over-long one: a heading the template does not define is counted
+/// and never named.
+#[test]
+fn ci_never_prints_body_text_for_an_over_long_body() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let canary = "CanaryHeadingQ7x";
+    let filler = "canaryfillerword ".repeat(1100);
+    let body = format!(
+        "Task: {canary}-TSK\n{FULL_BODY}\n## {canary}\n{filler}\n\n### {canary} sub\n\nmore {canary} text\n"
+    );
+    let file = dir.path().join("canary-body.md");
+    std::fs::write(&file, &body).unwrap();
+    let out = run_in(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--pr-body-file",
+            file.to_str().unwrap(),
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "-word limit (HTML comments not counted); largest sections: an unlisted section ("
+        ),
+        "the verdict stays visible: {stderr}"
+    );
+    for text in [&stdout, &stderr] {
+        assert!(!text.to_lowercase().contains("canary"), "{text}");
+    }
+}
+
+/// TSK-1040: the other body-derived diagnostics print no body text either.
+/// Each case puts a private canary where a diagnostic once echoed it (a
+/// template-remnant line, a custom element's name, an emoji, a ledger id) and
+/// asserts the real binary still reports the finding but never the canary.
+#[test]
+fn ci_diagnostics_never_echo_body_text() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let cases = [
+        (
+            "(paste the real test summary output here) CanaryLineQ7x\n",
+            "template remnant",
+            "canaryline",
+        ),
+        (
+            "<canary-private-466>\n\nUnclosed custom container.\n",
+            "never closes",
+            "canary-private",
+        ),
+        (
+            "A crab \u{1F980} appears.\n",
+            "PR body contains an emoji",
+            "\u{1F980}",
+        ),
+        (
+            "See FU-987654 for details.\n",
+            "coordination ledger id",
+            "fu-987654",
+        ),
+    ];
+    for (tail, finding, canary) in cases {
+        let body = format!("{FULL_BODY}\n{tail}");
+        let file = dir.path().join("echo-body.md");
+        std::fs::write(&file, format!("Task: TSK-001\n{body}")).unwrap();
+        let out = run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/x",
+                "--pr-body-file",
+                file.to_str().unwrap(),
+            ],
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(finding),
+            "{finding} stays reported: {stderr}"
+        );
+        for text in [&stdout, &stderr] {
+            assert!(!text.to_lowercase().contains(canary), "{canary}: {text}");
+        }
+    }
+}
+
 // -- policy characters (ADR-0067) --------------------------------------------
 
 /// Set `git.policy_characters` to `block`, the level this repository uses;

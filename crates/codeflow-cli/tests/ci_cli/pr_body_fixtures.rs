@@ -534,9 +534,8 @@ fn unfilled_installed_templates_block_empty_summary_and_changes_and_warn_on_remn
             "{tier:?}: {error}"
         );
         for warning in [
-            "template remnant (a table row of empty cells): '|  |  |  |'",
-            "template remnant (unresolved template alternatives or placeholders): '- Impact:",
-            "template remnant (unresolved template alternatives or placeholders): '- Breaking:",
+            "template remnant (a table row of empty cells)",
+            "template remnant (unresolved template alternatives or placeholders)",
             "PR Impact must be none, patch, minor or major",
             "PR Breaking must be yes or no",
         ] {

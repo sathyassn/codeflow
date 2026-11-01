@@ -5147,7 +5147,7 @@
    "repo_skill_mirrors_are_byte_identical",
    "repository_runtime_state_never_enters_the_tracked_tree",
    "shipped_catalog_metadata_and_linked_references_are_valid_and_manifested",
-   "shipped_ci_rechecks_an_edited_pr_body_through_env",
+   "shipped_ci_rechecks_an_edited_pr_body_through_a_file",
    "shipped_record_and_pr_templates_carry_no_dash",
    "starter_portal_config_points_at_decisions_instead_of_publishing_them",
    "writing_rules_are_stated_in_full_only_in_their_three_homes"

@@ -167,6 +167,52 @@ fn assert_blocks(result: &(i32, String), what: &str, needle: &str) {
     );
 }
 
+/// TSK-1040: a `Task:` value the body selects is the body's own text until a
+/// record vouches for it, so no classification message or announcement
+/// repeats it. Each case is refused as before, by its fixed category, and
+/// the real binary prints the value on neither stream. The vouched task
+/// (TSK-001 on its own record) is still announced by name.
+#[test]
+fn task_line_values_the_body_selects_never_reach_the_log() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(root, "feat/work", &[("src/lib.rs", "pub fn w() {}\n")]);
+    for (task_line, finding, canary) in [
+        (
+            "Task: CanaryUnitQ7x",
+            "neither `TSK-NNN` nor `EPC-NNN`",
+            "canaryunit",
+        ),
+        (
+            "Task: TSK-001, CanaryListQ7x",
+            "not a list of distinct epics",
+            "canarylist",
+        ),
+        ("Task: TSK-987654", "has no task record", "987654"),
+        ("Task: EPC-987654", "has no epic record", "987654"),
+        ("Task: EPC-001, EPC-987654", "has no epic record", "987654"),
+    ] {
+        let result = ci(root, "feat/work", &body(task_line));
+        assert_blocks(&result, task_line, finding);
+        assert!(
+            !result.1.to_lowercase().contains(canary),
+            "{task_line}: {}",
+            result.1
+        );
+    }
+    branch_with(
+        root,
+        "fix/TSK-001-repair",
+        &[("src/lib.rs", "pub fn r() {}\n")],
+    );
+    let result = ci(root, "fix/TSK-001-repair", &body("Task: TSK-987654"));
+    assert_blocks(&result, "mismatch", "names another task than branch");
+    assert!(!result.1.contains("987654"), "{}", result.1);
+    let result = ci(root, "feat/work", &body("Task: TSK-001"));
+    assert_passes(&result, "a vouched task");
+    assert!(result.1.contains("tracked TSK-001"), "{}", result.1);
+}
+
 /// TSK-388: the pre-push hook hands `codeflow ci` the destination's default
 /// branch as `--into`, and a remote can put control characters in that
 /// name: an OSC title sequence, or the C1 control CSI that git accepts.

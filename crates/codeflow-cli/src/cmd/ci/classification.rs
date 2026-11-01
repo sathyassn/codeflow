@@ -218,7 +218,7 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
             if let Some(carried) = input.branch_task.as_deref() {
                 if carried != task_id {
                     return Err(format!(
-                        "`Task: {task_id}` names another task than branch '{}' ({carried})",
+                        "the `Task:` line names another task than branch '{}' ({carried})",
                         input.branch
                     ));
                 }
@@ -236,9 +236,9 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
             if input.branch.starts_with("integration/") {
                 return match &input.epic_line {
                     Some(Ok(actual)) if actual == &epic => Ok(Class::EpicLine(epic)),
-                    Some(Ok(actual)) => {
-                        Err(format!("Task: {epic} does not match the line's {actual}"))
-                    }
+                    Some(Ok(actual)) => Err(format!(
+                        "the `Task:` line does not match the line's {actual}"
+                    )),
                     Some(Err(reason)) => Err(reason.clone()),
                     None => Err(format!("'{}' is not a verified epic line", input.branch)),
                 };
@@ -257,19 +257,18 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                 return Err("a task branch must name its own task".into());
             }
             if input.branch.starts_with("integration/") {
-                return Err(format!(
-                    "an integration line lands one epic; `Task: {}` names several",
-                    epics.join(", ")
-                ));
+                return Err(
+                    "an integration line lands one epic; the `Task:` line names several".into(),
+                );
             }
             planning(input, epics)
         }
-        Some(TaskLine::Malformed(value)) if value.contains(',') => Err(format!(
-            "`Task: {value}` is not a list of distinct epics; only a planning amendment names several, as `Task: EPC-001, EPC-002`, and a task id never takes a list"
-        )),
-        Some(TaskLine::Malformed(value) | TaskLine::Unit(value)) => Err(format!(
-            "`Task: {value}` is neither `TSK-NNN` nor `EPC-NNN`"
-        )),
+        Some(TaskLine::Malformed(value)) if value.contains(',') => Err(
+            "the `Task:` line is not a list of distinct epics; only a planning amendment names several, as `Task: EPC-001, EPC-002`, and a task id never takes a list".into(),
+        ),
+        Some(TaskLine::Malformed(_) | TaskLine::Unit(_)) => {
+            Err("the `Task:` line is neither `TSK-NNN` nor `EPC-NNN`".into())
+        }
         None if input.root_branch => Ok(Class::RootBranch(input.branch.to_string())),
         None => Err(
             "no `Task:` line; name the task, or the epic for a planning change or integration line"
@@ -649,7 +648,9 @@ pub(super) fn dispatch(
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
     };
+    let task_problem = |task: &str| amendment::task_problem(root, range.base, range.head, task);
     let class = match classify(&input)
+        .and_then(|class| named_task_entry(&input, &task_problem, class))
         .and_then(|class| cancellation_entry(root, branch, range, &files, class))
         .and_then(|class| exemption_entry(root, range, &changes, class))
         .map(|class| release_class(release, class))
@@ -698,6 +699,37 @@ fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
         .map_err(Clone::clone)
 }
 
+/// A task the body names, and the branch does not carry, must have a task
+/// record before any message repeats it: until then the identifier is the
+/// body's own text, and the policy run's log carries none of the body
+/// (TSK-1040).
+fn named_task_entry(
+    input: &Input<'_>,
+    task_problem: &dyn Fn(&str) -> Option<String>,
+    class: Class,
+) -> Result<Class, String> {
+    // An exemption keeps its task identity checks where it always had them,
+    // and its announcement never names the task (see `announce`).
+    let Class::Tracked { task_id: named } = &class else {
+        return Ok(class);
+    };
+    // The branch name is not the body: a task it spells out is already in
+    // every context line, whether or not its record is visible yet.
+    let spelled = input.branch.split('/').any(|part| {
+        part == named
+            || part
+                .strip_prefix(named.as_str())
+                .is_some_and(|rest| rest.starts_with('-'))
+    });
+    if spelled || input.branch_task.as_deref() == Some(named.as_str()) {
+        return Ok(class);
+    }
+    match task_problem(named) {
+        Some(problem) => Err(problem),
+        None => Ok(class),
+    }
+}
+
 /// The task-named cancellation is an amendment and starts no work. Both
 /// entry points use the same merge-base and range validation.
 fn cancellation_entry(
@@ -718,7 +750,7 @@ fn cancellation_entry(
             )? {
                 if cancelled != *task_id {
                     return Err(format!(
-                        "`Task: {task_id}` does not name the cancelled task {cancelled}"
+                        "the `Task:` line does not name the cancelled task {cancelled}"
                     ));
                 }
                 return Ok(Class::PlanningOnly { epics: Vec::new() });
@@ -785,7 +817,12 @@ fn announce(class: &Class, line: Option<&EpicLineResult>) {
         .and_then(|result| result.as_ref().ok())
         .map(|(_, report)| report);
     match class {
-        Class::SecretScanExemption(ExemptionWork::Task(id) | ExemptionWork::Epic(id)) => println!(
+        // The task is the body's own text unless a record vouches for it, so
+        // only the epic, which `epic_problem` has checked, is named.
+        Class::SecretScanExemption(ExemptionWork::Task(_)) => println!(
+            "codeflow ci: pull request class: secret-scan exemption for the named task (only .gitleaksignore; dependency readiness is not required)"
+        ),
+        Class::SecretScanExemption(ExemptionWork::Epic(id)) => println!(
             "codeflow ci: pull request class: secret-scan exemption for {id} (only .gitleaksignore; dependency readiness is not required)"
         ),
         Class::PlanningOnly { epics } => println!(

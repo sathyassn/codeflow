@@ -112,17 +112,17 @@ class GateContracts(unittest.TestCase):
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
-    # TSK-254: pull request runs share one group per pull request and cancel
-    # the run they supersede; push, schedule and dispatch runs each get a
-    # group of their own run id and are never cancelled, so a registry run is
-    # never replaced. The exact text is pinned: a group keyed on the ref, or a
-    # cancel that is not limited to pull_request_target, would cancel
-    # registry runs.
+    # TSK-1040: pull request runs share one group per pull request and queue
+    # (`queue: max`, no cancellation), so no event cancels or replaces a run;
+    # push, schedule and dispatch runs each get a group of their own run id.
+    # The exact text is pinned: a group keyed on the ref, or any cancellation,
+    # would cancel the run that judges a pushed head.
     POLICY_CONCURRENCY = (
         "\nconcurrency:\n"
         "  group: ${{ github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.workflow, "
         "github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}\n"
-        "  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}\n\n"
+        "  cancel-in-progress: false\n"
+        "  queue: max\n\n"
     )
     # The judging run reads the body when it runs, so the newest body is
     # judged whichever event's run survives the group.
@@ -138,7 +138,9 @@ class GateContracts(unittest.TestCase):
         self.assertLess(workflow.index(self.POLICY_CONCURRENCY), workflow.index('\njobs:\n'))
         self.assertIn(self.POLICY_BODY, workflow)
         self.assertIn('          GH_TOKEN: ${{ github.token }}\n', workflow)
-        self.assertIn('          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}\n', workflow)
+        self.assertIn('          BODY_FILE: ${{ runner.temp }}/pr-body.md\n', workflow)
+        self.assertIn('--pr-body-file "$BODY_FILE"', workflow)
+        self.assertNotIn('CODEFLOW_PR_BODY', workflow)
         self.assertNotIn('github.event.pull_request.body', workflow)
         actions = '      actions: read\n' if admission else ''
         self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)

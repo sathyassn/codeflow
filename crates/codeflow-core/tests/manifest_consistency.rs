@@ -718,9 +718,10 @@ fn ci_templates_never_resolve_codeflow_through_a_cargo_bin() {
 
 /// Codex EPC-017 review, finding 5: the PR-body check (structure and the
 /// ADR-0067 characters) must rerun when the body is edited after opening,
-/// and the body keeps reaching `codeflow ci` through `env:`, never inline.
+/// and the body reaches `codeflow ci` as a file (TSK-1040), never inline
+/// and never through `env:`.
 #[test]
-fn shipped_ci_rechecks_an_edited_pr_body_through_env() {
+fn shipped_ci_rechecks_an_edited_pr_body_through_a_file() {
     // The PR-body check runs in the enforcing workflow on
     // `pull_request_target` (TSK-107, SPC-013 R-113).
     let workflow = std::fs::read_to_string(repo_root().join("assets/base/ci/codeflow-policy.yml"))
@@ -733,9 +734,12 @@ fn shipped_ci_rechecks_an_edited_pr_body_through_env() {
     );
     // TSK-254: the body is read from the API when the job runs, so the
     // newest body is judged whichever run survives the concurrency group,
-    // and it reaches `codeflow ci` only through env, from a step output.
-    assert!(workflow.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
-    assert_eq!(workflow.matches("steps.body.outputs.text").count(), 1);
+    // and it reaches `codeflow ci` only as a file (TSK-1040): the runner
+    // prints a step's `env:` values, so the text is never an env value.
+    assert!(workflow.contains("BODY_FILE: ${{ runner.temp }}/pr-body.md"));
+    assert!(workflow.contains("--pr-body-file \"$BODY_FILE\""));
+    assert_eq!(workflow.matches("CODEFLOW_PR_BODY").count(), 0);
+    assert_eq!(workflow.matches("steps.body.outputs.text").count(), 0);
     assert_eq!(
         workflow.matches("github.event.pull_request.body").count(),
         0,

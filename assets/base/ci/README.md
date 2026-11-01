@@ -231,18 +231,47 @@ job has no cap, because it runs your own suite, whose length only you know;
 add one to your copy when you know it (`codeflow update` keeps your edit).
 
 `codeflow-policy.yml` runs once per pull request event, and a push followed
-by a body edit sends two events seconds apart. Pull request runs share one
-concurrency group per pull request, so the newer run cancels the older one.
-The run that judges reads the pull request's body from the API when it runs,
-not from its event, so the newest body is judged whichever run survives; for
-that, the job's token gains `pull-requests: read` and stays read-only. Push,
-schedule and dispatch runs each get a group of their own and are never
-cancelled, so a registry check is never replaced by a newer event.
-Concurrency groups are shared across the repository, so any workflow that
-names the same group can cancel the policy check; that fails closed, since
-a cancelled check never passes, and requiring approval to run workflows
-from outside collaborators (the repository's Actions settings) limits who
-can start such a workflow.
+by a body edit sends two events seconds apart. No event cancels or replaces a
+run: the workflow sets `cancel-in-progress: false` and `queue: max`, so every
+pending run in the pull request's concurrency group waits its turn and
+finishes, and the push's required "commit standards" check ends completed,
+never cancelled. `cancel-in-progress: false` alone does not do this: the
+default queue holds one pending run and cancels it when a newer run arrives.
+Push, schedule and dispatch runs each get a group of their own and are never
+replaced, so a registry check is never replaced by a newer event.
+
+The event pins the head and the base commit: the job checks out the event's
+base commit and refuses a head that is not the event's. Only the body comes
+from the API, read when the run executes (the job's token gains
+`pull-requests: read` and stays read-only), so a queued run can judge a
+newer body than its event. The body is written to a file in the runner's
+temp directory and given to `codeflow ci` with `--pr-body-file`, never
+through `env:` or an argument, because the runner prints a step's `env:`
+values; the log carries only the body's sha256 digest. The run ends with a
+second read. That last step fails the run, with its own message, when the
+head, the base branch or the body differs from what the run judged, and
+fails closed when the read fails. The run queued by the change decides. The
+base commit is not compared, since a push to the base branch fires no pull
+request event.
+
+Limits:
+
+- A concurrency group queues at most 100 runs. A run that arrives past that
+  is cancelled, so the newest push fails closed until someone re-runs the
+  check.
+- A change made after the last read and before the run ends is not seen by
+  that run. The run that change queued judges it.
+- Each run makes two reads of the pull request on the job's shared token,
+  which counts against the repository's API rate limit.
+- `queue` is a 2026 key. actionlint releases up to 1.7.12 reject it as an
+  unexpected key; ignore that message in `.github/actionlint.yml` and keep the
+  key. Check your linter's release notes before upgrading it.
+- Concurrency groups are shared across the repository, so any workflow that
+  names the same group can cancel a run of this check by using
+  `cancel-in-progress: true`; that fails closed, since a cancelled check
+  never passes, and requiring approval to run workflows from outside
+  collaborators (the repository's Actions settings) limits who can start such
+  a workflow.
 
 ## Project setup hook
 
