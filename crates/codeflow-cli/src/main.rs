@@ -433,6 +433,9 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run() -> anyhow::Result<()> {
+    // Lock descriptors an enclosing `codeflow reserve` handed over become
+    // close-on-exec before any thread or child starts (TSK-1128).
+    codeflow_core::testing::gate_guard::adopt_reserved_locks();
     // A hook git fires during this command runs this binary (SPC-013 R-85):
     // the path goes only into git children's environment, so an inherited
     // value is dropped here and no other child ever sees one.
