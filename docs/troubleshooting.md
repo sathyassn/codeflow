@@ -160,7 +160,9 @@ process groups to the holder's record and leaves those still running
 there when it ends, so if the nested run is killed and the reserve ends
 while a target survives, the next gate refuses until that target exits. Each rewrite of the holder record holds the OS lock of
 `full-gate.record.lock` beside it from read to rename, so the reserve and
-the nested run never drop a group line the other just added.
+the nested run never drop a group line the other just added. If that lock
+cannot be taken within five seconds, the rewrite runs without it, as
+before this lock existed, and the gate reports the missed serialization.
 Full and essential gates under a reserve still take
 the lock themselves and refuse. On Windows a nested quick run waits or
 refuses as a direct one does.
