@@ -161,8 +161,8 @@ fn pre_commit_engine(
             &crate::root_checkout::process_env,
         ));
 
-    match super::landed_policy::staged_paths(root, policy)
-        .and_then(|paths| super::path_policy::staged(&repo, &paths))
+    match super::landed_policy::staged_rules(root, policy)
+        .and_then(|(paths, content)| super::path_policy::staged_with(&repo, &paths, Some(&content)))
     {
         Ok(paths) => {
             report.violations.extend(paths.violations);

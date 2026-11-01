@@ -450,6 +450,19 @@ pub struct GitPolicy {
     pub path_policy: PolicyLevel,
     pub blocked_names: Vec<super::path_policy::BlockedName>,
     pub protected_paths: Vec<super::path_policy::ProtectedPath>,
+    /// New or changed files the authority's `.gitignore` files exclude
+    /// (TSK-323): `{level, allow: [{path, reason}]}`. Absent means level
+    /// `warn` and no allowance. The shipped policy file does not list it,
+    /// so an older binary never meets the key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignored_files: Option<super::path_policy::IgnoredFiles>,
+    /// An explicit file size limit (TSK-323): `{limit, except_under}`.
+    /// Absent, files over 1 MiB warn and over 10 MiB are refused in a new
+    /// scaffold and reported elsewhere; set, it opts in and replaces the
+    /// default. The shipped policy file does not list it, so an older
+    /// binary never meets the key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_file_bytes: Option<super::path_policy::MaxFileBytes>,
     /// Managed CI only: read from the trusted commit, default `trusted`.
     pub secret_scan_inline_allow: SecretScanInlineAllow,
     /// Unresolved conflict markers on the lines a change adds to a text
@@ -615,6 +628,8 @@ impl Default for GitPolicy {
             path_policy: PolicyLevel::Block,
             blocked_names: super::path_policy::default_names(),
             protected_paths: Vec::new(),
+            ignored_files: None,
+            max_file_bytes: None,
             secret_scan_inline_allow: SecretScanInlineAllow::Trusted,
             conflict_markers: PolicyLevel::Block,
             test_gate_on_push: PolicyLevel::Block,
