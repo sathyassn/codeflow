@@ -227,6 +227,11 @@ A receiver's first push still proves its own task landings.
   The receiver's own completion still binds all its product work. A line
   merge that adds product changes outside verified source history and
   reviewed task heads refuses even when no task completes in that range.
+  A pull request from a task branch into an epic line judges the merges
+  it carries against that line in the same way, so a sync that hand-edits
+  a source task's file blocks there too. A merge that edits a completed
+  task's acceptance block, which neither of its parents holds, is refused
+  for that edit.
   A line push after landing work whose completion is still pending waits
   until the completion record lands, even if the work was reviewed earlier.
 

@@ -508,6 +508,150 @@ pub fn recovery_fetch(command: &str, root: &Path) -> bool {
         && recovery_args(root, &words[1..])
 }
 
+/// The git subcommands that stay allowed while the policy authority cannot
+/// be resolved (TSK-1104): the read-only set the guard already allows for an
+/// unresolved target, without `help`, which starts a configured viewer
+/// program. None of them writes refs, configuration, hooks or the working
+/// tree.
+const READ_ONLY_UNRESOLVED: &[&str] = &[
+    "status",
+    "diff",
+    "log",
+    "show",
+    "rev-parse",
+    "ls-files",
+    "ls-tree",
+    "merge-base",
+    "for-each-ref",
+    "show-ref",
+    "cat-file",
+    "check-ignore",
+    "version",
+];
+
+/// Long options that can run a program, write a file or read outside the
+/// repository. A shortened spelling (`--ext`) counts as the full name.
+const REFUSED_LONG_OPTIONS: &[&str] = &[
+    "--help",
+    "--output",
+    "--ext-diff",
+    "--textconv",
+    "--paginate",
+    "--open-files-in-pager",
+    "--no-index",
+    "--exec-path",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+    "--filters",
+    "--show-signature",
+];
+
+fn refused_option(word: &str) -> bool {
+    let Some(long) = word.strip_prefix("--") else {
+        return word == "-O" || word.starts_with("-O");
+    };
+    let name = format!("--{}", long.split('=').next().unwrap_or(long));
+    REFUSED_LONG_OPTIONS
+        .iter()
+        .any(|full| (full.starts_with(&name) && name.len() >= 3) || name.starts_with(full))
+}
+
+/// Whether a command line is only read-only git, safe to run while the
+/// policy authority cannot be resolved. It is a closed form and it never
+/// asks a shell parser: the line may hold only plain word characters and
+/// the separators `;` and `&&`; every part must be `git <subcommand> ...`
+/// with a subcommand from `READ_ONLY_UNRESOLVED`, no git global option,
+/// and none of `REFUSED_LONG_OPTIONS`. Quotes, variables, substitutions,
+/// redirects, pipes, globs, leading assignments and launchers all fail it.
+#[must_use]
+pub fn read_only_git(command: &str) -> bool {
+    let plain = |c: char| c.is_ascii_alphanumeric() || " \t._/:=@%,+-~^;&".contains(c);
+    if command.trim().is_empty() || !command.chars().all(plain) {
+        return false;
+    }
+    let normalized = command.replace("&&", ";");
+    if normalized.contains('&') {
+        return false;
+    }
+    normalized.split(';').all(|part| {
+        let words: Vec<&str> = part.split_whitespace().collect();
+        let [first, sub, rest @ ..] = words.as_slice() else {
+            return false;
+        };
+        *first == "git"
+            && READ_ONLY_UNRESOLVED.contains(sub)
+            && rest
+                .iter()
+                .all(|word| !refused_option(word) && !word.starts_with('~') && !word.contains("%G"))
+    })
+}
+
+/// [`read_only_git`] plus the program reader: the line must also name no
+/// program that Git would run (a configured fsmonitor, external diff,
+/// textconv, pager or hook, an environment program variable, or a
+/// configuration injected through the environment, as the runner catalog
+/// lists them), read in `cwd` as the normal path reads them. Any read
+/// error refuses.
+#[must_use]
+pub fn read_only_git_runs_nothing(command: &str, cwd: &Path) -> bool {
+    read_only_git(command)
+        && super::git_guard::git_runner_bodies(command, cwd).is_ok_and(|bodies| bodies.is_empty())
+        && crate::security::git_preflight::program_runs(command, cwd)
+            .is_ok_and(|runs| runs.is_empty())
+        && no_index_change_hook(cwd)
+}
+
+/// Whether no `post-index-change` hook exists where Git looks for hooks: a
+/// read-only call that refreshes the index runs it, and the runner catalog
+/// does not list hook files. The hooks directory comes from the effective
+/// configuration Git itself lists, so a `core.hooksPath` set through the
+/// environment counts. A configuration that cannot be read, or a path
+/// spelling that cannot be resolved with certainty (`~user`, `%(prefix)`,
+/// an empty value), refuses.
+fn no_index_change_hook(cwd: &Path) -> bool {
+    let Ok(Some(repo)) = super::repo::open(cwd) else {
+        return false;
+    };
+    let Ok(config) = crate::security::git_config::read(
+        cwd,
+        &[],
+        &crate::security::git_config::Environment::new(),
+    ) else {
+        return false;
+    };
+    let hooks = match config.get_all("core.hooksPath").last() {
+        None => repo.commondir().join("hooks"),
+        Some((_, _, value)) => {
+            let Ok(value) = std::str::from_utf8(value) else {
+                return false;
+            };
+            let path = if let Some(rest) = value.strip_prefix("~/") {
+                let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
+                    return false;
+                };
+                std::path::PathBuf::from(home).join(rest)
+            } else if value.is_empty() || value.starts_with('~') || value.starts_with("%(") {
+                return false;
+            } else {
+                std::path::PathBuf::from(value)
+            };
+            // Git runs hooks from the top of the working tree (the git
+            // directory when bare), so a relative path starts there.
+            if path.is_absolute() {
+                path
+            } else {
+                repo.workdir().unwrap_or_else(|| repo.path()).join(path)
+            }
+        }
+    };
+    matches!(
+        std::fs::symlink_metadata(hooks.join("post-index-change")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

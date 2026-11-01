@@ -1,7 +1,7 @@
 //! TSK-379: built hooks judge the repository holding a target.
 use super::{
-    codeflow, enforced_repo, expansion_codeflow, git_command, guard_payload, run_with_stdin,
-    shell_path,
+    codeflow, enforced_repo, expansion_codeflow, git_command, guard_payload, line_allows,
+    line_refuses, run_time_word_refusal, run_with_stdin, shell_path,
 };
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -176,12 +176,16 @@ fn tsk1002_r12_tee_destinations_are_writes() {
         );
         for guard in ["git-guard", "exec-guard"] {
             let out = f.command_with_tmpdir(&f.linked, guard, &line, Some(&tmpdir));
-            if out.status.code() != Some(0) {
+            if !line_allows(&out) {
                 wrong.push(format!("known TMPDIR: {guard}: {line}: {out:?}"));
             }
             let out = f.command_with_tmpdir(&f.linked, guard, &line, None);
-            let expected = Some(if guard == "git-guard" { 2 } else { 0 });
-            if out.status.code() != expected || guard == "git-guard" && !refused(&out) {
+            let ok = if guard == "git-guard" {
+                out.status.code() == Some(2) && refused(&out)
+            } else {
+                line_allows(&out)
+            };
+            if !ok {
                 wrong.push(format!("absent TMPDIR: {guard}: {line}: {out:?}"));
             }
         }
@@ -274,13 +278,13 @@ fn tsk1002_review01_classes_refuse_through_the_hooks() {
     .chain(link_allow)
     .collect();
     for line in &refuse {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
     for line in &allow {
         let out = f.command(&f.linked, "exec-guard", line);
-        if out.status.code() != Some(0) {
+        if !line_allows(&out) {
             wrong.push(format!("refused: {line}: {out:?}"));
         }
     }
@@ -326,7 +330,7 @@ fn tsk1002_directory_changes_in_every_launcher_spelling() {
     ];
     for form in reads {
         let line = form.replace('%', &store);
-        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", &line)) {
             wrong.push(format!("allowed: {line}"));
         }
         let line = form.replace('%', &public);
@@ -342,7 +346,7 @@ fn tsk1002_directory_changes_in_every_launcher_spelling() {
         let line = line.replace('%', &public);
         let out = f.command(&f.linked, "exec-guard", &line);
         let stderr = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2) {
+        if !line_refuses(&out) {
             wrong.push(format!("allowed unknown directory: {line}"));
         } else if stderr.contains("__unverified") || !stderr.contains("`env -") {
             // The refusal names env's words as written, never a marker.
@@ -361,7 +365,7 @@ fn tsk1002_directory_changes_in_every_launcher_spelling() {
         // Both guards run before every shell command; either refusal stops it.
         if ["git-guard", "exec-guard"]
             .iter()
-            .all(|guard| f.command(&f.linked, guard, line).status.code() != Some(2))
+            .all(|guard| !line_refuses(&f.command(&f.linked, guard, line)))
         {
             wrong.push(format!("allowed write: {line}"));
         }
@@ -406,7 +410,7 @@ fn tsk1002_review02_classes_refuse_through_the_hooks() {
         "env -S \"--chdir='%' cat auth.json\"",
     ] {
         let line = form.replace('%', &store);
-        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", &line)) {
             wrong.push(format!("allowed: {line}"));
         }
         let line = form.replace('%', &public);
@@ -438,7 +442,7 @@ fn tsk1002_review02_classes_refuse_through_the_hooks() {
         "printf x > run; chmod +x run; PATH=.:$PATH run".to_string(),
         "printf x > run; chmod +x run; export PATH=.:$PATH; run".to_string(),
     ] {
-        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", &line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -451,7 +455,7 @@ fn tsk1002_review02_classes_refuse_through_the_hooks() {
         "f() { local -r x=id_rsa; }; f",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        if out.status.code() != Some(0) {
+        if !line_allows(&out) {
             wrong.push(format!("refused: {line}: {out:?}"));
         }
     }
@@ -485,17 +489,17 @@ fn tsk1002_review02_directory_options_resolve_physically() {
         "tar -C %/.. -cf out.tar auth.json",
     ] {
         let line = form.replace('%', "alias");
-        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", &line)) {
             wrong.push(format!("allowed: {line}"));
         }
         let line = form.replace('%', "plain");
         let out = f.command(&f.linked, "exec-guard", &line);
-        if out.status.code() != Some(0) {
+        if !line_allows(&out) {
             wrong.push(format!("refused public: {line}: {out:?}"));
         }
     }
     let line = "env -C absent/.. cat auth.json";
-    if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+    if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
         wrong.push(format!("allowed: {line}"));
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
@@ -548,7 +552,7 @@ fn tsk1002_review03_classes_fail_closed_through_the_hooks() {
         r"env -C '\\fixture-host\fixture-share\child\..' cat auth.json",
         "env -C '//fixture-host/fixture-share' cat notes.md",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -562,7 +566,7 @@ fn tsk1002_review03_classes_fail_closed_through_the_hooks() {
         "deno eval --print '1 + 1'",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        if out.status.code() != Some(0) {
+        if !line_allows(&out) {
             wrong.push(format!("refused: {line}: {out:?}"));
         }
     }
@@ -597,7 +601,7 @@ fn tsk1002_review03_successive_and_physical_directory_changes() {
         "cd alias && cat ../auth.json",
         "cd alias && env -C .. cat auth.json",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -665,7 +669,7 @@ fn tsk1002_review04_bounded_classes_refuse_through_the_hooks() {
         "frobnicate --cwd x rg token auth.json".into(),
     ];
     for line in &refused {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -684,7 +688,7 @@ fn tsk1002_review04_bounded_classes_refuse_through_the_hooks() {
         "grep -r cat sub",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        if out.status.code() != Some(0) {
+        if !line_allows(&out) {
             wrong.push(format!("refused: {line}: {out:?}"));
         }
     }
@@ -726,7 +730,7 @@ fn tsk1002_review07_physical_cd_and_shell_options_refuse() {
         "zsh --chase-dots -c 'cd alias/.. && cat auth.json'",
         "zsh -X -c 'cd alias/.. && cat auth.json'",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -778,7 +782,7 @@ fn tsk1002_review06_git_roles_and_input_lists_refuse() {
         "git hash-object --stdin-paths < list.txt",
         "git add --pathspec-from-file=paths.txt",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -846,7 +850,7 @@ fn tsk1002_review08_unmodelled_shell_constructs_refuse() {
         "echo 'cat copies/id_rsa' > s.sh; zsh s.sh",
         "printf '%s\\n' 'cd alias/.. && cat auth.json' > s.sh; bash -P s.sh",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -861,7 +865,7 @@ fn tsk1002_review08_unmodelled_shell_constructs_refuse() {
         "zsh --no-rcs -c 'cd alias/.. && cat auth.json'",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        if out.status.code() != Some(0) {
+        if !line_allows(&out) {
             wrong.push(format!("refused: {line}: {out:?}"));
         }
     }
@@ -908,7 +912,7 @@ fn tsk1002_codex07_git_forms_are_parsed_completely() {
         "git log -p -- ':(top)id_rsa'",
         "git log -p -- ':(attr:secret)'",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -972,7 +976,7 @@ fn tsk1002_codex08_git_selection_and_stdin_classes() {
         "git add src ':!src/x'",
         "printf '%s\\0' '\"id_rsa\"' | git add --pathspec-from-file=- --pathspec-file-nul",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -1043,7 +1047,7 @@ fn tsk1002_codex09_unproven_git_readings_refuse() {
         "git --git-dir='\\\\.\\C:\\fixture\\.git' status",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        if out.status.code() != Some(2) {
+        if !line_refuses(&out) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -1104,7 +1108,7 @@ fn tsk1002_codex10_git_modes_values_and_environment() {
         "git grep '://'",
         "git log --grep=':/'",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -1130,7 +1134,7 @@ fn tsk1002_codex10_git_modes_values_and_environment() {
             "git -c include.path=//fixture-host/fixture-share/config fixture-alias",
         );
         let message = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2) || !message.contains("share, verbatim or device") {
+        if !line_refuses(&out) || !message.contains("share, verbatim or device") {
             wrong.push(format!("{hook} include share: {message}"));
         }
     }
@@ -1163,7 +1167,7 @@ fn tsk1002_codex11_work_tree_programs_status_and_options() {
         "git status -vv -- id_rsa".to_string(),
         "GIT_EXEC_PATH=/tmp git status".to_string(),
     ] {
-        if f.command(&f.linked, "exec-guard", &line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", &line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -1210,7 +1214,7 @@ fn tsk1002_alternates_writes_refuse() {
     ] {
         let out = f.command(cwd, "git-guard", &line);
         let message = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2) || !message.contains("git.hook_integrity") {
+        if !line_refuses(&out) || !message.contains("git.hook_integrity") {
             wrong.push(format!("allowed: {line}: {message}"));
         }
     }
@@ -1225,7 +1229,7 @@ fn tsk1002_alternates_writes_refuse() {
             .env("HOME", f.temp.path()),
         &payload,
     );
-    if out.status.code() != Some(2) {
+    if !line_refuses(&out) {
         wrong.push(format!("edit allowed: {out:?}"));
     }
     for hook in ["git-guard", "exec-guard"] {
@@ -1278,7 +1282,7 @@ fn tsk1002_review12_program_words_and_values() {
     ] {
         let out = f.command(&f.linked, "exec-guard", &line);
         let message = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2) || !message.contains("security.secret_reads") {
+        if !line_refuses(&out) || !message.contains("security.secret_reads") {
             wrong.push(format!("exec-guard allowed: {line}: {message}"));
         }
     }
@@ -1289,7 +1293,7 @@ fn tsk1002_review12_program_words_and_values() {
     ] {
         let out = f.command(&f.linked, "git-guard", line);
         let message = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2) || !message.contains("git.hook_integrity") {
+        if !line_refuses(&out) || !message.contains("git.hook_integrity") {
             wrong.push(format!("git-guard allowed: {line}: {message}"));
         }
     }
@@ -1304,7 +1308,7 @@ fn tsk1002_review12_program_words_and_values() {
     ] {
         for hook in ["git-guard", "exec-guard"] {
             let out = f.command(&f.linked, hook, line);
-            if out.status.code() != Some(0) {
+            if !line_allows(&out) {
                 wrong.push(format!("{hook} refused: {line}: {out:?}"));
             }
         }
@@ -1348,7 +1352,7 @@ fn tsk1002_committed_content_is_outside_the_promise() {
         "git add id_rsa",
         "GIT_DIR=../other/.git git show main",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -1365,7 +1369,7 @@ fn assert_pair(f: &Fixture, refused: &[String], allowed: &[String]) {
             .iter()
             .map(|hook| f.command(&f.linked, hook, line))
             .collect();
-        if outs.iter().all(|out| out.status.code() != Some(2)) {
+        if outs.iter().all(|out| !line_refuses(out)) {
             wrong.push(format!("both guards allowed: {line}"));
         }
         if outs
@@ -1378,7 +1382,7 @@ fn assert_pair(f: &Fixture, refused: &[String], allowed: &[String]) {
     for line in allowed {
         for hook in ["git-guard", "exec-guard"] {
             let out = f.command(&f.linked, hook, line);
-            if out.status.code() != Some(0) {
+            if !line_allows(&out) {
                 let err = String::from_utf8_lossy(&out.stderr);
                 wrong.push(format!("{hook} refused: {line}: {err}"));
             }
@@ -1542,17 +1546,20 @@ fn tsk1002_review13_programs_run_where_git_runs_them() {
             .iter()
             .map(|hook| f.command(&f.root, hook, line))
             .collect();
-        if outs.iter().all(|out| out.status.code() != Some(2)) {
+        if outs.iter().all(|out| !line_refuses(out)) {
             wrong.push(format!("both guards allowed: {line}"));
         }
     }
+    // Under the strict default the body `echo $name` takes the strict rule's
+    // own finding (TSK-397 Grok review 01); `line_allows` still fails a
+    // refusal by any of the line's rules.
     for line in [
         "git submodule foreach 'echo $name'",
         "cd sub && git submodule foreach 'git status --short'",
     ] {
         for hook in ["git-guard", "exec-guard"] {
             let out = f.command(&f.root, hook, line);
-            if out.status.code() != Some(0) {
+            if !line_allows(&out) {
                 let err = String::from_utf8_lossy(&out.stderr);
                 wrong.push(format!("{hook} refused: {line}: {err}"));
             }
@@ -1747,7 +1754,7 @@ fn tsk1002_codex07_aliases_are_judged_by_expansion() {
         "git log -p -- ':(icase)ID_RSA'",
         "git --icase-pathspecs log -p -- 'ID_RS?'",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -1790,7 +1797,7 @@ fn tsk1002_fable09_command_local_home_and_substitution_globs() {
         "env HOME=alias bash -c 'cd -P && cd .. && cat auth.json'",
         "HOME=alias exec bash -c 'cd -P && cd .. && cat auth.json'",
     ] {
-        if f.command(&f.linked, "exec-guard", line).status.code() != Some(2) {
+        if !line_refuses(&f.command(&f.linked, "exec-guard", line)) {
             wrong.push(format!("allowed: {line}"));
         }
     }
@@ -1799,7 +1806,7 @@ fn tsk1002_fable09_command_local_home_and_substitution_globs() {
         "cat \"$(git rev-parse --show-toplevel)/README.md\"",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        if out.status.code() != Some(0) {
+        if !line_allows(&out) {
             wrong.push(format!("refused: {line}: {out:?}"));
         }
     }
@@ -1880,7 +1887,7 @@ fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
         ),
     ] {
         let out = f.command(&f.linked, guard, &line);
-        if out.status.code() != Some(2) {
+        if !line_refuses(&out) {
             wrong.push(format!("refuse {guard}: {line}: {out:?}"));
         }
     }
@@ -1899,7 +1906,7 @@ fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
         format!(r"cat '\??\{home}\notes.md'"),
     ] {
         let out = f.command(&f.linked, "exec-guard", &line);
-        if out.status.code() != Some(0) {
+        if !line_allows(&out) {
             wrong.push(format!("allow: {line}: {out:?}"));
         }
     }
@@ -1911,7 +1918,11 @@ fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
             let mut cmd = f.guard_command(&f.linked, "exec-guard");
             cmd.env("HOME", &unc_home).env("USERPROFILE", &unc_home);
             let out = run_with_stdin(&mut cmd, &guard_payload(command, &f.linked));
-            if out.status.code() != Some(code) {
+            if !(if code == 0 {
+                line_allows(&out)
+            } else {
+                out.status.code() == Some(2)
+            }) {
                 wrong.push(format!("UNC home: {command}: {out:?}"));
             }
         }
@@ -1925,7 +1936,7 @@ fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
             &mut f.guard_command(&f.linked, "exec-guard"),
             &guard_payload("cat notes.md", &linked_unc),
         );
-        if out.status.code() != Some(2) {
+        if !line_refuses(&out) {
             wrong.push(format!("UNC checkout identity was established: {out:?}"));
         }
         // A plain directory outside any checkout reads through the share.
@@ -1935,7 +1946,11 @@ fn tsk1002_unc_spellings_of_stores_and_checkouts_refuse() {
                 &mut f.guard_command(f.temp.path(), "exec-guard"),
                 &guard_payload(command, &unc_cwd),
             );
-            if out.status.code() != Some(code) {
+            if !(if code == 0 {
+                line_allows(&out)
+            } else {
+                out.status.code() == Some(2)
+            }) {
                 wrong.push(format!("UNC cwd: {command}: {out:?}"));
             }
         }
@@ -1984,7 +1999,11 @@ fn tsk1002_review3_nul_path_streams_preserve_file_names() {
         ),
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        assert_eq!(out.status.code(), Some(expected), "{line}: {out:?}");
+        if expected == 0 {
+            assert!(line_allows(&out), "{line}: {out:?}");
+        } else {
+            assert_eq!(out.status.code(), Some(2), "{line}: {out:?}");
+        }
     }
 }
 
@@ -2015,7 +2034,7 @@ fn tsk1002_ci1_windows_home_streams_stay_guarded() {
         "printf '%s\\0' \"$HOME/notes.md\" | xargs -0 cat".to_string(),
     ] {
         let out = f.command(&f.linked, "exec-guard", &line);
-        assert_eq!(out.status.code(), Some(0), "{line}: {out:?}");
+        assert!(line_allows(&out), "{line}: {out:?}");
     }
 }
 
@@ -2070,7 +2089,7 @@ fn tsk1002_r13_home_catalog_globs_and_named_metadata_paths() {
         "git log -- HOME",
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        assert_eq!(out.status.code(), Some(0), "{line}: {out:?}");
+        assert!(line_allows(&out), "{line}: {out:?}");
     }
     let root = shell_path(&f.root);
     let line = format!("HOME='{root}'; git status -- ~/.claude/settings.json");
@@ -2195,11 +2214,14 @@ fn tsk1002_r14_home_file_globs_keep_public_siblings() {
         ("cat ~/.codex/auth.{json}", true),
     ] {
         let out = f.command(&f.linked, "exec-guard", line);
-        let expected = Some(if refuse { 2 } else { 0 });
-        if out.status.code() != expected
-            || refuse && !String::from_utf8_lossy(&out.stderr).contains("security.secret_reads")
-        {
-            wrong.push(format!("{line}: expected {expected:?}: {out:?}"));
+        let ok = if refuse {
+            out.status.code() == Some(2)
+                && String::from_utf8_lossy(&out.stderr).contains("security.secret_reads")
+        } else {
+            line_allows(&out)
+        };
+        if !ok {
+            wrong.push(format!("{line}: expected refuse={refuse}: {out:?}"));
         }
     }
     let selected_secret = project.join("id_rsa.md");
@@ -2211,7 +2233,7 @@ fn tsk1002_r14_home_file_globs_keep_public_siblings() {
     ];
     for line in selectors {
         let out = f.command(&f.linked, "exec-guard", line);
-        if out.status.code() != Some(2)
+        if !line_refuses(&out)
             || !String::from_utf8_lossy(&out.stderr).contains("security.secret_reads")
         {
             wrong.push(format!("selected secret name: {line}: {out:?}"));
@@ -2223,7 +2245,7 @@ fn tsk1002_r14_home_file_globs_keep_public_siblings() {
         std::os::unix::fs::symlink("trace.jsonl", project.join("renamed.md")).unwrap();
         for line in selectors {
             let out = f.command(&f.linked, "exec-guard", line);
-            if out.status.code() != Some(2)
+            if !line_refuses(&out)
                 || !String::from_utf8_lossy(&out.stderr).contains("security.secret_reads")
             {
                 wrong.push(format!("selected secret link: {line}: {out:?}"));
@@ -2628,7 +2650,12 @@ fn repair2_git_creation_assignments() {
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
         let out = f.command(&f.root, hook, "D=scratch; git clone /source $D/newclone");
-        assert_eq!(out.status.code(), Some(0), "ordinary {hook}: {out:?}");
+        // TSK-397: `git clone` given a run-time word.
+        if hook == "exec-guard" {
+            assert!(run_time_word_refusal(&out), "ordinary {hook}: {out:?}");
+        } else {
+            assert_eq!(out.status.code(), Some(0), "ordinary {hook}: {out:?}");
+        }
     }
 }
 
@@ -3044,7 +3071,7 @@ fn target_returned_worktree_after_prune() {
         for target in f.targets() {
             for route in ["redirect", "interpreter", "native"] {
                 let out = f.write(cwd, route, &target);
-                if out.status.code() != Some(2) {
+                if !line_refuses(&out) {
                     wrong.push(format!(
                         "{} {route} {}: {out:?}",
                         cwd.display(),
@@ -3308,6 +3335,13 @@ fn repair3_runner_locations() {
             ),
         ] {
             let out = f.command(&subdir, hook, &command);
+            // TSK-397 design D: in the tightened outcome the suite runs in,
+            // `cd` is no exempt name, so the exec guard judges the run-time
+            // word after it.
+            if hook == "exec-guard" && command.starts_with("D=..") {
+                assert_eq!(out.status.code(), Some(2), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
         for command in [
@@ -3734,6 +3768,11 @@ fn runner_home_in_program_path_assignments() {
             "export PATH=\"$HOME/bin:$PATH\"; git status",
         ] {
             let out = f.command(&f.linked, hook, command);
+            // TSK-397: `export` given a run-time word.
+            if hook == "exec-guard" && command.starts_with("export") {
+                assert!(run_time_word_refusal(&out), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
         for command in [
@@ -3756,6 +3795,11 @@ fn runner_home_tilde_operands() {
             "git -c core.pager=true diff ~",
         ] {
             let out = f.command(&f.linked, hook, command);
+            // TSK-397: `git` given a tilde word.
+            if hook == "exec-guard" {
+                assert!(run_time_word_refusal(&out), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
         for command in [
@@ -4445,6 +4489,11 @@ fn reassigned_home_resolves_tilde_and_home_words() {
             "git log -1 --format='%h~%s'",
         ] {
             let out = f.command(&f.linked, hook, command);
+            // TSK-397: `git` given a tilde word, outside `git log`.
+            if hook == "exec-guard" && command.contains(" ~") {
+                assert!(run_time_word_refusal(&out), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
     }
@@ -4575,6 +4624,11 @@ fn wrapped_and_unproven_home_changes_are_read() {
             "command -v git && git status".to_string(),
         ] {
             let out = f.command(&f.root, hook, &command);
+            // TSK-397: `git status` given a tilde word.
+            if hook == "exec-guard" && command.contains(" ~") {
+                assert!(run_time_word_refusal(&out), "{hook} {command}: {out:?}");
+                continue;
+            }
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
     }

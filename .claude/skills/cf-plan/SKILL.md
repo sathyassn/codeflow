@@ -69,6 +69,12 @@ when a single outcome becomes one standalone task.
      criteria changes of other tasks ride together in one amendment on a
      `plan/` branch, reviewed by one other-lineage seat. A task's own criteria
      change rides in its own PR.
+   - **Retarget of records already on the default branch:** an amendment that
+     changes the integration target of records the default branch already holds
+     records the retarget on the line, in one planning pull request. The hooks
+     read nothing from task records (TSK-1077), so the retarget cannot refuse a
+     command, and `codeflow ci` reports the records whose target differs from
+     the default branch's copy. Example: the EPC-024 move of 2026-10-31.
    Add a spec only where interfaces, formats, or behavior need pinning down,
    and an ADR draft if a Tier-3 decision is involved. Do not hand-invent IDs.
    If another method owns product specs or task decomposition, link the
