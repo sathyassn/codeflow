@@ -1,0 +1,11 @@
+id = "TSK-1127"
+uid = "45dd82fe-e9be-4f4c-a1ab-464671bbdd6d"
+kind = "TSK"
+title = "The shipped report specimens and portal layer samples conform to the approved shell and topic contracts"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T03:55:26Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
