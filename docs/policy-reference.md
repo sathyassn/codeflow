@@ -32,7 +32,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.root_checkout_commits` | Level | `block` | off \| warn \| allow \| block | A commit at the root checkout on any branch other than git.root_branch. | git-guard applies the level to agents; the git hooks apply it when a harness marker is set and only warn otherwise. Suspended in the pre-first-commit bootstrap window. |
 | `git.worktree_locations` | string list | `[".worktrees",".claude/worktrees","$CODEX_HOME/worktrees","$GROK_HOME/worktrees","$GROK_HOME/worktree_pool"]` | folders: relative to the root checkout, absolute, ~/..., $CODEX_HOME/... or $GROK_HOME/... | Where linked worktrees may live; doctor reports one outside them. | The default covers .worktrees and the folders the Claude desktop app, Codex and Grok manage. |
 | `git.claim_remotes` | string list | `[]` | an array of configured remote names, none starting with a dash | Additional remotes whose branches count as advisory work claims. | Origin and the target's fetch remote always count. Empty by default; other remote branches are reported as information. Named remotes must be configured when work claim lists their branches. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.required_checks` | string list | `["codeflow gates","secret scan","security review","commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and commit standards. `codeflow remote protect` requires them with up-to-date branches, and `codeflow doctor --check remote-perimeter` warns when the live rules do not. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.required_checks` | string list | `["codeflow gates","secret scan","security review","commit standards"]` | a non-empty array of status check names, none blank | Status checks a protected branch requires before merging, on a branch that is up to date with its base. | Defaults to the shipped CI job names: codeflow gates, secret scan, security review and commit standards. `codeflow remote protect` requires them, on an up-to-date branch, on each protected branch other than the default branch, whose own rulesets require the names its policy workflow declares; `codeflow doctor --check remote-perimeter` warns when the default branch's live rules do not require them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.commit_format` | Level | `block` | off \| warn \| allow \| block | Conventional-commit subject shape: `type(scope): description`. | Governs three checks: commit_types, commit_desc_max_len, and commit_subject_max_len; off/allow disables all of them. |
 | `git.commit_types` | string list | `["feat","fix","docs","refactor","test","chore","ci","perf","build","revert"]` | an array of lower-case conventional commit types | The whitelist of commit types. | Enforced under commit_format. |
 | `git.commit_desc_max_len` | uint | `50` | a non-negative integer (character count) | Max length of the description, the text after `type(scope): `. | Enforced under commit_format. |
@@ -67,8 +67,10 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.branch_naming` | Level | `block` | off \| warn \| allow \| block | Branch names must match `{prefix}/{kebab-name}` with a sanctioned prefix. | Protected branches are exempt (governed by the protection rules, not naming); prefixes come from branch_prefixes. |
 | `git.branch_prefixes` | string list | `["feat/","fix/","docs/","refactor/","test/","chore/","ci/","hotfix/","plan/","task/","spike/","experiment/","integration/"]` | an array of prefixes, each ending with `/` (e.g. feat/) | The sanctioned branch-name prefixes. | A prefix missing its trailing `/` never matches a `{prefix}/{name}` branch. |
 | `git.path_policy` | Level | `block` | off \| warn \| allow \| block | Refuse blocked names and protected prefixes in staged changes and introduced commits. | Reads landed policy for pre-commit and target policy for CI. Off removes only this gate; the secret scan remains separate. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.blocked_names` | path rule list | `[".env",".env.*","*.env","*.pem","*.key","*.p12","*.pfx","*.jks","*.keystore","id_rsa*","id_dsa*","id_ecdsa*","id_ed25519*",".netrc",".pgpass","*.tfstate","*.tfstate.*","kubeconfig",".kube/config",".aws/credentials","application_default_credentials.json","credentials.json",".credentials.json"]` | strings or {pattern, except_under: [root-relative prefix], reason} | Block final-component globs or component sequences at any depth. | Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.protected_paths` | path rule list | `[]` | {prefix, allow: [{path, reason}]} entries | Refuse every change under root-anchored component prefixes. | Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.blocked_names` | path rule list | `[".env",".env.*","*.env","*.pem","*.key","*.p12","*.pfx","*.jks","*.keystore","id_rsa*","id_dsa*","id_ecdsa*","id_ed25519*",".netrc",".pgpass","*.tfstate","*.tfstate.*","kubeconfig",".kube/config",".aws/credentials","application_default_credentials.json","credentials.json",".credentials.json"]` | strings or {pattern, except_under: [root-relative prefix], reason} | Block final-component globs or component sequences at any depth. | Shipped names remain when omitted; use a narrow explained except_under on the default branch to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.protected_paths` | path rule list | `[]` | {prefix, allow: [{path, reason}]} entries | Refuse every change under root-anchored component prefixes. | Exceptions come only from the default branch at one commit; a working copy adds denials only, and line-only or branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.ignored_files` | object | `absent` | {level: off \| warn \| allow \| block, allow: [{path, reason}]} | Report or refuse a new or changed file that the policy authority's .gitignore files exclude. | Absent means level warn. Read with the policy and the .gitignore files of the authority's tree, never the working tree or the change: a .gitignore edit in the change admits nothing, and a tracked file is still judged. Matching follows git, with ASCII case ignored. An allow entry names a root-relative prefix with a reason. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.max_file_bytes` | object | `absent` | {limit: bytes, at least 1 (default 10485760), except_under: [root-relative directory]} | Refuse a new or changed file larger than the limit; one over 1 MiB warns. | Absent: a file over 1 MiB warns and one over 10 MiB is refused where the authority's project settings hold file_size_rule, which a fresh `codeflow init` writes; elsewhere, as in a project `codeflow update` brought forward, both are report lines. Setting either field opts in and replaces that part of the default; except_under exempts files beneath a directory, never one named file. Sizes are of the blob git records, so a Git LFS path is sized by its pointer. A refusal names the admission routes. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. |
 | `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
@@ -104,14 +106,19 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 ### Blocked names and protected paths
 
-`git.path_policy` defaults to `block`. Pre-commit reads the landed policy
-and any stricter working-copy rules. CI reads the target policy and judges
-all commits the range introduces. A branch-only exception grants no access.
-Denials from applicable sources are combined. When a task declares an
-integration line, pre-commit takes exceptions from that line, as CI against
-the line does, and the default branch adds only denials. Otherwise
-exceptions keep only the area the sources share. A removed entry still
-applies when another source holds it.
+`git.path_policy` defaults to `block`. Path exceptions and denials come
+from the default branch at one commit (ADR-0091). The guards and
+pre-commit's path checks read it at the commit `refs/remotes/<remote>/HEAD`
+names; pre-commit also keeps any stricter working-copy denials, and a
+working copy adds no exception. Pre-merge-commit runs no path check. Pre-push
+judges with the default branch the destination advertises, and `codeflow
+ci` with the commit it is given (`--policy-from`, else `--base`; the hosted
+jobs pass the pull request's target). CI judges all commits the range
+introduces. No integration line, task record or `git.root_branch` supplies
+an exception, a denial or a level, so a branch-only or line-only exception
+grants no access. When that commit holds no `.codeflow/policy.json`, the
+shipped defaults apply; an unreadable one refuses. The commit hooks still
+take their levels from the working copy until TSK-1078 lands.
 
 - A `git.blocked_names` string without `/` is a glob on the final component.
   A sequence with `/` matches consecutive components at any depth.
@@ -176,6 +183,82 @@ judged by its target, as above, and a gitlink or any other entry type
 there refuses. Other rules still apply to those files. `git.secret_scan` continues to own
 both the existing environment-file check and the content secret scan;
 `git.path_policy: off` disables only the new path gate.
+
+### Ignored files and large files
+
+Two more rules judge the same new and changed files, staged and in every
+commit a range introduces, merges included: a merge is judged on every
+file it records that no parent holds, so a clean automatic merge that
+grows a file over the limit is refused too (TSK-323). Each reads its key,
+the project kind and the `.gitignore` files at the policy authority: for
+pre-commit, the commit `refs/remotes/<remote>/HEAD` names (`HEAD` only
+in the initialization and local-only states), and for `codeflow ci`, the
+commit whose policy judges the range (`--policy-from` or the base), with
+the shipped defaults where that commit has no policy file. No branch is
+guessed: an unset remote `HEAD` refuses, and a `codeflow ci` run with
+neither `--policy-from` nor a base cannot judge these two rules and
+refuses (ADR-0091). Neither reads the working tree or the change being judged, so a
+`.gitignore` or policy edit in a change admits nothing until it lands.
+Neither judges a gate input, deleted files or gitlinks, and both run when
+`git.path_policy` is off.
+
+- **`git.ignored_files`** (default level `warn`): a file the authority's
+  ignore rules exclude is reported, or refused at `block`. Matching follows
+  git: the nearest `.gitignore` decides, `!` re-includes, and a file under
+  an excluded directory stays excluded, and a byte order mark at the start
+  of a file is skipped. ASCII case is ignored, and patterns and paths
+  compare in composed Unicode (NFC). A tracked
+  file is still judged, since git's own ignore check skips tracked files.
+  `allow: [{path, reason}]` admits a root-relative prefix.
+- **`git.max_file_bytes`**: sizes the blob git records for the path.
+
+What a file over each threshold gets depends on the project:
+
+- **New scaffold** (`file_size_rule` in the authority's
+  `.codeflow/project.toml`, written by a fresh `codeflow init`): a warning
+  over 1 MiB, a refusal over 10 MiB.
+- **Updated project** with no `git.max_file_bytes`: a report line for each,
+  never a refusal.
+- **`git.max_file_bytes` set on the authority**: a warning over 1 MiB, a
+  refusal over `limit`.
+
+`codeflow update` never writes either key or the project kind, and its
+report says how an updated project opts in. Setting `limit` or
+`except_under` opts in and replaces that part of the default:
+
+```json
+{
+  "git": {
+    "max_file_bytes": {
+      "limit": 20971520,
+      "except_under": ["tests/fixtures/large"]
+    }
+  }
+}
+```
+
+Set the key only once every binary that judges the repository, the CI pin
+included, is 4.0.0 or later; an older binary refuses the key (see "Where a
+new key goes").
+
+A size refusal names the file, its size, the limit and three admission
+routes:
+
+1. **Git LFS.** For a path `.gitattributes` gives `filter=lfs`, git records
+   the pointer (about 130 bytes), so the file passes with no policy change.
+   Without `git lfs install` git records the payload, and the rule sizes
+   that.
+2. **A policy change on the default branch.** A `limit` or
+   `except_under` change to `git.max_file_bytes` in `.codeflow/policy.json`,
+   through a reviewed pull request. `except_under` names directories: a
+   file beneath one is exempt, and an entry naming the file itself exempts
+   nothing, so there is no single-file exception in 4.0.0.
+3. **From 4.2.0, a per-path `admitted` row** in the exemption register.
+
+Legitimate large files have homes outside ordinary git objects: model
+weights, datasets and fixtures, media, vendored binaries and installers
+belong in Git LFS, or in a release asset or package registry that the
+repository references by digest.
 
 ## Unsupported policy keys
 
@@ -869,6 +952,175 @@ the project stood and is left out when the project has no commit yet.
 - **What stays valid?** No existing record is edited. A record made by an older release, even on the morning of the upgrade, is listed, so it warns until it is next amended. The "Outcome:" sentence some older records carry in their Description stays valid for them.
 - **Can a change edit the list?** `codeflow ci` and the pre-push hook judge the list against `.codeflow/project.toml` at the tip of the branch the change lands on: the tip the destination advertises to the pre-push hook, the hosting platform's target commit, or else the target branch's remote-tracking ref, then its local branch. The pre-push hook names the target by the same rule that bounds the push's range, else the destination's default branch, so a declared target the range rejects never decides it. Neither the range's `--base`, which can be a merge-base, nor the pushed branch's own earlier tip decides it. A target with no tip is never read as having no list: a target the destination does not advertise refuses until the line is pushed there first (a fork fetches the upstream line and pushes it to the fork), and a target missing from the clone refuses until it is fetched, created (in a repository with no remote) or named with `--into`. A change that leaves the marker as it was at every best fork point from the target is not judged, since merging it keeps the target's own list; a target list that cannot be read refuses every change until it is repaired on the target. A change that edits the marker may keep or drop uids the target lists, and is refused when it adds a uid, removes the marker or leaves it unreadable. A target with no marker admits the change that writes one, which is the adoption itself. This check runs in every tier, including a project that keeps only epics or no records yet.
 - **And an epic's Deliverables?** An open epic whose uid is not listed warns when its `## Deliverables` section names nothing.
+
+## Remote protection
+
+`codeflow remote protect` writes the host rules as GitHub repository
+rulesets it owns by name. No policy key selects them: the flags below do,
+and nothing is stored (issue 279, TSK-1080).
+
+The rulesets:
+
+- **A, "codeflow authority updates"**, on `~DEFAULT_BRANCH`: `update`,
+  without fetch and merge; its bypass list is one repository role, set by
+  the profile.
+- **B, "codeflow authority checks"**, on `~DEFAULT_BRANCH`: a pull request
+  with the profile's approvals; strict checks, each pinned to the app that
+  must produce it; no force push; no deletion; no bypass.
+- **C, "codeflow line checks"**, on the line pattern: a pull request with no
+  approval; strict checks pinned to GitHub Actions; no force push; no
+  deletion; no bypass; no creation rule, and the checks are not required
+  when a line is created, so a new line can still be cut. Every later
+  update of the line stays under C, and the default branch takes the
+  line's content only through B.
+
+The flags:
+
+- **`--profile`**: `solo-administrator` (default) needs no approval, and only
+  the administrator role (`RepositoryRole` 5) updates the default branch.
+  `independent-review` needs one approval, dismisses stale approvals,
+  requires the last push to be approved by someone else, and lets only the
+  maintain role (`RepositoryRole` 2) and the roles above it update it.
+- **`--check-app <id>`**: Mode A, where B requires the `authority:` names
+  pinned to that GitHub App. Without it, Mode B: B requires the `trusted:`
+  names pinned to GitHub Actions (15368). GitHub Actions' own id is
+  refused.
+- **`--lines <pattern>`**: the pattern C targets, below `refs/heads/`;
+  default `integration/**`.
+
+The role ids are not in GitHub's REST reference. They were read from a
+scratch repository on 2026-10-30: 2 is maintain, 4 write and 5 admin, and
+an administrator can bypass a rule that names the maintain role (TSK-1080
+Findings). A bypass actor merges into the default branch with `gh pr merge
+--admin`.
+
+- **What B and C require.** B: the `trusted:` names (Mode B) or the matching
+  `authority:` names (Mode A), plus `codeflow gates`, `security review` and
+  `windows` where a workflow on the default branch declares them. C: the
+  `trusted:` names plus `codeflow gates` and `windows` where declared, each
+  pinned to GitHub Actions. `remote protect` refuses B and C while the
+  default branch's `.github/workflows/codeflow-policy.yml` does not declare
+  `trusted: commit standards` and `trusted: secret scan` as job names (and,
+  in Mode A, does not name each `authority:` check it creates), or no workflow there
+  declares `codeflow gates`: a rule that requires a name nothing produces
+  blocks every pull request. A is written either way.
+- **Other protected branches.** Each pattern in `git.protected_branches`
+  other than the default branch and the line pattern gets its own ruleset,
+  `codeflow protect <pattern>`, with the checks in `git.required_checks`.
+  The registry's data profile is `codeflow protect codeflow/registry`.
+  Classic branch protection is never written.
+- **Never weaker.** A ruleset with any other name is never written. Every
+  write sends `name`, `target`, `enforcement`, `conditions`,
+  `bypass_actors` and `rules`, because GitHub does not document what an
+  update does with omitted fields, and the bypass list the host answers is
+  checked against the one sent. An update makes the ruleset active, joins
+  its include patterns and drops its excludes, adds a missing rule, raises
+  an approval count and turns review flags on, makes checks strict and adds
+  missing names. It never lowers an approval count, removes a rule, changes
+  which app produces a check (that ruleset is left unwritten and reported)
+  or widens a bypass list: A keeps the bypass list it has, and B and C are
+  written with an empty one. B or C that carries an `update` rule is left
+  unwritten. A second run with nothing to change writes nothing.
+- **Reducing a rule.** There is no command for it. An administrator edits
+  the ruleset on the host, where the host records the change.
+
+### Enablement order
+
+The names B and C require are produced by the default branch's policy
+workflow once TSK-336 is there. Until then `remote protect` writes A alone
+and reports B and C as not applied.
+
+1. TSK-336 reaches the default branch through the line's reviewed pull
+   request, under the existing rules.
+2. From that merge, the old names (`commit standards`, `secret scan`,
+   `release impact`) have no producer, so every pull request into the
+   default branch and the lines is blocked by the rulesets that still
+   require them. This fails closed by design.
+3. In the same session, an administrator runs `codeflow remote protect`
+   (with `--check-app <id>` in Mode A, and `--lines` for the line pattern),
+   which writes A, B and C.
+4. The administrator retires, on the host, every foreign ruleset that
+   requires an old name. In this repository those are 24379074 (`main`)
+   and 25435656 (`integration/**`). `codeflow doctor --check
+   remote-perimeter` names each one, and is green only after.
+
+### Mode A setup (operator)
+
+Steps 1 to 5 can be done at any time and change nothing until the policy
+workflow uses them. Step 6 runs after TSK-336 is on the default branch, in
+one session. Step 7 has no ordering dependency.
+
+1. Settings, Developer settings, GitHub Apps, New GitHub App: a name such as
+   `codeflow-authority-<repo>`, no webhook, repository permission Checks
+   read and write only, "Only on this account".
+2. Install the App on this repository only; note the App id.
+3. Generate one private key on the App and download it.
+4. Repository Settings, Environments, New environment `codeflow-authority`;
+   deployment branches and tags: selected branches and tags, the default
+   branch only.
+5. In that environment, add the secret `CODEFLOW_AUTHORITY_APP_KEY` (the key
+   file's contents) and the variable `CODEFLOW_AUTHORITY_APP_ID`.
+6. Run `codeflow remote protect --check-app <id> --lines "integration/**"`
+   as the administrator; retire the foreign rulesets; run `codeflow doctor
+   --check remote-perimeter` and stop only when it is green with no
+   recovery window open.
+7. Create the agent principal: a non-administrator App installation or bot
+   account with Contents and Pull requests write and Actions read, and no
+   Workflows, Commit statuses, Checks, Administration, Environments or
+   secrets access. Install it, point every seat's `gh` and git at it, and
+   remove the operator's login from the seats' credential stores.
+
+On GitHub Free, environment secrets exist only in public repositories; a
+private repository on Free uses Mode B.
+
+### Recovery window
+
+When the required checks fail on every pull request, the repair included,
+the route is: an administrator adds the administrator role to B's bypass
+list on the host (not `evaluate` mode, which releases everyone), merges the
+one repair pull request bound to its head (`gh pr merge
+--match-head-commit <sha>`), then runs `codeflow remote protect`, which
+writes B's empty bypass list back. The same route applies to C for a line.
+
+- **Accepted administrator power.** While the list is not empty, every
+  administrator can merge any pull request, not only the repair, and on a
+  line C's deletion rule is bypassed too, so the line can be deleted. The
+  host cannot narrow this; it is accepted, and visible in `doctor` and the
+  host's audit log.
+- **A window cannot stay open unnoticed.** `codeflow doctor --check
+  remote-perimeter` fails while any ruleset named as B or C has a bypass
+  list that is not empty, naming the actors, the time the ruleset last
+  changed and the close.
+- **Exercised on a host.** On a scratch repository on 2026-10-30, while
+  the administrator role was in B's bypass list, a pull request whose
+  required check was failing merged with `gh pr merge --admin`; `doctor`
+  then failed, naming the window, and `codeflow remote protect` emptied the
+  list (the sources of each fact are in TSK-1080's Findings). Two cases are
+  not yet shown on a host: a write-access App refused under A, and a merge
+  by an account outside the bypass list refused while the window is open
+  (TSK-336).
+
+### What doctor reports
+
+`codeflow doctor --check remote-perimeter [--profile <name>]` adds these
+to its required-checks answer:
+
+- **Fail:** any ruleset named as B or C lists a bypass actor, or two
+  rulesets share B's or C's name (`remote protect` writes neither).
+- **Warn:** with `--profile`, the owned rulesets differ from it or one is
+  missing; classic protection on the default branch has `enforce_admins`
+  off; a required-checks rule on the line pattern is not strict; no active
+  ruleset requires a pull request on the line pattern (judged with
+  `--profile`, or when some ruleset targets the lines); an `authority:`
+  check is unpinned or pinned to GitHub Actions; the `codeflow-authority`
+  environment admits more than the default branch; a job other than the
+  authority job in the policy workflow references that environment; a
+  ruleset other than A, B and C requires a name no workflow on the default
+  branch declares.
+- **Note, never a pass:** a bypass list, ruleset, environment or workflow
+  that cannot be read.
+
+The line pattern is C's when C exists, else `integration/**`.
 
 ## Where a new key goes
 

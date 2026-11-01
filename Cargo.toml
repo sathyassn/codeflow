@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/codeflow-core", "crates/codeflow-cli", "crates/codeflow-present", "crates/codeflow-fixture"]
 
 [workspace.package]
-version = "3.2.0"
+version = "4.0.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/sathyassn/codeflow"
@@ -24,6 +24,8 @@ toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 glob = "0.3"
 globset = "0.4"
+# The gitignore matcher of the ignored-file rule (TSK-323, ADR in docs/decisions).
+ignore = { version = "=0.4.33", default-features = false }
 quick-xml = "0.41"
 regex = "1"
 git2 = { version = "0.21", default-features = false }

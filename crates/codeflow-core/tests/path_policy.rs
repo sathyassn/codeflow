@@ -284,6 +284,14 @@ fn landed_authority_refuses_branch_waivers_and_unreadable_sources() {
     f.repo
         .reference("refs/remotes/origin/main", base, true, "fixture")
         .unwrap();
+    f.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
     let local: GitPolicy = serde_json::from_value(json!({"path_policy":"off", "blocked_names":[{"pattern":"*.pem","except_under":["/"],"reason":"branch only"}],
         "protected_paths":[{"prefix":"private","allow":[{"path":"/","reason":"branch only"}]}]})).unwrap();
     f.stage("private/cert.pem", 0o100_644, b"public");
@@ -293,7 +301,7 @@ fn landed_authority_refuses_branch_waivers_and_unreadable_sources() {
         .unwrap()
         .violations
         .is_empty());
-    // Before first fetch / no remote, HEAD still supplies the policy.
+    // No remote (local only): HEAD still supplies the policy.
     f.repo.remote_delete("origin").unwrap();
     assert_eq!(
         codeflow_core::hooks::landed_policy::staged_paths(f.dir.path(), &local)
@@ -345,8 +353,10 @@ fn all_gate_inputs_remain_exempt_under_hostile_policy() {
     assert!(f.range(base, head, &p).violations.is_empty());
 }
 
+/// TSK-1077: a line a landed task record declares contributes neither
+/// denials nor exceptions; the default branch alone decides.
 #[test]
-fn declared_integration_target_contributes_denials_and_intersects_waivers() {
+fn a_declared_integration_line_contributes_nothing() {
     let f = Fixture::new();
     f.stage(".codeflow/policy.json", 0o100_644, br#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures"],"reason":"public"}]}}"#);
     f.stage(
@@ -366,17 +376,26 @@ fn declared_integration_target_contributes_denials_and_intersects_waivers() {
             .unwrap();
     }
     f.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
+    f.repo
         .reference("refs/heads/task/TSK-007-paths", line, true, "fixture")
         .unwrap();
     f.repo.set_head("refs/heads/task/TSK-007-paths").unwrap();
     let landed = codeflow_core::hooks::landed_policy::load(f.dir.path()).unwrap();
-    assert!(landed.source.contains("integration/paths"));
+    assert_eq!(landed.source, "refs/remotes/origin/main");
     let p = PathPolicy::from_git(&landed.policy.git).unwrap();
     for (path, blocked) in [
-        ("target-only", true),
-        ("private/file", true),
-        ("fixtures/cert.pem", true),
+        ("target-only", false),
+        ("private/file", false),
+        ("fixtures/cert.pem", false),
         ("fixtures/narrow/cert.pem", false),
+        ("other/cert.pem", true),
     ] {
         f.stage(path, 0o100_644, b"public");
         let report = path_policy::staged(&f.repo, &p).unwrap();
@@ -407,6 +426,14 @@ fn line_fixture(main: &str, line: &str) -> Fixture {
             .unwrap();
     }
     f.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
+    f.repo
         .reference("refs/heads/task/TSK-007-paths", line_id, true, "fixture")
         .unwrap();
     f.repo.set_head("refs/heads/task/TSK-007-paths").unwrap();
@@ -415,8 +442,10 @@ fn line_fixture(main: &str, line: &str) -> Fixture {
     f
 }
 
+/// TSK-1077: the line's exceptions grant nothing, and the line's working
+/// copy may add denials only.
 #[test]
-fn line_exceptions_stand_and_a_line_cannot_remove_a_main_denial() {
+fn line_exceptions_are_ignored_and_main_denials_stand() {
     let f = line_fixture(
         r#"{"git":{"blocked_names":["main-only"],"protected_paths":[{"prefix":"vault","allow":[]}]}}"#,
         r#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures"],"reason":"public"}],
@@ -427,8 +456,8 @@ fn line_exceptions_stand_and_a_line_cannot_remove_a_main_denial() {
         .git;
     let p = codeflow_core::hooks::landed_policy::staged_paths(f.dir.path(), &local).unwrap();
     for (path, blocked) in [
-        ("fixtures/cert.pem", false),
-        ("private/examples/x", false),
+        ("fixtures/cert.pem", true),
+        ("private/examples/x", true),
         ("other/cert.pem", true),
         ("private/x", true),
         ("main-only", true),
@@ -447,11 +476,7 @@ fn identical_policies_with_explicit_rules_report_no_local_difference() {
         "protected_paths":[{"prefix":"private","allow":[{"path":"private/examples","reason":"public"}]}]}}"#;
     let f = line_fixture(policy, policy);
     let landed = codeflow_core::hooks::landed_policy::load(f.dir.path()).unwrap();
-    assert!(
-        landed.source.contains("integration/paths"),
-        "{}",
-        landed.source
-    );
+    assert_eq!(landed.source, "refs/remotes/origin/main");
     assert!(!landed.local_differs);
     std::fs::write(
         f.dir.path().join(".codeflow/policy.json"),
