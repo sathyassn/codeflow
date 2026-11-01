@@ -142,7 +142,11 @@ decision 2026-10-31):
   that gh runs outside the sandbox with its environment (`--jq env`
   printed every variable; review round 4), so on every `gh` call
   exec-guard admits `--jq` only as a plain field selector and refuses a
-  template, under `security.secret_reads`. The shipped ask and deny
+  template, under `security.secret_reads`. It reads every word of the
+  call for these options, with no `--` stop and no model of where gh's
+  options end (an option can take `--` as its value; review round 5), so
+  any word that could be one must be a jq flag with a selector program,
+  and it accepts the refusal of some harmless calls that this causes. The shipped ask and deny
   rules stay as a second layer for the common spellings.
 - The Read tool and the sandbox deny the token stores of `gh`, git,
   Docker, gcloud, Azure, npm and the macOS keychains.

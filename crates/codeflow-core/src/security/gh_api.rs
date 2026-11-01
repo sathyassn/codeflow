@@ -219,10 +219,32 @@ fn is_dot_path(path: &str) -> bool {
 }
 
 /// Why the `gh` call with these words (every word after `gh`) is refused
-/// for an output expression, or `None`. A `--jq`/`-q` program must be a
-/// [`is_field_selector`]; `--template`, and `-t` wherever it can mean the
-/// template, are refused, since a template is a program too. `-t` is the
-/// title in `gh pr` and `gh issue` `create` and `edit`.
+/// for an output program, or `None`.
+///
+/// The scan does not model where gh's options end (security review round
+/// 5, SEC-09-R5-OPTION-VALUE: `--search --` consumed the `--` as a value and
+/// gh still ran a later `--jq`). Every word is read, with no `--` stop and
+/// no position logic, and each word that is or could be an output option
+/// is judged on its own:
+///
+/// - `--jq` and `--jq=...`: the program, the attached text or else the next
+///   word, must be a [`is_field_selector`].
+/// - `--template` and `--template=...`: refused, since a template is a
+///   program too.
+/// - A short word (`-` and letters): only the letters before its first `=`
+///   can be options, since gh takes everything after `=` as the value of
+///   the letter before it. Both `q` and `t` take a value, so the first of
+///   them takes the rest of the word. If it is `t`, the word can be a
+///   template and is refused (SEC-10-R5-TEMPLATE: `-tq.name` is the template
+///   `q.name`), except the exact separate word `-t` in `gh pr` or
+///   `gh issue` `create` and `edit`, where it is the title. If it is `q`,
+///   the text after it (without a leading `=`), or else the next word, must
+///   be a field selector.
+///
+/// This refuses some harmless calls, such as a value that holds `q` or `t`
+/// attached to a short option (`-Ftitle=x`, `-Rquick/repo`) or a word that
+/// is only the value of another option; spelling the value as a separate
+/// word avoids it.
 pub(crate) fn output_code(rest: &[String]) -> Option<String> {
     let title = matches!(
         (
@@ -231,26 +253,23 @@ pub(crate) fn output_code(rest: &[String]) -> Option<String> {
         ),
         (Some("pr" | "issue"), Some("create" | "edit"))
     );
-    let jq = |program: Option<&String>| match program {
+    let jq = |word: &str, program: Option<&String>| match program {
         Some(program) if is_field_selector(program) => None,
         Some(program) => Some(format!(
-            "`--jq {program}` is a program gh runs outside the sandbox with its environment"
+            "`{word} {program}` is a program gh runs outside the sandbox with its environment"
         )),
-        None => Some("`--jq` has no program".to_string()),
+        None => Some(format!("`{word}` has no program")),
     };
-    let mut words = rest.iter();
-    while let Some(word) = words.next() {
-        if word == "--" {
-            break;
-        }
+    for (at, word) in rest.iter().enumerate() {
+        let next = rest.get(at + 1);
         if let Some(long) = word.strip_prefix("--") {
             let (name, attached) = match long.split_once('=') {
                 Some((name, value)) => (name, Some(value.to_string())),
                 None => (long, None),
             };
+            let name = name.to_ascii_lowercase();
             if name == "jq" {
-                let program = attached.or_else(|| words.next().cloned());
-                if let Some(why) = jq(program.as_ref()) {
+                if let Some(why) = jq(word, attached.as_ref().or(next)) {
                     return Some(why);
                 }
             } else if name == "template" {
@@ -263,26 +282,26 @@ pub(crate) fn output_code(rest: &[String]) -> Option<String> {
         let Some(short) = word.strip_prefix('-').filter(|s| !s.is_empty()) else {
             continue;
         };
-        // In a short option word, what follows `=` is always a value
-        // (`-X=put`), so only the letters before it can be options.
         let letters = short.split('=').next().unwrap_or_default();
-        if let Some(at) = letters.find('q') {
-            let after = &short[at + 1..];
-            let after = after.strip_prefix('=').unwrap_or(after);
-            let program = if after.is_empty() {
-                words.next().cloned()
-            } else {
-                Some(after.to_string())
-            };
-            if let Some(why) = jq(program.as_ref()) {
-                return Some(why);
-            }
+        // `q` and `t` both take a value, so the first of them takes the
+        // rest of the word: `-tq.name` is the template `q.name` and
+        // `-q.title` the selector `.title`.
+        let Some(at) = letters.find(['q', 't']) else {
             continue;
-        }
-        if !title && letters.contains('t') {
+        };
+        if letters.as_bytes()[at] == b't' {
+            if title && word == "-t" {
+                continue;
+            }
             return Some(format!(
                 "`{word}` can be a template program gh runs outside the sandbox"
             ));
+        }
+        let after = &short[at + 1..];
+        let after = after.strip_prefix('=').unwrap_or(after);
+        let attached = (!after.is_empty()).then(|| after.to_string());
+        if let Some(why) = jq(word, attached.as_ref().or(next)) {
+            return Some(why);
         }
     }
     None
@@ -455,6 +474,25 @@ mod tests {
             "-R o/r pr create -t x",
             "api repos/o/r -iXpatch",
             "api repos/o/r --jq",
+            // Round 5: a `--` that is an option's value hides nothing.
+            "pr list --search -- --json number --jq env",
+            "pr list --search -- --json number --jq=env",
+            "pr list --search -- --json number -qenv",
+            "issue list --label -- --json title -q env",
+            "run list --branch -- --json name --template {{.name}}",
+            "pr view 1 -- --jq env",
+            "api repos/o/r -- --jq env",
+            // Repeated flags: every one is judged.
+            "pr view 1 --json title --jq .title --jq env",
+            "pr view 1 --json title -q .title -qenv",
+            // Round 5: a `t` in a short word is a template, whatever follows.
+            "pr view 458 --json title -tq.name",
+            "pr view 458 --json title -t{{.title}}q.name",
+            "pr view 458 --json title -iqt.name",
+            "pr create -tq.name",
+            "pr create -t x --jq env",
+            "pr create -t x -- -q env",
+            "pr create --title x -t{{.a}}",
         ] {
             assert!(output_code(&words(line)).is_some(), "{line}");
         }
@@ -467,6 +505,13 @@ mod tests {
             "pr list --state open",
             "api repos/o/r -X=put",
             "api repos/o/r -X=quit",
+            "pr view 458 --json title -q.title",
+            "pr view 458 --json title -q=.title",
+            "pr view 458 --json title --jq=.title --jq .number",
+            "pr list --search -- --json number --jq .[].number",
+            "pr create --title x -b body",
+            "pr create --title=-x -b body",
+            "issue create -t x -b body -l bug",
         ] {
             assert_eq!(output_code(&words(line)), None, "{line}");
         }

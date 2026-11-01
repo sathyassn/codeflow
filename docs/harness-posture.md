@@ -93,11 +93,20 @@ amends ADR-0029's retry).
     print the GitHub token (TSK-1070 security review round 4). On every
     `gh` call, `--jq`/`-q` is admitted only as a plain field selector
     (dot paths of names with `[]` and `[N]`, joined by `|` or `,`, such
-    as `.head.sha` or `.[] | .name`), and `--template`, and `-t` except
-    as the title of `gh pr` or `gh issue` `create` and `edit`, are
-    refused, under `security.secret_reads`. For anything richer, read the
-    `--json` output as gh prints it: a pipe into `jq` keeps the call
-    sandboxed, where gh has no token.
+    as `.head.sha` or `.[] | .name`), and every template is refused,
+    under `security.secret_reads`. The check does not model where gh's
+    options end, since an option can take `--` as its value (review
+    round 5): it reads every word of the call, with no `--` stop, and any
+    word that is or could be `--jq`, `--template`, `-q` or `-t`,
+    including a short word whose letters hold `q` or `t`, must be a jq
+    flag with a selector program or the call is refused. The only
+    exception is the separate word `-t` as the title of `gh pr` or
+    `gh issue` `create` and `edit`, and another word in that call can
+    still refuse it. This refuses some harmless calls, such as a value
+    holding `q` or `t` attached to a short option (`-Ftitle=x`); spell
+    the value as a separate word. For anything richer, read the `--json`
+    output as gh prints it: a pipe into `jq` keeps the call sandboxed,
+    where gh has no token.
   - The `forge_write` ask rules and the DELETE denies in the presets name
     the common spellings as a second layer.
 - Excluded commands do not inherit the host list: an excluded `gh` or

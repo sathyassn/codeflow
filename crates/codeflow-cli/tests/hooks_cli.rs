@@ -11408,6 +11408,66 @@ fn exec_guard_refuses_gh_output_programs_on_every_verb() {
     }
 }
 
+/// TSK-1070 security review round 5 (SEC-09-R5-OPTION-VALUE,
+/// SEC-10-R5-TEMPLATE): exec-guard reads every word of a `gh` call for an
+/// output program, with no `--` stop, so a `--` that is another option's
+/// value hides nothing, and the first of `q` and `t` in a short word decides
+/// whether it is a selector or a template. Both hook payload shapes.
+#[test]
+fn exec_guard_reads_every_gh_word_for_an_output_program() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for codex in [false, true] {
+        for command in [
+            // The two Codex triggers.
+            "gh pr list -R o/r --search -- --json number --jq env",
+            "gh pr view 458 --json title -tq.name",
+            // `--` as the value of other string options.
+            "gh issue list --label -- --json title --jq env",
+            "gh pr list --author -- --json number -q env",
+            "gh run list --branch -- --json name --jq=env",
+            "gh search prs --repo -- x --json title -qenv",
+            "gh pr list --search -- --json number --template '{{.number}}'",
+            "gh api repos/o/r -- --jq env",
+            // Repeated flags: each is judged.
+            "gh pr view 1 --json title --jq .title --jq env",
+            "gh pr view 1 --json title -q .title -q=env",
+            // Attached templates, whatever text follows the `t`.
+            "gh pr view 1 --json title -t'{{.title}}q.name'",
+            "gh pr view 1 --json title -t=q.name",
+            "gh pr create -tq.name",
+            // A title does not excuse another word.
+            "gh pr create -t x -- --jq env",
+            "gh issue edit 1 -t x --template '{{.a}}'",
+        ] {
+            let out = exec_guard_from(dir.path(), command, codex);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{codex} {command}: {err}");
+            assert!(
+                err.contains("security.secret_reads"),
+                "{codex} {command}: {err}"
+            );
+        }
+        for command in [
+            "gh pr view 458 --json title -q.title",
+            "gh pr view 458 --json title -q=.title",
+            "gh pr view 458 --json title,number --jq=.title --jq .number",
+            "gh pr list --search -- --json number --jq '.[].number'",
+            "gh pr create -t title -b body",
+            "gh pr create --title title -b body",
+            "gh issue edit 1 -t title",
+        ] {
+            let out = exec_guard_from(dir.path(), command, codex);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{codex} {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
 fn assert_asks(dir: &Path, command: &str) {
     let out = exec_guard_from(dir, command, false);
     let stdout = String::from_utf8_lossy(&out.stdout);
