@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 76] = [
+pub const SCHEMA: [KeySpec; 77] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -881,6 +881,13 @@ pub const SCHEMA: [KeySpec; 76] = [
         valid: LEVEL_VALID,
         purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
         notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
+    },
+    KeySpec {
+        path: "security.text_guard",
+        kind: KeyKind::Enum(&["strict", "relaxed"]),
+        valid: "strict | relaxed",
+        purpose: "Which text rule the exec-guard applies to shell calls (TSK-397): `strict` adds the strict rule to every call; `relaxed` applies the line's rule by the operator's choice and verifies no sandbox.",
+        notes: "Default strict, also when the key is absent. `relaxed` is honoured only from the remote-tracking refs as last fetched (the remote's default branch, the one policy authority since TSK-1077): plain refs under `refs/remotes/<remote>/`, a remote `HEAD` that stays there, and no ref file that is a symbolic link. It is never honoured from a working copy, a local branch or tag, or a repository without a remote; a Claude Code call also needs it in the session project's policy. Those refs are local state that a process able to write `.git` can set; the guard does not authenticate them. The strict rule's refusals block whatever `git.hook_integrity` says. Under `relaxed`, a recognized marked retry (`dangerouslyDisableSandbox`) and every call on native Windows still take the strict rule. `codeflow doctor --check sandbox` shows the rule and the ref it was read from. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "security.outward_actions",
@@ -1718,7 +1725,8 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 11] = [
+        const OPTIONAL: [&str; 12] = [
+            "security.text_guard",
             "git.pr_section_mapping",
             "git.ignored_files",
             "git.max_file_bytes",
