@@ -76,12 +76,11 @@ network_proxy = true
 ignore_default_excludes = false
 
 # `cf-guard` grants no write under the home folder (TSK-337). Review and
-# consult seats run no gate and reserve nothing (ADR-0075 D2: a consult or
-# review edits nothing), so they cannot take the gate lock under
-# `~/.codeflow/locks`, write gate evidence under `~/.codeflow/gate-runs` or,
-# outside the main checkout root, write the common `.git`. A seat that has to
-# reserve or run a quick-mode heavy target is a builder seat and launches as
-# one.
+# consult seats run no heavy work (ADR-0075 D2: a consult or review edits
+# nothing), so they cannot take a coordination slot under `~/.codeflow/locks`,
+# write gate evidence under `~/.codeflow/gate-runs` or, outside the main
+# checkout root, write the common `.git`. A seat that has to run a heavy
+# target or `codeflow reserve` is a builder seat and launches as one.
 [permissions.cf-guard]
 extends = ":workspace"
 
@@ -286,34 +285,31 @@ dangerously_allow_all_unix_sockets = false
 # same home grant (a test keeps them equal), and the startup stub with it
 # still cannot read or run anything. `codeflow doctor --preflight` runs
 # `codex sandbox` with the launch overrides and managed config from the main
-# checkout root, writes a probe file in both gate lock folders and in the
-# common `.git` objects and refs, and fails when any of them is not writable.
+# checkout root, writes a probe file in the lock folders and in
+# the common `.git` objects and refs, and fails when any of them is not
+# writable.
 #
-# `~/.codeflow/locks` is writable so a builder can run `codeflow reserve`
-# and the heavy quick targets, which hold `~/.codeflow/locks/full-gate.lock`
-# besides the lock under the common `.git`. CodeFlow never writes a lock
-# file: it opens it read only, without following links, refusing anything
-# but a regular file, and only locks it. The holder record is a separate
-# file that is only ever replaced, by a new file created under a random
-# name and renamed over it, and read without following links. Only
-# validated values from it are printed: process numbers, a start time, a
-# known mode, and a folder only when its text equals one the gate already
-# trusts (the project and its git worktrees); a planted folder value is
-# never resolved, and errors never quote the record. So a link planted in
-# the folder can at most be locked or replaced, never written through, and
-# reveals nothing beyond a folder the gate already trusts. A gate that
-# cannot write its record refuses rather than run uncoordinated. The folder
-# stays an advisory coordination boundary, not a security boundary: a
-# builder can still hold, delete or replace a lock or a record and so
-# block, mislead or split the coordination between gates.
+# `~/.codeflow/locks` is writable so a builder can take a coordination slot
+# for `codeflow reserve` and the heavy quick targets. Every heavy run is
+# admitted at once with a slot and a share of the host's job budget; when the
+# host is busy the run takes a smaller job count and never waits. Only a
+# target declared `host_exclusive: true` changes that: while it runs no heavy
+# run starts, so either kind of run can be delayed within the run's bound. The
+# folder is an advisory coordination boundary, not a security boundary: a
+# builder can still hold, delete or replace slot state, which can change how
+# many runs share the host and can make admission refuse to start. Slot state
+# is never authenticated evidence, and admission refuses to guess when it
+# cannot read it.
 #
 # `~/.codeflow/gate-runs` stays unwritable to builder and review seats
-# (TSK-337 AC-5, decided 2026-10-27): full gates and their evidence stay
-# with the primary. The gate copies run artifacts into that folder, and later
-# gates read its run records as a green base without authenticating them, so
-# a seat that could write it could plant a record a later gate trusts. A
-# builder runs `codeflow reserve` and quick-mode heavy targets under the
-# shared lock, which need only `~/.codeflow/locks`. Nothing else under the
+# (TSK-337 AC-5, decided 2026-10-27). A full run copies its artifacts into
+# that folder, so a seat cannot complete a full run that keeps its evidence;
+# that run happens outside the seat sandbox until an engine change gives a
+# builder its own supported route. Run records are reports only: since
+# TSK-1044 none earns selection credit (ADR-0089), but a seat that could
+# write the folder could plant reports that mislead a reader. A
+# builder runs `codeflow reserve` and quick-mode heavy targets, which need
+# only `~/.codeflow/locks` for their coordination slot. Nothing else under the
 # home folder is writable; a relocated `CODEFLOW_HOME` is not covered.
 [permissions.cf-builder]
 extends = "cf-guard"

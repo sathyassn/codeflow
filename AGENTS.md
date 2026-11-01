@@ -119,7 +119,8 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
     cargo doc --workspace --no-deps`, targeted tests (`cargo test -p <crate>
     --test <name>`) and `codeflow test --mode quick`. The pre-push hook's
     quick run is that evidence when it covers the same tree.
-  - Builders do not run routine whole essential or full gates. A check that
+  - A whole essential or full gate is not routine builder evidence, though any
+    worktree may run one when its task needs it. A check that
     exists only in a heavier mode runs as a targeted check, such as `codeflow
     test --mode essential --only <target>` (`rust-workspace` is defined only
     in essential). Measurement trials a task authorizes stay allowed.
@@ -153,7 +154,7 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   - Once TSK-358 lands, a pull request into a line also needs its own green
     "codeflow gates" and "windows" verdicts at the exact head that lands;
     TSK-358 updates this sentence when it lands.
-- **Direct heavy Cargo work uses `codeflow reserve -- <command>` while another worktree may be gating; keep its target directory inside this worktree.**
+- **Heavy Cargo work in parallel worktrees is fine; keep each worktree's target directory inside it.** Every heavy run takes a coordination slot and, past the host's job budget, runs with fewer jobs, so no worktree waits for another, except that a `host_exclusive` target and ordinary heavy runs can delay each other (workflow-discipline "Lanes and capacity"). `codeflow reserve -- <command>` applies the same admission to a direct command and remains available.
 - **Hook and policy tasks run the worktree's own binary.** For a task that
   changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
   (or `PATH`) at the worktree's `target/debug/codeflow`; never build inside

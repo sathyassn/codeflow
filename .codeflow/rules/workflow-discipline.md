@@ -201,8 +201,9 @@ mutation testing, or project-owned architecture fitness checks only from the
 orchestrator's evidence triggers; `none selected` is valid and is written
 nowhere per task, and normal scenario coverage remains mandatory. Builders
 run targeted tests as they go and `codeflow test --mode quick` once before
-ready, and cite them with the revision and the command; the full gate runs once on each exact landing candidate, one
-at a time, and a standalone PR is its own candidate. Adopted push and CI
+ready, and cite them with the revision and the command; the full gate runs once on each exact landing candidate (one candidate lands
+at a time, while building and testing elsewhere continue), and a standalone PR
+is its own candidate. Adopted push and CI
 gates still run, and completed evidence is reused only for the same tree.
 Honor what the gate reports; the project's policy sets its level.
 
@@ -411,15 +412,37 @@ or person-days, never scale a human estimate by an AI speed multiplier, and
 never extrapolate from a slow pace. Estimation is optional: offer it only
 when asked or when a capacity or deadline decision needs it.
 
-## Lanes and queues
+## Lanes and capacity
 
-Size parallel lanes from the host's observed memory and CPU. A cheap
-targeted check, a named test target in the worktree's own target directory,
-runs freely and never waits in a queue. Heavy work (the full gate,
-essential, heavy quick targets and direct heavy Cargo commands) takes
-resource admission through the gate lock, or through
-`codeflow reserve -- <command>` for a direct command. Only the primary runs
-the full gate.
+Size parallel lanes from the host's observed memory and CPU. Nothing in
+CodeFlow makes one piece of work wait for another that could run beside it;
+only correctness orders work (a dependency, or one landing at a time on a
+line tip).
+
+- The host has a job budget: its cores, lowered when free memory cannot give
+  each job about 1 GiB, or `execution.host_jobs` when the project sets it.
+  Every heavy run (the full gate, essential, heavy quick targets and
+  `codeflow reserve -- <command>`) is admitted at once and takes a
+  coordination slot in the lock folder, which records that it is running.
+  The slot is not the budget.
+- A run uses its own width (its worker budget, never above the job budget,
+  else the whole job budget) while the active runs fit the budget at that
+  width. When more runs are
+  active, it starts at once with the budget divided among them, at least one
+  job. A run never waits for another run and never skips a target for lack of
+  capacity.
+- A target declared `host_exclusive: true` is the one exception, because its
+  result depends on nothing else running. It starts only when no other heavy
+  run holds the host, and no heavy run starts while it runs. So an exclusive
+  target and an ordinary heavy run can each delay the other, within the run's
+  bound. After the bound a full or essential run refuses, and a quick heavy
+  target and the exclusive target are recorded not run. No other target runs
+  alone.
+- A cheap targeted check, a named test target in the worktree's own target
+  directory, runs freely.
+- Any session, in any worktree, may run the gates its work needs, within what
+  its sandbox can write. A seat sandbox cannot write the gate evidence
+  folder, so a full gate that must keep evidence runs outside it.
 
 ## Planning
 

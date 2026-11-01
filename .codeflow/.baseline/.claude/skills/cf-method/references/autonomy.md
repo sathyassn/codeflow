@@ -269,12 +269,13 @@ This guidance adds no setting and grants no approval.
 
 ## Multi-session coordination
 
-The host orders the shared machine's gate queue by the accepted dependency
-graph and current resource pressure. Ask lanes to defer heavy runs when
-needed, use the project's queue and lock mechanisms, and keep each lane's
-build output separate. A queue position never waives a check. For example,
-let the lane testing a predecessor finish before a dependent lane starts
-its heavy verification.
+Lanes run in parallel. Every heavy run takes a coordination slot and, past the
+host's job budget, runs with fewer jobs, so no lane waits for another lane's run, except that a `host_exclusive`
+target and ordinary heavy runs can delay each other (workflow-discipline
+"Lanes and capacity"); keep each
+lane's build output separate. Only a dependency orders work: a dependent task
+builds on its predecessor's exact reviewed head, and the predecessor lands
+first. Use the host's capacity to size how many lanes to start.
 
 Batch coordination into one digest per lane with its result, evidence,
 next action and real blocker. A message budget helps keep that digest
@@ -283,7 +284,7 @@ For example, combine three routine lane updates in that lane's next digest and
 send an urgent authority question when it arises.
 
 Before every status report or handoff, sweep lanes and seats for items
-parked on process: an unanswered prompt, a refusal, a queue wait, a missing
+parked on process: an unanswered prompt, a refusal, a missing
 harvest or a review follow-up. Inspect live seat state as `cf-herdr`'s
 "Blocked seats" says. Resolve in-scope steps, preserve held actions, and
 name the owner and clearing event for an external blocker. For example,

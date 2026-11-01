@@ -68,16 +68,21 @@ nothing, and the session load merges it into the project's profile;
 without it the seat stops with "failed to load workspace requirements".
 The seat gets the profile as the main checkout root has it, which can
 predate a CodeFlow update, so the launch also carries the profile's home
-grant, the gate lock folder, and its local binding off, which keeps
+grant, the lock folder, and its local binding off, which keeps
 private, link-local and cloud metadata destinations refused as for a
 review seat; Codex merges both into that profile. A builder seat cannot
 serve on a local port, so tests that do run on the primary. A builder
-runs `codeflow reserve` and quick-mode heavy targets under the
-shared lock; full gates and their evidence stay with the primary, and
-`~/.codeflow/gate-runs` is not writable to any Codex seat.
+runs `codeflow reserve` and quick-mode heavy targets, each admitted at
+once with a coordination slot and a share of the host's job budget (a
+smaller job count when the host is busy, never a wait). Only a
+`host_exclusive: true` target changes that: while it runs no heavy run
+starts, and it starts only when none is running, so either kind of run can
+be delayed within the run's bound and then reported not run.
+`~/.codeflow/gate-runs` is not writable to any Codex seat, so a
+full run that keeps its evidence happens outside a seat sandbox.
 `codeflow doctor --preflight` checks that the installed Codex accepts
 these overrides and that, from the main checkout root with managed
-config, they let a builder write both gate lock folders and the common
+config, they let a builder write the lock folders and the common
 `.git` objects and refs; it exits 1 when a write is refused. When it
 cannot run that check, it says builder readiness is not established,
 and the launched seat's own writes are the evidence. A review seat gets

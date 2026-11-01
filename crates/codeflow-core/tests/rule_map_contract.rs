@@ -1310,7 +1310,7 @@ fn autonomy_keeps_seat_prompts_and_refusal_recovery_bounded() {
         "host-run recovery",
         "proposal until the operator approves",
         "one digest per lane",
-        "The host orders the shared machine's gate queue",
+        "Lanes run in parallel.",
         "reaching a count never parks authorized work",
         "Before every status report or handoff, sweep lanes and seats",
         "chat delegation is not a recorded delegation",

@@ -178,9 +178,10 @@ asks for just that.
   makes the operator choose an implementation tactic.
 - **Bounded parallelism.** Parallelize independent discovery and implementation
   only when it shortens the critical path: one owner, branch and worktree per
-  task; shared contracts and integration serialized; concurrency capped from
-  observed memory, CPU, disk, context and tool limits. Landing has priority: a
-  new build starts only while no landing can proceed. Task output is
+  task; a shared contract has one editor at a time and each landing is one
+  candidate on a line tip, but building and testing never wait for a landing;
+  lanes are sized from observed memory, CPU, disk, context and tool limits.
+  Task output is
   provisional until its batch candidate is gated green.
 
 ## Seats and routing
@@ -229,7 +230,7 @@ Start by running `codeflow doctor --preflight` and reading it: it prints the
 seat, sandbox and tool evidence the steps below ask for, each value marked
 configured, observed or unavailable, whether the installed Codex
 accepts the builder launch's profile, and whether that launch gives a
-builder seat its gate lock and commit writes from the main checkout root; it
+builder seat its lock folder and commit writes from the main checkout root; it
 exits 1 when it observed either fail. When it could not run that check, it
 says builder readiness is not established and exits 0; that line is
 information, never readiness evidence. It cannot establish the live model

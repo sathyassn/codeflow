@@ -155,7 +155,6 @@ each batch.
   so this check refuses it too. The
   predecessor still lands first. Any other post-review change needs a new
   review, then a rebase and a recheck.
-- Landing has priority: a new build starts only while no landing can proceed.
 
 Only the operator adds process. A rule that adds a pull request, an approval,
 a review pass or a record to every task needs the operator's explicit
