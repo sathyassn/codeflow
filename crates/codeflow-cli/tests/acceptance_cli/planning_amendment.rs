@@ -34,7 +34,17 @@ enum Extra {
     Product,
     /// The epic plan and the policy file.
     Policy,
+    /// The epic plan and a harness instruction file beside it.
+    Instructions,
+    /// The epic plan and a hidden settings file beside it.
+    Hidden,
+    /// The epic plan and a watched contract beside it ([`WATCHED`]).
+    Watched,
 }
+
+/// A breaking-change watch path beneath the plan folder, so a planning
+/// directory holds an adopter-facing file.
+const WATCHED: &str = ", \"breaking_watch_paths\": [\"docs/plan/contract.md\"]";
 
 /// Write TSK-001 as `status` with `closeout`, its AC-1 as `own` leaves it.
 fn write_own(root: &Path, own: Own, status: &str, closeout: &str) {
@@ -77,6 +87,9 @@ fn amendment(root: &Path, own: Own, extra: Extra) -> String {
             ".codeflow/policy.json",
             "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": []}\n}\n",
         ),
+        Extra::Instructions => write(root, "docs/plan/AGENTS.md", "# Plan agents\n"),
+        Extra::Hidden => write(root, "docs/plan/.claude/settings.json", "{}\n"),
+        Extra::Watched => write(root, "docs/plan/contract.md", "# Contract\n"),
     }
     commit(root, "docs(plan): narrow EPC-001 for Linux")
 }
@@ -110,7 +123,7 @@ fn complete_and_judge(root: &Path, own: Own, reviewed: &str, by: &str) -> (i32, 
 /// task branch, built before it, merges the line before the review. The
 /// waiver names the amendment, or the landing merge when `name_merge`.
 fn on_target(own: Own, extra: Extra, name_merge: bool) -> (i32, String) {
-    let dir = line_repo(&["TSK-001", "TSK-002"]);
+    let dir = line_repo_with(&["TSK-001", "TSK-002"], WATCHED);
     let root = dir.path();
     build(root, "task/TSK-001-work", "src/work.rs");
     git(root, &["switch", "-C", "plan/amend", LINE]);
@@ -129,7 +142,7 @@ fn on_target(own: Own, extra: Extra, name_merge: bool) -> (i32, String) {
 
 /// The task amends its own criterion in its own range, before the review.
 fn own_range(own: Own, extra: Extra) -> (i32, String) {
-    let dir = line_repo(&["TSK-001", "TSK-002"]);
+    let dir = line_repo_with(&["TSK-001", "TSK-002"], WATCHED);
     let root = dir.path();
     build(root, "task/TSK-001-work", "src/work.rs");
     let amended = amendment(root, own, extra);
@@ -162,8 +175,10 @@ fn an_own_range_waiver_may_update_the_plan_beside_the_record() {
     assert_passes(&own_range(Own::Amended, Extra::Plan), "amended");
 }
 
-/// Fail closed on both routes: the amendment changes planning records only
-/// and amends this task's criterion.
+/// Fail closed on both routes: the amendment changes planning records only,
+/// as the hardened amendment classification reads them (no instruction,
+/// hidden or adopter-facing file even beneath a planning folder), and
+/// amends this task's criterion.
 #[test]
 fn a_task_waiver_refuses_a_mixed_or_unrelated_amendment() {
     let refusals = [
@@ -172,6 +187,21 @@ fn a_task_waiver_refuses_a_mixed_or_unrelated_amendment() {
             Own::Amended,
             Extra::Policy,
             "also changes .codeflow/policy.json",
+        ),
+        (
+            Own::Amended,
+            Extra::Instructions,
+            "also changes docs/plan/AGENTS.md",
+        ),
+        (
+            Own::Amended,
+            Extra::Hidden,
+            "also changes docs/plan/.claude/settings.json",
+        ),
+        (
+            Own::Amended,
+            Extra::Watched,
+            "also changes docs/plan/contract.md",
         ),
         (
             Own::Untouched,

@@ -1156,14 +1156,18 @@ fn epic_waiver_problem(
         Ok(parents) => parents.first().copied(),
         Err(error) => return Some(error.to_string()),
     };
-    match non_planning_change(repo, parent, amendment) {
+    match waiver_amendment_change(repo, parent, amendment, &[reviewed]) {
         Ok(None) => {}
         Ok(Some(path)) => {
             return Some(format!(
                 "names {named}, which also changes {path}; a planning amendment changes planning records only"
             ));
         }
-        Err(_) => return Some(format!("names {named}, whose change cannot be read")),
+        Err(reason) => {
+            return Some(format!(
+                "names {named}, whose change cannot be read: {reason}"
+            ))
+        }
     }
     let criterion = |oid: Option<Oid>| {
         oid.map(|oid| record_at(repo, oid, epic))
@@ -2862,8 +2866,9 @@ fn waiver_problem(
         Err(error) => return Some(error.to_string()),
     };
     // What the amendment brought onto the target (for a merge, against the
-    // target-side parent) changes planning records only (R-52, R-60).
-    match non_planning_change(repo, parent, amendment) {
+    // target-side parent) changes planning records only (R-52, R-60), as
+    // the pinned targets' policy classifies them, on either route.
+    match waiver_amendment_change(repo, parent, amendment, pinned) {
         Ok(None) => {}
         Ok(Some(path)) => {
             return Some(format!(
@@ -2871,9 +2876,9 @@ fn waiver_problem(
                 evidence.trim()
             ));
         }
-        Err(_) => {
+        Err(reason) => {
             return Some(format!(
-                "names {}, whose change cannot be read",
+                "names {}, whose change cannot be read: {reason}",
                 evidence.trim()
             ));
         }
@@ -2922,6 +2927,56 @@ pub(super) fn non_planning_change(
         .find(|path| {
             path.rule_text()
                 .map_or(true, |text| text.contains('\\') || !is_planning_path(text))
+        })
+        .map(|path| path.display().to_string());
+    Ok(outside)
+}
+
+/// The first path a waiver's amendment changes that is not a planning
+/// record or plan, or `None` when every path is one. A path counts only
+/// when [`super::classify::amendment_path`] admits it as a record under the
+/// policy at each commit of `policy_from` (the pinned targets, or the
+/// reviewed commit for an epic's own waiver): a hidden file, a harness
+/// instruction file or an adopter-facing path is refused even inside
+/// `project-management/` or `docs/plan/`, and an ordinary document is
+/// refused too. A name that is not plain text refuses (issue 79).
+///
+/// # Errors
+///
+/// Returns why a tree, the diff or a policy cannot be read, so the caller
+/// refuses.
+fn waiver_amendment_change(
+    repo: &Repository,
+    parent: Option<Oid>,
+    commit: Oid,
+    policy_from: &[Oid],
+) -> Result<Option<String>, String> {
+    if policy_from.is_empty() {
+        return Err("no policy to classify its paths".into());
+    }
+    let projects = policy_from
+        .iter()
+        .map(|at| super::amendment::project_at(repo, *at))
+        .collect::<Result<Vec<_>, _>>()?;
+    let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
+    let after = tree(commit).map_err(|error| error.message().to_string())?;
+    let before = parent
+        .map(tree)
+        .transpose()
+        .map_err(|error| error.message().to_string())?;
+    let diff = repo
+        .diff_tree_to_tree(before.as_ref(), Some(&after), None)
+        .map_err(|error| error.message().to_string())?;
+    let outside = crate::git::diff_paths(&diff)
+        .into_iter()
+        .find(|path| {
+            path.rule_text().map_or(true, |text| {
+                text.contains('\\')
+                    || projects.iter().any(|project| {
+                        super::classify::amendment_path(text, project)
+                            != Some(super::classify::AmendmentPath::Record)
+                    })
+            })
         })
         .map(|path| path.display().to_string());
     Ok(outside)
