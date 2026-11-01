@@ -1,0 +1,11 @@
+id = "TSK-1134"
+uid = "585a5c28-2536-4c5f-9b19-4523d48aeae7"
+kind = "TSK"
+title = "The portal reads the capability folder and the legacy file"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:31:22Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"

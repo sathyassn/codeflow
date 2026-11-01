@@ -1,0 +1,11 @@
+id = "TSK-1138"
+uid = "3811a9dd-822c-4df2-8dee-59cf6a26faa8"
+kind = "TSK"
+title = "CodeFlow's own catalog is migrated and its check blocks"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:32:19Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"

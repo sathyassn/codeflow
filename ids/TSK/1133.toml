@@ -1,0 +1,11 @@
+id = "TSK-1133"
+uid = "3843db31-ba7f-43a8-9bc9-2ff800b27435"
+kind = "TSK"
+title = "Capability ids come from the registry and coverage shows in the status commands"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:31:08Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"

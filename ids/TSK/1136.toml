@@ -1,0 +1,11 @@
+id = "TSK-1136"
+uid = "e04096cb-7a7a-4716-bf58-fe3d1dd03f59"
+kind = "TSK"
+title = "The capability check ships with its policy key, template, remedy and guide"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:31:47Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"

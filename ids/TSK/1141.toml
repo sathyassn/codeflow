@@ -1,0 +1,11 @@
+id = "TSK-1141"
+uid = "aafc9755-da87-42b0-9964-88c7bd3ad8d8"
+kind = "TSK"
+title = "The portal shows the capabilities catalog"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:33:08Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-1135"
+uid = "d4c4fdf0-09eb-46d4-9b96-49adf83f70e3"
+kind = "TSK"
+title = "The pull request capability impact check reads trees and the catalog delta"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:31:34Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
