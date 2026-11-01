@@ -23,7 +23,7 @@ pub struct GateOptions {
     /// detection (`codeflow test --config`, TSK-1020).
     pub config: Option<PathBuf>,
     /// Seconds heavy work waits for a host-exclusive target, replacing
-    /// `execution.heavy_wait_seconds` (`codeflow test --wait-seconds`).
+    /// the run's host-exclusive wait (`codeflow test --wait-seconds`).
     pub heavy_wait_seconds: Option<u64>,
 }
 

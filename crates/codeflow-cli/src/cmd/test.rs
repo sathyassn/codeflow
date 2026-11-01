@@ -22,15 +22,13 @@ pub struct TestArgs {
     /// run at once; past the host's job budget a run uses fewer jobs.
     /// Undeclared quick targets use `execution.quick_default_class` (light by default).
     /// Only a `host_exclusive` target runs alone; while one holds the host, heavy
-    /// work waits up to `--wait-seconds` or `execution.heavy_wait_seconds`
-    /// (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix).
+    /// work waits up to `--wait-seconds` (default zero), then refuses. Under `codeflow reserve` quick uses its slot (Unix).
     /// With no quick targets, quick uses essential targets, heavy unless declared light.
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
 
     /// Seconds heavy work waits for a host-exclusive target, or a
-    /// host-exclusive target for other heavy runs, replacing
-    /// `execution.heavy_wait_seconds`.
+    /// host-exclusive target for other heavy runs. Default zero.
     #[arg(long, value_name = "SECONDS")]
     pub wait_seconds: Option<u64>,
 
@@ -295,14 +293,7 @@ fn guard_gate(
     let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
         format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
     })?;
-    let wait = std::time::Duration::from_secs(wait_seconds.unwrap_or_else(|| {
-        let path = config.map_or_else(
-            || root.join(".codeflow/test-config.json"),
-            std::path::Path::to_path_buf,
-        );
-        codeflow_core::testing::config::load_test_config(&path)
-            .map_or(0, |config| config.execution.heavy_wait_seconds)
-    }));
+    let wait = std::time::Duration::from_secs(wait_seconds.unwrap_or(0));
     let start = std::time::Instant::now();
     let mut announced = false;
     let lock = loop {

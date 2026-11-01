@@ -46,12 +46,6 @@
           },
           "description": "Shared input globs that select all targets."
         },
-        "heavy_wait_seconds": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 0,
-          "description": "Bounded wait while a host-exclusive target holds the host, and for a host-exclusive target while other heavy runs hold it. Heavy runs never wait for each other."
-        },
         "host_jobs": {
           "type": "integer",
           "minimum": 1,

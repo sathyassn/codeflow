@@ -86,17 +86,13 @@ fn two_full_gates_in_two_worktrees_run_at_once() {
 }
 
 /// AC-2 (journey): a quick run's heavy target runs at once during a full
-/// gate in another worktree, with no wait configured and no "not run".
+/// gate in another worktree, with no wait and no "not run".
 #[cfg(unix)]
 #[test]
 fn a_quick_run_during_a_full_gate_runs_its_heavy_targets() {
     let home = tempfile::tempdir().unwrap();
     let first = repo(&holding("full", ""));
-    let linked = linked_worktree(
-        first.path(),
-        "linked",
-        &marking("quick", r#""heavy_wait_seconds":0"#, ""),
-    );
+    let linked = linked_worktree(first.path(), "linked", &marking("quick", "", ""));
     let (mut holder, rx, _stdout) = spawn(command(
         first.path(),
         home.path(),

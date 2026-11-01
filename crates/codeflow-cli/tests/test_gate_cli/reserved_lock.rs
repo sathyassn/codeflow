@@ -24,7 +24,7 @@ fn heavy_quick(hold: bool) -> String {
         ""
     };
     format!(
-        r#"{{"schema_version":"1.0","execution":{{"heavy_wait_seconds":0}},"targets":[
+        r#"{{"schema_version":"1.0","execution":{{}},"targets":[
           {{"name":"nested-heavy","heavy":true,"timeout_seconds":30,"runner":"custom","modes":{{"quick":{{"command":"touch heavy-started; {wait}touch heavy-ran"}}}}}}
         ]}}"#
     )
@@ -319,7 +319,7 @@ fn a_surviving_nested_target_keeps_the_lock_busy() {
     // The light `survivor` is not: it starts while the heavy `holder` keeps
     // the lock held, records its group, and outlives the killed run.
     let first = repo(
-        r#"{"schema_version":"1.0","execution":{"heavy_wait_seconds":0,"parallel":true},"targets":[
+        r#"{"schema_version":"1.0","execution":{"parallel":true},"targets":[
           {"name":"first","heavy":true,"timeout_seconds":60,"runner":"custom","modes":{"quick":{"command":"touch first-ran"}}},
           {"name":"holder","heavy":true,"timeout_seconds":60,"runner":"custom","modes":{"quick":{"command":"while ! test -f release; do sleep 0.01; done"}}},
           {"name":"survivor","heavy":false,"timeout_seconds":60,"runner":"custom","requires":["first"],"modes":{"quick":{"command":"echo $$ > group.txt; sleep 30"}}}

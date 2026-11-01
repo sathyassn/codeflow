@@ -77,9 +77,10 @@ pub struct ExecutionConfig {
     pub quick_default_class: QuickTargetClass,
 
     /// Maximum wait for a host-exclusive target: for a heavy run while one
-    /// holds the host, and for one while other heavy runs hold it. Heavy
+    /// holds the host, and for one while other heavy runs hold it. Set only
+    /// by `codeflow test --wait-seconds`, never by the config file; heavy
     /// runs never wait for each other (TSK-1145).
-    #[serde(default, skip_serializing_if = "is_zero")]
+    #[serde(skip)]
     pub heavy_wait_seconds: u64,
 
     /// Jobs all heavy runs on this host share. Omitted computes it from the
@@ -518,11 +519,6 @@ pub struct CoverageException {
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde requires a reference
 fn is_false(value: &bool) -> bool {
     !value
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires a reference
-fn is_zero(value: &u64) -> bool {
-    *value == 0
 }
 
 fn default_true() -> bool {

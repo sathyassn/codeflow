@@ -131,8 +131,7 @@ A target that cannot share the host, such as a timing-sensitive one,
 declares `"host_exclusive": true`. It starts only when no other heavy run
 holds the host: it takes `host.lock` exclusively, after the other targets
 of its own run end. While it runs, other heavy runs and reserves wait up to
-`--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then
-refuse naming it; the target itself waits for other runs up to the same
+`--wait-seconds` (default zero), then refuse naming it; the target itself waits for other runs up to the same
 bound, then is reported not run. A run under `codeflow reserve` cannot run
 a host-exclusive target. Nothing else runs alone.
 
