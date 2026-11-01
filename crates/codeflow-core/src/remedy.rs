@@ -422,6 +422,10 @@ catalog! {
     /// A policy key with no enforcement reader.
     POLICY_UNSUPPORTED = Step::Edit(".codeflow/policy.json"),
         "the operator removes {key} from .codeflow/policy.json; `codeflow update` removes only an unchanged retired default and preserves edited values";
+    /// A settings file with an unresolved merge conflict, read at `HEAD`
+    /// meanwhile (TSK-330).
+    SETTINGS_CONFLICT = Step::Git("git merge --abort"),
+        "the operator resolves {path} outside the session, since the guards refuse writes to it, then `git add {path}` and the commit conclude the merge; or abandon it with `git merge --abort` (`git rebase --abort` during a rebase)";
 
     // Protected branches and the sanctioned landing path.
 

@@ -367,7 +367,7 @@ fn branch_line(root: &Path) -> Option<String> {
         Ok(info) => info?,
         Err(error) => return Some(format!("branch cannot be read: {error}")),
     };
-    let policy = match Policy::load(root) {
+    let policy = match Policy::load_local(root) {
         Ok(policy) => policy,
         Err(error) => return Some(format!("branch policy cannot be read: {error}")),
     };
