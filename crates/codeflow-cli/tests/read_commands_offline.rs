@@ -117,6 +117,8 @@ fn planned_project(tasks: usize) -> (tempfile::TempDir, PathBuf) {
         .run();
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
     ok(&codeflow(&root, &["ids", "seed"]), "ids seed");
     git(&root, &["switch", "-q", "-c", "plan/offline", LINE]);
     ok(&codeflow(&root, &["epic", "new", "Offline"]), "epic new");

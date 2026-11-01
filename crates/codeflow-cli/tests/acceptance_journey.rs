@@ -1088,6 +1088,8 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
     git(&root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
     // Each new tree must be checked from its own complete checkout.
     for line in [LINE_A, LINE_B] {
         git(&root, &["switch", "-q", line]);
@@ -1484,6 +1486,8 @@ fn a_push_and_its_pull_request_reach_the_same_journey_verdict() {
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
     git(&root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
 
     // The pull request check over the range blocks on the journey.
     let reason = "TSK-001 changes the adopter-facing path set but has no `(journey)` criterion";

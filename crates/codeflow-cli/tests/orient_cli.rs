@@ -275,6 +275,23 @@ fn unreachable_remote_falls_back_to_local_creation_evidence() {
         ],
         today,
     );
+    // TSK-1077: the policy is read only at the remote's default branch as
+    // last fetched, which needs no answer from the remote; the line's
+    // evidence still finds the remote unreachable.
+    git(
+        root,
+        &["update-ref", "refs/remotes/origin/main", "main"],
+        today,
+    );
+    git(
+        root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+        today,
+    );
     let out = run(root, false);
     let local = row(&out, "local");
     assert!(

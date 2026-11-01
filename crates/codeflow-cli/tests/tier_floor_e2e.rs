@@ -550,6 +550,13 @@ fn push_set_blocks_a_bad_push_at_every_tier() {
             "seed the destination",
         );
         git_ok(&root, &["fetch", "-q", "origin"], "fetch the destination");
+        // Git before 2.48 records no remote HEAD on fetch, and the default
+        // branch is the only policy authority (ADR-0091).
+        git_ok(
+            &root,
+            &["remote", "set-head", "origin", &start],
+            "remote set-head",
+        );
 
         // `init` already committed the scaffold; add one reviewed change.
         let good = ["-m", "chore: add a base file"];
@@ -627,6 +634,13 @@ fn human_override_lands_protected_commits_and_pushes_but_nothing_destructive() {
         out.status.success(),
         "human bootstrap push refused:\n{}",
         stderr(&out)
+    );
+    // TSK-1077: a push records no remote HEAD, and the default branch it
+    // names is the only policy authority, so the operator records it once.
+    git_ok(
+        &root,
+        &["remote", "set-head", "origin", &main],
+        "remote set-head",
     );
 
     // A commit on the protected branch: refused without, made with it.

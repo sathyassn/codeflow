@@ -5742,8 +5742,12 @@ fn push_set_by_path_reports_an_unresolved_range_without_borrowing_history() {
     let path = bare.path().to_str().unwrap();
     let (code, err) = push_hook(dir.path(), path, &[("feat/x", &head)]);
     assert_eq!(code, Some(0), "{err}");
+    // TSK-1077: a destination that advertises no branches, named by path
+    // with no tracking namespace, is initialization: no check runs.
     assert!(
-        err.contains("`codeflow ci` did not run for 'feat/x': range unresolved"),
+        err.contains(
+            "initialization: the destination advertises no branches, so 'feat/x' creates its first"
+        ),
         "{err}"
     );
     assert!(
@@ -5862,38 +5866,48 @@ fn task_on_moved_line(bare: &Path, local: &Path, own: &[(&str, &str)]) -> String
     old
 }
 
+/// TSK-1077: `stable` holds no policy file, so the shipped defaults judge
+/// through the same authority path as a landed policy. The line bounds the
+/// other checks; the commit checks run from the default branch's tip, as
+/// TSK-212 review round five set for every branch, so the line's legacy
+/// commits are judged too. The working-copy fallback that once checked
+/// only the own commits here is removed.
 #[test]
-fn push_set_checks_only_the_own_commits_of_a_branch_rebased_onto_a_moved_line() {
+fn push_set_rebased_onto_a_moved_line_checks_the_line_s_commits_from_the_default() {
     // TSK-115: a task branch rebased onto its moved integration line and
     // force-pushed. The line's new commit is on the destination through the
-    // line's own ref, so only the task's commit is checked.
+    // line's own ref, so the other checks cover only the task's commit.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
     git(local.path(), &["rebase", "-q", "dest/integration/line"]);
     let rebased = rev(local.path(), "HEAD");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &rebased, &old);
-    assert_eq!(code, Some(0), "{err}");
     assert!(
         err.contains("'task/t' rewrites the destination's")
             && err.contains("checks 1 commit(s), leaving out history"),
         "{err}"
     );
-    assert!(!err.contains("Legacy line subject two."), "{err}");
+    assert!(
+        err.contains("with the shipped defaults, since stable"),
+        "{err}"
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject two."), "{err}");
 
-    // A bad own commit in the rebased branch still blocks.
+    // A bad own commit in the rebased branch blocks as well.
     let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject two."), "{err}");
 }
 
 #[test]
-fn push_set_checks_only_the_own_commits_of_a_branch_that_merged_the_line_twice() {
+fn push_set_merged_the_line_twice_checks_the_line_s_commits_from_the_default() {
     // TSK-165: a pushed task branch merges its moved line, the line moves
     // again, and the branch merges it once more before the next push. Both
-    // line tips border the range; the older one's successors are history the
-    // destination holds through the line, so they are never checked again.
+    // line tips border the other checks' range. TSK-1077: the commit checks
+    // run from the default branch's tip (see the rebase case above), so the
+    // line's legacy commits are judged.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
     let merge = |message: &str| {
@@ -5923,22 +5937,22 @@ fn push_set_checks_only_the_own_commits_of_a_branch_that_merged_the_line_twice()
     merge("chore: take the line again");
     let head = commit_file(local.path(), "u.txt", "u\n", "feat: add u");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &head, &old);
-    assert_eq!(code, Some(0), "{err}");
-    assert!(!err.contains("Legacy line subject"), "{err}");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject three."), "{err}");
 
-    // A bad own commit after the second merge still blocks.
+    // A bad own commit after the second merge blocks as well.
     let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject"), "{err}");
 }
 
 #[test]
 fn push_set_blocks_a_rewrite_that_drops_a_commit_and_adds_a_bad_one() {
     // The rewrite drops the branch's second commit, adds a bad one and moves
     // onto the line's new tip. The dropped commit's history does not hide
-    // the bad one, and the line's commit is not checked again.
+    // the bad one. TSK-1077: the commit checks run from the default branch's
+    // tip (see the rebase case above), so the line's commit is judged too.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = task_on_moved_line(
         bare.path(),
@@ -5960,7 +5974,7 @@ fn push_set_blocks_a_rewrite_that_drops_a_commit_and_adds_a_bad_one() {
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject two."), "{err}");
+    assert!(err.contains("Legacy line subject two."), "{err}");
     assert!(
         err.contains("checks 2 commit(s), leaving out history"),
         "{err}"
@@ -6043,16 +6057,18 @@ fn integration_line(bare: &Path, local: &Path) -> String {
 }
 
 #[test]
-fn push_set_checks_only_the_own_commits_of_a_new_branch_off_a_line() {
-    // A new branch cut from an integration line is bounded by what the
-    // destination advertises now, not by its protected branches alone: the
-    // line's legacy commit is not checked again, a bad own commit is.
+fn push_set_new_branch_off_a_line_checks_the_line_s_commits_from_the_default() {
+    // A new branch cut from an integration line: the line bounds the other
+    // checks, and TSK-1077 runs the commit checks from the default branch's
+    // tip (see the rebase case above), so the line's legacy commit is
+    // judged as well as a bad own commit.
     let (bare, local) = stable_destination("chore: legacy base");
     integration_line(bare.path(), local.path());
     git(local.path(), &["checkout", "-q", "-b", "feat/new", "line"]);
     let good = commit_file(local.path(), "n.txt", "n\n", "feat: add new work");
     let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &good)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject."), "{err}");
     assert!(!err.contains("did not run for 'feat/new'"), "{err}");
     assert!(!err.contains("ls-remote"), "{err}");
 
@@ -6060,7 +6076,6 @@ fn push_set_checks_only_the_own_commits_of_a_new_branch_off_a_line() {
     let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &bad)]);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject."), "{err}");
 }
 
 /// A valid task record on the advertised line, before the task's own work.
@@ -6538,8 +6553,10 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     let head = rev(lone.path(), "HEAD");
     let (code, err) = push_hook(lone.path(), "origin", &[("feat/lone", &head)]);
     assert_eq!(code, Some(0), "{err}");
+    // TSK-1077: the destination advertises no branches and this clone
+    // tracks none, so the push is initialization and no check runs.
     assert!(
-        err.contains("`codeflow ci` did not run for 'feat/lone': range unresolved"),
+        err.contains("initialization: the destination advertises no branches, so 'feat/lone' creates its first"),
         "{err}"
     );
 
@@ -9112,6 +9129,12 @@ fn push_tree_review_epic_integration_from_ahead_plan_worktree() {
         dir.path(),
         "HEAD:refs/heads/main",
     );
+    // TSK-1077: the clone records the destination's default branch, the
+    // only policy authority, as a fetch on git 2.48 or later does. Both
+    // update refs, so they run the installed reference-transaction hook and
+    // need this build on PATH, as every other git step here does.
+    ok("git", dir.path(), &["fetch", "-q", "origin"]);
+    ok("git", dir.path(), &["remote", "set-head", "origin", "-a"]);
     let plan = dir.path().join(".worktrees/plan-probe");
     ok(
         "git",
@@ -9461,10 +9484,10 @@ fn guards_read_a_search_pattern_as_text() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// TSK-398 Codex review F1: when the destination advertises no tips, the
-/// pre-push range falls back to the protected tracking refs. A local branch
-/// or tag whose full name is the absent `refs/remotes/origin/main` never
-/// answers for it, so the malformed commit is still refused.
+/// TSK-398 review F1: a local branch or tag whose full name is the absent
+/// `refs/remotes/origin/main` never answers for it. TSK-1077: when the
+/// destination advertises no tips and the clone still tracks some, no
+/// fallback runs at all; the push is refused with the fetch route.
 #[test]
 fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
     const ZERO: &str = "0000000000000000000000000000000000000000";
@@ -9503,11 +9526,15 @@ fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
                 &format!("refs/heads/fix/review {malformed} refs/heads/fix/review {ZERO}\n"),
             )
         };
+        // TSK-1077: the destination advertises no branches while the clone
+        // still tracks one, so the push is refused with the fetch route,
+        // before any range or fallback is read.
+        let refused = "run git fetch --prune origin";
         let clean = push();
         let text = String::from_utf8_lossy(&clean.stderr).to_string()
             + &String::from_utf8_lossy(&clean.stdout);
         assert_eq!(clean.status.code(), Some(1), "{shadow} clean: {text}");
-        assert!(text.contains("git.commit_format"), "{shadow} clean: {text}");
+        assert!(text.contains(refused), "{shadow} clean: {text}");
         if shadow == "branch" {
             git(&clone, &["branch", "refs/remotes/origin/main", &malformed]);
         } else {
@@ -9517,8 +9544,74 @@ fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
         let text = String::from_utf8_lossy(&shadowed.stderr).to_string()
             + &String::from_utf8_lossy(&shadowed.stdout);
         assert_eq!(shadowed.status.code(), Some(1), "{shadow}: {text}");
-        assert!(text.contains("git.commit_format"), "{shadow}: {text}");
+        assert!(text.contains(refused), "{shadow}: {text}");
     }
+}
+
+/// TSK-1077 review round 01 F2, end to end: a clone whose fetch mapping
+/// stores the default branch outside `refs/remotes/origin/` still holds a
+/// stale tracking ref when the destination stops advertising branches. The
+/// push is refused with the fetch route, never labelled initialization.
+#[test]
+fn pre_push_refuses_a_stale_ref_under_an_exact_fetch_mapping() {
+    const ZERO: &str = "0000000000000000000000000000000000000000";
+    let tmp = tempfile::tempdir().unwrap();
+    let seed = tmp.path().join("seed");
+    std::fs::create_dir(&seed).unwrap();
+    init_repo(&seed, "master");
+    let origin = tmp.path().join("origin.git");
+    let clone = tmp.path().join("work");
+    isolate_clone(codeflow_fixture::clone(tmp.path(), &seed, &origin))
+        .bare()
+        .run();
+    isolate_clone(codeflow_fixture::clone(tmp.path(), &origin, &clone)).run();
+    git(&clone, &["config", "user.email", "t@example.com"]);
+    git(&clone, &["config", "user.name", "t"]);
+    git(
+        &clone,
+        &[
+            "config",
+            "--replace-all",
+            "remote.origin.fetch",
+            "+refs/heads/master:refs/mirror/master",
+        ],
+    );
+    git(&clone, &["fetch", "-q", "origin"]);
+    git(
+        &clone,
+        &["update-ref", "--no-deref", "-d", "refs/remotes/origin/HEAD"],
+    );
+    git(&clone, &["update-ref", "-d", "refs/remotes/origin/master"]);
+    git(&clone, &["switch", "-q", "-c", "fix/review"]);
+    std::fs::write(clone.join("review.txt"), "review\n").unwrap();
+    git(&clone, &["add", "."]);
+    git(&clone, &["commit", "-q", "-m", "fix: add review"]);
+    let head = String::from_utf8_lossy(
+        &git_command()
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&clone)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    // The destination no longer advertises a branch; refs/mirror/master is
+    // the clone's only, stale, record of it.
+    git(&origin, &["update-ref", "-d", "refs/heads/master"]);
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", "origin"])
+            .arg(&origin)
+            .current_dir(&clone),
+        &format!("refs/heads/fix/review {head} refs/heads/fix/review {ZERO}\n"),
+    );
+    let text =
+        String::from_utf8_lossy(&out.stderr).to_string() + &String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("refs/mirror/master"), "{text}");
+    assert!(text.contains("run git fetch --prune origin"), "{text}");
+    assert!(!text.contains("initialization:"), "{text}");
 }
 
 #[cfg(unix)]

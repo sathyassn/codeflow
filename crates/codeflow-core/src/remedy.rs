@@ -434,7 +434,7 @@ catalog! {
         "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
     /// Deleting a protected branch.
     PROTECTED_DELETE = Step::Edit(".codeflow/policy.json"),
-        "protected branches are never deleted; if it is truly intended, first remove the entry from git.protected_branches in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "protected branches are never deleted; if it is truly intended, first remove the entry from git.protected_branches in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
     /// Rewriting protected history.
     PROTECTED_REWRITE = Step::Git("git revert"),
         "undo it with `git revert` instead, and rebase feature branches in their own worktree; protected history is append-only";
@@ -446,7 +446,7 @@ catalog! {
         "push without force after `git pull --rebase`; the project restricts force-pushes with git.force_push_unprotected in `.codeflow/policy.json`";
     /// A `gh pr merge` into a protected base.
     PR_MERGE_PROTECTED = Step::Edit(".codeflow/policy.json"),
-        "PR merges into protected branches are performed by a human (GitHub UI / their own terminal) or explicitly sanctioned by git.pr_merge_to_protected in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "PR merges into protected branches are performed by a human (GitHub UI / their own terminal) or explicitly sanctioned by git.pr_merge_to_protected in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
     /// A branch name outside the prefixes.
     BRANCH_NAME = Step::Git("git branch"),
         "rename it with `git branch -m <prefix>/<kebab-name>`, with a sanctioned prefix: {prefixes}";
@@ -843,7 +843,7 @@ catalog! {
 
     /// An action reserved for the operator, including a secret-store read.
     OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),
-        "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
 
     /// A `gh` call whose options the guard cannot read for certain; the
     /// call runs outside the Claude sandbox with the GitHub token
@@ -853,7 +853,7 @@ catalog! {
 
     /// A recursive read or glob whose complete selected paths cannot be inspected.
     SECRET_SELECTION = Step::Edit(".codeflow/policy.json"),
-        "narrow the search roots or file selection to paths the guard can inspect within its metadata budget, without including secret stores; the operator runs an intended secret read personally in a separate terminal; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "narrow the search roots or file selection to paths the guard can inspect within its metadata budget, without including secret stores; the operator runs an intended secret read personally in a separate terminal; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
 
     /// A branch push that would include tags because of effective Git config.
     PUSH_WITHOUT_FOLLOW_TAGS = Step::Git("git push"),
@@ -861,13 +861,13 @@ catalog! {
 
     /// A privilege escalation proposed from a session.
     PRIVILEGE_ESCALATION = Step::Edit(".codeflow/policy.json"),
-        "privilege escalation needs applicable operator authority: an operator runs it outside the session; {enforcement}; text that only quotes a launcher word is not refused when the whole line is `echo`, `printf` (a `%s`-only format), `grep` and `cat` with single-quoted words, document-file redirects and a quoted heredoc delimiter (`cat <<'EOF' > notes.md`), so write such text that way or with the editor tool and pass the file by path; the effective harness may show no permission prompt (security.privilege_escalation in `.codeflow/policy.json`); session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "privilege escalation needs applicable operator authority: an operator runs it outside the session; {enforcement}; text that only quotes a launcher word is not refused when the whole line is `echo`, `printf` (a `%s`-only format), `grep` and `cat` with single-quoted words, document-file redirects and a quoted heredoc delimiter (`cat <<'EOF' > notes.md`), so write such text that way or with the editor tool and pass the file by path; the effective harness may show no permission prompt (security.privilege_escalation in `.codeflow/policy.json`); session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn policy_relaxation_routes_require_every_named_source() {
+    fn policy_relaxation_routes_name_the_default_branch() {
         for remedy in [
             &super::PROTECTED_DELETE,
             &super::PR_MERGE_PROTECTED,
@@ -876,17 +876,14 @@ mod tests {
             &super::PRIVILEGE_ESCALATION,
         ] {
             assert!(
-                remedy
-                    .text
-                    .contains("on every branch named as a policy source"),
+                remedy.text.contains("on the default branch and fetches it"),
                 "{}: {}",
                 remedy.name,
                 remedy.text
             );
-            assert!(remedy.text.contains("fetches"));
-            assert!(remedy
-                .text
-                .contains("HEAD while no remote-tracking refs exist"));
+            assert!(remedy.text.contains(
+                "HEAD where the repository has no remote or its remote advertises no refs"
+            ));
         }
     }
 

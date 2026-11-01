@@ -274,10 +274,13 @@ fn ci_remerge_refuses_introductions_and_passes_inherited_names() {
     println!("CI passed inherited blocked name and refused merge introduction");
 }
 
-/// Review probe H: an exception landed only on the declared integration
-/// line passes pre-commit as it passes `codeflow ci` against that line.
+/// Review probe H, reversed by TSK-1077: an exception landed only on the
+/// declared integration line no longer passes pre-commit. The default
+/// branch, named by `refs/remotes/origin/HEAD`, is the only local
+/// authority, so the line's exception discharges nothing locally; the
+/// hosted job on a pull request into the line still judges with the line.
 #[test]
-fn hook_and_ci_agree_on_an_exception_landed_only_on_the_line() {
+fn an_exception_landed_only_on_the_line_does_not_pass_pre_commit() {
     let f = Adopter::new(&json!({}));
     f.stage(
         "project-management/tasks/TSK-007.md",
@@ -299,29 +302,19 @@ fn hook_and_ci_agree_on_an_exception_landed_only_on_the_line() {
             .unwrap();
     }
     f.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
+    f.repo
         .reference("refs/heads/task/TSK-007-certs", line, true, "fixture")
         .unwrap();
     f.repo.set_head("refs/heads/task/TSK-007-certs").unwrap();
     std::fs::write(f.dir.path().join(".codeflow/policy.json"), &line_policy).unwrap();
     f.stage("fixtures/cert.pem", 0o100_644, b"public");
-    verdict(&f.hook(), false);
-    let head = f.commit(&[line]);
-    let base = line.to_string();
-    let ci = f
-        .command(env!("CARGO_BIN_EXE_codeflow"))
-        .args([
-            "ci",
-            "--base",
-            &base,
-            "--head",
-            &head.to_string(),
-            "--branch",
-            "task/TSK-007-certs",
-        ])
-        .output()
-        .unwrap();
-    assert!(!said(&ci).contains("git.path_policy"), "{}", said(&ci));
-    f.stage("other/cert.pem", 0o100_644, b"public");
     verdict(&f.hook(), true);
 }
 
