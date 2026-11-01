@@ -494,10 +494,11 @@ fn binding(
     match super::release_line::checkout_scope(repo_root, into) {
         Ok(scope) if scope.release() => shown(at_head),
         Ok(_) => {
-            // In the task's own pull request, a waiver may name a record-only
+            // In the task's own pull request, a waiver may name a planning
             // amendment commit of its range (TSK-184). The binder withholds
             // it from a range that reopens a landed completion, as it does
-            // for CI (TSK-340).
+            // for CI (TSK-340); commits on an unqualified declared line are
+            // outside the task's own range (`own_range`).
             shown(
                 super::acceptance::bind_completion_with_amendment(
                     &repo,
@@ -507,7 +508,7 @@ fn binding(
                     default_target,
                     super::acceptance::Transport::TaskLanding,
                     qualified.base,
-                    qualified.base,
+                    qualified.own_range,
                     &qualified.run.stacking(),
                     &qualified.run.criteria(),
                 )
@@ -551,6 +552,12 @@ struct Qualified {
     /// The range anchor: the merge-base of `HEAD` with the qualified
     /// target, or `None` on the target branch itself.
     base: Option<git2::Oid>,
+    /// The anchor of the task's own range, for its own-range waivers: `base`
+    /// when the task's declared target qualifies or none is declared, and
+    /// `None` when a declared target does not qualify. There `base` is the
+    /// default target's, where commits made on that unrecorded line would
+    /// count as the task's own (issue 465).
+    own_range: Option<git2::Oid>,
 }
 
 /// Settle the verb's receiving lines (TSK-340, operator decision of
@@ -599,8 +606,10 @@ fn qualify(
     };
     let mut target = default.map(|(_, tip)| tip);
     let mut target_name = default.map(|(name, _)| name.to_string());
+    let mut own_target = declared.is_none();
     if let Some(name) = declared {
         if default.is_some_and(|(default, _)| default == name) || protected(name)? {
+            own_target = true;
             let Some(tip) = receiving_tip(repo, name)? else {
                 return Err(format!(
                     "the target `{name}` does not resolve here; fetch it (`git fetch origin {name}`)"
@@ -623,12 +632,23 @@ fn qualify(
         ),
         _ => None,
     };
+    // An unqualified declared line earns no authority, and nothing here
+    // can say which of its commits are the task's own: any ref naming it
+    // can be moved, rewound or left unfetched. So it leaves no own range
+    // (issue 465); pinning the line with `--base` and `--into` makes it the
+    // target, whose merge-base is the boundary.
+    let own_range = if declared.is_some() && !own_target {
+        None
+    } else {
+        base
+    };
     Ok(Qualified {
         run: super::acceptance::RunBases::new(
             default.map(|(_, tip)| tip).into_iter().chain(target),
         ),
         default: default.map(|(_, tip)| tip),
         base,
+        own_range,
     })
 }
 

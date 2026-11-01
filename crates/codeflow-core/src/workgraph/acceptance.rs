@@ -502,8 +502,8 @@ impl From<Vec<Finding>> for BindingResult {
 /// Closeout may differ in the reviewed segment. A clean task landing can
 /// transport that segment onto a line; a reopening range reviews its own
 /// work and takes no landing's review. `base` pins the range's anchored old review when supplied.
-/// A waiver names the criterion's record-only amendment on its target;
-/// `bind_completion_with_amendment` adds the task's own range.
+/// A waiver names a planning-only amendment of the criterion on its
+/// target; `bind_completion_with_amendment` adds the task's own range.
 #[must_use]
 pub fn bind_completion(
     repo: &Repository,
@@ -559,9 +559,10 @@ fn task_reopen_history(
 
 /// [`bind_completion`] with the own-task waiver allowance (TSK-184): in the
 /// task's own pull request, before the task was ever complete on its
-/// target, a waiver may also name a record-only amendment commit of this
-/// record in that range, after `own_range_base` and strictly before the
-/// reviewed commit. Once the pull request lands, that commit is on the
+/// target, a waiver may also name a planning-only amendment commit of this
+/// record's criterion in that range, after `own_range_base` and strictly
+/// before the reviewed commit. Like an amendment on the target, it may also
+/// change other planning records, such as the epic plan (issue 465). Once the pull request lands, that commit is on the
 /// target, so a line and the release judge accept the same waiver under
 /// the target rule. `None`, or a range that reopens a landed completion,
 /// keeps the target rule alone; a range that reopens only a completion it
@@ -1156,14 +1157,18 @@ fn epic_waiver_problem(
         Ok(parents) => parents.first().copied(),
         Err(error) => return Some(error.to_string()),
     };
-    match non_planning_change(repo, parent, amendment) {
+    match waiver_amendment_change(repo, parent, amendment, &[reviewed]) {
         Ok(None) => {}
         Ok(Some(path)) => {
             return Some(format!(
                 "names {named}, which also changes {path}; a planning amendment changes planning records only"
             ));
         }
-        Err(_) => return Some(format!("names {named}, whose change cannot be read")),
+        Err(reason) => {
+            return Some(format!(
+                "names {named}, whose change cannot be read: {reason}"
+            ))
+        }
     }
     let criterion = |oid: Option<Oid>| {
         oid.map(|oid| record_at(repo, oid, epic))
@@ -2807,28 +2812,22 @@ fn waiver_problem(
         };
         if before_base || reviewed == Some(amendment) || !before_review {
             return Some(format!(
-                "names {}, which is not on the target or a record-only amendment strictly before the reviewed revision in this task's range; {ON_TARGET}; {WAIVER_ROUTE}",
+                "names {}, which is not on the target or an amendment strictly before the reviewed revision in this task's range; {ON_TARGET}; {WAIVER_ROUTE}",
                 evidence.trim()
             ));
         }
-        let Ok(commit) = repo.find_commit(amendment) else {
-            return Some("amendment cannot be read".into());
-        };
-        let paths = super::lifecycle::changed_paths(
-            repo,
-            &history::parent_id(repo, &commit, 0).map_or_else(|_| String::new(), |p| p.to_string()),
-            Some(&amendment.to_string()),
-        );
-        if paths.is_err()
-            || paths
-                .is_ok_and(|paths| paths.is_empty() || paths.iter().any(|path| path != &task.path))
-        {
-            return Some(format!(
-                "names {}, which must change only this task's record to count as an amendment in its own range, and is not on the target; {ON_TARGET}; {WAIVER_ROUTE}",
-                evidence.trim()
-            ));
-        }
+        // In its own range the amendment meets the same test as one on the
+        // target (issue 465): the checks below refuse it unless it changes
+        // planning records only and amends this criterion of this record,
+        // so it may update the epic plan beside the record.
     }
+    // A refusal of a commit off the target also says what the target route
+    // requires (TSK-340 AC-7).
+    let route = if off_target {
+        format!("; it is not on the target either: {ON_TARGET}; {WAIVER_ROUTE}")
+    } else {
+        String::new()
+    };
     let contains = match is_ancestor_or_same(repo, amendment, landing.commit()) {
         Ok(contains) => contains,
         Err(error) => return Some(error),
@@ -2868,18 +2867,19 @@ fn waiver_problem(
         Err(error) => return Some(error.to_string()),
     };
     // What the amendment brought onto the target (for a merge, against the
-    // target-side parent) changes planning records only (R-52, R-60).
-    match non_planning_change(repo, parent, amendment) {
+    // target-side parent) changes planning records only (R-52, R-60), as
+    // the pinned targets' policy classifies them, on either route.
+    match waiver_amendment_change(repo, parent, amendment, pinned) {
         Ok(None) => {}
         Ok(Some(path)) => {
             return Some(format!(
-                "names {}, which also changes {path}; a planning amendment changes planning records only",
+                "names {}, which also changes {path}; a planning amendment changes planning records only{route}",
                 evidence.trim()
             ));
         }
-        Err(_) => {
+        Err(reason) => {
             return Some(format!(
-                "names {}, whose change cannot be read",
+                "names {}, whose change cannot be read: {reason}",
                 evidence.trim()
             ));
         }
@@ -2902,7 +2902,7 @@ fn waiver_problem(
     match (criterion(parent), criterion(Some(amendment))) {
         (Some(before), Some(after)) if before != after => None,
         _ => Some(format!(
-            "names {}, which does not amend {id} of {}",
+            "names {}, which does not amend {id} of {}{route}",
             evidence.trim(),
             task.id
         )),
@@ -2928,6 +2928,67 @@ pub(super) fn non_planning_change(
         .find(|path| {
             path.rule_text()
                 .map_or(true, |text| text.contains('\\') || !is_planning_path(text))
+        })
+        .map(|path| path.display().to_string());
+    Ok(outside)
+}
+
+/// The first path a waiver's amendment changes that is not a planning
+/// record or plan, or `None` when every path is one. A path counts only
+/// when [`super::classify::amendment_path`] admits it as a record under the
+/// policy at each commit of `policy_from` (the pinned targets, or the
+/// reviewed commit for an epic's own waiver): a hidden file, a harness
+/// instruction file or an adopter-facing path is refused even inside
+/// `project-management/` or `docs/plan/`, and an ordinary document is
+/// refused too. A symbolic link or submodule on either side refuses under
+/// any name, by the rule a planning pull request applies
+/// ([`super::amendment::irregular_entry`]), and so does a name that is not
+/// plain text (issue 79).
+///
+/// # Errors
+///
+/// Returns why a tree, the diff or a policy cannot be read, so the caller
+/// refuses.
+fn waiver_amendment_change(
+    repo: &Repository,
+    parent: Option<Oid>,
+    commit: Oid,
+    policy_from: &[Oid],
+) -> Result<Option<String>, String> {
+    if policy_from.is_empty() {
+        return Err("no policy to classify its paths".into());
+    }
+    let projects = policy_from
+        .iter()
+        .map(|at| super::amendment::project_at(repo, *at))
+        .collect::<Result<Vec<_>, _>>()?;
+    let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
+    let after = tree(commit).map_err(|error| error.message().to_string())?;
+    let before = parent
+        .map(tree)
+        .transpose()
+        .map_err(|error| error.message().to_string())?;
+    let diff = repo
+        .diff_tree_to_tree(before.as_ref(), Some(&after), None)
+        .map_err(|error| error.message().to_string())?;
+    // The entry first, on both sides, as the planning pull request reads it
+    // (ADR-0078): a symbolic link or submodule is no planning record under
+    // any admitted name.
+    if let Some((shown, kind)) = super::amendment::irregular_entry(&diff) {
+        return Ok(Some(
+            kind.map_or(shown.clone(), |kind| format!("the {kind} {shown}")),
+        ));
+    }
+    let outside = crate::git::diff_paths(&diff)
+        .into_iter()
+        .find(|path| {
+            path.rule_text().map_or(true, |text| {
+                text.contains('\\')
+                    || projects.iter().any(|project| {
+                        super::classify::amendment_path(text, project)
+                            != Some(super::classify::AmendmentPath::Record)
+                    })
+            })
         })
         .map(|path| path.display().to_string());
     Ok(outside)
@@ -3930,7 +3991,7 @@ fn completions_received(
     let _judgment = history::judgment();
     let amendable = criteria.amends();
     // The task a task pull request is for may waive a criterion by a
-    // record-only amendment in its own range (TSK-184); no other record may.
+    // planning amendment in its own range (TSK-184); no other record may.
     let own_task = match criteria {
         Criteria::OwnTask(id) => Some(id.as_str()),
         _ => None,
