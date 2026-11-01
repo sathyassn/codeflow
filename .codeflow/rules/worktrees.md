@@ -154,9 +154,9 @@ worktree or concurrently edit a shared contract, schema, migration, or other
 merge hotspot. The host sizes browser and model-session lanes from
 available CPU, memory, disk, and tool limits, monitors pressure, and reduces
 fan-out before swapping or context sprawl degrade quality. It sets no cap on
-heavy build and test runs: each takes a slot of the host's capacity or runs
-with a smaller job count (workflow-discipline "Lanes and capacity"), so an
-independent heavy run is never deferred. Dependent work stays sequential.
+heavy build and test runs: each takes a coordination slot and, past the
+host's job budget, runs with fewer jobs (workflow-discipline "Lanes and
+capacity"), so an independent heavy run is never deferred. Dependent work stays sequential.
 
 For a multi-task body, integrate through `integration/<epic>` in small
 batches, and serialize each landing: one candidate at a time. Before review,

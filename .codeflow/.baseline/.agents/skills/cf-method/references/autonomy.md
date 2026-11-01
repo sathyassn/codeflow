@@ -269,8 +269,8 @@ This guidance adds no setting and grants no approval.
 
 ## Multi-session coordination
 
-Lanes run in parallel. Heavy runs take a slot of the host's capacity or run
-with a smaller job count, so no lane waits for another lane's run; keep each
+Lanes run in parallel. Every heavy run takes a coordination slot and, past the
+host's job budget, runs with fewer jobs, so no lane waits for another lane's run; keep each
 lane's build output separate. Only a dependency orders work: a dependent task
 builds on its predecessor's exact reviewed head, and the predecessor lands
 first. Use the host's capacity to size how many lanes to start.

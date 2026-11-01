@@ -21,9 +21,9 @@ generated registries, and other conflict hotspots have a single owner or run
 sequentially. The coordinator sizes concurrent browsers and model sessions
 from observed capacity and preserves headroom; reduce fan-out before swap
 pressure, duplicate caches or builds, or context dilution affects evidence
-quality. Heavy test and build runs need no coordinator cap: each takes a slot
-of the host's capacity or runs with a smaller job count, so lanes never wait
-for one another. Never use concurrent writers in one worktree, and never
+quality. Heavy test and build runs need no coordinator cap: each takes a
+coordination slot and, past the host's job budget, runs with fewer jobs, so
+lanes never wait for one another. Never use concurrent writers in one worktree, and never
 rebase a shared integration branch.
 
 Reviewed task heads land as the `cf-method` skill's "Managing a body of

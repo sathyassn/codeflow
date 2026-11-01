@@ -77,7 +77,7 @@ ignore_default_excludes = false
 
 # `cf-guard` grants no write under the home folder (TSK-337). Review and
 # consult seats run no heavy work (ADR-0075 D2: a consult or review edits
-# nothing), so they cannot take a capacity slot under `~/.codeflow/locks`,
+# nothing), so they cannot take a coordination slot under `~/.codeflow/locks`,
 # write gate evidence under `~/.codeflow/gate-runs` or, outside the main
 # checkout root, write the common `.git`. A seat that has to run a heavy
 # target or `codeflow reserve` is a builder seat and launches as one.

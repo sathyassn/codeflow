@@ -154,7 +154,7 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   - Once TSK-358 lands, a pull request into a line also needs its own green
     "codeflow gates" and "windows" verdicts at the exact head that lands;
     TSK-358 updates this sentence when it lands.
-- **Heavy Cargo work in parallel worktrees is fine; keep each worktree's target directory inside it.** Heavy runs take a free slot of the host's capacity, or run with a smaller job count, so no worktree waits for another. `codeflow reserve -- <command>` applies the same admission to a direct command and remains available.
+- **Heavy Cargo work in parallel worktrees is fine; keep each worktree's target directory inside it.** Every heavy run takes a coordination slot and, past the host's job budget, runs with fewer jobs, so no worktree waits for another. `codeflow reserve -- <command>` applies the same admission to a direct command and remains available.
 - **Hook and policy tasks run the worktree's own binary.** For a task that
   changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
   (or `PATH`) at the worktree's `target/debug/codeflow`; never build inside
