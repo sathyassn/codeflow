@@ -1,0 +1,11 @@
+id = "TSK-1145"
+uid = "b6a85a75-55e4-486b-b621-dc16c8eb5e4f"
+kind = "TSK"
+title = "Heavy test runs share the host by capacity instead of one lock"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:52:10Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
