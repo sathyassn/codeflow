@@ -219,6 +219,22 @@ pre-push refuses only a new cancelled record without its reason or scope,
 or a path a planning amendment cannot carry; the pull request check judges
 the rest.
 
+## A blocked task refuses its own pull request
+
+`work.stable_planning_anchor: task TSK-NNN is blocked` means the target
+still records the task as blocked and this range does not unblock it. When
+the Blocker is resolved, run `codeflow task status TSK-NNN todo` on the
+task branch, commit the record, and run `codeflow work start TSK-NNN`;
+`codeflow ci` then judges the task as `todo` and shows the removed Blocker.
+An open `depends_on` predecessor still refuses the task.
+
+`work.records: status ... is refused at commit ...` names the one commit
+whose status step is illegal; change status with `codeflow task status`,
+one legal step per commit. `status history cannot be read` names its cause
+and the step that repairs it: fetch full history for a shallow clone,
+fetch or repair the object store for a missing object, or fix the record
+version for an unparsable one.
+
 ## A push is blocked by a quick target
 
 A `git.test_gate_on_push` failure names each failed target and its cause:
