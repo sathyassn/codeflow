@@ -1,0 +1,11 @@
+id = "TSK-1158"
+uid = "2021f72c-bb99-46f8-8e18-588f7a5754a0"
+kind = "TSK"
+title = "An epic closes a criterion that moved to another epic, with a waiver naming the moving amendment"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T22:49:42Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
