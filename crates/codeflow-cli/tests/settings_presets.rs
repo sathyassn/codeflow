@@ -1484,6 +1484,8 @@ fn tsk1070_departure() -> Departure {
     ];
     let mut added_denies = table.claude_read_groups[0].denies.clone();
     added_denies.extend(stores.iter().map(|(rule, _)| (*rule).to_string()));
+    // The fixed folder for user-settings backups (review round 2, SEC-08).
+    added_denies.push("Read(~/.codeflow/claude/backups/**)".to_string());
     let mut removed_carveouts = Vec::new();
     for word in ["secret", "credentials"] {
         for ext in [
@@ -1813,6 +1815,22 @@ fn launcher_files_are_denied_to_edits_and_sandboxed_writes() {
                 "{name}: no sandbox write deny covers ~/{file}"
             );
         }
+    }
+}
+
+/// Security review round 2 (SEC-08): the backups of the person's user
+/// settings live in one fixed folder, whatever `CLAUDE_CONFIG_DIR` says,
+/// and every preset denies that folder to the Read tool, which Claude Code
+/// also applies to sandboxed commands.
+#[test]
+fn user_settings_backups_are_denied_to_reads() {
+    for name in preset_files() {
+        let deny = perm_array(&load(&name), "deny");
+        assert!(
+            deny.iter()
+                .any(|rule| rule == "Read(~/.codeflow/claude/backups/**)"),
+            "{name}: the user-settings backups are readable"
+        );
     }
 }
 

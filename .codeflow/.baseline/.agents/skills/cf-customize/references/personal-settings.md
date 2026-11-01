@@ -128,8 +128,9 @@ So the mode is the person's choice, made outside the repository:
   variables, and, when `herdr` is installed, the Herdr exclusion with its
   denies. Each item shows the entries it would add and is merged only on a
   typed yes. The file as it was is kept, readable by the person only, as
-  `backups/settings.json.codeflow-backup-<time>-<n>` beside it, a folder
-  the shipped presets deny to reads, and
+  `~/.codeflow/claude/backups/settings.json.codeflow-backup-<time>-<n>`,
+  a folder the shipped presets deny to reads wherever `CLAUDE_CONFIG_DIR`
+  puts the user file, and
   `~/.codeflow/claude-user-settings.json` records what was added, so
   `--uninstall` removes only those entries. Bypass mode and the host list
   are never written there.
@@ -184,7 +185,7 @@ shell startup files, so the session hands the person
 | Permission prompts and the auto-mode classifier | nothing judges intent; the docs say bypass "offers no protection against prompt injection or unintended actions" beyond the rules above |
 | Allow rules | they have no effect, since everything not denied runs |
 | Protected-path prompts (`.git`, `.claude`) | writes there run without a prompt, except where a deny rule covers the file |
-| The prompt on an excluded command | the excluded `gh` subcommands and a plain `git push` run outside the sandbox without asking, except a `gh api` write (a POST, PUT or PATCH in any spelling, a field or input body separated or attached, a bundle led by `-i`, GraphQL) or a `gh api --hostname` call, which an ask rule prompts for in every mode; the guards still judge each one |
+| The prompt on an excluded command | the excluded `gh` subcommands and a plain `git push` run outside the sandbox without asking, except a `gh api` write (any method other than GET or HEAD, in any case or option form, a field or input body, GraphQL), an absolute URL endpoint or a `--hostname` call, which exec-guard reads by gh's own option grammar and prompts for in every mode; a DELETE, `gh auth status` with the token flag and a form exec-guard cannot read are refused; the guards still judge each one |
 | The prompt on an unlisted host | without the session file, a sandboxed command reaches a host off `sandbox.network.allowedDomains` without asking, since a project file cannot set `sandbox.network.strictAllowlist`. The session file sets it with the host list, because under it Claude Code ignores the project's list. The private-range `deniedDomains` stay refused in every mode |
 
 Another tool that needs host state, or another host, is added in

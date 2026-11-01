@@ -11141,3 +11141,166 @@ fn a_guard_stalled_on_a_fifo_include_refuses_at_its_deadline() {
         );
     }
 }
+
+/// Exec-guard with a payload shaped as each harness sends it: Claude Code's
+/// (`hook_event_name`), or Codex's (the same plus `turn_id`).
+fn exec_guard_from(dir: &Path, command: &str, codex: bool) -> Output {
+    let mut payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": dir,
+        "session_id": "s-1",
+        "permission_mode": "bypassPermissions",
+    });
+    if codex {
+        payload["turn_id"] = serde_json::json!("t-1");
+    }
+    let mut hook = codeflow();
+    hook.env("SHELL", "/bin/zsh");
+    run_with_stdin(
+        hook.args(["hook", "exec-guard"]).current_dir(dir),
+        &payload.to_string(),
+    )
+}
+
+/// TSK-1070 security review round 2 (SEC-05): Claude Code runs `gh api`
+/// outside its sandbox by name, so exec-guard reads its options by gh's own
+/// grammar. A DELETE is refused in every spelling, case and quoting the
+/// shell turns into the same arguments, and a form the guard cannot be sure
+/// of is refused.
+#[test]
+fn exec_guard_refuses_every_gh_api_delete_and_unread_form() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        "gh api repos/o/r -X=DeLeTe",
+        "gh api repos/o/r -iXDELETE",
+        "gh api repos/o/r -X 'DeLeTe'",
+        "gh api repos/o/r -X \"delete\"",
+        "gh api repos/o/r --method=dElEtE",
+        "gh api repos/o/r -H 'X-HTTP-Method-Override: DELETE'",
+        "gh api repos/o/r -X \"$M\"",
+        "gh api repos/o/r $FLAGS",
+        "gh api repos/o/r --metod POST",
+        "gh auth status -at",
+        "gh auth status --show-token=true",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("security.outward_actions"), "{command}: {err}");
+    }
+}
+
+/// TSK-1070 security review round 2 (SEC-05): a `gh api` write in any
+/// spelling, case or quoting asks the person (Claude's `ask` answer, which
+/// prompts in bypass mode too); a read does not, and neither does a Codex
+/// call, whose `gh` runs in Codex's own sandbox.
+#[test]
+fn exec_guard_asks_before_every_gh_api_write() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        "gh api repos/o/r/actions/runs/1/rerun -X PoSt",
+        "gh api repos/o/r -X 'POST'",
+        "gh api repos/o/r -X=put",
+        "gh api repos/o/r -iXpatch",
+        "gh api repos/o/r --method=pAtCh",
+        "gh api repos/o/r -'f'body=x",
+        "gh api repos/o/r -fbody=x",
+        "gh api repos/o/r --raw-field=body=x",
+        "gh api repos/o/r --input body.json",
+        "gh api graphql -f query=x",
+        "gh api https://example.invalid/review-canary",
+        "gh api repos/o/r --hostname example.invalid",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let answer: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("{command}: no ask answer ({e}): {stdout}"));
+        assert_eq!(
+            answer["hookSpecificOutput"]["permissionDecision"], "ask",
+            "{command}"
+        );
+        assert_eq!(answer["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert!(
+            answer["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .unwrap()
+                .contains("`gh api`"),
+            "{command}"
+        );
+        let codex = exec_guard_from(dir.path(), command, true);
+        assert_eq!(codex.status.code(), Some(0), "{command}");
+        assert!(codex.stdout.is_empty(), "{command}: Codex gets no ask");
+    }
+    for command in [
+        "gh api repos/o/r/pulls/1 --jq .head.sha",
+        "gh api search/issues -X GET -f q=repo:o/r",
+        "gh api repos/o/r -X get",
+        "gh pr view 1",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        assert_eq!(out.status.code(), Some(0), "{command}");
+        assert!(
+            out.stdout.is_empty(),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
+/// TSK-1070 security review round 2 (the excluded `git push` runs the
+/// pre-push hooks outside the sandbox): an edit, or a shell write, to the
+/// hooks folder of a linked worktree under the project is refused, as it
+/// is at the project root. The Edit tool's settings deny is anchored at the
+/// project root, so the guards carry the worktrees.
+#[test]
+fn the_hooks_folder_of_a_worktree_is_refused_to_edits_and_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_repo(root, "main");
+    std::fs::create_dir_all(root.join(".codeflow/git-hooks")).unwrap();
+    std::fs::write(root.join(".codeflow/git-hooks/pre-push"), "#!/bin/sh\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: hooks"]);
+    git(root, &["config", "core.hooksPath", ".codeflow/git-hooks"]);
+    git(root, &["worktree", "add", "-b", "task/x", ".worktrees/x"]);
+    let hook = root.join(".worktrees/x/.codeflow/git-hooks/pre-push");
+    assert!(hook.exists());
+    let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+        "file_path": hook, "content":"#!/bin/sh\ntouch /tmp/x\n"}, "cwd": root})
+    .to_string();
+    let out = run_with_stdin(
+        codeflow().args(["hook", "edit-guard"]).current_dir(root),
+        &payload,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for command in [
+        "printf x > .worktrees/x/.codeflow/git-hooks/pre-push",
+        "cp base.txt .worktrees/x/.codeflow/git-hooks/pre-push",
+    ] {
+        let out = run_with_stdin(
+            codeflow().args(["hook", "git-guard"]).current_dir(root),
+            &guard_payload(command, root),
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

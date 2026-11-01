@@ -105,6 +105,16 @@ pub fn shell_is_posix(tool_name: &str, shell: Option<&str>, unix_host: bool) -> 
     }
 }
 
+/// What the person is asked before the call runs, when nothing refuses it:
+/// each `gh api` call on the line that writes or reaches another host, read
+/// by gh's own option grammar in every spelling and case (TSK-1070 security
+/// review round 2). Claude Code runs `gh api` outside its sandbox by name,
+/// and its text rules cannot close the list of spellings.
+#[must_use]
+pub fn asks_in(command: &str, levels: &SecuritySection, cwd: &std::path::Path) -> Vec<String> {
+    crate::security::outward::asks_at(command, levels, Some(cwd))
+}
+
 /// [`evaluate_at`] for a call whose shell is known. `posix` is true for the
 /// Bash and `run_terminal_command` tools; only those lines can be certified
 /// as prose (TSK-233), because the grammar is POSIX shell grammar and

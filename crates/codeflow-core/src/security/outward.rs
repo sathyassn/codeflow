@@ -16,11 +16,8 @@ pub(crate) fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation
     evaluate_at(command, levels, None)
 }
 
-pub(crate) fn evaluate_at(
-    command: &str,
-    levels: &SecuritySection,
-    cwd: Option<&Path>,
-) -> Vec<Violation> {
+/// The line read once, with the commands in its interpreter code.
+fn read_line(command: &str, cwd: Option<&Path>) -> (Parsed, Parsed) {
     let mut parsed = Parsed::default();
     visit(command, cwd, 0, &mut parsed);
     let mut embedded = Parsed::default();
@@ -30,6 +27,35 @@ pub(crate) fn evaluate_at(
             argv(&words[at..], None, cwd, 0, &mut embedded);
         }
     }
+    (parsed, embedded)
+}
+
+/// What the person is asked before the line runs: each `gh api` call on
+/// it that writes or reaches another host (the `forge_write` family, read
+/// by gh's own option grammar). Empty when the outward-action check is
+/// off.
+pub(crate) fn asks_at(command: &str, levels: &SecuritySection, cwd: Option<&Path>) -> Vec<String> {
+    if !levels.outward_actions.is_active() {
+        return Vec::new();
+    }
+    let (parsed, embedded) = read_line(command, cwd);
+    let mut asks = parsed.gh_writes;
+    asks.extend(embedded.gh_writes);
+    asks.sort();
+    asks.dedup();
+    asks
+}
+
+pub(crate) fn evaluate_at(
+    command: &str,
+    levels: &SecuritySection,
+    cwd: Option<&Path>,
+) -> Vec<Violation> {
+    let (parsed, embedded) = read_line(command, cwd);
+    let mut unread_gh = parsed.unread_gh;
+    unread_gh.extend(embedded.unread_gh);
+    unread_gh.sort();
+    unread_gh.dedup();
     let mut families = parsed.families;
     families.extend(embedded.families);
     let mut config_reasons = parsed.config_reasons;
@@ -54,6 +80,16 @@ pub(crate) fn evaluate_at(
             )
         })
         .collect();
+    if levels.outward_actions.is_active() {
+        violations.extend(unread_gh.into_iter().map(|why| {
+            Violation::new(
+                "security.outward_actions",
+                levels.outward_actions,
+                format!("unread gh call: {why}; it runs outside the sandbox with the GitHub token, so a form the guard cannot read is refused"),
+                crate::remedy::GH_CALL_UNREAD.remedy(),
+            )
+        }));
+    }
     violations.extend(families
         .into_iter()
         .filter_map(|(id, root)| {
@@ -135,6 +171,12 @@ struct Parsed {
     config_reasons: Vec<(Option<PathBuf>, String)>,
     unreadable: Vec<String>,
     families: Vec<(&'static str, Option<PathBuf>)>,
+    /// `gh` calls whose options the guard cannot read for certain, with the
+    /// reason (TSK-1070 security review round 2): refused.
+    unread_gh: Vec<String>,
+    /// `gh api` calls that write or reach another host, with the reason:
+    /// the person is asked before they run.
+    gh_writes: Vec<String>,
     code: Vec<String>,
     stdin_interpreter: usize,
     commands: Vec<Unwrapped>,
@@ -2851,6 +2893,43 @@ fn perl_attached_code(arg: &str) -> Option<&str> {
     None
 }
 
+/// The `gh` calls whose family depends on their options: a visibility
+/// change, and `gh api` and `gh auth status`, read by gh's own grammar,
+/// never a list of spellings (TSK-1070 security review round 2).
+fn gh_family(
+    sub: &str,
+    body: &[String],
+    out: &mut Parsed,
+    source: &dyn Fn() -> Result<Option<PathBuf>, String>,
+) -> Result<(), String> {
+    if sub == "repo"
+        && body.first().is_some_and(|s| s == "edit")
+        && body
+            .iter()
+            .any(|s| s == "--visibility" || s.starts_with("--visibility="))
+    {
+        out.families.push(("account", source()?));
+    }
+    if sub == "api" {
+        match super::gh_api::api_intent(body) {
+            super::gh_api::Intent::Read => {}
+            super::gh_api::Intent::Delete => out.families.push(("account", source()?)),
+            super::gh_api::Intent::Write(why) => out.gh_writes.push(format!("`gh api` {why}")),
+            super::gh_api::Intent::Unread(why) => {
+                out.unread_gh.push(format!("`gh api`: {why}"));
+            }
+        }
+    }
+    if sub == "auth" && body.first().is_some_and(|s| s == "status") {
+        match super::gh_api::auth_status_shows_token(&body[1..]) {
+            Ok(false) => {}
+            Ok(true) => out.families.push(("forge_exec", source()?)),
+            Err(why) => out.unread_gh.push(format!("`gh auth status`: {why}")),
+        }
+    }
+    Ok(())
+}
+
 fn direct_family(
     name: &str,
     rest: &[String],
@@ -2919,26 +2998,7 @@ fn direct_family(
         }
     }
     if name == "gh" {
-        if sub == "repo"
-            && body.first().is_some_and(|s| s == "edit")
-            && body
-                .iter()
-                .any(|s| s == "--visibility" || s.starts_with("--visibility="))
-        {
-            out.families.push(("account", source()?));
-        }
-        if sub == "api"
-            && body.iter().enumerate().any(|(i, a)| {
-                a.eq_ignore_ascii_case("-XDELETE")
-                    || a.eq_ignore_ascii_case("--method=DELETE")
-                    || ((a == "-X" || a == "--method")
-                        && body
-                            .get(i + 1)
-                            .is_some_and(|v| v.eq_ignore_ascii_case("DELETE")))
-            })
-        {
-            out.families.push(("account", source()?));
-        }
+        gh_family(sub, body, out, &source)?;
     }
     if name.starts_with("git-credential-") {
         out.families.push(("account", source()?));

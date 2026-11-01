@@ -148,6 +148,7 @@
       "Read(~/.password-store/**)",
       "Read(~/.claude/.credentials.json)",
       "Read(~/.claude/backups/**)",
+      "Read(~/.codeflow/claude/backups/**)",
       "Read(~/.claude/debug/**)",
       "Read(~/.claude/file-history/**)",
       "Read(~/.claude/history.jsonl)",

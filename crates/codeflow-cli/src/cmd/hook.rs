@@ -728,7 +728,51 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         &cwd,
         &root,
     );
+    if !codeflow_core::hooks::any_blocking(&violations) && from_claude(stdin) {
+        let asks = exec_guard::asks_in(command, &policy.security, &cwd);
+        if !asks.is_empty() {
+            claude_ask(out, &asks);
+        }
+    }
     exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
+}
+
+/// Whether the payload comes from Claude Code: a `PreToolUse` event with
+/// none of the fields Codex adds (`turn_id`). Grok names its event
+/// `hookEventName` and gets its deny answer from [`grok_deny`].
+fn from_claude(stdin: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(stdin)
+        .ok()
+        .is_some_and(|value| {
+            value
+                .get("hook_event_name")
+                .and_then(serde_json::Value::as_str)
+                == Some("PreToolUse")
+                && value.get("turn_id").is_none()
+        })
+}
+
+/// Claude Code's ask answer: the person confirms the call before it runs,
+/// in every permission mode, bypass included (live check 2026-10-31,
+/// Claude Code 2.1.316); a session with no person refuses it.
+fn claude_ask(out: &mut dyn Write, asks: &[String]) {
+    let reason = format!(
+        "codeflow exec-guard: {}. It runs outside the sandbox with your GitHub token (TSK-1070, ADR-0093); confirm only if you meant it.",
+        asks.join("; ")
+    );
+    let answer = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "ask",
+            "permissionDecisionReason": reason,
+        }
+    });
+    let _ = term_writeln!(
+        out,
+        "{}",
+        codeflow_core::git::display_json(&answer.to_string())
+    );
+    let _ = out.flush();
 }
 
 fn edit_guard(stdin: &str) -> i32 {

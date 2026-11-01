@@ -695,7 +695,7 @@
   {
    "id": "forge_write",
    "decision": "ask",
-   "why": "A `gh api` call that writes (a POST, PUT or PATCH method in any spelling, a field or an input body, separated or attached, or any GraphQL call, since a mutation and a query share one form), a call with a short-option bundle (`-i` is the only flag that can lead one), and a call to another host (`--hostname`) run outside the Claude sandbox by name (TSK-1070). They prompt in every mode, bypass included, so a person sees each such call the text rules can name; an unattended session is refused (ADR-0093, departing from ADR-0075 decision 1 for this family only).",
+   "why": "A `gh api` call that writes (a POST, PUT or PATCH method in any spelling, a field or an input body, separated or attached, or any GraphQL call, since a mutation and a query share one form), a call with a short-option bundle (`-i` is the only flag that can lead one), and a call to another host (`--hostname`) run outside the Claude sandbox by name (TSK-1070). They prompt in every mode, bypass included; an unattended session is refused (ADR-0093, departing from ADR-0075 decision 1 for this family only). These text rules name the common spellings only: exec-guard reads every `gh api` call by gh's own option grammar, in any case, bundle or `=` form, answers Claude Code with the same prompt for each write, absolute URL and `--hostname` call, and refuses a form it cannot read (TSK-1070 security review round 2).",
    "claude": [
     "Bash(gh api -X POST*)",
     "Bash(gh api * -X POST*)",
@@ -870,6 +870,7 @@
     "Read(~/.password-store/**)",
     "Read(~/.claude/.credentials.json)",
     "Read(~/.claude/backups/**)",
+    "Read(~/.codeflow/claude/backups/**)",
     "Read(~/.claude/debug/**)",
     "Read(~/.claude/file-history/**)",
     "Read(~/.claude/history.jsonl)",

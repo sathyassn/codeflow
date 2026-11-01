@@ -125,7 +125,14 @@ decision 2026-10-31):
   ask rule still prompts in bypass, which is the only way a person sees an
   outward write the deny rules cannot name, and an unattended session is
   refused. Codex gets no rule for it, since its `never` approval has no
-  prompt.
+  prompt. Text rules cannot close the list of spellings (`-X PoSt`,
+  `-X=DeLeTe`, `-iXDELETE` passed them), so exec-guard reads each `gh api`
+  call by gh's own option grammar and answers Claude Code with the same
+  `ask` decision for a write, GraphQL, an absolute URL or `--hostname`; a
+  hook `ask` prompts in bypass too (live check, Claude Code 2.1.316). It
+  refuses a DELETE in any form and a form it cannot read for certain
+  (TSK-1070 security review round 2). The shipped ask and deny rules stay
+  as a second layer for the common spellings.
 - The Read tool and the sandbox deny the token stores of `gh`, git,
   Docker, gcloud, Azure, npm and the macOS keychains.
 - The `secret` and `credentials` name rules match exact secret names and
@@ -166,8 +173,8 @@ decision 2026-10-31):
   `.claude/settings.local.json` (`sandbox.excludedCommands`,
   `sandbox.network.allowedDomains`). Removing a merged worktree, which the
   sandbox's `.git` and `.claude` write denies stop, goes to the operator.
-- Excluded commands do not inherit the host list. The ask rules cover
-  `gh api --hostname`; `gh` with `GH_HOST` or a `-R` naming another host,
+- Excluded commands do not inherit the host list. Exec-guard's prompt
+  covers `gh api --hostname` and an absolute URL endpoint; `gh` with `GH_HOST` or a `-R` naming another host,
   and a push to a remote URL on another host, have no rule of their own.
 - Whether PreToolUse hooks run under bypass is not stated in Claude Code's
   docs, so the canary proves it in each live session rather than this record

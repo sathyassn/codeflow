@@ -23,7 +23,7 @@
     ".agents/skills/cf-customize/references/personal-settings.md": {
       "src": "agents/skills/cf-customize/references/personal-settings.md",
       "ownership": "managed",
-      "sha256": "92356e975f0823bb60d448a18c4d179ce39da8ea2983b28bd37ce094e2c50b24",
+      "sha256": "e87382a483f9a76799181fbb6aed3e087303c8d5d364a0e246894436f2fe346c",
       "exec": false
     },
     ".agents/skills/cf-delegate/SKILL.md": {
@@ -845,7 +845,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "c6f8e97bcb306106c3e037b841c4e16158797b4e88d5f57b6fe8ce8693328a1b",
+      "sha256": "db02a39663e7a77d6b08b60ba5e8cb3555664ed72d7bbdd3c7396e8a03cd23fd",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -869,7 +869,7 @@
     ".claude/skills/cf-customize/references/personal-settings.md": {
       "src": "agents/skills/cf-customize/references/personal-settings.md",
       "ownership": "managed",
-      "sha256": "92356e975f0823bb60d448a18c4d179ce39da8ea2983b28bd37ce094e2c50b24",
+      "sha256": "e87382a483f9a76799181fbb6aed3e087303c8d5d364a0e246894436f2fe346c",
       "exec": false
     },
     ".claude/skills/cf-delegate/SKILL.md": {
@@ -1787,7 +1787,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "cb06181de75b8dc56d1d485872a6f4c8c04d12b2e5666603b1bb01bcf7dae755",
+      "sha256": "4f60cfb373a22e0908409e04c1d09bc6427c2cd9a59250b31851c3faf9ec2ada",
       "exec": false
     },
     ".codex/hooks.json": {

@@ -335,19 +335,22 @@ fn read_record(path: &Path) -> Result<Record, String> {
         .map_err(|err| format!("{} is not a valid record ({err})", path.display()))
 }
 
-/// Copy the user file to a new backup in the `backups` folder beside it
-/// (`~/.claude/backups`, which the shipped presets deny to the Read tool
-/// and the sandbox, as they deny the user file itself; security review
-/// SEC-08), readable by its owner only. Each backup gets a new name, so a
-/// second backup in the same second never replaces the first. Returns the
-/// backup path.
-fn backup(user: &Path) -> std::io::Result<PathBuf> {
+/// Where backups of the user file go: `~/.codeflow/claude/backups`, beside
+/// the install record, whatever folder the user file is in. The shipped
+/// presets deny that folder to the Read tool and the sandbox; a folder
+/// beside the user file would move with `CLAUDE_CONFIG_DIR` out of their
+/// reach (security review round 2, SEC-08).
+pub(super) fn backup_dir(record_path: &Path) -> PathBuf {
+    record_path.with_file_name("claude").join("backups")
+}
+
+/// Copy the user file to a new backup in [`backup_dir`], readable by its
+/// owner only. Each backup gets a new name, so a second backup in the same
+/// second never replaces the first. Returns the backup path.
+fn backup(user: &Path, record_path: &Path) -> std::io::Result<PathBuf> {
     use std::io::Write;
     let bytes = std::fs::read(user)?;
-    let dir = user
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("backups");
+    let dir = backup_dir(record_path);
     std::fs::create_dir_all(&dir)?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -449,7 +452,7 @@ pub fn offer(
         return 0;
     }
     if existed {
-        match backup(user) {
+        match backup(user, record_path) {
             Ok(path) => println!("  Kept the file as it was in {}.", path.display()),
             Err(err) => {
                 println!(
@@ -519,7 +522,7 @@ pub fn remove(record_path: &Path) -> i32 {
             revert(&mut root, change);
         }
     }
-    match backup(&user) {
+    match backup(&user, record_path) {
         Ok(path) => println!("  Kept the file as it was in {}.", path.display()),
         Err(err) => {
             println!(
@@ -604,7 +607,7 @@ mod tests {
         assert!(strings(&after["sandbox"]["excludedCommands"]).contains(&json!("herdr *")));
         assert!(strings(&after["sandbox"]["filesystem"]["denyRead"]).contains(&json!("~/.ssh")));
         assert_eq!(after["model"], "opus");
-        let backups = std::fs::read_dir(user.parent().unwrap().join("backups"))
+        let backups = std::fs::read_dir(backup_dir(&record))
             .unwrap()
             .filter(|e| {
                 e.as_ref()
@@ -728,9 +731,9 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&record).unwrap(), "{ not json");
     }
 
-    /// Security review SEC-08: backups go to the `backups` folder the
-    /// presets deny to reads, owner-only, and two in the same second keep
-    /// both earlier versions.
+    /// Security review SEC-08: backups go to the folder the presets deny to
+    /// reads, owner-only, and two in the same second keep both earlier
+    /// versions.
     #[cfg(unix)]
     #[test]
     fn backups_are_private_and_never_replace_each_other() {
@@ -738,17 +741,41 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let user = dir.path().join("settings.json");
         std::fs::write(&user, "first").unwrap();
-        let one = backup(&user).unwrap();
+        let record = dir.path().join("record.json");
+        let one = backup(&user, &record).unwrap();
         std::fs::write(&user, "second").unwrap();
-        let two = backup(&user).unwrap();
+        let two = backup(&user, &record).unwrap();
         assert_ne!(one, two);
         assert_eq!(std::fs::read_to_string(&one).unwrap(), "first");
         assert_eq!(std::fs::read_to_string(&two).unwrap(), "second");
         for path in [&one, &two] {
-            assert_eq!(path.parent().unwrap(), dir.path().join("backups"));
+            assert_eq!(path.parent().unwrap(), dir.path().join("claude/backups"));
             let mode = std::fs::metadata(path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "{}", path.display());
         }
+    }
+
+    /// Security review round 2 (SEC-08): with the user file in a folder
+    /// `CLAUDE_CONFIG_DIR` names, the backup still goes beside the install
+    /// record, where the presets deny reads, and never beside the user file.
+    #[test]
+    fn a_custom_config_folder_does_not_move_the_backups() {
+        let dir = tempfile::tempdir().unwrap();
+        let custom = dir.path().join("custom-claude");
+        std::fs::create_dir_all(&custom).unwrap();
+        let user = custom.join("settings.json");
+        std::fs::write(&user, r#"{"env": {"PRIVATE": "synthetic"}}"#).unwrap();
+        let record = dir.path().join("home/.codeflow/claude-user-settings.json");
+        assert_eq!(
+            offer(&mut "yes\n".as_bytes(), &user, &record, &preset(), ALL),
+            0
+        );
+        assert!(
+            !custom.join("backups").exists(),
+            "no backup beside the user file"
+        );
+        let fixed = dir.path().join("home/.codeflow/claude/backups");
+        assert_eq!(std::fs::read_dir(&fixed).unwrap().count(), 1);
     }
 
     /// The record is written before the user file, so a user file that

@@ -43,11 +43,14 @@ amends ADR-0029's retry).
   create, comment, edit, ready, review and merge; `gh run` view, list,
   watch, rerun and cancel; `gh issue` view, list, status, create, comment,
   edit, close and reopen; `gh api`, `gh repo view`, `gh release view`,
-  `gh release list`, `gh search` and `gh auth status`. Verbs that change
-  this machine stay sandboxed: `gh run download` extracts an archive,
-  and `gh pr checkout` and `gh issue develop` run git (TSK-1070 security
-  review). `git push *` covers a plain push, which asks `gh` for the
-  HTTPS credential and runs the pre-push hook.
+  `gh release list`, `gh search` and `gh auth status`. `gh run download`,
+  which extracts an archive, and `gh pr checkout` and `gh issue develop`,
+  which run git, stay sandboxed (TSK-1070 security review). The excluded
+  verbs still act on this machine: `gh pr create` can push a branch and,
+  with `--editor`, start the editor; `gh pr merge --delete-branch` deletes
+  the local branch. The git that `gh` starts is not judged by git-guard.
+  `git push *` covers a plain push, which asks `gh` for the HTTPS
+  credential and runs the pre-push hook.
 - An entry matches only when every command in the call matches it. A pipe,
   a file redirect, a `cd`, `git -C <path>`, an environment prefix or a
   `$(...)` keeps the whole call sandboxed (Claude Code sandboxing docs and
@@ -61,22 +64,34 @@ amends ADR-0029's retry).
   that would run code outside the sandbox, print the token or reach
   another host: extensions, aliases, `gh config set`, `gh auth status
   --show-token`, codespaces, keys, secrets, variables, `gh repo clone`,
-  `gh browse`, `--receive-pack`, `--exec` and `ext::` remotes. The
-  `forge_write` ask rules prompt in every mode (ADR-0093) for a `gh api`
-  write method in any spelling (`-X POST`, `-XPOST`, `-X=post`,
-  `--method=PATCH`), a field or input body, separated or attached
-  (`-f body=x`, `-fbody=x`, `--field=x`), a bundle led by `-i`, GraphQL
-  after any flags, and `--hostname`.
+  `gh browse`, `--receive-pack`, `--exec` and `ext::` remotes.
+- A list of spellings never closes, so exec-guard reads every `gh api`
+  and `gh auth status` call by gh's own option grammar: separated,
+  attached and `=` values, short-option bundles, and the method in any
+  case, as gh upper-cases it before sending. It refuses a DELETE in any
+  form, including a method-override header, and `gh auth status` with the
+  token flag in any bundle. It answers Claude Code with a prompt (the
+  `ask` decision, which Claude Code shows in bypass mode too) for a `gh
+  api` write method, a field or input body, GraphQL, an absolute URL
+  endpoint and `--hostname`. It refuses a form it cannot read for
+  certain: a word the shell fills in, an option `gh` does not have, a
+  second endpoint. The `forge_write` ask rules and the DELETE denies in
+  the presets name the common spellings as a second layer.
 - Excluded commands do not inherit the host list: an excluded `gh` or
-  `git push` reaches whatever host it names. The `--hostname` ask covers
-  `gh api`; `gh` with `GH_HOST` or a `-R host/owner/repo` and a push to a
-  remote URL on another host have no rule of their own, so such a call can
-  carry data off the host list; `gh` sends a token only to a host it holds
-  one for.
-  The sandbox denies writes to `.codeflow/git-hooks` in any
-  checkout, since a push runs those hooks outside it, and removes
-  `GH_TOKEN`, `GITHUB_TOKEN`, `NPM_TOKEN` and `NODE_AUTH_TOKEN` from every
-  sandboxed command.
+  `git push` reaches whatever host it names. The prompt covers `gh api`
+  with `--hostname` or an absolute URL; `gh` with `GH_HOST` or a `-R
+  host/owner/repo` and a push to a remote URL on another host have no
+  rule of their own, so such a call can carry data off the host list;
+  `gh` sends a token only to a host it holds one for.
+  A push runs the pre-push hooks in `.codeflow/git-hooks` outside the
+  sandbox, so the sandbox denies writes to that folder in any checkout
+  (`**/.codeflow/git-hooks`; on Linux the sandbox may need explicit
+  paths). The Edit tool's deny rule covers the project's own folder, and
+  edit-guard refuses an edit to it in any checkout, worktrees included. A
+  `core.hooksPath` other than `.codeflow/git-hooks` has no such deny;
+  git-guard refuses changing it. The sandbox also removes `GH_TOKEN`,
+  `GITHUB_TOKEN`, `NPM_TOKEN` and `NODE_AUTH_TOKEN` from every sandboxed
+  command.
 - Herdr's socket and the official Codex plugin route (ADR-0029) also need
   host state, but no shipped preset excludes them: an entry there reaches
   every adopter. A person who uses them adds `herdr *`, with denies for

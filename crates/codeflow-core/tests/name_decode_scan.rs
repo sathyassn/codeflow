@@ -2242,6 +2242,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // A payload that does not parse as JSON gets no ask answer; shell_call parsed the same text first and refuses one it cannot read, so this only tells the Claude payload apart (TSK-1070).
+    (
+        "crates/codeflow-cli/src/cmd/hook.rs",
+        "from_claude",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // gh splits a header at the first colon and trims both sides with Go's strings.TrimSpace, which also removes Unicode space, so the method override is read as gh reads it (TSK-1070 security review round 2).
+    (
+        "crates/codeflow-core/src/security/gh_api.rs",
+        "api_intent",
+        "trim",
+        2,
+        "format-contract",
+    ),
     // This handler runs after the blocking guard verdict; malformed already-produced JSON chooses the textual denial message, retaining nonzero exit/refusal.
     (
         "crates/codeflow-cli/src/cmd/hook.rs",
@@ -6897,6 +6913,9 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/claude_session.rs", "run", "exists", 2, "Status display only: present or absent is printed and nothing is decided or written (TSK-1070)."),
     ("crates/codeflow-cli/src/cmd/claude_session.rs", "uninstall", "ErrorKind::NotFound", 1, "A file already gone needs no removal; every other read error is reported and uninstall exits nonzero (TSK-1070)."),
     ("crates/codeflow-cli/src/cmd/claude_session.rs", "note_prior", "ErrorKind::NotFound", 1, "No file at the path means nothing predates the install, so there is nothing to put back; every other read error refuses the install before it writes (TSK-1070 security review)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "adopt_changes", "ErrorKind::NotFound", 1, "A file already gone holds no change of the person's to keep; every other read error refuses the reinstall before it writes (TSK-1070 security review round 2)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "write_owned", "ErrorKind::NotFound", 1, "No file yet means no earlier content whose hash must stay recognisable; every other read error refuses the write (TSK-1070 security review round 2)."),
+    ("crates/codeflow-cli/src/cmd/claude_session.rs", "file_mode", "ErrorKind::NotFound", 1, "No wrapper yet means no permission bits to keep or restore; every other metadata error refuses the wrapper write (TSK-1070 security review round 2)."),
     ("crates/codeflow-cli/src/cmd/claude_session.rs", "write_atomic", "ErrorKind::NotFound", 2, "canonicalize finds no file, or a dangling link, so the write lands at the path as given, creating it; and a target with no metadata is new, so it is created owner-only; every other error propagates and nothing is written (TSK-1070)."),
     ("crates/codeflow-cli/src/cmd/claude_session/user_settings.rs", "on_path", "is_file", 1, "Only decides whether the Herdr item is offered; it is added only on the person's yes, and a herdr that is not found is not offered (TSK-1070)."),
     ("crates/codeflow-cli/src/cmd/claude_session/user_settings.rs", "read_record", "ErrorKind::NotFound", 1, "No record yet means nothing was added; every other read error, and a record that does not parse, refuses the offer and the removal (TSK-1070)."),

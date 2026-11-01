@@ -283,6 +283,21 @@ pub struct Manifest {
     /// The editor wrapper's content before the first install wrote it.
     #[serde(default)]
     pub wrapper_prior: Option<String>,
+    /// The editor wrapper's permission bits before the first install wrote
+    /// it, put back with its content.
+    #[serde(default)]
+    pub wrapper_prior_mode: Option<u32>,
+    /// While a write is under way, the hash of the session file it
+    /// replaces, so an interrupted refresh still leaves the earlier
+    /// install recognisable (security review round 2).
+    #[serde(default)]
+    pub session_was: Option<String>,
+    /// The same for the script.
+    #[serde(default)]
+    pub script_was: Option<String>,
+    /// The same for the editor wrapper.
+    #[serde(default)]
+    pub wrapper_was: Option<String>,
 }
 
 /// One startup-file line the install added.
@@ -426,36 +441,115 @@ fn note_prior(
     }
 }
 
+/// On a reinstall, a file the person changed since the last install is
+/// theirs now: it becomes the content `--uninstall` puts back, so their
+/// additions survive (security review round 2, SEC-07). A file still as the
+/// last install (or an interrupted one) left it keeps the earlier prior.
+fn adopt_changes(
+    path: &Path,
+    recorded: Option<&String>,
+    was: Option<&String>,
+    prior: &mut Option<String>,
+) -> Result<(), String> {
+    let Some(recorded) = recorded else {
+        return Ok(());
+    };
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(format!("Cannot read {}: {err}", path.display())),
+    };
+    let now = sha(&bytes);
+    if &now == recorded || was == Some(&now) {
+        return Ok(());
+    }
+    let text = String::from_utf8(bytes).map_err(|_| {
+        format!(
+            "{} changed since codeflow wrote it and is not UTF-8 text; move it aside first. Nothing written.",
+            path.display()
+        )
+    })?;
+    *prior = Some(text);
+    Ok(())
+}
+
 /// Write one of Codeflow's files: note what it replaces, record the new
-/// content's hash, then write.
+/// content's hash with the old one kept until the write lands, then write.
 fn write_owned(
     layout: &Layout,
     manifest: &mut Manifest,
     which: Owned,
     text: &str,
 ) -> Result<(), String> {
-    let (path, recorded, prior) = match which {
+    let (path, recorded, prior, was) = match which {
         Owned::Session => (
             &layout.session,
             &mut manifest.session,
             &mut manifest.session_prior,
+            &mut manifest.session_was,
         ),
         Owned::Script => (
             &layout.script,
             &mut manifest.script,
             &mut manifest.script_prior,
+            &mut manifest.script_was,
         ),
         Owned::Wrapper => (
             &layout.wrapper,
             &mut manifest.wrapper,
             &mut manifest.wrapper_prior,
+            &mut manifest.wrapper_was,
         ),
     };
     note_prior(path, recorded.as_ref(), prior)?;
+    adopt_changes(path, recorded.as_ref(), was.as_ref(), prior)?;
+    // Until the write lands, the file on disk is what the last install
+    // wrote, or the person's: remember its hash so it stays recognisable.
+    *was = match std::fs::read(path) {
+        Ok(bytes) => Some(sha(&bytes)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(format!("Cannot read {}: {err}", path.display())),
+    };
     *recorded = Some(sha(text.as_bytes()));
     let path = path.clone();
     save_manifest(layout, manifest)?;
-    write_atomic(&path, text).map_err(|err| format!("Cannot write {}: {err}", path.display()))
+    write_atomic(&path, text).map_err(|err| format!("Cannot write {}: {err}", path.display()))?;
+    match which {
+        Owned::Session => manifest.session_was = None,
+        Owned::Script => manifest.script_was = None,
+        Owned::Wrapper => manifest.wrapper_was = None,
+    }
+    save_manifest(layout, manifest)
+}
+
+/// The permission bits of `path`, or `None` when it does not exist (Unix
+/// only); any other error is returned so nothing is written on a guess.
+fn file_mode(path: &Path) -> std::io::Result<Option<u32>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(meta) => Ok(Some(meta.permissions().mode() & 0o7777)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(None)
+    }
+}
+
+/// Put back recorded permission bits after a restore.
+fn restore_mode(path: &Path, mode: Option<u32>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::PermissionsExt;
+        return std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+    let _ = (path, mode);
+    Ok(())
 }
 
 /// The files `--install` owns.
@@ -567,14 +661,34 @@ fn offer_rc_lines(
 /// that uses it; the person adds the setting, since editor settings files
 /// may hold comments this command cannot keep.
 fn write_wrapper(layout: &Layout, manifest: &mut Manifest) -> bool {
+    // The permission bits of a wrapper that predates the install, for
+    // `--uninstall` to put back with its content (review round 2).
+    let existing_mode = match file_mode(&layout.wrapper) {
+        Ok(mode) => mode,
+        Err(err) => {
+            println!("Cannot read {}: {err}", layout.wrapper.display());
+            return false;
+        }
+    };
+    if manifest.wrapper.is_none() && manifest.wrapper_prior_mode.is_none() {
+        manifest.wrapper_prior_mode = existing_mode;
+    }
     if let Err(why) = write_owned(layout, manifest, Owned::Wrapper, WRAPPER) {
         println!("{why}");
         return false;
     }
+    // The editor runs it as the person, so the owner needs execute; a new
+    // wrapper is the owner's only, and an existing one keeps its bits.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&layout.wrapper, std::fs::Permissions::from_mode(0o755));
+        let mode = existing_mode.map_or(0o700, |mode| mode | 0o100);
+        if let Err(err) =
+            std::fs::set_permissions(&layout.wrapper, std::fs::Permissions::from_mode(mode))
+        {
+            println!("Cannot make {} executable: {err}", layout.wrapper.display());
+            return false;
+        }
     }
     println!("  Wrote {}. To have the VS Code extension start Claude Code with the session file, add this to your VS Code user settings:", layout.wrapper.display());
     println!(
@@ -696,10 +810,28 @@ pub fn uninstall(layout: &Layout) -> i32 {
             }
         }
     }
-    for (path, recorded, prior) in [
-        (&layout.script, &manifest.script, &manifest.script_prior),
-        (&layout.wrapper, &manifest.wrapper, &manifest.wrapper_prior),
-        (&layout.session, &manifest.session, &manifest.session_prior),
+    for (path, recorded, was, prior, mode) in [
+        (
+            &layout.script,
+            &manifest.script,
+            &manifest.script_was,
+            &manifest.script_prior,
+            None,
+        ),
+        (
+            &layout.wrapper,
+            &manifest.wrapper,
+            &manifest.wrapper_was,
+            &manifest.wrapper_prior,
+            manifest.wrapper_prior_mode,
+        ),
+        (
+            &layout.session,
+            &manifest.session,
+            &manifest.session_was,
+            &manifest.session_prior,
+            None,
+        ),
     ] {
         match std::fs::read(path) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -707,11 +839,18 @@ pub fn uninstall(layout: &Layout) -> i32 {
                 println!("  Cannot read {}: {err}", path.display());
                 code = 1;
             }
-            Ok(bytes) if recorded.as_deref() == Some(sha(&bytes).as_str()) => {
+            Ok(bytes)
+                if [recorded, was]
+                    .iter()
+                    .any(|hash| hash.as_deref() == Some(sha(&bytes).as_str())) =>
+            {
                 // A file that was there before the install gets its old
-                // content back; one the install created is removed.
+                // content and permissions back; one the install created is
+                // removed.
                 let done = match prior {
-                    Some(text) => write_atomic(path, text).map(|()| "Restored"),
+                    Some(text) => write_atomic(path, text)
+                        .and_then(|()| restore_mode(path, mode))
+                        .map(|()| "Restored"),
                     None => std::fs::remove_file(path).map(|()| "Removed"),
                 };
                 match done {
@@ -1246,6 +1385,112 @@ mod tests {
             "# my wrapper\n"
         );
         assert!(!layout.manifest.exists());
+    }
+
+    /// Security review round 2 (SEC-07): install, the person changes each
+    /// file, reinstall, uninstall. Their version survives, for files the
+    /// install created and for files that were there before it.
+    #[test]
+    fn a_reinstall_keeps_what_the_person_changed_after_the_install() {
+        for pre_existing in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let layout = layout(dir.path(), "/bin/zsh");
+            if pre_existing {
+                for (path, text) in [
+                    (&layout.session, "{\"original\": true}\n"),
+                    (&layout.script, "# original\n"),
+                    (&layout.wrapper, "# original wrapper\n"),
+                ] {
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(path, text).unwrap();
+                }
+            }
+            assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 0);
+            // The person adds a host to the session file and a line to the
+            // script and the wrapper.
+            let mut session = read(&layout.session);
+            session["sandbox"]["network"]["allowedDomains"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("registry.example.com"));
+            let changed_session = serde_json::to_string_pretty(&session).unwrap() + "\n";
+            std::fs::write(&layout.session, &changed_session).unwrap();
+            let changed_script = format!("{SCRIPT}# mine\n");
+            std::fs::write(&layout.script, &changed_script).unwrap();
+            let changed_wrapper = format!("{WRAPPER}# mine\n");
+            std::fs::write(&layout.wrapper, &changed_wrapper).unwrap();
+
+            assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 0);
+            assert!(
+                strings(&read(&layout.session)["sandbox"]["network"]["allowedDomains"])
+                    .contains(&json!("registry.example.com"))
+            );
+            assert_eq!(uninstall(&layout), 0);
+            assert_eq!(
+                std::fs::read_to_string(&layout.session).unwrap(),
+                changed_session,
+                "pre-existing: {pre_existing}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&layout.script).unwrap(),
+                changed_script
+            );
+            assert_eq!(
+                std::fs::read_to_string(&layout.wrapper).unwrap(),
+                changed_wrapper
+            );
+            assert!(!layout.manifest.exists());
+        }
+        // A reinstall over unchanged files still leaves nothing behind.
+        let dir = tempfile::tempdir().unwrap();
+        let layout = layout(dir.path(), "/bin/zsh");
+        assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 0);
+        assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 0);
+        assert_eq!(uninstall(&layout), 0);
+        assert!(!layout.session.exists() && !layout.script.exists() && !layout.wrapper.exists());
+    }
+
+    /// Review round 2 nit: a refresh that stops before its write lands
+    /// leaves the earlier install recognisable, so uninstall still removes it.
+    #[test]
+    fn an_interrupted_refresh_leaves_the_earlier_install_removable() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = layout(dir.path(), "/bin/zsh");
+        assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 0);
+        // The record as a refresh leaves it after saving the new hash and
+        // before its write lands.
+        let mut manifest = read_manifest(&layout).unwrap();
+        manifest.session_was = manifest.session.clone();
+        manifest.session = Some(sha(b"a refresh that never landed"));
+        save_manifest(&layout, &manifest).unwrap();
+        assert_eq!(uninstall(&layout), 0);
+        assert!(!layout.session.exists());
+    }
+
+    /// Review round 2 nit: a wrapper that predates the install gets its
+    /// permission bits back with its content; a new one is the owner's only.
+    #[cfg(unix)]
+    #[test]
+    fn the_wrapper_keeps_its_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let layout = layout(dir.path(), "/bin/zsh");
+        assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 0);
+        assert_eq!(mode(&layout.wrapper), 0o700);
+        assert_eq!(uninstall(&layout), 0);
+
+        std::fs::create_dir_all(layout.wrapper.parent().unwrap()).unwrap();
+        std::fs::write(&layout.wrapper, "# mine\n").unwrap();
+        std::fs::set_permissions(&layout.wrapper, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(install(&mut "no\nno\n".as_bytes(), &layout), 0);
+        assert_eq!(mode(&layout.wrapper), 0o740);
+        assert_eq!(uninstall(&layout), 0);
+        assert_eq!(
+            std::fs::read_to_string(&layout.wrapper).unwrap(),
+            "# mine\n"
+        );
+        assert_eq!(mode(&layout.wrapper), 0o640);
     }
 
     /// Review nit: the record is written before each change, so an install
