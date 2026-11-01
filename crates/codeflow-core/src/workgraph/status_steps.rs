@@ -368,15 +368,13 @@ impl<'r> Walker<'r> {
 mod tests {
     use super::*;
     use std::path::Path;
-    use std::process::Command;
 
     const PATH: &str = "project-management/tasks/TSK-001.md";
 
     fn git(root: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .current_dir(root)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
             .env("GIT_AUTHOR_NAME", "t")
             .env("GIT_AUTHOR_EMAIL", "t@example.test")
             .env("GIT_COMMITTER_NAME", "t")
