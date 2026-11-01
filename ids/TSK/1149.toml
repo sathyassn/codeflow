@@ -1,0 +1,11 @@
+id = "TSK-1149"
+uid = "9d2bfccf-5614-4c0d-9d31-6a6abe2b0b3a"
+kind = "TSK"
+title = "A task branch can push its own line sync before review"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T17:52:55Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
