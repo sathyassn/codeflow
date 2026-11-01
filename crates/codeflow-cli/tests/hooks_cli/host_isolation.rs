@@ -27,9 +27,14 @@ fn empty_home() -> &'static Path {
 
 /// Cut a command off from the host's Git state, once for every `hooks_cli`
 /// run: [`strip_host_git_state`] (every inherited host variable removed, the
-/// system and global files at `/dev/null`) and an empty home. A test that
+/// system and global files at `/dev/null`), an empty home and no agent
+/// session marker, so a hook a commit runs does not apply the root-checkout
+/// rule because the test itself runs inside an agent session. A test that
 /// needs a value sets it after this call.
 pub(super) fn isolate_git(cmd: &mut Command) -> &mut Command {
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        cmd.env_remove(name);
+    }
     strip_host_git_state(cmd)
         .env("HOME", empty_home())
         .env("USERPROFILE", empty_home())
