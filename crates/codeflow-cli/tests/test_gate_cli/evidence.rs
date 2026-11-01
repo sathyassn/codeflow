@@ -1025,3 +1025,70 @@ fn an_explicit_full_comparison_runs_every_target() {
     let record: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(record["complete"], true);
 }
+
+/// TSK-355 AC-1, AC-7, AC-8 and AC-10 under credit row B (TSK-1044 adopted
+/// no protected recorder): two explicit quick runs at two commits of one
+/// tree, the shape of the recorded `dec65cb133e4` and `d37e55ed86be` pair,
+/// and a third chained run each execute every target and name the reason.
+/// No run names an earlier run as the source of a result, and a check that
+/// now fails is caught although its tree and the earlier passing records
+/// are unchanged: a reused result would have hidden it.
+#[test]
+fn quick_runs_of_one_tree_reuse_no_earlier_result() {
+    let fixture = Fixture::new(|c| {
+        let command = c["targets"][0]["modes"]["quick"]["command"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        c["targets"][0]["modes"]["quick"]["command"] =
+            json!(format!("{command} && test ! -f target/fail-check"));
+    });
+    let dir = fixture.root.path();
+    let mut runs: Vec<Value> = Vec::new();
+    for round in 0..3 {
+        if round > 0 {
+            git(dir, &["commit", "--allow-empty", "-qm", "test: same tree"]);
+        }
+        let (text, record) = fixture.quick();
+        for target in ["rust-check", "record-check"] {
+            assert!(
+                text.contains(&format!("starting target '{target}'")),
+                "{text}"
+            );
+        }
+        assert!(
+            text.contains("no local run record earns selection credit"),
+            "{text}"
+        );
+        assert_eq!(record["results"].as_array().unwrap().len(), 2);
+        let raw = serde_json::to_string(&record).unwrap();
+        for earlier in &runs {
+            assert_eq!(record["git_tree"], earlier["git_tree"], "one tree");
+            assert_ne!(record["revision"], earlier["revision"], "two commits");
+            let id = earlier["run_id"].as_str().unwrap();
+            assert!(!raw.contains(id), "run {round} names earlier run {id}");
+        }
+        assert!(!raw.contains("reused"), "{raw}");
+        assert_eq!(record["selection"]["skipped"], json!([]));
+        runs.push(record);
+    }
+    // The same tree again, with earlier passing quick records beside it;
+    // the check now fails, and the run executes it and fails.
+    std::fs::write(dir.join("target/fail-check"), "failure").unwrap();
+    git(dir, &["commit", "--allow-empty", "-qm", "test: same tree"]);
+    let output = run(dir, fixture.home.path(), &["test", "--mode", "quick"]);
+    let text = stderr(&output);
+    assert!(
+        !output.status.success(),
+        "a passing result was reused: {text}"
+    );
+    assert!(
+        text.contains("completed target 'rust-check': FAILED"),
+        "{text}"
+    );
+    assert!(
+        text.contains("no local run record earns selection credit"),
+        "{text}"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
+}
