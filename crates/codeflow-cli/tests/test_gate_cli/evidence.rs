@@ -1026,13 +1026,13 @@ fn an_explicit_full_comparison_runs_every_target() {
     assert_eq!(record["complete"], true);
 }
 
-/// TSK-355 AC-1, AC-7, AC-8 and AC-10 under credit row B (TSK-1044 adopted
-/// no protected recorder): two explicit quick runs at two commits of one
-/// tree, the shape of the recorded `dec65cb133e4` and `d37e55ed86be` pair,
-/// and a third chained run each execute every target and name the reason.
-/// No run names an earlier run as the source of a result, and a check that
-/// now fails is caught although its tree and the earlier passing records
-/// are unchanged: a reused result would have hidden it.
+/// TSK-355 AC-1, AC-4, AC-7 and AC-10 under credit row B (TSK-1044 adopted
+/// no protected recorder): beside the fixture's seeded green full record,
+/// three explicit quick runs at three commits of one tree (the shape of the
+/// recorded `dec65cb133e4` and `d37e55ed86be` pair, chained once more) each
+/// execute every target, name the reason and cite no earlier run. Then a
+/// fourth, after a check starts failing on the same tree, executes it and
+/// fails: a reused passing result would have hidden it.
 #[test]
 fn quick_runs_of_one_tree_reuse_no_earlier_result() {
     let fixture = Fixture::new(|c| {
