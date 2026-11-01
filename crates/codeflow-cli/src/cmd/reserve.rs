@@ -39,8 +39,20 @@ pub fn run(args: &ReserveArgs) -> i32 {
     };
     let start = Instant::now();
     let wait = Duration::from_secs(args.wait_seconds);
-    // A waiter queues once, so waiters take the lock in arrival order.
-    let mut ticket = None;
+    // A waiter queues before its first attempt, so waiters take the lock in
+    // arrival order and none loses a lock that frees before it queued.
+    let ticket = if wait.is_zero() {
+        None
+    } else {
+        match WaitTicket::take(&root, wait) {
+            Ok(taken) => Some(taken),
+            Err(error) => {
+                eprintln!("codeflow reserve: refused: {error}");
+                return 1;
+            }
+        }
+    };
+    let mut announced = false;
     let lock = loop {
         match acquire_project_gate_lock(&root, "reserve", ticket.as_ref()) {
             Ok(lock) => break lock,
@@ -49,14 +61,8 @@ pub fn run(args: &ReserveArgs) -> i32 {
                     eprintln!("codeflow reserve: refused: {message}");
                     return 1;
                 }
-                if ticket.is_none() {
-                    match WaitTicket::take(&root, wait.saturating_sub(start.elapsed())) {
-                        Ok(taken) => ticket = Some(taken),
-                        Err(error) => {
-                            eprintln!("codeflow reserve: refused: {error}");
-                            return 1;
-                        }
-                    }
+                if !announced {
+                    announced = true;
                     eprintln!(
                         "codeflow reserve: waiting up to {}s in arrival order: {message}",
                         args.wait_seconds

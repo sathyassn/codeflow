@@ -123,8 +123,12 @@ refuse if the lock is still held. This repository waits up to 1800 seconds.
 Waiting quick runs and reserves take the lock in arrival order: each
 queues a ticket in the `waiters` folder beside the CodeFlow home lock, and
 a later caller is refused while an earlier waiter's ticket is live. A
-ticket of an exited process, or past its deadline, is removed; an
-unreadable queue refuses. Full and essential gates do not queue. The result names the light targets that ran. Pre-push runs no
+ticket of an exited process, or past its deadline, is removed; tickets
+that arrived at the same instant go in process-id order. An unreadable
+queue refuses. A ticket name that does not parse refuses once and is
+renamed aside as `quarantined-<time>-<name>`, so it cannot block the queue;
+if it cannot be renamed, every waiter refuses until it is removed. Full
+and essential gates do not queue. The result names the light targets that ran. Pre-push runs no
 quick target, so it never waits for the lock.
 
 Read the holder's process, worktree, mode and start time with
@@ -141,10 +145,17 @@ when it exits or is killed. Use the worktree's own Cargo target directory.
 
 On Unix, `codeflow reserve -- codeflow test --mode quick` runs the quick
 run's heavy targets under the reserve's lock. The reserve hands its lock
-descriptors only to a `codeflow` program, which makes them close-on-exec
-so no target or daemon keeps them, and uses them only after the OS lock
-shows they are the holder's own; a value set any other way falls back to
-ordinary admission. Full and essential gates under a reserve still take
+descriptors only when the command is the same executable file as the
+running `codeflow` (same device and inode after resolving links, whether
+named by path or found on `PATH`); any other program, including one that
+is only named `codeflow`, gets none. The receiving `codeflow` makes them
+close-on-exec so no target or daemon keeps them, and uses them only after
+the OS lock shows they are the holder's own; a value set any other way
+falls back to ordinary admission. The nested run adds its targets'
+process groups to the holder's record and leaves those still running
+there when it ends, so if the nested run is killed and the reserve ends
+while a target survives, the next gate refuses until that target exits.
+Full and essential gates under a reserve still take
 the lock themselves and refuse. On Windows a nested quick run waits or
 refuses as a direct one does.
 

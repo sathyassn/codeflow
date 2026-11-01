@@ -1,12 +1,18 @@
 //! TSK-1128: a quick run under `codeflow reserve` uses the reserve's lock,
-//! a forged hand-over grants nothing, and a direct quick run can wait a
-//! bounded time for the lock.
+//! a forged hand-over grants nothing, a program only named `codeflow` gets
+//! no lock, a nested run's surviving target keeps the lock busy, and a
+//! direct quick run can wait a bounded time for the lock.
 
 use super::{command, git, held_until_released, repo, run, spawn, stderr, wait_for};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_codeflow");
+/// The binary under test, the same one `command` runs, so a fail-before
+/// run with `CODEFLOW_TEST_GATE_BIN` nests the same binary.
+fn bin() -> String {
+    std::env::var("CODEFLOW_TEST_GATE_BIN")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_codeflow").to_string())
+}
 
 /// A quick config whose one heavy target marks its start, waits for
 /// `release` (when `hold`) and marks its end.
@@ -57,7 +63,7 @@ fn a_quick_run_under_reserve_runs_its_heavy_targets_under_the_reserved_lock() {
     let (mut reserve, rx, _stdout) = spawn(command(
         first.path(),
         home.path(),
-        &["reserve", "--", BIN, "test", "--mode", "quick"],
+        &["reserve", "--", &bin(), "test", "--mode", "quick"],
     ));
     wait_for(&rx, "[codeflow reserve] started process");
     wait_for_file(&first.path().join("heavy-started"));
@@ -107,7 +113,7 @@ fn an_essential_gate_under_reserve_still_refuses() {
     let output = run(
         dir.path(),
         home.path(),
-        &["reserve", "--", BIN, "test", "--mode", "essential"],
+        &["reserve", "--", &bin(), "test", "--mode", "essential"],
     );
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(
@@ -137,7 +143,7 @@ fn a_forged_hand_over_is_refused_while_another_gate_holds_the_lock() {
             "sh",
             home_lock.to_str().unwrap(),
             repo_lock.to_str().unwrap(),
-            BIN,
+            &bin(),
         ])
         .current_dir(&linked)
         .env("CODEFLOW_HOME", home.path())
@@ -243,4 +249,191 @@ fn waiting_reserves_take_the_lock_in_arrival_order() {
     assert!(earlier.wait().unwrap().success());
     assert!(later.wait().unwrap().success());
     assert_eq!(std::fs::read_to_string(&order).unwrap(), "earlier\nlater\n");
+}
+
+/// A config with an essential target, for the gate that must refuse.
+const ESSENTIAL_PASS: &str = r#"{"schema_version":"1.0","targets":[
+  {"name":"pass","runner":"custom","modes":{"essential":{"command":"exit 0"},"quick":{"command":"exit 0"}}}
+]}"#;
+
+/// Records which inherited descriptors are the lock files named in its
+/// arguments, unlocks every inherited descriptor, marks that it did, and
+/// waits for `release`.
+const UNLOCKER: &str = r#"#!/bin/sh
+echo "${CODEFLOW_RESERVED_LOCK_FDS-unset}" > env.txt
+exec perl -e '
+use Fcntl qw(:flock);
+my @locks = map { join ":", (stat $_)[0, 1] } @ARGV;
+my @held;
+for my $fd (3 .. 64) {
+    open(my $fh, "<&=", $fd) or next;
+    my $id = join ":", (stat $fh)[0, 1];
+    push @held, $fd if grep { $_ eq $id } @locks;
+    flock($fh, LOCK_UN);
+}
+open(my $out, ">", "fds.txt") or die; print $out join(",", @held), "\n"; close $out;
+open(my $mark, ">", "unlocked") or die; close $mark;
+select(undef, undef, undef, 0.02) until -e "release";
+' "$@"
+"#;
+
+/// F1 (Grok round 01), AC-2: a program that is not this codeflow binary
+/// gets no lock descriptor and no hand-over variable, even when it is named
+/// `codeflow`, run by path or found on `PATH`; unlocking every descriptor it
+/// has cannot free the reserve's lock.
+#[test]
+fn a_program_only_named_codeflow_receives_no_lock() {
+    use std::os::unix::fs::PermissionsExt;
+    for by_path in [true, false] {
+        let home = tempfile::tempdir().unwrap();
+        let first = repo(&heavy_quick(false));
+        let linked = linked_worktree(first.path(), ESSENTIAL_PASS);
+        let tools = tempfile::tempdir().unwrap();
+        let fake = tools.path().join("codeflow");
+        std::fs::write(&fake, UNLOCKER).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home_lock = home.path().join("locks/full-gate.lock");
+        let repo_lock = first.path().join(".git/codeflow/full-gate.lock");
+        let program = if by_path {
+            fake.to_str().unwrap().to_string()
+        } else {
+            "codeflow".to_string()
+        };
+        let mut cmd = command(
+            first.path(),
+            home.path(),
+            &[
+                "reserve",
+                "--",
+                &program,
+                home_lock.to_str().unwrap(),
+                repo_lock.to_str().unwrap(),
+            ],
+        );
+        let path = format!(
+            "{}:{}",
+            tools.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        cmd.env("PATH", path);
+        let (mut reserve, rx, _stdout) = spawn(cmd);
+        wait_for(&rx, "[codeflow reserve] started process");
+        wait_for_file(&first.path().join("unlocked"));
+
+        let env = std::fs::read_to_string(first.path().join("env.txt")).unwrap();
+        assert_eq!(env.trim(), "unset", "by path {by_path}");
+        let fds = std::fs::read_to_string(first.path().join("fds.txt")).unwrap();
+        assert_eq!(fds.trim(), "", "by path {by_path}: lock descriptors {fds}");
+        let essential = run(&linked, home.path(), &["test", "--mode", "essential"]);
+        assert_eq!(
+            essential.status.code(),
+            Some(1),
+            "by path {by_path}: {}",
+            stderr(&essential)
+        );
+
+        std::fs::write(first.path().join("release"), "done").unwrap();
+        let status = reserve.wait().unwrap();
+        let lines: Vec<String> = rx.try_iter().collect();
+        assert!(status.success(), "by path {by_path}: {lines:#?}");
+    }
+}
+
+/// F2 (Grok round 01), AC-5: a nested quick run records its heavy target's
+/// process group on the reserve's record. When the nested run is killed and
+/// the reserve ends while that target still runs, the next gate refuses
+/// until the target exits.
+#[test]
+fn a_surviving_nested_target_keeps_the_lock_busy() {
+    let home = tempfile::tempdir().unwrap();
+    // Heavy targets are supervised and end with the run that started them.
+    // The light `survivor` is not: it starts while the heavy `holder` keeps
+    // the lock held, records its group, and outlives the killed run.
+    let first = repo(
+        r#"{"schema_version":"1.0","execution":{"heavy_wait_seconds":0,"parallel":true},"targets":[
+          {"name":"first","heavy":true,"timeout_seconds":60,"runner":"custom","modes":{"quick":{"command":"touch first-ran"}}},
+          {"name":"holder","heavy":true,"timeout_seconds":60,"runner":"custom","modes":{"quick":{"command":"while ! test -f release; do sleep 0.01; done"}}},
+          {"name":"survivor","heavy":false,"timeout_seconds":60,"runner":"custom","requires":["first"],"modes":{"quick":{"command":"echo $$ > group.txt; sleep 30"}}}
+        ]}"#,
+    );
+    let linked = linked_worktree(first.path(), ESSENTIAL_PASS);
+    let (mut reserve, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["reserve", "--", &bin(), "test", "--mode", "quick"],
+    ));
+    let started = wait_for(&rx, "[codeflow reserve] started process");
+    let nested: u32 = started
+        .rsplit(' ')
+        .next()
+        .and_then(|pid| pid.trim().parse().ok())
+        .unwrap_or_else(|| panic!("no pid in {started}"));
+    let group_file = first.path().join("group.txt");
+    let group: u32 = (0..400)
+        .find_map(|_| {
+            let parsed = std::fs::read_to_string(&group_file)
+                .unwrap_or_default()
+                .trim()
+                .parse()
+                .ok();
+            if parsed.is_none() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            parsed
+        })
+        .expect("the target wrote its group");
+    let record = home.path().join("locks/full-gate.record");
+    let recorded = (0..200).any(|_| {
+        let text = std::fs::read_to_string(&record).unwrap_or_default();
+        let found = text.lines().any(|line| line == format!("group={group}"));
+        if !found {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        found
+    });
+    assert!(
+        recorded,
+        "the nested run recorded its target's group: {}",
+        std::fs::read_to_string(&record).unwrap_or_default()
+    );
+
+    let killed = std::process::Command::new("kill")
+        .args(["-KILL", &nested.to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    reserve.wait().unwrap();
+    let alive = |g: u32| {
+        std::process::Command::new("kill")
+            .args(["-0", "--", &format!("-{g}")])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(
+        alive(group),
+        "the target outlived the nested run and reserve"
+    );
+
+    let refused = run(&linked, home.path(), &["test", "--mode", "essential"]);
+    let err = stderr(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{err}");
+    assert!(err.contains("targets are still running"), "{err}");
+    assert!(err.contains(&format!("process group {group}")), "{err}");
+
+    std::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{group}")])
+        .status()
+        .unwrap();
+    let gone = (0..100).any(|_| {
+        let gone = !alive(group);
+        if !gone {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        gone
+    });
+    assert!(gone, "the target exited");
+    let after = run(&linked, home.path(), &["test", "--mode", "essential"]);
+    assert!(after.status.success(), "{}", stderr(&after));
 }
