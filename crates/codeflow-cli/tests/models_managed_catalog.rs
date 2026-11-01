@@ -552,6 +552,14 @@ fn orchestrating_host_starts_at_its_model_default_and_no_trigger_raises_it() {
             assert_eq!(chosen["participant"], "host", "{host}: {host_seat}");
             assert_eq!(chosen["harness"], host, "{host}: {host_seat}");
             assert_eq!(chosen["effort"], want, "{host} {extra:?}: {host_seat}");
+            // The highest-cost reasoning line never hosts or backs the
+            // orchestrating session, not even as a fallback (operator rule,
+            // 2026-11-01).
+            let mut lines = vec![chosen["line"].as_str().unwrap()];
+            for alternative in chosen["remaining_alternatives"].as_array().unwrap() {
+                lines.push(alternative["line"].as_str().unwrap());
+            }
+            assert!(!lines.contains(&"fable"), "{host} {extra:?}: {host_seat}");
         }
     }
 }

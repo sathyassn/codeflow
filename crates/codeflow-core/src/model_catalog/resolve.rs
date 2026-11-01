@@ -720,15 +720,21 @@ impl Catalog {
                 // ADR-0095: a seat starts at its bound model's default. A
                 // seat line that offers nothing at the route's effort starts
                 // at its own lowest effort above it (Fable offers only
-                // high); line and worker routes are never clamped.
+                // high); line and worker routes are never clamped. The
+                // orchestrating session is never raised, so a line without
+                // its effort (Fable) never hosts or backs it.
                 let effort = match seat {
-                    Some(_) if !version.efforts.contains(&effort) => version
-                        .efforts
-                        .iter()
-                        .copied()
-                        .filter(|offered| *offered > effort)
-                        .min()
-                        .unwrap_or(effort),
+                    Some(_)
+                        if request.duty != "orchestrate" && !version.efforts.contains(&effort) =>
+                    {
+                        version
+                            .efforts
+                            .iter()
+                            .copied()
+                            .filter(|offered| *offered > effort)
+                            .min()
+                            .unwrap_or(effort)
+                    }
                     _ => effort,
                 };
                 let eligibility_request = EligibilityRequest {

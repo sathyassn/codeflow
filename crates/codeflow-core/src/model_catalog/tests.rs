@@ -206,24 +206,35 @@ fn a_seat_line_without_the_seat_default_starts_at_its_own_lowest_effort() {
     // ADR-0095: a seat starts at its bound model's default. A seat line that
     // offers nothing at the seat route's effort (Fable offers only high)
     // starts at its own lowest effort instead of dropping out; a line or
-    // worker route still never clamps.
+    // worker route still never clamps. The orchestrating session is never
+    // raised, so such a line never hosts or backs it.
     let mut value = fixture();
     value["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    value["duties"]["independent-plan"]["required"][0]["alternatives"][0]["effort"] =
+        json!("medium");
     value["lines"][1]["versions"][0]["efforts"] = json!(["high", "xhigh"]);
     let c = parse(&value).unwrap();
     let observed = BTreeMap::new();
-    let host = c.resolve(&request("orchestrate", &observed)).unwrap();
-    assert_eq!(host.participants[0].version, "orchid-one");
-    assert_eq!(host.participants[0].effort, Effort::Medium);
-    let fallback = &host.participants[0].remaining_alternatives[0];
+    let plan = c.resolve(&request("independent-plan", &observed)).unwrap();
+    assert_eq!(plan.participants[0].version, "orchid-one");
+    assert_eq!(plan.participants[0].effort, Effort::Medium);
+    let fallback = &plan.participants[0].remaining_alternatives[0];
     assert_eq!(fallback.version, "orchid-two");
     assert_eq!(fallback.effort, Effort::High);
     let exclusions = [exclude("orchid-one")];
-    let mut without_first = request("orchestrate", &observed);
+    let mut without_first = request("independent-plan", &observed);
     without_first.exclusions = &exclusions;
     let chosen = &c.resolve(&without_first).unwrap().participants[0];
     assert_eq!(chosen.version, "orchid-two");
     assert_eq!(chosen.effort, Effort::High);
+    // The orchestrating host keeps orchid-one at medium with no fallback to
+    // the high-only line, and stays open rather than clamp when it is gone.
+    let host = c.resolve(&request("orchestrate", &observed)).unwrap();
+    assert_eq!(host.participants[0].version, "orchid-one");
+    assert!(host.participants[0].remaining_alternatives.is_empty());
+    let mut host_without_first = request("orchestrate", &observed);
+    host_without_first.exclusions = &exclusions;
+    assert!(c.resolve(&host_without_first).unwrap().is_open());
 }
 #[test]
 fn high_trigger_raises_a_medium_lane_but_never_the_orchestrating_session() {

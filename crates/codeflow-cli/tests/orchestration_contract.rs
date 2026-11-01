@@ -674,6 +674,39 @@ fn managed_catalog_sets_effort_by_model_and_keeps_fable_off_execution() {
             }
         }
     }
+    assert!(catalog["rules"].as_array().unwrap().iter().any(|rule| rule
+        .as_str()
+        .unwrap()
+        .starts_with("The highest-cost reasoning line, fable in this ensemble, serves only key review, analysis and direction")));
+    // High triggers are the operator's named needs, not categories that
+    // would raise every seat (ADR-0095).
+    let triggers: Vec<String> = serde_json::from_value(catalog["high_triggers"].clone()).unwrap();
+    assert_eq!(triggers.len(), 3, "{triggers:?}");
+    for (trigger, need) in triggers
+        .iter()
+        .zip(["hard build", "security review", "stuck diagnosis"])
+    {
+        assert!(trigger.contains(need), "{trigger} names {need}");
+    }
+}
+
+/// ADR-0095: the orchestrating host starts at its own seat's model default,
+/// and the highest-cost reasoning line (fable) never hosts or backs it.
+#[test]
+fn orchestrating_host_names_every_seat_and_keeps_fable_out() {
+    let catalog: serde_json::Value = serde_json::from_str(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ))
+    .expect("catalog");
+    let seat_lines = |seat: &str| -> Vec<String> {
+        catalog["seats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == seat)
+            .map(|s| serde_json::from_value(s["lines"].clone()).unwrap())
+            .unwrap_or_default()
+    };
     // The orchestrating host resolves to its own seat at that seat's model
     // default: every seat is named once under the same-host relation.
     let host = &catalog["duties"]["orchestrate"]["required"][0];
@@ -691,20 +724,34 @@ fn managed_catalog_sets_effort_by_model_and_keeps_fable_off_execution() {
         .map(|s| s["id"].as_str().unwrap())
         .collect();
     assert_eq!(named, seats, "orchestrate names every seat");
+    // The orchestrating session is never raised, so a fable version, which
+    // offers nothing at the Claude seat's orchestrate effort, cannot back it.
+    let directing = host["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| seat_lines(a["target"]["id"].as_str().unwrap()).contains(&"fable".to_string()))
+        .expect("the seat holding fable has an orchestrate route");
+    let fable = catalog["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == "fable")
+        .unwrap();
+    for version in fable["versions"].as_array().unwrap() {
+        assert!(
+            !version["efforts"]
+                .as_array()
+                .unwrap()
+                .contains(&directing["effort"]),
+            "fable {} would host orchestrate",
+            version["id"]
+        );
+    }
     assert!(catalog["rules"].as_array().unwrap().iter().any(|rule| rule
         .as_str()
         .unwrap()
-        .starts_with("The highest-cost reasoning line, fable in this ensemble, serves only key review, analysis and direction")));
-    // High triggers are the operator's named needs, not categories that
-    // would raise every seat (ADR-0095).
-    let triggers: Vec<String> = serde_json::from_value(catalog["high_triggers"].clone()).unwrap();
-    assert_eq!(triggers.len(), 3, "{triggers:?}");
-    for (trigger, need) in triggers
-        .iter()
-        .zip(["hard build", "security review", "stuck diagnosis"])
-    {
-        assert!(trigger.contains(need), "{trigger} names {need}");
-    }
+        .contains("it never hosts or backs the orchestrating session")));
 }
 
 #[test]

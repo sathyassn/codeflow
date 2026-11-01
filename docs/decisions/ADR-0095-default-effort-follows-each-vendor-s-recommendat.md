@@ -56,8 +56,14 @@ of ADR-0056 and all of ADR-0087 stand.
   ensemble that is Fable. It serves key review, analysis and direction
   (design, architecture and planning decisions). Each run names its
   deliverable and its end and is closed when done. Execution goes to Opus or
-  Sonnet. No execution or evidence-collection duty routes to it, and a test
-  holds that.
+  Sonnet. No execution or evidence-collection duty routes to it, and it
+  never hosts or backs the long-running orchestrating session, even as a
+  fallback; tests hold both.
+- **A seat line starts at its own default.** When a seat line offers
+  nothing at the seat route's effort, it starts at its own lowest effort
+  above it, so Fable keeps high as a design co-owner or an advisory
+  fallback. The orchestrating session is never raised, so this does not
+  apply to it. Line and worker routes are never clamped.
 - **Catalog.** Seat-targeted duties in `current-ensemble.json` carry medium,
   design included, except Grok seats at high. The duty floor is medium for
   every duty except `reasoning-support`, the stronger-reasoning request,
