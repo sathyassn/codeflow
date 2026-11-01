@@ -122,8 +122,17 @@ can set it to `"heavy"` and set `execution.heavy_wait_seconds` to a bounded
 wait. An explicit target declaration
 takes precedence. When there are no quick targets and quick falls back to
 essential, undeclared targets are heavy. Heavy quick targets wait up to
-`execution.heavy_wait_seconds` (default zero), then refuse if the lock is
-still held. The result names the light targets that ran. Pre-push runs no
+`--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then
+refuse if the lock is still held. This repository waits up to 1800 seconds.
+Waiting quick runs and reserves take the lock in arrival order: each
+queues a ticket in the `waiters` folder beside the CodeFlow home lock, and
+a later caller is refused while an earlier waiter's ticket is live. A
+ticket of an exited process, or past its deadline, is removed; tickets
+that arrived at the same instant go in process-id order. An unreadable
+queue refuses. A ticket name that does not parse refuses once and is
+renamed aside as `quarantined-<time>-<name>`, so it cannot block the queue;
+if it cannot be renamed, every waiter refuses until it is removed. Full
+and essential gates do not queue. The result names the light targets that ran. Pre-push runs no
 quick target, so it never waits for the lock.
 
 Read the holder's process, worktree, mode and start time with
@@ -137,6 +146,26 @@ the same locks. `--wait-seconds` sets a bounded wait, and
 `--timeout-seconds` sets the command deadline. Arguments after `--` reach
 the executable unchanged. The wrapper ends its command's process group
 when it exits or is killed. Use the worktree's own Cargo target directory.
+
+On Unix, `codeflow reserve -- codeflow test --mode quick` runs the quick
+run's heavy targets under the reserve's lock. The reserve hands its lock
+descriptors only when the command is the same executable file as the
+running `codeflow` (same device and inode after resolving links, whether
+named by path or found on `PATH`); any other program, including one that
+is only named `codeflow`, gets none. The receiving `codeflow` makes them
+close-on-exec so no target or daemon keeps them, and uses them only after
+the OS lock shows they are the holder's own; a value set any other way
+falls back to ordinary admission. The nested run adds its targets'
+process groups to the holder's record and leaves those still running
+there when it ends, so if the nested run is killed and the reserve ends
+while a target survives, the next gate refuses until that target exits. Each rewrite of the holder record holds the OS lock of
+`full-gate.record.lock` beside it from read to rename, so the reserve and
+the nested run never drop a group line the other just added. If that lock
+cannot be taken within five seconds, the rewrite runs without it, as
+before this lock existed, and the gate reports the missed serialization.
+Full and essential gates under a reserve still take
+the lock themselves and refuse. On Windows a nested quick run waits or
+refuses as a direct one does.
 
 `execution.worker_budget`, when configured, divides workers among ready
 heavy targets and records their Cargo, nextest, Rust-test and shell-oracle

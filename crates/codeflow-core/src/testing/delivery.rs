@@ -22,6 +22,9 @@ pub struct GateOptions {
     /// `.codeflow/test-config.json`, with no fallback to it or to stack
     /// detection (`codeflow test --config`, TSK-1020).
     pub config: Option<PathBuf>,
+    /// Seconds heavy quick work waits for the shared lock, replacing
+    /// `execution.heavy_wait_seconds` (`codeflow test --wait-seconds`).
+    pub heavy_wait_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
