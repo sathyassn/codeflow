@@ -91,6 +91,18 @@ impl fmt::Display for PolicyLevel {
     }
 }
 
+/// Which engine the commit-time secret scan runs beside the built-in
+/// patterns (TSK-412).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecretScanEngine {
+    /// The built-in patterns only.
+    Builtin,
+    /// The built-in patterns, then the gitleaks binary the managed CI scan
+    /// pins (`hooks::gitleaks`).
+    Gitleaks,
+}
+
 /// Whether the managed CI secret scan accepts inline allows on held commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -434,6 +446,10 @@ pub struct GitPolicy {
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
+    /// The commit-time secret scan's engine (TSK-412): `builtin` (default)
+    /// runs the built-in patterns; `gitleaks` also runs the pinned gitleaks
+    /// binary, at the `secret_scan` level.
+    pub secret_scan_engine: SecretScanEngine,
     pub path_policy: PolicyLevel,
     pub blocked_names: Vec<super::path_policy::BlockedName>,
     pub protected_paths: Vec<super::path_policy::ProtectedPath>,
@@ -612,6 +628,7 @@ impl Default for GitPolicy {
                 .map(ToString::to_string)
                 .collect(),
             secret_scan: PolicyLevel::Block,
+            secret_scan_engine: SecretScanEngine::Builtin,
             path_policy: PolicyLevel::Block,
             blocked_names: super::path_policy::default_names(),
             protected_paths: Vec::new(),

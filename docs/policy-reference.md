@@ -72,7 +72,8 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.protected_paths` | path rule list | `[]` | {prefix, allow: [{path, reason}]} entries | Refuse every change under root-anchored component prefixes. | Exceptions come only from the default branch at one commit; a working copy adds denials only, and line-only or branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.ignored_files` | object | `absent` | {level: off \| warn \| allow \| block, allow: [{path, reason}]} | Report or refuse a new or changed file that the policy authority's .gitignore files exclude. | Absent means level warn. Read with the policy and the .gitignore files of the authority's tree, never the working tree or the change: a .gitignore edit in the change admits nothing, and a tracked file is still judged. Matching follows git, with ASCII case ignored. An allow entry names a root-relative prefix with a reason. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.max_file_bytes` | object | `absent` | {limit: bytes, at least 1 (default 10485760), except_under: [root-relative directory]} | Refuse a new or changed file larger than the limit; one over 1 MiB warns. | Absent: a file over 1 MiB warns and one over 10 MiB is refused where the authority's project settings hold file_size_rule, which a fresh `codeflow init` writes; elsewhere, as in a project `codeflow update` brought forward, both are report lines. Setting either field opts in and replaces that part of the default; except_under exempts files beneath a directory, never one named file. Sizes are of the blob git records, so a Git LFS path is sized by its pointer. A refusal names the admission routes. Gate inputs are never judged. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. |
+| `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. A merge Git concludes itself runs no pre-commit, so commit-msg scans it when Git passes MERGE_MSG; a commit-msg message file other than MERGE_MSG or COMMIT_EDITMSG is refused at this level. |
+| `git.secret_scan_engine` | enum | `builtin` | builtin \| gitleaks | The engine the commit-time secret scan runs beside the built-in patterns. | builtin runs the built-in patterns only. gitleaks also runs the gitleaks release the managed CI scan pins over the staged diff, after the built-in patterns, reading the working tree's .gitleaksignore and .gitleaks.toml. A gitleaks binary that is missing, not the pinned version or not the pinned checksum is a finding at the git.secret_scan level, so at block it refuses the commit; `codeflow doctor --check secret-engine` reports where it looked. The hook never downloads it. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
 | `git.test_gate_on_push` | Level | `block` | off \| warn \| allow \| block | Run the push set before a push (pre-push hook). | The push set runs `codeflow ci` over each pushed range, which includes the conflict-marker check, and the release preflight where the project adopted it. It runs no `codeflow validate --docs` (`codeflow ci` checks the work graph) and no test-config target, so a push never waits for the heavy-work lock; cite `codeflow test --mode quick` when the pull request is made ready. Tag and other non-branch pushes are outside the push set. Local-config tampering is outside the hook threat model; hosted CI checks the pushed commit. |
@@ -932,6 +933,117 @@ The advisory diagnostic examines at most the first 64 KiB of the ignore
 file and 50 candidate fingerprints, with a five-second time budget. A
 limit warning asks for manual review of the remainder. These limits apply
 only to diagnostics; gitleaks still reads the complete trusted ignore file.
+
+## The commit-time gitleaks engine
+
+`git.secret_scan_engine: gitleaks` adds the gitleaks release the managed CI
+scan pins to the commit-time secret scan. A line that only gitleaks' rules
+match, such as a file's SHA-256 recorded under a path name that holds `token`
+or `key` (`generic-api-key`), is then refused while the commit can still be
+reworded. The default, `builtin`, runs the built-in patterns alone.
+
+- **Order.** The built-in patterns run first under both settings, so no
+  refusal they give is lost; gitleaks adds its findings after them, at the
+  `git.secret_scan` level.
+- **Which commits.** `pre-commit` scans a plain commit and a merge concluded
+  by hand. Git runs no `pre-commit` for a merge it concludes itself, so
+  `commit-msg` scans that one after the message checks, when Git passes this
+  worktree's `MERGE_MSG`. With `COMMIT_EDITMSG`, `pre-commit` already
+  scanned the commit and `commit-msg` does not scan it again. Any other
+  message file is refused at the `git.secret_scan` level, and the staged
+  content is still scanned. This holds under both engines.
+- **The pin.** The hook runs gitleaks 8.30.1, the version
+  `assets/base/ci/codeflow-ci.yml` pins, and only when the first `gitleaks`
+  on `PATH` has the SHA-256 of the official release binary for this
+  platform (Linux, macOS and Windows on x86_64 and arm64) and reports that
+  version. Relative `PATH` entries are skipped. A binary with another
+  checksum is never run.
+- **Fails closed.** A missing binary, another checksum, another version or
+  a platform with no pinned binary is a `git.secret_scan_engine` finding at
+  the `git.secret_scan` level: at `block` it refuses the commit, at `warn` it
+  warns once and the built-in scan still runs. So is a gitleaks run that
+  fails or whose report cannot be read.
+- **Install.** Download the archive for your platform from the gitleaks
+  8.30.1 release, check it against the release's checksums file and put its
+  `gitleaks` binary in a folder on `PATH`. A package manager's build, such as
+  Homebrew's, has another checksum. `codeflow doctor --check secret-engine`
+  reports the folders searched, the checksum and version found and the pin.
+  The hook never downloads anything, and the secret scan and the gitleaks
+  runner make no network request. One earlier step can: when the configured
+  remote has no tracking ref, the policy-authority step asks the remote once
+  whether it advertises any ref (TSK-1077) and refuses fail closed if it
+  cannot. `git fetch` creates the tracking refs and ends the question.
+- **Rules and exemptions.** gitleaks reads `.gitleaksignore` and
+  `.gitleaks.toml` from the working tree, the only copies before a commit
+  exists. `GITLEAKS_CONFIG` and `GITLEAKS_CONFIG_TOML` from the shell are
+  not passed to it. The CI scan reads its own copies from the trusted
+  commit, so a commit cannot weaken it.
+- **Every staged line is read.** An inline `gitleaks:allow` comment on a
+  staged line is ignored, as the CI scan ignores one the trusted commit does
+  not hold yet. Git attributes come from the empty tree, with `diff` set on
+  every path, so a `.gitattributes` entry (`-diff`, `binary` or a `textconv`
+  driver) cannot hide a staged line and a file holding a NUL byte is read as
+  text. This needs git 2.41 or later, as the CI scan does; an older git is a
+  failed scan. The scan sets `GIT_NO_LAZY_FETCH=1` for gitleaks and every git it runs, overriding an
+  inherited value, so in a partial clone a missing object is a failed scan
+  and never a fetch from the promisor remote. A repository with a promisor
+  remote (a partial clone) also needs git 2.46 or later: the setting arrives
+  in 2.45, but only 2.46 stops the diff prefetch from starting a fetch. Before
+  any staged object is read, the staged listing, the attribute lookup and the
+  scan read the repository's promisor setting in the scan's own configuration
+  view; an older git, or a setting that cannot be read, is a failed commit.
+  The clone's own `.git/info/attributes` still applies, since
+  nothing committed or staged can change it. gitleaks cannot read a path
+  with a backslash, double quote or control character reliably (it skips a
+  name ending in a backslash), so a staged path with one is a failed scan
+  before gitleaks runs, whatever `git.policy_characters` says and in an
+  automatic merge too, as the CI scan refuses such a path. Rename detection
+  is off for the scan, so a file renamed from such a name is read as a new
+  file under its new name, and deleting one is not refused. The scan's git
+  ignores configuration a caller passes down (`git -c`, inherited numbered
+  `GIT_CONFIG_*` settings, `GIT_DIFF_OPTS`, `GIT_EXTERNAL_DIFF`, replace
+  refs), so none of it can turn rename detection back on or change the
+  diff. A staged symlink's target is diffed with git's `default` driver,
+  which attributes do not reach, so the scan pins that driver to text with
+  no conversion whatever a configuration file or include sets; a submodule
+  shows as its commit line. gitleaks exits 0 with an empty report when git
+  fails part way through, so the hook does not read its log. gitleaks runs
+  at the error level, and any output it writes to stderr, even a blank line,
+  is a failed scan. Git's own trace of the run (`GIT_TRACE2_EVENT`, one JSON
+  event per line) must show the staged diff and every other git that
+  gitleaks started exiting with 0; a git that failed or was killed is a
+  failed scan. No path, file content or configuration value can forge or
+  hide either check. The trace and the scan's attributes file sit in a
+  private folder inside the repository's git directory, never under
+  `TMPDIR`, `TMP` or `TEMP`: anyone who can rename entries there can already
+  replace the hooks and index the scan reads, so the folder adds no trust.
+  On Unix the folder is created with mode 0700 and both files inside the
+  opened folder with 0600, whatever the umask, and a folder or trace file
+  replaced during the run is a failed scan. On Windows both files take the
+  git directory's access list; the hook makes no Unix mode or replacement
+  check there. The folder is removed when the scan ends, but a scan that is
+  force-killed can leave its `codeflow-gitleaks-*` folder behind in the git
+  directory; a later scan makes a new folder and never reads an old one, so
+  such a folder is safe to delete.
+- **Fingerprints.** A staged finding's fingerprint has no commit:
+  `<path>:<rule>:<line>`, for example `docs/hashes.json:generic-api-key:2`.
+  A commit-bound `.gitleaksignore` entry, `<commit>:<path>:<rule>:<line>`,
+  never covers it. For a known false-positive file, allowlist its path in
+  `.gitleaks.toml`, which the hook and the CI scan both read:
+
+  ```toml
+  [extend]
+  useDefault = true
+
+  [[allowlists]]
+  description = "File digests recorded under their path names"
+  paths = ['''^docs/hashes\.json$''']
+  ```
+
+- **Limits.** The pin ties the verdict to the CI rules. It is no defence
+  against a process that can write to a `PATH` folder: that process could
+  replace the binary between the check and the run, or replace `git`, which
+  the hook and gitleaks run unverified.
 
 ## The Outcome adoption marker
 
