@@ -370,6 +370,18 @@ fn commit_msg(
     );
     // A commit has no pull request body to settle it with (TSK-147 AC-4).
     git_hook::note_watched_paths(&mut report);
+    // After the message checks, the staged scan of an automatic merge, which
+    // Git runs no pre-commit for (TSK-412). Git names the file relative to
+    // this hook's working directory.
+    let cwd = std::env::current_dir().map_err(|e| {
+        codeflow_core::error::HookError::Config(format!(
+            "commit-msg: cannot read the working directory: {e}"
+        ))
+    })?;
+    let scan = git_hook::commit_msg_secret_scan(root, &policy.git, &cwd.join(&msg_file))?;
+    report.violations.extend(scan.violations);
+    report.notes.extend(scan.notes);
+    report.status.extend(scan.status);
     Ok(report)
 }
 
@@ -459,10 +471,15 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
     let unreadable = |why: String| {
         codeflow_core::error::HookError::Config(format!("cannot read staged files: {why}"))
     };
-    let out = codeflow_core::git::command()
+    // Decide first whether this repository and git allow a read that never
+    // fetches; the listing below may read promised blobs.
+    codeflow_core::hooks::gitleaks::require_offline_objects(root).map_err(unreadable)?;
+    let mut command = codeflow_core::git::command();
+    codeflow_core::hooks::gitleaks::pin_object_reader(&mut command);
+    let out = command
         .arg("-C")
         .arg(root)
-        .args(["diff", "--cached", "--name-only", "-z"])
+        .args(["diff", "--cached", "--name-only", "-z", "--no-renames"])
         .output()
         .map_err(|error| unreadable(error.to_string()))?;
     if !out.status.success() {
