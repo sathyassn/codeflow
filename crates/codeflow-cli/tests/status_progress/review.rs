@@ -1129,3 +1129,104 @@ fn a_red_required_check_turning_missing_is_not_cleared() {
         "{since}"
     );
 }
+
+/// Adopt an estimate home holding one frozen forecast over the open
+/// tasks, each pinned to its record's digest at the time of writing.
+fn adopt_forecast(root: &Path) -> String {
+    use codeflow_core::scaffold::sha256_hex;
+    write(
+        root,
+        ".codeflow/estimate.json",
+        &serde_json::json!({
+            "schema_version": 1, "status": "adopted", "rationale": "fixture",
+            "method_version": "codeflow-agentic-1",
+            "root": "project-management/estimates", "re_offer_when": "never"
+        })
+        .to_string(),
+    );
+    write(root, "project-management/estimates/profile.md", "profile\n");
+    let pin = serde_json::json!({
+        "path": "project-management/estimates/profile.md",
+        "sha256": sha256_hex(b"profile\n")
+    });
+    let tasks = ["TSK-001", "TSK-002", "TSK-003"];
+    let packages: Vec<Value> = tasks
+        .iter()
+        .map(|id| {
+            let record =
+                std::fs::read(root.join(format!("project-management/tasks/{id}.md"))).unwrap();
+            serde_json::json!({
+                "id": format!("pkg-{id}"),
+                "source": {"kind": "codeflow_task", "task_id": id, "sha256": sha256_hex(&record)},
+                "context_pins": [], "grade": "medium", "grade_evidence": ["fixture"],
+                "duration_basis": "judgment",
+                "stage_exclusions": [
+                    {"stage": "review", "reason": "fixture"},
+                    {"stage": "verify", "reason": "fixture"},
+                    {"stage": "rework", "reason": "fixture"}
+                ]
+            })
+        })
+        .collect();
+    let hour = 3600;
+    let activities: Vec<Value> = tasks
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            serde_json::json!({
+                "id": format!("{id}-implement"), "package_id": format!("pkg-{id}"),
+                "stage": "implement", "start_seconds": index * hour, "duration_seconds": hour,
+                "demands": [{"resource_id": "producer", "units": 1}],
+                "after": [], "after_boundaries": [], "basis": "fixture"
+            })
+        })
+        .collect();
+    let scenario = |name: &str| {
+        serde_json::json!({"name": name, "assumptions": ["fixture"],
+            "activities": activities, "milestones": []})
+    };
+    let path = "project-management/estimates/forecasts/demo/v1.json";
+    write(
+        root,
+        path,
+        &serde_json::json!({
+            "schema_version": 1, "id": "demo", "anchor_epoch_seconds": 1_793_000_000u64,
+            "horizon_seconds": 30 * 24 * hour, "profile": pin, "rubric": pin,
+            "packages": packages, "boundaries": [],
+            "resources": [{"id": "producer", "capacity": 1,
+                "windows": [{"start_seconds": 0, "end_seconds": 30 * 24 * hour}]}],
+            "scenarios": [scenario("favorable"), scenario("planning"), scenario("adverse")]
+        })
+        .to_string(),
+    );
+    path.to_string()
+}
+
+/// AC-5: windows come from the adopted forecast that covers the scope, and
+/// a forecast whose task criteria changed since it was frozen is named
+/// stale in the basis rather than read as current.
+#[test]
+fn a_stale_adopted_forecast_is_named_stale() {
+    let fx = fixture();
+    let path = adopt_forecast(&fx.root);
+    let check = fx.cli(&["estimate", "check", &path, "--json"]);
+    assert!(check.status.success(), "{}", text(&check));
+    let fresh = fx.json(&["--epic", "EPC-001"]);
+    let basis = fresh["windows"]["basis"].as_str().unwrap();
+    assert_eq!(fresh["windows"]["basis_kind"], "forecast", "{basis}");
+    assert!(basis.contains(&path) && !basis.contains("stale"), "{basis}");
+
+    // TSK-003's criteria change after the forecast was frozen.
+    let record = fx.root.join("project-management/tasks/TSK-003.md");
+    let changed = std::fs::read_to_string(&record).unwrap()
+        + "- AC-2 When asked, the command shall also report.\n";
+    std::fs::write(&record, changed).unwrap();
+    let stale = fx.json(&["--epic", "EPC-001"]);
+    let basis = stale["windows"]["basis"].as_str().unwrap();
+    assert_eq!(stale["windows"]["basis_kind"], "forecast", "{basis}");
+    assert!(
+        basis.contains(&path)
+            && basis.contains("(stale: a task's criteria changed since it was frozen)"),
+        "{basis}"
+    );
+}
