@@ -5054,3 +5054,234 @@ fn meaning_taken_pack_keeps_its_controls_and_blind_prompt() {
         );
     }
 }
+
+/// TSK-1033: the declare-once requirement has a builder case that reads an
+/// existing constant and helper, a builder case that adds an enum for a
+/// closed set, and a review case that refuses a new unchecked copy while
+/// keeping a test's literal expected values.
+#[test]
+fn declare_once_cases_cover_reuse_closed_set_and_review() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    let quality_core: BTreeSet<&str> = packs["packs"]
+        .as_array()
+        .expect("packs array")
+        .iter()
+        .find(|pack| pack["id"] == "quality-core")
+        .expect("quality-core pack")["cases"]
+        .as_array()
+        .expect("pack cases")
+        .iter()
+        .map(|value| value.as_str().expect("case id"))
+        .collect();
+    let strings = |case: &Value, field: &str| -> BTreeSet<String> {
+        case["expected"][field]
+            .as_array()
+            .expect("expected array")
+            .iter()
+            .map(|value| value.as_str().expect("string").to_string())
+            .collect()
+    };
+    for (case_id, signals, guards) in [
+        (
+            "builder-reads-the-existing-constant",
+            &[
+                "retry_limit_read_from_existing_constant",
+                "support_queue_built_by_existing_helper",
+            ][..],
+            &[
+                "retry_limit_literal_repeated",
+                "team_slug_or_queue_prefix_literal_repeated",
+            ][..],
+        ),
+        (
+            "builder-adds-an-enum-for-a-closed-set",
+            &[
+                "channel_declared_once_as_enum_or_literal_type",
+                "every_channel_comparison_uses_or_is_checked_against_the_declared_set",
+            ][..],
+            &[
+                "raw_channel_strings_compared_in_several_places",
+                "speculative_channel_registry_or_plugin_framework",
+            ][..],
+        ),
+        (
+            "review-refuses-a-new-unchecked-copy",
+            &[
+                "copy_and_home_named_at_file_line",
+                "major_finding_for_unchecked_copy",
+            ][..],
+            &[
+                "approved_with_copy_as_minor",
+                "test_oracle_literals_flagged",
+            ][..],
+        ),
+    ] {
+        let case = indexed[case_id];
+        assert!(
+            quality_core.contains(case_id),
+            "{case_id} left quality-core"
+        );
+        assert!(
+            case["requirements"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|id| id == "CF-QA-019")),
+            "{case_id} no longer names CF-QA-019"
+        );
+        let actual_signals = strings(case, "signals");
+        for signal in signals {
+            assert!(actual_signals.contains(*signal), "{case_id} lost {signal}");
+        }
+        let actual_guards = strings(case, "must_not");
+        for guard in guards {
+            assert!(actual_guards.contains(*guard), "{case_id} lost {guard}");
+        }
+    }
+}
+
+/// TSK-1033: each declare-once fixture keeps the home and the copy its case
+/// grades.
+#[test]
+fn declare_once_fixtures_keep_the_home_and_the_copy() {
+    let reuse = fixture_overlay("declare-once-existing-constant");
+    assert!(reuse["src/config.ts"].contains("export const MAX_RETRIES = 3;"));
+    assert!(reuse["src/notify.ts"].contains("export function supportQueue()"));
+    assert!(
+        !reuse.contains_key("src/escalate.ts"),
+        "the subject writes escalate.ts"
+    );
+
+    let closed = fixture_overlay("declare-once-closed-set");
+    assert!(closed["CHANGE.md"].contains("`pickup`, `courier` or `post`"));
+    assert!(
+        !closed["src/orders.py"].contains("channel"),
+        "no channel home exists yet"
+    );
+
+    let review = fixture_overlay("declare-once-review-copy");
+    assert!(review["src/ownership.ts"].contains("export const OWNER_TEAM = \"payments-core\";"));
+    assert!(review["src/alerts.ts"].contains("const OWNER = \"payments-core\";"));
+    assert!(
+        review["tests/alerts.test.ts"].contains("assert.equal(alert?.team, \"payments-core\");")
+    );
+
+    // The test copies are the cases' negative control, so each states the
+    // reason the declare-once rule asks for at the site.
+    for (id, test_file) in [
+        ("declare-once-existing-constant", "tests/retry.test.ts"),
+        ("declare-once-review-copy", "tests/alerts.test.ts"),
+    ] {
+        let body = fixture_overlay(id)[test_file].clone();
+        assert!(
+            body.contains("on purpose") && body.contains("independent"),
+            "{id}: {test_file} copies a value without the stated independent-oracle reason"
+        );
+    }
+}
+
+/// TSK-1033: a fixture that runs `node --test` names its test files and
+/// imports only files it ships, exactly as written, so its tests run on
+/// Node's own TypeScript support with no build step.
+#[test]
+fn node_test_fixtures_import_shipped_files_and_name_their_tests() {
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let mut checked = 0;
+    for fixture in fixtures["fixtures"].as_array().expect("fixtures array") {
+        let id = fixture["id"].as_str().expect("fixture id");
+        let Some(package) = fixture["files"]["package.json"].as_str() else {
+            continue;
+        };
+        let package: Value = serde_json::from_str(package)
+            .unwrap_or_else(|error| panic!("{id}: package.json: {error}"));
+        let Some(script) = package["scripts"]["test"].as_str() else {
+            continue;
+        };
+        let Some(arguments) = script.strip_prefix("node --test") else {
+            continue;
+        };
+        let overlay = fixture_overlay(id);
+        // Each test argument is a file the fixture ships or a `*` pattern
+        // that matches one; options are not test files.
+        let tests: Vec<&str> = arguments
+            .split_whitespace()
+            .filter(|argument| !argument.starts_with('-'))
+            .collect();
+        assert!(!tests.is_empty(), "{id}: `{script}` names no test files");
+        for test in tests {
+            let found = match test.split_once('*') {
+                Some((prefix, suffix)) => overlay.keys().any(|path| {
+                    path.len() > prefix.len() + suffix.len()
+                        && path.starts_with(prefix)
+                        && path.ends_with(suffix)
+                }),
+                None => overlay.contains_key(test),
+            };
+            assert!(
+                found,
+                "{id}: `{test}` in `{script}` matches no fixture file"
+            );
+        }
+        for (path, body) in &overlay {
+            if ![".ts", ".mts", ".js", ".mjs"]
+                .iter()
+                .any(|extension| path.ends_with(extension))
+            {
+                continue;
+            }
+            for specifier in relative_imports(body) {
+                let resolved = resolve_relative(path, &specifier);
+                assert!(
+                    overlay.contains_key(&resolved),
+                    "{id}: {path} imports {specifier}, which the fixture does not ship"
+                );
+            }
+        }
+        checked += 1;
+    }
+    assert!(
+        checked >= 2,
+        "the node --test fixtures are no longer checked"
+    );
+}
+
+/// Relative module specifiers named by `import ... from` or `export ... from`.
+fn relative_imports(body: &str) -> Vec<String> {
+    body.lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            if !["import ", "export ", "}"]
+                .iter()
+                .any(|start| line.starts_with(start))
+            {
+                return None;
+            }
+            let (_, tail) = line.split_once(" from ")?;
+            let specifier = tail
+                .trim()
+                .trim_end_matches(';')
+                .trim_matches(|quote| quote == '"' || quote == '\'');
+            specifier.starts_with('.').then(|| specifier.to_string())
+        })
+        .collect()
+}
+
+fn resolve_relative(from: &str, specifier: &str) -> String {
+    let mut parts: Vec<&str> = from.split('/').collect();
+    parts.pop();
+    for segment in specifier.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
