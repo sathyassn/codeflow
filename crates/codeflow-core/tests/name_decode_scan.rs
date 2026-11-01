@@ -3150,6 +3150,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // The closed read-only form admits only the ASCII characters its `plain` check lists, so the blank test and the word split see no Unicode whitespace; anything else already refused (TSK-1104).
+    (
+        "crates/codeflow-core/src/hooks/ref_authority.rs",
+        "read_only_git",
+        "trim",
+        1,
+        "ascii-marker",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/ref_authority.rs",
+        "read_only_git",
+        "split_whitespace",
+        1,
+        "ascii-marker",
+    ),
     // UTF-8 failure maps to true in the refusal condition; the remote URL mapping remains unproven and fetch is refused.
     (
         "crates/codeflow-core/src/hooks/ref_authority.rs",
@@ -6954,6 +6969,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
+    ("crates/codeflow-core/src/hooks/ref_authority.rs", "no_index_change_hook", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata of the hook file lets an unresolved-authority read-only call pass; a present file, a dangling link and every other error refuse, and the hooks directory comes from the configuration Git lists (TSK-1104)."),
     ("crates/codeflow-core/src/workgraph/history.rs", "check_command", "ErrorKind::NotFound", 1, "Git treats an absent GIT_SHALLOW_FILE as no boundary, including a dangling path; other read errors refuse. The installed CLI test compares relative, missing and empty overrides with native Git."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_dir", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_file", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
