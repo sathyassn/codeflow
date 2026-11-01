@@ -169,6 +169,42 @@ fn a_cancellation_revived_inside_one_range_is_refused() {
     assert!(text.contains("a cancelled task is terminal"), "{text}");
 }
 
+/// A cancellation revived across a gap is refused like the direct edit:
+/// the record deleted then recreated, moved to its epic's task path, or
+/// parked off the record paths and restored (TSK-1036 review 01).
+#[test]
+fn a_cancellation_revived_across_a_gap_is_refused() {
+    const EPIC_TASK: &str = "project-management/epics/EPC-001/tasks/TSK-001.md";
+    let gaps: [(&str, &str, Option<&str>); 3] = [
+        ("deleted then recreated", TASK, None),
+        ("moved to the epic path", EPIC_TASK, Some(EPIC_TASK)),
+        (
+            "parked off the record paths",
+            TASK,
+            Some("notes/TSK-001.md"),
+        ),
+    ];
+    for (what, back, gap) in gaps {
+        let dir = repo();
+        let root = dir.path();
+        write(root, TASK, &record("cancelled"));
+        commit(root, "docs: cancel the task");
+        std::fs::remove_file(root.join(TASK)).unwrap();
+        if let Some(gap) = gap.filter(|gap| *gap != back) {
+            write(root, gap, &record("cancelled"));
+        }
+        if gap != Some(back) {
+            commit(root, "docs: move the task away");
+        }
+        if let Some(gap) = gap.filter(|gap| *gap != back) {
+            std::fs::remove_file(root.join(gap)).unwrap();
+        }
+        write(root, back, &record("todo"));
+        commit(root, "docs: bring the task back");
+        refused(root, what, TERMINAL, None);
+    }
+}
+
 /// A side branch from `main` that cancels TSK-001; returns its name.
 fn cancelled_side(root: &Path) -> &'static str {
     git(root, &["switch", "-qc", "side", "main"]);
