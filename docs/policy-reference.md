@@ -2088,13 +2088,22 @@ allowed.
   (`env`, `sh -c`) all fail it, so no shell construct is ever interpreted in
   this state.
 - **Still refused:** git global options (`-c`, `-C`, `--git-dir`), and the
-  options `--output`, `--ext-diff`, `--textconv`, `--filters`,
+  options `--help` (git turns `git status --help` into `git help`, which
+  starts a viewer; `-h` stays), `--output`, `--ext-diff`, `--textconv`, `--filters`,
   `--paginate`, `--open-files-in-pager`, `--no-index`, `--show-signature`
   and a `%G` format (also in any shortened spelling such as `--ext`), because
   each can run a program, write a file or read outside the repository; any
   redirect to a path; `--exec-path`; every mutating command; edits through
   edit-guard, an unrelated file included.
+- **Configured programs:** a call that would run a program Git is already
+  configured to run is refused. The program reader the normal path uses
+  (the runner catalog: `core.fsmonitor`, `diff.external`, `diff.*.command`,
+  `diff.*.textconv`, `core.pager`, `GIT_EXTERNAL_DIFF`, `GIT_PAGER`, `PAGER`,
+  configuration injected through the `GIT_CONFIG_COUNT` variables, and the
+  other entries) runs on the call and must report nothing to run. A hook
+  file `post-index-change` in the hooks directory also refuses, and any read
+  error refuses. With `PAGER` set in the environment, `git diff`, `log` and
+  `show` are therefore refused until the authority resolves, while
+  `git status` and `git rev-parse` pass.
 - **Not changed:** the one-fetch recovery, and the verdicts once the
-  authority resolves. A program already named by repository configuration
-  (`core.fsmonitor`, a configured pager) is as before: writing that
-  configuration is refused as a hook-integrity write.
+  authority resolves.

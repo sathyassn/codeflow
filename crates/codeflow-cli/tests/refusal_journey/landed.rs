@@ -67,7 +67,9 @@ impl Repo {
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE");
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("PAGER")
+            .env_remove("GIT_PAGER");
         c
     }
     fn git(&self, args: &[&str]) -> String {
@@ -1758,6 +1760,9 @@ const REFUSED_UNRESOLVED: &[&str] = &[
     "git update-ref refs/heads/z HEAD",
     "git remote set-head origin -a",
     "git help status",
+    "git status --help",
+    "git log --help",
+    "git diff --he",
     "git status > out.txt",
     "git status && git commit --allow-empty -m x",
     "git status ; rm -rf x",
@@ -1805,6 +1810,11 @@ fn ac2_unresolved_authority_allows_exactly_the_read_only_git_set() {
     assert!(text.contains("refs/remotes/origin/HEAD"), "{text}");
     assert!(text.contains("git remote set-head origin -a"), "{text}");
     assert!(text.contains("read-only git"), "{text}");
+    // exec-guard's refusal carries the same sentence.
+    let out = repo.check("exec-guard", "echo ok", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("read-only git"), "{text}");
+    assert!(text.contains("git remote set-head origin -a"), "{text}");
     // Edits are not read-only and keep refusing, an unrelated file included.
     let out = edit_guard_write(&repo, "notes.txt");
     assert_eq!(out.status.code(), Some(2), "{out:?}");
@@ -1886,4 +1896,56 @@ fn ac6_unset_origin_head_journey_reads_pass_commit_names_set_head_then_clears() 
     repo.check("exec-guard", "echo ok", 0);
     assert_eq!(edit_guard_write(&repo, "notes.txt").status.code(), Some(0));
     println!("{report}");
+}
+
+#[test]
+fn ac2_unresolved_authority_still_refuses_a_git_call_that_runs_a_configured_program() {
+    for (key, command) in [
+        ("core.fsmonitor", "git status"),
+        ("diff.external", "git diff HEAD"),
+        ("diff.x.textconv", "git diff HEAD"),
+        ("core.pager", "git log -1"),
+    ] {
+        let repo = unresolved_authority_repo();
+        // The plain call is allowed before the setting exists.
+        for hook in ["git-guard", "exec-guard"] {
+            assert_eq!(repo.hook(hook, command).status.code(), Some(0), "{hook}");
+        }
+        repo.git(&["config", key, "/bin/echo"]);
+        for hook in ["git-guard", "exec-guard"] {
+            let out = repo.hook(hook, command);
+            assert_eq!(out.status.code(), Some(2), "{key}: {hook}: {out:?}");
+        }
+    }
+    // A program named by the hook process environment.
+    let repo = unresolved_authority_repo();
+    for (name, command) in [
+        ("GIT_EXTERNAL_DIFF", "git diff HEAD"),
+        ("GIT_PAGER", "git log -1"),
+    ] {
+        let mut process = repo.command(&binary());
+        process.env(name, "/bin/echo");
+        let out = run_hook(process, repo.root(), "git-guard", command);
+        assert_eq!(out.status.code(), Some(2), "{name}: {out:?}");
+    }
+    // Configuration injected through the environment.
+    let mut process = repo.command(&binary());
+    process
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
+        .env("GIT_CONFIG_VALUE_0", "/bin/echo");
+    let out = run_hook(process, repo.root(), "git-guard", "git status");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+}
+
+#[test]
+fn ac2_unresolved_authority_refuses_status_when_the_index_change_hook_exists() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = unresolved_authority_repo();
+    let hook = repo.root().join(".git/hooks/post-index-change");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = repo.hook("git-guard", "git status");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
 }

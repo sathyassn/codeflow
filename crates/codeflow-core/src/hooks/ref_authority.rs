@@ -532,6 +532,7 @@ const READ_ONLY_UNRESOLVED: &[&str] = &[
 /// Long options that can run a program, write a file or read outside the
 /// repository. A shortened spelling (`--ext`) counts as the full name.
 const REFUSED_LONG_OPTIONS: &[&str] = &[
+    "--help",
     "--output",
     "--ext-diff",
     "--textconv",
@@ -585,6 +586,43 @@ pub fn read_only_git(command: &str) -> bool {
                 .iter()
                 .all(|word| !refused_option(word) && !word.starts_with('~') && !word.contains("%G"))
     })
+}
+
+/// [`read_only_git`] plus the program reader: the line must also name no
+/// program that Git would run (a configured fsmonitor, external diff,
+/// textconv, pager or hook, an environment program variable, or a
+/// configuration injected through the environment, as the runner catalog
+/// lists them), read in `cwd` as the normal path reads them. Any read
+/// error refuses.
+#[must_use]
+pub fn read_only_git_runs_nothing(command: &str, cwd: &Path) -> bool {
+    read_only_git(command)
+        && super::git_guard::git_runner_bodies(command, cwd).is_ok_and(|bodies| bodies.is_empty())
+        && crate::security::git_preflight::program_runs(command, cwd)
+            .is_ok_and(|runs| runs.is_empty())
+        && no_index_change_hook(cwd)
+}
+
+/// Whether no `post-index-change` hook exists where Git looks for hooks: a
+/// read-only call that refreshes the index runs it, and the runner catalog
+/// does not list hook files. A hooks path that cannot be read refuses.
+fn no_index_change_hook(cwd: &Path) -> bool {
+    let Ok(Some(repo)) = super::repo::open(cwd) else {
+        return false;
+    };
+    let Ok(config) = repo.config() else {
+        return false;
+    };
+    let hooks = match config.get_path("core.hooksPath") {
+        Ok(path) if path.is_absolute() => path,
+        Ok(path) => repo.workdir().unwrap_or_else(|| repo.path()).join(path),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => repo.commondir().join("hooks"),
+        Err(_) => return false,
+    };
+    matches!(
+        std::fs::symlink_metadata(hooks.join("post-index-change")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 #[cfg(test)]
