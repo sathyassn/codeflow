@@ -341,6 +341,65 @@ from before 3.0.0 and does not restore a key a later policy deleted. A first Cod
 review fails until the policy lands; merge that pull request over the
 failing check, or land the policy alone first.
 
+## Project exception hook
+
+A project that records dependency-audit exceptions in its own reviewed
+register, with an owner, an expiry and a reason per row, commits
+`.codeflow/audit-exceptions.sh` instead of editing the managed step. The
+hook is optional, project-owned, and never written by `codeflow update`. It
+runs in the GitHub `security review` job after the managed audit, only when
+the audit finds advisories, and may accept findings that a trusted file
+records.
+
+- **Trusted commit only.** The step reads the hook from the trusted commit
+  (the pull request's base, or the pushed commit) and exports that commit's
+  files to a folder outside the checkout. The hook runs there with `bash`,
+  so a path it reads, such as `docs/dependency-register.csv`, is the trusted
+  commit's copy. A pull request that adds or changes the hook or the
+  register is judged by the base, and takes effect once it lands; the step
+  prints a notice when the change holds a hook the trusted commit does not.
+  A hook that is not a regular file on the trusted commit fails the job.
+- **Inputs.** The working folder is the exported trusted commit.
+  `CODEFLOW_AUDIT_FINDINGS` is the path of a file with one finding per line,
+  tab separated: advisory id, package, version, ecosystem, lockfile path,
+  and the advisory's aliases joined by commas. `CODEFLOW_TRUSTED_SHA` is the
+  trusted commit and `CODEFLOW_TRUSTED_ROOT` is the exported folder. The
+  scan runs with `--verbosity error --format json` when the trusted commit
+  holds the hook, so its log holds only errors.
+- **Exit contract.** The hook prints the findings it accepts to standard
+  output, one per line, copied unchanged from the findings file. Exit 0 with
+  those lines is a verdict; any other exit status makes the hook accept
+  nothing, as does a printed line that is not a finding. The step passes
+  when every finding is accepted and lists each as `accepted by the project
+  exception hook: <finding>`; otherwise it lists the rest as `not accepted:
+  <finding>` and applies the policy level as before (`block` fails, `warn`
+  reports). The hook runs only when osv-scanner exits 1 for advisories and
+  logged no error. osv-scanner exits 1 even when it could not read a
+  lockfile, so any logged error means the scan may be incomplete: the hook
+  is not run, the logged errors are printed, and the policy level applies as
+  if nothing were accepted.
+- **Advice.** When the trusted commit holds the hook, the failure message
+  tells the reader to accept a justified finding through it. Without the
+  hook, the message and the `osv-scanner.toml` route are as in 3.1.0, and
+  the `osv-scanner.toml` suppressions still come from the trusted commit.
+- **Match on the advisory, not the path.** The lockfile path is chosen by
+  the change under test. Key a register row on the advisory id, package and
+  version, and check its expiry in the hook.
+
+Example: accept the advisories whose id is the first column of a register
+row that has not expired (`docs/dependency-register.tsv`, columns id, owner,
+expiry as `YYYY-MM-DD`, reason):
+
+```sh
+today=$(date -u +%Y-%m-%d)
+awk -F'\t' -v today="$today" \
+  'NR == FNR { if ($3 >= today) ok[$1] = 1; next } ($1 in ok)' \
+  docs/dependency-register.tsv "$CODEFLOW_AUDIT_FINDINGS"
+```
+
+Only the GitHub workflow runs the hook. The GitLab, Bitbucket and generic
+wrappers carry the audit only as an optional add-on you run yourself.
+
 ## Two planes, deliberately
 
 `codeflow ci` is the **portable, host-agnostic** verification plane. The
