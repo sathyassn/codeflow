@@ -1,0 +1,11 @@
+id = "TSK-1153"
+uid = "cf8cd230-7a47-498b-994b-dac968af5d6f"
+kind = "TSK"
+title = "Hosted line CI reaches its verdicts in about 13 minutes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T19:40:02Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
