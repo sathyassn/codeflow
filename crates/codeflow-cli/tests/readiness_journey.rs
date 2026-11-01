@@ -194,6 +194,8 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
         .run();
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
     // The scaffold holds a record (ADR-0001), so the shared id registry is
     // seeded once before the first new record (TSK-101).
     ok(&codeflow(&root, &["ids", "seed"]), "ids seed");
