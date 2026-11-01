@@ -202,6 +202,30 @@ fn seat_and_design_defaults_can_be_medium_but_reasoning_cannot() {
     );
 }
 #[test]
+fn a_seat_line_without_the_seat_default_starts_at_its_own_lowest_effort() {
+    // ADR-0095: a seat starts at its bound model's default. A seat line that
+    // offers nothing at the seat route's effort (Fable offers only high)
+    // starts at its own lowest effort instead of dropping out; a line or
+    // worker route still never clamps.
+    let mut value = fixture();
+    value["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
+    value["lines"][1]["versions"][0]["efforts"] = json!(["high", "xhigh"]);
+    let c = parse(&value).unwrap();
+    let observed = BTreeMap::new();
+    let host = c.resolve(&request("orchestrate", &observed)).unwrap();
+    assert_eq!(host.participants[0].version, "orchid-one");
+    assert_eq!(host.participants[0].effort, Effort::Medium);
+    let fallback = &host.participants[0].remaining_alternatives[0];
+    assert_eq!(fallback.version, "orchid-two");
+    assert_eq!(fallback.effort, Effort::High);
+    let exclusions = [exclude("orchid-one")];
+    let mut without_first = request("orchestrate", &observed);
+    without_first.exclusions = &exclusions;
+    let chosen = &c.resolve(&without_first).unwrap().participants[0];
+    assert_eq!(chosen.version, "orchid-two");
+    assert_eq!(chosen.effort, Effort::High);
+}
+#[test]
 fn high_trigger_raises_a_medium_lane_but_never_the_orchestrating_session() {
     let mut value = fixture();
     value["duties"]["orchestrate"]["required"][0]["alternatives"][0]["effort"] = json!("medium");
