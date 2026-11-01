@@ -259,6 +259,14 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow status` | | Generated status view: branch, worktrees, in-flight work, capabilities |
 | | `--capabilities` | Show the full capability table (default: counts by status). |
 | | `--delivery` | Show the capability-delivery rollup: each capability's epics with their open/total task counts and next actionable tasks. |
+| | `--task <TSK-NNN>` | Progress of one task. |
+| | `--epic <EPC-NNN>...` | Progress of an epic; repeat for several. |
+| | `--line <BRANCH>` | Progress of every task whose home is this integration line. |
+| | `--json` | Print the progress facts as versioned JSON (report-v1). |
+| | `--present` | Reserved for the cf-present report view (TSK-1098); refused for now. |
+| | `--md` | Reserved for the Markdown report view (TSK-1098); refused for now. |
+| | `--session <FILE>` | Merge a session facts file (session-v1) into the lanes view. |
+| | `--since <FILE>` | Report what changed since a previous `--json` snapshot. |
 | `codeflow recall <QUERY>` | | Search project memory: ledger, session summaries, ADRs, epics, capabilities |
 | | `--all` | Search every repo in the user registry, not just the current one. |
 | | `--rebuild` | Drop the index for the searched repos and re-sync (the index is a rebuildable cache). |
@@ -583,6 +591,10 @@ name and branch must match; cross-repository pull requests are refused.
 - `codeflow status` also prints a read-only cleanup inventory of linked
   worktrees and unattached local branches. It is local git evidence and never
   stands in for a check that the owner is done (ADR-0044).
+- `codeflow status` with a scope flag, `--json`, `--session` or `--since`
+  prints the progress view instead. It writes nothing and never fetches;
+  [Reading where work stands](delivery.md#reading-where-work-stands) gives
+  its stage ladder, locations, windows and unknowns.
 - `codeflow recall` searches through bundled SQLite full-text search (FTS5) and
   names the sources it could not cover.
 - `recall --all` reads the user registry at `~/.codeflow/registry.json`, which

@@ -94,5 +94,66 @@ pub fn check_forecast(repo_root: &Path, forecast_path: &Path) -> ForecastReport 
     report
 }
 
+/// Per-task end offsets a valid forecast gives, for `codeflow status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskEnds {
+    /// The forecast's anchor, seconds since the epoch.
+    pub anchor_epoch_seconds: u64,
+    /// A pinned source changed since the forecast was frozen.
+    pub stale: bool,
+    /// Task id to the latest end of its activities under the favorable,
+    /// planning and adverse scenarios, in seconds from the anchor.
+    pub ends: std::collections::BTreeMap<String, [u64; 3]>,
+}
+
+/// Read a frozen forecast's per-task ends. A forecast that fails a check
+/// other than a stale pin gives the reason instead.
+///
+/// # Errors
+///
+/// The reason when the forecast cannot be read or fails its checks.
+pub fn task_ends(repo_root: &Path, forecast_path: &Path) -> Result<TaskEnds, String> {
+    let report = check_forecast(repo_root, forecast_path);
+    let stale = report.findings.iter().any(|f| f.code == "stale_pin");
+    if let Some(finding) = report.findings.iter().find(|f| f.code != "stale_pin") {
+        return Err(format!("the forecast fails its check: {}", finding.message));
+    }
+    let bytes = crate::bounded_file::read_bounded_regular(
+        &repo_root.join(forecast_path),
+        model::MAX_INPUT_BYTES,
+    )
+    .map_err(|error| format!("the forecast cannot be read: {error}"))?;
+    let forecast: model::Forecast = serde_json::from_slice(&bytes)
+        .map_err(|_| "the forecast does not match its schema".to_string())?;
+    let tasks: std::collections::BTreeMap<&str, &str> = forecast
+        .packages
+        .iter()
+        .filter_map(|p| p.source.task_id().map(|task| (p.id.as_str(), task)))
+        .collect();
+    let mut ends: std::collections::BTreeMap<String, [u64; 3]> = std::collections::BTreeMap::new();
+    for scenario in &forecast.scenarios {
+        let slot = match scenario.name {
+            ScenarioName::Favorable => 0,
+            ScenarioName::Planning => 1,
+            ScenarioName::Adverse => 2,
+        };
+        for activity in &scenario.activities {
+            let Some(task) = activity.package_id.as_deref().and_then(|p| tasks.get(p)) else {
+                continue;
+            };
+            let end = activity
+                .start_seconds
+                .saturating_add(activity.duration_seconds);
+            let entry = ends.entry((*task).to_string()).or_default();
+            entry[slot] = entry[slot].max(end);
+        }
+    }
+    Ok(TaskEnds {
+        anchor_epoch_seconds: forecast.anchor_epoch_seconds,
+        stale,
+        ends,
+    })
+}
+
 #[cfg(test)]
 mod tests;

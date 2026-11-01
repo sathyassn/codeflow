@@ -1,0 +1,478 @@
+//! The `--since <previous facts file>` delta: what changed since an earlier
+//! snapshot, and what the earlier snapshot held that this one has no
+//! counterpart for, as `superseded` by an evidenced event or `not observed`
+//! when its source was not checked this time. No earlier fact is dropped
+//! silently, and lost coverage never reads as a replacement.
+
+use std::collections::BTreeMap;
+
+use serde_json::{json, Value};
+
+/// The most bytes a previous facts file may hold.
+const MAX_PREVIOUS_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read a previous facts file.
+///
+/// # Errors
+///
+/// The reason when it cannot be read or is not JSON.
+pub fn read(path: &std::path::Path) -> Result<Value, String> {
+    let bytes = crate::bounded_file::read_bounded_regular(path, MAX_PREVIOUS_BYTES)
+        .map_err(|error| format!("--since {}: cannot be read: {error}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("--since {}: not a facts file: {error}", path.display()))
+}
+
+fn text<'a>(value: &'a Value, pointer: &str) -> &'a str {
+    value.pointer(pointer).and_then(Value::as_str).unwrap_or("")
+}
+
+/// Refuse a previous snapshot of another schema version, kind, repository
+/// or scope, naming the field.
+fn check_envelope(previous: &Value, current: &Value) -> Result<(), String> {
+    for (pointer, name) in [
+        ("/schema_version", "schema_version"),
+        ("/kind", "kind"),
+        ("/repository", "repository"),
+        ("/scope/kind", "scope kind"),
+        ("/scope/names", "scope names"),
+        ("/scope/target", "scope target"),
+    ] {
+        let (before, now) = (previous.pointer(pointer), current.pointer(pointer));
+        if before != now {
+            return Err(format!(
+                "--since: the previous snapshot has another {name} ({} against {}); compare snapshots of one repository and scope",
+                before.map_or_else(|| "none".into(), Value::to_string),
+                now.map_or_else(|| "none".into(), Value::to_string),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The sources this snapshot checked.
+fn checked_sources(facts: &Value) -> BTreeMap<String, bool> {
+    let mut out = BTreeMap::new();
+    if let Some(entries) = facts.pointer("/evidence").and_then(Value::as_array) {
+        for entry in entries {
+            let checked = entry
+                .get("checked")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let source = text(entry, "/source").to_string();
+            let slot = out.entry(source).or_insert(true);
+            *slot = *slot && checked;
+        }
+    }
+    if let Some(sources) = facts
+        .pointer("/issues/operator/sources")
+        .and_then(Value::as_array)
+    {
+        for entry in sources {
+            let checked = entry
+                .get("checked")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let slot = out
+                .entry(text(entry, "/source").to_string())
+                .or_insert(true);
+            *slot = *slot && checked;
+        }
+    }
+    // A session file is observed only when this snapshot read one.
+    let session_read = facts.pointer("/lanes/session").is_some_and(Value::is_array);
+    let slot = out.entry("session file".to_string()).or_insert(true);
+    *slot = *slot && session_read;
+    out
+}
+
+/// Each keyed item of one family: issues by subject and kind, operator
+/// items by source and id, session lanes by lane and task, tasks by id.
+fn keyed(facts: &Value) -> BTreeMap<(String, String), (String, Value)> {
+    let mut out = BTreeMap::new();
+    for list in ["/issues/tasks", "/issues/lanes"] {
+        for issue in facts
+            .pointer(list)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let key = format!("{} {}", text(issue, "/kind"), text(issue, "/subject"));
+            out.insert(
+                ("issue".into(), key),
+                (text(issue, "/source").to_string(), issue.clone()),
+            );
+        }
+    }
+    for item in facts
+        .pointer("/issues/operator/items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let key = format!("{} {}", text(item, "/source"), text(item, "/id"));
+        out.insert(
+            ("operator item".into(), key),
+            (text(item, "/source").to_string(), item.clone()),
+        );
+    }
+    for lane in facts
+        .pointer("/lanes/session")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let key = format!("{} {}", word(lane, "/lane"), word(lane, "/task"));
+        out.insert(
+            ("session lane".into(), key),
+            ("session".into(), lane.clone()),
+        );
+    }
+    // Pull requests on each epic's landing chain, with their check runs.
+    for pull in facts
+        .pointer("/epics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|epic| {
+            epic.pointer("/landing_chain/open")
+                .and_then(Value::as_array)
+        })
+        .flatten()
+    {
+        out.insert(
+            ("pull request".into(), format!("#{}", word(pull, "/number"))),
+            ("forge".into(), pull.clone()),
+        );
+    }
+    for task in facts
+        .pointer("/tasks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        out.insert(
+            ("task".into(), text(task, "/id").to_string()),
+            ("records".into(), task.clone()),
+        );
+    }
+    out
+}
+
+/// A field as text: a string, or the JSON of anything else.
+fn word(value: &Value, pointer: &str) -> String {
+    match value.pointer(pointer) {
+        Some(Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
+/// The kind of a required-check issue the current snapshot still holds
+/// for `earlier`'s subject, when one remains.
+fn still_required(
+    earlier: &Value,
+    now: &BTreeMap<(String, String), (String, Value)>,
+) -> Option<String> {
+    let subject = text(earlier, "/subject");
+    now.iter().find_map(|((family, _), (_, item))| {
+        (family == "issue"
+            && text(item, "/subject") == subject
+            && text(item, "/kind").starts_with("required check"))
+        .then(|| text(item, "/kind").to_string())
+    })
+}
+
+/// The event that replaced an earlier item no longer present.
+fn replaced_by(family: &str, earlier: &Value, current: &Value) -> String {
+    match family {
+        "issue" => {
+            let subject = text(earlier, "/subject");
+            let landed = current
+                .pointer("/tasks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|task| text(task, "/id") == subject && text(task, "/stage") == "landed");
+            if landed {
+                format!("{subject} landed")
+            } else {
+                format!(
+                    "cleared: {} no longer read for {subject}",
+                    text(earlier, "/kind")
+                )
+            }
+        }
+        "operator item" => "resolved: its source no longer holds it".into(),
+        "session lane" => "the session file no longer holds it".into(),
+        "pull request" => "the forge no longer lists it open".into(),
+        _ => "no longer in the scope the records give".into(),
+    }
+}
+
+/// The source family of an item, as the evidence entries name it.
+fn family_source(source: &str) -> &str {
+    match source {
+        "records" => "records",
+        "forge" => "forge",
+        "ledger" => "ledger",
+        "session" => "session file",
+        other => other,
+    }
+}
+
+/// A word that says the current value was not observed.
+fn unobserved(value: &Value) -> bool {
+    matches!(value.as_str(), Some("unknown" | "unverified"))
+        || value.get("state").and_then(Value::as_str) == Some("unverified")
+}
+
+/// The keys that hold when a fact was observed, nearest first.
+const OBSERVED_KEYS: [&str; 4] = ["observed_at", "read_at", "last_check", "checked_at"];
+
+/// When `value` itself was observed: its own observation time, else the
+/// first one among its fields, breadth first. `None` when it carries none.
+fn observed_at(value: &Value) -> Option<String> {
+    let mut queue = std::collections::VecDeque::from([value]);
+    while let Some(next) = queue.pop_front() {
+        if let Some(object) = next.as_object() {
+            for key in OBSERVED_KEYS {
+                if let Some(at) = object
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|at| crate::coord::parse_time(at).is_ok())
+                {
+                    return Some(at.to_string());
+                }
+            }
+            queue.extend(object.values());
+        } else if let Some(items) = next.as_array() {
+            queue.extend(items);
+        }
+    }
+    None
+}
+
+/// The fields of a retained item that were observed before and are not
+/// now, at any depth (`context.last_moved`, `runs[build]`), absent or
+/// reading unknown: each kept with its earlier value and the time that
+/// value was observed, never dropped.
+fn lost_fields(
+    family: &str,
+    key: &str,
+    earlier: &Value,
+    current: &Value,
+    fallback: &str,
+    absent_is_lost: bool,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    let at = observed_at(earlier).unwrap_or_else(|| fallback.to_string());
+    let walk = Walk {
+        family,
+        key,
+        absent_is_lost,
+    };
+    walk.lost_under("", earlier, Some(current), &at, &mut out);
+    out
+}
+
+/// One retained item's comparison.
+struct Walk<'a> {
+    family: &'a str,
+    key: &'a str,
+    /// A gone field counts as lost (its source was not checked).
+    absent_is_lost: bool,
+}
+
+/// An array element's key: its `name`, `number` or `id`, else its index.
+fn element_key(index: usize, item: &Value) -> String {
+    ["name", "number", "id"]
+        .iter()
+        .find_map(|field| {
+            item.get(field).filter(|v| !v.is_null()).map(|v| match v {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            })
+        })
+        .unwrap_or_else(|| index.to_string())
+}
+
+impl Walk<'_> {
+    fn lost(&self, out: &mut Vec<Value>, path: &str, value: &Value, at: &str) {
+        out.push(json!({
+            "family": self.family,
+            "subject": self.key,
+            "field": path,
+            "earlier": value,
+            "earlier_observed_at": observed_at(value).unwrap_or_else(|| at.to_string()),
+            "current": "unknown",
+        }));
+    }
+
+    fn lost_under(
+        &self,
+        path: &str,
+        earlier: &Value,
+        current: Option<&Value>,
+        at: &str,
+        out: &mut Vec<Value>,
+    ) {
+        let Some(now) = current else {
+            if self.absent_is_lost && !unobserved(earlier) && !path.is_empty() {
+                self.lost(out, path, earlier, at);
+            }
+            return;
+        };
+        if unobserved(now) && !unobserved(earlier) && !path.is_empty() {
+            self.lost(out, path, earlier, at);
+            return;
+        }
+        let join = |field: &str| {
+            if path.is_empty() {
+                field.to_string()
+            } else {
+                format!("{path}.{field}")
+            }
+        };
+        match (earlier, now) {
+            (Value::Object(before), Value::Object(after)) => {
+                let at = observed_at(earlier).unwrap_or_else(|| at.to_string());
+                for (field, value) in before {
+                    self.lost_under(&join(field), value, after.get(field), &at, out);
+                }
+            }
+            (Value::Array(before), Value::Array(after)) => {
+                let keyed: BTreeMap<String, &Value> = after
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| (element_key(index, item), item))
+                    .collect();
+                for (index, value) in before.iter().enumerate() {
+                    let element = element_key(index, value);
+                    self.lost_under(
+                        &format!("{path}[{element}]"),
+                        value,
+                        keyed.get(&element).copied(),
+                        at,
+                        out,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The delta between `previous` and `current` facts.
+///
+/// # Errors
+///
+/// The reason, naming the field, when the two snapshots are not of one
+/// schema version, repository and scope.
+pub fn delta(previous: &Value, current: &Value) -> Result<Value, String> {
+    check_envelope(previous, current)?;
+    let at = text(current, "/snapshot/at").to_string();
+    let earlier_at = text(previous, "/snapshot/at").to_string();
+    let checked = checked_sources(current);
+    let before = keyed(previous);
+    let now = keyed(current);
+    let mut changes = Vec::new();
+    let mut superseded = Vec::new();
+    let mut not_observed = Vec::new();
+    for ((family, key), (_, item)) in &now {
+        let Some((_, earlier)) = before.get(&(family.clone(), key.clone())) else {
+            let what = match family.as_str() {
+                "issue" if text(item, "/kind") == "required checks not read" => {
+                    "required checks not read"
+                }
+                "issue" if text(item, "/kind").starts_with("required check") => {
+                    "check turned not green"
+                }
+                "issue" if text(item, "/kind") == "blocked" => "blocker opened",
+                "issue" => "issue opened",
+                "operator item" if text(item, "/source") == "session" => "decision recorded",
+                "operator item" => "operator item added",
+                "session lane" => "session lane recorded",
+                _ => "task added",
+            };
+            changes.push(json!({"change": what, "subject": key, "at": at}));
+            continue;
+        };
+        // A field or element that is gone counts as lost only while its
+        // source was not checked; with the source checked it is a change.
+        let source = &before[&(family.clone(), key.clone())].0;
+        let absent_is_lost = !checked.get(family_source(source)).copied().unwrap_or(false);
+        not_observed.extend(lost_fields(
+            family,
+            key,
+            earlier,
+            item,
+            &earlier_at,
+            absent_is_lost,
+        ));
+        if family == "task" {
+            let (was, is) = (text(earlier, "/stage"), text(item, "/stage"));
+            if was != "landed" && is == "landed" {
+                changes.push(json!({"change": "landed", "subject": key, "at": at}));
+            }
+            if text(earlier, "/status") != "cancelled" && text(item, "/status") == "cancelled" {
+                changes.push(json!({"change": "task cancelled", "subject": key, "at": at}));
+            }
+        }
+    }
+    for ((family, key), (source, earlier)) in &before {
+        if now.contains_key(&(family.clone(), key.clone())) {
+            continue;
+        }
+        let source_checked = checked.get(family_source(source)).copied().unwrap_or(false);
+        // A required check is cleared only when no required-check issue
+        // remains for its subject, so the requirement passed or was
+        // removed; a change of kind (red to missing, pending or skipped)
+        // is a change, never a clearance.
+        let still = (family == "issue" && text(earlier, "/kind").starts_with("required check"))
+            .then(|| still_required(earlier, &now))
+            .flatten();
+        if let (true, Some(kind)) = (source_checked, &still) {
+            changes.push(json!({"change": "check changed", "subject": key, "at": at}));
+            superseded.push(json!({
+                "family": family,
+                "subject": key,
+                "event": format!("now {kind} for {}", text(earlier, "/subject")),
+                "at": at,
+                "earlier": earlier,
+            }));
+        } else if source_checked {
+            let event = replaced_by(family, earlier, current);
+            let what = match family.as_str() {
+                "issue" if text(earlier, "/kind") == "blocked" => "blocker cleared",
+                "issue" if text(earlier, "/kind").starts_with("required check") => "check cleared",
+                "operator item" => "operator item resolved",
+                "session lane" => "session lane cleared",
+                _ => "removed",
+            };
+            changes.push(json!({"change": what, "subject": key, "at": at}));
+            superseded.push(json!({
+                "family": family,
+                "subject": key,
+                "event": event,
+                "at": at,
+                "earlier": earlier,
+            }));
+        } else {
+            not_observed.push(json!({
+                "family": family,
+                "subject": key,
+                "source": source,
+                "earlier": earlier,
+                "earlier_observed_at": observed_at(earlier).unwrap_or_else(|| earlier_at.clone()),
+                "current": "unknown",
+            }));
+        }
+    }
+    Ok(json!({
+        "previous_at": earlier_at,
+        "changes": changes,
+        "superseded": superseded,
+        "not_observed": not_observed,
+    }))
+}

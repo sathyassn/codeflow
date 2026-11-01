@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codeflow:schema:status:session:1",
+  "title": "CodeFlow status session facts v1",
+  "$comment": "Facts only a coordinating session knows, each with the time it was observed. codeflow status --session merges them into the lanes view labelled session; they never change a percent or a stage.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "facts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "observed_at"
+        ],
+        "properties": {
+          "observed_at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+          },
+          "lane": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "builder": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "seat": {
+            "type": "string"
+          },
+          "verdict_in_flight": {
+            "type": "string"
+          },
+          "blocker": {
+            "type": "string"
+          },
+          "no_progress": {
+            "type": "boolean"
+          },
+          "recommendation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "why"
+            ],
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              },
+              "alternatives": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "decision": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "context",
+              "options",
+              "recommendation",
+              "reasoning"
+            ],
+            "properties": {
+              "context": {
+                "type": "string"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recommendation": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "lane"
+            ]
+          },
+          {
+            "required": [
+              "task"
+            ]
+          },
+          {
+            "required": [
+              "decision"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

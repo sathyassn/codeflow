@@ -1,0 +1,1131 @@
+//! The review round's fail-closed cases, each through the real gatherer:
+//! lost coverage, acceptance against the current criteria, location
+//! proofs, windows, check runs, pace, `--since` and quoted commands.
+use super::*;
+
+/// A one-commit repository whose `origin/<branch>` refs are set by hand
+/// and whose refs read as fetched a minute before the snapshot.
+struct Repo {
+    _dir: tempfile::TempDir,
+    base: PathBuf,
+    root: PathBuf,
+    bin: PathBuf,
+}
+
+const DATE: &str = "2026-11-01T10:00:00Z";
+
+impl Repo {
+    fn new(name: &str, records: &[(&str, String)]) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let root = base.join(name);
+        let bin = base.join("bin");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        let repo = Self {
+            _dir: dir,
+            base,
+            root,
+            bin,
+        };
+        repo.git(&["init", "-q", "-b", "main"]);
+        repo.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/demo.git",
+        ]);
+        write(
+            &repo.root,
+            "project-management/epics/EPC-001.md",
+            "---\nid: EPC-001\ntitle: Demo\nstatus: active\n---\n\n## Outcome\n\nDemo ships.\n\n## Core work\n\nThe first slice of the demo.\n\n- TSK-001\n",
+        );
+        for (id, text) in records {
+            repo.record(id, text);
+        }
+        repo.commit();
+        repo.sync("main");
+        repo.gh("printf '%s\\n' '[]'");
+        repo
+    }
+
+    fn git(&self, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&self.root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.test")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.test")
+            .env("GIT_AUTHOR_DATE", DATE)
+            .env("GIT_COMMITTER_DATE", DATE)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().into()
+    }
+
+    fn record(&self, id: &str, text: &str) {
+        write(
+            &self.root,
+            &format!("project-management/tasks/{id}.md"),
+            text,
+        );
+    }
+
+    fn commit(&self) -> String {
+        self.git(&["add", "."]);
+        self.git(&["commit", "-qm", "docs: fixture"]);
+        self.git(&["rev-parse", "HEAD"])
+    }
+
+    /// Point `origin/<branch>` at the local branch, fetched at 11:59.
+    fn sync(&self, branch: &str) {
+        let tip = self.git(&["rev-parse", branch]);
+        self.git(&["update-ref", &format!("refs/remotes/origin/{branch}"), &tip]);
+        let fetch = self.root.join(".git/FETCH_HEAD");
+        std::fs::write(&fetch, "").unwrap();
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_793_534_340);
+        std::fs::File::options()
+            .write(true)
+            .open(&fetch)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    fn gh(&self, body: &str) {
+        let script = self.bin.join("gh");
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    fn pulls(&self, pulls: &Value) {
+        self.gh(&format!("cat <<'JSON'\n{pulls}\nJSON"));
+    }
+
+    /// A forge that lists `pulls` and, for `main`, requires `required`
+    /// through one ruleset; any other read fails.
+    fn forge(&self, pulls: &Value, required: &[&str]) {
+        let checks: Vec<Value> = required
+            .iter()
+            .map(|name| serde_json::json!({"context": name}))
+            .collect();
+        self.forge_with(pulls, &Value::Array(checks), None);
+    }
+
+    /// A forge that lists `pulls`, requires `checks` (ruleset entries) on
+    /// `main`, and answers a head's check runs with `runs` when given; any
+    /// other read fails.
+    fn forge_with(&self, pulls: &Value, checks: &Value, runs: Option<&Value>) {
+        let rules = serde_json::json!([{"type": "required_status_checks",
+            "parameters": {"required_status_checks": checks}}]);
+        let runs = runs.map_or_else(|| "exit 1".to_string(), |runs| format!("echo '{runs}'"));
+        self.gh(&format!(
+            "case \"$1 $2\" in\n\
+             \"api repos/acme/demo/rules/branches/main?per_page=100\") echo '{rules}' ;;\n\
+             \"api repos/acme/demo/branches/main\") echo '{{\"name\":\"main\",\"protected\":false}}' ;;\n\
+             \"api repos/acme/demo/commits/\"*) {runs} ;;\n\
+             \"pr list\") cat <<'JSON'\n{pulls}\nJSON\n;;\n\
+             *) exit 1 ;;\nesac"
+        ));
+    }
+
+    fn json(&self, args: &[&str]) -> Value {
+        let path = format!(
+            "{}:{}",
+            self.bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let output = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+            .current_dir(&self.root)
+            .args(["status", "--json"])
+            .args(args)
+            .env("PATH", path)
+            .env("CODEFLOW_STATUS_AS_OF", AS_OF)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+}
+
+fn record(id: &str, status: &str, target: &str, deps: &str) -> String {
+    format!(
+        "---\nid: {id}\nepic_id: EPC-001\nintegration_target: {target}\ntitle: work {id}\nstatus: {status}\nwork_type: feat\nspecs: []\ndepends_on: [{deps}]\ncreated: 2026-10-30\n---\n\n## Outcome\n\nThe work succeeds.\n\n## Description\n\nWork.\n\n## Acceptance Criteria\n\n- AC-1 When run, the command shall succeed.\n"
+    )
+}
+
+fn records_source(value: &Value) -> &Value {
+    value["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["source"] == "records")
+        .unwrap()
+}
+
+/// F1: a task whose home target cannot be read, or whose status the
+/// ladder does not know, makes every percent over it unknown and the
+/// records source unchecked; it never reads as done or not started.
+#[test]
+fn lost_coverage_and_unknown_statuses_make_percents_unknown() {
+    let repo = Repo::new(
+        "missing-target",
+        &[
+            ("TSK-001", record("TSK-001", "complete", "main", "")),
+            (
+                "TSK-002",
+                record("TSK-002", "todo", "integration/missing", ""),
+            ),
+        ],
+    );
+    let value = repo.json(&["--epic", "EPC-001"]);
+    assert_eq!(value["scope"]["percent"], "unknown", "{}", value["scope"]);
+    assert_eq!(value["epics"][0]["percent"], "unknown");
+    assert_eq!(task(&value, "TSK-002")["stage"], "unknown");
+    assert_eq!(records_source(&value)["checked"], false);
+    assert_eq!(value["issues"]["operator"]["state"], "not established");
+
+    let repo = Repo::new(
+        "unknown-status",
+        &[("TSK-001", record("TSK-001", "potato", "main", ""))],
+    );
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(value["scope"]["percent"], "unknown");
+    assert_eq!(value["tasks"][0]["stage"], "unknown");
+    assert_eq!(value["tasks"][0]["percent"], "unknown");
+}
+
+/// F1: a forge answer at the read limit may hide pull requests, so it is
+/// unverified, never the whole set.
+#[test]
+fn a_forge_read_at_its_limit_is_unverified() {
+    let repo = Repo::new(
+        "truncated",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let pulls: Vec<Value> = (1..=200)
+        .map(|number| {
+            serde_json::json!({"number": number, "title": "x", "headRefName": format!("fix/{number}"),
+                "headRefOid": "a".repeat(40), "baseRefName": "main", "isDraft": false,
+                "statusCheckRollup": []})
+        })
+        .collect();
+    repo.pulls(&Value::Array(pulls));
+    let value = repo.json(&["--epic", "EPC-001"]);
+    assert_eq!(value["pulls_into_main"], "unverified");
+    let forge = value["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["source"] == "forge")
+        .unwrap();
+    assert_eq!(forge["checked"], false);
+    assert!(
+        forge["note"].as_str().unwrap().contains("read limit"),
+        "{forge}"
+    );
+}
+
+/// F2: a block that still lists a criterion the record removed is invalid
+/// and never earns `reviewed`; its count is over the current criteria.
+#[test]
+fn an_acceptance_block_is_judged_against_the_current_criteria() {
+    let two = format!(
+        "{}- AC-2 When run twice, the command shall succeed twice.\n",
+        record("TSK-001", "todo", "main", "")
+    );
+    let repo = Repo::new("acceptance", &[("TSK-001", two)]);
+    repo.git(&["switch", "-qc", "task/TSK-001-work"]);
+    write(&repo.root, "src/new.rs", "fn new() {}\n");
+    let reviewed = repo.commit();
+    let block = format!(
+        "\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: target/reviews/review.md\n  criteria:\n    AC-1: verified | test passed\n    AC-2: verified | test passed\n  journey: fixture\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n```\n"
+    );
+    repo.record(
+        "TSK-001",
+        &format!("{}{block}", record("TSK-001", "todo", "main", "")),
+    );
+    repo.commit();
+    let value = repo.json(&["--task", "TSK-001"]);
+    let fact = &value["tasks"][0];
+    assert_ne!(fact["stage"], "reviewed", "{fact}");
+    assert_eq!(fact["criteria"]["state"], "invalid", "{fact}");
+    assert_eq!(fact["criteria"]["total"], 1);
+    assert_eq!(fact["criteria"]["verified"], 1);
+    assert_ne!(fact["criteria"]["note"], "none");
+}
+
+/// F3: a completion on the line reads `line`, never `main`, until the
+/// default branch's remote ref reaches its landing commit.
+#[test]
+fn a_line_completion_is_on_main_only_when_main_reaches_it() {
+    const LINE: &str = "integration/EPC-001-demo";
+    let repo = Repo::new(
+        "main-stale",
+        &[("TSK-001", record("TSK-001", "todo", LINE, ""))],
+    );
+    repo.git(&["switch", "-qc", LINE]);
+    write(&repo.root, "src/changed.rs", "fn changed() {}\n");
+    repo.record("TSK-001", &record("TSK-001", "complete", LINE, ""));
+    repo.commit();
+    repo.sync(LINE);
+    let value = repo.json(&["--task", "TSK-001"]);
+    let location = &value["tasks"][0]["location"];
+    assert_eq!(location["kind"], "line", "{location}");
+    assert_eq!(location["state"], "checked", "{location}");
+}
+
+/// F4: every window starts at or before each of its ends, and a
+/// predecessor outside the scope still delays its successor.
+#[test]
+fn windows_start_before_they_end_and_outside_predecessors_count() {
+    let repo = Repo::new(
+        "windows",
+        &[
+            ("TSK-001", record("TSK-001", "todo", "main", "")),
+            ("TSK-002", record("TSK-002", "todo", "main", "TSK-001")),
+        ],
+    );
+    let value = repo.json(&["--epic", "EPC-001"]);
+    for fact in value["tasks"].as_array().unwrap() {
+        let window = &fact["window"];
+        let start = window["start_seconds"].as_i64().unwrap();
+        for end in ["earliest", "planning", "latest"] {
+            let end = window[format!("{end}_end_seconds")].as_i64().unwrap();
+            assert!(start <= end, "{}: {window}", fact["id"]);
+        }
+    }
+    let alone = repo.json(&["--task", "TSK-002"]);
+    let window = &alone["tasks"][0]["window"];
+    assert!(window["start_seconds"].as_i64().unwrap() > 0, "{window}");
+}
+
+/// F5: a skipped run is never a pass; each run is kept with its state,
+/// and a skipped required check is an issue.
+#[test]
+fn a_skipped_check_is_not_a_pass() {
+    let repo = Repo::new(
+        "checks",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    repo.forge(
+        &serde_json::json!([{"number": 1, "title": "Task", "headRefName": "task/TSK-001-work",
+        "headRefOid": "a".repeat(40), "baseRefName": "main", "isDraft": true,
+        "statusCheckRollup": [
+            {"name": "gates", "conclusion": "SUCCESS", "completedAt": "2026-11-01T11:00:00Z"},
+            {"name": "windows", "conclusion": "SKIPPED"}]}]),
+        &["gates", "windows"],
+    );
+    let value = repo.json(&["--epic", "EPC-001"]);
+    let pull = &value["epics"][0]["landing_chain"]["open"][0];
+    assert_eq!(pull["checks"], "skipped", "{pull}");
+    assert_eq!(pull["required"], "skipped", "{pull}");
+    assert_eq!(pull["runs"][0]["state"], "success");
+    assert_eq!(pull["runs"][1]["name"], "windows");
+    assert_eq!(pull["runs"][1]["state"], "skipped");
+    assert!(
+        value["issues"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["kind"] == "required check skipped without reuse evidence"),
+        "{}",
+        value["issues"]
+    );
+}
+
+/// F6: the status is read with the record parser, so a trailing comment
+/// does not hide a landing, and the totals are the week's events.
+#[test]
+fn pace_reads_statuses_with_the_record_parser() {
+    let repo = Repo::new(
+        "pace",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    repo.record(
+        "TSK-001",
+        &record(
+            "TSK-001",
+            "complete # todo | blocked | complete | cancelled",
+            "main",
+            "",
+        ),
+    );
+    repo.commit();
+    repo.sync("main");
+    let value = repo.json(&["--epic", "EPC-001"]);
+    assert_eq!(value["tasks"][0]["stage"], "landed");
+    assert_eq!(value["pace"]["landed_total"], 1, "{}", value["pace"]);
+    // Created on 2026-10-30, inside the week.
+    assert_eq!(value["pace"]["added_total"], 1, "{}", value["pace"]);
+    let rate = value["pace"]["observed_landing_rate_per_day"]
+        .as_f64()
+        .unwrap();
+    assert!((rate - 1.0 / 7.0).abs() < 1e-9, "{rate}");
+}
+
+/// F7: `--since` keeps a session lane and a nested fact the current
+/// snapshot did not observe, never dropping them.
+#[test]
+fn since_keeps_session_lanes_and_nested_facts() {
+    let repo = Repo::new(
+        "since",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let session = repo.base.join("session.json");
+    std::fs::write(
+        &session,
+        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","lane":"L-1","task":"TSK-001","builder":"fixture","blocker":"vendor unavailable"}]}"#,
+    )
+    .unwrap();
+    let before = repo.json(&["--epic", "EPC-001", "--session", session.to_str().unwrap()]);
+    let previous = repo.base.join("before.json");
+    std::fs::write(&previous, before.to_string()).unwrap();
+    let after = repo.json(&["--epic", "EPC-001", "--since", previous.to_str().unwrap()]);
+    let kept = after["since"]["not_observed"].as_array().unwrap();
+    assert!(
+        kept.iter()
+            .any(|item| item["family"] == "session lane" && item["subject"] == "L-1 TSK-001"),
+        "{}",
+        after["since"]
+    );
+
+    let mut before = repo.json(&["--task", "TSK-001"]);
+    before["tasks"][0]["context"]["last_moved"] = "2026-11-01T09:00:00Z".into();
+    std::fs::write(&previous, before.to_string()).unwrap();
+    let after = repo.json(&["--task", "TSK-001", "--since", previous.to_str().unwrap()]);
+    assert!(
+        after["since"]["not_observed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["field"] == "context.last_moved"
+                && item["earlier"] == "2026-11-01T09:00:00Z"),
+        "{}",
+        after["since"]
+    );
+}
+
+/// N1: a cited command quotes the repository path, so it runs from
+/// another folder when the path holds a space.
+#[test]
+fn a_cited_command_quotes_a_path_with_spaces() {
+    let blocked = format!(
+        "{}\n## Blocker\n\n- reason: waits on vendor\n- owner: operator\n- revisit: when vendor replies\n",
+        record("TSK-001", "blocked", "main", "")
+    );
+    let repo = Repo::new("blocked path with spaces", &[("TSK-001", blocked)]);
+    let value = repo.json(&["--task", "TSK-001"]);
+    let command = value["issues"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["kind"] == "blocked")
+        .and_then(|issue| issue["command"].as_str())
+        .unwrap()
+        .to_string();
+    let (cd, rest) = command.split_once(" && ").unwrap();
+    assert!(
+        rest.starts_with("codeflow task status TSK-001"),
+        "{command}"
+    );
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{cd} && pwd -P"))
+        .current_dir(&repo.base)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{command}: {}", text(&output));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        repo.root.to_str().unwrap()
+    );
+}
+
+/// The fail-closed classes of review round 02, each through the real CLI.
+fn block(reviewed: &str) -> String {
+    format!(
+        "\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: target/reviews/review.md\n  criteria:\n    AC-1: verified | test passed\n  journey: fixture\n  not_verified: none\n  follow_ups: \"none: no follow-ups\"\n  verdict: approved\n```\n"
+    )
+}
+
+fn evidence<'a>(value: &'a Value, measure: &str, source: &str) -> &'a Value {
+    value["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["measure"] == measure && entry["source"] == source)
+        .unwrap_or_else(|| panic!("no {measure} {source} evidence: {}", value["evidence"]))
+}
+
+/// R2 F1: records the readiness core judges invalid (a missing
+/// predecessor) give an unknown stage and percent, unchecked records and
+/// an incomplete issues view, never a numeric zero.
+#[test]
+fn invalid_readiness_is_unknown_never_zero() {
+    let repo = Repo::new(
+        "invalid",
+        &[("TSK-001", record("TSK-001", "todo", "main", "TSK-999"))],
+    );
+    let value = repo.json(&["--task", "TSK-001"]);
+    let fact = &value["tasks"][0];
+    assert_eq!(fact["state"], "invalid");
+    assert_eq!(fact["stage"], "unknown", "{fact}");
+    assert_eq!(fact["percent"], "unknown");
+    assert_eq!(value["scope"]["percent"], "unknown");
+    assert_eq!(evidence(&value, "percents", "records")["checked"], false);
+    assert_eq!(value["issues"]["complete"], false);
+}
+
+/// R2 F1: an unread forge cannot rule out an open pull request, so an open
+/// task's stage and its open pull request read unknown.
+#[test]
+fn an_unread_forge_leaves_an_open_task_unknown() {
+    let repo = Repo::new(
+        "forge-lost",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    repo.gh("exit 1");
+    let value = repo.json(&["--task", "TSK-001"]);
+    let fact = &value["tasks"][0];
+    assert_eq!(fact["stage"], "unknown", "{fact}");
+    assert_eq!(fact["percent"], "unknown");
+    assert_eq!(fact["context"]["open_pull_request"], "unknown");
+}
+
+/// R2 F2: a reviewed commit with the same tree but outside the head's
+/// history never binds, and neither does a review whose record body
+/// changed afterwards.
+#[test]
+fn a_review_binds_only_through_ancestry_and_an_unchanged_record() {
+    let repo = Repo::new(
+        "unrelated",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    repo.git(&["switch", "-qc", "task/TSK-001-work"]);
+    write(&repo.root, "src/work.rs", "fn work() {}\n");
+    let head = repo.commit();
+    let tree = repo.git(&["rev-parse", "HEAD^{tree}"]);
+    let unrelated = repo.git(&["commit-tree", &tree, "-m", "same tree, no ancestry"]);
+    repo.record(
+        "TSK-001",
+        &format!(
+            "{}{}",
+            record("TSK-001", "todo", "main", ""),
+            block(&unrelated)
+        ),
+    );
+    repo.commit();
+    let fact = &repo.json(&["--task", "TSK-001"])["tasks"][0];
+    assert_ne!(fact["stage"], "reviewed", "{fact}");
+    assert!(
+        fact["criteria"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("ancestor"),
+        "{fact}"
+    );
+
+    // The real head binds.
+    repo.record(
+        "TSK-001",
+        &format!("{}{}", record("TSK-001", "todo", "main", ""), block(&head)),
+    );
+    repo.commit();
+    let fact = &repo.json(&["--task", "TSK-001"])["tasks"][0];
+    assert_eq!(fact["stage"], "reviewed", "{fact}");
+
+    // A later change to the record's description unbinds it.
+    let changed = record("TSK-001", "todo", "main", "").replace("Work.", "Different work.");
+    repo.record("TSK-001", &format!("{changed}{}", block(&head)));
+    repo.commit();
+    let fact = &repo.json(&["--task", "TSK-001"])["tasks"][0];
+    assert_ne!(fact["stage"], "reviewed", "{fact}");
+}
+
+/// R2 F2: acceptance binds to the pull request the report shows: the
+/// lowest-numbered one into the task's home target.
+#[test]
+fn acceptance_binds_to_the_pull_request_the_report_shows() {
+    let repo = Repo::new(
+        "competing",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    repo.git(&["switch", "-qc", "task/TSK-001-work"]);
+    write(&repo.root, "src/work.rs", "fn work() {}\n");
+    let head = repo.commit();
+    repo.record(
+        "TSK-001",
+        &format!("{}{}", record("TSK-001", "todo", "main", ""), block(&head)),
+    );
+    let bound = repo.commit();
+    let pull = |number: u64, sha: &str, base: &str| {
+        serde_json::json!({"number": number, "title": "Task", "headRefName": "task/TSK-001-work",
+            "headRefOid": sha, "baseRefName": base, "isDraft": false, "statusCheckRollup": []})
+    };
+    // #1 targets another base, so #2 into main is shown, and its head is
+    // not here: acceptance cannot bind.
+    repo.forge(
+        &serde_json::json!([
+            pull(1, &bound, "elsewhere"),
+            pull(2, &"c".repeat(40), "main")
+        ]),
+        &[],
+    );
+    let fact = &repo.json(&["--task", "TSK-001"])["tasks"][0];
+    assert_eq!(fact["context"]["open_pull_request"], 2, "{fact}");
+    assert_ne!(fact["stage"], "reviewed", "{fact}");
+}
+
+/// R2 F4: a successor starts at its predecessor's latest end, and every
+/// scenario's end runs from that start (AC-5).
+#[test]
+fn a_successor_starts_at_the_predecessors_latest_end() {
+    let repo = Repo::new(
+        "start-rule",
+        &[
+            ("TSK-001", record("TSK-001", "todo", "main", "")),
+            ("TSK-002", record("TSK-002", "todo", "main", "TSK-001")),
+        ],
+    );
+    let value = repo.json(&["--epic", "EPC-001"]);
+    let window = |id: &str| {
+        value["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"] == id)
+            .unwrap()["window"]
+            .clone()
+    };
+    let (first, second) = (window("TSK-001"), window("TSK-002"));
+    let latest = first["latest_end_seconds"].as_i64().unwrap();
+    assert_eq!(
+        second["start_seconds"].as_i64().unwrap(),
+        latest,
+        "{second}"
+    );
+    for end in ["earliest", "planning", "latest"] {
+        assert!(
+            second[format!("{end}_end_seconds")].as_i64().unwrap() > latest,
+            "{second}"
+        );
+    }
+}
+
+/// R2 F5: an optional success never hides a required check with no run;
+/// an unread required set makes the issues view incomplete; run times
+/// are normalized to UTC and carry their observation time.
+#[test]
+fn required_checks_are_read_and_never_assumed() {
+    let repo = Repo::new(
+        "required",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let head = repo.git(&["rev-parse", "HEAD"]);
+    let pulls = serde_json::json!([{"number": 1, "title": "Task", "headRefName": "task/TSK-001-work",
+        "headRefOid": head, "baseRefName": "main", "isDraft": false,
+        "statusCheckRollup": [{"name": "optional-lint", "conclusion": "SUCCESS",
+            "completedAt": "2026-11-01T07:00:00-04:00"}]}]);
+    repo.forge(&pulls, &["build"]);
+    let value = repo.json(&["--task", "TSK-001"]);
+    let pull = &value["epics"][0]["landing_chain"]["open"][0];
+    assert_eq!(pull["checks"], "passed", "{pull}");
+    assert_eq!(pull["required"], "missing", "{pull}");
+    assert_eq!(pull["runs"][0]["required"], false);
+    assert_eq!(pull["runs"][0]["completed_at"], "2026-11-01T11:00:00Z");
+    assert_eq!(pull["runs"][0]["observed_at"], "2026-11-01T12:00:00Z");
+    assert!(
+        value["issues"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["kind"] == "required check missing"),
+        "{}",
+        value["issues"]
+    );
+    assert_eq!(value["issues"]["complete"], true);
+
+    // The pull request list alone: the required set is unread.
+    repo.pulls(&pulls);
+    let value = repo.json(&["--task", "TSK-001"]);
+    let pull = &value["epics"][0]["landing_chain"]["open"][0];
+    assert_eq!(pull["required"], "unverified", "{pull}");
+    assert_eq!(pull["runs"][0]["required"], "unknown");
+    assert_eq!(value["issues"]["complete"], false);
+    assert_eq!(
+        evidence(&value, "issues", "required checks")["checked"],
+        false
+    );
+}
+
+/// R2 F6: a historical status that cannot be read is no transition: no
+/// landing is counted, the pace is not established and the location is
+/// unverified.
+#[test]
+fn an_unreadable_historical_status_invents_no_landing() {
+    let repo = Repo::new(
+        "bad-prior",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    std::fs::write(
+        repo.root.join("project-management/tasks/TSK-001.md"),
+        b"\xff unreadable former status\n",
+    )
+    .unwrap();
+    repo.commit();
+    repo.record("TSK-001", &record("TSK-001", "complete", "main", ""));
+    repo.commit();
+    repo.sync("main");
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(
+        value["pace"]["landed_total"], "unknown",
+        "{}",
+        value["pace"]
+    );
+    assert_eq!(value["tasks"][0]["location"]["state"], "unverified");
+    let pace = evidence(&value, "pace", "git history");
+    assert_eq!(pace["checked"], false);
+    assert!(pace["note"].as_str().unwrap().contains("TSK-001"), "{pace}");
+}
+
+/// R2 F7: a lost observation keeps its own observation time, and a pull
+/// request with its check runs is kept when the forge is lost.
+#[test]
+fn since_keeps_lost_observations_with_their_own_times() {
+    let repo = Repo::new(
+        "since-times",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let session = repo.base.join("session.json");
+    std::fs::write(
+        &session,
+        r#"{"schema_version":1,"facts":[{"observed_at":"2026-11-01T11:00:00Z","lane":"L-1","task":"TSK-001","builder":"fixture","blocker":"vendor unavailable"}]}"#,
+    )
+    .unwrap();
+    let pulls = serde_json::json!([{"number": 1, "title": "Task", "headRefName": "task/TSK-001-work",
+        "headRefOid": "a".repeat(40), "baseRefName": "main", "isDraft": false,
+        "statusCheckRollup": [{"name": "build", "conclusion": "SUCCESS"}]}]);
+    repo.forge(&pulls, &["build"]);
+    let before = repo.json(&["--epic", "EPC-001", "--session", session.to_str().unwrap()]);
+    let previous = repo.base.join("before.json");
+    std::fs::write(&previous, before.to_string()).unwrap();
+    repo.gh("exit 1");
+    let after = repo.json(&["--epic", "EPC-001", "--since", previous.to_str().unwrap()]);
+    let kept = after["since"]["not_observed"].as_array().unwrap();
+    let lane = kept
+        .iter()
+        .find(|item| item["family"] == "session lane")
+        .unwrap_or_else(|| panic!("{}", after["since"]));
+    assert_eq!(lane["earlier_observed_at"], "2026-11-01T11:00:00Z");
+    let pull = kept
+        .iter()
+        .find(|item| item["family"] == "pull request" && item["subject"] == "#1")
+        .unwrap_or_else(|| panic!("{}", after["since"]));
+    assert_eq!(pull["earlier"]["runs"][0]["name"], "build");
+    assert_eq!(pull["earlier_observed_at"], "2026-11-01T12:00:00Z");
+}
+
+/// The fail-closed classes of review round 03, each through the real CLI.
+fn task_pull(number: u64, head: &str, base: &str, rollup: &Value) -> Value {
+    serde_json::json!({"number": number, "title": "Task", "headRefName": "task/TSK-001-work",
+        "headRefOid": head, "baseRefName": base, "isDraft": false, "statusCheckRollup": rollup})
+}
+
+fn issue_kinds(value: &Value) -> Vec<String> {
+    value["issues"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["kind"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// R3 F1: a pull request whose head is not here leaves the task's
+/// criteria and stage unknown, even when the home copy has no block: the
+/// head was never read, so no block there is proven absent.
+#[test]
+fn an_unread_pull_request_head_leaves_criteria_and_stage_unknown() {
+    let repo = Repo::new(
+        "missing-head",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    repo.forge(
+        &serde_json::json!([task_pull(
+            1,
+            &"c".repeat(40),
+            "main",
+            &serde_json::json!([])
+        )]),
+        &[],
+    );
+    let value = repo.json(&["--task", "TSK-001"]);
+    let fact = &value["tasks"][0];
+    assert_eq!(fact["stage"], "unknown", "{fact}");
+    assert_eq!(fact["percent"], "unknown");
+    assert_eq!(fact["criteria"], "unknown", "{fact}");
+    assert_eq!(fact["context"]["open_pull_request"], 1);
+    assert_eq!(evidence(&value, "percents", "git")["checked"], false);
+    assert_eq!(value["issues"]["complete"], false);
+}
+
+/// R3 F1: a pull request row the report cannot read is never dropped: the
+/// forge read is unverified and an open task's stage unknown.
+#[test]
+fn a_malformed_pull_request_row_leaves_the_forge_unverified() {
+    let repo = Repo::new(
+        "malformed-row",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let mut row = task_pull(1, &"a".repeat(40), "main", &serde_json::json!([]));
+    row["number"] = Value::String("one".into());
+    repo.pulls(&serde_json::json!([row]));
+    let value = repo.json(&["--task", "TSK-001"]);
+    let forge = evidence(&value, "locations", "forge");
+    assert_eq!(forge["checked"], false, "{forge}");
+    assert!(
+        forge["note"].as_str().unwrap().contains("number"),
+        "{forge}"
+    );
+    let fact = &value["tasks"][0];
+    assert_eq!(fact["stage"], "unknown", "{fact}");
+    assert_eq!(fact["context"]["open_pull_request"], "unknown");
+}
+
+/// R3 F1: a task whose status the ladder does not know is neither open nor
+/// done: the open counts and finishes are unknown and the path's landing
+/// step is not done.
+#[test]
+fn an_unknown_status_leaves_the_finish_and_path_unknown() {
+    let repo = Repo::new(
+        "unknown-finish",
+        &[("TSK-001", record("TSK-001", "potato", "main", ""))],
+    );
+    let value = repo.json(&["--epic", "EPC-001"]);
+    for scenario in value["windows"]["scenarios"].as_array().unwrap() {
+        assert_eq!(scenario["open_tasks"], "unknown", "{scenario}");
+        assert_eq!(scenario["finish"]["state"], "not yet estimable");
+    }
+    let land = &value["epics"][0]["path_to_main"][0];
+    assert_eq!(land["done"], false, "{land}");
+    assert_eq!(land["window"]["state"], "not yet estimable");
+    assert_eq!(value["pace"]["days"][0]["open_at_end"], "unknown");
+}
+
+/// R3 F5: a requirement bound to an app is met only by that app's run: a
+/// same-named run from another app is missing, unread producers are
+/// unverified, and an unbound requirement still matches by name.
+#[test]
+fn a_required_check_counts_only_from_its_app() {
+    let repo = Repo::new(
+        "producer",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let pulls = serde_json::json!([task_pull(
+        1,
+        &"a".repeat(40),
+        "main",
+        &serde_json::json!([{"name": "build", "conclusion": "SUCCESS"}])
+    )]);
+    let bound = serde_json::json!([{"context": "build", "integration_id": 42}]);
+    let from = |app: u64| {
+        serde_json::json!({"total_count": 1, "check_runs": [{"name": "build", "app": {"id": app},
+            "status": "completed", "conclusion": "success"}]})
+    };
+    let chain = |value: &Value| value["epics"][0]["landing_chain"]["open"][0].clone();
+
+    repo.forge_with(&pulls, &bound, Some(&from(99)));
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(chain(&value)["required"], "missing", "{}", chain(&value));
+    assert_eq!(chain(&value)["runs"][0]["required"], false);
+    assert!(issue_kinds(&value).contains(&"required check missing".to_string()));
+
+    repo.forge_with(&pulls, &bound, Some(&from(42)));
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(chain(&value)["required"], "passed", "{}", chain(&value));
+    assert_eq!(chain(&value)["runs"][0]["required"], true);
+
+    repo.forge_with(&pulls, &bound, None);
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(chain(&value)["required"], "unverified", "{}", chain(&value));
+    assert_eq!(chain(&value)["runs"][0]["required"], "unknown");
+    assert_eq!(value["issues"]["complete"], false);
+
+    repo.forge_with(&pulls, &serde_json::json!([{"context": "build"}]), None);
+    let value = repo.json(&["--task", "TSK-001"]);
+    assert_eq!(chain(&value)["required"], "passed", "{}", chain(&value));
+}
+
+/// R3 F6: a prior record with no status, a status that is not text, or a
+/// status a record may not carry proves no prior state, so no landing.
+#[test]
+fn only_a_valid_prior_status_proves_a_landing() {
+    let base = record("TSK-001", "todo", "main", "");
+    for (name, prior) in [
+        ("no-status", base.replace("status: todo\n", "")),
+        (
+            "list-status",
+            base.replace("status: todo", "status: [todo]"),
+        ),
+        (
+            "unknown-status",
+            base.replace("status: todo", "status: potato"),
+        ),
+    ] {
+        let repo = Repo::new(name, &[("TSK-001", prior)]);
+        repo.record("TSK-001", &record("TSK-001", "complete", "main", ""));
+        repo.commit();
+        repo.sync("main");
+        let value = repo.json(&["--task", "TSK-001"]);
+        assert_eq!(
+            value["pace"]["landed_total"], "unknown",
+            "{name}: {}",
+            value["pace"]
+        );
+        assert_eq!(
+            value["tasks"][0]["location"]["state"], "unverified",
+            "{name}"
+        );
+    }
+}
+
+/// R3 F6: each pace measure needs its own coverage: a home that was not
+/// read leaves the landings unknown; an undated task leaves the additions
+/// and open counts unknown while the landings stay counted.
+#[test]
+fn pace_measures_need_every_home_and_every_date() {
+    let repo = Repo::new(
+        "pace-home",
+        &[
+            ("TSK-001", record("TSK-001", "todo", "main", "")),
+            (
+                "TSK-002",
+                record("TSK-002", "todo", "integration/missing", ""),
+            ),
+        ],
+    );
+    repo.record("TSK-001", &record("TSK-001", "complete", "main", ""));
+    repo.commit();
+    repo.sync("main");
+    let value = repo.json(&["--epic", "EPC-001"]);
+    assert_eq!(
+        value["pace"]["landed_total"], "unknown",
+        "{}",
+        value["pace"]
+    );
+    assert_eq!(evidence(&value, "pace", "git history")["checked"], false);
+
+    let undated = record("TSK-002", "todo", "main", "").replace("created: 2026-10-30\n", "");
+    let repo = Repo::new(
+        "pace-dates",
+        &[
+            ("TSK-001", record("TSK-001", "todo", "main", "")),
+            ("TSK-002", undated),
+        ],
+    );
+    let value = repo.json(&["--epic", "EPC-001"]);
+    assert_eq!(value["pace"]["landed_total"], 0, "{}", value["pace"]);
+    assert_eq!(value["pace"]["added_total"], "unknown");
+    assert_eq!(value["pace"]["intake_rate_per_day"], "unknown");
+    assert_eq!(value["pace"]["days"][6]["open_at_end"], "unknown");
+    assert_eq!(
+        evidence(&value, "pace", "record creation dates")["checked"],
+        false
+    );
+}
+
+/// R3 F7: losing only the required set keeps a red required check as not
+/// observed; it is never reported cleared.
+#[test]
+fn losing_the_required_set_never_clears_a_red_check() {
+    let repo = Repo::new(
+        "required-lost",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let pulls = serde_json::json!([task_pull(
+        1,
+        &"a".repeat(40),
+        "main",
+        &serde_json::json!([{"name": "build", "conclusion": "FAILURE"}])
+    )]);
+    repo.forge(&pulls, &["build"]);
+    let before = repo.json(&["--epic", "EPC-001"]);
+    assert!(issue_kinds(&before).contains(&"required check red".to_string()));
+    let previous = repo.base.join("before.json");
+    std::fs::write(&previous, before.to_string()).unwrap();
+    repo.pulls(&pulls);
+    let after = repo.json(&["--epic", "EPC-001", "--since", previous.to_str().unwrap()]);
+    let since = &after["since"];
+    assert!(
+        !since["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|change| change["change"] == "check cleared"),
+        "{since}"
+    );
+    assert!(
+        since["superseded"].as_array().unwrap().is_empty(),
+        "{since}"
+    );
+    let kept = since["not_observed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["family"] == "issue")
+        .unwrap_or_else(|| panic!("{since}"));
+    assert_eq!(kept["earlier"]["kind"], "required check red");
+    assert_eq!(kept["earlier_observed_at"], "2026-11-01T12:00:00Z");
+}
+
+/// R3 F8: the forge observation has one time bound: required-check reads
+/// for several bases share it, so stalled reads never multiply it.
+#[test]
+fn the_forge_observation_keeps_one_time_bound() {
+    let repo = Repo::new(
+        "forge-budget",
+        &[
+            ("TSK-001", record("TSK-001", "todo", "main", "")),
+            (
+                "TSK-002",
+                record("TSK-002", "todo", "integration/EPC-001-demo", ""),
+            ),
+        ],
+    );
+    repo.git(&["branch", "integration/EPC-001-demo"]);
+    repo.sync("integration/EPC-001-demo");
+    let pull = |number: u64, id: &str, base: &str| {
+        serde_json::json!({"number": number, "title": "Task", "headRefName": format!("task/{id}-work"),
+            "headRefOid": "a".repeat(40), "baseRefName": base, "isDraft": true, "statusCheckRollup": []})
+    };
+    let pulls = serde_json::json!([
+        pull(1, "TSK-001", "main"),
+        pull(2, "TSK-002", "integration/EPC-001-demo")
+    ]);
+    repo.gh(&format!(
+        "if [ \"$1 $2\" = \"pr list\" ]; then cat <<'JSON'\n{pulls}\nJSON\nelse exec sleep 25; fi"
+    ));
+    let start = std::time::Instant::now();
+    let value = repo.json(&["--epic", "EPC-001"]);
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(32),
+        "took {elapsed:?}"
+    );
+    assert_eq!(value["issues"]["complete"], false);
+    assert_eq!(
+        evidence(&value, "issues", "required checks")["checked"],
+        false
+    );
+}
+
+/// The fail-closed classes of review round 04, each through the real CLI.
+///
+/// R4 F1: a completion whose landing transition is not proven leaves the
+/// path's steps not done, though the record says complete.
+#[test]
+fn an_unproven_landing_never_finishes_the_path() {
+    let prior = record("TSK-001", "todo", "main", "").replace("status: todo\n", "");
+    let repo = Repo::new("unproven-path", &[("TSK-001", prior)]);
+    repo.record("TSK-001", &record("TSK-001", "complete", "main", ""));
+    repo.commit();
+    repo.sync("main");
+    let value = repo.json(&["--epic", "EPC-001"]);
+    assert_eq!(task(&value, "TSK-001")["location"]["state"], "unverified");
+    let path = value["epics"][0]["path_to_main"].as_array().unwrap();
+    let land = &path[0];
+    assert_eq!(land["done"], false, "{land}");
+    assert_eq!(land["window"]["state"], "not yet estimable");
+    assert!(
+        land["window"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("TSK-001"),
+        "{land}"
+    );
+    assert!(path.iter().all(|step| step["done"] == false), "{path:?}");
+}
+
+/// R4 F1: a branch whose history the guarded walk refuses (a shallow cut)
+/// leaves the task's stage unknown, never `not started`.
+#[test]
+fn an_unreadable_branch_history_leaves_the_stage_unknown() {
+    let repo = Repo::new(
+        "shallow-branch",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    repo.git(&["switch", "-qc", "task/TSK-001-work"]);
+    write(&repo.root, "src/one.rs", "fn one() {}\n");
+    let first = repo.commit();
+    write(&repo.root, "src/two.rs", "fn two() {}\n");
+    repo.commit();
+    repo.git(&["switch", "-q", "main"]);
+    std::fs::write(repo.root.join(".git/shallow"), format!("{first}\n")).unwrap();
+    let value = repo.json(&["--task", "TSK-001"]);
+    let fact = &value["tasks"][0];
+    assert_eq!(fact["stage"], "unknown", "{fact}");
+    assert_eq!(fact["percent"], "unknown");
+    assert_eq!(evidence(&value, "percents", "git")["checked"], false);
+}
+
+/// R4 F7: a red required check that turns missing is a change, never a
+/// clearance: the requirement was read and did not pass.
+#[test]
+fn a_red_required_check_turning_missing_is_not_cleared() {
+    let repo = Repo::new(
+        "red-to-missing",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let head = repo.git(&["rev-parse", "HEAD"]);
+    let red = serde_json::json!([task_pull(
+        1,
+        &head,
+        "main",
+        &serde_json::json!([{"name": "build", "conclusion": "FAILURE"}])
+    )]);
+    repo.forge(&red, &["build"]);
+    let before = repo.json(&["--epic", "EPC-001"]);
+    assert!(issue_kinds(&before).contains(&"required check red".to_string()));
+    let previous = repo.base.join("before.json");
+    std::fs::write(&previous, before.to_string()).unwrap();
+    let missing = serde_json::json!([task_pull(1, &head, "main", &serde_json::json!([]))]);
+    repo.forge(&missing, &["build"]);
+    let after = repo.json(&["--epic", "EPC-001", "--since", previous.to_str().unwrap()]);
+    assert!(issue_kinds(&after).contains(&"required check missing".to_string()));
+    let since = &after["since"];
+    let changes = since["changes"].as_array().unwrap();
+    assert!(
+        !changes
+            .iter()
+            .any(|change| change["change"] == "check cleared"),
+        "{since}"
+    );
+    assert!(
+        changes
+            .iter()
+            .any(|change| change["change"] == "check changed"),
+        "{since}"
+    );
+    assert!(
+        !since["superseded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["event"].as_str().unwrap().starts_with("cleared")),
+        "{since}"
+    );
+}

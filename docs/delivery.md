@@ -185,6 +185,65 @@ pull request cites the full gate by run id and revision, and the review
 verdict lives on the pull request, so the evidence survives the cleanup of
 worktrees and build directories.
 
+### Reading where work stands
+
+Where work stands is read, never stored. `codeflow status --epic EPC-NNN`
+(or `--task`, `--line`, and `--json` for versioned facts) derives each
+task's stage, location, place in the order, lane, window and issues from
+the records on each target's tip, the fetched refs, the forge and the
+coordination ledger, with the readiness core that `work next` uses.
+
+- It writes nothing and never fetches. Refs are read as last fetched,
+  with their fetch time; all forge reads share one network bound. A fact it could not read says `unknown`, `unverified`
+  or `not yet estimable`, never a number, a pass or an omission;
+  `not recorded` means the source was read and holds nothing.
+- Stage ladder, one percent per task: not started 0, in progress 20 (a
+  claim or task commits), in review 50 (an open pull request), reviewed 75
+  (an approving acceptance block, valid against the current criteria,
+  that binds as the landing gate binds it to the head of the pull request
+  shown), landed 100.
+- An epic's and the scope's percent is the mean over their unique tasks;
+  cancelled tasks are excluded and listed. A task's stage, and every
+  percent over it, is `unknown` when its home target, its reported head,
+  its branch history, or the forge while it is open was not read, when
+  its status is not on the ladder, or when the readiness core cannot
+  judge it or judges it invalid. A forge row missing a field makes the
+  forge read `unverified`. An off-ladder status also leaves the open
+  counts and finish windows `unknown`; it, or an unproven landing, keeps
+  every path step over that task not done.
+- Locations: `main`, `line`, `pull request` (draft, open or approved at the
+  reviewed SHA), `branch`, or `none` (`record on line` when only the record
+  is there), each bound to the ref and fetch time read. `main` and `line`
+  need the landing commit reachable from that remote ref, else they are
+  `unverified`.
+- Each check run is kept, with completion and read times in UTC.
+  A skipped run is never a pass. A read at its limit (200 pull requests,
+  or 100 rules or check runs) is `unverified`. The required set comes
+  from the base branch's rulesets and branch protection; a required check
+  with no run is `missing`, and one bound to an app counts only that
+  app's run. Until the required set
+  and those app runs are read, the required view is `unverified` and the
+  issues view incomplete.
+- Pace counts a landing only where history shows a change to `complete`
+  from an absent record or an allowed status; any other prior status
+  leaves that landing, its location and the pace unproven. Landings need
+  every home and record read; additions and open counts also need every
+  creation date.
+- Windows are durations from the snapshot, never dates, based on an
+  adopted forecast covering the scope, else the planned throughput rule
+  over the observed lanes (one lane, labelled assumed, when none is). A
+  window starts at the snapshot or its predecessors' latest end, all ends
+  run from that start, and open predecessors outside the scope count. The scope finish has two scenarios: intake stops, or continues at
+  the last seven days' rate.
+- The operator set reads `none owed` only when every source (records, the
+  ledger, each owed-item source, the forge, the session file) was checked,
+  else `not established`, naming it.
+- `--since` keeps every fact the snapshot could not observe, with its
+  own time. An issue clears only when every source it rests on was read
+  again; a required check clears only when it passed or was removed.
+- `CODEFLOW_STATUS_AS_OF=<UTC time>` holds the snapshot time fixed, so two
+  runs on one state print identical bytes.
+
 ### Completed work imported from another line
 
 An ordinary merge can bring completed work from `main` or a verified epic

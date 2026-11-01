@@ -1358,6 +1358,29 @@ fn binding_source(
     }
 }
 
+/// Whether an open task's acceptance block binds at `head`, judged by the
+/// one binding predicate the landing gate uses: the reviewed commit is
+/// `head` or its ancestor through the guarded history reader, and after it
+/// only the record's status and Closeout changed, apart from clean
+/// re-merges of `receiving` (the task's integration target tips). `None`
+/// when it binds, else why not.
+pub(crate) fn open_head_problem(
+    repo: &Repository,
+    task: &RecordView,
+    head: Oid,
+    reviewed: Oid,
+    receiving: &[Oid],
+) -> Option<String> {
+    let tips = RunBases::new(receiving.iter().copied()).stacking();
+    reviewed_span_problem(
+        repo,
+        task,
+        Landing::Commit(head),
+        reviewed,
+        Stacking::OnTarget(&tips),
+    )
+}
+
 /// Whether a reviewed span may stack clean merges of the target.
 #[derive(Debug, Clone, Copy)]
 enum Stacking<'a> {
