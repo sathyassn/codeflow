@@ -6966,3 +6966,6 @@ mod epic_line;
 
 #[path = "acceptance_cli/sync_merges.rs"]
 mod sync_merges;
+
+#[path = "acceptance_cli/main_reopens.rs"]
+mod main_reopens;
