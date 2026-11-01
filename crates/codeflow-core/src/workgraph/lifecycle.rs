@@ -2390,10 +2390,11 @@ fn touched_in_range(
 
 /// The status steps of `record` over `base..head`, judged per commit (see
 /// [`super::status_steps`]); with no `head`, the working tree's change from
-/// `HEAD` is the last step. `None` when the endpoints alone judge the
-/// record: a rename inside the range, a record whose older copy comes from
-/// a migration baseline, or a revision that does not resolve, whose
-/// refusal the range read reports.
+/// `HEAD` is the last step. The walk follows the record by its id, so a
+/// move between record paths is judged too. `None` when the endpoints
+/// alone judge the record: a record whose older copy comes from a
+/// migration baseline, or a revision that does not resolve, whose refusal
+/// the range read reports.
 fn range_steps(
     repo: &Repository,
     base: &str,
@@ -2402,11 +2403,9 @@ fn range_steps(
     at_base: Option<&RecordView>,
     created: bool,
 ) -> Option<super::status_steps::Steps> {
-    use super::status_steps::{judge, step_allowed, Steps};
-    match at_base {
-        Some(old) if old.path != record.path => return None,
-        None if !created => return None,
-        _ => {}
+    use super::status_steps::{judge, starts_at, step_allowed, Steps};
+    if at_base.is_none() && !created {
+        return None;
     }
     let base = resolve_commit(repo, base).ok().flatten()?;
     let Some(head) = head else {
@@ -2417,17 +2416,27 @@ fn range_steps(
         let at_tip = Graph::from_revision(repo, &tip.to_string())
             .ok()
             .and_then(|graph| graph.records.get(&record.id).cloned());
-        match at_tip {
-            Some(old) if old.path == record.path => {
-                if let Err(reason) = step_allowed(record.kind, Some(&old.status), &record.status) {
-                    steps.problems.push(format!(
-                        "status {} -> {} is refused in the working tree: {reason}",
-                        old.status, record.status
-                    ));
-                    steps.proven = false;
+        if at_tip.is_none_or(|old| old.path != record.path) {
+            steps.proven = false;
+        }
+        // The checkout's step starts from the status at `HEAD`, or, when
+        // `HEAD` holds no record, from the status it last held before.
+        match starts_at(repo, base, tip, record.kind, &record.path) {
+            Ok(starts) => {
+                for from in starts.into_iter().flatten() {
+                    if let Err(reason) = step_allowed(record.kind, Some(&from), &record.status) {
+                        steps.problems.push(format!(
+                            "status {from} -> {} is refused in the working tree: {reason}",
+                            record.status
+                        ));
+                        steps.proven = false;
+                    }
                 }
             }
-            _ => steps.proven = false,
+            Err(unreadable) => {
+                steps.problems.push(unreadable);
+                steps.proven = false;
+            }
         }
         return Some(steps);
     };
