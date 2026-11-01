@@ -1538,13 +1538,16 @@ fn tsk1002_review13_programs_run_where_git_runs_them() {
             wrong.push(format!("both guards allowed: {line}"));
         }
     }
+    // Under the strict default the body `echo $name` takes the strict rule's
+    // own finding (TSK-397 Grok review 01); `line_allows` still fails a
+    // refusal by any of the line's rules.
     for line in [
         "git submodule foreach 'echo $name'",
         "cd sub && git submodule foreach 'git status --short'",
     ] {
         for hook in ["git-guard", "exec-guard"] {
             let out = f.command(&f.root, hook, line);
-            if out.status.code() != Some(0) {
+            if !line_allows(&out) {
                 let err = String::from_utf8_lossy(&out.stderr);
                 wrong.push(format!("{hook} refused: {line}: {err}"));
             }
