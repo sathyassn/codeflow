@@ -1,6 +1,6 @@
 //! `codeflow test` gate guards and progress, driven through the real binary
-//! (TSK-134, TSK-094): a start line per target on stderr, one full gate at a
-//! time on a machine, and a warning for a cargo target directory outside the
+//! (TSK-134, TSK-094): a start line per target on stderr, heavy runs side by
+//! side by host capacity (TSK-1145), and a warning for a cargo target directory outside the
 //! worktree.
 
 use std::path::Path;
@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 #[path = "test_gate_cli/capacity.rs"]
 mod capacity;
+#[cfg(unix)]
 #[path = "test_gate_cli/containment.rs"]
 mod containment;
 #[path = "support/drain_pipe.rs"]
