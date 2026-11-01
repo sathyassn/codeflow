@@ -118,7 +118,7 @@ commands, paste their real summaries, and state their scope. A builder
 pastes its targeted tests and its `codeflow test --mode quick` run,
 targeted meaning the checks that read what changed, each with revision and
 command; the pre-push hook's quick run counts when it
-covered the same tree. The landing-class checks (`git-rules.md`, "Bodies of work") run once on the candidate:
+covered the same tree. The landing-class checks (`.codeflow/rules/git-rules.md`, "Bodies of work") run once on the candidate:
 the primary links it in each member's PR when the batch lands, and a
 standalone PR runs it as its own candidate. Cite a gate run by its run id
 and revision from its durable home (the CodeFlow home's `gate-runs`

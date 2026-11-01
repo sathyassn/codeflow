@@ -243,7 +243,7 @@ reviewer; another task's criteria are never changed from this PR.
   command, in the task PR. The pace of planned work is set in
   [the workflow lifecycle](workflow-lifecycle.md) "Planned work moves at
   speed".
-  The primary runs the landing-class checks from `git-rules.md` once per
+  The primary runs the landing-class checks from `.codeflow/rules/git-rules.md` once per
   batch candidate and links their evidence. A
   standalone PR is its own candidate and runs its own gate.
 - Before asking for review, the builder merges the current integration line
