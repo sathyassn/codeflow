@@ -552,11 +552,11 @@ struct Qualified {
     /// The range anchor: the merge-base of `HEAD` with the qualified
     /// target, or `None` on the target branch itself.
     base: Option<git2::Oid>,
-    /// The anchor of the task's own range, for its own-range waivers. A
-    /// declared target that does not qualify leaves `base` at the default
-    /// target, where commits made on that unrecorded line would count as
-    /// the task's own (issue 465); when that line resolves, the own range
-    /// starts at its merge-base instead, whenever that is later.
+    /// The anchor of the task's own range, for its own-range waivers: `base`
+    /// when the task's declared target qualifies or none is declared, and
+    /// `None` when a declared target does not qualify. There `base` is the
+    /// default target's, where commits made on that unrecorded line would
+    /// count as the task's own (issue 465).
     own_range: Option<git2::Oid>,
 }
 
@@ -632,24 +632,15 @@ fn qualify(
         ),
         _ => None,
     };
-    // An unqualified declared line earns no authority, but it can narrow
-    // the task's own range: its commits are not the task's own. A local or
-    // fetched ref the requester moves can only restore the default anchor.
-    let own_range = match (base, declared.filter(|_| !own_target)) {
-        (Some(base), Some(name)) => match receiving_tip(repo, name).ok().flatten() {
-            Some(tip) => {
-                let line_base = history::merge_base(repo, head, tip).map_err(|error| {
-                    format!("cannot read the merge-base with `{name}`: {error}")
-                })?;
-                if super::acceptance::is_ancestor_or_same(repo, base, line_base)? {
-                    Some(line_base)
-                } else {
-                    Some(base)
-                }
-            }
-            None => Some(base),
-        },
-        (base, _) => base,
+    // An unqualified declared line earns no authority, and nothing here
+    // can say which of its commits are the task's own: any ref naming it
+    // can be moved, rewound or left unfetched. So it leaves no own range
+    // (issue 465); pinning the line with `--base` and `--into` makes it the
+    // target, whose merge-base is the boundary.
+    let own_range = if declared.is_some() && !own_target {
+        None
+    } else {
+        base
     };
     Ok(Qualified {
         run: super::acceptance::RunBases::new(

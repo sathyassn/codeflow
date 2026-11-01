@@ -904,7 +904,9 @@ fn waived_block(dir: &Path, name: &str, reviewed: &str, waiver: &str) -> String 
 /// verb and CI accept the waiver before and after a reopen in that range,
 /// with or without a merge of the line. A reopen of a landed completion
 /// keeps its criteria frozen, and the refusal names the planning commit on
-/// the target that the waiver needs.
+/// the target that the waiver needs. The line's plan landed only on the
+/// line, so `main` does not record it, and each completion pins it with
+/// `--base` and `--into` to have an own range (issue 465).
 #[test]
 #[allow(clippy::too_many_lines)] // The three #278 branches share one planned line.
 fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
@@ -931,7 +933,15 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
             &root,
             "task",
             "TSK-001",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "an in-branch waiver on a branch without the task id",
     );
@@ -961,7 +971,15 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "the pre-reopen control",
     );
@@ -1024,7 +1042,15 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
                     &root,
                     "task",
                     "TSK-002",
-                    &["complete", "--acceptance", &block],
+                    &[
+                        "complete",
+                        "--acceptance",
+                        &block,
+                        "--base",
+                        LINE,
+                        "--into",
+                        LINE,
+                    ],
                 ),
                 &format!("the {name} waiver inside a reopened, unlanded range"),
             );
@@ -1074,7 +1100,15 @@ fn a_waiver_in_the_tasks_own_range_follows_its_completion_span() {
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "an in-branch waiver after a landed reopen",
         named,
@@ -1113,7 +1147,8 @@ const ROUTE: &str = "amend the criterion through a planning pull request into th
 /// "on the target" requires and naming the pins; pinned, it accepts. Once a
 /// completion landed, the original waiver is on the target and still
 /// counts, while a new in-branch waiver is refused, naming the planning
-/// route.
+/// route. Each completion pins the line, which `main` does not record
+/// (issue 465).
 #[test]
 #[allow(clippy::too_many_lines)] // One fixture keeps the #354 sequence and its controls in order.
 fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
@@ -1152,7 +1187,15 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "the first completion with an in-branch waiver",
     );
@@ -1212,7 +1255,15 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         );
         for expected in [reason, ON_TARGET, ROUTE] {
             fails(
@@ -1231,7 +1282,15 @@ fn a_waiver_survives_the_reopen_that_removes_a_follow_up_record() {
             &root,
             "task",
             "TSK-002",
-            &["complete", "--acceptance", &block],
+            &[
+                "complete",
+                "--acceptance",
+                &block,
+                "--base",
+                LINE,
+                "--into",
+                LINE,
+            ],
         ),
         "the same waiver after the reopen (issue #354)",
     );

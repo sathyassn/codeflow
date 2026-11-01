@@ -1968,12 +1968,20 @@ fn moving_the_local_target_does_not_move_the_anchor() {
 /// name earns no authority. TSK-001 declares `integration/EPC-009-rogue`,
 /// which no epic or policy at `main` names. The verb refuses a side-branch
 /// landing on it, a clean merge of it after the review, and a waiver whose
-/// amendment was made on it, batched with the epic or of the record alone
-/// (issue 465: commits on that line are not the task's own range).
+/// amendment was made on it, batched with the epic or of the record alone,
+/// also after the line's ref is rewound to `main` or deleted (issue 465:
+/// no ref naming that line marks which commits are the task's own).
 #[test]
 fn an_unrecorded_integration_line_earns_no_authority() {
     const ROGUE: &str = "integration/EPC-009-rogue";
-    for case in ["landing", "stacking", "waiver", "record-only waiver"] {
+    for case in [
+        "landing",
+        "stacking",
+        "waiver",
+        "record-only waiver",
+        "rewound line",
+        "deleted line",
+    ] {
         let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
         let root = dir.path();
         let path = record_path("TSK-001");
@@ -2025,7 +2033,13 @@ fn an_unrecorded_integration_line_earns_no_authority() {
                 commit(root, "docs(records): restore TSK-001 AC-1");
                 git(root, &["switch", "-c", "task/TSK-001-review", ROGUE]);
                 write(root, "src/lib.rs", "pub fn work() {}\n");
-                (commit(root, "feat: the work"), Some(amendment))
+                let reviewed = commit(root, "feat: the work");
+                match case {
+                    "rewound line" => git(root, &["branch", "-f", ROGUE, "main"]),
+                    "deleted line" => git(root, &["branch", "-D", ROGUE]),
+                    _ => {}
+                }
+                (reviewed, Some(amendment))
             }
         };
         let ac1 = waiver.map_or("AC-1: verified | unit".to_string(), |by| {
@@ -2043,10 +2057,57 @@ fn an_unrecorded_integration_line_earns_no_authority() {
         let needle = match case {
             "landing" => "src/side.rs",
             "stacking" => "src/rogue.rs",
+            "deleted line" => "cannot resolve integration/EPC-009-rogue",
             _ => "AC-1 waiver",
         };
         assert!(verb.1.contains(needle), "{case}: {}", verb.1);
     }
+}
+
+/// Issue 465: a task declaring an unrecorded line has no own range in the
+/// verb unless the line is pinned. A record-only amendment on the task's
+/// own branch, after the line, is refused without pins and accepted with
+/// `--base <line> --into <line>`, which make the line the target.
+#[test]
+fn an_unrecorded_line_needs_pins_for_an_own_range_waiver() {
+    const ROGUE: &str = "integration/EPC-009-rogue";
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let path = record_path("TSK-001");
+    let rogue_task = |status: &str, closeout: &str, criteria: &str| {
+        task("TSK-001", status, criteria, closeout).replace(
+            "integration_target: main",
+            &format!("integration_target: {ROGUE}"),
+        )
+    };
+    write(root, &path, &rogue_task("todo", "Pending.\n", OWN_JOURNEY));
+    commit(root, "docs(records): target the rogue line");
+    git(root, &["branch", ROGUE, "main"]);
+    git(root, &["switch", "-c", "task/TSK-001-review", ROGUE]);
+    let narrowed = OWN_JOURNEY.replacen("shall work.", "shall mostly work.", 1);
+    write(root, &path, &rogue_task("todo", "Pending.\n", &narrowed));
+    let amendment = commit(root, "docs(records): narrow TSK-001 AC-1");
+    write(root, "src/lib.rs", "pub fn work() {}\n");
+    let reviewed = commit(root, "feat: the work");
+    let done = block(
+        &reviewed,
+        &[
+            &format!("AC-1: waived | {amendment}"),
+            "AC-2: verified | journey",
+        ],
+        "verified | journey",
+        "none: done",
+    );
+    write(root, &path, &rogue_task("todo", &done, &narrowed));
+    let unpinned = status_complete(root, "TSK-001");
+    assert_ne!(unpinned.0, 0, "unpinned: {}", unpinned.1);
+    assert!(
+        unpinned.1.contains("AC-1 waiver"),
+        "unpinned: {}",
+        unpinned.1
+    );
+    let pinned = status_complete_args(root, "TSK-001", &["--base", ROGUE, "--into", ROGUE]);
+    assert_eq!(pinned.0, 0, "pinned: {}", pinned.1);
 }
 
 /// `task status <id> complete` with extra arguments.
