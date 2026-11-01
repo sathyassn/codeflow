@@ -1,3 +1,3 @@
-codeflow 3.2.0 source=b6cf648d38b6c2dd74be036f3da97daac220f3f8 dirty=unavailable inputs=92e6244ad52a3eed45d836ff80be0a26999e665bf837f2319aa6cab7e0d90a9d
-sha256 0ff07760d7228d401449083ff27cb12cd4ffb8afac5157f87df617bf7c16c596
+codeflow 4.0.0 source=31f7df8f7c6c35082c9d0fa4ceb540d8b80e63b3 dirty=unavailable inputs=bf96a690c46bfc7e62021eff62d3e7574ba1101443513bd1da4e84618c39389f
+sha256 61520d0793c337bba2824bb11d230a95edc4b9d70d405b6cf7e46094edbc55b7
 built from a git archive of the line in its own target directory
