@@ -899,6 +899,7 @@ fn spawn_command(
         timeout,
         super::evidence::redacted_values(target).is_empty(),
         target.heavy == Some(true),
+        false,
     )
 }
 
@@ -932,8 +933,13 @@ pub fn run_reserved_command(
             .env("CODEFLOW_ORACLE_WORKERS", oracle.to_string());
         progress!("[codeflow reserve] workers: jobs={workers}, nextest={workers}, rust-tests=1, oracle={oracle}");
     }
+    // Only a `codeflow` program receives the lock descriptors: it makes them
+    // close-on-exec at start, so no other tool or daemon can keep them.
+    let hand_over = Path::new(program)
+        .file_name()
+        .is_some_and(|name| name == "codeflow");
     let start = Instant::now();
-    let result = spawn_prepared(command, "reserve", timeout, true, true)?;
+    let result = spawn_prepared(command, "reserve", timeout, true, true, hand_over)?;
     Ok(TargetRunResult {
         target_name: "reserve".into(),
         error: None,
@@ -962,7 +968,10 @@ fn spawn_prepared(
     timeout: Duration,
     emit_progress: bool,
     supervised: bool,
+    hand_over: bool,
 ) -> Result<CommandOutcome, TestingError> {
+    #[cfg(not(unix))]
+    let _ = hand_over;
     // Pipe output so it can be captured while we poll for the timeout. Reader
     // threads drain the pipes concurrently — without them a chatty command
     // could fill the pipe buffer and deadlock while we sit in try_wait().
@@ -995,7 +1004,7 @@ fn spawn_prepared(
 
     #[cfg(unix)]
     let mut watcher = if supervised {
-        Some(group_watch::GroupWatch::prepare(&mut cmd).map_err(spawn_err)?)
+        Some(group_watch::GroupWatch::prepare(&mut cmd, hand_over).map_err(spawn_err)?)
     } else {
         None
     };

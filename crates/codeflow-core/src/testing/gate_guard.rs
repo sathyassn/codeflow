@@ -50,6 +50,17 @@
 //! exits, and the lock never frees while a target of the gate runs. No
 //! group is recorded there.
 //!
+//! **A command under `codeflow reserve` shares its lock** (TSK-1128). On
+//! Unix, `codeflow reserve` hands a `codeflow` command duplicates of its
+//! locked lock descriptors and names them in [`RESERVED_LOCKS_ENV`]. The
+//! name grants nothing: the receiving process marks them close-on-exec at
+//! start ([`adopt_reserved_locks`]), and quick admission and a nested
+//! reserve use them only after each lock path's file identity matches a
+//! descriptor, a fresh open of that path is refused by the OS lock, and the
+//! descriptor itself takes it, which only the holder's own open file
+//! description can. Anything else falls back to ordinary admission. Full
+//! and essential gates never inherit.
+//!
 //! **Target directory.** `CARGO_TARGET_DIR` outside the worktree lets builds
 //! in parallel worktrees overwrite each other's binaries. A shared directory
 //! is also a legitimate way to save disk, and the gate lock already keeps two
@@ -84,6 +95,9 @@ pub const RECORD_FILE: &str = "full-gate.record";
 pub struct GateLock {
     id: u64,
     files: Vec<AcquiredFile>,
+    /// Descriptors of a lock an enclosing `codeflow reserve` holds. They are
+    /// never unlocked here: unlocking would release the holder's lock.
+    inherited: Vec<File>,
     /// The lock files held, whose records the drop clears.
     paths: Vec<PathBuf>,
     /// Degradations and reclaimed stale locks, for the caller to print.
@@ -368,9 +382,19 @@ fn holder_status(path: &Path, trusted: &[String]) -> Result<String, String> {
 /// Acquire the machine and repository locks, with the operator's repair pointer.
 /// # Errors
 /// Refuses unavailable directories and held locks before starting heavy work.
+/// Quick admission and `codeflow reserve` call this; under an enclosing
+/// `codeflow reserve` they first use its lock ([`RESERVED_LOCKS_ENV`]).
+/// Full and essential gates take the lock themselves and never inherit.
 pub fn acquire_project_gate_lock(root: &Path, mode: &str) -> Result<GateLock, String> {
     let dirs = lock_dirs(root, crate::registry::codeflow_home().as_deref())
         .map_err(|error| format!("gate lock unavailable: cannot discover repository: {error}; run `codeflow doctor --check permissions`"))?;
+    #[cfg(unix)]
+    {
+        let adopted = adopted().clone();
+        if let Some(lock) = inherit_gate_lock(&dirs, &adopted) {
+            return Ok(lock);
+        }
+    }
     acquire_gate_lock(&dirs, root, mode).map_err(|held| {
         let message = held.to_string();
         if message.contains("gate lock unavailable") {
@@ -486,6 +510,7 @@ pub fn acquire_gate_lock(
     let mut lock = GateLock {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         files: Vec::new(),
+        inherited: Vec::new(),
         paths: Vec::new(),
         notes: Vec::new(),
     };
@@ -559,6 +584,151 @@ pub fn acquire_gate_lock(
         });
     }
     Ok(lock)
+}
+
+/// Names the lock descriptors `codeflow reserve` hands to a `codeflow`
+/// command, as decimal descriptor numbers separated by commas (TSK-1128).
+/// The value is a hint, never authority: [`inherit_gate_lock`] trusts a
+/// descriptor only after the OS lock shows it is the holder's own.
+pub const RESERVED_LOCKS_ENV: &str = "CODEFLOW_RESERVED_LOCK_FDS";
+
+/// The most descriptors one hand-over names: one per lock directory.
+const MOST_RESERVED_LOCKS: usize = 4;
+
+#[cfg(unix)]
+static ADOPTED: Mutex<Vec<std::os::fd::RawFd>> = Mutex::new(Vec::new());
+
+#[cfg(unix)]
+fn adopted() -> std::sync::MutexGuard<'static, Vec<std::os::fd::RawFd>> {
+    ADOPTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Take the descriptors an enclosing `codeflow reserve` handed over, before
+/// this process starts any thread or child. The variable is removed, so no
+/// child sees it, and each named descriptor that is an open regular file is
+/// made close-on-exec, so no target, tool or daemon this process starts can
+/// keep the reserved lock after the run. A malformed value is ignored
+/// whole. The descriptors grant nothing until [`inherit_gate_lock`] checks
+/// them.
+pub fn adopt_reserved_locks() {
+    let value = std::env::var_os(RESERVED_LOCKS_ENV);
+    std::env::remove_var(RESERVED_LOCKS_ENV);
+    #[cfg(unix)]
+    if let Some(descriptors) = value
+        .as_deref()
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(parse_descriptors)
+    {
+        let mut kept = Vec::new();
+        for fd in descriptors {
+            // SAFETY: fstat and fcntl only read or set this descriptor's
+            // flags; an unopened number fails with EBADF and is skipped.
+            unsafe {
+                let mut stat: libc::stat = std::mem::zeroed();
+                if libc::fstat(fd, &raw mut stat) != 0
+                    || stat.st_mode & libc::S_IFMT != libc::S_IFREG
+                {
+                    continue;
+                }
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) != 0 {
+                    continue;
+                }
+            }
+            kept.push(fd);
+        }
+        *adopted() = kept;
+    }
+    #[cfg(not(unix))]
+    let _ = value;
+}
+
+/// Descriptor numbers from a hand-over value: distinct, above the standard
+/// streams, at most [`MOST_RESERVED_LOCKS`]; `None` when any part is not.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn parse_descriptors(value: &str) -> Option<Vec<i32>> {
+    let mut descriptors = Vec::new();
+    for part in value.split(',') {
+        let fd = part.parse::<i32>().ok().filter(|fd| *fd > 2)?;
+        if descriptors.contains(&fd) || descriptors.len() == MOST_RESERVED_LOCKS {
+            return None;
+        }
+        descriptors.push(fd);
+    }
+    Some(descriptors)
+}
+
+/// Use the locks in `dirs` that an enclosing holder handed over as
+/// `descriptors`, or `None` to fall back to ordinary admission. Every lock
+/// must match: the lock path's file has the identity of one descriptor, a
+/// fresh open of that path is refused by the OS lock (someone holds it), and
+/// that descriptor takes the lock (so the holder is its open file
+/// description, which only the holder's process tree can carry). A
+/// descriptor this process opened itself, or one naming any other file,
+/// fails a check. Nothing is unlocked on any path: the descriptors share the
+/// holder's lock, and the holder record stays the holder's.
+#[cfg(unix)]
+fn inherit_gate_lock(dirs: &[PathBuf], descriptors: &[std::os::fd::RawFd]) -> Option<GateLock> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    if dirs.is_empty() || descriptors.is_empty() {
+        return None;
+    }
+    let mut inherited = Vec::new();
+    for dir in dirs {
+        let path = dir.join(LOCK_FILE);
+        let (anchor, relative) = lock_anchor(&path).ok()?;
+        let current = crate::contained::Tree::open(anchor)
+            .ok()?
+            .open_regular(&relative)
+            .ok()?;
+        let identity = FileIdentity::of(&current).ok()?;
+        let file = descriptors.iter().find_map(|&fd| {
+            // SAFETY: F_DUPFD_CLOEXEC returns a new descriptor this process
+            // owns, or -1 when `fd` is not open.
+            let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+            if copy < 0 {
+                return None;
+            }
+            // SAFETY: `copy` is a fresh descriptor owned by nothing else.
+            let file = unsafe { File::from_raw_fd(copy) };
+            (FileIdentity::of(&file).ok()? == identity).then_some(file)
+        })?;
+        let fresh = open_lock_file(&path).ok()?;
+        match os_lock::try_lock(&fresh) {
+            Err(error) if os_lock::is_contended(&error) => {}
+            Ok(()) => {
+                // Nobody holds it: there is nothing to inherit.
+                os_lock::unlock(&fresh);
+                return None;
+            }
+            Err(_) => return None,
+        }
+        if os_lock::try_lock(&file).is_err() {
+            return None;
+        }
+        inherited.push(file);
+    }
+    let lock = GateLock {
+        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        files: Vec::new(),
+        inherited,
+        paths: Vec::new(),
+        notes: vec![
+            "heavy work runs under the lock held by the enclosing `codeflow reserve`".to_string(),
+        ],
+    };
+    // Registered without paths: targets' watchers keep copies of the lock,
+    // and no record is written, since the record names the holder.
+    held().push(Held {
+        id: lock.id,
+        paths: Vec::new(),
+        record: String::new(),
+        groups: BTreeSet::new(),
+        descriptors: lock.inherited.iter().map(AsRawFd::as_raw_fd).collect(),
+    });
+    Some(lock)
 }
 
 /// Duplicate held locks for a target's lifetime watcher before spawning it.
@@ -1192,6 +1362,69 @@ mod tests {
             "a clean release leaves no stale record: {:?}",
             again.notes
         );
+    }
+
+    /// TSK-1128 AC-2, AC-5: only descriptors of the holder's own locked
+    /// open file description inherit; descriptors this process opened
+    /// itself, or naming another file, fall back to ordinary admission, and
+    /// a second gate still refuses while the inherited lock is in use.
+    #[cfg(unix)]
+    #[test]
+    fn only_the_holders_own_descriptors_inherit_its_lock() {
+        use std::os::fd::AsRawFd;
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let dirs = dirs(tmp.path());
+        let numbers = |files: &[File]| files.iter().map(AsRawFd::as_raw_fd).collect::<Vec<_>>();
+        let own: Vec<File> = dirs
+            .iter()
+            .map(|dir| open_lock_file(&dir.join(LOCK_FILE)).unwrap())
+            .collect();
+        assert!(
+            inherit_gate_lock(&dirs, &numbers(&own)).is_none(),
+            "a free lock has no holder to inherit from"
+        );
+        let holder = acquire_full_gate_lock(&dirs, &work).expect("the probe left the lock free");
+        assert!(
+            inherit_gate_lock(&dirs, &numbers(&own)).is_none(),
+            "descriptors opened outside the holder are refused"
+        );
+        std::fs::write(tmp.path().join("other"), "").unwrap();
+        let other = vec![File::open(tmp.path().join("other")).unwrap()];
+        assert!(inherit_gate_lock(&dirs, &numbers(&other)).is_none());
+        let first = holder.files.first().map(|file| file.0.as_raw_fd()).unwrap();
+        assert!(
+            inherit_gate_lock(&dirs, &[first]).is_none(),
+            "every lock must be handed over"
+        );
+
+        let handed: Vec<_> = holder.files.iter().map(|file| file.0.as_raw_fd()).collect();
+        let inherited =
+            inherit_gate_lock(&dirs, &handed).expect("the holder's descriptors inherit");
+        assert!(inherited.notes[0].contains("enclosing `codeflow reserve`"));
+        let refused = acquire_full_gate_lock(&dirs, &work)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("one heavy gate"), "{refused}");
+        drop(inherited);
+        let refused = acquire_full_gate_lock(&dirs, &work)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains(&format!("pid {}", std::process::id())),
+            "the inherited lock never releases or rewrites the holder's: {refused}"
+        );
+        drop(holder);
+    }
+
+    #[test]
+    fn hand_over_values_parse_strictly() {
+        assert_eq!(parse_descriptors("7"), Some(vec![7]));
+        assert_eq!(parse_descriptors("7,9"), Some(vec![7, 9]));
+        for bad in ["", "2", "7,7", "x", "7,", "-1", "3,4,5,6,7"] {
+            assert_eq!(parse_descriptors(bad), None, "{bad}");
+        }
     }
 
     #[test]

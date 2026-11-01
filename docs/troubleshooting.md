@@ -118,8 +118,8 @@ can set it to `"heavy"` and set `execution.heavy_wait_seconds` to a bounded
 wait. An explicit target declaration
 takes precedence. When there are no quick targets and quick falls back to
 essential, undeclared targets are heavy. Heavy quick targets wait up to
-`execution.heavy_wait_seconds` (default zero), then refuse if the lock is
-still held. The result names the light targets that ran. Pre-push runs no
+`--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then
+refuse if the lock is still held. This repository waits up to 1800 seconds. The result names the light targets that ran. Pre-push runs no
 quick target, so it never waits for the lock.
 
 Read the holder's process, worktree, mode and start time with
@@ -133,6 +133,15 @@ the same locks. `--wait-seconds` sets a bounded wait, and
 `--timeout-seconds` sets the command deadline. Arguments after `--` reach
 the executable unchanged. The wrapper ends its command's process group
 when it exits or is killed. Use the worktree's own Cargo target directory.
+
+On Unix, `codeflow reserve -- codeflow test --mode quick` runs the quick
+run's heavy targets under the reserve's lock. The reserve hands its lock
+descriptors only to a `codeflow` program, which makes them close-on-exec
+so no target or daemon keeps them, and uses them only after the OS lock
+shows they are the holder's own; a value set any other way falls back to
+ordinary admission. Full and essential gates under a reserve still take
+the lock themselves and refuse. On Windows a nested quick run waits or
+refuses as a direct one does.
 
 `execution.worker_budget`, when configured, divides workers among ready
 heavy targets and records their Cargo, nextest, Rust-test and shell-oracle
