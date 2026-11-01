@@ -819,25 +819,18 @@ fn unreadable_staged_path(root: &Path) -> Result<Option<String>, String> {
 /// (`GIT_ATTR_SOURCE`), the version the managed CI scan requires too.
 const MIN_GIT: (u32, u32) = (2, 41);
 
-/// The oldest git that honours `GIT_NO_LAZY_FETCH`. An older git ignores the
-/// setting, which is harmless unless the repository is a partial clone, where
-/// it could fetch a missing object during the scan.
-const MIN_GIT_PARTIAL_CLONE: (u32, u32) = (2, 44);
+/// The oldest git that can be kept from fetching a repository's missing
+/// objects. `GIT_NO_LAZY_FETCH` arrives in 2.45, but 2.45's diff prefetch
+/// still calls the promisor fetch directly; the guard before the fetch
+/// subprocess is in 2.46's `fetch_objects`. An older git ignores the setting,
+/// which is harmless unless the repository has a promisor remote.
+const MIN_GIT_PARTIAL_CLONE: (u32, u32) = (2, 46);
 
-/// Whether the scan must be refused for this git: it is too old for the
-/// attribute pinning, or the repository is a partial clone and git cannot be
-/// kept from fetching its missing objects. Returns the refusal reason.
-fn git_refusal(version: &str, partial_clone: bool) -> Option<String> {
-    let found = git_version(version);
-    if found.is_none_or(|found| found < MIN_GIT) {
-        return Some(format!(
-            "{version} cannot read attributes from a named tree, so a \
-             .gitattributes entry could hide staged lines from gitleaks; \
-             upgrade git to {}.{} or later",
-            MIN_GIT.0, MIN_GIT.1
-        ));
-    }
-    if partial_clone && found.is_some_and(|found| found < MIN_GIT_PARTIAL_CLONE) {
+/// The reason a repository that fetches missing objects on demand (a
+/// promisor remote) cannot be read by this git, or `None`. A git whose
+/// version cannot be read is refused too.
+fn promisor_refusal(version: &str, promisor: bool) -> Option<String> {
+    if promisor && git_version(version).is_none_or(|found| found < MIN_GIT_PARTIAL_CLONE) {
         return Some(format!(
             "this repository fetches missing objects on demand (a promisor \
              remote), and {version} cannot be kept from doing that during the \
@@ -846,6 +839,96 @@ fn git_refusal(version: &str, partial_clone: bool) -> Option<String> {
         ));
     }
     None
+}
+
+/// Whether the scan must be refused for this git: it is too old for the
+/// attribute pinning, or the repository has a promisor remote and git cannot
+/// be kept from fetching. Returns the refusal reason.
+fn git_refusal(version: &str, promisor: bool) -> Option<String> {
+    if git_version(version).is_none_or(|found| found < MIN_GIT) {
+        return Some(format!(
+            "{version} cannot read attributes from a named tree, so a \
+             .gitattributes entry could hide staged lines from gitleaks; \
+             upgrade git to {}.{} or later",
+            MIN_GIT.0, MIN_GIT.1
+        ));
+    }
+    promisor_refusal(version, promisor)
+}
+
+/// A read-only git query for the capability decision, in the scan's view of
+/// the repository: the repository, worktree and index variables are kept,
+/// and a caller's `GIT_CONFIG` (which only `git config` reads) and its
+/// command-line and numbered settings are removed, as the scan removes them
+/// for `git diff`.
+fn capability_query(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+    let mut command = crate::git::command();
+    command
+        .env_remove("GIT_CONFIG")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT");
+    for (name, _) in std::env::vars_os() {
+        let bytes = name.as_encoded_bytes();
+        if bytes.starts_with(b"GIT_CONFIG_KEY_") || bytes.starts_with(b"GIT_CONFIG_VALUE_") {
+            command.env_remove(&name);
+        }
+    }
+    crate::git::local_objects_only(&mut command);
+    command
+        .args(args)
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|error| format!("git did not run: {error}"))
+}
+
+/// The git version text, and whether the repository has a promisor remote
+/// (`extensions.partialClone` or a `remote.<name>.promisor`). Git's exit 1
+/// from `git config` means no match; any other failure is an error, so an
+/// undecidable repository is never taken as a plain one.
+fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
+    let version = capability_query(root, &["version"])?;
+    if !version.status.success() {
+        return Err(format!("`git version` exited with {}", version.status));
+    }
+    let version = String::from_utf8_lossy(&version.stdout).trim().to_string();
+    let config = capability_query(
+        root,
+        &[
+            "config",
+            "--get-regexp",
+            r"^(extensions\.partialclone|remote\..*\.promisor)$",
+        ],
+    )?;
+    match config.status.code() {
+        Some(0) => Ok((version, !config.stdout.is_empty())),
+        Some(1) => Ok((version, false)),
+        _ => Err(format!(
+            "cannot tell whether this repository fetches missing objects on \
+             demand: `git config` exited with {}",
+            config.status
+        )),
+    }
+}
+
+/// Refuse before any git object read when the repository fetches missing
+/// objects on demand and this git cannot be kept from doing so, or when that
+/// cannot be decided. Every caller of the commit-time scan that reads staged
+/// objects (the staged inventory, attribute lookup, the scan itself) calls
+/// this first. It makes no network request.
+///
+/// # Errors
+///
+/// The refusal reason, naming the git version needed.
+pub fn require_offline_objects(root: &Path) -> Result<(), String> {
+    let (version, promisor) = version_and_promisor(root)?;
+    promisor_refusal(&version, promisor).map_or(Ok(()), Err)
+}
+
+/// Give a git process that lists staged paths the scan's pins: no rename
+/// detection through configuration, no caller configuration, no lazy fetch.
+pub fn pin_staged_listing(command: &mut Command) {
+    pin_git_output(command, &[]);
 }
 
 /// Git attributes for the gitleaks run, so the staged diff it reads shows
@@ -866,34 +949,18 @@ struct TextAttributes {
 
 impl TextAttributes {
     fn for_repository(root: &Path) -> Result<Self, String> {
-        let git = |args: &[&str]| -> Result<String, String> {
-            let out = crate::git::command()
-                .args(args)
-                .env("GIT_NO_LAZY_FETCH", "1")
-                .current_dir(root)
-                .stdin(std::process::Stdio::null())
-                .output()
-                .map_err(|error| format!("git did not run: {error}"))?;
-            if !out.status.success() {
-                return Err(format!(
-                    "`git {}` exited with {}",
-                    args.join(" "),
-                    out.status
-                ));
-            }
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-        };
-        let version = git(&["version"])?;
-        let partial_clone = git(&[
-            "config",
-            "--get-regexp",
-            r"^(extensions\.partialclone|remote\..*\.promisor)$",
-        ])
-        .is_ok_and(|found| !found.is_empty());
-        if let Some(reason) = git_refusal(&version, partial_clone) {
+        let (version, promisor) = version_and_promisor(root)?;
+        if let Some(reason) = git_refusal(&version, promisor) {
             return Err(reason);
         }
-        let empty_tree = git(&["hash-object", "-t", "tree", "--stdin"])?;
+        let out = capability_query(root, &["hash-object", "-t", "tree", "--stdin"])?;
+        if !out.status.success() {
+            return Err(format!(
+                "`git hash-object -t tree --stdin` exited with {}",
+                out.status
+            ));
+        }
+        let empty_tree = String::from_utf8_lossy(&out.stdout).trim().to_string();
         Ok(Self { empty_tree })
     }
 
@@ -1140,13 +1207,28 @@ mod tests {
     }
 
     #[test]
-    fn an_old_git_is_refused_only_for_a_partial_clone_below_2_44() {
-        let old = "git version 2.43.0";
-        assert!(git_refusal(old, false).is_none());
-        let reason = git_refusal(old, true).expect("a partial clone needs 2.44");
-        assert!(reason.contains("2.44"), "{reason}");
-        assert!(git_refusal("git version 2.44.0", true).is_none());
-        assert!(git_refusal("git version 2.53.0 (Apple Git-1)", true).is_none());
+    fn a_promisor_repository_needs_git_2_46() {
+        for old in [
+            "git version 2.41.0",
+            "git version 2.44.0",
+            "git version 2.45.2",
+        ] {
+            assert!(git_refusal(old, false).is_none(), "{old}");
+            let reason = git_refusal(old, true).expect(old);
+            assert!(reason.contains("2.46"), "{reason}");
+            assert!(promisor_refusal(old, true).is_some(), "{old}");
+        }
+        assert!(promisor_refusal("git version 2.45.9", true).is_some());
+        for new in [
+            "git version 2.46.0",
+            "git version 2.53.0 (Apple Git-1)",
+            "git version 3.0.0",
+        ] {
+            assert!(git_refusal(new, true).is_none(), "{new}");
+            assert!(promisor_refusal(new, true).is_none(), "{new}");
+        }
+        assert!(promisor_refusal("not git", true).is_some());
+        assert!(promisor_refusal("not git", false).is_none());
         assert!(git_refusal("git version 2.40.1", false).is_some());
         assert!(git_refusal("not git", false).is_some());
     }

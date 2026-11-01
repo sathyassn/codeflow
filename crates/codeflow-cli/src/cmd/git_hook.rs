@@ -471,11 +471,15 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
     let unreadable = |why: String| {
         codeflow_core::error::HookError::Config(format!("cannot read staged files: {why}"))
     };
-    let out = codeflow_core::git::command()
-        .env("GIT_NO_LAZY_FETCH", "1")
+    // Decide first whether this repository and git allow a read that never
+    // fetches; the listing below may read promised blobs.
+    codeflow_core::hooks::gitleaks::require_offline_objects(root).map_err(unreadable)?;
+    let mut command = codeflow_core::git::command();
+    codeflow_core::hooks::gitleaks::pin_staged_listing(&mut command);
+    let out = command
         .arg("-C")
         .arg(root)
-        .args(["diff", "--cached", "--name-only", "-z"])
+        .args(["diff", "--cached", "--name-only", "-z", "--no-renames"])
         .output()
         .map_err(|error| unreadable(error.to_string()))?;
     if !out.status.success() {
