@@ -1459,7 +1459,12 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     // The judging run reads the body when it runs, so the newest body is
     // judged whichever run survives the group; the event's copy is unused.
     assert!(!POLICY.contains("github.event.pull_request.body"));
-    assert!(POLICY.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
+    // The body reaches `codeflow ci` as a file: the runner prints a step's
+    // `env:` values and its arguments, so neither may carry the text.
+    assert!(!POLICY.contains("CODEFLOW_PR_BODY"));
+    assert!(!POLICY.contains("outputs.text"));
+    assert!(POLICY.contains("BODY_FILE: ${{ runner.temp }}/pr-body.md"));
+    assert!(POLICY.contains("--pr-body-file \"$BODY_FILE\""));
     assert!(POLICY.contains("/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\""));
 
     let enforcing = job(POLICY, "commit-lint");
@@ -1855,8 +1860,89 @@ fn the_body_is_logged_as_a_digest_never_as_text() {
         "the text is never logged: {log}"
     );
     assert!(
-        written.contains("SECRET-BODY-TEXT"),
-        "the output still carries the text"
+        !written.contains("SECRET-BODY-TEXT"),
+        "no step output carries the text: {written}"
+    );
+}
+
+/// Runs the body-reading step and then the `codeflow ci` step the way the
+/// runner does, with a stand-in `codeflow` that records where it found the
+/// body. Returns the combined log and what the stand-in saw.
+fn run_body_then_ci(body: &str) -> (String, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let api = dir.path().join("api/repos/o/r/pulls");
+    std::fs::create_dir_all(&api).unwrap();
+    std::fs::write(api.join("7"), pull(JUDGED_HEAD, "main", body)).unwrap();
+    let temp = dir.path().join("tmp");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&temp).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    let marker = dir.path().join("marker");
+    let fake = bin.join("codeflow");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\necho \"codeflow $*\"\nfile=\nwhile [ $# -gt 0 ]; do\n  \
+         [ \"$1\" = --pr-body-file ] && file=$2\n  shift\ndone\n\
+         grep -q CANARY-BODY-TEXT \"$file\" && echo file-has-body >> \"$MARKER\"\n\
+         env | grep -q CANARY-BODY-TEXT && echo env-has-body >> \"$MARKER\"\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let output_file = dir.path().join("github-output");
+    std::fs::write(&output_file, "").unwrap();
+    let step = |prefix: &str| {
+        run_blocks(POLICY, prefix)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("step {prefix}"))
+    };
+    let script = format!(
+        "export PATH='{}':\"$PATH\"\nexport MARKER='{}'\n{}\n\
+         export BASE_SHA=b HEAD_SHA=h HEAD_REF=r ACTOR=a BODY_FILE='{}/pr-body.md'\n{}",
+        bin.display(),
+        marker.display(),
+        step("Read the pull request's current body"),
+        temp.display(),
+        step("codeflow ci (commit"),
+    );
+    let out = Command::new("bash")
+        .args(["-c", &script])
+        .env(
+            "GITHUB_API_URL",
+            format!("file://{}", dir.path().join("api").display()),
+        )
+        .env("GITHUB_REPOSITORY", "o/r")
+        .env("GITHUB_OUTPUT", &output_file)
+        .env("RUNNER_TEMP", &temp)
+        .env("GH_TOKEN", "unused")
+        .env("PR_NUMBER", "7")
+        .output()
+        .expect("bash runs");
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{log}");
+    (log, std::fs::read_to_string(&marker).unwrap_or_default())
+}
+
+#[test]
+fn the_body_text_never_reaches_the_log_or_the_codeflow_environment() {
+    let body = "## Summary\nCANARY-BODY-TEXT $(id) `id`\n";
+    let (log, seen) = run_body_then_ci(body);
+    assert!(
+        !log.contains("CANARY-BODY-TEXT"),
+        "neither the steps nor the arguments of codeflow ci carry the text: {log}"
+    );
+    assert!(log.contains("--pr-body-file"), "{log}");
+    assert!(
+        log.contains(&format!("sha256 {}", body_digest(body))),
+        "{log}"
+    );
+    assert_eq!(
+        seen, "file-has-body\n",
+        "codeflow ci reads the body from the file and not from its environment"
     );
 }
 

@@ -240,14 +240,19 @@ default queue holds one pending run and cancels it when a newer run arrives.
 Push, schedule and dispatch runs each get a group of their own and are never
 replaced, so a registry check is never replaced by a newer event.
 
-A queued run judges the pull request as it reads it when it runs, not as its
-event described it. The run reads the body from the API (the job's token
-gains `pull-requests: read` and stays read-only), logs it as a sha256 digest
-and never as text, and ends with a second read. That last step fails the run,
-with its own message, when the head, the base branch or the body changed
-while the run judged them, and fails closed when the read fails. The run
-queued by the change decides the head. The base commit is not compared,
-since a push to the base branch fires no pull request event.
+The event pins the head and the base commit: the job checks out the event's
+base commit and refuses a head that is not the event's. Only the body comes
+from the API, read when the run executes (the job's token gains
+`pull-requests: read` and stays read-only), so a queued run can judge a
+newer body than its event. The body is written to a file in the runner's
+temp directory and given to `codeflow ci` with `--pr-body-file`, never
+through `env:` or an argument, because the runner prints a step's `env:`
+values; the log carries only the body's sha256 digest. The run ends with a
+second read. That last step fails the run, with its own message, when the
+head, the base branch or the body differs from what the run judged, and
+fails closed when the read fails. The run queued by the change decides. The
+base commit is not compared, since a push to the base branch fires no pull
+request event.
 
 Limits:
 

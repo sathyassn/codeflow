@@ -138,7 +138,9 @@ class GateContracts(unittest.TestCase):
         self.assertLess(workflow.index(self.POLICY_CONCURRENCY), workflow.index('\njobs:\n'))
         self.assertIn(self.POLICY_BODY, workflow)
         self.assertIn('          GH_TOKEN: ${{ github.token }}\n', workflow)
-        self.assertIn('          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}\n', workflow)
+        self.assertIn('          BODY_FILE: ${{ runner.temp }}/pr-body.md\n', workflow)
+        self.assertIn('--pr-body-file "$BODY_FILE"', workflow)
+        self.assertNotIn('CODEFLOW_PR_BODY', workflow)
         self.assertNotIn('github.event.pull_request.body', workflow)
         actions = '      actions: read\n' if admission else ''
         self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)

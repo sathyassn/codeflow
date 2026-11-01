@@ -39,14 +39,18 @@
 # (actionlint releases up to 1.7.12), so ignore that message in the linter's
 # configuration rather than removing the key.
 #
-# A run judges the head, base branch and body as it reads them, so a queued
-# run can judge a pull request that has changed since its event. The last
-# step reads the pull request again and fails the run, with its own
-# message, when the head, the base branch or the body changed while it
-# judged them; the run queued by that change decides. It fails closed when
-# that read fails. A change made after that last read, before the run ends,
-# is judged by the run that change queued. The body is logged as a sha256
-# digest, never as text. Each run makes two API reads on the job's token.
+# The event pins the head and the base commit: the job checks out the
+# event's base commit and refuses a head that is not the event's. Only the
+# body comes from the API, read when the job runs, so a queued run can judge
+# a newer body than its event. The last step reads the pull request again
+# and fails the run, with its own message, when the head, the base branch or
+# the body differs from what the run judged; the run queued by that change
+# decides. It fails closed when that read fails. A change made after that
+# last read, before the run ends, is judged by the run that change queued.
+# The body is logged as a sha256 digest, never as text: it is written to a
+# file in the runner's temp directory and handed to `codeflow ci` as a file,
+# never through `env:` or an argument, because the runner prints a step's
+# `env:` values in its log. Each run makes two API reads on the job's token.
 # Push, schedule and dispatch runs each get a group of their own run, so a
 # registry run is never replaced by a newer queued event.
 name: codeflow-policy
@@ -212,9 +216,9 @@ jobs:
       # event carries the body as it was when the event fired, and the run
       # that survives the concurrency group can belong to an older event (one
       # delivered late, or a re-run), so only the current body is the newest.
-      # The text is written as a step output under a random delimiter and is
-      # never interpolated into a script.
-      # A sha256 digest of that text is its other output.
+      # The text is written to a file in the runner's temp directory, never to
+      # a step output, an `env:` value or an argument, so it cannot reach the
+      # log; the step's outputs are the file's path and its sha256 digest.
       - name: Read the pull request's current body
         id: body
         if: github.event_name == 'pull_request_target'
@@ -226,33 +230,29 @@ jobs:
           curl -fsSL --retry 3 --max-time 60 \
             -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
-          delimiter="codeflow_body_$(openssl rand -hex 16)"
-          {
-            echo "text<<${delimiter}"
-            jq -r '.body // ""' "${RUNNER_TEMP}/pull.json"
-            echo "${delimiter}"
-          } >> "$GITHUB_OUTPUT"
-          # The body is logged as a digest, never as text; the last step
-          # compares a new digest with this one.
+          jq -r '.body // ""' "${RUNNER_TEMP}/pull.json" > "${RUNNER_TEMP}/pr-body.md"
+          # The body is logged as a digest of the file's bytes, never as
+          # text; the last step compares a new digest with this one.
           if command -v sha256sum >/dev/null 2>&1; then
-            digest=$(jq -r '.body // ""' "${RUNNER_TEMP}/pull.json" | sha256sum | cut -d ' ' -f 1)
+            digest=$(sha256sum "${RUNNER_TEMP}/pr-body.md" | cut -d ' ' -f 1)
           else
-            digest=$(jq -r '.body // ""' "${RUNNER_TEMP}/pull.json" | shasum -a 256 | cut -d ' ' -f 1)
+            digest=$(shasum -a 256 "${RUNNER_TEMP}/pr-body.md" | cut -d ' ' -f 1)
           fi
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           echo "pull request body judged: sha256 ${digest}"
 
-      # The PR body reaches `codeflow ci` through `env:`, never interpolated
-      # into the script, so an untrusted body cannot inject shell.
+      # The PR body reaches `codeflow ci` as a file, never interpolated into
+      # the script and never through `env:` (the runner logs those values), so
+      # an untrusted body can neither inject shell nor reach the log.
       - name: codeflow ci (commit + branch + PR-body standards)
         if: github.event_name == 'pull_request_target'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
+          BODY_FILE: ${{ runner.temp }}/pr-body.md
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
-        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
+        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR" --pr-body-file "$BODY_FILE"
 
       # The registry is fetched explicitly with full history, never forced
       # (R-20); the pull request head above was fetched as data only.
