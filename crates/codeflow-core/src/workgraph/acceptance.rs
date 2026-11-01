@@ -2939,7 +2939,10 @@ pub(super) fn non_planning_change(
 /// reviewed commit for an epic's own waiver): a hidden file, a harness
 /// instruction file or an adopter-facing path is refused even inside
 /// `project-management/` or `docs/plan/`, and an ordinary document is
-/// refused too. A name that is not plain text refuses (issue 79).
+/// refused too. A symbolic link or submodule on either side refuses under
+/// any name, by the rule a planning pull request applies
+/// ([`super::amendment::irregular_entry`]), and so does a name that is not
+/// plain text (issue 79).
 ///
 /// # Errors
 ///
@@ -2967,6 +2970,14 @@ fn waiver_amendment_change(
     let diff = repo
         .diff_tree_to_tree(before.as_ref(), Some(&after), None)
         .map_err(|error| error.message().to_string())?;
+    // The entry first, on both sides, as the planning pull request reads it
+    // (ADR-0078): a symbolic link or submodule is no planning record under
+    // any admitted name.
+    if let Some((shown, kind)) = super::amendment::irregular_entry(&diff) {
+        return Ok(Some(
+            kind.map_or(shown.clone(), |kind| format!("the {kind} {shown}")),
+        ));
+    }
     let outside = crate::git::diff_paths(&diff)
         .into_iter()
         .find(|path| {

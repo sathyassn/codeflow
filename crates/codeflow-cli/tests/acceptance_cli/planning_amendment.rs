@@ -40,6 +40,41 @@ enum Extra {
     Hidden,
     /// The epic plan and a watched contract beside it ([`WATCHED`]).
     Watched,
+    /// The epic plan itself as a symbolic link into product code.
+    PlanLink,
+    /// The epic plan and a submodule beneath the plan folder.
+    PlanSubmodule,
+    /// The epic plan and a symbolic link beneath `project-management/`.
+    RecordsLink,
+    /// The epic plan and a submodule beneath `project-management/`.
+    RecordsSubmodule,
+}
+
+/// Stage `path` as a symbolic link to product code (`link`) or as a
+/// submodule at the current commit, by its Git entry mode, so the fixture
+/// is the same on every platform. With `core.symlinks` off, a later
+/// `git add -A` keeps the link's mode from the file holding its target.
+fn stage_special(root: &Path, link: bool, path: &str) {
+    git(root, &["config", "core.symlinks", "false"]);
+    let (mode, oid) = if link {
+        write(root, path, "../../src/lib.rs");
+        git(root, &["add", "-A"]);
+        ("120000", git_out(root, &["hash-object", "-w", path]))
+    } else {
+        // An empty folder is an unpopulated submodule to Git.
+        std::fs::create_dir_all(root.join(path)).unwrap();
+        git(root, &["add", "-A"]);
+        ("160000", head(root))
+    };
+    git(
+        root,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("{mode},{oid},{path}"),
+        ],
+    );
 }
 
 /// A breaking-change watch path beneath the plan folder, so a planning
@@ -90,6 +125,20 @@ fn amendment(root: &Path, own: Own, extra: Extra) -> String {
         Extra::Instructions => write(root, "docs/plan/AGENTS.md", "# Plan agents\n"),
         Extra::Hidden => write(root, "docs/plan/.claude/settings.json", "{}\n"),
         Extra::Watched => write(root, "docs/plan/contract.md", "# Contract\n"),
+        Extra::PlanLink => stage_special(root, true, "docs/plan/EPC-001.md"),
+        Extra::PlanSubmodule => stage_special(root, false, "docs/plan/vendor"),
+        Extra::RecordsLink => stage_special(root, true, "project-management/notes.md"),
+        Extra::RecordsSubmodule => stage_special(root, false, "project-management/vendor"),
+    }
+    if matches!(
+        extra,
+        Extra::PlanLink | Extra::PlanSubmodule | Extra::RecordsLink | Extra::RecordsSubmodule
+    ) {
+        git(
+            root,
+            &["commit", "-m", "docs(plan): narrow EPC-001 for Linux"],
+        );
+        return head(root);
     }
     commit(root, "docs(plan): narrow EPC-001 for Linux")
 }
@@ -173,12 +222,26 @@ fn a_task_waiver_names_an_epic_amendment_on_the_target() {
 #[test]
 fn an_own_range_waiver_may_update_the_plan_beside_the_record() {
     assert_passes(&own_range(Own::Amended, Extra::Plan), "amended");
+    // The control for the entry-mode refusals: a regular plan file passes
+    // on the target route too.
+    assert_passes(
+        &on_target(Own::Amended, Extra::Plan, false),
+        "on the target",
+    );
+    // An own-range amendment that also changes another task's record is
+    // still refused, by the scope rule that holds whatever the waiver.
+    assert_blocks(
+        &own_range(Own::Amended, Extra::EpicPlanAndTask),
+        "own range beside another task's record",
+        &["TSK-002 changes its criteria in TSK-001's pull request"],
+    );
 }
 
 /// Fail closed on both routes: the amendment changes planning records only,
 /// as the hardened amendment classification reads them (no instruction,
-/// hidden or adopter-facing file even beneath a planning folder), and
-/// amends this task's criterion.
+/// hidden or adopter-facing file even beneath a planning folder, and no
+/// symbolic link or submodule under any admitted name), and amends this
+/// task's criterion.
 #[test]
 fn a_task_waiver_refuses_a_mixed_or_unrelated_amendment() {
     let refusals = [
@@ -207,6 +270,26 @@ fn a_task_waiver_refuses_a_mixed_or_unrelated_amendment() {
             Own::Untouched,
             Extra::Plan,
             "which does not amend AC-1 of TSK-001",
+        ),
+        (
+            Own::Amended,
+            Extra::PlanLink,
+            "also changes the symbolic link docs/plan/EPC-001.md",
+        ),
+        (
+            Own::Amended,
+            Extra::PlanSubmodule,
+            "also changes the submodule docs/plan/vendor",
+        ),
+        (
+            Own::Amended,
+            Extra::RecordsLink,
+            "also changes the symbolic link project-management/notes.md",
+        ),
+        (
+            Own::Amended,
+            Extra::RecordsSubmodule,
+            "also changes the submodule project-management/vendor",
         ),
     ];
     for (own, extra, needle) in refusals {
