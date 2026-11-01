@@ -874,7 +874,7 @@ fn process_alive(pid: u32) -> bool {
             return GetLastError() == ERROR_ACCESS_DENIED;
         }
         let mut code = 0_u32;
-        let queried = GetExitCodeProcess(handle, &mut code) != 0;
+        let queried = GetExitCodeProcess(handle, &raw mut code) != 0;
         CloseHandle(handle);
         !queried || code == STILL_ACTIVE
     }
