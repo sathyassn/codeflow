@@ -12,7 +12,11 @@
 //! - a word naming DELETE anywhere in a `gh api` call is refused;
 //! - a `gh auth` call with the token flag anywhere, or with an option
 //!   before its subcommand, is refused;
-//! - a word the shell fills in is refused, since it could be any of these.
+//! - a word the shell fills in is refused, since it could be any of these;
+//! - an output expression is code that runs with gh's environment (round
+//!   4: `--jq env` prints every variable gh inherited), so any `gh` call's
+//!   `--jq` is admitted only as a plain field selector, and `--template` is
+//!   refused ([`output_code`]).
 
 use crate::hooks::git_guard::expands;
 
@@ -44,7 +48,7 @@ pub(crate) enum Auth {
 
 /// Options the plain read form takes with a value, as a separate word or
 /// after `=` on the long name.
-const READ_VALUE: &[&str] = &["-q", "--jq", "-t", "--template", "--cache"];
+const READ_VALUE: &[&str] = &["-q", "--jq", "--cache"];
 /// Options the plain read form takes without a value.
 const READ_FLAG: &[&str] = &["-i", "--include", "--paginate", "--slurp", "--silent"];
 
@@ -97,9 +101,7 @@ pub(crate) fn api_intent(args: &[String]) -> Intent {
             continue;
         }
         if READ_FLAG.contains(&word.as_str())
-            || ["--jq=", "--template=", "--cache="]
-                .iter()
-                .any(|p| word.starts_with(p))
+            || ["--jq=", "--cache="].iter().any(|p| word.starts_with(p))
         {
             continue;
         }
@@ -157,6 +159,133 @@ pub(crate) fn auth_intent(args: &[String]) -> Auth {
         return Auth::Refused;
     }
     Auth::Plain
+}
+
+/// Whether a jq program is a plain field selector: dot paths of
+/// identifiers with `[]` and `[N]`, joined by `|` or `,`. Nothing else is
+/// admitted: no `env`, `$ENV`, variables, functions, string interpolation,
+/// formats, object construction or recursion, since gh evaluates the
+/// program outside the sandbox with its own environment (security review
+/// round 4, SEC-09).
+pub(crate) fn is_field_selector(program: &str) -> bool {
+    let program = program.trim();
+    !program.is_empty()
+        && program
+            .split(['|', ','])
+            .all(|path| is_dot_path(path.trim()))
+}
+
+fn is_dot_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.first() != Some(&b'.') {
+        return false;
+    }
+    if path == "." {
+        return true;
+    }
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'.' => {
+                at += 1;
+                // A dot is followed by a name or a bracket, never another
+                // dot (`..` recurses).
+                let start = at;
+                while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                    at += 1;
+                }
+                let named = at > start;
+                if named && bytes[start].is_ascii_digit() {
+                    return false;
+                }
+                if !named && bytes.get(at) != Some(&b'[') {
+                    return false;
+                }
+            }
+            b'[' => {
+                at += 1;
+                while at < bytes.len() && bytes[at].is_ascii_digit() {
+                    at += 1;
+                }
+                if bytes.get(at) != Some(&b']') {
+                    return false;
+                }
+                at += 1;
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Why the `gh` call with these words (every word after `gh`) is refused
+/// for an output expression, or `None`. A `--jq`/`-q` program must be a
+/// [`is_field_selector`]; `--template`, and `-t` wherever it can mean the
+/// template, are refused, since a template is a program too. `-t` is the
+/// title in `gh pr` and `gh issue` `create` and `edit`.
+pub(crate) fn output_code(rest: &[String]) -> Option<String> {
+    let title = matches!(
+        (
+            rest.first().map(String::as_str),
+            rest.get(1).map(String::as_str)
+        ),
+        (Some("pr" | "issue"), Some("create" | "edit"))
+    );
+    let jq = |program: Option<&String>| match program {
+        Some(program) if is_field_selector(program) => None,
+        Some(program) => Some(format!(
+            "`--jq {program}` is a program gh runs outside the sandbox with its environment"
+        )),
+        None => Some("`--jq` has no program".to_string()),
+    };
+    let mut words = rest.iter();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            break;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, attached) = match long.split_once('=') {
+                Some((name, value)) => (name, Some(value.to_string())),
+                None => (long, None),
+            };
+            if name == "jq" {
+                let program = attached.or_else(|| words.next().cloned());
+                if let Some(why) = jq(program.as_ref()) {
+                    return Some(why);
+                }
+            } else if name == "template" {
+                return Some(format!(
+                    "`{word}` is a template program gh runs outside the sandbox"
+                ));
+            }
+            continue;
+        }
+        let Some(short) = word.strip_prefix('-').filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        // In a short option word, what follows `=` is always a value
+        // (`-X=put`), so only the letters before it can be options.
+        let letters = short.split('=').next().unwrap_or_default();
+        if let Some(at) = letters.find('q') {
+            let after = &short[at + 1..];
+            let after = after.strip_prefix('=').unwrap_or(after);
+            let program = if after.is_empty() {
+                words.next().cloned()
+            } else {
+                Some(after.to_string())
+            };
+            if let Some(why) = jq(program.as_ref()) {
+                return Some(why);
+            }
+            continue;
+        }
+        if !title && letters.contains('t') {
+            return Some(format!(
+                "`{word}` can be a template program gh runs outside the sandbox"
+            ));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -254,10 +383,92 @@ mod tests {
             "repos/o/r -X get",
             "repos/o/r --method=GET",
             "repos/o/r --paginate --slurp -q .name",
-            "repos/o/r -i --silent --jq=.name --template={{.name}} --cache 1h",
+            "repos/o/r -i --silent --jq=.name --cache 1h",
             "repos/o/r/git/refs/heads/delete-me",
         ] {
             assert_eq!(intent(line), Intent::Read, "{line}");
+        }
+    }
+
+    #[test]
+    fn only_a_plain_field_selector_is_admitted() {
+        for program in [
+            ".",
+            ".name",
+            ".head.sha",
+            ".[]",
+            ".[].id",
+            ".jobs[].databaseId",
+            ".[0]",
+            ".items[2].name_2",
+            ".a, .b",
+            ".[] | .name",
+            ".env",
+            " .x |.y ",
+        ] {
+            assert!(is_field_selector(program), "{program}");
+        }
+        for program in [
+            "",
+            "env",
+            "env.GH_TOKEN",
+            "$ENV",
+            "$ENV.GH_TOKEN",
+            "$__loc__",
+            "getpath([\"a\"])",
+            "env | to_entries",
+            ".[env]",
+            ".[\"GH_TOKEN\"]",
+            ". as $x | $x",
+            "\"\\(env)\"",
+            "@base64",
+            "{id, name}",
+            "..",
+            ".a..b",
+            ".a.[0]x",
+            "input",
+            ".a?",
+            "select(.a)",
+            ".a // env",
+            ".1a",
+            "[.a]",
+        ] {
+            assert!(!is_field_selector(program), "{program}");
+        }
+    }
+
+    #[test]
+    fn output_programs_are_refused_on_every_gh_call() {
+        for line in [
+            "api rate_limit --jq env",
+            "api rate_limit --jq=env",
+            "api rate_limit -q env",
+            "api rate_limit -qenv",
+            "api rate_limit -iq=env",
+            "api rate_limit -q $ENV",
+            "pr view 458 --json number --jq env",
+            "pr view 458 --json number -q .number|env",
+            "run list --json name --jq getpath([\"a\"])",
+            "api repos/o/r --template {{.name}}",
+            "pr view 1 --json title --template={{.title}}",
+            "pr view 1 --json title -t {{.title}}",
+            "-R o/r pr create -t x",
+            "api repos/o/r -iXpatch",
+            "api repos/o/r --jq",
+        ] {
+            assert!(output_code(&words(line)).is_some(), "{line}");
+        }
+        for line in [
+            "api repos/o/r --jq .name",
+            "pr view 458 --json number --jq .number",
+            "run view 1 --json jobs --jq .jobs[].databaseId",
+            "pr create -t title -b body",
+            "issue edit 1 -t title",
+            "pr list --state open",
+            "api repos/o/r -X=put",
+            "api repos/o/r -X=quit",
+        ] {
+            assert_eq!(output_code(&words(line)), None, "{line}");
         }
     }
 

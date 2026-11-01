@@ -46,6 +46,25 @@ pub(crate) fn asks_at(command: &str, levels: &SecuritySection, cwd: Option<&Path
     asks
 }
 
+/// The refusals for `gh` output programs (TSK-1070 security review
+/// round 4), under `security.secret_reads`.
+fn gh_output_programs(gh_code: Vec<String>, levels: &SecuritySection) -> Vec<Violation> {
+    if !levels.secret_reads.is_active() {
+        return Vec::new();
+    }
+    gh_code
+        .into_iter()
+        .map(|why| {
+            Violation::new(
+                "security.secret_reads",
+                levels.secret_reads,
+                format!("gh output program: {why}, so it can print the GitHub token and every other variable gh holds"),
+                crate::remedy::GH_OUTPUT_PROGRAM.remedy(),
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn evaluate_at(
     command: &str,
     levels: &SecuritySection,
@@ -56,6 +75,10 @@ pub(crate) fn evaluate_at(
     unread_gh.extend(embedded.unread_gh);
     unread_gh.sort();
     unread_gh.dedup();
+    let mut gh_code = parsed.gh_code;
+    gh_code.extend(embedded.gh_code);
+    gh_code.sort();
+    gh_code.dedup();
     let mut families = parsed.families;
     families.extend(embedded.families);
     let mut config_reasons = parsed.config_reasons;
@@ -80,6 +103,7 @@ pub(crate) fn evaluate_at(
             )
         })
         .collect();
+    violations.extend(gh_output_programs(gh_code, levels));
     if levels.outward_actions.is_active() {
         violations.extend(unread_gh.into_iter().map(|why| {
             Violation::new(
@@ -177,6 +201,10 @@ struct Parsed {
     /// `gh api` calls that write or reach another host, with the reason:
     /// the person is asked before they run.
     gh_writes: Vec<String>,
+    /// `gh` calls with an output program other than a plain field
+    /// selector, with the reason: refused, since gh runs it outside the
+    /// sandbox with its environment (TSK-1070 security review round 4).
+    gh_code: Vec<String>,
     code: Vec<String>,
     stdin_interpreter: usize,
     commands: Vec<Unwrapped>,
@@ -2912,6 +2940,9 @@ fn gh_family(
             .any(|s| s == "--visibility" || s.starts_with("--visibility="))
     {
         out.families.push(("account", source()?));
+    }
+    if let Some(why) = super::gh_api::output_code(rest) {
+        out.gh_code.push(why);
     }
     let Some(first) = rest.first() else {
         return Ok(());

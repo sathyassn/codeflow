@@ -105,7 +105,8 @@ decision 2026-10-31):
   `release view`, `release list`, `search`, `auth status`) and `git push *`.
   An entry matches only when every command in the call matches, so the
   agent push path is a plain `git push` from the session's working
-  directory, and `gh` output is filtered with `--jq`. Herdr and the
+  directory, and `gh` output fields are selected with a plain `--jq`
+  field selector. Herdr and the
   official Codex plugin are left to the person's own user or `--settings`
   file, since a project entry reaches every adopter and the plugin's
   command path changes with each version (sandbox exemptions research,
@@ -131,13 +132,17 @@ decision 2026-10-31):
   header, an option before `api`; TSK-1070 security review round 3). So
   exec-guard treats a `gh api` call as a read only in one narrow plain
   form (`api` first, one REST endpoint, at most an explicit GET, and only
-  the output options `--jq`, `--template`, `--cache`, `--include`,
-  `--paginate`, `--slurp` and `--silent`) and answers Claude Code with the
+  the output options `--jq`, `--cache`, `--include`, `--paginate`,
+  `--slurp` and `--silent`) and answers Claude Code with the
   same `ask` decision for every other form, fields with `-X GET`
   included; a hook `ask` prompts in bypass too (live check, Claude Code
   2.1.316). It refuses a word naming DELETE anywhere in a `gh api` call, a
   `gh auth` call with the token flag anywhere or an option before its
-  subcommand, and a word the shell fills in. The shipped ask and deny
+  subcommand, and a word the shell fills in. An output program is code
+  that gh runs outside the sandbox with its environment (`--jq env`
+  printed every variable; review round 4), so on every `gh` call
+  exec-guard admits `--jq` only as a plain field selector and refuses a
+  template, under `security.secret_reads`. The shipped ask and deny
   rules stay as a second layer for the common spellings.
 - The Read tool and the sandbox deny the token stores of `gh`, git,
   Docker, gcloud, Azure, npm and the macOS keychains.

@@ -83,6 +83,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ABSENT_WORKTREE", Runs),
     ("OUTWARD_ACTION", Excluded(HumanAuthority)),
     ("GH_CALL_UNREAD", Excluded(HumanAuthority)),
+    ("GH_OUTPUT_PROGRAM", Excluded(HumanAuthority)),
     ("SECRET_SELECTION", Runs),
     ("PUSH_WITHOUT_FOLLOW_TAGS", Runs),
     ("TASK_STATUS", Runs),

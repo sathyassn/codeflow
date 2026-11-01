@@ -11297,7 +11297,7 @@ fn exec_guard_asks_before_every_gh_api_write() {
         "gh api repos/o/r/actions/runs/1/rerun -X PoSt",
         "gh api repos/o/r -X 'POST'",
         "gh api repos/o/r -X=put",
-        "gh api repos/o/r -iXpatch",
+        "gh api repos/o/r -iX patch",
         "gh api repos/o/r --method=pAtCh",
         "gh api repos/o/r -'f'body=x",
         "gh api repos/o/r -fbody=x",
@@ -11344,6 +11344,66 @@ fn exec_guard_asks_before_every_gh_api_write() {
             out.stdout.is_empty(),
             "{command}: {}",
             String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
+/// TSK-1070 security review round 4 (SEC-09): gh runs a `--jq` program or
+/// a template outside the sandbox with its own environment, so `--jq env`
+/// printed every inherited variable. On every `gh` call, a `--jq` program
+/// is admitted only as a plain field selector and a template is refused,
+/// under `security.secret_reads`, through the full hook.
+#[test]
+fn exec_guard_refuses_gh_output_programs_on_every_verb() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        "gh api rate_limit --jq env",
+        "gh api rate_limit --jq=env",
+        "gh api rate_limit -q env",
+        "gh api rate_limit -qenv",
+        "gh api rate_limit --jq '$ENV'",
+        "gh api rate_limit --jq '$ENV.GH_TOKEN'",
+        "gh api rate_limit --jq 'env[(\"GH_\" + \"TOKEN\")]'",
+        "gh api rate_limit --jq 'env | getpath([\"GH_TOKEN\"])'",
+        "gh api rate_limit --jq '$__loc__'",
+        "gh api rate_limit --jq '\"\\(env)\"'",
+        "gh pr view 458 --json number --jq env",
+        "gh pr view 458 --json number -q '.number, env'",
+        "gh issue list --json title --jq 'env.GH_TOKEN'",
+        "gh run list --json name --jq '[env]'",
+        "gh release view v1 --json name --jq env",
+        "gh repo view --json name --jq env",
+        "gh search prs x --json title --jq env",
+        "gh -R o/r pr view 1 --json title --jq env",
+        "gh api repos/o/r --template '{{.name}}'",
+        "gh pr view 1 --json title --template={{.title}}",
+        "gh pr view 1 --json title -t '{{.title}}'",
+        "gh api repos/o/r -t '{{.name}}'",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("security.secret_reads"), "{command}: {err}");
+        assert!(err.contains("--json"), "{command}: {err}");
+    }
+    // The selector forms CodeFlow's docs and scripts use stay allowed.
+    for command in [
+        "gh api repos/o/r/pulls/1 --jq .head.sha",
+        "gh api repos/o/r/rulesets --jq '.[].id'",
+        "gh api repos/o/r/contents/x --jq .content",
+        "gh run view 1 --json jobs --jq '.jobs[].databaseId'",
+        "gh run view 1 --json attempt --jq .attempt",
+        "gh pr view 458 --json number,state --jq '.number, .state'",
+        "gh pr list --json number --jq '.[] | .number'",
+        "gh pr create -t title -b body",
+    ] {
+        let out = exec_guard_from(dir.path(), command, false);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 }

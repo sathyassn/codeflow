@@ -56,7 +56,8 @@ amends ADR-0029's retry).
   `$(...)` keeps the whole call sandboxed (Claude Code sandboxing docs and
   the TSK-1070 canary). So an agent pushes with a plain `git push` from the
   session's working directory, which git-guard resolves as the repository,
-  and filters `gh` output with `--jq`. A script that calls `git` or `gh`
+  and selects `gh` output fields with `--jq` (a plain field selector;
+  see below). A script that calls `git` or `gh`
   stays sandboxed too, and an App token passed as `GH_TOKEN=$(...) gh ...`
   never matches an entry.
 - The guards, the deny rules and the ask rules judge an excluded command
@@ -72,8 +73,8 @@ amends ADR-0029's retry).
   - A `gh api` call runs without a prompt only in the plain read form:
     `api` is the first word after `gh`, one endpoint that is not GraphQL
     or an absolute URL, an explicit method only as `-X GET`, `--method
-    GET` or `--method=GET`, and otherwise only `-q`/`--jq`,
-    `-t`/`--template`, `--cache`, `-i`/`--include`, `--paginate`,
+    GET` or `--method=GET`, and otherwise only `-q`/`--jq` (as a field
+    selector, below), `--cache`, `-i`/`--include`, `--paginate`,
     `--slurp` and `--silent`, each as a separate word or a long `=` form.
   - Every other `gh api` form gets a prompt (the `ask` decision, which
     Claude Code shows in bypass mode too): a write method, a field or
@@ -87,6 +88,16 @@ amends ADR-0029's retry).
     before its subcommand.
   - A word the shell fills in is refused, in a `gh api` or `gh auth` call
     or as the `gh` subcommand.
+  - An output program is code: gh runs a `--jq` program or a template
+    outside the sandbox with its own environment, so `--jq env` would
+    print the GitHub token (TSK-1070 security review round 4). On every
+    `gh` call, `--jq`/`-q` is admitted only as a plain field selector
+    (dot paths of names with `[]` and `[N]`, joined by `|` or `,`, such
+    as `.head.sha` or `.[] | .name`), and `--template`, and `-t` except
+    as the title of `gh pr` or `gh issue` `create` and `edit`, are
+    refused, under `security.secret_reads`. For anything richer, read the
+    `--json` output as gh prints it: a pipe into `jq` keeps the call
+    sandboxed, where gh has no token.
   - The `forge_write` ask rules and the DELETE denies in the presets name
     the common spellings as a second layer.
 - Excluded commands do not inherit the host list: an excluded `gh` or
