@@ -39,7 +39,7 @@ The release chain is the longest. Some records in these chains still read
 
 ## Technical
 
-72 decisions, 3 with `status: superseded`. A
+70 decisions, 3 with `status: superseded`. A
 decision is proposed, then accepted, and may later be superseded; its
 content is never rewritten, and only `superseded_by` or a dated note is added.
 
