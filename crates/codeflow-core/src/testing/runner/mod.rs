@@ -386,6 +386,7 @@ pub fn run_dependency_targets_with_admission(
     let bound = parallel_bound(execution.parallel, execution.max_parallel);
     let mut admission = None;
     let mut wait_started = None;
+    let mut ticket: Option<super::gate_guard::WaitTicket> = None;
     let mut allocations = BTreeMap::<usize, usize>::new();
     let baseline = match super::delivery::tracked(project_dir) {
         Ok(snapshot) => snapshot,
@@ -443,20 +444,38 @@ pub fn run_dependency_targets_with_admission(
                 continue;
             }
             if quick && heavy && admission.is_none() {
-                match super::gate_guard::acquire_project_gate_lock(project_dir, "quick") {
+                match super::gate_guard::acquire_project_gate_lock(
+                    project_dir,
+                    "quick",
+                    ticket.as_ref(),
+                ) {
                     Ok(lock) => {
                         for note in &lock.notes {
                             progress!("[codeflow test] {note}");
                         }
                         admission = Some(lock);
                         wait_started = None;
+                        ticket = None;
                     }
                     Err(message) => {
                         let first_wait = wait_started.is_none();
                         let since = wait_started.get_or_insert_with(Instant::now);
-                        if !message.contains("gate lock unavailable")
-                            && since.elapsed() < Duration::from_secs(execution.heavy_wait_seconds)
+                        let bound = Duration::from_secs(execution.heavy_wait_seconds);
+                        let mut message = message;
+                        if ticket.is_none()
+                            && !message.contains("gate lock unavailable")
+                            && since.elapsed() < bound
                         {
+                            // Queue once, so waiters take the lock in arrival order.
+                            match super::gate_guard::WaitTicket::take(
+                                project_dir,
+                                bound.saturating_sub(since.elapsed()),
+                            ) {
+                                Ok(taken) => ticket = Some(taken),
+                                Err(error) => message = error,
+                            }
+                        }
+                        if !message.contains("gate lock unavailable") && since.elapsed() < bound {
                             if first_wait {
                                 progress!(
                                     "[codeflow test] waiting up to {}s for heavy work: {message}",
@@ -466,6 +485,7 @@ pub fn run_dependency_targets_with_admission(
                             waiting = true;
                             continue;
                         }
+                        ticket = None;
                         let reason = format!("not run: heavy target refused: {message}");
                         progress!("[codeflow test] {}: {reason}", target.name);
                         results.insert(index, Ok(not_run(target, &reason)));

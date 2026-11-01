@@ -61,6 +61,16 @@
 //! description can. Anything else falls back to ordinary admission. Full
 //! and essential gates never inherit.
 //!
+//! **Waiters are served in arrival order** (TSK-1128). A quick run or a
+//! reserve that waits for the lock takes a ticket in the `waiters` folder
+//! of the first lock directory, named by its arrival time, process and
+//! deadline ([`WaitTicket`]). Quick admission and reserve take the lock
+//! only when no earlier live ticket is queued; a ticket whose process has
+//! exited or whose deadline has passed is stale and removed. A queue that
+//! cannot be read, or a ticket name that does not parse, refuses the
+//! waiter (fail closed). Full and essential gates do not wait and do not
+//! read the queue.
+//!
 //! **Target directory.** `CARGO_TARGET_DIR` outside the worktree lets builds
 //! in parallel worktrees overwrite each other's binaries. A shared directory
 //! is also a legitimate way to save disk, and the gate lock already keeps two
@@ -385,17 +395,44 @@ fn holder_status(path: &Path, trusted: &[String]) -> Result<String, String> {
 /// Quick admission and `codeflow reserve` call this; under an enclosing
 /// `codeflow reserve` they first use its lock ([`RESERVED_LOCKS_ENV`]).
 /// Full and essential gates take the lock themselves and never inherit.
-pub fn acquire_project_gate_lock(root: &Path, mode: &str) -> Result<GateLock, String> {
-    let dirs = lock_dirs(root, crate::registry::codeflow_home().as_deref())
-        .map_err(|error| format!("gate lock unavailable: cannot discover repository: {error}; run `codeflow doctor --check permissions`"))?;
+/// A waiter passes its `ticket`; any caller is refused while an earlier
+/// live ticket is queued, so waiters take the lock in arrival order.
+pub fn acquire_project_gate_lock(
+    root: &Path,
+    mode: &str,
+    ticket: Option<&WaitTicket>,
+) -> Result<GateLock, String> {
+    let dirs = project_lock_dirs(root)?;
+    acquire_in_turn(&dirs, root, mode, ticket)
+}
+
+/// The lock directories of `root`, with the operator's repair pointer.
+/// # Errors
+/// When the repository cannot be discovered.
+pub fn project_lock_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
+    lock_dirs(root, crate::registry::codeflow_home().as_deref())
+        .map_err(|error| format!("gate lock unavailable: cannot discover repository: {error}; run `codeflow doctor --check permissions`"))
+}
+
+fn acquire_in_turn(
+    dirs: &[PathBuf],
+    root: &Path,
+    mode: &str,
+    ticket: Option<&WaitTicket>,
+) -> Result<GateLock, String> {
     #[cfg(unix)]
     {
         let adopted = adopted().clone();
-        if let Some(lock) = inherit_gate_lock(&dirs, &adopted) {
+        if let Some(lock) = inherit_gate_lock(dirs, &adopted) {
             return Ok(lock);
         }
     }
-    acquire_gate_lock(&dirs, root, mode).map_err(|held| {
+    if let Some(ahead) = earliest_waiter(dirs, ticket.map(|ticket| ticket.name.as_str()))? {
+        return Err(format!(
+            "an earlier waiter is queued for the heavy-work lock: {ahead}; waiters take the lock in arrival order"
+        ));
+    }
+    acquire_gate_lock(dirs, root, mode).map_err(|held| {
         let message = held.to_string();
         if message.contains("gate lock unavailable") {
             format!("{message}; run `codeflow doctor --check permissions` to identify the directories to repair")
@@ -586,9 +623,167 @@ pub fn acquire_gate_lock(
     Ok(lock)
 }
 
+/// The folder of waiter tickets, inside the first lock directory.
+const WAITERS_DIR: &str = "waiters";
+
+/// The most tickets a queue may hold before it refuses as unreadable.
+const MOST_WAITERS: usize = 256;
+
+/// Seconds past its deadline after which a live process's ticket is stale.
+const TICKET_GRACE_SECONDS: u64 = 5;
+
+/// A place in the queue for the heavy-work lock, held while its process
+/// waits and removed when it drops (TSK-1128). The name orders the queue:
+/// `ticket-<arrival ns>-<pid>-<deadline unix seconds>`.
+#[derive(Debug)]
+pub struct WaitTicket {
+    anchor: PathBuf,
+    relative: String,
+    name: String,
+}
+
+impl WaitTicket {
+    /// Join the queue of the locks in `root`'s lock directories, waiting at
+    /// most `wait`.
+    /// # Errors
+    /// When the queue folder cannot be written (`gate lock unavailable`).
+    pub fn take(root: &Path, wait: std::time::Duration) -> Result<Self, String> {
+        Self::take_in(&project_lock_dirs(root)?, wait)
+    }
+
+    fn take_in(dirs: &[PathBuf], wait: std::time::Duration) -> Result<Self, String> {
+        let unavailable = |error: std::io::Error| {
+            format!("gate lock unavailable: cannot join the waiter queue: {error}")
+        };
+        let Some(dir) = dirs.first() else {
+            return Err("gate lock unavailable: no lock directory for a waiter queue".to_string());
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        let name = format!(
+            "ticket-{:020}-{}-{}",
+            now.as_nanos(),
+            std::process::id(),
+            now.as_secs()
+                .saturating_add(wait.as_secs())
+                .saturating_add(1)
+        );
+        let ticket_path = dir.join(WAITERS_DIR).join(&name);
+        let (anchor, relative) = lock_anchor(&ticket_path).map_err(unavailable)?;
+        let tree = crate::contained::Tree::open(anchor).map_err(unavailable)?;
+        let folder = relative.rsplit_once('/').map_or("", |(folder, _)| folder);
+        tree.create_dir_all(folder).map_err(unavailable)?;
+        tree.create_new(&relative, b"").map_err(unavailable)?;
+        Ok(Self {
+            anchor: anchor.to_path_buf(),
+            relative,
+            name,
+        })
+    }
+}
+
+impl Drop for WaitTicket {
+    fn drop(&mut self) {
+        if let Ok(tree) = crate::contained::Tree::open(&self.anchor) {
+            let _ = tree.remove(&self.relative);
+        }
+    }
+}
+
+/// A parsed ticket name: arrival, process and deadline.
+fn parse_ticket(name: &str) -> Option<(u128, u32, u64)> {
+    let mut parts = name.strip_prefix("ticket-")?.split('-');
+    let arrival = parts.next()?.parse().ok()?;
+    let pid = parts.next()?.parse().ok().filter(|pid| *pid > 1)?;
+    let deadline = parts.next()?.parse().ok()?;
+    parts.next().is_none().then_some((arrival, pid, deadline))
+}
+
+/// The earliest live ticket other than `own`, described for a refusal, or
+/// `None`. Stale tickets are removed on the way. Only names starting with
+/// `ticket-` are read; such a name that does not parse, or a queue that
+/// cannot be listed, is an error naming `gate lock unavailable`.
+fn earliest_waiter(dirs: &[PathBuf], own: Option<&str>) -> Result<Option<String>, String> {
+    let unavailable =
+        |error: String| format!("gate lock unavailable: cannot read the waiter queue: {error}");
+    let Some(dir) = dirs.first() else {
+        return Ok(None);
+    };
+    let probe = dir.join(WAITERS_DIR).join("probe");
+    let (anchor, relative) = lock_anchor(&probe).map_err(|error| unavailable(error.to_string()))?;
+    let folder = relative
+        .rsplit_once('/')
+        .map_or("", |(folder, _)| folder)
+        .to_string();
+    let tree = match crate::contained::Tree::open(anchor) {
+        Ok(tree) => tree,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(unavailable(error.to_string())),
+    };
+    let names = match tree.entries(&folder, MOST_WAITERS) {
+        Ok(names) => names,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(unavailable(error.to_string())),
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut earliest: Option<(u128, u32)> = None;
+    for name in names {
+        let Some(name) = name.to_str().map(str::to_string) else {
+            return Err(unavailable("a ticket name is not valid UTF-8".to_string()));
+        };
+        if !name.starts_with("ticket-") {
+            continue;
+        }
+        let Some((arrival, pid, deadline)) = parse_ticket(&name) else {
+            return Err(unavailable(format!(
+                "a ticket name does not parse: {}",
+                crate::git::display_line(&name)
+            )));
+        };
+        if Some(name.as_str()) == own {
+            continue;
+        }
+        if now > deadline.saturating_add(TICKET_GRACE_SECONDS) || !process_alive(pid) {
+            let _ = tree.remove(&format!("{folder}/{name}"));
+            continue;
+        }
+        if own
+            .and_then(parse_ticket)
+            .is_some_and(|(mine, _, _)| mine < arrival)
+        {
+            continue;
+        }
+        if earliest.is_none_or(|(first, _)| arrival < first) {
+            earliest = Some((arrival, pid));
+        }
+    }
+    Ok(earliest.map(|(_, pid)| format!("process {pid}")))
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 only checks that the process exists.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn process_alive(_pid: u32) -> bool {
+    // Without a cheap check here, a ticket lives until its deadline.
+    true
+}
+
 /// Names the lock descriptors `codeflow reserve` hands to a `codeflow`
 /// command, as decimal descriptor numbers separated by commas (TSK-1128).
-/// The value is a hint, never authority: [`inherit_gate_lock`] trusts a
+/// The value is a hint, never authority: `inherit_gate_lock` trusts a
 /// descriptor only after the OS lock shows it is the holder's own.
 pub const RESERVED_LOCKS_ENV: &str = "CODEFLOW_RESERVED_LOCK_FDS";
 
@@ -610,7 +805,7 @@ fn adopted() -> std::sync::MutexGuard<'static, Vec<std::os::fd::RawFd>> {
 /// child sees it, and each named descriptor that is an open regular file is
 /// made close-on-exec, so no target, tool or daemon this process starts can
 /// keep the reserved lock after the run. A malformed value is ignored
-/// whole. The descriptors grant nothing until [`inherit_gate_lock`] checks
+/// whole. The descriptors grant nothing until `inherit_gate_lock` checks
 /// them.
 pub fn adopt_reserved_locks() {
     let value = std::env::var_os(RESERVED_LOCKS_ENV);
@@ -1416,6 +1611,63 @@ mod tests {
             "the inherited lock never releases or rewrites the holder's: {refused}"
         );
         drop(holder);
+    }
+
+    /// TSK-1128 AC-7: an earlier waiter takes the lock before a later one;
+    /// stale and dropped tickets stop counting; a malformed ticket refuses.
+    #[test]
+    fn waiters_take_the_lock_in_arrival_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let dirs = dirs(tmp.path());
+        let wait = std::time::Duration::from_secs(60);
+        let earlier = WaitTicket::take_in(&dirs, wait).unwrap();
+        let later = WaitTicket::take_in(&dirs, wait).unwrap();
+        let refused = acquire_in_turn(&dirs, &work, "reserve", Some(&later)).unwrap_err();
+        assert!(refused.contains("an earlier waiter is queued"), "{refused}");
+        let refused = acquire_in_turn(&dirs, &work, "quick", None).unwrap_err();
+        assert!(refused.contains("an earlier waiter is queued"), "{refused}");
+        let first = acquire_in_turn(&dirs, &work, "reserve", Some(&earlier))
+            .expect("the earlier waiter goes first");
+        drop(earlier);
+        drop(first);
+        let second = (0..40)
+            .find_map(|_| {
+                acquire_in_turn(&dirs, &work, "reserve", Some(&later))
+                    .map_err(|_| std::thread::sleep(std::time::Duration::from_millis(50)))
+                    .ok()
+            })
+            .expect("the later waiter goes next");
+        drop(second);
+        drop(later);
+
+        let queue = dirs[0].join(WAITERS_DIR);
+        // A ticket of an exited process, and one past its deadline, are stale.
+        std::fs::write(
+            queue.join("ticket-00000000000000000001-999999-99999999999"),
+            "",
+        )
+        .unwrap();
+        std::fs::write(
+            queue.join(format!(
+                "ticket-00000000000000000002-{}-1",
+                std::process::id()
+            )),
+            "",
+        )
+        .unwrap();
+        let lock =
+            acquire_in_turn(&dirs, &work, "quick", None).expect("stale tickets do not block");
+        drop(lock);
+        assert_eq!(
+            std::fs::read_dir(&queue).unwrap().count(),
+            0,
+            "stale tickets are removed"
+        );
+        std::fs::write(queue.join("ticket-junk"), "").unwrap();
+        let refused = acquire_in_turn(&dirs, &work, "quick", None).unwrap_err();
+        assert!(refused.contains("gate lock unavailable"), "{refused}");
     }
 
     #[test]

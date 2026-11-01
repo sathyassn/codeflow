@@ -119,7 +119,12 @@ wait. An explicit target declaration
 takes precedence. When there are no quick targets and quick falls back to
 essential, undeclared targets are heavy. Heavy quick targets wait up to
 `--wait-seconds` or `execution.heavy_wait_seconds` (default zero), then
-refuse if the lock is still held. This repository waits up to 1800 seconds. The result names the light targets that ran. Pre-push runs no
+refuse if the lock is still held. This repository waits up to 1800 seconds.
+Waiting quick runs and reserves take the lock in arrival order: each
+queues a ticket in the `waiters` folder beside the CodeFlow home lock, and
+a later caller is refused while an earlier waiter's ticket is live. A
+ticket of an exited process, or past its deadline, is removed; an
+unreadable queue refuses. Full and essential gates do not queue. The result names the light targets that ran. Pre-push runs no
 quick target, so it never waits for the lock.
 
 Read the holder's process, worktree, mode and start time with

@@ -205,3 +205,42 @@ fn a_direct_quick_run_waits_for_the_lock_up_to_its_bound() {
     assert!(linked.join("heavy-ran").exists());
     assert!(holder.wait().unwrap().success());
 }
+
+/// AC-7 (journey): two reserves that wait for a held lock run in the order
+/// they arrived, once the holder ends.
+#[test]
+fn waiting_reserves_take_the_lock_in_arrival_order() {
+    let home = tempfile::tempdir().unwrap();
+    let first = held_until_released("full");
+    let linked = linked_worktree(first.path(), &heavy_quick(false));
+    let (mut holder, rx, _stdout) = spawn(command(first.path(), home.path(), &["test"]));
+    wait_for(&rx, "starting target 'holder'");
+    let order = first.path().join("order");
+    let script = format!("echo \"$1\" >> '{}'", order.display());
+    let waiter = |name: &str| {
+        let (child, lines, _stdout) = spawn(command(
+            &linked,
+            home.path(),
+            &[
+                "reserve",
+                "--wait-seconds",
+                "60",
+                "--",
+                "sh",
+                "-c",
+                &script,
+                "sh",
+                name,
+            ],
+        ));
+        wait_for(&lines, "waiting up to 60s in arrival order");
+        (child, lines)
+    };
+    let (mut earlier, _earlier_lines) = waiter("earlier");
+    let (mut later, _later_lines) = waiter("later");
+    std::fs::write(first.path().join("release"), "done").unwrap();
+    assert!(holder.wait().unwrap().success());
+    assert!(earlier.wait().unwrap().success());
+    assert!(later.wait().unwrap().success());
+    assert_eq!(std::fs::read_to_string(&order).unwrap(), "earlier\nlater\n");
+}

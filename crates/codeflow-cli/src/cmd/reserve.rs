@@ -1,6 +1,9 @@
 //! Direct heavy commands share the gate's machine and repository admission.
 use clap::Args;
-use codeflow_core::testing::{gate_guard::acquire_project_gate_lock, runner::run_reserved_command};
+use codeflow_core::testing::{
+    gate_guard::{acquire_project_gate_lock, WaitTicket},
+    runner::run_reserved_command,
+};
 use std::ffi::OsString;
 use std::time::{Duration, Instant};
 
@@ -35,20 +38,35 @@ pub fn run(args: &ReserveArgs) -> i32 {
         }
     };
     let start = Instant::now();
+    let wait = Duration::from_secs(args.wait_seconds);
+    // A waiter queues once, so waiters take the lock in arrival order.
+    let mut ticket = None;
     let lock = loop {
-        match acquire_project_gate_lock(&root, "reserve") {
+        match acquire_project_gate_lock(&root, "reserve", ticket.as_ref()) {
             Ok(lock) => break lock,
             Err(message) => {
-                if message.contains("gate lock unavailable")
-                    || start.elapsed() >= Duration::from_secs(args.wait_seconds)
-                {
+                if message.contains("gate lock unavailable") || start.elapsed() >= wait {
                     eprintln!("codeflow reserve: refused: {message}");
                     return 1;
+                }
+                if ticket.is_none() {
+                    match WaitTicket::take(&root, wait.saturating_sub(start.elapsed())) {
+                        Ok(taken) => ticket = Some(taken),
+                        Err(error) => {
+                            eprintln!("codeflow reserve: refused: {error}");
+                            return 1;
+                        }
+                    }
+                    eprintln!(
+                        "codeflow reserve: waiting up to {}s in arrival order: {message}",
+                        args.wait_seconds
+                    );
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
     };
+    drop(ticket);
     for note in &lock.notes {
         eprintln!("codeflow reserve: {note}");
     }
