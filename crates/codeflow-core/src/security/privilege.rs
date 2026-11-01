@@ -234,6 +234,7 @@ mod tests {
             sandbox_bypass: false,
             current_branch: "feat/test",
             policy: test_policy(),
+            cwd: None,
         }
     }
 

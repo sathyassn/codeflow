@@ -733,6 +733,56 @@ fn own_roots(args: &[String], literal: &[bool], configured: bool) -> Option<Vec<
     )
 }
 
+/// The options that make a search tool run another program: ripgrep's
+/// `--pre` and `--pre-glob` (a program on every file it searches),
+/// `-z` and `--search-zip` (a decompression program found on `PATH`) and
+/// `--hostname-bin` (a program that prints the host name); `ag`'s
+/// `--pager`, and its `-z` and `--search-zip`, kept out with ripgrep's
+/// although `ag` decompresses in process; `git grep`'s
+/// `-O` and `--open-files-in-pager` (a pager given the matching files)
+/// and `--textconv` (the conversion program a file's attributes name).
+/// `git grep` honours no textconv setting without `--textconv`.
+const RUNS_PROGRAM: &[(&str, &[&str])] = &[
+    (
+        "rg",
+        &[
+            "--pre",
+            "--pre-glob",
+            "-z",
+            "--search-zip",
+            "--hostname-bin",
+        ],
+    ),
+    ("ag", &["--pager", "-z", "--search-zip"]),
+    ("git grep", &["-O", "--open-files-in-pager", "--textconv"]),
+];
+
+/// Whether a call of the search tool `program` (`rg`, `ag` or `git grep`,
+/// without its `git`) with `args` runs no other program (TSK-286, after
+/// TSK-380): every option is one the tool's grammar knows, none is in
+/// [`RUNS_PROGRAM`], and for ripgrep either `--no-config` is given or the
+/// line does not name `RIPGREP_CONFIG_PATH` (`configured`), since a
+/// configuration file may add `--pre`. An option the grammar does not
+/// know, an abbreviation included, may be one that runs a program, so it
+/// is not proven.
+pub(crate) fn runs_no_program(program: &str, args: &[String], configured: bool) -> bool {
+    let Some(denied) = RUNS_PROGRAM
+        .iter()
+        .find(|(name, _)| *name == program)
+        .map(|(_, denied)| *denied)
+    else {
+        return false;
+    };
+    let Some(call) = grammar(program).and_then(|grammar| read_call(grammar, args)) else {
+        return false;
+    };
+    let runs = call
+        .options
+        .iter()
+        .any(|option| denied.contains(&option.as_str()));
+    !runs && (program != "rg" || call.no_config || !configured)
+}
+
 /// GNU `parallel`'s command, as the range of `args` it spans up to its
 /// first input separator, and whether `-q` or `--quote` is given.
 fn parallel_command(args: &[String]) -> Option<(usize, usize, bool)> {
@@ -814,6 +864,8 @@ struct Call {
     no_pattern: bool,
     /// `--no-config` is given.
     no_config: bool,
+    /// Each option given, as `--name` or `-c`, in order.
+    options: Vec<String>,
 }
 
 /// Read a call by `grammar`, or `None` at an option it does not know.
@@ -825,6 +877,7 @@ fn read_call(grammar: &Grammar, args: &[String]) -> Option<Call> {
         supplied: false,
         no_pattern: false,
         no_config: false,
+        options: Vec::new(),
     };
     let mut options = true;
     let mut at = 0;
@@ -861,6 +914,7 @@ fn read_long(
     if name == "no-config" {
         call.no_config = true;
     }
+    call.options.push(format!("--{name}"));
     let flag = grammar.long_flags.contains(&name)
         || name
             .strip_prefix("no-")
@@ -902,6 +956,7 @@ fn read_short(
     call: &mut Call,
 ) -> Option<usize> {
     for (offset, letter) in cluster.char_indices() {
+        call.options.push(format!("-{letter}"));
         if grammar.flags.contains(letter) || (grammar.digits && letter.is_ascii_digit()) {
             if grammar.no_pattern.contains(&format!("-{letter}").as_str()) {
                 call.no_pattern = true;

@@ -8557,12 +8557,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "INPUT=src/app.py; python3 tool.py \"$INPUT\"",
         "python3 -c 'import json, sys; print(json.load(sys.stdin))' < .codeflow/policy.json",
         "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
-        "find . -name '*.py' -exec python3 -m py_compile {} +",
         "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
         "python3 tool.py -v -n3 -o out.json",
         "cd src && python3 app.py settings.json",
-        "find . -name '*.rs' -execdir python3 lint.py {} +",
-        "find src -execdir python3 lint.py notes.txt \\;",
         "cd .codex && python3 -c 'print(1)'",
         "cd .codeflow/git-hooks && python3 -c 'print(1)'",
         "source go.sh && python3 tool.py notes.txt",
@@ -8599,6 +8596,20 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         // Refused for what the interpreter is given, not for its code.
         if !interpreter_argument_refused(&out) {
             wrong.push(format!("should refuse: {command}: {err}"));
+        }
+    }
+    // TSK-286: an interpreter `find` runs on its matches may remove them,
+    // so the deletion floor refuses it as unproven whatever paths the
+    // interpreter itself is given.
+    for command in [
+        "find . -name '*.py' -exec python3 -m py_compile {} +",
+        "find . -name '*.rs' -execdir python3 lint.py {} +",
+        "find src -execdir python3 lint.py notes.txt \\;",
+    ] {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("unproven deletion target") {
+            wrong.push(format!("deletion floor should refuse: {command}: {err}"));
         }
     }
     // Code a shell or interpreter takes from a here-string, a process
@@ -9266,11 +9277,9 @@ fn guards_read_a_search_pattern_as_text() {
         "grep -rn '/etc/hosts' docs/".to_string(),
         "rg --files | xargs rg '.claude/settings.json'".to_string(),
         "rg --files | xargs rg -e x -e '.codeflow/policy.json'".to_string(),
-        "find docs -exec rg -l '.claude/settings.json' {} +".to_string(),
         // A wrapped `git grep` reads its pattern as plain `git grep` does.
         "rg --files | xargs git grep '/CHANGELOG.md$'".to_string(),
         "rg --files | xargs git grep -e '/CHANGELOG.md$' --".to_string(),
-        "find docs -exec git grep '/CHANGELOG.md$' {} +".to_string(),
         // A preprocessor over a root that holds nothing protected.
         "rg --pre pdftotext needle docs/".to_string(),
     ];
@@ -9315,6 +9324,35 @@ fn guards_read_a_search_pattern_as_text() {
             }
         }
     }
+    // TSK-286 keeps TSK-380's promise: the deletion floor proves `rg`, `ag` and
+    // `git grep` only read the matches `find -exec` hands them, unless an
+    // option runs another program (`--pre`, `-z`, `--pager`, `-O`,
+    // `--textconv`).
+    for command in [
+        "find docs -exec rg -l '.claude/settings.json' {} +",
+        "find docs -exec git grep '/CHANGELOG.md$' {} +",
+        "find docs -exec ag -l '/etc/hosts' {} +",
+    ] {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = run(hook, command);
+            if !out.status.success() {
+                let err = String::from_utf8_lossy(&out.stderr);
+                wrong.push(format!("{hook} should allow: {command}: {err}"));
+            }
+        }
+    }
+    for command in [
+        "find docs -exec rg -z x {} +",
+        "find docs -exec git grep -O x {} +",
+        "find docs -exec ag --pager rm x {} +",
+        "find docs -exec git grep --textconv x {} +",
+    ] {
+        let out = run("exec-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("unproven deletion target") {
+            wrong.push(format!("deletion floor should refuse: {command}: {err}"));
+        }
+    }
     for command in [
         "rg x > ~/.zshrc",
         "grep x docs/a.md > ~/.zshrc",
@@ -9356,7 +9394,9 @@ fn guards_read_a_search_pattern_as_text() {
     ] {
         let out = run("exec-guard", command);
         let err = String::from_utf8_lossy(&out.stderr);
-        if out.status.code() != Some(2) || !err.contains("security.shell_startup") {
+        // TSK-286: the deletion floor refuses `find -exec rg --pre` first.
+        let floor = command.starts_with("find ") && err.contains("unproven deletion target");
+        if out.status.code() != Some(2) || !(floor || err.contains("security.shell_startup")) {
             wrong.push(format!("exec-guard should refuse: {command}: {err}"));
         }
     }

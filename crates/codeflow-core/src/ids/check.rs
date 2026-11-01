@@ -123,8 +123,9 @@ fn reconcile(git: &Git, ledger: &Ledger, report: &mut Report) -> Result<(), IdsE
     let mut landing_cache: HashMap<(RegId, String), Option<String>> = HashMap::new();
     let tips = inventory::landing_tips(git)?;
     let mut unplaced: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let remotes = inventory::remote_names(git)?;
     for records in inventory::on_every_ref(git)? {
-        let name = branch_name(&records.refname).to_string();
+        let name = branch_name(&records.refname, &remotes).to_string();
         let landing = is_landing_branch(&name);
         for copy in &records.copies {
             let entry = ledger.entry(&copy.id);
@@ -463,6 +464,7 @@ fn scan(
         ours.push(identity(&head_sha, &record.id, record.uid.as_ref())?);
     }
     let mut cache: HashMap<String, Vec<inventory::Copy>> = HashMap::new();
+    let remotes = inventory::remote_names(git)?;
     for (refname, sha) in inventory::code_refs(git)? {
         if sha == head_sha {
             continue;
@@ -478,7 +480,7 @@ fn scan(
                     report.blocks.push(format!(
                         "uniqueness: {} also exists on {} as a different record ({}); renumber this one with `codeflow ids retarget {}`",
                         record.id,
-                        branch_name(&refname),
+                        branch_name(&refname, &remotes),
                         copy.path,
                         record.id
                     ));

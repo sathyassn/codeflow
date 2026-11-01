@@ -814,3 +814,7 @@ mod line_adoption;
 
 #[path = "refusal_journey/secret_paths.rs"]
 mod secret_paths;
+
+#[cfg(unix)]
+#[path = "refusal_journey/native_deletion.rs"]
+mod native_deletion;
