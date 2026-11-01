@@ -347,20 +347,19 @@ fn run_parallel(
         .collect()
 }
 
-/// The worker budget of a run that shares the host with `runs` heavy runs,
-/// itself included: its own `worker_budget` while they fit the host's job
-/// budget, else its share of that budget (TSK-1145).
-fn run_budget(execution: &super::config::ExecutionConfig, runs: usize) -> Option<usize> {
+/// The worker budget of a heavy run that shares the host with `runs` heavy
+/// runs, itself included: always bounded by the host's job budget, even for
+/// the first run and when `worker_budget` is unset, which only caps it
+/// further (TSK-1145).
+fn run_budget(execution: &super::config::ExecutionConfig, runs: usize) -> usize {
     let host = super::capacity::host_jobs(execution.host_jobs);
+    let jobs = super::capacity::run_jobs(host, execution.worker_budget, runs);
     if super::capacity::lowered(host, execution.worker_budget, runs) {
-        let jobs = super::capacity::run_jobs(host, execution.worker_budget, runs);
         progress!(
             "[codeflow test] {runs} heavy runs share this host's {host} jobs; this run uses {jobs}"
         );
-        Some(jobs)
-    } else {
-        execution.worker_budget
     }
+    jobs
 }
 
 /// Run a validated dependency graph with bounded concurrency and exclusive targets.
@@ -404,8 +403,9 @@ pub fn run_dependency_targets_with_admission(
     let mut wait_started = None;
     // The jobs heavy targets share: the run's own budget, lowered when more
     // heavy runs share the host than its job budget holds (TSK-1145).
-    let mut budget = super::gate_guard::held_runs()
-        .map_or(execution.worker_budget, |runs| run_budget(execution, runs));
+    let mut budget = super::gate_guard::held_runs().map_or(execution.worker_budget, |runs| {
+        Some(run_budget(execution, runs))
+    });
     let mut host_hold: Option<(usize, super::gate_guard::HostExclusive)> = None;
     let mut allocations = BTreeMap::<usize, usize>::new();
     let baseline = match super::delivery::tracked(project_dir) {
@@ -460,7 +460,12 @@ pub fn run_dependency_targets_with_admission(
             let heavy = target.heavy == Some(true) || target.host_exclusive;
             let free_workers =
                 budget.map(|budget| budget.saturating_sub(allocations.values().sum()));
-            if heavy && free_workers.is_some_and(|free| free < target.workers.unwrap_or(1)) {
+            // A declared width above the run's budget runs at the budget, so a
+            // lowered budget never leaves a target waiting forever (R483-04).
+            let need = budget.map_or(target.workers.unwrap_or(1), |budget| {
+                target.workers.unwrap_or(1).clamp(1, budget.max(1))
+            });
+            if heavy && free_workers.is_some_and(|free| free < need) {
                 continue;
             }
             if quick && heavy && admission.is_none() {
@@ -473,7 +478,7 @@ pub fn run_dependency_targets_with_admission(
                         for note in &lock.notes {
                             progress!("[codeflow test] {note}");
                         }
-                        budget = run_budget(execution, lock.runs);
+                        budget = Some(run_budget(execution, lock.runs));
                         admission = Some(lock);
                         wait_started = None;
                     }
@@ -523,9 +528,15 @@ pub fn run_dependency_targets_with_admission(
             let free_workers =
                 budget.map(|budget| budget.saturating_sub(allocations.values().sum()));
             let mut target = target.clone();
-            // A run whose budget the host lowered sizes every target not
+            // Heavy targets always take a share of the host-bounded budget. A
+            // budget below what the run would otherwise use (its
+            // `worker_budget`, else every core) also sizes each target not
             // declared light, so its tools do not take the whole host.
-            let sized = heavy || (budget != execution.worker_budget && target.heavy != Some(false));
+            let unbounded = execution.worker_budget.unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+            });
+            let sized =
+                heavy || (target.heavy != Some(false) && budget.is_some_and(|b| b < unbounded));
             if sized {
                 if let Some(free) = free_workers {
                     let ready = pending
@@ -543,7 +554,11 @@ pub fn run_dependency_targets_with_admission(
                     } else {
                         ready.min(bound - running.len()).max(1)
                     };
-                    let workers = target.workers.unwrap_or_else(|| (free / shares).max(1));
+                    // Never above what is free: admission may have lowered
+                    // the budget after the fit check (R483-04).
+                    let workers = target
+                        .workers
+                        .map_or_else(|| (free / shares).max(1), |width| width.min(free).max(1));
                     allocations.insert(index, workers);
                     for key in ["CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"] {
                         target.env.insert(key.into(), workers.to_string());
@@ -687,6 +702,9 @@ fn run_owed_target(
     // following a link or junction at any component (TSK-1044).
     let (anchor, output) = super::delivery::target_anchor(root)?;
     let locate = |path: &Path| super::delivery::locate(root, &anchor, &output, path);
+    // Held until this function returns, so the target's output is written
+    // and collected before another run's same target can touch it.
+    let _leases = evidence_leases(target, root, &anchor, &output)?;
     if let Some(report) = &target.report {
         if target.modes[mode].command.contains("nextest") {
             let path = resolve_cwd(root, target.cwd.as_deref())?.join(&report.path);
@@ -817,6 +835,81 @@ fn run_owed_target(
             .map_err(|error| super::delivery::evidence_refused(tree.path(), &log, &error))?;
     }
     Ok(result)
+}
+
+/// The outputs of `target` that every run of it writes at one fixed path,
+/// each named with the tool that fixes it. Two runs that share a build
+/// output folder (two gates in one worktree, or worktrees that name one
+/// target folder) would otherwise remove, overwrite or collect each other's
+/// files between production and collection (R483-03).
+///
+/// None of these tools can be pointed at a per-run path without a rebuild:
+/// - `nextest` writes its `JUnit` report under its store folder, which the
+///   profile in `.config/nextest.toml` fixes;
+/// - cargo-llvm-cov sets its own `LLVM_PROFILE_FILE`, removes every profile
+///   in its target folder before the run and merges every one after it;
+/// - a configured report or coverage file is written wherever the target's
+///   own command writes it.
+///
+/// Everything else a run writes is already its own: the run folder, its
+/// `CODEFLOW_GATE_RESULTS` path and its saved reports carry the run id.
+fn shared_outputs(target: &TargetConfig, root: &Path) -> Result<Vec<PathBuf>, TestingError> {
+    let cwd = resolve_cwd(root, target.cwd.as_deref())?;
+    let mut shared = Vec::new();
+    if let Some(report) = &target.report {
+        shared.push(cwd.join(&report.path));
+    }
+    if let Some(coverage) = &target.coverage {
+        shared.push(cwd.join(&coverage.path));
+    }
+    if let Some(dir) = target.env.get("CARGO_LLVM_COV_TARGET_DIR") {
+        shared.push(PathBuf::from(dir));
+    }
+    shared.sort();
+    shared.dedup();
+    Ok(shared)
+}
+
+/// Exclusive leases on the [`shared_outputs`] of `target`, one lock file per
+/// output under `<build output>/codeflow-gate/leases/`, taken in a fixed
+/// order so two runs never wait on each other in a cycle. A run whose output
+/// another run is writing waits for that target to finish, which its own
+/// timeout bounds; runs with no output in common never wait.
+fn evidence_leases(
+    target: &TargetConfig,
+    root: &Path,
+    anchor: &Path,
+    output: &str,
+) -> Result<Vec<std::fs::File>, TestingError> {
+    use fs2::FileExt;
+    let shared = shared_outputs(target, root)?;
+    if shared.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tree = crate::contained::Tree::open(anchor)?;
+    let folder = format!("{output}/codeflow-gate/leases");
+    tree.create_dir_all(&folder)
+        .map_err(|error| super::delivery::evidence_refused(tree.path(), &folder, &error))?;
+    let mut leases = Vec::new();
+    for path in shared {
+        let key = super::delivery::digest(path.as_os_str().as_encoded_bytes());
+        let relative = format!("{folder}/{}.lock", &key[..32]);
+        let file = tree
+            .lock_file(&relative)
+            .map_err(|error| super::delivery::evidence_refused(tree.path(), &relative, &error))?;
+        if file.try_lock_exclusive().is_err() {
+            eprintln!(
+                "[codeflow test] {}: another run is writing {}; waiting for it to finish",
+                target.name,
+                crate::git::display_path(&path)
+            );
+            file.lock_exclusive().map_err(|error| {
+                super::delivery::evidence_refused(tree.path(), &relative, &error)
+            })?;
+        }
+        leases.push(file);
+    }
+    Ok(leases)
 }
 
 /// The evidence anchor of the project at `root` and the run folder's path

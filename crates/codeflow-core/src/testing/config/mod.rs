@@ -88,7 +88,8 @@ pub struct ExecutionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_jobs: Option<usize>,
 
-    /// Total workers shared by concurrent heavy targets. Omitted leaves tools unchanged.
+    /// Workers one run shares among its concurrent heavy targets, capped at
+    /// the host job budget. Omitted, a run uses the host budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_budget: Option<usize>,
 
@@ -196,7 +197,8 @@ pub struct TargetConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heavy: Option<bool>,
 
-    /// Workers this heavy target needs from `execution.worker_budget` before it starts.
+    /// Workers this heavy target needs from `execution.worker_budget` before it starts;
+    /// under a lower run budget it runs at that budget.
     /// Omitted targets divide the currently available workers among ready heavy targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workers: Option<usize>,

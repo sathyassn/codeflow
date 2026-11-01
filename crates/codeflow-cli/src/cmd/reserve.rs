@@ -67,16 +67,16 @@ pub fn run(args: &ReserveArgs) -> i32 {
         eprintln!("codeflow reserve: {note}");
     }
     let host = capacity::host_jobs(execution.host_jobs);
-    let workers = if capacity::lowered(host, execution.worker_budget, lock.runs) {
-        let jobs = capacity::run_jobs(host, execution.worker_budget, lock.runs);
+    // Always bounded by the host's job budget, the first run included
+    // (R483-05); `worker_budget` only caps it further.
+    let jobs = capacity::run_jobs(host, execution.worker_budget, lock.runs);
+    if capacity::lowered(host, execution.worker_budget, lock.runs) {
         eprintln!(
             "codeflow reserve: {} heavy runs share this host's {host} jobs; this command uses {jobs}",
             lock.runs
         );
-        Some(jobs)
-    } else {
-        execution.worker_budget
-    };
+    }
+    let workers = Some(jobs);
     let cwd = std::env::current_dir().unwrap_or(root);
     match run_reserved_command(
         &args.command,

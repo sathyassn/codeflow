@@ -35,14 +35,15 @@ pub fn budget_from(cores: usize, memory: Option<u64>) -> usize {
     cores.min(by_memory).max(1)
 }
 
-/// The jobs one run uses: `per_run` (else the whole `host_jobs`) while the
-/// `active` runs, this one included, fit the host at that width; otherwise
-/// `host_jobs` divided by `active`, at least one. The result never exceeds
-/// `per_run`.
+/// The jobs one run uses. Its width is `per_run` capped at `host_jobs`
+/// (the whole budget when `per_run` is unset); while the `active` runs,
+/// this one included, fit the host at that width it uses the width,
+/// otherwise `host_jobs` divided by `active`, at least one. The result never
+/// exceeds `per_run` or `host_jobs`, and no run count refuses a run.
 #[must_use]
 pub fn run_jobs(host_jobs: usize, per_run: Option<usize>, active: usize) -> usize {
     let host_jobs = host_jobs.max(1);
-    let width = per_run.unwrap_or(host_jobs).max(1);
+    let width = per_run.unwrap_or(host_jobs).clamp(1, host_jobs);
     let fits = (host_jobs / width).max(1);
     if active <= fits {
         width
@@ -51,8 +52,9 @@ pub fn run_jobs(host_jobs: usize, per_run: Option<usize>, active: usize) -> usiz
     }
 }
 
-/// Whether a run at its own width shares the host with more runs than fit,
-/// so its job count was lowered.
+/// Whether the run's job count is below the width it asked for: its
+/// `per_run` is above the host budget, or it shares the host with more
+/// runs than fit.
 #[must_use]
 pub fn lowered(host_jobs: usize, per_run: Option<usize>, active: usize) -> bool {
     run_jobs(host_jobs, per_run, active) < per_run.unwrap_or(host_jobs).max(1)
@@ -155,6 +157,18 @@ mod tests {
         }
         // A run with no width of its own uses the whole budget when alone.
         assert_eq!(run_jobs(16, None, 1), 16);
+    }
+
+    #[test]
+    fn a_per_run_width_above_the_host_budget_is_capped_by_it() {
+        // R483-05: a run alone never takes more than the host's jobs.
+        assert_eq!(run_jobs(2, Some(9), 1), 2);
+        assert!(lowered(2, Some(9), 1));
+        assert_eq!(run_jobs(2, None, 1), 2);
+        assert!(!lowered(2, None, 1));
+        assert_eq!(run_jobs(4, Some(9), 3), 1);
+        // Past any run count a run still starts with one job.
+        assert_eq!(run_jobs(4, Some(2), 1000), 1);
     }
 
     #[test]
