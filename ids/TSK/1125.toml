@@ -1,0 +1,11 @@
+id = "TSK-1125"
+uid = "d67e2e3a-2a11-4354-9805-d2f8f6da7037"
+kind = "TSK"
+title = "A work claim pinned to a predecessor accepts a local copy that is behind the pinned remote tip"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T02:17:11Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
