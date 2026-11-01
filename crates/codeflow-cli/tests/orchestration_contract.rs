@@ -668,12 +668,29 @@ fn managed_catalog_sets_effort_by_model_and_keeps_fable_off_execution() {
                     };
                     assert_eq!(effort, want, "{duty}: {seat} default effort");
                 }
-                if target["kind"] == "host-seat" {
-                    assert_eq!(effort, "medium", "{duty}: host default effort");
-                }
+                // A single host-seat effort cannot hold each model's
+                // default, so no route uses one.
+                assert_ne!(target["kind"], "host-seat", "{duty}: host-seat effort");
             }
         }
     }
+    // The orchestrating host resolves to its own seat at that seat's model
+    // default: every seat is named once under the same-host relation.
+    let host = &catalog["duties"]["orchestrate"]["required"][0];
+    assert_eq!(host["relation"], "same-host");
+    let named: Vec<&str> = host["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["target"]["id"].as_str().unwrap())
+        .collect();
+    let seats: Vec<&str> = catalog["seats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(named, seats, "orchestrate names every seat");
     assert!(catalog["rules"].as_array().unwrap().iter().any(|rule| rule
         .as_str()
         .unwrap()

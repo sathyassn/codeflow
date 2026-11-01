@@ -95,7 +95,8 @@ unless it changes the named primary or reviewer.
 
 Default effort follows each vendor's recommended default for the bound
 model, as the current ensemble records it (in this ensemble: medium for Opus,
-Sonnet and the Codex lines, and high for Fable, whose lowest effort is high).
+Sonnet and the Codex lines, high for Grok, and high for Fable, whose lowest
+effort is high). The orchestrating session starts at its own model's default.
 It is not a ceiling. Raise a seat or worker to high, or xhigh on Codex, only
 when a named need applies to that lane, such as a hard build, a security
 review or a stuck diagnosis, and never by default or by category for an

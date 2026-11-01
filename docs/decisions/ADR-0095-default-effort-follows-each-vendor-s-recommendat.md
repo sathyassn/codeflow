@@ -48,7 +48,10 @@ of ADR-0056 and all of ADR-0087 stand.
   exactly those three; the two earlier category triggers (complex or
   difficult work, material ambiguity) are removed, so a category never
   raises every seat. The resolver never raises the orchestrating director or
-  coordinator session by trigger; it stays at the default.
+  coordinator session by trigger; it stays at its own model's default. The
+  `orchestrate` duty therefore names each seat at that seat's default
+  (Claude and Codex medium, Grok high) under the same-host relation, so the
+  host session resolves to its own seat at its model's default.
 - **The highest-cost reasoning model directs and never executes.** In this
   ensemble that is Fable. It serves key review, analysis and direction
   (design, architecture and planning decisions). Each run names its

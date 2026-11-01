@@ -532,3 +532,26 @@ fn xhigh_trigger_keeps_the_design_seat_at_its_default_and_adds_a_worker() {
     assert_eq!(design["xhigh_trigger_met"], true);
     assert_pinned_launches(&catalog, &design);
 }
+
+#[test]
+fn orchestrating_host_starts_at_its_model_default_and_no_trigger_raises_it() {
+    let catalog = managed();
+    let repo = Repo::new(&catalog);
+    let trigger = catalog["high_triggers"][0].as_str().unwrap();
+    // ADR-0095: the directing session starts at its bound model's vendor
+    // default, high for Grok 4.7 and medium for Opus and Astra, and a
+    // trigger never changes it.
+    for (host, want) in [
+        ("claude-code", "medium"),
+        ("codex-app", "medium"),
+        ("grok-cli", "high"),
+    ] {
+        for extra in [&[][..], &["--trigger", trigger][..]] {
+            let host_seat = repo.resolved("orchestrate", host, "none", extra, true);
+            let chosen = &host_seat["participants"][0];
+            assert_eq!(chosen["participant"], "host", "{host}: {host_seat}");
+            assert_eq!(chosen["harness"], host, "{host}: {host_seat}");
+            assert_eq!(chosen["effort"], want, "{host} {extra:?}: {host_seat}");
+        }
+    }
+}
