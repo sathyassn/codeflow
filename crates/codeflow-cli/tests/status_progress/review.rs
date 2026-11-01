@@ -1032,3 +1032,100 @@ fn the_forge_observation_keeps_one_time_bound() {
         false
     );
 }
+
+/// The fail-closed classes of review round 04, each through the real CLI.
+///
+/// R4 F1: a completion whose landing transition is not proven leaves the
+/// path's steps not done, though the record says complete.
+#[test]
+fn an_unproven_landing_never_finishes_the_path() {
+    let prior = record("TSK-001", "todo", "main", "").replace("status: todo\n", "");
+    let repo = Repo::new("unproven-path", &[("TSK-001", prior)]);
+    repo.record("TSK-001", &record("TSK-001", "complete", "main", ""));
+    repo.commit();
+    repo.sync("main");
+    let value = repo.json(&["--epic", "EPC-001"]);
+    assert_eq!(task(&value, "TSK-001")["location"]["state"], "unverified");
+    let path = value["epics"][0]["path_to_main"].as_array().unwrap();
+    let land = &path[0];
+    assert_eq!(land["done"], false, "{land}");
+    assert_eq!(land["window"]["state"], "not yet estimable");
+    assert!(
+        land["window"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("TSK-001"),
+        "{land}"
+    );
+    assert!(path.iter().all(|step| step["done"] == false), "{path:?}");
+}
+
+/// R4 F1: a branch whose history the guarded walk refuses (a shallow cut)
+/// leaves the task's stage unknown, never `not started`.
+#[test]
+fn an_unreadable_branch_history_leaves_the_stage_unknown() {
+    let repo = Repo::new(
+        "shallow-branch",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    repo.git(&["switch", "-qc", "task/TSK-001-work"]);
+    write(&repo.root, "src/one.rs", "fn one() {}\n");
+    let first = repo.commit();
+    write(&repo.root, "src/two.rs", "fn two() {}\n");
+    repo.commit();
+    repo.git(&["switch", "-q", "main"]);
+    std::fs::write(repo.root.join(".git/shallow"), format!("{first}\n")).unwrap();
+    let value = repo.json(&["--task", "TSK-001"]);
+    let fact = &value["tasks"][0];
+    assert_eq!(fact["stage"], "unknown", "{fact}");
+    assert_eq!(fact["percent"], "unknown");
+    assert_eq!(evidence(&value, "percents", "git")["checked"], false);
+}
+
+/// R4 F7: a red required check that turns missing is a change, never a
+/// clearance: the requirement was read and did not pass.
+#[test]
+fn a_red_required_check_turning_missing_is_not_cleared() {
+    let repo = Repo::new(
+        "red-to-missing",
+        &[("TSK-001", record("TSK-001", "todo", "main", ""))],
+    );
+    let head = repo.git(&["rev-parse", "HEAD"]);
+    let red = serde_json::json!([task_pull(
+        1,
+        &head,
+        "main",
+        &serde_json::json!([{"name": "build", "conclusion": "FAILURE"}])
+    )]);
+    repo.forge(&red, &["build"]);
+    let before = repo.json(&["--epic", "EPC-001"]);
+    assert!(issue_kinds(&before).contains(&"required check red".to_string()));
+    let previous = repo.base.join("before.json");
+    std::fs::write(&previous, before.to_string()).unwrap();
+    let missing = serde_json::json!([task_pull(1, &head, "main", &serde_json::json!([]))]);
+    repo.forge(&missing, &["build"]);
+    let after = repo.json(&["--epic", "EPC-001", "--since", previous.to_str().unwrap()]);
+    assert!(issue_kinds(&after).contains(&"required check missing".to_string()));
+    let since = &after["since"];
+    let changes = since["changes"].as_array().unwrap();
+    assert!(
+        !changes
+            .iter()
+            .any(|change| change["change"] == "check cleared"),
+        "{since}"
+    );
+    assert!(
+        changes
+            .iter()
+            .any(|change| change["change"] == "check changed"),
+        "{since}"
+    );
+    assert!(
+        !since["superseded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["event"].as_str().unwrap().starts_with("cleared")),
+        "{since}"
+    );
+}

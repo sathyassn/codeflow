@@ -548,24 +548,38 @@ fn find_branch<'r>(repo: &'r Repository, name: &str) -> Option<git2::Commit<'r>>
         .and_then(|reference| reference.peel_to_commit().ok())
 }
 
+/// The branch `name` and its head, `None` when there is no such branch,
+/// or why its history could not be read: an unreadable history is never
+/// taken for a branch with no commits.
 fn branch_in(
     repo: &Repository,
     name: &str,
     tip: Option<Oid>,
     worktrees: &BTreeMap<String, String>,
-) -> Option<(BranchIn, Oid)> {
+) -> Option<Result<(BranchIn, Oid), String>> {
     let commit = find_branch(repo, name)?;
+    let unread = |error: git2::Error| {
+        format!(
+            "the history of the branch {name} cannot be read through the guarded walk: {}",
+            error.message()
+        )
+    };
     // The guarded reader refuses grafts, replace refs and a shallow cut.
-    let mut walk = history::revwalk(repo).ok()?;
-    walk.push(commit.id()).ok()?;
-    if let Some(tip) = tip {
-        walk.hide(tip).ok()?;
-    }
-    let commits_ahead = walk
-        .take(HISTORY_LIMIT)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?
-        .len();
+    let commits_ahead = (|| {
+        let mut walk = history::revwalk(repo)?;
+        walk.push(commit.id())?;
+        if let Some(tip) = tip {
+            walk.hide(tip)?;
+        }
+        Ok(walk
+            .take(HISTORY_LIMIT)
+            .collect::<Result<Vec<_>, _>>()?
+            .len())
+    })();
+    let commits_ahead = match commits_ahead {
+        Ok(count) => count,
+        Err(error) => return Some(Err(unread(error))),
+    };
     let local = name.split_once('/').map_or(name, |(remote, rest)| {
         if repo.find_remote(remote).is_ok() {
             rest
@@ -573,7 +587,7 @@ fn branch_in(
             name
         }
     });
-    Some((
+    Some(Ok((
         BranchIn {
             name: name.to_string(),
             head: commit.id().to_string(),
@@ -585,7 +599,7 @@ fn branch_in(
                 .cloned(),
         },
         commit.id(),
-    ))
+    )))
 }
 
 /// The record's text at `path` on `commit`.
@@ -659,14 +673,24 @@ fn task_in(context: &TaskContext<'_>, found: &Found) -> TaskIn {
     let branch = entry
         .and_then(|entry| entry.branch_names.first())
         .and_then(|name| branch_in(repo, name, tip, &context.worktrees));
+    let (branch, branch_unread) = match branch {
+        Some(Ok(found)) => (Some(found), None),
+        Some(Err(reason)) => (None, Some(reason)),
+        None => (None, None),
+    };
     let closed = matches!(record.status.as_str(), "complete" | "cancelled");
     let pull = context.pulls.and_then(|pulls| {
         super::compute::select_pull(pulls, &record.id, &found.target, context.default_branch)
     });
     // The most advanced copy: the home tip once closed, else the head the
     // pull request reports, else the branch head. A head that cannot be
-    // read leaves its acceptance unknown, whatever the home copy holds.
-    let mut head_unread = None;
+    // read leaves its acceptance unknown, whatever the home copy holds; so
+    // does a branch, with no pull request, whose history could not be read.
+    let mut head_unread = if closed || pull.is_some() {
+        None
+    } else {
+        branch_unread
+    };
     let (acceptance, follow_from) = if closed {
         let binding = Binding::Landed(match &context.landed {
             Ok(tasks) => tasks.get(&record.id).map_or_else(

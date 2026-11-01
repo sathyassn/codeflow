@@ -168,6 +168,21 @@ fn word(value: &Value, pointer: &str) -> String {
     }
 }
 
+/// The kind of a required-check issue the current snapshot still holds
+/// for `earlier`'s subject, when one remains.
+fn still_required(
+    earlier: &Value,
+    now: &BTreeMap<(String, String), (String, Value)>,
+) -> Option<String> {
+    let subject = text(earlier, "/subject");
+    now.iter().find_map(|((family, _), (_, item))| {
+        (family == "issue"
+            && text(item, "/subject") == subject
+            && text(item, "/kind").starts_with("required check"))
+        .then(|| text(item, "/kind").to_string())
+    })
+}
+
 /// The event that replaced an earlier item no longer present.
 fn replaced_by(family: &str, earlier: &Value, current: &Value) -> String {
     match family {
@@ -410,7 +425,23 @@ pub fn delta(previous: &Value, current: &Value) -> Result<Value, String> {
             continue;
         }
         let source_checked = checked.get(family_source(source)).copied().unwrap_or(false);
-        if source_checked {
+        // A required check is cleared only when no required-check issue
+        // remains for its subject, so the requirement passed or was
+        // removed; a change of kind (red to missing, pending or skipped)
+        // is a change, never a clearance.
+        let still = (family == "issue" && text(earlier, "/kind").starts_with("required check"))
+            .then(|| still_required(earlier, &now))
+            .flatten();
+        if let (true, Some(kind)) = (source_checked, &still) {
+            changes.push(json!({"change": "check changed", "subject": key, "at": at}));
+            superseded.push(json!({
+                "family": family,
+                "subject": key,
+                "event": format!("now {kind} for {}", text(earlier, "/subject")),
+                "at": at,
+                "earlier": earlier,
+            }));
+        } else if source_checked {
             let event = replaced_by(family, earlier, current);
             let what = match family.as_str() {
                 "issue" if text(earlier, "/kind") == "blocked" => "blocker cleared",

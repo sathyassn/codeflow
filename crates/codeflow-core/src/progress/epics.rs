@@ -10,7 +10,7 @@ use super::compute::{
 use super::inputs::{EpicIn, ForgeIn, Inputs, TaskIn};
 use super::model::{
     ChainLanded, ChainPull, CheckRunFact, EpicFact, FeatureFact, HopFact, Known, LandingChain,
-    LocationCounts, PullFact, StageCounts, StepFact, ThemeFact,
+    LocationCounts, LocationFact, PullFact, StageCounts, StepFact, ThemeFact,
 };
 use super::plan::{done_window, is_open, not_estimable, openness_unknown, Plan, Win};
 
@@ -272,6 +272,36 @@ fn step(
     }
 }
 
+/// Whether every live task of `tasks` is proven on main, and why any step
+/// over them cannot be done. A step is done only on proof: every live
+/// task's location is proven (its landing transition reachable from the
+/// remote ref read), never a completion whose transition or ref could not
+/// be read, and never a task whose openness is not known.
+fn proven(inputs: &Inputs, tasks: &[&TaskIn]) -> (bool, Vec<String>) {
+    let located: Vec<(&TaskIn, LocationFact)> = tasks
+        .iter()
+        .filter(|task| task.status != "cancelled")
+        .map(|task| (*task, location(inputs, task)))
+        .collect();
+    let on_main = located
+        .iter()
+        .all(|(_, fact)| fact.kind == "main" && fact.state == "checked");
+    let mut undetermined: Vec<String> = tasks.iter().filter_map(|t| openness_unknown(t)).collect();
+    undetermined.extend(located.iter().filter_map(|(task, fact)| {
+        let landed = task.status == "complete" || task.state.as_deref() == Some("landed");
+        (landed && fact.state != "checked").then(|| {
+            format!(
+                "the landing of {} is not proven: {}",
+                task.id,
+                fact.note
+                    .value()
+                    .map_or("its proof could not be read", String::as_str)
+            )
+        })
+    }));
+    (on_main, undetermined)
+}
+
 /// The remaining steps on the recorded landing route.
 fn path(inputs: &Inputs, plan: &Plan, line: &str, tasks: &[&TaskIn]) -> Vec<StepFact> {
     let open: Vec<String> = tasks
@@ -279,13 +309,7 @@ fn path(inputs: &Inputs, plan: &Plan, line: &str, tasks: &[&TaskIn]) -> Vec<Step
         .filter(|t| is_open(t))
         .map(|t| t.id.clone())
         .collect();
-    let on_main = tasks
-        .iter()
-        .filter(|task| task.status != "cancelled")
-        .all(|task| location(inputs, task).kind == "main");
-    // A task whose openness is not known keeps the landing step open and
-    // its window unknown: nothing on the path is done or dated over it.
-    let undetermined: Vec<String> = tasks.iter().filter_map(|t| openness_unknown(t)).collect();
+    let (on_main, undetermined) = proven(inputs, tasks);
     let land = if undetermined.is_empty() {
         plan.finish(open.iter()).unwrap_or(Win::Estimable {
             start: 0,
