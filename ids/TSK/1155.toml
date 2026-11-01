@@ -1,0 +1,11 @@
+id = "TSK-1155"
+uid = "06dd2481-3aeb-47f3-a061-1a474a39845f"
+kind = "TSK"
+title = "codeflow ci refuses a direct commit on an integration line before the gate runs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-01T21:19:52Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
