@@ -1,0 +1,11 @@
+id = "TSK-1170"
+uid = "ee3d8e36-3d03-46c0-92b7-1f6ca9f81ab7"
+kind = "TSK"
+title = "Integration line names cannot collide by case"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T03:13:11Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
