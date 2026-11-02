@@ -2249,7 +2249,7 @@ fn unblocked_in_range(
     }
     let base_id = Oid::from_str(merge_base)
         .map_err(|error| WorkStartError::Repository(error.message().to_string()))?;
-    if !judge(repo, base_id, head_id, RecordKind::Task, &now.path).proven {
+    if !judge(repo, base_id, head_id, RecordKind::Task, &now.id).proven {
         return Ok(false);
     }
     if head.is_none() {

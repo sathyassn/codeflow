@@ -134,12 +134,12 @@ pub struct Steps {
     pub proven: bool,
 }
 
-/// Judge the record `path` names over `base..head`, followed by its id (the
-/// file stem) wherever a record of `kind` may live.
+/// Judge the record `id` of `kind` over `base..head`, followed by the id
+/// its frontmatter states, at every record path of its kind.
 #[must_use]
-pub fn judge(repo: &Repository, base: Oid, head: Oid, kind: RecordKind, path: &str) -> Steps {
+pub fn judge(repo: &Repository, base: Oid, head: Oid, kind: RecordKind, id: &str) -> Steps {
     let _judgment = history::judgment();
-    let mut walker = Walker::new(repo, kind, stem(path));
+    let mut walker = Walker::new(repo, kind, id.to_string());
     match walker.range(base, head) {
         Ok(problems) => Steps {
             proven: problems.is_empty() && !walker.absent,
@@ -153,9 +153,9 @@ pub fn judge(repo: &Repository, base: Oid, head: Oid, kind: RecordKind, path: &s
 }
 
 /// The statuses a change made on top of `tip` starts from (the working
-/// tree's step): the record's status at `tip`, or, where `tip` holds none,
-/// the status each nearest earlier holder in `base..tip` (or the boundary)
-/// had; `None` alone for a record never held there.
+/// tree's step): the status of record `id` at `tip`, or, where `tip` holds
+/// none, the status each nearest earlier holder in `base..tip` (or the
+/// boundary) had; `None` alone for a record never held there.
 ///
 /// # Errors
 /// Returns the unreadable-history refusal.
@@ -164,24 +164,16 @@ pub fn starts_at(
     base: Oid,
     tip: Oid,
     kind: RecordKind,
-    path: &str,
+    id: &str,
 ) -> Result<Vec<Option<String>>, String> {
     let _judgment = history::judgment();
-    let mut walker = Walker::new(repo, kind, stem(path));
+    let mut walker = Walker::new(repo, kind, id.to_string());
     walker
         .range(base, tip)
         .map_err(|unreadable| unreadable.message())?;
     walker
         .starts(tip)
         .map_err(|unreadable| unreadable.message())
-}
-
-fn stem(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_default()
-        .to_string()
 }
 
 /// The status `kind` records start from when created.
@@ -208,13 +200,20 @@ pub fn step_allowed(kind: RecordKind, from: Option<&str>, to: &str) -> Result<()
     }
 }
 
+/// What a record file states: its id and status, or why it does not parse.
+type Parsed = Result<(String, String), String>;
+
+/// One tree entry: its name, object id and kind.
+type Entry = (String, Oid, Option<git2::ObjectType>);
+
 struct Walker<'r> {
     repo: &'r Repository,
     kind: RecordKind,
     id: String,
     /// The record file (blob and path) holding the id at each commit.
     found: HashMap<Oid, Option<(Oid, String)>>,
-    statuses: HashMap<Oid, String>,
+    /// What each record blob read states.
+    parsed: HashMap<Oid, Parsed>,
     steps: HashMap<(Oid, usize), bool>,
     /// Steps being judged, so a chain that reaches itself is refused.
     open: HashSet<(Oid, usize)>,
@@ -227,10 +226,31 @@ fn short(oid: Oid) -> String {
     oid.to_string()[..12].to_string()
 }
 
-/// Whether `name` is the record file of `id`: `<id>.md`, any case of `md`.
-fn names_record(name: &str, id: &str) -> bool {
-    name.rsplit_once('.')
-        .is_some_and(|(stem, extension)| stem == id && extension.eq_ignore_ascii_case("md"))
+/// The stem of a `.md` file name (any case of `md`), else `None`.
+fn markdown_stem(name: &str) -> Option<&str> {
+    let (stem, extension) = name.rsplit_once('.')?;
+    extension.eq_ignore_ascii_case("md").then_some(stem)
+}
+
+/// The entries of `tree` (under `dir`). A name that is not UTF-8 cannot be
+/// told from a record path, so it refuses, as the record inventory does.
+fn entries(tree: &git2::Tree<'_>, dir: &str, commit: Oid) -> Result<Vec<Entry>, Unreadable> {
+    let mut entries = Vec::new();
+    for entry in tree {
+        let name = crate::git::GitName::from_bytes(entry.name_bytes());
+        let Ok(text) = name.rule_text() else {
+            return Err(Unreadable::new(
+                Cause::Unparsable,
+                format!(
+                    "a name under {dir} at {} is not UTF-8: {}",
+                    short(commit),
+                    name.display()
+                ),
+            ));
+        };
+        entries.push((text.to_string(), entry.id(), entry.kind()));
+    }
+    Ok(entries)
 }
 
 impl<'r> Walker<'r> {
@@ -240,7 +260,7 @@ impl<'r> Walker<'r> {
             kind,
             id,
             found: HashMap::new(),
-            statuses: HashMap::new(),
+            parsed: HashMap::new(),
             steps: HashMap::new(),
             open: HashSet::new(),
             in_range: HashSet::new(),
@@ -266,86 +286,94 @@ impl<'r> Walker<'r> {
         self.repo.find_tree(entry.id()).map(Some).map_err(missing)
     }
 
-    /// Every record file of the id in `tree` (under `dir`), as blob and path.
-    fn files_in(&self, tree: &git2::Tree<'_>, dir: &str, into: &mut Vec<(Oid, String)>) {
-        for entry in tree {
-            if entry.kind() != Some(git2::ObjectType::Blob) {
-                continue;
-            }
-            // A name that is not UTF-8 cannot be a record id's file.
-            let name = crate::git::GitName::from_bytes(entry.name_bytes());
-            if let Some(name) = name
-                .rule_text()
-                .ok()
-                .filter(|name| names_record(name, &self.id))
-            {
-                into.push((entry.id(), format!("{dir}/{name}")));
-            }
-        }
-    }
-
-    /// The record file holding the id at `commit`, at any path a record of
-    /// this kind may live at; `None` when no such file exists. Two files
-    /// holding one id cannot be told apart, so they refuse.
-    fn locate(&mut self, commit: Oid) -> Result<Option<(Oid, String)>, Unreadable> {
-        if let Some(found) = self.found.get(&commit) {
-            return Ok(found.clone());
-        }
+    /// The files at record paths of this kind in `commit`'s tree, as blob
+    /// and path.
+    fn record_files(&self, commit: Oid) -> Result<Vec<(Oid, String)>, Unreadable> {
         let missing = |error: git2::Error| Unreadable::new(Cause::MissingObject, error.message());
         let tree = self
             .repo
             .find_commit(commit)
             .and_then(|found| found.tree())
             .map_err(missing)?;
-        let mut files = Vec::new();
-        match self.kind {
-            RecordKind::Task => {
-                let dir = "project-management/tasks";
-                if let Some(tasks) = self.subtree(&tree, dir)? {
-                    self.files_in(&tasks, dir, &mut files);
-                }
-            }
-            RecordKind::Spec => {
-                let dir = "project-management/specs";
-                if let Some(specs) = self.subtree(&tree, dir)? {
-                    self.files_in(&specs, dir, &mut files);
-                }
-            }
-            RecordKind::Epic => {}
-        }
         let epics_dir = "project-management/epics";
+        let mut dirs = vec![
+            "project-management/tasks".to_string(),
+            "project-management/specs".to_string(),
+            epics_dir.to_string(),
+        ];
         if let Some(epics) = self.subtree(&tree, epics_dir)? {
-            if self.kind == RecordKind::Epic {
-                self.files_in(&epics, epics_dir, &mut files);
-            }
-            let epic_dirs = epics
-                .iter()
-                .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
-                .filter_map(|entry| {
-                    // No record path runs through a directory whose name is
-                    // not UTF-8, so such a directory holds no record.
-                    crate::git::GitName::from_bytes(entry.name_bytes())
-                        .rule_text()
-                        .ok()
-                        .map(str::to_string)
-                })
-                .collect::<Vec<_>>();
-            for epic in epic_dirs {
-                let (dir, wanted) = match self.kind {
-                    RecordKind::Task => (format!("{epics_dir}/{epic}/tasks"), true),
-                    RecordKind::Epic => (format!("{epics_dir}/{epic}"), epic == self.id),
-                    RecordKind::Spec => (String::new(), false),
-                };
-                if !wanted {
-                    continue;
-                }
-                if let Some(sub) = self.subtree(&tree, &dir)? {
-                    self.files_in(&sub, &dir, &mut files);
+            for (name, _, kind) in entries(&epics, epics_dir, commit)? {
+                if kind == Some(git2::ObjectType::Tree) {
+                    dirs.push(format!("{epics_dir}/{name}"));
+                    dirs.push(format!("{epics_dir}/{name}/tasks"));
                 }
             }
         }
-        if files.len() > 1 {
-            let paths = files
+        let mut files = Vec::new();
+        for dir in dirs {
+            let Some(sub) = self.subtree(&tree, &dir)? else {
+                continue;
+            };
+            for (name, blob, kind) in entries(&sub, &dir, commit)? {
+                let path = format!("{dir}/{name}");
+                if kind == Some(git2::ObjectType::Blob)
+                    && super::work_start::record_kind_for_tree_path(&path) == Some(self.kind)
+                {
+                    files.push((blob, path));
+                }
+            }
+        }
+        Ok(files)
+    }
+
+    /// What the record blob at `path` states, read once per blob.
+    fn parse(&mut self, blob: Oid, path: &str) -> Result<Parsed, Unreadable> {
+        if let Some(parsed) = self.parsed.get(&blob) {
+            return Ok(parsed.clone());
+        }
+        let found = self
+            .repo
+            .find_blob(blob)
+            .map_err(|error| Unreadable::new(Cause::MissingObject, error.message()))?;
+        let parsed = std::str::from_utf8(found.content())
+            .map_err(|error| error.to_string())
+            .and_then(|text| RecordView::parse(self.kind, path, text))
+            .map(|record| (record.id, record.status));
+        self.parsed.insert(blob, parsed.clone());
+        Ok(parsed)
+    }
+
+    /// The record file holding the id at `commit`: a file at a record path
+    /// of this kind whose frontmatter states the id, as the record graph
+    /// keys it; `None` when no file does. A file named for the id that does
+    /// not parse, or two files stating one id, cannot be told apart from
+    /// the record, so they refuse.
+    fn locate(&mut self, commit: Oid) -> Result<Option<(Oid, String)>, Unreadable> {
+        if let Some(found) = self.found.get(&commit) {
+            return Ok(found.clone());
+        }
+        let mut holders = Vec::new();
+        for (blob, path) in self.record_files(commit)? {
+            match self.parse(blob, &path)? {
+                Ok((id, _)) if id == self.id => holders.push((blob, path)),
+                Ok(_) => {}
+                Err(error) => {
+                    let named = path
+                        .rsplit('/')
+                        .next()
+                        .and_then(markdown_stem)
+                        .is_some_and(|stem| stem == self.id);
+                    if named {
+                        return Err(Unreadable::new(
+                            Cause::Unparsable,
+                            format!("{path} at {}: {error}", short(commit)),
+                        ));
+                    }
+                }
+            }
+        }
+        if holders.len() > 1 {
+            let paths = holders
                 .iter()
                 .map(|(_, path)| path.as_str())
                 .collect::<Vec<_>>();
@@ -359,7 +387,7 @@ impl<'r> Walker<'r> {
                 ),
             ));
         }
-        let found = files.pop();
+        let found = holders.pop();
         self.found.insert(commit, found.clone());
         Ok(found)
     }
@@ -383,29 +411,13 @@ impl<'r> Walker<'r> {
             self.absent = true;
             return Ok(None);
         };
-        if let Some(status) = self.statuses.get(&blob) {
-            return Ok(Some(status.clone()));
-        }
-        let found = self
-            .repo
-            .find_blob(blob)
-            .map_err(|error| Unreadable::new(Cause::MissingObject, error.message()))?;
-        let text = std::str::from_utf8(found.content()).map_err(|error| {
-            Unreadable::new(
+        match self.parse(blob, &path)? {
+            Ok((_, status)) => Ok(Some(status)),
+            Err(error) => Err(Unreadable::new(
                 Cause::Unparsable,
                 format!("{path} at {}: {error}", short(commit)),
-            )
-        })?;
-        let status = RecordView::parse(self.kind, &path, text)
-            .map_err(|error| {
-                Unreadable::new(
-                    Cause::Unparsable,
-                    format!("{path} at {}: {error}", short(commit)),
-                )
-            })?
-            .status;
-        self.statuses.insert(blob, status.clone());
-        Ok(Some(status))
+            )),
+        }
     }
 
     /// The statuses a change from `parent` starts from: the record's status
@@ -623,7 +635,7 @@ mod tests {
 
     fn steps(root: &Path, base: Oid, head: Oid) -> Steps {
         let repo = Repository::open(root).unwrap();
-        judge(&repo, base, head, RecordKind::Task, PATH)
+        judge(&repo, base, head, RecordKind::Task, "TSK-001")
     }
 
     #[test]
@@ -848,7 +860,7 @@ mod tests {
         at(dir.path(), "cancelled");
         let head = moved(dir.path(), Some(EPIC_PATH), "todo");
         let repo_at = Repository::open(dir.path()).unwrap();
-        let judged = judge(&repo_at, base, head, RecordKind::Task, EPIC_PATH);
+        let judged = judge(&repo_at, base, head, RecordKind::Task, "TSK-001");
         assert!(terminal(&judged), "{judged:?}");
 
         // Parked off the record paths, then restored as todo.
@@ -885,7 +897,7 @@ mod tests {
             base,
             head,
             RecordKind::Task,
-            EPIC_PATH,
+            "TSK-001",
         );
         assert!(judged.problems.is_empty(), "{judged:?}");
     }
@@ -911,7 +923,7 @@ mod tests {
             base,
             head,
             RecordKind::Task,
-            upper,
+            "TSK-001",
         );
         assert!(terminal(&judged), "{judged:?}");
 
@@ -937,9 +949,102 @@ mod tests {
         at(dir.path(), "cancelled");
         let tip = drop_record(dir.path());
         let repo = repo_at_path(dir.path());
-        let starts = starts_at(&repo, base, tip, RecordKind::Task, PATH).unwrap();
+        let starts = starts_at(&repo, base, tip, RecordKind::Task, "TSK-001").unwrap();
         assert_eq!(starts, vec![Some("cancelled".to_string())]);
-        let fresh = starts_at(&repo, tip, tip, RecordKind::Task, PATH).unwrap();
+        let fresh = starts_at(&repo, tip, tip, RecordKind::Task, "TSK-001").unwrap();
         assert_eq!(fresh, vec![None]);
+    }
+
+    /// Commit `files` (path, content) after removing every path in `drop`.
+    fn commit_files(root: &Path, drop: &[&str], files: &[(&str, &str)]) -> Oid {
+        for path in drop {
+            std::fs::remove_file(root.join(path)).unwrap();
+        }
+        for (path, text) in files {
+            let file = root.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, text).unwrap();
+        }
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "chore: files"]);
+        Oid::from_str(&git(root, &["rev-parse", "HEAD"])).unwrap()
+    }
+
+    /// The record is the file whose frontmatter states the id, as the graph
+    /// keys it, whatever the file is named; a file of another id is not it
+    /// (TSK-1036 review 02).
+    #[test]
+    fn the_record_is_followed_by_its_stated_id() {
+        const OTHER: &str = "project-management/tasks/TSK-002.md";
+        // Cancelled only under another name, then restored as todo.
+        let (dir, base) = repo("todo");
+        commit_files(dir.path(), &[PATH], &[(OTHER, &record("cancelled"))]);
+        let head = commit_files(dir.path(), &[OTHER], &[(PATH, &record("todo"))]);
+        assert!(terminal(&steps(dir.path(), base, head)));
+
+        // Cancelled, then moved to another name as todo.
+        let (dir, base) = repo("todo");
+        at(dir.path(), "cancelled");
+        let head = commit_files(dir.path(), &[PATH], &[(OTHER, &record("todo"))]);
+        assert!(terminal(&steps(dir.path(), base, head)));
+
+        // A real TSK-002 beside TSK-001 is another record.
+        let (dir, base) = repo("todo");
+        let own = record("cancelled").replace("id: TSK-001", "id: TSK-002");
+        commit_files(dir.path(), &[], &[(OTHER, &own)]);
+        let head = at(dir.path(), "complete");
+        let judged = steps(dir.path(), base, head);
+        assert!(judged.proven && judged.problems.is_empty(), "{judged:?}");
+    }
+
+    /// A record directory whose name is not UTF-8 cannot be read, so the
+    /// history refuses instead of reading the record as absent.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_utf8_refuses() {
+        use std::os::unix::ffi::OsStrExt;
+        let (dir, base) = repo("todo");
+        // Some file systems refuse such a name, so the tree is built from
+        // objects: project-management/epics/EPC-\xff/tasks/TSK-001.md.
+        let repo = repo_at_path(dir.path());
+        let blob = repo.blob(record("cancelled").as_bytes()).unwrap();
+        let mut tasks = repo.treebuilder(None).unwrap();
+        tasks.insert("TSK-001.md", blob, 0o100_644).unwrap();
+        let tasks = tasks.write().unwrap();
+        let mut epic = repo.treebuilder(None).unwrap();
+        epic.insert("tasks", tasks, 0o040_000).unwrap();
+        let epic = epic.write().unwrap();
+        let mut epics = repo.treebuilder(None).unwrap();
+        let name = std::path::Path::new(std::ffi::OsStr::from_bytes(b"EPC-\xff"));
+        epics.insert(name, epic, 0o040_000).unwrap();
+        let epics = epics.write().unwrap();
+        let mut management = repo.treebuilder(None).unwrap();
+        management.insert("epics", epics, 0o040_000).unwrap();
+        let management = management.write().unwrap();
+        let mut root = repo.treebuilder(None).unwrap();
+        root.insert("project-management", management, 0o040_000)
+            .unwrap();
+        let tree = repo.find_tree(root.write().unwrap()).unwrap();
+        let signature = git2::Signature::now("t", "t@example.test").unwrap();
+        let parent = repo.find_commit(base).unwrap();
+        let hidden = repo
+            .commit(
+                None,
+                &signature,
+                &signature,
+                "chore: hide",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+        git(dir.path(), &["reset", "-q", "--soft", &hidden.to_string()]);
+        let head = at(dir.path(), "todo");
+        let judged = steps(dir.path(), base, head);
+        assert!(
+            judged.problems.iter().any(|problem| {
+                problem.starts_with(UNREADABLE) && problem.contains("is not UTF-8")
+            }),
+            "{judged:?}"
+        );
     }
 }

@@ -2412,7 +2412,7 @@ fn range_steps(
         // The working tree: the commits to `HEAD`, then the uncommitted
         // change as one more step.
         let tip = resolve_commit(repo, "HEAD").ok().flatten()?;
-        let mut steps = judge(repo, base, tip, record.kind, &record.path);
+        let mut steps = judge(repo, base, tip, record.kind, &record.id);
         let at_tip = Graph::from_revision(repo, &tip.to_string())
             .ok()
             .and_then(|graph| graph.records.get(&record.id).cloned());
@@ -2421,7 +2421,7 @@ fn range_steps(
         }
         // The checkout's step starts from the status at `HEAD`, or, when
         // `HEAD` holds no record, from the status it last held before.
-        match starts_at(repo, base, tip, record.kind, &record.path) {
+        match starts_at(repo, base, tip, record.kind, &record.id) {
             Ok(starts) => {
                 for from in starts.into_iter().flatten() {
                     if let Err(reason) = step_allowed(record.kind, Some(&from), &record.status) {
@@ -2441,7 +2441,7 @@ fn range_steps(
         return Some(steps);
     };
     let head = resolve_commit(repo, head).ok().flatten()?;
-    let steps: Steps = judge(repo, base, head, record.kind, &record.path);
+    let steps: Steps = judge(repo, base, head, record.kind, &record.id);
     Some(steps)
 }
 
