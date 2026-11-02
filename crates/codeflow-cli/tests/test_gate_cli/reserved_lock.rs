@@ -74,9 +74,9 @@ fn a_quick_run_under_reserve_runs_its_heavy_targets_under_the_reserved_lock() {
     let contender = run(&linked, home.path(), &["test", "--mode", "quick"]);
     assert_eq!(contender.status.code(), Some(0), "{}", stderr(&contender));
     assert!(linked.join("heavy-ran").exists(), "{}", stderr(&contender));
-    assert!(home.path().join("locks/full-gate-1.lock").exists());
+    assert!(home.path().join("locks/full-gate-2.lock").exists());
     assert!(
-        !home.path().join("locks/full-gate-2.lock").exists(),
+        !home.path().join("locks/full-gate-3.lock").exists(),
         "the nested run shares the reserve's slot"
     );
     let reserved = run(
@@ -129,8 +129,8 @@ fn a_forged_hand_over_is_refused_while_another_gate_holds_the_lock() {
     let linked = linked_worktree(first.path(), &heavy_quick(false));
     let (mut holder, rx, _stdout) = spawn(command(first.path(), home.path(), &["test"]));
     wait_for(&rx, "starting target 'holder'");
-    let home_lock = home.path().join("locks/full-gate.lock");
-    let repo_lock = first.path().join(".git/codeflow/full-gate.lock");
+    let home_lock = home.path().join("locks/full-gate-1.lock");
+    let repo_lock = first.path().join(".git/codeflow/full-gate-1.lock");
     assert!(home_lock.exists() && repo_lock.exists());
     let output = std::process::Command::new("sh")
         .args([
@@ -151,7 +151,7 @@ fn a_forged_hand_over_is_refused_while_another_gate_holds_the_lock() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert!(!stderr(&output).contains("enclosing `codeflow reserve`"));
     assert!(linked.join("heavy-ran").exists());
-    assert!(home.path().join("locks/full-gate-1.lock").exists());
+    assert!(home.path().join("locks/full-gate-2.lock").exists());
     std::fs::write(first.path().join("release"), "done").unwrap();
     assert!(holder.wait().unwrap().success());
 }
@@ -259,8 +259,8 @@ fn a_program_only_named_codeflow_receives_no_lock() {
         let fake = tools.path().join("codeflow");
         std::fs::write(&fake, UNLOCKER).unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let home_lock = home.path().join("locks/full-gate.lock");
-        let repo_lock = first.path().join(".git/codeflow/full-gate.lock");
+        let home_lock = home.path().join("locks/full-gate-1.lock");
+        let repo_lock = first.path().join(".git/codeflow/full-gate-1.lock");
         let program = if by_path {
             fake.to_str().unwrap().to_string()
         } else {
@@ -291,7 +291,7 @@ fn a_program_only_named_codeflow_receives_no_lock() {
         assert_eq!(env.trim(), "unset", "by path {by_path}");
         let fds = std::fs::read_to_string(first.path().join("fds.txt")).unwrap();
         assert_eq!(fds.trim(), "", "by path {by_path}: lock descriptors {fds}");
-        // The reserve's slot stays held, so the next run takes slot 1.
+        // The reserve's slot stays held, so the next run takes slot 2.
         let essential = run(&linked, home.path(), &["test", "--mode", "essential"]);
         assert_eq!(
             essential.status.code(),
@@ -299,7 +299,7 @@ fn a_program_only_named_codeflow_receives_no_lock() {
             "by path {by_path}: {}",
             stderr(&essential)
         );
-        assert!(home.path().join("locks/full-gate-1.lock").exists());
+        assert!(home.path().join("locks/full-gate-2.lock").exists());
 
         std::fs::write(first.path().join("release"), "done").unwrap();
         let status = reserve.wait().unwrap();
@@ -351,7 +351,7 @@ fn a_surviving_nested_target_keeps_the_lock_busy() {
             parsed
         })
         .expect("the target wrote its group");
-    let record = home.path().join("locks/full-gate.record");
+    let record = home.path().join("locks/full-gate-1.record");
     let recorded = (0..200).any(|_| {
         let text = std::fs::read_to_string(&record).unwrap_or_default();
         let found = text.lines().any(|line| line == format!("group={group}"));
@@ -385,11 +385,11 @@ fn a_surviving_nested_target_keeps_the_lock_busy() {
         "the target outlived the nested run and reserve"
     );
 
-    // The surviving target keeps slot 0 busy: the next run takes slot 1.
+    // The surviving target keeps slot 1 busy: the next run takes slot 2.
     let beside = run(&linked, home.path(), &["test", "--mode", "essential"]);
     let err = stderr(&beside);
     assert_eq!(beside.status.code(), Some(0), "{err}");
-    assert!(home.path().join("locks/full-gate-1.lock").exists(), "{err}");
+    assert!(home.path().join("locks/full-gate-2.lock").exists(), "{err}");
 
     std::process::Command::new("kill")
         .args(["-KILL", "--", &format!("-{group}")])

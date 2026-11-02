@@ -19,10 +19,20 @@
 //!   every worktree of the repository.
 //!
 //! A run takes one slot and the shared host lock in every configured folder
-//! before targets start. Slot `0` is [`LOCK_FILE`], the file older binaries
-//! lock exclusively; slot `n` is `full-gate-<n>.lock`. A lock that cannot
-//! be opened or a record that cannot be read refuses, naming the path and
-//! error (fail closed). The shipped Claude settings presets allow sandboxed
+//! before targets start. Slot `n` is `full-gate-<n>.lock`, from 1 up.
+//! A lock that cannot be opened or a record that cannot be read refuses,
+//! naming the path and error (fail closed).
+//!
+//! **Older binaries are fenced out** (TSK-1256). 3.1.x and the line builds
+//! before TSK-1256 know only [`LOCK_FILE`], which they lock exclusively, and
+//! run alone. Every new run, inherited ones included, holds [`LOCK_FILE`]
+//! shared in every folder for its whole life, before it takes any other
+//! lock, so an older gate refuses while any new run is active. While an
+//! older gate holds it, a new run refuses at once, naming that holder, and
+//! takes nothing else; it does not wait. A shared take that fails for any
+//! other reason refuses (fail closed). New runs keep [`RECORD_FILE`] naming
+//! the most recently admitted run that is still active, in the one-holder
+//! format older readers parse, so an older gate's refusal names a holder. The shipped Claude settings presets allow sandboxed
 //! writes to `~/.codeflow/locks` only (TSK-216); no preset grants
 //! `~/.codeflow/gate-runs`, so a full gate that keeps its evidence runs
 //! outside the sandbox (issue 254). `codeflow doctor --check permissions` names any folder this process
@@ -86,12 +96,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// File name of slot 0 in each lock directory, the file older binaries
-/// lock exclusively. Slot files are only ever opened read only and locked;
-/// `CodeFlow` never writes, truncates or deletes them (TSK-1003).
+/// File name of the fence in each lock directory: the one lock older
+/// binaries take, exclusively. Every new run holds it shared and takes no
+/// slot here (TSK-1256). Lock files are only ever opened read only and
+/// locked; `CodeFlow` never writes, truncates or deletes them (TSK-1003).
 pub const LOCK_FILE: &str = "full-gate.lock";
 
-/// File name of the holder record beside slot 0. Every lock's record is
+/// File name of the holder record beside the fence: the most recently
+/// admitted run that is still active, one holder, as older readers parse
+/// it (TSK-1256). Every lock's record is
 /// its file name with `.lock` replaced by `.record`. A record is replaced
 /// whole: written to a new file created exclusively under a random name in
 /// the same folder, then renamed over this name. An existing record is
@@ -104,24 +117,24 @@ pub const RECORD_FILE: &str = "full-gate.record";
 /// (TSK-1145).
 pub const HOST_LOCK_FILE: &str = "host.lock";
 
-/// File name of slot `index`: [`LOCK_FILE`] for slot 0, else
-/// `full-gate-<index>.lock`. A lock directory has no fixed number of slots:
-/// a run that finds every existing slot busy creates the next one, so no run
-/// count refuses a run (R483-06).
+/// The first slot index. Slot files start at 1, so no slot is the fence
+/// ([`LOCK_FILE`]) and the files of slots 1 and up keep the names the
+/// TSK-1145 version gave them (TSK-1256).
+pub const FIRST_SLOT: usize = 1;
+
+/// File name of slot `index` (from [`FIRST_SLOT`]): `full-gate-<index>.lock`.
+/// A lock directory has no fixed number of slots: a run that finds every
+/// existing slot busy creates the next one, so no run count refuses a run
+/// (R483-06).
 #[must_use]
 pub fn slot_file(index: usize) -> String {
-    if index == 0 {
-        LOCK_FILE.to_string()
-    } else {
-        format!("full-gate-{index}.lock")
-    }
+    debug_assert!(index >= FIRST_SLOT, "slot files start at {FIRST_SLOT}");
+    format!("full-gate-{index}.lock")
 }
 
-/// The slot index a lock file name stands for, if it names a slot.
+/// The slot index a lock file name stands for, if it names a slot. The
+/// fence ([`LOCK_FILE`]) is not a slot.
 fn slot_index(name: &str) -> Option<usize> {
-    if name == LOCK_FILE {
-        return Some(0);
-    }
     let digits = name.strip_prefix("full-gate-")?.strip_suffix(".lock")?;
     if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -135,7 +148,7 @@ fn slot_index(name: &str) -> Option<usize> {
 fn slot_indices(dir: &Path) -> Result<Vec<usize>, LockHeld> {
     let unavailable = |error: std::io::Error| {
         LockHeld::unavailable(
-            dir.join(LOCK_FILE),
+            dir.to_path_buf(),
             format!("gate lock unavailable: cannot list the lock folder: {error}"),
         )
     };
@@ -159,6 +172,9 @@ fn slot_indices(dir: &Path) -> Result<Vec<usize>, LockHeld> {
 pub struct GateLock {
     id: u64,
     files: Vec<AcquiredFile>,
+    /// The fence held shared in each lock directory, with its path; it
+    /// releases after the slots, once its record names a run still active.
+    fences: Vec<(PathBuf, AcquiredFile)>,
     /// Descriptors of a slot an enclosing `codeflow reserve` holds. They
     /// are never unlocked here: unlocking would release the holder's slot.
     inherited: Vec<File>,
@@ -252,9 +268,95 @@ impl Drop for GateLock {
                 clear();
             }
         }
+        // The slots release first, so the fence record a release writes
+        // never names a run that has ended (TSK-1256). Target watchers keep
+        // their copies, so a slot whose targets run stays busy and named.
+        self.files.clear();
+        let trusted = entry
+            .as_ref()
+            .map(|entry| entry.trusted.clone())
+            .unwrap_or_default();
+        for (path, _) in &self.fences {
+            let release = || {
+                let _ = write_fence_record(path, None, &trusted);
+            };
+            if with_record_lock(path, release).is_err() {
+                release();
+            }
+        }
         drop(entry);
         // AcquiredFile explicitly unlocks before its descriptor closes.
     }
+}
+
+/// Rewrite the fence record at `fence` (the caller holds its record lock):
+/// `holder` when given, else the holder lines of a slot in the same folder
+/// that another run holds, else none; with every live group the record
+/// already carries, which only an older binary's killed gate writes there.
+/// Older readers parse one holder, so the record names one run: the most
+/// recently admitted one, or on a release one still active (TSK-1256).
+fn write_fence_record(
+    fence: &Path,
+    holder: Option<&str>,
+    trusted: &[String],
+) -> std::io::Result<()> {
+    let (_, groups) = record_parts(fence, trusted).unwrap_or_default();
+    let mut text = match holder {
+        Some(holder) => holder.to_string(),
+        None => active_holder(fence, trusted),
+    };
+    for group in groups.into_iter().filter(|group| group_alive(*group)) {
+        let _ = writeln!(text, "group={group}");
+    }
+    write_record(fence, &text)
+}
+
+/// The holder lines of a slot beside `fence` that another process holds
+/// locked, or empty when none does.
+fn active_holder(fence: &Path, trusted: &[String]) -> String {
+    let Some(dir) = fence.parent() else {
+        return String::new();
+    };
+    for index in slot_indices(dir).unwrap_or_default() {
+        let path = dir.join(slot_file(index));
+        match try_open_and_lock(&path, false) {
+            Ok(Slot::Busy) => {}
+            Ok(Slot::Taken(file)) => {
+                drop(AcquiredFile(file));
+                continue;
+            }
+            Err(_) => continue,
+        }
+        let Some(text) = read_slot_record(&path) else {
+            continue;
+        };
+        let Ok(parsed) = parse_record_with(&text, trusted, true) else {
+            continue;
+        };
+        let mut base = String::new();
+        for line in parsed.lines().filter(|line| !line.starts_with("group=")) {
+            let _ = writeln!(base, "{line}");
+        }
+        if base.lines().any(|line| line.starts_with("pid=")) {
+            return base;
+        }
+    }
+    String::new()
+}
+
+/// The text of the record beside the slot at `path`, through the anchored
+/// no-follow open; `None` when absent or unreadable.
+fn read_slot_record(path: &Path) -> Option<String> {
+    let record = record_path(path);
+    if crate::absence::proven_absent(&record).ok()? {
+        return None;
+    }
+    let (anchor, relative) = lock_anchor(&record).ok()?;
+    let mut file = crate::contained::Tree::open(anchor)
+        .ok()?
+        .open_regular(&relative)
+        .ok()?;
+    read_record(&mut file).ok()
 }
 
 /// The record beside `path` split into its holder lines and its groups.
@@ -296,6 +398,9 @@ pub struct LockHeld {
     /// A `host_exclusive` target holds the host, or one is refused because
     /// other heavy runs hold it.
     pub exclusive: bool,
+    /// An older binary's gate holds the fence ([`LOCK_FILE`]) exclusively
+    /// (TSK-1256).
+    pub older_binary: bool,
 }
 
 impl LockHeld {
@@ -305,6 +410,19 @@ impl LockHeld {
             holder,
             running_groups: Vec::new(),
             exclusive: false,
+            older_binary: false,
+        }
+    }
+
+    /// An older binary's gate holds the fence at `path`; `holder` is its
+    /// record ([`fence_holder`]).
+    fn older_binary(path: PathBuf, holder: String) -> Self {
+        Self {
+            path,
+            holder,
+            running_groups: Vec::new(),
+            exclusive: false,
+            older_binary: true,
         }
     }
 }
@@ -312,7 +430,7 @@ impl LockHeld {
 impl std::fmt::Display for LockHeld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let lock = crate::git::display_path(&self.path);
-        if !self.exclusive {
+        if !self.exclusive && !self.older_binary {
             return write!(f, "{} (lock: {lock})", self.holder);
         }
         let holder = if self.holder.trim().is_empty() {
@@ -320,6 +438,14 @@ impl std::fmt::Display for LockHeld {
         } else {
             describe_holder(&self.holder)
         };
+        if self.older_binary {
+            return write!(
+                f,
+                "an older CodeFlow binary's gate is running on this machine: {holder}. \
+                 Gates of CodeFlow 3.1 and other older binaries run alone, so this run \
+                 started nothing; run it again when that gate ends (lock: {lock})"
+            );
+        }
         write!(
             f,
             "a host-exclusive target is running on this machine: {holder}. Heavy runs \
@@ -482,7 +608,7 @@ pub fn builder_write_probe(
 }
 
 /// Read holder records without taking a lock, changing a record, or creating directories:
-/// the host lock's and every existing slot's. These are snapshots: admission still checks
+/// the host lock's, the fence's and every existing slot's. These are snapshots: admission still checks
 /// the OS locks and live target groups.
 /// # Errors
 /// Refuses discovery failures and unreadable or oversized records.
@@ -493,11 +619,8 @@ pub fn gate_lock_status(root: &Path) -> Result<Vec<String>, String> {
     let mut lines = Vec::new();
     for dir in dirs {
         lines.push(holder_status(&dir.join(HOST_LOCK_FILE), &trusted)?);
-        let mut indices = slot_indices(&dir).map_err(|held| held.to_string())?;
-        if indices.first() != Some(&0) {
-            indices.insert(0, 0);
-        }
-        for index in indices {
+        lines.push(holder_status(&dir.join(LOCK_FILE), &trusted)?);
+        for index in slot_indices(&dir).map_err(|held| held.to_string())? {
             lines.push(holder_status(&dir.join(slot_file(index)), &trusted)?);
         }
     }
@@ -669,12 +792,15 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
     acquire_gate_lock(dirs, project_dir, "full")
 }
 
-/// Admit a heavy run: in every lock directory, hold the host lock shared and
-/// take the first free slot, recording `mode` beside it. Other active runs
-/// never refuse it; they only raise [`GateLock::runs`].
+/// Admit a heavy run: hold the fence ([`LOCK_FILE`]) shared in every lock
+/// directory first, then in each one hold the host lock shared and take the
+/// first free slot, recording `mode` beside the slot and the fence. Other
+/// active new runs never refuse it; they only raise [`GateLock::runs`].
 /// # Errors
-/// While a `host_exclusive` target holds the host; when a lock directory or
-/// lock cannot be opened, or a slot record cannot be read or written. Locks taken in this call are released before returning.
+/// At once, before any slot is taken, while an older binary's gate holds a
+/// fence (TSK-1256); while a `host_exclusive` target holds the host; when a
+/// lock directory or lock cannot be opened, or a slot or fence record cannot
+/// be read or written. Locks taken in this call are released before returning.
 pub fn acquire_gate_lock(
     dirs: &[PathBuf],
     project_dir: &Path,
@@ -683,6 +809,7 @@ pub fn acquire_gate_lock(
     let mut lock = GateLock {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         files: Vec::new(),
+        fences: Vec::new(),
         inherited: Vec::new(),
         paths: Vec::new(),
         runs: 1,
@@ -697,6 +824,14 @@ pub fn acquire_gate_lock(
                 .to_string(),
         );
     }
+    // Every fence first: an older binary's gate refuses this run before it
+    // takes a slot or the host in any folder (TSK-1256).
+    let mut orphans = 0;
+    for dir in dirs {
+        let (fence, orphaned) = take_fence(dir, &trusted)?;
+        orphans = orphans.max(usize::from(orphaned));
+        lock.fences.push((dir.join(LOCK_FILE), fence));
+    }
     let mut host = Vec::new();
     for dir in dirs {
         let host_path = dir.join(HOST_LOCK_FILE);
@@ -709,6 +844,7 @@ pub fn acquire_gate_lock(
                     holder,
                     running_groups: Vec::new(),
                     exclusive: true,
+                    older_binary: false,
                 });
             }
         }
@@ -722,9 +858,23 @@ pub fn acquire_gate_lock(
                 format!("gate lock unavailable: its holder record cannot be written: {error}"),
             ));
         }
-        lock.runs = lock.runs.max(busy + 1);
+        lock.runs = lock.runs.max(busy + orphans + 1);
         lock.files.push(acquired);
         lock.paths.push(path);
+    }
+    // Older readers name the holder from the fence record, so it names this
+    // run, the most recently admitted one. A run that cannot write it
+    // refuses, as for its slot record.
+    for (fence, _) in &lock.fences {
+        let written =
+            with_record_lock(fence, || write_fence_record(fence, Some(&record), &trusted))
+                .and_then(|written| written);
+        if let Err(error) = written {
+            return Err(LockHeld::unavailable(
+                fence.clone(),
+                format!("gate lock unavailable: its holder record cannot be written: {error}"),
+            ));
+        }
     }
     if !lock.files.is_empty() {
         held().push(Held {
@@ -741,6 +891,7 @@ pub fn acquire_gate_lock(
                     .iter()
                     .map(|file| file.0.as_raw_fd())
                     .chain(host.iter().map(|(_, file)| file.0.as_raw_fd()))
+                    .chain(lock.fences.iter().map(|(_, file)| file.0.as_raw_fd()))
                     .collect()
             },
             host,
@@ -749,6 +900,86 @@ pub fn acquire_gate_lock(
         });
     }
     Ok(lock)
+}
+
+/// Hold the fence ([`LOCK_FILE`]) in `dir` shared, and say whether its
+/// record names a live target group, which only an older binary's gate that
+/// was killed while its targets ran leaves there.
+/// # Errors
+/// At once while an older binary's gate holds the fence exclusively, naming
+/// it; when the fence cannot be opened or locked, or its record cannot be
+/// read (fail closed).
+fn take_fence(dir: &Path, trusted: &[String]) -> Result<(AcquiredFile, bool), LockHeld> {
+    let path = dir.join(LOCK_FILE);
+    let Slot::Taken(file) = try_open_and_lock(&path, true)? else {
+        let holder = fence_holder(&path, trusted);
+        return Err(LockHeld::older_binary(path, holder));
+    };
+    let mut acquired = AcquiredFile(file);
+    let previous = read_holder(&path, Some(&mut acquired.0), trusted).map_err(|error| {
+        LockHeld::unavailable(
+            path.clone(),
+            format!("cannot read gate lock record: {error}"),
+        )
+    })?;
+    let running = live_groups(&previous).map_err(|error| {
+        LockHeld::unavailable(
+            path.clone(),
+            format!("cannot reclaim gate lock: {error}; inspect and repair the lock record after verifying its processes"),
+        )
+    })?;
+    Ok((acquired, !running.is_empty()))
+}
+
+/// The holder an older binary's gate recorded for the fence at `path`: the
+/// record file's holder while its process lives (a line build before
+/// TSK-1256 writes it), else the record a 3.1 gate keeps inside the lock
+/// file; empty when neither is readable. A record left by a run that died
+/// is never shown as the holder.
+fn fence_holder(path: &Path, trusted: &[String]) -> String {
+    let read = |file: &Path| -> Option<String> {
+        if crate::absence::proven_absent(file).ok()? {
+            return None;
+        }
+        let (anchor, relative) = lock_anchor(file).ok()?;
+        let mut opened = crate::contained::Tree::open(anchor)
+            .ok()?
+            .open_regular(&relative)
+            .ok()?;
+        let text = read_record(&mut opened).ok()?;
+        parse_record(&text, trusted)
+            .ok()
+            .filter(|record| !record.trim().is_empty())
+    };
+    read(&record_path(path))
+        .filter(|record| holder_alive(record))
+        .or_else(|| read(path))
+        .unwrap_or_default()
+}
+
+/// Whether the process a holder record names by `pid` still runs.
+#[cfg(unix)]
+fn holder_alive(record: &str) -> bool {
+    let Some(pid) = record
+        .lines()
+        .find_map(|line| line.strip_prefix("pid="))
+        .and_then(|value| libc::pid_t::try_from(value.parse::<u32>().ok()?).ok())
+        .filter(|pid| *pid > 1)
+    else {
+        return false;
+    };
+    // SAFETY: signal 0 only checks that the process exists; nothing is sent.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Whether the process a holder record names still runs. No check here: a
+/// named holder is shown.
+#[cfg(not(unix))]
+fn holder_alive(record: &str) -> bool {
+    record.lines().any(|line| line.starts_with("pid="))
 }
 
 /// Take the first free slot in `dir`: the slot, its path, and how many
@@ -762,7 +993,7 @@ fn take_slot(
     let mut busy = 0;
     // Every existing slot is tried in order, then the next index is created;
     // a slot another run creates first only moves this run one further.
-    for index in 0.. {
+    for index in FIRST_SLOT.. {
         let path = dir.join(slot_file(index));
         let Slot::Taken(file) = try_open_and_lock(&path, false)? else {
             busy += 1;
@@ -991,13 +1222,28 @@ pub fn hold_host_exclusive_in(
     Ok(HostExclusive { files: taken })
 }
 
-/// A busy slot in `dirs` that this process does not hold, if any.
+/// A busy slot in `dirs` that this process does not hold, or a fence whose
+/// record names a live target group of an older binary's killed gate, if
+/// any. The fence lock itself is not checked: this run holds it shared.
 fn orphaned_slot(dirs: &[PathBuf], trusted: &[String]) -> Result<Option<PathBuf>, LockHeld> {
     let own: Vec<PathBuf> = held()
         .iter()
         .flat_map(|lock| lock.paths.iter().cloned())
         .collect();
     for dir in dirs {
+        let fence = dir.join(LOCK_FILE);
+        let record = read_holder(&fence, None, trusted).map_err(|error| {
+            LockHeld::unavailable(
+                fence.clone(),
+                format!("cannot read gate lock record: {error}"),
+            )
+        })?;
+        let running = live_groups(&record).map_err(|error| {
+            LockHeld::unavailable(fence.clone(), format!("cannot reclaim gate lock: {error}"))
+        })?;
+        if !running.is_empty() {
+            return Ok(Some(fence));
+        }
         for index in slot_indices(dir)? {
             let path = dir.join(slot_file(index));
             if own.contains(&path) {
@@ -1055,8 +1301,9 @@ fn retake_shared(wait: std::time::Duration) {
 /// descriptor only after the OS lock shows it is the holder's own.
 pub const RESERVED_LOCKS_ENV: &str = "CODEFLOW_RESERVED_LOCK_FDS";
 
-/// The most descriptors one hand-over names: one per lock directory.
-const MOST_RESERVED_LOCKS: usize = 4;
+/// The most descriptors one hand-over names: a slot, the host lock and the
+/// fence in each of the two lock directories.
+const MOST_RESERVED_LOCKS: usize = 6;
 
 #[cfg(unix)]
 static ADOPTED: Mutex<Vec<std::os::fd::RawFd>> = Mutex::new(Vec::new());
@@ -1202,6 +1449,13 @@ fn inherit_gate_lock(
         inherited.push(file);
         paths.push(path);
     }
+    // The fence, held shared by this process too, so a target that outlives
+    // the reserve still keeps older binaries out (TSK-1256).
+    let mut fences = Vec::new();
+    for dir in dirs {
+        let (fence, _) = take_fence(dir, &trusted)?;
+        fences.push((dir.join(LOCK_FILE), fence));
+    }
     // The host half of the lease, taken as ordinary admission takes it.
     let mut host = Vec::new();
     for dir in dirs {
@@ -1215,6 +1469,7 @@ fn inherit_gate_lock(
                     holder,
                     running_groups: Vec::new(),
                     exclusive: true,
+                    older_binary: false,
                 });
             }
         }
@@ -1229,6 +1484,7 @@ fn inherit_gate_lock(
     let lock = GateLock {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         files: Vec::new(),
+        fences,
         inherited,
         paths: paths.clone(),
         runs,
@@ -1254,6 +1510,7 @@ fn inherit_gate_lock(
             .iter()
             .map(AsRawFd::as_raw_fd)
             .chain(host.iter().map(|(_, file)| file.0.as_raw_fd()))
+            .chain(lock.fences.iter().map(|(_, file)| file.0.as_raw_fd()))
             .collect(),
         host,
     });
@@ -1752,6 +2009,14 @@ const LOCK_MODES: [&str; 5] = ["full", "quick", "essential", "reserve", "exclusi
 /// record's text, so a file reached through a planted link reveals nothing
 /// beyond a folder the gate already trusts.
 fn parse_record(text: &str, trusted: &[String]) -> Result<String, String> {
+    parse_record_with(text, trusted, false)
+}
+
+/// [`parse_record`], keeping a `dir` value that is not trusted when
+/// `keep_dir` is set. Only the fence record copy uses it: the value is
+/// passed on to older readers, which apply their own check, and is never
+/// resolved or shown here.
+fn parse_record_with(text: &str, trusted: &[String], keep_dir: bool) -> Result<String, String> {
     let mut seen = BTreeSet::new();
     let mut out = String::new();
     for line in text.split_terminator('\n') {
@@ -1783,6 +2048,8 @@ fn parse_record(text: &str, trusted: &[String]) -> Result<String, String> {
                 let value = trimmed_dir(value);
                 if let Some(dir) = trusted.iter().find(|dir| dir.as_str() == value.as_ref()) {
                     dir.clone()
+                } else if keep_dir {
+                    value.into_owned()
                 } else {
                     // Not a folder the gate trusts: shown as unknown, never
                     // as the record's text, and never looked up.
@@ -1964,13 +2231,13 @@ mod tests {
         let first = acquire_full_gate_lock(&dirs(tmp.path()), &work).unwrap();
         assert!(first.notes.is_empty(), "{:?}", first.notes);
         assert_eq!(first.runs, 1);
-        assert!(first.paths.iter().all(|path| path.ends_with(LOCK_FILE)));
+        assert!(first.paths.iter().all(|path| path.ends_with(slot_file(1))));
 
         let second = acquire_full_gate_lock(&dirs(tmp.path()), &work).unwrap();
         assert_eq!(second.runs, 2);
-        assert!(second.paths.iter().all(|path| path.ends_with(slot_file(1))));
+        assert!(second.paths.iter().all(|path| path.ends_with(slot_file(2))));
         for dir in dirs(tmp.path()) {
-            let record = std::fs::read_to_string(dir.join("full-gate-1.record")).unwrap();
+            let record = std::fs::read_to_string(dir.join("full-gate-2.record")).unwrap();
             assert!(
                 record.contains(&format!("pid={}", std::process::id())),
                 "{record}"
@@ -1986,13 +2253,13 @@ mod tests {
             .find_map(|_| {
                 acquire_full_gate_lock(&dirs(tmp.path()), Path::new("/work/b"))
                     .ok()
-                    .filter(|lock| lock.paths.iter().all(|path| path.ends_with(LOCK_FILE)))
+                    .filter(|lock| lock.paths.iter().all(|path| path.ends_with(slot_file(1))))
                     .or_else(|| {
                         std::thread::sleep(std::time::Duration::from_millis(50));
                         None
                     })
             })
-            .expect("slot 0 is free once its holder drops it");
+            .expect("slot 1 is free once its holder drops it");
         assert!(
             again.notes.is_empty(),
             "a clean release leaves no stale record: {:?}",
@@ -2042,7 +2309,7 @@ mod tests {
         let own: Vec<File> = dirs
             .iter()
             .map(|dir| {
-                let file = open_lock_file(&dir.join(LOCK_FILE)).unwrap();
+                let file = open_lock_file(&dir.join(slot_file(1))).unwrap();
                 os_lock::try_lock(&file).unwrap();
                 file
             })
@@ -2070,7 +2337,7 @@ mod tests {
         std::fs::create_dir(&work).unwrap();
         let dirs = dirs(tmp.path());
         let holder = acquire_full_gate_lock(&dirs, &work).unwrap();
-        let sibling = dirs[0].join(slot_file(1));
+        let sibling = dirs[0].join(slot_file(2));
         std::fs::write(&sibling, "").unwrap();
         std::fs::write(tmp.path().join("elsewhere"), "").unwrap();
         std::os::unix::fs::symlink(tmp.path().join("elsewhere"), record_path(&sibling)).unwrap();
@@ -2098,7 +2365,7 @@ mod tests {
         let dir = tmp.path().join("one");
         std::fs::create_dir(&dir).unwrap();
         let dirs = vec![dir.clone()];
-        let held: Vec<File> = (0..64)
+        let held: Vec<File> = (1..=64)
             .map(|index| {
                 let file = open_lock_file(&dir.join(slot_file(index))).unwrap();
                 os_lock::try_lock(&file).unwrap();
@@ -2107,7 +2374,7 @@ mod tests {
             .collect();
         let lock = acquire_full_gate_lock(&dirs, &work).expect("a 65th run is admitted");
         assert_eq!(lock.runs, 65);
-        assert!(lock.paths[0].ends_with(slot_file(64)));
+        assert!(lock.paths[0].ends_with(slot_file(65)));
         drop(lock);
         drop(held);
     }
@@ -2158,7 +2425,7 @@ mod tests {
         let numbers = |files: &[File]| files.iter().map(AsRawFd::as_raw_fd).collect::<Vec<_>>();
         let own: Vec<File> = dirs
             .iter()
-            .map(|dir| open_lock_file(&dir.join(LOCK_FILE)).unwrap())
+            .map(|dir| open_lock_file(&dir.join(slot_file(1))).unwrap())
             .collect();
         assert!(
             inherit_gate_lock(&dirs, &numbers(&own), Vec::new())
@@ -2194,15 +2461,15 @@ mod tests {
         assert_eq!(inherited.runs, 1, "the nested run is the holder's run");
         let beside = acquire_full_gate_lock(&dirs, &work).expect("another run is admitted");
         assert_eq!(beside.runs, 2);
-        assert!(beside.paths.iter().all(|path| path.ends_with(slot_file(1))));
+        assert!(beside.paths.iter().all(|path| path.ends_with(slot_file(2))));
         drop(beside);
         drop(inherited);
-        let fresh = open_lock_file(&dirs[0].join(LOCK_FILE)).unwrap();
+        let fresh = open_lock_file(&dirs[0].join(slot_file(1))).unwrap();
         assert!(
             os_lock::try_lock(&fresh).is_err(),
             "the inherited lock never releases the holder's slot"
         );
-        let record = std::fs::read_to_string(dirs[0].join(RECORD_FILE)).unwrap();
+        let record = std::fs::read_to_string(record_path(&dirs[0].join(slot_file(1)))).unwrap();
         assert!(
             record.contains(&format!("pid={}", std::process::id())),
             "the inherited lock never rewrites the holder's record: {record}"
@@ -2304,7 +2571,11 @@ mod tests {
     fn hand_over_values_parse_strictly() {
         assert_eq!(parse_descriptors("7"), Some(vec![7]));
         assert_eq!(parse_descriptors("7,9"), Some(vec![7, 9]));
-        for bad in ["", "2", "7,7", "x", "7,", "-1", "3,4,5,6,7"] {
+        assert_eq!(
+            parse_descriptors("3,4,5,6,7,8"),
+            Some(vec![3, 4, 5, 6, 7, 8])
+        );
+        for bad in ["", "2", "7,7", "x", "7,", "-1", "3,4,5,6,7,8,9"] {
             assert_eq!(parse_descriptors(bad), None, "{bad}");
         }
     }
@@ -2327,7 +2598,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // A record with no flock behind it: its process died without cleanup.
         std::fs::write(
-            dir.join(LOCK_FILE),
+            dir.join(slot_file(1)),
             "pid=999999\nstarted=1\ndir=/gone/worktree\n",
         )
         .unwrap();
@@ -2340,7 +2611,7 @@ mod tests {
             "{:?}",
             lock.notes
         );
-        let record = std::fs::read_to_string(dir.join(RECORD_FILE)).unwrap();
+        let record = std::fs::read_to_string(record_path(&dir.join(slot_file(1)))).unwrap();
         assert!(record.contains(&format!("pid={}", std::process::id())));
     }
 
@@ -2368,6 +2639,12 @@ mod tests {
         assert_eq!(beside.runs, 2, "the surviving target counts as a run");
         assert!(beside.paths[0].ends_with(slot_file(1)));
         assert!(
+            std::fs::read_to_string(dir.join(RECORD_FILE))
+                .unwrap()
+                .contains(&format!("group={group}")),
+            "the fence record keeps the surviving target"
+        );
+        assert!(
             std::fs::read_to_string(dir.join(LOCK_FILE))
                 .unwrap()
                 .contains(&format!("group={group}")),
@@ -2385,14 +2662,8 @@ mod tests {
         target.kill().unwrap();
         target.wait().unwrap();
         let lock = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")).unwrap();
-        assert!(lock.paths[0].ends_with(LOCK_FILE));
-        assert!(
-            lock.notes
-                .iter()
-                .any(|n| n.contains("reclaimed a stale gate lock")),
-            "{:?}",
-            lock.notes
-        );
+        assert_eq!(lock.runs, 1, "the ended target no longer counts");
+        assert!(lock.paths[0].ends_with(slot_file(1)));
     }
 
     #[test]
@@ -2403,13 +2674,15 @@ mod tests {
         // A group number no other test uses: records are shared by every
         // lock this process holds.
         target_group_started(4_000_001).unwrap();
-        let record = std::fs::read_to_string(dir.join(RECORD_FILE)).unwrap();
+        let slot = record_path(&dir.join(slot_file(1)));
+        let record = std::fs::read_to_string(&slot).unwrap();
         assert!(record.contains("group=4000001"), "{record}");
         assert!(record.contains(&format!("pid={}", std::process::id())));
         target_group_finished(4_000_001).unwrap();
-        let record = std::fs::read_to_string(dir.join(RECORD_FILE)).unwrap();
+        let record = std::fs::read_to_string(&slot).unwrap();
         assert!(!record.contains("group=4000001"), "{record}");
         drop(lock);
+        assert_eq!(std::fs::read_to_string(&slot).unwrap(), "");
         assert_eq!(std::fs::read_to_string(dir.join(RECORD_FILE)).unwrap(), "");
         // The lock file itself is never written (TSK-1003).
         assert_eq!(std::fs::read_to_string(dir.join(LOCK_FILE)).unwrap(), "");
@@ -3021,6 +3294,7 @@ mod tests {
         let dir = home.join(HOME_LOCK_DIR);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(LOCK_FILE), "").unwrap();
+        std::fs::write(dir.join(slot_file(1)), "").unwrap();
         std::fs::write(dir.join(HOST_LOCK_FILE), "").unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
         let refused = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"));
@@ -3140,5 +3414,324 @@ mod heavy_admission_tests {
         os_lock::try_lock(&next).expect("explicit unlock also releases inherited descriptors");
         os_lock::unlock(&next);
         drop(inherited);
+    }
+}
+
+/// TSK-1256: older binaries (3.1.x, and line builds before this change)
+/// lock `full-gate.lock` exclusively; every new run holds it shared.
+#[cfg(test)]
+mod old_binary_fence_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// A temp root, a trusted work folder in it, and two lock folders.
+    fn setup() -> (tempfile::TempDir, PathBuf, Vec<PathBuf>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let work = root.join("work");
+        std::fs::create_dir(&work).unwrap();
+        let dirs = vec![root.join("home-locks"), root.join("repo-locks")];
+        (tmp, work, dirs)
+    }
+
+    /// An older binary's take, as 3.1.0 and the pre-TSK-1256 line builds
+    /// make it: `full-gate.lock` opened and locked exclusively, no wait.
+    fn old_take(dir: &Path) -> std::io::Result<AcquiredFile> {
+        let file = open_lock_file(&dir.join(LOCK_FILE))?;
+        os_lock::try_lock(&file)?;
+        Ok(AcquiredFile(file))
+    }
+
+    /// [`old_take`], retried briefly: a sibling test that forks a child can
+    /// hold a duplicate of a released descriptor until its exec.
+    fn old_take_eventually(dir: &Path) -> AcquiredFile {
+        for _ in 0..40 {
+            if let Ok(file) = old_take(dir) {
+                return file;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        old_take(dir).expect("the old binary's take succeeds once no new run is active")
+    }
+
+    fn now() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    }
+
+    /// AC-1: while new runs hold only slots 1 and up, an older binary's
+    /// exclusive take of `full-gate.lock` is refused.
+    #[test]
+    fn an_old_take_is_refused_while_new_runs_hold_only_later_slots() {
+        let (_tmp, work, dirs) = setup();
+        let first = acquire_full_gate_lock(&dirs, &work).unwrap();
+        let second = acquire_full_gate_lock(&dirs, &work).unwrap();
+        drop(first);
+        for dir in &dirs {
+            match old_take(dir) {
+                Err(error) if os_lock::is_contended(&error) => {}
+                other => panic!(
+                    "an old binary's take of {} must be refused while a new run is active: {:?}",
+                    dir.join(LOCK_FILE).display(),
+                    other.map(drop)
+                ),
+            }
+        }
+        drop(second);
+        for dir in &dirs {
+            drop(old_take_eventually(dir));
+        }
+    }
+
+    /// AC-2: while a 3.1 gate holds `full-gate.lock` exclusively, a new run
+    /// refuses at once, takes no slot, and names the holder from the record
+    /// the 3.1 gate keeps inside the lock file.
+    #[test]
+    fn a_new_run_refuses_at_once_naming_a_3_1_holder() {
+        let (_tmp, work, dirs) = setup();
+        let pid = std::process::id();
+        std::fs::create_dir_all(&dirs[0]).unwrap();
+        // A crashed new run's record names a dead process; the live 3.1
+        // holder's record is the one inside the lock file.
+        std::fs::write(
+            dirs[0].join(RECORD_FILE),
+            "pid=999999\nstarted=1\ndir=/gone\nmode=full\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dirs[0].join(LOCK_FILE),
+            format!("pid={pid}\nstarted={}\ndir={}\n", now(), work.display()),
+        )
+        .unwrap();
+        let old = old_take(&dirs[0]).unwrap();
+        let start = Instant::now();
+        let refused = acquire_full_gate_lock(&dirs, &work).unwrap_err();
+        assert!(start.elapsed() < Duration::from_secs(2), "no wait");
+        assert_eq!(refused.path, dirs[0].join(LOCK_FILE));
+        let message = refused.to_string();
+        assert!(
+            message.contains(&format!("pid {pid} in {}", work.display())),
+            "{message}"
+        );
+        assert!(!message.contains("999999"), "{message}");
+        assert!(message.contains("older CodeFlow binary"), "{message}");
+        for dir in &dirs {
+            assert!(!dir.join(slot_file(1)).exists(), "no slot is taken");
+            assert!(!dir.join(HOST_LOCK_FILE).exists(), "nothing starts");
+        }
+        drop(old);
+        let run = acquire_full_gate_lock(&dirs, &work).expect("admitted once the old gate ends");
+        drop(run);
+    }
+
+    /// AC-2: a line build from before this change keeps its record in
+    /// `full-gate.record`; holding only the repository folder's lock, it
+    /// still refuses a new run before any slot in either folder is taken.
+    #[test]
+    fn a_new_run_refuses_at_once_naming_a_line_build_holder() {
+        let (_tmp, work, dirs) = setup();
+        let pid = std::process::id();
+        std::fs::create_dir_all(&dirs[1]).unwrap();
+        std::fs::write(
+            dirs[1].join(RECORD_FILE),
+            format!(
+                "pid={pid}\nstarted={}\ndir={}\nmode=essential\n",
+                now(),
+                work.display()
+            ),
+        )
+        .unwrap();
+        let old = old_take(&dirs[1]).unwrap();
+        let refused = acquire_full_gate_lock(&dirs, &work).unwrap_err();
+        assert_eq!(refused.path, dirs[1].join(LOCK_FILE));
+        let message = refused.to_string();
+        assert!(message.contains(&format!("pid {pid}")), "{message}");
+        assert!(message.contains("essential mode"), "{message}");
+        for dir in &dirs {
+            assert!(!dir.join(slot_file(1)).exists(), "no slot is taken");
+        }
+        drop(old_take_eventually(&dirs[0]));
+        drop(old);
+    }
+
+    /// AC-3: a fence that cannot be opened refuses, naming the file, and
+    /// releases the fence already taken in another folder.
+    #[test]
+    fn a_fence_that_cannot_be_opened_fails_closed_naming_it() {
+        let (_tmp, work, dirs) = setup();
+        std::fs::create_dir_all(dirs[1].join(LOCK_FILE)).unwrap();
+        let refused = acquire_full_gate_lock(&dirs, &work).unwrap_err();
+        assert_eq!(refused.path, dirs[1].join(LOCK_FILE));
+        let message = with_repair_pointer(&refused);
+        assert!(message.contains("gate lock unavailable"), "{message}");
+        assert!(message.contains(LOCK_FILE), "{message}");
+        for dir in &dirs {
+            assert!(!dir.join(slot_file(1)).exists(), "no slot is taken");
+        }
+        drop(old_take_eventually(&dirs[0]));
+    }
+
+    /// AC-3: a permission error on the fence fails closed the same way.
+    #[cfg(unix)]
+    #[test]
+    fn a_fence_without_permission_fails_closed_naming_it() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid only reads the process's user id.
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root opens any file; the fixture cannot deny it
+        }
+        let (_tmp, work, dirs) = setup();
+        std::fs::create_dir_all(&dirs[0]).unwrap();
+        let fence = dirs[0].join(LOCK_FILE);
+        std::fs::write(&fence, "").unwrap();
+        std::fs::set_permissions(&fence, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let refused = acquire_full_gate_lock(&dirs, &work).unwrap_err();
+        std::fs::set_permissions(&fence, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(refused.path, fence);
+        let message = refused.to_string();
+        assert!(message.contains("gate lock unavailable"), "{message}");
+        assert!(message.contains(LOCK_FILE), "{message}");
+        for dir in &dirs {
+            assert!(!dir.join(slot_file(1)).exists(), "no slot is taken");
+        }
+    }
+
+    /// AC-4: while new runs are active, `full-gate.record` names the most
+    /// recent of them in the one-holder format older readers parse, never
+    /// one that has ended; the lock file a 3.1 reader shows stays empty.
+    #[test]
+    fn old_readers_see_the_most_recent_active_holder() {
+        let (_tmp, root_work, dirs) = setup();
+        let root = root_work.parent().unwrap().to_path_buf();
+        let (work_a, work_b) = (root.join("work-a"), root.join("work-b"));
+        std::fs::create_dir(&work_a).unwrap();
+        std::fs::create_dir(&work_b).unwrap();
+        // What a line build before this change reads: the record file,
+        // one holder, keys and modes its strict parser accepts.
+        let line_reader = |dir: &Path| {
+            let text = std::fs::read_to_string(dir.join(RECORD_FILE)).unwrap();
+            parse_record(&text, &[]).expect("an old parser reads the record");
+            assert!(
+                text.lines().filter(|line| line.starts_with("pid=")).count() <= 1,
+                "{text}"
+            );
+            assert!(
+                text.lines()
+                    .filter_map(|line| line.strip_prefix("mode="))
+                    .all(|mode| ["full", "quick", "essential", "reserve"].contains(&mode)),
+                "{text}"
+            );
+            text
+        };
+        // What 3.1 reads: the lock file itself, which new runs never write.
+        let release_reader = |dir: &Path| std::fs::read_to_string(dir.join(LOCK_FILE)).unwrap();
+
+        let a = acquire_full_gate_lock(&dirs, &work_a).unwrap();
+        let b = acquire_full_gate_lock(&dirs, &work_b).unwrap();
+        for dir in &dirs {
+            let text = line_reader(dir);
+            assert!(
+                text.contains(&format!("dir={}\n", work_b.display())),
+                "{text}"
+            );
+            assert_eq!(
+                release_reader(dir),
+                "",
+                "3.1 shows no holder, never a false one"
+            );
+        }
+        drop(b);
+        for dir in &dirs {
+            let text = line_reader(dir);
+            assert!(
+                text.contains(&format!("dir={}\n", work_a.display())),
+                "the ended run is no longer named: {text}"
+            );
+            assert!(
+                text.contains(&format!("pid={}\n", std::process::id())),
+                "{text}"
+            );
+        }
+        drop(a);
+        for dir in &dirs {
+            assert_eq!(
+                line_reader(dir),
+                "",
+                "no run is active, so no holder is named"
+            );
+        }
+    }
+
+    /// AC-9: a host that has the slot-0 and fence files the landed TSK-1145
+    /// version left, with stale records, admits a run correctly; a landed
+    /// run still on slot 1 counts, and one on slot 0 is an older binary.
+    #[test]
+    fn a_host_with_the_landed_slot_files_still_admits_correctly() {
+        let (_tmp, work, dirs) = setup();
+        for dir in &dirs {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join(LOCK_FILE), "").unwrap();
+            std::fs::write(
+                dir.join(RECORD_FILE),
+                "pid=999999\nstarted=1\ndir=/gone\nmode=full\n",
+            )
+            .unwrap();
+            std::fs::write(dir.join("full-gate.record.lock"), "").unwrap();
+            std::fs::write(dir.join(slot_file(1)), "").unwrap();
+            std::fs::write(
+                record_path(&dir.join(slot_file(1))),
+                "pid=999998\nstarted=1\ndir=/gone\nmode=quick\n",
+            )
+            .unwrap();
+            std::fs::write(dir.join(HOST_LOCK_FILE), "").unwrap();
+        }
+        let lock = acquire_full_gate_lock(&dirs, &work).expect("stale landed files never refuse");
+        assert_eq!(lock.runs, 1, "stale records count no run");
+        assert!(
+            lock.paths.iter().all(|path| path.ends_with(slot_file(1))),
+            "{:?}",
+            lock.paths
+        );
+        assert!(
+            lock.notes.iter().any(|note| note.contains("pid 999998")),
+            "{:?}",
+            lock.notes
+        );
+        for dir in &dirs {
+            let record = std::fs::read_to_string(dir.join(RECORD_FILE)).unwrap();
+            assert!(
+                record.contains(&format!("pid={}\n", std::process::id())),
+                "{record}"
+            );
+        }
+        drop(lock);
+
+        // A landed-version run still holding slot 1 counts as a run.
+        let landed: Vec<File> = dirs
+            .iter()
+            .map(|dir| {
+                let file = open_lock_file(&dir.join(slot_file(1))).unwrap();
+                for _ in 0..40 {
+                    if os_lock::try_lock(&file).is_ok() {
+                        return file;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                panic!("slot 1 stays held");
+            })
+            .collect();
+        let beside = acquire_full_gate_lock(&dirs, &work).unwrap();
+        assert_eq!(beside.runs, 2);
+        assert!(beside.paths.iter().all(|path| path.ends_with(slot_file(2))));
+        drop(beside);
+        drop(landed);
+
+        // A landed-version run on slot 0 locks `full-gate.lock`
+        // exclusively, as an older binary does, and is refused as one.
+        let slot_zero = old_take_eventually(&dirs[0]);
+        let refused = acquire_full_gate_lock(&dirs, &work).unwrap_err();
+        assert_eq!(refused.path, dirs[0].join(LOCK_FILE));
+        drop(slot_zero);
     }
 }

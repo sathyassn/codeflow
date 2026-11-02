@@ -376,7 +376,7 @@ fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
     // The gate records the group in its holder record just after the target
     // starts, and the target can write its file first: wait for the record
     // before killing the gate, or the kill can land between the two.
-    let lock_file = home.path().join("locks/full-gate.record");
+    let lock_file = home.path().join("locks/full-gate-1.record");
     let recorded = (0..200).any(|_| {
         let text = std::fs::read_to_string(&lock_file).unwrap_or_default();
         let found = text.lines().any(|l| l == format!("group={group}"));
@@ -407,7 +407,7 @@ fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
         let beside = run(dir, home.path(), &["test", "--mode", mode]);
         let err = stderr(&beside);
         assert_eq!(beside.status.code(), Some(0), "{err}");
-        assert!(home.path().join("locks/full-gate-1.lock").exists(), "{err}");
+        assert!(home.path().join("locks/full-gate-2.lock").exists(), "{err}");
         assert!(
             std::fs::read_to_string(&lock_file)
                 .unwrap()
@@ -651,7 +651,7 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
         let beside = run(other.path(), home.path(), &["test", "--mode", "full"]);
         let err = stderr(&beside);
         assert_eq!(beside.status.code(), Some(0), "{err}");
-        assert!(home.path().join("locks/full-gate-1.lock").exists(), "{err}");
+        assert!(home.path().join("locks/full-gate-2.lock").exists(), "{err}");
         Command::new("kill")
             .args(["-KILL", "--", &format!("-{pid}")])
             .status()
@@ -684,7 +684,7 @@ fn a_stale_lock_from_a_dead_gate_is_reclaimed() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join("locks")).unwrap();
     std::fs::write(
-        home.path().join("locks/full-gate.lock"),
+        home.path().join("locks/full-gate-1.record"),
         "pid=999999\nstarted=1\ndir=/gone\n",
     )
     .unwrap();
@@ -1334,7 +1334,7 @@ fn a_gate_takes_a_slot_through_the_identity_check_beside_a_contender() {
     let error = stderr(&contender);
     assert_eq!(contender.status.code(), Some(0), "{error}");
     assert!(
-        home.path().join("locks/full-gate-1.lock").exists(),
+        home.path().join("locks/full-gate-2.lock").exists(),
         "{error}"
     );
     std::fs::write(repo.path().join("release"), "").unwrap();
@@ -1623,6 +1623,7 @@ fn reserve_refuses_when_the_holder_record_cannot_be_written() {
     let locks = home.path().join("locks");
     std::fs::create_dir(&locks).unwrap();
     std::fs::write(locks.join("full-gate.lock"), "").unwrap();
+    std::fs::write(locks.join("full-gate-1.lock"), "").unwrap();
     std::fs::write(locks.join("host.lock"), "").unwrap();
     std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o500)).unwrap();
     let reserved = run(
@@ -1694,7 +1695,7 @@ fn quick_default_class_controls_undeclared_targets_and_keeps_explicit_light_work
 fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     let home = tempfile::tempdir().unwrap();
     let root = held_until_released("essential");
-    let path = home.path().join("locks/full-gate.record");
+    let path = home.path().join("locks/full-gate-1.record");
     let empty = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(empty.status.success(), "{}", stderr(&empty));
     assert!(String::from_utf8_lossy(&empty.stdout).contains("no recorded holder"));
@@ -1725,7 +1726,8 @@ fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     let status = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let text = String::from_utf8_lossy(&status.stdout);
-    assert_eq!(text.matches("recorded holder:").count(), 2, "{text}");
+    // The fence and slot 1 of both folders name the run (TSK-1256).
+    assert_eq!(text.matches("recorded holder:").count(), 4, "{text}");
     for value in [
         format!("pid {}", child.id()),
         "essential mode".into(),
@@ -1744,8 +1746,8 @@ fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
         String::from_utf8_lossy(&after.stdout)
             .matches("no recorded holder")
             .count(),
-        4,
-        "the host lock and slot 0 of both folders"
+        6,
+        "the host lock, the fence and slot 1 of both folders"
     );
 }
 
