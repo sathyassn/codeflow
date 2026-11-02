@@ -363,6 +363,8 @@ pub struct GitPolicy {
     /// Generic release declaration syntax, consistency and breaking commit floor.
     /// Defaults to warn; off/allow disables this independent check.
     pub pr_release_impact: PolicyLevel,
+    /// Opt-in catalog/declaration agreement; absent and off perform no tree work.
+    pub pr_capability_impact: PolicyLevel,
     /// The shape of the PR body's Summary section, which `codeflow ci`
     /// checks on a provided body: one prose paragraph that anchors the
     /// reader, then a list or table, then at most one closing paragraph
@@ -605,6 +607,7 @@ impl Default for GitPolicy {
             policy_characters: PolicyLevel::Warn,
             pr_sections: PolicyLevel::Block,
             pr_release_impact: PolicyLevel::Warn,
+            pr_capability_impact: PolicyLevel::Off,
             pr_summary: PolicyLevel::Block,
             pr_breaking_level: "major".into(),
             pr_required_sections: DEFAULT_PR_REQUIRED_SECTIONS.map(String::from).to_vec(),
@@ -1071,6 +1074,7 @@ impl GitPolicy {
         self.policy_characters = PolicyLevel::Off;
         self.pr_sections = PolicyLevel::Off;
         self.pr_release_impact = PolicyLevel::Off;
+        self.pr_capability_impact = PolicyLevel::Off;
         self.pr_summary = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
         self.conflict_markers = PolicyLevel::Off;

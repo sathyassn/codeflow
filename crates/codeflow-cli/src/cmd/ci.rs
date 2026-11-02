@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 mod acceptance;
 mod adopter;
+mod capability_impact;
 mod change_class;
 mod classification;
 mod conflict_markers;
@@ -168,6 +169,11 @@ pub struct CiArgs {
     /// hosted CI never passes it.
     #[arg(long, hide = true, requires = "destination")]
     pub advertisement_stdin: bool,
+
+    /// Check catalog data as a local push preflight, without PR declarations.
+    /// This is not a hosted admission verdict.
+    #[arg(long, hide = true)]
+    pub capability_preflight: bool,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -763,6 +769,37 @@ pub fn run(args: &CiArgs) -> i32 {
     {
         visible_graph_check(&root, level, &mut tagged, &mut ran);
     }
+
+    let capability = capability_impact::evaluate(
+        &root,
+        configured,
+        &judging.raw,
+        authority.as_ref().map(Authority::sha),
+        base_sha.as_deref(),
+        &head,
+        pr_body.as_deref(),
+        args.capability_preflight,
+        is_pr_event(|key| environment.get(key).cloned()),
+    );
+    for note in capability.notes {
+        println!("codeflow ci: {}", crate::cmd::shown(&note));
+    }
+    if capability.ran {
+        ran.push(if args.capability_preflight {
+            "capability preflight"
+        } else {
+            "capability impact"
+        });
+    }
+    tagged.extend(
+        capability
+            .findings
+            .into_iter()
+            .map(|violation| TaggedViolation {
+                sha: None,
+                violation,
+            }),
+    );
 
     // --- PR-body check ----------------------------------------------------
     // A Bitbucket PR without a body channel was warned about when resolving

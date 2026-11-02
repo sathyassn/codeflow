@@ -1590,7 +1590,7 @@ const TEMPLATE_ALTERNATIVES: [&str; 3] = [
 /// A value that says nothing: empty of letters and digits, a whole
 /// `<placeholder>`, or a placeholder word (`PLACEHOLDERS` in
 /// `scripts/release.py`).
-fn placeholder(value: &str) -> bool {
+pub(super) fn placeholder(value: &str) -> bool {
     let value = guidance(value);
     let whole_placeholder = value.starts_with('<')
         && value.ends_with('>')
@@ -1608,6 +1608,31 @@ fn substantive(value: &str) -> bool {
     !placeholder(value)
         && normalized != "see breaking change"
         && !TEMPLATE_ALTERNATIVES.contains(&normalized.as_str())
+}
+
+/// Visible own-section declaration lines, excluding examples, comments and subsections.
+pub(super) fn capability_lines(body: &str) -> Result<Vec<String>, String> {
+    let parsed = sections(body);
+    let matched: Vec<_> = parsed
+        .iter()
+        .filter(|s| s.matches("Capability impact"))
+        .collect();
+    let [section] = matched.as_slice() else {
+        return Err("PR body needs exactly one ## Capability impact section".into());
+    };
+    if section.depth != HeadingLevel::H2 {
+        return Err("Capability impact must be a level-two heading".into());
+    }
+    let content = section.content();
+    let end = sections(content)
+        .first()
+        .map_or(content.len(), |s| s.heading_start);
+    Ok(field_text(&content[..end])
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 #[cfg(test)]

@@ -2,10 +2,12 @@
 //!
 //! - `codeflow ci` runs once per pushed branch on git data: the range from
 //!   the destination's own history to the pushed sha.
-//! - The push set runs no tree checks (TSK-449): `codeflow validate --docs`
+//! - The push set runs no checkout test targets (TSK-449): `codeflow validate --docs`
 //!   is `codeflow ci`'s own `work.valid_graph` check, and the test-config
 //!   targets belong to `codeflow test`, cited when the pull request is made
 //!   ready. A push is a backup; it neither runs nor waits for a test target.
+//!   Capability preflight reads pinned catalog objects without a PR body;
+//!   declaration admission remains the hosted actual-target check.
 //!   The conflict-marker check runs inside each `codeflow ci`; staged
 //!   secrets are refused by the pre-commit hook and by the hosted gitleaks
 //!   scan, not here.
@@ -315,6 +317,7 @@ fn run_ci_ranges(
             report.status.push(judging);
             let running = policy.test_gate_on_push.to_string();
             let mut args = vec!["ci", "--base", &base, "--head", &r.local_sha];
+            args.push("--capability-preflight");
             args.extend(["--branch", branch, "--run-level", &running]);
             // Range boundaries can be unnamed merge bases. Pass destination
             // intent separately so CI does not infer it from coincident refs.

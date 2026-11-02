@@ -204,11 +204,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_TARGET: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 --max-time 60 \
             -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
+          # A current body must describe the same head and target as this run.
+          jq -e --arg head "$EXPECTED_HEAD" --arg base "$EXPECTED_BASE" --arg target "$EXPECTED_TARGET" \
+            '.head.sha == $head and .base.sha == $base and .base.ref == $target and .state == "open"' \
+            "${RUNNER_TEMP}/pull.json" >/dev/null || {
+              echo "::error::pull request head or target moved; trigger a fresh PR event, for example by editing its body"; exit 1;
+            }
           delimiter="codeflow_body_$(openssl rand -hex 16)"
           {
             echo "text<<${delimiter}"
@@ -226,7 +235,20 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
-        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
+          # Do not admit a verdict if its body, head or target changed while it ran.
+          curl -fsSL --retry 3 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull-after.json"
+          jq -e --slurpfile before "${RUNNER_TEMP}/pull.json" \
+            'def snapshot: [.head.sha, .base.sha, .base.ref, .body, .state]; snapshot == ($before[0] | snapshot) and .state == "open"' \
+            "${RUNNER_TEMP}/pull-after.json" >/dev/null || {
+              echo "::error::pull request body, head or target changed during evaluation; use the new PR event's check"; exit 1;
+            }
 
       # The registry is fetched explicitly with full history, never forced
       # (R-20); the pull request head above was fetched as data only.

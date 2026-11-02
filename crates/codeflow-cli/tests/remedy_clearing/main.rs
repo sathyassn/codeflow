@@ -165,6 +165,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_BODY_LENGTH", Runs),
     ("PR_SUMMARY_SHAPE", Runs),
     ("PR_RELEASE_IMPACT", Runs),
+    ("PR_CAPABILITY_IMPACT", Runs),
     ("CI_BASE_UNRESOLVED", Runs),
     ("CI_BASE_REFUSED", Runs),
     ("CI_BASE_TARGET_DIFFER", Runs),
@@ -1014,6 +1015,46 @@ fn clears_pr_release_impact() {
         &BODY.replace("- Migration: none\n", ""),
         BODY,
         "non-empty migration field",
+    );
+}
+
+#[test]
+fn clears_pr_capability_impact() {
+    let dir = ci_repo(r#"{"git":{"pr_capability_impact":"block"}}"#);
+    let root = dir.path();
+    write(root, ".codeflow/project.toml", "areas = ['engine']\n");
+    write(root, "docs/capabilities/vocabulary.yaml", "inventory: incomplete\ngroups: [{name: records, about: Records}]\ntags: [{name: rust, about: Rust}]\n");
+    write(
+        root,
+        "docs/capabilities/CAP-101-catalog.md",
+        include_str!("../../../codeflow-core/tests/fixtures/capability-catalog/valid.md"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: add catalog"]);
+    let bodies = tempfile::tempdir().unwrap();
+    let body = bodies.path().join("body.md");
+    std::fs::write(
+        &body,
+        "## Capability impact\n\n- None: Internal cleanup preserves behaviour.\n",
+    )
+    .unwrap();
+    let before = ci(root, &["--pr-body-file", body.to_str().unwrap()]);
+    let printed = block(&before, "None cannot accompany capability changes");
+    assert_prints_row(printed, "PR_CAPABILITY_IMPACT");
+    let step = printed_command(printed, "PR_CAPABILITY_IMPACT", None);
+    std::fs::write(&body, "## Capability impact\n\n- Added CAP-101 catalog: Readers can inspect their capabilities.\n").unwrap();
+    let filled = step.replace("<body.md>", body.to_str().unwrap());
+    let parts = words(&filled);
+    let after = text(
+        &command(exe().to_str().unwrap(), root)
+            .args(&parts[1..])
+            .args(["--base", "main", "--head", "HEAD", "--branch", "feat/x"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        after.contains("declaration agrees with catalog delta"),
+        "{after}"
     );
 }
 
