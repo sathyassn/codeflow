@@ -1761,11 +1761,7 @@ fn panel_of_anchor(body: &str, anchor: &str) -> Option<String> {
 fn source_body(text: &str) -> String {
     let normalized = normalize_markdown_source(text);
     let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
-    normalized
-        .strip_prefix("---\n")
-        .and_then(|rest| rest.find("\n---\n").map(|end| &rest[end + 5..]))
-        .unwrap_or(normalized)
-        .to_string()
+    markdown_body(normalized).to_string()
 }
 
 fn slug_heading(raw: &str) -> String {

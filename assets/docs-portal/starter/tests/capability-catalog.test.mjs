@@ -96,9 +96,9 @@ for (const layout of ["legacy", "folder", "mixed"]) {
       await writeFile(path.join(root, "docs/capabilities.md"), `# Capabilities\n\n${layout === "folder" ? "" : legacy}`);
       if (layout !== "legacy") {
         await writeFile(path.join(root, "docs/capabilities/CAP-002-second.md"), [
-          "---", "id: CAP-002", "uid: 12345678-1234-4234-8234-123456789abc", "name: second",
+          "--- \t", "id: CAP-002", "uid: 12345678-1234-4234-8234-123456789abc", "name: second",
           "summary: The second capability.", "area: engine", "status: planned", "kind: functional",
-          "audience: [agent]", "---", "", "# Second", "", "The second capability.", "",
+          "audience: [agent]", "--- \t", "", "# Second", "", "The second capability.", "",
         ].join("\n"));
         await writeFile(path.join(root, "docs/capabilities/vocabulary.yaml"), "inventory: incomplete\ngroups: []\ntags: []\n");
       }

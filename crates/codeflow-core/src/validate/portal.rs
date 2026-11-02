@@ -1840,8 +1840,9 @@ fn expected_portal_pages(
         pages: derive_expected_routes(&selected, contract, report),
         record_ids: pointed_record_ids(&records, contract),
         has_capability_records: records.iter().any(|record| {
-            record.path.starts_with("docs/capabilities/")
-                && record.path != "docs/capabilities/vocabulary.yaml"
+            record.path == "docs/capabilities"
+                || (record.path.starts_with("docs/capabilities/")
+                    && record.path != "docs/capabilities/vocabulary.yaml")
         }),
     })
 }
@@ -3167,13 +3168,18 @@ fn resolve_source_link(source_path: &str, target: &str) -> Option<String> {
 }
 
 fn markdown_body(value: &str) -> &str {
-    if !value.starts_with("---\n") {
+    let mut lines = value.split_inclusive('\n');
+    let Some(first) = lines.next().filter(|line| line.trim_end() == "---") else {
         return value;
+    };
+    let mut offset = first.len();
+    for line in lines {
+        offset += line.len();
+        if line.trim_end() == "---" {
+            return &value[offset..];
+        }
     }
     value
-        .get(4..)
-        .and_then(|rest| rest.find("\n---\n").map(|end| &rest[end + 5..]))
-        .unwrap_or(value)
 }
 
 fn decode_percent(value: &str) -> Option<String> {

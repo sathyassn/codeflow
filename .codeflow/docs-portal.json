@@ -226,7 +226,7 @@
     },
     "tests/capability-catalog.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "09564cc8593f1dbe5f9cc666a4985fbc8a708a96fb9cf824e901cf6ef5e04850"
+      "pristine_sha256": "28efd16d663374dd46cc17faa35baa329a938f06b689bb5ccd9cc5d18865fb4e"
     },
     "tests/chrome.test.mjs": {
       "ownership": "managed",
