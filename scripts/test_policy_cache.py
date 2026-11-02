@@ -87,7 +87,9 @@ class PolicyCache(unittest.TestCase):
             git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                 'commit', '--allow-empty', '-m', 'chore: untrusted head', cwd=remote)
             head = git('rev-parse', 'HEAD', cwd=remote)
-            git('clone', str(remote), str(checkout), cwd=root)
+            checkout.mkdir()
+            git('init', '-b', 'main')
+            git('remote', 'add', 'origin', str(remote))
             def verify(sha, workflow_ref='refs/heads/main'):
                 output = root / 'output'
                 output.write_text('')
