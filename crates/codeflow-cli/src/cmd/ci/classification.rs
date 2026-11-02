@@ -1006,13 +1006,10 @@ fn tracked(
             });
         }
         Err(_) if anchor.own_branch => {}
-        Err(error) => anchor_failure(
-            tagged,
-            anchor.level,
-            error.to_string(),
-            codeflow_core::remedy::WORK_START_MERGE_PLANNING
-                .with(&[("target", &target), ("id", task_id)]),
-        ),
+        Err(error) => {
+            let remedy = error.admission_remedy(&target, task_id);
+            anchor_failure(tagged, anchor.level, error.to_string(), remedy);
+        }
     }
 }
 

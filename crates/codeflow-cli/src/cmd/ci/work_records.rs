@@ -206,9 +206,9 @@ fn marker_block(message: String) -> Violation {
 }
 
 pub(super) fn block(message: String) -> Violation {
-    Violation::always_blocking(
-        "work.records",
-        message,
+    // Status history that cannot be read names its own cause (TSK-1036).
+    let remedy = codeflow_core::workgraph::status_steps::remedy_for(&message).unwrap_or(
         "change status with `codeflow task|epic|spec status`, which writes what the transition needs",
-    )
+    );
+    Violation::always_blocking("work.records", message, remedy)
 }
