@@ -118,6 +118,50 @@ fn ci(root: &Path, branch: &str, pr_body: &str) -> (i32, String) {
     ci_into(root, "main", branch, pr_body, None)
 }
 
+/// The commit a run judges for `branch`: the branch's own tip when the
+/// fixture has that branch, else the checkout's HEAD (a branch context with
+/// no local branch). Judging HEAD under another branch's name would test the
+/// wrong range (TSK-1040, Codex round 07).
+fn branch_head(root: &Path, branch: &str) -> String {
+    let out = Command::new("git")
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    if out.status.success() {
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    } else {
+        "HEAD".to_string()
+    }
+}
+
+/// The paths `branch` changes from `main`, as `git diff --name-status`
+/// prints them.
+fn range_changes(root: &Path, branch: &str) -> String {
+    let out = Command::new("git")
+        .args(["diff", "--name-status", &format!("main...{branch}")])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    assert!(out.status.success(), "git diff main...{branch}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
 fn ci_into(
     root: &Path,
     base: &str,
@@ -125,6 +169,7 @@ fn ci_into(
     pr_body: &str,
     into: Option<&str>,
 ) -> (i32, String) {
+    let head = branch_head(root, branch);
     let mut command = codeflow();
     command.arg("ci");
     if let Some(into) = into {
@@ -135,11 +180,11 @@ fn ci_into(
             "--base",
             base,
             "--head",
-            "HEAD",
+            &head,
             "--branch",
             branch,
             "--pr-body",
-            &with_reviews(root, "HEAD", pr_body),
+            &with_reviews(root, &head, pr_body),
         ])
         .current_dir(root)
         .output()
@@ -273,12 +318,21 @@ fn a_full_tier_project_without_records_never_repeats_the_task_value() {
     git(root, &["switch", "-qC", "feat/exemption-removed", "main"]);
     git(root, &["rm", "-q", ".gitleaksignore"]);
     git(root, &["commit", "-qm", "chore: drop the scan ignore file"]);
-    for branch in [
-        "feat/body-canary",
-        "feat/exemption",
-        "feat/exemption-removed",
+    git(root, &["switch", "-q", "main"]);
+    for (branch, change) in [
+        ("feat/body-canary", "M\tsrc/lib.rs\n"),
+        ("feat/exemption", "M\t.gitleaksignore\n"),
+        ("feat/exemption-removed", "D\t.gitleaksignore\n"),
     ] {
+        assert_eq!(range_changes(root, branch), change, "{branch}'s range");
         let result = ci(root, branch, &body("Task: TSK-987654"));
+        assert!(
+            result
+                .1
+                .contains(&format!("head {}", branch_head(root, branch))),
+            "{branch} judged its own tip: {}",
+            result.1
+        );
         assert_blocks(&result, branch, "has no task record");
         assert!(!result.1.contains("987654"), "{branch}: {}", result.1);
     }
@@ -1505,6 +1559,7 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
 
 /// `codeflow ci` as a pull request check whose draft state is `draft`.
 fn ci_draft(root: &Path, branch: &str, pr_body: &str, draft: &str) -> (i32, String) {
+    let head = branch_head(root, branch);
     let out = codeflow()
         .env("CODEFLOW_PR_DRAFT", draft)
         .env_remove("GITHUB_EVENT_PATH")
@@ -1513,11 +1568,11 @@ fn ci_draft(root: &Path, branch: &str, pr_body: &str, draft: &str) -> (i32, Stri
             "--base",
             "main",
             "--head",
-            "HEAD",
+            &head,
             "--branch",
             branch,
             "--pr-body",
-            &with_reviews(root, "HEAD", pr_body),
+            &with_reviews(root, &head, pr_body),
         ])
         .current_dir(root)
         .output()
