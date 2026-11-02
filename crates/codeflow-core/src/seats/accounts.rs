@@ -385,16 +385,30 @@ pub fn load(
 mod tests {
     use super::*;
 
+    /// An absolute path on every platform: Windows needs a drive prefix, so a
+    /// bare `/srv/x` is not absolute there. Forward slashes are valid on both.
+    const ROOT: &str = if cfg!(windows) { "C:/" } else { "/" };
+
+    fn project() -> PathBuf {
+        PathBuf::from(format!("{ROOT}work/project"))
+    }
+
+    fn user_home() -> PathBuf {
+        PathBuf::from(format!("{ROOT}home/me"))
+    }
+
     fn parse(text: &str) -> Result<Profile, String> {
         Profile::parse(
             text,
             Path::new("accounts.toml"),
-            Path::new("/work/project"),
-            Some(Path::new("/home/me")),
+            &project(),
+            Some(&user_home()),
         )
     }
 
-    const GOOD: &str = r#"
+    fn good() -> String {
+        format!(
+            r#"
 schema_version = 1
 [families.codex]
 config_home = "~/.codex-second"
@@ -402,15 +416,17 @@ config_home = "~/.codex-second"
 key_env = "CODEX_FALLBACK_API_KEY"
 spend_cap_usd = 25
 [families.claude]
-config_home = "/srv/claude-work"
-"#;
+config_home = "{ROOT}srv/claude-work"
+"#
+        )
+    }
 
     #[test]
     fn a_profile_maps_a_family_to_its_own_variable_only() {
-        let profile = parse(GOOD).unwrap();
+        let profile = parse(&good()).unwrap();
         let codex = profile.launch_env(Family::Codex).unwrap();
         assert_eq!(codex.variable, "CODEX_HOME");
-        assert_eq!(codex.config_home, Path::new("/home/me/.codex-second"));
+        assert_eq!(codex.config_home, user_home().join(".codex-second"));
         let claude = profile.launch_env(Family::Claude).unwrap();
         assert_eq!(claude.variable, "CLAUDE_CONFIG_DIR");
         assert!(profile.launch_env(Family::Grok).is_none());
@@ -540,15 +556,18 @@ config_home = "/srv/claude-work"
 
     #[test]
     fn config_homes_must_be_absolute_plain_and_outside_tracked_files() {
-        for bad in ["relative/dir", "/a/../b", "/work/project/sub", "~"] {
+        let inside = format!("{ROOT}work/project/sub");
+        let parent = format!("{ROOT}a/../b");
+        for bad in ["relative/dir", &parent, &inside, "~"] {
             let text = format!("schema_version = 1\n[families.codex]\nconfig_home = \"{bad}\"\n");
-            let result =
-                Profile::parse(&text, Path::new("a.toml"), Path::new("/work/project"), None);
+            let result = Profile::parse(&text, Path::new("a.toml"), &project(), None);
             assert!(result.is_err(), "{bad}");
         }
-        let local = "schema_version = 1\n[families.codex]\n\
-                     config_home = \"/work/project/.codeflow/local/codex\"\n";
-        assert!(parse(local).is_ok());
+        let local = format!(
+            "schema_version = 1\n[families.codex]\n\
+             config_home = \"{ROOT}work/project/.codeflow/local/codex\"\n"
+        );
+        assert!(parse(&local).is_ok());
     }
 
     #[test]
@@ -592,14 +611,16 @@ config_home = "/srv/claude-work"
         assert!(load(&root, Some(&home), None).unwrap().is_none());
         std::fs::write(
             home.join(PROFILE_FILE),
-            "schema_version = 1\n[families.grok]\nconfig_home = \"/srv/user-grok\"\n",
+            format!("schema_version = 1\n[families.grok]\nconfig_home = \"{ROOT}srv/user-grok\"\n"),
         )
         .unwrap();
         let user = load(&root, Some(&home), None).unwrap().unwrap();
         assert!(user.launch_env(Family::Grok).is_some());
         std::fs::write(
             root.join(LOCAL_DIR).join(PROFILE_FILE),
-            "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/proj-codex\"\n",
+            format!(
+                "schema_version = 1\n[families.codex]\nconfig_home = \"{ROOT}srv/proj-codex\"\n"
+            ),
         )
         .unwrap();
         let project = load(&root, Some(&home), None).unwrap().unwrap();

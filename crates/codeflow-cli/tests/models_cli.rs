@@ -832,6 +832,49 @@ impl Seats {
         self.dir.path().join("home")
     }
 
+    /// A folder outside the project, written the way the platform writes an
+    /// absolute path (a drive letter on Windows).
+    fn far(&self, name: &str) -> PathBuf {
+        self.dir.path().join("far").join(name)
+    }
+
+    fn far_text(&self, name: &str) -> String {
+        self.far(name).display().to_string()
+    }
+
+    /// The standard profile: a folder per family, and a Codex API fallback.
+    /// TOML literal strings, so a Windows path needs no escapes.
+    fn standard_profile(&self) -> String {
+        format!(
+            "schema_version = 1\n\n[families.claude]\nconfig_home = '{}'\n\n\
+             [families.codex]\nconfig_home = '{}'\n\n\
+             [families.codex.api_fallback]\nkey_env = \"CODEX_FALLBACK_API_KEY\"\nspend_cap_usd = 25\n\n\
+             [families.grok]\nconfig_home = '{}'\n",
+            self.far_text("claude-work"),
+            self.far_text("codex-second"),
+            self.far_text("grok-second"),
+        )
+    }
+
+    /// A profile that maps one family to one folder outside the project.
+    fn one_home(&self, family: &str, name: &str) -> String {
+        format!(
+            "schema_version = 1\n[families.{family}]\nconfig_home = '{}'\n",
+            self.far_text(name)
+        )
+    }
+
+    /// Record `payload` as the seat of `family` that the standard profile maps
+    /// (its config home passed explicitly).
+    fn record(&self, family: &str, payload: &str) -> Output {
+        let home = self.far_text(match family {
+            "claude" => "claude-work",
+            "codex" => "codex-second",
+            _ => "grok-second",
+        });
+        self.record_in(family, payload, Some(&home))
+    }
+
     fn profile(&self, text: &str) {
         write(&self.project(), ".codeflow/local/accounts.toml", text);
     }
@@ -971,25 +1014,538 @@ fn payload_fields_of_the_wrong_type_or_range_are_refused_and_stored_files_are_ch
     assert!(String::from_utf8_lossy(&output.stderr).contains("0 to 100"));
 }
 
-// Shell, symlink and POSIX-path tests: the launch sequences run in `sh`, and the
-// homes are POSIX paths, so none of this exists on Windows. The portable
-// profile and limits code is covered by the library tests and the tests above.
+const CLAUDE_STATUSLINE: &str = r#"{"model":{"id":"claude-opus-5-5"},"rate_limits":{
+  "five_hour":{"used_percentage":23.5,"resets_at":4102444800},
+  "seven_day":{"used_percentage":41.2,"resets_at":4102531200}}}"#;
+
+const CODEX_READ: &str = r#"{"rateLimits":{"limitId":"codex","planType":"pro",
+  "primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":4102444800},
+  "secondary":{"usedPercent":60,"windowDurationMins":10080,"resetsAt":4102531200}}}"#;
+
+#[test]
+fn launch_with_no_profile_or_no_mapping_unsets_the_family_variable() {
+    let seats = Seats::new();
+    let output = seats.run(&["launch-env", "--family", "codex"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "unset CODEX_HOME\n"
+    );
+    seats.profile(&seats.one_home("claude", "c"));
+    let output = seats.run(&["launch-env", "--family", "codex"]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "unset CODEX_HOME\n"
+    );
+    let json = seats.run(&["launch-env", "--family", "codex", "--json"]);
+    let value: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({"family": "codex", "variable": "CODEX_HOME", "config_home": null})
+    );
+}
+
+#[test]
+fn check_fails_unless_the_environment_matches_the_profile() {
+    let seats = Seats::new();
+    seats.profile(&seats.standard_profile());
+    let check = |inherited: Option<&str>| {
+        let mut command = seats.command(&["launch-env", "--family", "codex", "--check"]);
+        if let Some(value) = inherited {
+            command.env("CODEX_HOME", value);
+        }
+        command.output().unwrap()
+    };
+    let mapped = seats.far_text("codex-second");
+    let below = seats.far("codex-second").join("sub").display().to_string();
+    assert_eq!(check(Some(&mapped)).status.code(), Some(0));
+    for wrong in [None, Some("/inherited"), Some(below.as_str())] {
+        let output = check(wrong);
+        assert_eq!(output.status.code(), Some(2), "{wrong:?}");
+        assert!(output.stdout.is_empty());
+    }
+    seats.profile(&seats.one_home("claude", "c"));
+    assert_eq!(check(None).status.code(), Some(0));
+    assert_eq!(check(Some("/inherited")).status.code(), Some(2));
+    // A refused profile refuses the check as well.
+    seats.profile("schema_version = 1\ntoken = \"x\"\n");
+    assert_eq!(check(None).status.code(), Some(2));
+}
+
+#[test]
+fn launch_json_names_the_variable_and_folder() {
+    let seats = Seats::new();
+    seats.profile(&seats.standard_profile());
+    let output = seats.run(&["launch-env", "--family", "codex", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({"family": "codex", "variable": "CODEX_HOME", "config_home": seats.far_text("codex-second")})
+    );
+}
+
+#[test]
+fn a_profile_that_names_a_token_or_credential_is_refused_by_every_reader() {
+    let seats = Seats::new();
+    for (profile, needle) in [
+        (
+            "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\ntoken = \"abc\"\n",
+            "token",
+        ),
+        (
+            "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\n\
+             [families.codex.api_fallback]\nkey_env = \"CODEX_KEY\"\nspend_cap_usd = 5\n\
+             client_secret = \"abc\"\n",
+            "secret",
+        ),
+        (
+            concat!(
+                "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\nnote = \"ghp",
+                "_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\n"
+            ),
+            "GitHub token",
+        ),
+    ] {
+        seats.profile(profile);
+        for args in [
+            vec!["launch-env", "--family", "codex"],
+            vec!["limits"],
+            vec!["limits", "--json"],
+        ] {
+            let output = seats.run(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            assert!(
+                output.stdout.is_empty(),
+                "{args:?}: nothing for a shell to eval"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("accounts.toml") && stderr.contains(needle),
+                "{stderr}"
+            );
+        }
+    }
+}
+
+#[test]
+fn each_familys_fixture_payload_shows_used_percentage_and_reset_time() {
+    let seats = Seats::new();
+    seats.profile(&seats.standard_profile());
+    let recorded = seats.record("claude", CLAUDE_STATUSLINE);
+    assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
+    assert_eq!(seats.record("codex", CODEX_READ).status.code(), Some(0));
+    let grok_home = seats.far_text("grok-second");
+    let hit = seats.run(&[
+        "record-limits",
+        "--family",
+        "grok",
+        "--limit-hit",
+        "--resets-at",
+        "4102444800",
+        "--config-home",
+        &grok_home,
+    ]);
+    assert_eq!(hit.status.code(), Some(0), "{hit:?}");
+
+    let output = seats.run(&["limits", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let family = |id: &str| -> Value {
+        value["families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["family"] == id)
+            .cloned()
+            .unwrap()
+    };
+    let claude = family("claude");
+    assert_eq!(
+        claude["five_hour"],
+        json!({"state": "used", "used_percent": 23.5, "resets_at": 4_102_444_800_u64})
+    );
+    assert_eq!(
+        claude["weekly"],
+        json!({"state": "used", "used_percent": 41.2, "resets_at": 4_102_531_200_u64})
+    );
+    let codex = family("codex");
+    assert_eq!(codex["five_hour"]["used_percent"], 12.0);
+    assert_eq!(codex["weekly"]["resets_at"], 4_102_531_200_u64);
+    assert_eq!(
+        codex["account"]["config_home"],
+        seats.far_text("codex-second")
+    );
+    assert_eq!(codex["account"]["api_fallback"]["spend_cap_usd"], 25.0);
+    let grok = family("grok");
+    assert_eq!(grok["five_hour"], json!({"state": "not_exposed"}));
+    assert_eq!(grok["limit_hit_resets_at"], 4_102_444_800_u64);
+
+    let text = String::from_utf8(seats.run(&["limits"]).stdout).unwrap();
+    assert!(
+        text.contains("5-hour: 23.5% used, resets 2100-01-01T00:00:00Z"),
+        "{text}"
+    );
+    assert!(
+        text.contains("weekly: 60% used, resets 2100-01-02T00:00:00Z"),
+        "{text}"
+    );
+    assert!(text.contains(&format!(
+        "account: config home {} (via CODEX_HOME)",
+        seats.far_text("codex-second")
+    )));
+    assert!(text.contains("api fallback: key in $CODEX_FALLBACK_API_KEY, spend cap $25"));
+    assert!(text.contains("5-hour: not exposed"));
+    assert!(text.contains("limit hit reported"));
+}
+
+#[test]
+fn a_linked_worktree_reads_the_main_checkouts_profile_and_readings() {
+    let seats = Seats::new();
+    let project = seats.project();
+    git(&project, &["init", "--quiet", "-b", "main"]);
+    git(
+        &project,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.test",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+            "--quiet",
+        ],
+    );
+    git(
+        &project,
+        &["worktree", "add", "--quiet", "-b", "feature", "../linked"],
+    );
+    seats.profile(&seats.standard_profile());
+    let linked = seats.dir.path().join("linked");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    command
+        .current_dir(&linked)
+        .env("HOME", seats.home())
+        .env("CODEFLOW_HOME", seats.home().join(".codeflow"))
+        .args(["models", "launch-env", "--family", "codex"]);
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("export CODEX_HOME='{}'\n", seats.far_text("codex-second"))
+    );
+    // A reading recorded from the worktree lands in the main checkout.
+    let mut record = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    record
+        .current_dir(&linked)
+        .env("HOME", seats.home())
+        .env("CODEFLOW_HOME", seats.home().join(".codeflow"))
+        .args(["models", "record-limits", "--family", "grok", "--limit-hit"]);
+    assert_eq!(record.output().unwrap().status.code(), Some(0));
+    assert!(project.join(".codeflow/local/limits/grok.json").is_file());
+    assert!(!linked.join(".codeflow/local/limits").exists());
+}
+
+fn launch_in(seats: &Seats, home: &Path) -> Output {
+    seats.profile(&format!(
+        "schema_version = 1\n[families.codex]\nconfig_home = '{}'\n",
+        home.display()
+    ));
+    seats.run(&["launch-env", "--family", "codex"])
+}
+
+fn refusal(seats: &Seats, home: &Path) -> String {
+    let output = launch_in(seats, home);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{} {output:?}",
+        home.display()
+    );
+    assert!(output.stdout.is_empty(), "nothing for a shell to eval");
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[test]
+fn a_config_home_inside_a_linked_worktree_or_under_tracked_local_files_is_refused() {
+    let seats = Seats::new();
+    let project = seats.project();
+    git(&project, &["init", "--quiet", "-b", "main"]);
+    git(
+        &project,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.test",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+            "--quiet",
+        ],
+    );
+    let linked = seats.dir.path().join("linked");
+    git(
+        &project,
+        &["worktree", "add", "--quiet", "-b", "feature", "../linked"],
+    );
+    std::fs::create_dir_all(linked.join("state")).unwrap();
+    // The worktree is outside the main checkout, yet a commit there carries
+    // its files.
+    refusal(&seats, &linked.join("state"));
+    // A tracked file under the local exception makes the exception void.
+    let local_home = project.join(".codeflow/local/home");
+    std::fs::create_dir_all(&local_home).unwrap();
+    assert_eq!(launch_in(&seats, &local_home).status.code(), Some(0));
+    write(&project, ".codeflow/local/keep.txt", "x");
+    git(&project, &["add", "-f", ".codeflow/local/keep.txt"]);
+    refusal(&seats, &local_home);
+}
+
+#[test]
+fn escaped_secret_shapes_are_refused_and_diagnostics_never_quote_the_text() {
+    let seats = Seats::new();
+    let key = "a1".repeat(20);
+    // The secret-shaped text is written with TOML escapes, so the raw line
+    // does not match any pattern but the decoded value does.
+    seats.profile(&format!(
+        "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/\\u0073k-{key}\"\n"
+    ));
+    let output = seats.run(&["launch-env", "--family", "codex"]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(&key));
+    // A malformed line neither echoes its value nor the source line.
+    seats.profile("schema_version = 1\nsecret = \"SYNTHETIC_PRIVATE_VALUE\n");
+    for args in [
+        vec!["launch-env", "--family", "codex"],
+        vec!["limits"],
+        vec!["limits", "--json"],
+    ] {
+        let output = seats.run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("SYNTHETIC_PRIVATE_VALUE"), "{stderr}");
+        assert!(stderr.contains("accounts.toml"), "{stderr}");
+    }
+}
+
+#[test]
+fn a_reading_is_not_shown_for_a_different_account_after_the_profile_changes() {
+    let seats = Seats::new();
+    let (home_a, home_b) = (seats.far_text("home-a"), seats.far_text("home-b"));
+    seats.profile(&seats.one_home("codex", "home-a"));
+    // The seat that produced the reading ran under home A.
+    let recorded = seats.record_in("codex", CODEX_READ, Some(&home_a));
+    assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
+    let shown = |seats: &Seats| -> Value {
+        let output = seats.run(&["limits", "--json"]);
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        value["families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["family"] == "codex")
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(shown(&seats)["five_hour"]["state"], "used");
+    // The profile now names home B: A's windows must not be shown for it.
+    seats.profile(&seats.one_home("codex", "home-b"));
+    let codex = shown(&seats);
+    assert_eq!(codex["five_hour"], json!({"state": "not_exposed"}));
+    assert_eq!(codex["weekly"], json!({"state": "not_exposed"}));
+    assert_eq!(codex["exposed"], false);
+    assert_eq!(codex["other_homes"], json!([home_a]));
+    let text = String::from_utf8(seats.run(&["limits"]).stdout).unwrap();
+    assert!(
+        text.contains(&format!(
+            "unknown for this account: readings exist only for {home_a}"
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("12% used"), "{text}");
+    // A recorder running without the flag takes its identity from its own
+    // config-home variable.
+    let mut command = seats.command(&["record-limits", "--family", "codex"]);
+    command
+        .env("CODEX_HOME", &home_b)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    {
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(CODEX_READ.as_bytes())
+            .unwrap();
+    }
+    assert_eq!(child.wait_with_output().unwrap().status.code(), Some(0));
+    assert_eq!(shown(&seats)["five_hour"]["state"], "used");
+}
+
+#[test]
+fn concurrent_recorders_of_sparse_windows_never_lose_one() {
+    use std::io::Write;
+    let sparse_primary = r#"{"rateLimits":{"primary":{"usedPercent":1,"windowDurationMins":300,"resetsAt":4102444800}}}"#;
+    let sparse_secondary = r#"{"rateLimits":{"secondary":{"usedPercent":2,"windowDurationMins":10080,"resetsAt":4102444800}}}"#;
+    for round in 0..12 {
+        let seats = Seats::new();
+        let home = seats.far_text("a");
+        let spawn = |payload: &'static str| {
+            let mut child = seats
+                .command(&["record-limits", "--family", "codex", "--config-home", &home])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            (child.stdin.take().unwrap(), child, payload)
+        };
+        let (stdin_a, child_a, payload_a) = spawn(sparse_primary);
+        let (stdin_b, child_b, payload_b) = spawn(sparse_secondary);
+        let (mut a, mut b) = (stdin_a, stdin_b);
+        a.write_all(payload_a.as_bytes()).unwrap();
+        b.write_all(payload_b.as_bytes()).unwrap();
+        drop((a, b));
+        for child in [child_a, child_b] {
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(output.status.code(), Some(0), "round {round}: {output:?}");
+        }
+        seats.profile(&seats.one_home("codex", "a"));
+        let output = seats.run(&["limits", "--json"]);
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let codex = value["families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["family"] == "codex")
+            .unwrap();
+        assert_eq!(codex["five_hour"]["state"], "used", "round {round}");
+        assert_eq!(codex["weekly"]["state"], "used", "round {round}");
+    }
+}
+
+#[test]
+fn a_credential_named_or_secret_shaped_key_is_not_echoed_by_any_reader() {
+    let seats = Seats::new();
+    let secret = format!("sk-{}", "a1".repeat(20));
+    for profile in [
+        format!("schema_version = 1\n\"token {secret}\" = 1\n"),
+        format!("schema_version = 1\n[families.codex]\nconfig_home = '/srv/c'\n\"api key {secret}\" = 1\n"),
+        format!("schema_version = 1\n[families.\"{secret}\"]\nconfig_home = '/srv/c'\n"),
+        // The shape is hidden by an escape, so only the decoded key shows it.
+        format!(
+            "schema_version = 1\n\"token \\u0073k-{}\" = 1\n",
+            "a1".repeat(20)
+        ),
+    ] {
+        seats.profile(&profile);
+        for args in [
+            vec!["launch-env", "--family", "codex"],
+            vec!["launch-env", "--family", "codex", "--check"],
+            vec!["limits"],
+            vec!["limits", "--json"],
+        ] {
+            let output = seats.run(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!stderr.contains(&"a1".repeat(20)), "{args:?}: {stderr}");
+            assert!(stderr.contains("accounts.toml"), "{stderr}");
+        }
+    }
+}
+
+#[test]
+fn an_unreadable_index_does_not_open_the_local_exception() {
+    let seats = Seats::new();
+    let project = seats.project();
+    git(&project, &["init", "--quiet", "-b", "main"]);
+    let home = project.join(".codeflow/local/home");
+    std::fs::create_dir_all(&home).unwrap();
+    // A repository with no commits and an empty index: the exception holds.
+    assert_eq!(launch_in(&seats, &home).status.code(), Some(0));
+    write(&project, ".codeflow/local/keep.txt", "x");
+    git(&project, &["add", "-f", ".codeflow/local/keep.txt"]);
+    assert!(refusal(&seats, &home).contains("tracked"));
+    // The index is damaged: the tracked file is invisible, and the home that
+    // was just refused for it must not be accepted.
+    std::fs::write(project.join(".git/index"), b"not an index").unwrap();
+    let stderr = refusal(&seats, &home);
+    assert!(
+        stderr.contains("cannot read the repository index"),
+        "{stderr}"
+    );
+    // A home outside the project does not depend on the index.
+    let outside = seats.dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    assert_eq!(launch_in(&seats, &outside).status.code(), Some(0));
+}
+
+#[test]
+fn a_file_from_the_previous_build_is_replaced_by_the_next_recording() {
+    let seats = Seats::new();
+    seats.profile(&seats.one_home("codex", "home-a"));
+    // The shape the earlier build stored: one reading, no producing home.
+    write(
+        &seats.project(),
+        ".codeflow/local/limits/codex.json",
+        r#"{"schema_version":1,"family":"codex","source":"codex-rate-limits",
+           "recorded_at":100,"five_hour":{"used_percent":77.0,"resets_at":4102444800}}"#,
+    );
+    let shown = |seats: &Seats| -> Value {
+        let output = seats.run(&["limits", "--json"]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        value["families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["family"] == "codex")
+            .cloned()
+            .unwrap()
+    };
+    // Reading: no error, and the old number belongs to no account.
+    let before = shown(&seats);
+    assert_eq!(before["five_hour"], json!({"state": "not_exposed"}));
+    assert_eq!(before["legacy_unbound"], true);
+    let text = String::from_utf8(seats.run(&["limits"]).stdout).unwrap();
+    assert!(text.contains("earlier-format reading"), "{text}");
+    assert!(!text.contains("77"), "{text}");
+    // Writing: a fresh reading is accepted, replaces the file, and is shown
+    // for the home that produced it only.
+    let home_a = seats.far_text("home-a");
+    let recorded = seats.record_in("codex", CODEX_READ, Some(&home_a));
+    assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
+    let after = shown(&seats);
+    assert_eq!(after["five_hour"]["state"], "used");
+    assert_eq!(after["five_hour"]["used_percent"], 12.0);
+    assert_eq!(after["legacy_unbound"], false);
+    let stored =
+        std::fs::read_to_string(seats.project().join(".codeflow/local/limits/codex.json")).unwrap();
+    assert!(
+        stored.contains("\"schema_version\": 2") && !stored.contains("77"),
+        "{stored}"
+    );
+}
+
+// Unix-only seat tests: the launch sequences run in `sh`, the Herdr stub needs
+// POSIX permissions, and the alias tests make symlinks. Everything that checks
+// profile parsing and refusal, launch output, per-home attribution, migration
+// or the boundary through the CLI is above this module and runs on every
+// platform.
 #[cfg(unix)]
 mod unix_seats {
     use super::*;
 
     impl Seats {
-        /// Record `payload` as the seat of `family` that the standard `PROFILE`
-        /// maps (its config home passed explicitly).
-        fn record(&self, family: &str, payload: &str) -> Output {
-            let home = match family {
-                "claude" => format!("{}/claude-work", self.home().display()),
-                "codex" => "/srv/codex-second".to_string(),
-                _ => "/srv/grok-second".to_string(),
-            };
-            self.record_in(family, payload, Some(&home))
-        }
-
         /// The environment a shell has after the published launch sequence
         /// (from the shipped `transport.md`) for `family`, with no inherited
         /// config-home variable.
@@ -1064,31 +1620,6 @@ mod unix_seats {
         section[start..end].to_string()
     }
 
-    const PROFILE: &str = r#"
-schema_version = 1
-
-[families.claude]
-config_home = "~/claude-work"
-
-[families.codex]
-config_home = "/srv/codex-second"
-
-[families.codex.api_fallback]
-key_env = "CODEX_FALLBACK_API_KEY"
-spend_cap_usd = 25
-
-[families.grok]
-config_home = "/srv/grok-second"
-"#;
-
-    const CLAUDE_STATUSLINE: &str = r#"{"model":{"id":"claude-opus-5-5"},"rate_limits":{
-  "five_hour":{"used_percentage":23.5,"resets_at":4102444800},
-  "seven_day":{"used_percentage":41.2,"resets_at":4102531200}}}"#;
-
-    const CODEX_READ: &str = r#"{"rateLimits":{"limitId":"codex","planType":"pro",
-  "primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":4102444800},
-  "secondary":{"usedPercent":60,"windowDurationMins":10080,"resetsAt":4102531200}}}"#;
-
     fn env_lines(environment: &str, variable: &str) -> Vec<String> {
         let prefix = format!("{variable}=");
         environment
@@ -1101,15 +1632,11 @@ config_home = "/srv/grok-second"
     #[test]
     fn launch_sets_only_the_launched_familys_config_home_variable() {
         let seats = Seats::new();
-        seats.profile(PROFILE);
+        seats.profile(&seats.standard_profile());
         let expected = [
-            (
-                "claude",
-                "CLAUDE_CONFIG_DIR",
-                format!("{}/claude-work", seats.home().display()),
-            ),
-            ("codex", "CODEX_HOME", "/srv/codex-second".to_string()),
-            ("grok", "GROK_HOME", "/srv/grok-second".to_string()),
+            ("claude", "CLAUDE_CONFIG_DIR", seats.far_text("claude-work")),
+            ("codex", "CODEX_HOME", seats.far_text("codex-second")),
+            ("grok", "GROK_HOME", seats.far_text("grok-second")),
         ];
         for (family, variable, path) in &expected {
             let environment = seats.launched_environment(family);
@@ -1127,33 +1654,6 @@ config_home = "/srv/grok-second"
         }
     }
 
-    #[test]
-    fn launch_with_no_profile_or_no_mapping_unsets_the_family_variable() {
-        let seats = Seats::new();
-        let output = seats.run(&["launch-env", "--family", "codex"]);
-        assert_eq!(output.status.code(), Some(0));
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "unset CODEX_HOME\n"
-        );
-        seats.profile("schema_version = 1\n[families.claude]\nconfig_home = \"/srv/c\"\n");
-        let output = seats.run(&["launch-env", "--family", "codex"]);
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "unset CODEX_HOME\n"
-        );
-        let json = seats.run(&["launch-env", "--family", "codex", "--json"]);
-        let value: Value = serde_json::from_slice(&json.stdout).unwrap();
-        assert_eq!(
-            value,
-            json!({"family": "codex", "variable": "CODEX_HOME", "config_home": null})
-        );
-        let environment = seats.launched_environment("codex");
-        for variable in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"] {
-            assert!(env_lines(&environment, variable).is_empty(), "{variable}");
-        }
-    }
-
     const VARIABLES: [(&str, &str); 3] = [
         ("claude", "CLAUDE_CONFIG_DIR"),
         ("codex", "CODEX_HOME"),
@@ -1164,7 +1664,7 @@ config_home = "/srv/grok-second"
     fn the_published_sequence_replaces_or_clears_an_inherited_home_and_leaves_other_families_alone()
     {
         let seats = Seats::new();
-        seats.profile(PROFILE);
+        seats.profile(&seats.standard_profile());
         for (family, variable) in VARIABLES {
             let inherited: Vec<(&str, &str)> =
                 VARIABLES.iter().map(|(_, v)| (*v, "/inherited")).collect();
@@ -1174,11 +1674,11 @@ config_home = "/srv/grok-second"
                 output.status.success() && text.contains("STARTED"),
                 "{text}"
             );
-            let mapped = match family {
-                "claude" => format!("{}/claude-work", seats.home().display()),
-                "codex" => "/srv/codex-second".to_string(),
-                _ => "/srv/grok-second".to_string(),
-            };
+            let mapped = seats.far_text(match family {
+                "claude" => "claude-work",
+                "codex" => "codex-second",
+                _ => "grok-second",
+            });
             assert_eq!(
                 env_lines(&text, variable),
                 [format!("{variable}={mapped}")],
@@ -1193,7 +1693,7 @@ config_home = "/srv/grok-second"
             }
         }
         // A family the profile does not map: its own inherited home is cleared.
-        seats.profile("schema_version = 1\n[families.claude]\nconfig_home = \"/srv/c\"\n");
+        seats.profile(&seats.one_home("claude", "c"));
         for (family, variable) in VARIABLES.iter().filter(|(f, _)| *f != "claude") {
             let output = seats.sequence(family, &[(variable, "/inherited")], "env");
             let text = String::from_utf8(output.stdout).unwrap();
@@ -1237,31 +1737,6 @@ config_home = "/srv/grok-second"
             .unwrap();
         assert!(!String::from_utf8_lossy(&output.stdout).contains("STARTED"));
         assert!(!output.status.success());
-    }
-
-    #[test]
-    fn check_fails_unless_the_environment_matches_the_profile() {
-        let seats = Seats::new();
-        seats.profile(PROFILE);
-        let check = |inherited: Option<&str>| {
-            let mut command = seats.command(&["launch-env", "--family", "codex", "--check"]);
-            if let Some(value) = inherited {
-                command.env("CODEX_HOME", value);
-            }
-            command.output().unwrap()
-        };
-        assert_eq!(check(Some("/srv/codex-second")).status.code(), Some(0));
-        for wrong in [None, Some("/inherited"), Some("/srv/codex-second/sub")] {
-            let output = check(wrong);
-            assert_eq!(output.status.code(), Some(2), "{wrong:?}");
-            assert!(output.stdout.is_empty());
-        }
-        seats.profile("schema_version = 1\n[families.claude]\nconfig_home = \"/srv/c\"\n");
-        assert_eq!(check(None).status.code(), Some(0));
-        assert_eq!(check(Some("/inherited")).status.code(), Some(2));
-        // A refused profile refuses the check as well.
-        seats.profile("schema_version = 1\ntoken = \"x\"\n");
-        assert_eq!(check(None).status.code(), Some(2));
     }
 
     /// The lines of the shipped `cf-herdr` launch that handle the account
@@ -1358,13 +1833,16 @@ exit 0
     #[test]
     fn the_herdr_launch_starts_the_seat_only_after_the_pane_confirms_its_home() {
         let seats = Seats::new();
-        seats.profile(PROFILE);
+        seats.profile(&seats.standard_profile());
         let (output, calls) = run_herdr_sequence(&seats, "codex", &[("CODEX_HOME", "/inherited")]);
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(text.contains("LAUNCHED"), "{text} {calls}");
         assert!(calls.contains("agent start"), "{calls}");
         assert!(
-            calls.contains("pane run p1 export CODEX_HOME='/srv/codex-second'"),
+            calls.contains(&format!(
+                "pane run p1 export CODEX_HOME='{}'",
+                seats.far_text("codex-second")
+            )),
             "{calls}"
         );
         // The wait is for a per-launch acknowledgement, not a fixed word.
@@ -1390,7 +1868,8 @@ exit 0
         //    and still must not start the seat.
         for word in ["CF_HOME_OK", "CF_HOME_OK_", "CF_HOME_OK_deadbeef"] {
             seats.profile(&format!(
-                "schema_version = 1\n[families.codex]\nconfig_home = '/srv/codex-second/{word}'\n"
+                "schema_version = 1\n[families.codex]\nconfig_home = '{}/{word}'\n",
+                seats.far_text("codex-second")
             ));
             let (output, calls) = run_herdr_sequence(
                 &seats,
@@ -1408,7 +1887,7 @@ exit 0
         }
         // 2. Output left in the pane by an earlier launch, a fixed word and a
         //    full acknowledgement alike, does not satisfy a later wait.
-        seats.profile(PROFILE);
+        seats.profile(&seats.standard_profile());
         let earlier = "CF_HOME_OK\nCF_HOME_OK_000000000000000000000000\n";
         let (output, calls) = run_herdr_sequence_after(
             &seats,
@@ -1420,7 +1899,7 @@ exit 0
         assert_eq!(output.status.code(), Some(1));
         // 3. A mapped home with the word in its name is not a problem when the
         //    check really passes: the seat starts.
-        seats.profile("schema_version = 1\n[families.codex]\nconfig_home = '/srv/CF_HOME_OK'\n");
+        seats.profile(&seats.one_home("codex", "CF_HOME_OK"));
         let (output, calls) = run_herdr_sequence(&seats, "codex", &[("CODEX_HOME", "/inherited")]);
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("LAUNCHED"),
@@ -1431,7 +1910,7 @@ exit 0
     #[test]
     fn a_failure_in_any_herdr_step_stops_the_launch_before_agent_start() {
         let seats = Seats::new();
-        seats.profile(PROFILE);
+        seats.profile(&seats.standard_profile());
         for (label, env) in [
             ("first pane run fails", vec![("STUB_FAIL", "run1")]),
             ("check pane run fails", vec![("STUB_FAIL", "run2")]),
@@ -1458,197 +1937,8 @@ exit 0
         assert!(calls.is_empty(), "{calls}");
     }
 
-    #[test]
-    fn launch_json_names_the_variable_and_folder() {
-        let seats = Seats::new();
-        seats.profile(PROFILE);
-        let output = seats.run(&["launch-env", "--family", "codex", "--json"]);
-        assert_eq!(output.status.code(), Some(0));
-        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(
-            value,
-            json!({"family": "codex", "variable": "CODEX_HOME", "config_home": "/srv/codex-second"})
-        );
-    }
-
-    #[test]
-    fn a_profile_that_names_a_token_or_credential_is_refused_by_every_reader() {
-        let seats = Seats::new();
-        for (profile, needle) in [
-            (
-                "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\ntoken = \"abc\"\n",
-                "token",
-            ),
-            (
-                "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\n\
-             [families.codex.api_fallback]\nkey_env = \"CODEX_KEY\"\nspend_cap_usd = 5\n\
-             client_secret = \"abc\"\n",
-                "secret",
-            ),
-            (
-                concat!(
-                    "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\nnote = \"ghp",
-                    "_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\n"
-                ),
-                "GitHub token",
-            ),
-        ] {
-            seats.profile(profile);
-            for args in [
-                vec!["launch-env", "--family", "codex"],
-                vec!["limits"],
-                vec!["limits", "--json"],
-            ] {
-                let output = seats.run(&args);
-                assert_eq!(output.status.code(), Some(2), "{args:?}");
-                assert!(
-                    output.stdout.is_empty(),
-                    "{args:?}: nothing for a shell to eval"
-                );
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                assert!(
-                    stderr.contains("accounts.toml") && stderr.contains(needle),
-                    "{stderr}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn each_familys_fixture_payload_shows_used_percentage_and_reset_time() {
-        let seats = Seats::new();
-        seats.profile(PROFILE);
-        let recorded = seats.record("claude", CLAUDE_STATUSLINE);
-        assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
-        assert_eq!(seats.record("codex", CODEX_READ).status.code(), Some(0));
-        let hit = seats.run(&[
-            "record-limits",
-            "--family",
-            "grok",
-            "--limit-hit",
-            "--resets-at",
-            "4102444800",
-            "--config-home",
-            "/srv/grok-second",
-        ]);
-        assert_eq!(hit.status.code(), Some(0), "{hit:?}");
-
-        let output = seats.run(&["limits", "--json"]);
-        assert_eq!(output.status.code(), Some(0));
-        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let family = |id: &str| -> Value {
-            value["families"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|f| f["family"] == id)
-                .cloned()
-                .unwrap()
-        };
-        let claude = family("claude");
-        assert_eq!(
-            claude["five_hour"],
-            json!({"state": "used", "used_percent": 23.5, "resets_at": 4_102_444_800_u64})
-        );
-        assert_eq!(
-            claude["weekly"],
-            json!({"state": "used", "used_percent": 41.2, "resets_at": 4_102_531_200_u64})
-        );
-        let codex = family("codex");
-        assert_eq!(codex["five_hour"]["used_percent"], 12.0);
-        assert_eq!(codex["weekly"]["resets_at"], 4_102_531_200_u64);
-        assert_eq!(codex["account"]["config_home"], "/srv/codex-second");
-        assert_eq!(codex["account"]["api_fallback"]["spend_cap_usd"], 25.0);
-        let grok = family("grok");
-        assert_eq!(grok["five_hour"], json!({"state": "not_exposed"}));
-        assert_eq!(grok["limit_hit_resets_at"], 4_102_444_800_u64);
-
-        let text = String::from_utf8(seats.run(&["limits"]).stdout).unwrap();
-        assert!(
-            text.contains("5-hour: 23.5% used, resets 2100-01-01T00:00:00Z"),
-            "{text}"
-        );
-        assert!(
-            text.contains("weekly: 60% used, resets 2100-01-02T00:00:00Z"),
-            "{text}"
-        );
-        assert!(text.contains("account: config home /srv/codex-second (via CODEX_HOME)"));
-        assert!(text.contains("api fallback: key in $CODEX_FALLBACK_API_KEY, spend cap $25"));
-        assert!(text.contains("5-hour: not exposed"));
-        assert!(text.contains("limit hit reported"));
-    }
-
-    #[test]
-    fn a_linked_worktree_reads_the_main_checkouts_profile_and_readings() {
-        let seats = Seats::new();
-        let project = seats.project();
-        git(&project, &["init", "--quiet", "-b", "main"]);
-        git(
-            &project,
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@example.test",
-                "commit",
-                "--allow-empty",
-                "-m",
-                "init",
-                "--quiet",
-            ],
-        );
-        git(
-            &project,
-            &["worktree", "add", "--quiet", "-b", "feature", "../linked"],
-        );
-        seats.profile(PROFILE);
-        let linked = seats.dir.path().join("linked");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
-        command
-            .current_dir(&linked)
-            .env("HOME", seats.home())
-            .env("CODEFLOW_HOME", seats.home().join(".codeflow"))
-            .args(["models", "launch-env", "--family", "codex"]);
-        let output = command.output().unwrap();
-        assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert_eq!(
-            String::from_utf8(output.stdout).unwrap(),
-            "export CODEX_HOME='/srv/codex-second'\n"
-        );
-        // A reading recorded from the worktree lands in the main checkout.
-        let mut record = Command::new(env!("CARGO_BIN_EXE_codeflow"));
-        record
-            .current_dir(&linked)
-            .env("HOME", seats.home())
-            .env("CODEFLOW_HOME", seats.home().join(".codeflow"))
-            .args(["models", "record-limits", "--family", "grok", "--limit-hit"]);
-        assert_eq!(record.output().unwrap().status.code(), Some(0));
-        assert!(project.join(".codeflow/local/limits/grok.json").is_file());
-        assert!(!linked.join(".codeflow/local/limits").exists());
-    }
-
     // Round 2 of TSK-431: findings from the first security review. Each test
     // states the attack it closes. All paths are disposable folders.
-
-    fn launch_in(seats: &Seats, home: &Path) -> Output {
-        seats.profile(&format!(
-            "schema_version = 1\n[families.codex]\nconfig_home = \"{}\"\n",
-            home.display()
-        ));
-        seats.run(&["launch-env", "--family", "codex"])
-    }
-
-    fn refusal(seats: &Seats, home: &Path) -> String {
-        let output = launch_in(seats, home);
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{} {output:?}",
-            home.display()
-        );
-        assert!(output.stdout.is_empty(), "nothing for a shell to eval");
-        String::from_utf8_lossy(&output.stderr).into_owned()
-    }
 
     #[cfg(unix)]
     #[test]
@@ -1687,71 +1977,6 @@ exit 0
         assert_eq!(launch_in(&seats, &under_local).status.code(), Some(0));
     }
 
-    #[test]
-    fn a_config_home_inside_a_linked_worktree_or_under_tracked_local_files_is_refused() {
-        let seats = Seats::new();
-        let project = seats.project();
-        git(&project, &["init", "--quiet", "-b", "main"]);
-        git(
-            &project,
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@example.test",
-                "commit",
-                "--allow-empty",
-                "-m",
-                "init",
-                "--quiet",
-            ],
-        );
-        let linked = seats.dir.path().join("linked");
-        git(
-            &project,
-            &["worktree", "add", "--quiet", "-b", "feature", "../linked"],
-        );
-        std::fs::create_dir_all(linked.join("state")).unwrap();
-        // The worktree is outside the main checkout, yet a commit there carries
-        // its files.
-        refusal(&seats, &linked.join("state"));
-        // A tracked file under the local exception makes the exception void.
-        let local_home = project.join(".codeflow/local/home");
-        std::fs::create_dir_all(&local_home).unwrap();
-        assert_eq!(launch_in(&seats, &local_home).status.code(), Some(0));
-        write(&project, ".codeflow/local/keep.txt", "x");
-        git(&project, &["add", "-f", ".codeflow/local/keep.txt"]);
-        refusal(&seats, &local_home);
-    }
-
-    #[test]
-    fn escaped_secret_shapes_are_refused_and_diagnostics_never_quote_the_text() {
-        let seats = Seats::new();
-        let key = "a1".repeat(20);
-        // The secret-shaped text is written with TOML escapes, so the raw line
-        // does not match any pattern but the decoded value does.
-        seats.profile(&format!(
-            "schema_version = 1\n[families.codex]\nconfig_home = \"/srv/\\u0073k-{key}\"\n"
-        ));
-        let output = seats.run(&["launch-env", "--family", "codex"]);
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
-        assert!(output.stdout.is_empty());
-        assert!(!String::from_utf8_lossy(&output.stderr).contains(&key));
-        // A malformed line neither echoes its value nor the source line.
-        seats.profile("schema_version = 1\nsecret = \"SYNTHETIC_PRIVATE_VALUE\n");
-        for args in [
-            vec!["launch-env", "--family", "codex"],
-            vec!["limits"],
-            vec!["limits", "--json"],
-        ] {
-            let output = seats.run(&args);
-            assert_eq!(output.status.code(), Some(2), "{args:?}");
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(!stderr.contains("SYNTHETIC_PRIVATE_VALUE"), "{stderr}");
-            assert!(stderr.contains("accounts.toml"), "{stderr}");
-        }
-    }
-
     #[cfg(unix)]
     #[test]
     fn a_linked_local_folder_is_not_followed_for_readings() {
@@ -1782,207 +2007,26 @@ exit 0
     }
 
     #[test]
-    fn a_reading_is_not_shown_for_a_different_account_after_the_profile_changes() {
+    fn an_unmapped_family_clears_its_inherited_variable_in_a_shell() {
         let seats = Seats::new();
-        seats.profile("schema_version = 1\n[families.codex]\nconfig_home = \"/srv/home-a\"\n");
-        // The seat that produced the reading ran under home A.
-        let recorded = seats.record_in("codex", CODEX_READ, Some("/srv/home-a"));
-        assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
-        let shown = |seats: &Seats| -> Value {
-            let output = seats.run(&["limits", "--json"]);
-            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-            value["families"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|f| f["family"] == "codex")
-                .cloned()
-                .unwrap()
-        };
-        assert_eq!(shown(&seats)["five_hour"]["state"], "used");
-        // The profile now names home B: A's windows must not be shown for it.
-        seats.profile("schema_version = 1\n[families.codex]\nconfig_home = \"/srv/home-b\"\n");
-        let codex = shown(&seats);
-        assert_eq!(codex["five_hour"], json!({"state": "not_exposed"}));
-        assert_eq!(codex["weekly"], json!({"state": "not_exposed"}));
-        assert_eq!(codex["exposed"], false);
-        assert_eq!(codex["other_homes"], json!(["/srv/home-a"]));
-        let text = String::from_utf8(seats.run(&["limits"]).stdout).unwrap();
-        assert!(
-            text.contains("unknown for this account: readings exist only for /srv/home-a"),
-            "{text}"
-        );
-        assert!(!text.contains("12% used"), "{text}");
-        // A recorder running without the flag takes its identity from its own
-        // config-home variable.
-        let mut command = seats.command(&["record-limits", "--family", "codex"]);
-        command
-            .env("CODEX_HOME", "/srv/home-b")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        let mut child = command.spawn().unwrap();
-        {
-            use std::io::Write;
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(CODEX_READ.as_bytes())
-                .unwrap();
-        }
-        assert_eq!(child.wait_with_output().unwrap().status.code(), Some(0));
-        assert_eq!(shown(&seats)["five_hour"]["state"], "used");
-    }
-
-    #[test]
-    fn concurrent_recorders_of_sparse_windows_never_lose_one() {
-        use std::io::Write;
-        let sparse_primary = r#"{"rateLimits":{"primary":{"usedPercent":1,"windowDurationMins":300,"resetsAt":4102444800}}}"#;
-        let sparse_secondary = r#"{"rateLimits":{"secondary":{"usedPercent":2,"windowDurationMins":10080,"resetsAt":4102444800}}}"#;
-        for round in 0..12 {
-            let seats = Seats::new();
-            let spawn = |payload: &'static str| {
-                let mut child = seats
-                    .command(&[
-                        "record-limits",
-                        "--family",
-                        "codex",
-                        "--config-home",
-                        "/srv/a",
-                    ])
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .unwrap();
-                (child.stdin.take().unwrap(), child, payload)
-            };
-            let (stdin_a, child_a, payload_a) = spawn(sparse_primary);
-            let (stdin_b, child_b, payload_b) = spawn(sparse_secondary);
-            let (mut a, mut b) = (stdin_a, stdin_b);
-            a.write_all(payload_a.as_bytes()).unwrap();
-            b.write_all(payload_b.as_bytes()).unwrap();
-            drop((a, b));
-            for child in [child_a, child_b] {
-                let output = child.wait_with_output().unwrap();
-                assert_eq!(output.status.code(), Some(0), "round {round}: {output:?}");
-            }
-            seats.profile("schema_version = 1\n[families.codex]\nconfig_home = \"/srv/a\"\n");
-            let output = seats.run(&["limits", "--json"]);
-            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-            let codex = value["families"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|f| f["family"] == "codex")
-                .unwrap();
-            assert_eq!(codex["five_hour"]["state"], "used", "round {round}");
-            assert_eq!(codex["weekly"]["state"], "used", "round {round}");
+        let environment = seats.launched_environment("codex");
+        for variable in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"] {
+            assert!(env_lines(&environment, variable).is_empty(), "{variable}");
         }
     }
 
     #[test]
-    fn a_credential_named_or_secret_shaped_key_is_not_echoed_by_any_reader() {
+    fn a_leading_tilde_expands_to_the_home_folder() {
         let seats = Seats::new();
-        let secret = format!("sk-{}", "a1".repeat(20));
-        for profile in [
-        format!("schema_version = 1\n\"token {secret}\" = 1\n"),
-        format!("schema_version = 1\n[families.codex]\nconfig_home = '/srv/c'\n\"api key {secret}\" = 1\n"),
-        format!("schema_version = 1\n[families.\"{secret}\"]\nconfig_home = '/srv/c'\n"),
-        // The shape is hidden by an escape, so only the decoded key shows it.
-        format!(
-            "schema_version = 1\n\"token \\u0073k-{}\" = 1\n",
-            "a1".repeat(20)
-        ),
-    ] {
-        seats.profile(&profile);
-        for args in [
-            vec!["launch-env", "--family", "codex"],
-            vec!["launch-env", "--family", "codex", "--check"],
-            vec!["limits"],
-            vec!["limits", "--json"],
-        ] {
-            let output = seats.run(&args);
-            assert_eq!(output.status.code(), Some(2), "{args:?}");
-            assert!(output.stdout.is_empty());
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(!stderr.contains(&"a1".repeat(20)), "{args:?}: {stderr}");
-            assert!(stderr.contains("accounts.toml"), "{stderr}");
-        }
-    }
-    }
-
-    #[test]
-    fn an_unreadable_index_does_not_open_the_local_exception() {
-        let seats = Seats::new();
-        let project = seats.project();
-        git(&project, &["init", "--quiet", "-b", "main"]);
-        let home = project.join(".codeflow/local/home");
-        std::fs::create_dir_all(&home).unwrap();
-        // A repository with no commits and an empty index: the exception holds.
-        assert_eq!(launch_in(&seats, &home).status.code(), Some(0));
-        write(&project, ".codeflow/local/keep.txt", "x");
-        git(&project, &["add", "-f", ".codeflow/local/keep.txt"]);
-        assert!(refusal(&seats, &home).contains("tracked"));
-        // The index is damaged: the tracked file is invisible, and the home that
-        // was just refused for it must not be accepted.
-        std::fs::write(project.join(".git/index"), b"not an index").unwrap();
-        let stderr = refusal(&seats, &home);
-        assert!(
-            stderr.contains("cannot read the repository index"),
-            "{stderr}"
-        );
-        // A home outside the project does not depend on the index.
-        let outside = seats.dir.path().join("outside");
-        std::fs::create_dir_all(&outside).unwrap();
-        assert_eq!(launch_in(&seats, &outside).status.code(), Some(0));
-    }
-
-    #[test]
-    fn a_file_from_the_previous_build_is_replaced_by_the_next_recording() {
-        let seats = Seats::new();
-        seats.profile("schema_version = 1\n[families.codex]\nconfig_home = '/srv/home-a'\n");
-        // The shape the earlier build stored: one reading, no producing home.
-        write(
-            &seats.project(),
-            ".codeflow/local/limits/codex.json",
-            r#"{"schema_version":1,"family":"codex","source":"codex-rate-limits",
-           "recorded_at":100,"five_hour":{"used_percent":77.0,"resets_at":4102444800}}"#,
-        );
-        let shown = |seats: &Seats| -> Value {
-            let output = seats.run(&["limits", "--json"]);
-            assert_eq!(output.status.code(), Some(0), "{output:?}");
-            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-            value["families"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|f| f["family"] == "codex")
-                .cloned()
-                .unwrap()
-        };
-        // Reading: no error, and the old number belongs to no account.
-        let before = shown(&seats);
-        assert_eq!(before["five_hour"], json!({"state": "not_exposed"}));
-        assert_eq!(before["legacy_unbound"], true);
-        let text = String::from_utf8(seats.run(&["limits"]).stdout).unwrap();
-        assert!(text.contains("earlier-format reading"), "{text}");
-        assert!(!text.contains("77"), "{text}");
-        // Writing: a fresh reading is accepted, replaces the file, and is shown
-        // for the home that produced it only.
-        let recorded = seats.record_in("codex", CODEX_READ, Some("/srv/home-a"));
-        assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
-        let after = shown(&seats);
-        assert_eq!(after["five_hour"]["state"], "used");
-        assert_eq!(after["five_hour"]["used_percent"], 12.0);
-        assert_eq!(after["legacy_unbound"], false);
-        let stored =
-            std::fs::read_to_string(seats.project().join(".codeflow/local/limits/codex.json"))
-                .unwrap();
-        assert!(
-            stored.contains("\"schema_version\": 2") && !stored.contains("77"),
-            "{stored}"
+        seats.profile("schema_version = 1\n[families.claude]\nconfig_home = '~/claude-work'\n");
+        let output = seats.run(&["launch-env", "--family", "claude"]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!(
+                "export CLAUDE_CONFIG_DIR='{}/claude-work'\n",
+                seats.home().display()
+            )
         );
     }
 }

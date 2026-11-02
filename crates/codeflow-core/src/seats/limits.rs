@@ -718,8 +718,19 @@ mod tests {
     use super::*;
 
     const FAR: u64 = 4_102_444_800; // 2100-01-01
-    const HOME_A: &str = "/srv/codex-a";
-    const HOME_B: &str = "/srv/codex-b";
+    /// An absolute path on every platform: Windows needs a drive prefix, so a
+    /// bare `/srv/x` is not absolute there.
+    const ROOT: &str = if cfg!(windows) { "C:/" } else { "/" };
+    const HOME_A: &str = if cfg!(windows) {
+        "C:/srv/codex-a"
+    } else {
+        "/srv/codex-a"
+    };
+    const HOME_B: &str = if cfg!(windows) {
+        "C:/srv/codex-b"
+    } else {
+        "/srv/codex-b"
+    };
 
     fn stored(dir: &Path, family: Family) -> std::path::PathBuf {
         dir.join(file_for(family))
@@ -1020,7 +1031,7 @@ mod tests {
     fn only_the_newest_eight_homes_are_kept() {
         let dir = tempfile::tempdir().unwrap();
         for i in 0..10u64 {
-            let home = format!("/srv/h{i}");
+            let home = format!("{ROOT}srv/h{i}");
             record(
                 dir.path(),
                 Family::Codex,
@@ -1036,7 +1047,7 @@ mod tests {
         assert!(snapshot
             .homes
             .iter()
-            .all(|h| h.config_home.as_deref() != Some("/srv/h0")));
+            .all(|h| h.config_home.as_deref() != Some(format!("{ROOT}srv/h0").as_str())));
     }
 
     #[test]
