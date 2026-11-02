@@ -465,6 +465,7 @@ mod imports;
 mod receiving_merges;
 pub(crate) use imports::clear_cache as clear_import_cache;
 pub use imports::{imported_record_paths, imported_records, ImportedRecord};
+use receiving_merges::LineSyncTip;
 
 /// The source and completion endpoints established by the binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3891,7 +3892,7 @@ pub fn completions_in_range(
         default_target,
         criteria,
         run,
-        (line, receiving_line(line, None)),
+        (line, receiving_line(line, None), None),
         stacked,
     )
 }
@@ -3912,7 +3913,8 @@ fn receiving_line<'a>(branch: Option<&'a str>, into: Option<&'a str>) -> Option<
 
 /// [`completions_in_range`] with the judged branch (`line`) and the epic
 /// line that receives the range's merges (`receiving`, see
-/// [`receiving_line`]) given apart.
+/// [`receiving_line`]) given apart, and the receiving line's tip when this
+/// is the push of a task branch into it (`sync_tip`, see [`LineSyncTip`]).
 #[allow(clippy::too_many_arguments)] // The range, the run's authorities and the stacked heads.
 #[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
 fn completions_received(
@@ -3922,7 +3924,7 @@ fn completions_received(
     default_target: Option<Oid>,
     criteria: &Criteria,
     run: &RunBases,
-    (line, receiving): (Option<&str>, Option<&str>),
+    (line, receiving, sync_tip): (Option<&str>, Option<&str>, Option<LineSyncTip>),
     stacked: &[StackedHead],
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
@@ -4079,7 +4081,7 @@ fn completions_received(
         repo, &before, &local, head_oid, amendable,
     )?);
     findings.extend(receiving_merges::findings(
-        repo, base_oid, head_oid, receiving, &after, &reviewed,
+        repo, base_oid, head_oid, receiving, &after, &reviewed, sync_tip,
     )?);
     Ok(findings)
 }
@@ -4461,7 +4463,7 @@ pub fn pull_request_findings_judged(
         head,
         criteria,
         authority,
-        (branch, None),
+        (branch, None, None),
         pins,
     )
 }
@@ -4471,6 +4473,13 @@ pub fn pull_request_findings_judged(
 /// branch is not an epic line and the target is one, the
 /// target receives the range's merges: a sync merge a task branch carries
 /// is judged as the line push judges it (TSK-1066).
+///
+/// `sync_tip` is the target line's tip, which only the pre-push hand-off of
+/// a task branch gives (TSK-1149): a merge on the branch that brings in
+/// nothing but that line's history is then not judged as the line's work,
+/// so the push that keeps a hand-resolved line sync durable goes through.
+/// It applies only when the target, not the judged branch, is the epic
+/// line; the pull request check at ready and at landing never passes it.
 ///
 /// # Errors
 ///
@@ -4483,7 +4492,7 @@ pub fn pull_request_findings_into(
     head: &str,
     criteria: &Criteria,
     authority: Option<&str>,
-    (branch, into): (Option<&str>, Option<&str>),
+    (branch, into, sync_tip): (Option<&str>, Option<&str>, Option<&str>),
     pins: &[super::work_start::ReviewedPin],
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
@@ -4497,6 +4506,17 @@ pub fn pull_request_findings_into(
     };
     let target_tip = oid(base)?;
     let candidate = authority.map(oid).transpose()?;
+    // Only a task branch's push into its line relaxes the line's merges:
+    // the judged branch itself must not be an epic line (a line push keeps
+    // judging every merge), and the target must be one.
+    let sync_tip = match sync_tip {
+        Some(tip)
+            if receiving_line(branch, None).is_none() && receiving_line(None, into).is_some() =>
+        {
+            Some(LineSyncTip(oid(tip)?))
+        }
+        _ => None,
+    };
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     let head_tip = oid(head)?;
     let mut at_head = Graph::from_revision(&repo, head)?;
@@ -4594,7 +4614,7 @@ pub fn pull_request_findings_into(
         Some(target_tip),
         criteria,
         &run,
-        (branch, receiving_line(branch, into)),
+        (branch, receiving_line(branch, into), sync_tip),
         &stacked,
     )?);
     Ok(found)

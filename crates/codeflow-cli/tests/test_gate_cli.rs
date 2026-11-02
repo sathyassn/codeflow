@@ -19,6 +19,9 @@ mod evidence;
 mod named_config;
 #[path = "support/own_repository.rs"]
 mod own_repository;
+#[cfg(unix)]
+#[path = "test_gate_cli/reserved_lock.rs"]
+mod reserved_lock;
 use drain_pipe::{drain_lines, drain_pipe};
 
 fn git(dir: &Path, args: &[&str]) {
