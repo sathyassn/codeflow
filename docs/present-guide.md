@@ -129,8 +129,12 @@ review is over.
    The export is a review capture at a recorded time. The live session remains
    the handover surface. Open it once at the current revision before exporting
    HTML stages: a separate measuring host records their export heights at the
-   1200px and 400px reference viewports, independently of the review rail.
-   A stage without a matching revision, width and rendering contract keeps
+   content widths 360, 372.8, 480, 640, 768, 832 and 900px, independently of
+   the review rail. The export selects the nearest measured width at or below
+   the available column and retains that iframe width, leaving unused space
+   beside it when necessary. This preserves measured geometry even for authored
+   CSS that grows taller at wider widths. A stage without an eligible width,
+   matching revision and rendering contract keeps
    its fallback height and says "height not measured at this width; open the
    session". A stylesheet or font change invalidates earlier measurements.
 

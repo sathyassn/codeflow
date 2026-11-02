@@ -292,6 +292,7 @@ pub(crate) fn measurement_template(
         "cf-stage-measuring",
         &serde_json::json!({
             "revision": revision,
+            "widths": crate::stage_measurements::CONTENT_WIDTHS,
             "contract": crate::stage_measurements::rendering_contract(utility_style),
             "html": html,
         }),

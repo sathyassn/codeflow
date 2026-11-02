@@ -1191,10 +1191,21 @@ impl SessionStore {
         measurement.validate(&document, revision.revision, &contract)?;
         let mut records = self.stage_measurements(id)?;
         records.retain(|entry| {
-            entry.revision == revision.revision
-                && entry.contract == contract
+            entry
+                .validate(&document, revision.revision, &contract)
+                .is_ok()
                 && !entry.same_key(&measurement)
         });
+        if records
+            .iter()
+            .filter(|entry| entry.stage_id == measurement.stage_id)
+            .count()
+            >= crate::stage_measurements::MAX_ENTRIES_PER_STAGE
+        {
+            return Err(PresentError::InvalidRequest(
+                "stage measurement entry limit reached for this revision".into(),
+            ));
+        }
         records.push(measurement);
         let bytes = serialized_json_bytes(&records)?;
         if bytes > limits::MAX_REVISION_STATE_BYTES {

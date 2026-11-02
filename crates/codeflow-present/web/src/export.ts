@@ -32,6 +32,7 @@ const styleStages = async (): Promise<void> => {
   delete document.documentElement.dataset.cfReady;
   await Promise.all(stages.map(async (stage) => {
     const fresh = stage.frame.cloneNode(false) as HTMLIFrameElement;
+    fresh.setAttribute("scrolling", "no");
     fresh.srcdoc = stageSource(stage.source, document.documentElement);
     const loaded = frameLoad(fresh);
     stage.frame.replaceWith(fresh);

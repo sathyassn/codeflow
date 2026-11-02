@@ -9,9 +9,11 @@ use crate::{
     error::{PresentError, Result},
 };
 
-// Widths produced by the export at its reference viewports (1200 and 400).
-// Fractional layout is allowed one CSS subpixel of rounding across engines.
-pub(crate) const CONTENT_WIDTHS: [f64; 2] = [832.0, 372.8];
+// Seven stage viewports, each measured in three themes and two modes.
+pub(crate) const CONTENT_WIDTHS: [f64; 7] = [360.0, 372.8, 480.0, 640.0, 768.0, 832.0, 900.0];
+pub(crate) const MIN_WIDTH: f64 = 320.0;
+pub(crate) const MAX_WIDTH: f64 = 1920.0;
+pub(crate) const MAX_ENTRIES_PER_STAGE: usize = CONTENT_WIDTHS.len() * 6;
 pub(crate) const MAX_HEIGHT: f64 = 1_000_000.0;
 pub(crate) const MIN_HEIGHT: f64 = 24.0;
 
@@ -44,7 +46,11 @@ pub(crate) fn rendering_contract(utility_style: &str) -> String {
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);
     }
-    digest.update(b"export geometry v1; viewports=1200,400; widths=832,372.8; floor=24");
+    digest.update(b"export geometry v2; measured viewport retained; scrolling=no; floor=24");
+    for width in CONTENT_WIDTHS.into_iter().chain([MIN_WIDTH, MAX_WIDTH]) {
+        digest.update(width.to_le_bytes());
+    }
+    digest.update((MAX_ENTRIES_PER_STAGE as u64).to_le_bytes());
     let mut hex = String::with_capacity(64);
     for byte in digest.finalize() {
         write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
@@ -63,9 +69,8 @@ impl StageMeasurement {
             || self.contract != contract
             || !self.height.is_finite()
             || !(MIN_HEIGHT..=MAX_HEIGHT).contains(&self.height)
-            || !CONTENT_WIDTHS
-                .iter()
-                .any(|width| (self.content_width - width).abs() <= 1.0 / 64.0)
+            || !self.content_width.is_finite()
+            || !(MIN_WIDTH..=MAX_WIDTH).contains(&self.content_width)
             || !["graphite", "slate", "sage"].contains(&self.theme.as_str())
             || !["light", "dark"].contains(&self.mode.as_str())
             || !document
@@ -84,7 +89,7 @@ impl StageMeasurement {
         self.stage_id == other.stage_id
             && self.revision == other.revision
             && self.contract == other.contract
-            && self.content_width.to_bits() == other.content_width.to_bits()
+            && (self.content_width - other.content_width).abs() <= 1.0 / 64.0
             && self.theme == other.theme
             && self.mode == other.mode
     }
@@ -122,7 +127,13 @@ mod tests {
         let document = document();
         let valid = report();
         valid.validate(&document, 1, &valid.contract).unwrap();
-        for width in [0.0, 400.0, 1200.0, f64::NAN, f64::INFINITY] {
+        for width in [
+            0.0,
+            MIN_WIDTH - 1.0,
+            MAX_WIDTH + 1.0,
+            f64::NAN,
+            f64::INFINITY,
+        ] {
             let mut invalid = valid.clone();
             invalid.content_width = width;
             assert!(invalid.validate(&document, 1, &valid.contract).is_err());
@@ -243,6 +254,66 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         assert!(store.stage_measurements(session.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn bounded_width_range_accepts_scrollbar_and_laptop_geometry() {
+        let document = document();
+        for width in [320.0, 372.8125, 817.0, 990.0, 1920.0] {
+            let mut measurement = report();
+            measurement.content_width = width;
+            measurement
+                .validate(&document, 1, &measurement.contract)
+                .unwrap();
+        }
+        for width in [319.99, 1920.01, f64::NAN, f64::INFINITY] {
+            let mut measurement = report();
+            measurement.content_width = width;
+            assert!(measurement
+                .validate(&document, 1, &measurement.contract)
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn stage_entry_limit_rejects_growth_but_allows_replacement() {
+        let scratch = tempdir().unwrap();
+        let store = SessionStore::at_root(scratch.path().join("project"), "key".into()).unwrap();
+        let session = store.create(ParsedDocument::Supported(document())).unwrap();
+        let records: Vec<_> = (0..42)
+            .map(|index| {
+                let mut measurement = report();
+                measurement.content_width = 400.0 + f64::from(index);
+                measurement
+            })
+            .collect();
+        crate::state::write_json_atomic(
+            &store
+                .session_dir(session.id)
+                .join("stage-measurements.json"),
+            &records,
+        )
+        .unwrap();
+        assert!(store
+            .record_stage_measurement(session.id, report())
+            .is_err());
+        assert_eq!(store.stage_measurements(session.id).unwrap(), records);
+        let mut replacement = records[0].clone();
+        replacement.height = 1200.0;
+        // A different engine's subpixel grid must replace the same rung,
+        // not consume an extra slot in an already full ladder.
+        replacement.content_width += 1.0 / 128.0;
+        store
+            .record_stage_measurement(session.id, replacement.clone())
+            .unwrap();
+        let saved = store.stage_measurements(session.id).unwrap();
+        assert_eq!(saved.len(), 42);
+        assert!(saved.contains(&replacement));
+        let mut other_stage = report();
+        other_stage.stage_id = "short".into();
+        store
+            .record_stage_measurement(session.id, other_stage)
+            .unwrap();
     }
 
     #[test]

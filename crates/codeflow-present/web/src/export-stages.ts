@@ -51,9 +51,16 @@ export function frameLoad(frame: HTMLIFrameElement, timeout = FRAME_WAIT_MS): Pr
 export function sizeStage(frame: HTMLIFrameElement, measurements: StageMeasurement[]): void {
   const id = frame.closest<HTMLElement>("[data-cf-block-id]")?.dataset.cfBlockId;
   const root = document.documentElement;
-  const width = frame.getBoundingClientRect().width;
-  const match = measurements.find((item) => item.stage_id === id && Math.abs(item.content_width - width) <= 1 / 64
-    && item.theme === root.dataset.cfTheme && item.mode === root.dataset.cfModeResolved);
+  // Select against the column, not the previous rung's fixed frame width:
+  // a resize must be able to move both up and down the ladder.
+  const width = frame.parentElement?.getBoundingClientRect().width ?? frame.getBoundingClientRect().width;
+  const match = measurements.filter((item) => item.stage_id === id && item.content_width <= width
+    && item.theme === root.dataset.cfTheme && item.mode === root.dataset.cfModeResolved)
+    .reduce<StageMeasurement | undefined>((nearest, item) => !nearest || item.content_width > nearest.content_width ? item : nearest, undefined);
+  // Keep the measured viewport: authored CSS need not get shorter at wider
+  // widths (for example an aspect-ratio square). Leave spare column space.
+  frame.style.setProperty("inline-size", match ? `${match.content_width}px` : "100%", "important");
+  frame.dataset.cfStageMeasuredWidth = match ? String(match.content_width) : "";
   frame.style.setProperty("--cf-export-stage-height", match ? `${Math.max(24, match.height)}px` : "28rem");
   const notice = frame.parentElement?.querySelector<HTMLElement>("[data-cf-stage-notice]");
   if (notice) {

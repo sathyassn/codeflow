@@ -5,6 +5,7 @@ interface MeasurementConfig {
   revision: number;
   contract: string;
   html: string;
+  widths: number[];
 }
 
 /** A separate viewport reproduces export layout, unaffected by the review rail. */
@@ -12,16 +13,17 @@ export async function measureExportStages(): Promise<void> {
   const template = document.querySelector<HTMLTemplateElement>("#cf-stage-measuring");
   if (!template) return;
   const config = JSON.parse(template.content.textContent ?? "{}") as MeasurementConfig;
-  for (const width of [1200, 400]) {
+  for (const width of config.widths) {
     for (const theme of ["graphite", "slate", "sage"]) {
       for (const mode of ["light", "dark"]) {
         const host = document.createElement("iframe");
         // Readable only in this trusted live host. Scripts remain forbidden;
         // the saved export never receives this permission.
         host.sandbox.add("allow-same-origin");
+        host.setAttribute("scrolling", "no");
         host.setAttribute("aria-hidden", "true");
         host.inert = true;
-        host.style.cssText = `position:fixed;left:-100000px;top:0;width:${width}px;height:1px;border:0;visibility:hidden;pointer-events:none`;
+        host.style.cssText = `position:fixed;left:-100000px;top:0;width:1200px;height:1px;border:0;visibility:hidden;pointer-events:none`;
         host.srcdoc = config.html;
         const loaded = frameLoad(host);
         document.body.append(host);
@@ -40,7 +42,12 @@ export async function measureExportStages(): Promise<void> {
             if (!stageId) continue;
             const frame = original.cloneNode(false) as HTMLIFrameElement;
             frame.sandbox.add("allow-same-origin");
+            frame.setAttribute("scrolling", "no");
             frame.style.setProperty("--cf-export-stage-height", "1px");
+            // The stage's viewport, including authored media queries, is the
+            // ladder width. Export fonts and padding remain identical.
+            frame.style.setProperty("inline-size", `${width}px`, "important");
+            frame.style.setProperty("max-inline-size", "none", "important");
             frame.srcdoc = stageSource(original.srcdoc, page.documentElement);
             const ready = frameLoad(frame);
             original.replaceWith(frame);

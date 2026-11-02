@@ -5,23 +5,23 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-OR5TFDU6.js.br",
-      "name": "service/app-OR5TFDU6.js.br",
+      "bom-ref": "service/app-R35KF7CY.js.br",
+      "name": "service/app-R35KF7CY.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "eedd7a9a9d5e45e3f4e04925b5d329d42e89813629ced2223494e6f2300a3778"
+          "content": "6598172e9791502eb835d04072d70a5dbc9af4b52e43e084bb7c27bee791d1ef"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-OR5TFDU6.js.gz",
-      "name": "service/app-OR5TFDU6.js.gz",
+      "bom-ref": "service/app-R35KF7CY.js.gz",
+      "name": "service/app-R35KF7CY.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "7ad1848d0372b990efea47a4ca50ce486370c7e60b9b0ff96cbea18e25386c97"
+          "content": "92369492ff5f84b1cdb6f9c729555b58a3081454b904e8616f52da869681dd4b"
         }
       ]
     },
@@ -291,23 +291,23 @@
     },
     {
       "type": "file",
-      "bom-ref": "service/chunk-stage-measuring-JMQXXANL.js.br",
-      "name": "service/chunk-stage-measuring-JMQXXANL.js.br",
+      "bom-ref": "service/chunk-stage-measuring-4Y5PNQNM.js.br",
+      "name": "service/chunk-stage-measuring-4Y5PNQNM.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "a777ce3c21c430e632cbd1831b31ccd7e04191acbc4333bf60a69462a00f464f"
+          "content": "fdba687800c87c41bccf25d20d0ec1251149b6fdc14c200a3f3007643c28aa58"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/chunk-stage-measuring-JMQXXANL.js.gz",
-      "name": "service/chunk-stage-measuring-JMQXXANL.js.gz",
+      "bom-ref": "service/chunk-stage-measuring-4Y5PNQNM.js.gz",
+      "name": "service/chunk-stage-measuring-4Y5PNQNM.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "cae135165b7740968183d7e825cfa4481f6d4e1a2937071af2c98c5ba9cb6897"
+          "content": "ba5584ceded1a83ef0a15249b153811db4bd34b35b9f25decedec5b98e6780d0"
         }
       ]
     },

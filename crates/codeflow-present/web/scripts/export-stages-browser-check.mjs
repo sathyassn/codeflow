@@ -22,6 +22,7 @@ const cli = (args) => execFileSync(binary, args, { cwd: project, env, encoding: 
 const fixture = { schema_version: 2, title: "Export stage geometry", blocks: [
   { type: "html", id: "tall", title: "Nine lanes", caption: "All nine lanes remain visible.", html: `<div>${Array.from({ length: 9 }, (_, i) => `<div style="padding:32px 12px;border:1px solid">Lane ${i + 1}</div>`).join("")}</div>` },
   { type: "html", id: "short", title: "Short stage", caption: "One paragraph.", html: "<p>A short stage</p>" },
+  { type: "html", id: "square", title: "Width-dependent stage", caption: "A wider square also grows taller.", html: '<div style="aspect-ratio:1;background:gray">A square</div>' },
   { type: "html", id: "wrapping", title: "Wrapping stage", caption: "Independent of the review rail.", html: `<p>${"Wrapping content must not inherit the review rail geometry. ".repeat(30)}</p>` },
 ] };
 const argument = process.argv.indexOf("--document");
@@ -82,13 +83,20 @@ try {
     const exported = join(root, `measured-${mode}.html`);
     await exportCapture(exported, mode);
     const capture = await context.newPage();
-    for (const width of [1200, 400]) {
+    for (const [width, scrollbar] of [[1200, false], [400, false], [1366, false], [1200, true]]) {
       await capture.setViewportSize({ width, height: 900 });
       await capture.goto(pathToFileURL(exported).href);
       await capture.waitForSelector("html[data-cf-ready='true']");
+      if (scrollbar) {
+        // Model the classic scrollbar's 15px loss from the document column.
+        await capture.evaluate(() => { document.getElementById("cf-present-document").style.inlineSize = "calc(100% - 15px)"; });
+        await capture.waitForFunction(() => [...document.querySelectorAll("iframe[data-cf-export-stage]")].every((frame) => frame.dataset.cfStageMeasuredWidth === "768"));
+      }
       assert.equal(await capture.locator("[data-cf-stage-notice]:visible").count(), 0);
       for (const handle of await capture.locator("iframe[data-cf-export-stage]").elementHandles()) {
         assert.equal(await handle.getAttribute("sandbox"), "");
+        assert.equal(await handle.getAttribute("scrolling"), "no");
+        if (width === 1366) assert.equal(await handle.getAttribute("data-cf-stage-measured-width"), "900");
         assert.equal(await handle.getAttribute("data-cf-stage-status"), "loaded");
         const frame = await handle.contentFrame();
         assert.ok(frame);
@@ -105,10 +113,10 @@ try {
         assert.ok(geometry.height <= Math.max(24, geometry.bottom) + 2, JSON.stringify(geometry));
       }
       if (!process.argv.includes("--without-capture-preparation")) await prepareExportCapture(capture);
-      const screenshot = await capture.screenshot({ path: join(root, `${mode}-${width}.png`), fullPage: true });
+      const screenshot = await capture.screenshot({ path: join(root, `${mode}-${width}${scrollbar ? "-scrollbar" : ""}.png`), fullPage: true });
       await assertStageTextPainted(capture, screenshot);
     }
-    await capture.setViewportSize({ width: 900, height: 900 });
+    await capture.setViewportSize({ width: 350, height: 900 });
     await capture.goto(pathToFileURL(exported).href);
     await capture.waitForSelector("html[data-cf-ready='true']");
     assert.equal(await capture.locator("[data-cf-stage-notice]:visible").count(), stageCount);
