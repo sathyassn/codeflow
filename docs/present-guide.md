@@ -126,6 +126,20 @@ review is over.
    `--mode dark` or `--theme graphite` if you want a different look. Without
    `--with-notes`, the copy holds the document only, without notes or review
    controls.
+   The export is a review capture at a recorded time. The live session remains
+   the handover surface. Open it once at the current revision before exporting
+   HTML stages: a separate measuring host records their export heights at the
+   1200px and 400px reference viewports, independently of the review rail.
+   A stage without a matching revision, width and rendering contract keeps
+   its fallback height and says "height not measured at this width; open the
+   session". A stylesheet or font change invalidates earlier measurements.
+
+   Capture tools should wait for `html[data-cf-ready="true"]`. This signal
+   means every stage frame loaded or reached its bounded failure timeout;
+   failed frames show a visible notice. It does not mean all stages were
+   measured. Check `[data-cf-stage-notice]` for limitations before relying
+   on a capture.
+
 3. Close the session with `codeflow present close <session-id>`.
 4. To reclaim space later, preview with `codeflow present clear --dry-run`,
    then run `codeflow present clear`.

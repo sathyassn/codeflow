@@ -1168,6 +1168,60 @@ impl SessionStore {
         Ok(record)
     }
 
+    /// Measurements are bounded advisory state, replaced atomically under the
+    /// same session lock as revision changes. Old revisions are discarded.
+    pub(crate) fn record_stage_measurement(
+        &self,
+        id: Uuid,
+        measurement: crate::stage_measurements::StageMeasurement,
+    ) -> Result<()> {
+        let _project_lease = self.lock_project_mutation()?;
+        let _lock = self.lock_session(id)?;
+        let revision = self.current_revision(id)?;
+        let RevisionContent::Supported { document } = revision.content else {
+            return Err(PresentError::InvalidRequest(
+                "this revision cannot be measured".into(),
+            ));
+        };
+        let utility = self
+            .utility_tokens()?
+            .map(|tokens| tokens.css())
+            .unwrap_or_default();
+        let contract = crate::stage_measurements::rendering_contract(&utility);
+        measurement.validate(&document, revision.revision, &contract)?;
+        let mut records = self.stage_measurements(id)?;
+        records.retain(|entry| {
+            entry.revision == revision.revision
+                && entry.contract == contract
+                && !entry.same_key(&measurement)
+        });
+        records.push(measurement);
+        let bytes = serialized_json_bytes(&records)?;
+        if bytes > limits::MAX_REVISION_STATE_BYTES {
+            return Err(PresentError::InvalidRequest(
+                "stage measurements exceed the session bound".into(),
+            ));
+        }
+        self.ensure_project_capacity_unlocked(bytes, true)?;
+        write_json_atomic(
+            &self.session_dir(id).join("stage-measurements.json"),
+            &records,
+        )
+    }
+
+    pub(crate) fn stage_measurements(
+        &self,
+        id: Uuid,
+    ) -> Result<Vec<crate::stage_measurements::StageMeasurement>> {
+        self.ensure_session_layout(id)?;
+        let path = self.session_dir(id).join("stage-measurements.json");
+        match fs::symlink_metadata(&path) {
+            Ok(_) => read_json(&path, limits::MAX_REVISION_STATE_BYTES),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(PresentError::io(path, error)),
+        }
+    }
+
     pub fn current_revision(&self, id: Uuid) -> Result<RevisionRecord> {
         let session = self.load(id)?;
         self.revision(id, session.current_revision)

@@ -651,7 +651,7 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .block--html iframe {
   display: block;
   inline-size: 100%;
-  block-size: 28rem;
+  block-size: var(--cf-export-stage-height, 28rem);
   border: 0;
   background: transparent;
 }
