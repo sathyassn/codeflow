@@ -322,10 +322,11 @@ fn the_own_change_on_its_line_passes_the_pre_push() {
 }
 
 /// AC-6: `codeflow ci` given the hook's flags and `--into` the line gives
-/// the pre-push verdict once the destination confirms the line. Without
-/// `--into` the run takes the record's declared target, the same line, and
-/// gives the same verdict; with no destination to confirm the line, the
-/// exception does not apply and the range refuses as before.
+/// the pre-push verdict once the destination confirms the line. With no
+/// destination to confirm the line, or without an explicit `--into` (the
+/// run then infers the record's declared target), the exception does not
+/// apply and the range refuses as before (TSK-350 Description: "Any other
+/// range, including one with no `--into`, keeps today's rule").
 #[test]
 fn ci_into_the_confirmed_line_gives_the_pre_push_verdict() {
     let repo = shaped(Shape::Diverged);
@@ -337,12 +338,203 @@ fn ci_into_the_confirmed_line_gives_the_pre_push_verdict() {
     );
     assert!(!text.contains(GRANTED), "no destination: {text}");
     with_destination(&repo);
-    for into in [true, false] {
-        let (code, text) = judged(&repo, true, into);
-        assert_eq!(code, 0, "into={into}: {text}");
-        assert!(text.contains(GRANTED), "into={into}: {text}");
-        assert!(text.contains(OWN_DELTA), "into={into}: {text}");
-    }
+    let (code, text) = judged(&repo, true, true);
+    assert_eq!(code, 0, "with --into: {text}");
+    assert!(text.contains(GRANTED), "with --into: {text}");
+    assert!(text.contains(OWN_DELTA), "with --into: {text}");
+    let (code, text) = judged(&repo, true, false);
+    assert_eq!(code, 1, "without --into: {text}");
+    assert!(
+        text.contains("work.criteria_frozen"),
+        "without --into: {text}"
+    );
+    assert!(!text.contains(GRANTED), "without --into: {text}");
+}
+
+/// AC-8 (review 01, finding 1): the binding reads the pinned candidate
+/// authority and the confirmed line tip, never a local or remote-tracking
+/// ref. `main`'s pinned tip cancels the epic while `origin/main` is stale
+/// and still shows it active: the exception is refused, through
+/// `codeflow ci --into` and a real pre-push. A destination that does not
+/// hold the line confirms nothing.
+#[test]
+fn a_stale_ref_cannot_bind_a_cancelled_epics_line() {
+    let repo = shaped(Shape::Diverged);
+    with_destination(&repo);
+    let root = repo.dir.path();
+    git(root, &["switch", "-q", "main"]);
+    write(
+        root,
+        "project-management/epics/EPC-001.md",
+        &EPIC.replace("status: planning", "status: cancelled"),
+    );
+    commit(root, "docs(plan): cancel EPC-001 on main");
+    git(
+        root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "origin",
+            "main",
+        ],
+    );
+    let cancelled = git_out(root, &["rev-parse", "main"]);
+    // Leave `origin/main` at the active epic, as a clone that has not
+    // fetched would.
+    git(
+        root,
+        &["update-ref", "refs/remotes/origin/main", &repo.main],
+    );
+    git(root, &["switch", "-q", OWN]);
+    let (code, text) = ci_args(
+        root,
+        &[
+            "--base",
+            &repo.line,
+            "--head",
+            "HEAD",
+            "--branch",
+            OWN,
+            "--policy-from",
+            &cancelled,
+            "--commits-from",
+            &cancelled,
+            &format!("--into={LINE}"),
+        ],
+    );
+    assert_ne!(code, 0, "ci with a stale origin/main: {text}");
+    assert!(
+        !text.contains(GRANTED),
+        "ci with a stale origin/main: {text}"
+    );
+    assert!(
+        text.contains("cancelled"),
+        "ci with a stale origin/main: {text}"
+    );
+    let (code, text) = push(root, &["origin", OWN]);
+    assert_ne!(code, 0, "pre-push with a stale origin/main: {text}");
+
+    // Another destination that holds only `main`.
+    let other = root.join(".git/other.git");
+    git(
+        root,
+        &[
+            "init",
+            "--bare",
+            "-q",
+            "-b",
+            "main",
+            other.to_str().unwrap(),
+        ],
+    );
+    git(
+        root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            other.to_str().unwrap(),
+            &format!("{}:refs/heads/main", repo.main),
+        ],
+    );
+    let (code, text) = ci_args(
+        root,
+        &[
+            "--base",
+            &repo.line,
+            "--head",
+            "HEAD",
+            "--branch",
+            OWN,
+            "--policy-from",
+            &repo.main,
+            "--commits-from",
+            &repo.main,
+            "--destination",
+            other.to_str().unwrap(),
+            &format!("--into={LINE}"),
+        ],
+    );
+    assert_ne!(code, 0, "a destination without the line: {text}");
+    assert!(
+        !text.contains(GRANTED),
+        "a destination without the line: {text}"
+    );
+}
+
+/// AC-1 (review 01, finding 2): the checkout's policy file cannot change
+/// the criteria verdict. An uncommitted policy that drops the `task`
+/// prefix leaves the identical invocation's criteria verdict as it was.
+#[test]
+fn the_checkout_policy_cannot_change_the_own_line_verdict() {
+    let repo = shaped(Shape::Diverged);
+    with_destination(&repo);
+    let root = repo.dir.path();
+    let policy = std::fs::read_to_string(root.join(".codeflow/policy.json")).unwrap();
+    write(
+        root,
+        ".codeflow/policy.json",
+        &policy.replacen(
+            "\"product_paths\"",
+            "\"branch_prefixes\": [\"fix\", \"plan\"], \"product_paths\"",
+            1,
+        ),
+    );
+    // The criteria verdict is the one this invocation gives with the
+    // committed policy. The work-start record check still reads the
+    // checkout's policy and refuses here; that read can only refuse, and
+    // is outside the criteria path.
+    let (_, text) = judged(&repo, true, true);
+    assert!(
+        text.contains(GRANTED),
+        "a checkout policy without task/: {text}"
+    );
+    assert!(
+        text.contains(OWN_DELTA),
+        "a checkout policy without task/: {text}"
+    );
+    assert!(
+        !text.contains("BLOCKED — lifecycle invariant work.criteria_frozen"),
+        "a checkout policy without task/: {text}"
+    );
+}
+
+/// AC-10 on a task branch: TSK-451's rule still refuses a task pull
+/// request that edits another task's record, but with its own message, not
+/// the competing-versions refusal AC-10 removes.
+#[test]
+fn a_task_branch_editing_another_record_meets_the_ownership_rule() {
+    let repo = shaped(Shape::Diverged);
+    let root = repo.dir.path();
+    git(root, &["switch", "-q", "-c", "task/TSK-001-tidy", LINE]);
+    write(root, "src/tidy.rs", "// tidy\n");
+    write(
+        root,
+        &record_path("TSK-002"),
+        &own_record("the system shall work on the line.").replace("Work.\n", "Work, described.\n"),
+    );
+    commit(root, "fix: tidy TSK-002's description");
+    let (code, text) = ci_args(
+        root,
+        &[
+            "--base",
+            &repo.line,
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-tidy",
+            "--policy-from",
+            &repo.main,
+            "--commits-from",
+            &repo.main,
+        ],
+    );
+    assert_eq!(code, 1, "{text}");
+    assert!(text.contains("TSK-002 changes its record"), "{text}");
+    assert!(!text.contains("none of them is newer"), "{text}");
 }
 
 /// AC-8: the exception never reaches a range outside its scope. Each case
