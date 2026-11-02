@@ -363,8 +363,8 @@ fn lease_open_error(root: &PortalIo, error: std::io::Error) -> ScaffoldError {
     if error.raw_os_error()
         == Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION.cast_signed())
     {
-        // A newly created lease retains DELETE access for rejection cleanup;
-        // another no-delete-sharing opener can be excluded before fs2 locking.
+        // The lease opens read only, so a sharing violation now comes only
+        // from another opener holding DELETE access, such as an older binary.
         return ScaffoldError::invalid(
             Shown::path(TRANSACTION_LOCK_PATH),
             Shown::fixed(
@@ -2401,6 +2401,9 @@ mod tests {
         let error =
             acquire_portal_transaction_lease(&PortalIo::open(temp.path()).unwrap()).unwrap_err();
         assert!(error.to_string().contains("already in progress"));
+        // The second open reaches the OS lock: on Windows a creating handle
+        // with DELETE access used to refuse it as a sharing violation.
+        assert!(!error.to_string().contains("sharing violation"), "{error}");
         drop(first);
         acquire_portal_transaction_lease(&PortalIo::open(temp.path()).unwrap()).unwrap();
 
