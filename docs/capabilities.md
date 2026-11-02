@@ -683,14 +683,14 @@ Records contain YAML frontmatter and Markdown prose, checked by `validate --docs
 | Validation rule | Contract |
 |---|---|
 | Record files | Regular files directly under `docs/capabilities/`, named `CAP-NNN-<slug>.md`. Git index or tree mode must be non-executable; synthetic filesystem execute bits are ignored, including with `core.fileMode=false`. Untracked records have no Git mode until indexed. This mode rule does not apply to legacy or configuration files. Absolute paths, `..`, nested paths and symlinks are refused. Containment applies only to record files, not references inside them. |
-| Legacy compatibility | Fences and distinct folder records coexist. A CAP page without frontmatter remains companion prose when its id has a legacy fence. Legacy fences retain their existing schema. |
+| Legacy compatibility | Fences and distinct folder records coexist. A CAP page without frontmatter remains companion prose when its id has a legacy fence. Legacy fences retain their field shapes and ignore unknown keys; known string and list fields use the same bounds during deserialization. |
 | Identity | Duplicate ids or UUIDs name both sources. An identity in both layouts is refused regardless of bindings or payload equality. |
 | Evidence | References are syntax-checked, never opened or executed. Resolution belongs to TSK-362. A shipped record with only `gap:` evidence accepts `unassessed`, but refuses `beta` or `stable`. |
-| Scalar bound | `CAPABILITY_MAX_VALUE_CHARS` in `capability.rs`: 1024 Unicode characters per scalar or list item. |
-| List bound | `CAPABILITY_MAX_LIST_ITEMS`: 64 items per list. Scalar and list bounds also apply to the vocabulary. |
+| Scalar bound | `CAPABILITY_MAX_VALUE_CHARS` in `capability.rs`: 1024 Unicode characters per known string scalar or list item. |
+| List bound | `CAPABILITY_MAX_LIST_ITEMS`: 64 items per list. The same visitors enforce scalar and list bounds while reading records, legacy fences and vocabulary. |
 | Key bound | `CAPABILITY_MAX_FRONTMATTER_KEYS`: 32 frontmatter keys per record. The closed field set contains fewer than 32 fields; unknown and duplicate keys are refused before reading their values. |
 | Input bound | `CAPABILITY_MAX_FILE_BYTES`: 262,144 bytes (256 KiB) per input, including the legacy file, project configuration and vocabulary. Checkout reads are bounded; tree blob sizes are checked before reading their contents. Record frontmatter deserializes directly into typed fields: visitors stop at overlong strings or item 65, and nested collections are refused without expansion. Bounded scalar aliases remain valid. |
-| Schema refusals | Unknown or duplicate keys, malformed YAML and oversized values name the file and key; typed frontmatter errors retain the field name. |
+| Schema refusals | Unknown record or vocabulary keys, duplicate keys, malformed YAML and oversized values name the file and key; typed frontmatter errors retain the field name. |
 | Revision | Checkout and pinned-tree readers share validation. Areas and vocabulary come from the selected revision, independently of the checkout. |
 | Vocabulary | `vocabulary.yaml` contains `inventory: incomplete` or `complete`, plus `groups` and `tags` lists of `{name, about}`. Names are unique lowercase slugs within each list. The example stays `incomplete` until inventory work establishes coverage. |
 | Operations | The loader reads data; it performs no migration or id allocation. |

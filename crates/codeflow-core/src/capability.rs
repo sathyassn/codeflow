@@ -54,26 +54,31 @@ pub struct CapabilityParseIssue {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RawCapability {
+    #[serde(deserialize_with = "bounded_string")]
     id: String,
+    #[serde(deserialize_with = "bounded_string")]
     name: String,
+    #[serde(deserialize_with = "bounded_string")]
     area: String,
+    #[serde(deserialize_with = "bounded_string")]
     status: String,
+    #[serde(deserialize_with = "bounded_strings")]
     verified_by: Vec<String>,
-    #[serde(deserialize_with = "deserialize_string_list")]
+    #[serde(deserialize_with = "bounded_reference_list")]
     epics: Vec<String>,
-    #[serde(deserialize_with = "deserialize_string_list")]
+    #[serde(deserialize_with = "bounded_reference_list")]
     epic_id: Vec<String>,
-    #[serde(deserialize_with = "deserialize_string_list")]
+    #[serde(deserialize_with = "bounded_reference_list")]
     specs: Vec<String>,
-    #[serde(deserialize_with = "deserialize_string_list")]
+    #[serde(deserialize_with = "bounded_reference_list")]
     depends_on: Vec<String>,
-    #[serde(deserialize_with = "deserialize_string_list")]
+    #[serde(deserialize_with = "bounded_reference_list")]
     capabilities: Vec<String>,
-    #[serde(deserialize_with = "deserialize_string_list")]
+    #[serde(deserialize_with = "bounded_reference_list")]
     adrs: Vec<String>,
-    #[serde(deserialize_with = "deserialize_string_list")]
+    #[serde(deserialize_with = "bounded_reference_list")]
     related: Vec<String>,
-    #[serde(deserialize_with = "deserialize_string_list")]
+    #[serde(deserialize_with = "bounded_reference_list")]
     superseded_by: Vec<String>,
 }
 
@@ -97,23 +102,6 @@ impl RawCapability {
             line,
         }
     }
-}
-
-fn deserialize_string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        One(String),
-        Many(Vec<String>),
-    }
-    Ok(match Option::<OneOrMany>::deserialize(deserializer)? {
-        Some(OneOrMany::One(value)) => vec![value],
-        Some(OneOrMany::Many(values)) => values,
-        None => Vec::new(),
-    })
 }
 
 /// Blank out every character inside an HTML comment (`<!-- ... -->`),
@@ -276,7 +264,9 @@ pub struct CapabilityRecord {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityTerm {
+    #[serde(deserialize_with = "bounded_string")]
     pub name: String,
+    #[serde(deserialize_with = "bounded_string")]
     pub about: String,
 }
 
@@ -284,10 +274,11 @@ pub struct CapabilityTerm {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityVocabulary {
+    #[serde(deserialize_with = "bounded_string")]
     pub inventory: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "bounded_terms")]
     pub groups: Vec<CapabilityTerm>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "bounded_terms")]
     pub tags: Vec<CapabilityTerm>,
 }
 
@@ -458,21 +449,12 @@ impl<'de, const ALLOW_SCALAR: bool> serde::de::Visitor<'de> for StringListVisito
             "a list of at most {CAPABILITY_MAX_LIST_ITEMS} strings"
         )
     }
-    fn visit_seq<A: serde::de::SeqAccess<'de>>(
-        self,
-        mut sequence: A,
-    ) -> Result<Vec<String>, A::Error> {
-        let mut values = Vec::new();
-        while values.len() < CAPABILITY_MAX_LIST_ITEMS {
-            let Some(value) = sequence.next_element::<BoundedString>()? else {
-                return Ok(values);
-            };
-            values.push(value.0);
-        }
-        // Detect item 65 without deserializing its subtree.
-        sequence.next_element_seed(RejectExtraItem)?;
-        Ok(values)
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, sequence: A) -> Result<Vec<String>, A::Error> {
+        BoundedListVisitor::<BoundedString>(std::marker::PhantomData)
+            .visit_seq(sequence)
+            .map(|values| values.into_iter().map(|value| value.0).collect())
     }
+
     fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Vec<String>, E> {
         if ALLOW_SCALAR {
             StringVisitor.visit_str(value).map(|value| vec![value])
@@ -487,6 +469,35 @@ impl<'de, const ALLOW_SCALAR: bool> serde::de::Visitor<'de> for StringListVisito
             Err(E::custom("expected a list of strings"))
         }
     }
+}
+struct BoundedListVisitor<T>(std::marker::PhantomData<T>);
+impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for BoundedListVisitor<T> {
+    type Value = Vec<T>;
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "a list of at most {CAPABILITY_MAX_LIST_ITEMS} items"
+        )
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut sequence: A) -> Result<Vec<T>, A::Error> {
+        let mut values = Vec::new();
+        while values.len() < CAPABILITY_MAX_LIST_ITEMS {
+            let Some(value) = sequence.next_element::<T>()? else {
+                return Ok(values);
+            };
+            values.push(value);
+        }
+        // Refuse item 65 without reading its value or an aliased subtree.
+        sequence.next_element_seed(RejectExtraItem)?;
+        Ok(values)
+    }
+}
+fn bounded_terms<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<CapabilityTerm>, D::Error> {
+    deserializer.deserialize_seq(BoundedListVisitor::<CapabilityTerm>(
+        std::marker::PhantomData,
+    ))
 }
 struct RejectExtraItem;
 impl<'de> serde::de::DeserializeSeed<'de> for RejectExtraItem {
@@ -507,16 +518,6 @@ fn bounded_reference_list<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<String>, D::Error> {
     deserializer.deserialize_any(StringListVisitor::<true>)
 }
-fn scalar_bound(file: &str, key: &str, value: &str) -> Result<(), CapabilityCatalogError> {
-    if value.chars().take(CAPABILITY_MAX_VALUE_CHARS + 1).count() > CAPABILITY_MAX_VALUE_CHARS {
-        return Err(catalog_error(
-            file,
-            format!("{key}: value exceeds {CAPABILITY_MAX_VALUE_CHARS} characters"),
-        ));
-    }
-    Ok(())
-}
-
 fn parse_record(file: &str, content: &str) -> Result<CapabilityRecord, CapabilityCatalogError> {
     let mut lines = content.split_inclusive('\n');
     if lines.next().map(str::trim_end) != Some("---") {
@@ -770,12 +771,6 @@ fn parse_vocabulary(content: &str) -> Result<CapabilityVocabulary, CapabilityCat
         ));
     }
     for (key, terms) in [("groups", &vocabulary.groups), ("tags", &vocabulary.tags)] {
-        if terms.len() > CAPABILITY_MAX_LIST_ITEMS {
-            return Err(catalog_error(
-                VOCABULARY_PATH,
-                format!("{key}: list exceeds {CAPABILITY_MAX_LIST_ITEMS} items"),
-            ));
-        }
         let mut names = std::collections::BTreeSet::new();
         for term in terms {
             if !slug(&term.name) || !names.insert(&term.name) {
@@ -784,8 +779,6 @@ fn parse_vocabulary(content: &str) -> Result<CapabilityVocabulary, CapabilityCat
                     format!("{key}: names must be unique lowercase slugs"),
                 ));
             }
-            scalar_bound(VOCABULARY_PATH, key, &term.name)?;
-            scalar_bound(VOCABULARY_PATH, key, &term.about)?;
         }
     }
     Ok(vocabulary)

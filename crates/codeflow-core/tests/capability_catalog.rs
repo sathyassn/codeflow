@@ -9,12 +9,91 @@ const VALID: &str = include_str!("fixtures/capability-catalog/valid.md");
 const VOCAB: &str = "inventory: incomplete\ngroups: [{name: records, about: Records}]\ntags: [{name: rust, about: Rust}]\n";
 
 #[test]
+fn legacy_bounds_are_enforced_during_deserialization() {
+    for (field, value, reason) in [
+        ("name", "x".repeat(1025), "1024 characters"),
+        (
+            "epics",
+            format!("[{}]", vec!["EPC-001"; 65].join(",")),
+            "64 items",
+        ),
+        (
+            "verified_by",
+            format!("[{}]", vec!["proof"; 65].join(",")),
+            "64 items",
+        ),
+    ] {
+        let input = format!("```yaml\nid: CAP-201\n{field}: {value}\n```\n");
+        let (_, issues) = codeflow_core::capability::parse_capabilities(&input);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.message.contains(field) && issue.message.contains(reason)),
+            "{field}: {issues:?}"
+        );
+    }
+}
+
+#[test]
+fn vocabulary_bounds_abort_before_later_invalid_items() {
+    let dir = fixture();
+    write(dir.path(), "docs/capabilities/vocabulary.yaml", &format!("inventory: incomplete\ngroups:\n  - name: records\n    about: {}\n  - unexpected: value\ntags: []\n", "x".repeat(1025)));
+    refuse_both(dir.path(), "vocabulary.yaml", "1024 characters");
+    write(
+        dir.path(),
+        "docs/capabilities/vocabulary.yaml",
+        &format!(
+            "inventory: incomplete\ngroups: [{}{{unexpected: value}}]\n",
+            "{name: records, about: Records},".repeat(65)
+        ),
+    );
+    refuse_both(dir.path(), "vocabulary.yaml", "64 items");
+}
+
+#[test]
+fn legacy_relationship_shapes_and_unknown_keys_are_preserved() {
+    for (value, expected) in [
+        ("EPC-001", vec!["EPC-001"]),
+        ("[EPC-001]", vec!["EPC-001"]),
+        ("null", vec![]),
+    ] {
+        let (entries, issues) = codeflow_core::capability::parse_capabilities(&format!(
+            "```yaml\nid: CAP-201\nepics: {value}\nunknown_key: {{nested: ignored}}\n```\n"
+        ));
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(entries[0].epics, expected);
+    }
+}
+
+#[test]
 fn alias_bomb_record_is_bounded() {
+    assert_alias_bomb_bounded("alias_bomb_record_is_bounded", RECORD, "tags");
+}
+
+#[test]
+fn alias_bomb_legacy_fence_is_bounded() {
+    assert_alias_bomb_bounded(
+        "alias_bomb_legacy_fence_is_bounded",
+        "docs/capabilities.md",
+        "epics",
+    );
+}
+
+#[test]
+fn alias_bomb_vocabulary_is_bounded() {
+    assert_alias_bomb_bounded(
+        "alias_bomb_vocabulary_is_bounded",
+        "docs/capabilities/vocabulary.yaml",
+        "groups",
+    );
+}
+
+fn assert_alias_bomb_bounded(test_name: &str, file: &str, field: &str) {
     use std::time::{Duration, Instant};
     const CHILD: &str = "CODEFLOW_CATALOG_ALIAS_BOMB_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "alias_bomb_record_is_bounded"])
+            .args(["--exact", test_name])
             .env("CODEFLOW_CATALOG_ALIAS_BOMB_CHILD", "1")
             .spawn()
             .unwrap();
@@ -41,18 +120,22 @@ fn alias_bomb_record_is_bounded() {
             format!(",*{previous}").repeat(9)
         );
     }
-    let content = format!("---\ntags: {bomb}\n---\n");
+    let content = match file {
+        "docs/capabilities.md" => format!("```yaml\nid: CAP-201\nepics: {bomb}\n```\n"),
+        "docs/capabilities/vocabulary.yaml" => format!("inventory: incomplete\ngroups: {bomb}\n"),
+        _ => format!("---\ntags: {bomb}\n---\n"),
+    };
     assert!(content.len() < 1024);
     let dir = fixture();
-    write(dir.path(), RECORD, &content);
+    write(dir.path(), file, &content);
     let revision = tree(dir.path());
     let started = Instant::now();
     let error = load_capability_catalog(dir.path()).unwrap_err();
-    assert!(error.message.contains("tags"), "{error}");
+    assert!(error.message.contains(field), "{error}");
     assert!(started.elapsed() < Duration::from_secs(1));
     let started = Instant::now();
     let error = load_capability_catalog_from_tree(dir.path(), &revision).unwrap_err();
-    assert!(error.message.contains("tags"), "{error}");
+    assert!(error.message.contains(field), "{error}");
     assert!(started.elapsed() < Duration::from_secs(1));
 }
 
