@@ -58,9 +58,11 @@
 //!
 //! **Target lifetime on Unix.** Heavy quick targets and reserved commands
 //! have a watcher that ends their process group when the controller exits;
-//! it keeps copies of the run's slot and host locks, so a target that
+//! it keeps copies of the run's slot, host and fence locks, so a target that
 //! outlives its run keeps its slot busy and keeps a host-exclusive target
-//! out. Other targets can outlive a killed gate. While a run holds a slot,
+//! and older binaries out. Other targets can outlive a killed gate; each
+//! has a keeper that holds the same copies while its process group lives
+//! and never ends it (TSK-1256). While a run holds a slot,
 //! the runner records each running target's process group in the slot's
 //! record ([`target_group_started`]). A free slot whose record names a
 //! process group with a live process counts as busy.

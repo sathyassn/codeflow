@@ -1209,7 +1209,12 @@ fn spawn_prepared(
 
     #[cfg(unix)]
     let mut watcher = if supervised {
-        Some(group_watch::GroupWatch::prepare(&mut cmd, hand_over).map_err(spawn_err)?)
+        Some(group_watch::GroupWatch::prepare(&mut cmd, hand_over, false).map_err(spawn_err)?)
+    } else if crate::testing::gate_guard::held_runs().is_some() {
+        // A target that may outlive a killed gate keeps the gate's locks,
+        // the fence for older binaries included, while its group lives
+        // (TSK-1256).
+        Some(group_watch::GroupWatch::prepare(&mut cmd, false, true).map_err(spawn_err)?)
     } else {
         None
     };

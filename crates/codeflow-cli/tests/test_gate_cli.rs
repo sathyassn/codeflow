@@ -344,6 +344,75 @@ fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
     killed_gate_keeps_its_lock_until_its_target_exits("essential");
 }
 
+/// TSK-1256: a full-gate target that outlives its killed gate keeps an older
+/// binary's exclusive take of `full-gate.lock` refused until its process
+/// group ends. The older take is simulated as 3.1 makes it: `flock`
+/// exclusive, without waiting.
+#[cfg(unix)]
+#[test]
+fn a_killed_gates_surviving_target_keeps_older_binaries_out() {
+    use std::os::fd::AsRawFd;
+    let home = tempfile::tempdir().unwrap();
+    let first = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "survivor", "runner": "custom",
+   "modes": {"full": {"command": "echo $$ > group.txt; sleep 30"}}}
+]}"#,
+    );
+    let (mut gate, rx, _stdout) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'survivor'");
+    let group_file = first.path().join("group.txt");
+    let group = (0..200)
+        .find_map(|_| {
+            let text = std::fs::read_to_string(&group_file).unwrap_or_default();
+            let parsed = text.trim().parse::<u32>().ok();
+            if parsed.is_none() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            parsed
+        })
+        .expect("the target wrote its group");
+    gate.kill().unwrap();
+    gate.wait().unwrap();
+    let alive = |g: u32| {
+        Command::new("kill")
+            .args(["-0", "--", &format!("-{g}")])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(alive(group), "the target outlived its gate");
+
+    let fence = home.path().join("locks/full-gate.lock");
+    let older_take = || {
+        let file = std::fs::File::open(&fence).unwrap();
+        // SAFETY: flock on a descriptor this closure owns; it closes on drop.
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+    };
+    assert!(
+        !older_take(),
+        "an older binary's gate must stay out while the killed gate's target runs"
+    );
+
+    Command::new("kill")
+        .args(["-KILL", "--", &format!("-{group}")])
+        .status()
+        .unwrap();
+    let freed = (0..100).any(|_| {
+        if older_take() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        false
+    });
+    assert!(freed, "the fence frees once the target's group ends");
+}
+
 #[cfg(unix)]
 fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
     let home = tempfile::tempdir().unwrap();

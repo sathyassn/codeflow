@@ -213,7 +213,8 @@ Direct commands outside the wrapper and other applications also
 consume resources that the job budget does not see. Declared heavy targets
 and reserved commands end their process groups when the controller exits.
 On Unix, other targets can outlive a killed gate; their slot counts as
-busy until they end.
+busy until they end, and a small keeper process holds the gate's locks for
+them, so an older gate (below) stays out too.
 
 #### Older CodeFlow binaries on the same machine
 
@@ -229,6 +230,15 @@ takes a slot. So the two never run at the same time, in either order:
   write, so it says the holder has not recorded itself; an older 4.0 line
   build reads `full-gate.record`, which names the most recently admitted
   4.0 run that is still active.
+- A 3.1 gate that was killed leaves its record inside `full-gate.lock`, and
+  4.0 runs never write that file, so a later 3.1 refusal can name that dead
+  gate instead of the 4.0 run that holds the lock. To see the real holder,
+  run `codeflow test --lock-status` with a 4.0 binary, or read
+  `full-gate.record` and the slot records `full-gate-<n>.record` beside
+  `full-gate-<n>.lock`. The stale name goes away on its own: once no 4.0
+  run is active, the next 3.1 gate takes the lock and replaces the record.
+- A 4.0 run's target that outlives its killed gate on Unix keeps older
+  gates out until its process group ends.
 - A 4.0 run started while an older gate is active refuses at once with
   `an older CodeFlow binary's gate is running on this machine`, naming that
   gate's process, folder and age. It takes no slot, starts nothing and does
