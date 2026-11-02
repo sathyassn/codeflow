@@ -386,6 +386,7 @@ pub fn run_dependency_targets_with_admission(
     let bound = parallel_bound(execution.parallel, execution.max_parallel);
     let mut admission = None;
     let mut wait_started = None;
+    let mut ticket: Option<super::gate_guard::WaitTicket> = None;
     let mut allocations = BTreeMap::<usize, usize>::new();
     let baseline = match super::delivery::tracked(project_dir) {
         Ok(snapshot) => snapshot,
@@ -443,20 +444,35 @@ pub fn run_dependency_targets_with_admission(
                 continue;
             }
             if quick && heavy && admission.is_none() {
-                match super::gate_guard::acquire_project_gate_lock(project_dir, "quick") {
+                let bound = Duration::from_secs(execution.heavy_wait_seconds);
+                // A waiter queues before its first attempt, so waiters take
+                // the lock in arrival order (TSK-1128).
+                let queued = if ticket.is_none() && wait_started.is_none() && !bound.is_zero() {
+                    super::gate_guard::WaitTicket::take(project_dir, bound)
+                        .map(|taken| ticket = Some(taken))
+                } else {
+                    Ok(())
+                };
+                let attempt = queued.and_then(|()| {
+                    super::gate_guard::acquire_project_gate_lock(
+                        project_dir,
+                        "quick",
+                        ticket.as_ref(),
+                    )
+                });
+                match attempt {
                     Ok(lock) => {
                         for note in &lock.notes {
                             progress!("[codeflow test] {note}");
                         }
                         admission = Some(lock);
                         wait_started = None;
+                        ticket = None;
                     }
                     Err(message) => {
                         let first_wait = wait_started.is_none();
                         let since = wait_started.get_or_insert_with(Instant::now);
-                        if !message.contains("gate lock unavailable")
-                            && since.elapsed() < Duration::from_secs(execution.heavy_wait_seconds)
-                        {
+                        if !message.contains("gate lock unavailable") && since.elapsed() < bound {
                             if first_wait {
                                 progress!(
                                     "[codeflow test] waiting up to {}s for heavy work: {message}",
@@ -466,6 +482,7 @@ pub fn run_dependency_targets_with_admission(
                             waiting = true;
                             continue;
                         }
+                        ticket = None;
                         let reason = format!("not run: heavy target refused: {message}");
                         progress!("[codeflow test] {}: {reason}", target.name);
                         results.insert(index, Ok(not_run(target, &reason)));
@@ -899,6 +916,7 @@ fn spawn_command(
         timeout,
         super::evidence::redacted_values(target).is_empty(),
         target.heavy == Some(true),
+        false,
     )
 }
 
@@ -917,7 +935,16 @@ pub fn run_reserved_command(
             message: "a command is required".into(),
         });
     };
-    let mut command = crate::git::process(program);
+    // Only this very binary receives the lock descriptors (TSK-1128): it
+    // makes them close-on-exec at start, so no other tool, script or daemon
+    // can keep or unlock them. The command then runs that checked binary.
+    let same_binary = this_binary_if_same(program, cwd);
+    let hand_over = same_binary.is_some();
+    let mut command = crate::git::process(
+        same_binary
+            .as_deref()
+            .map_or(program.as_os_str(), Path::as_os_str),
+    );
     command.args(&args[1..]).current_dir(cwd);
     if let Some(workers) = workers {
         let oracle = if args.iter().any(|arg| arg == "nextest") {
@@ -933,7 +960,7 @@ pub fn run_reserved_command(
         progress!("[codeflow reserve] workers: jobs={workers}, nextest={workers}, rust-tests=1, oracle={oracle}");
     }
     let start = Instant::now();
-    let result = spawn_prepared(command, "reserve", timeout, true, true)?;
+    let result = spawn_prepared(command, "reserve", timeout, true, true, hand_over)?;
     Ok(TargetRunResult {
         target_name: "reserve".into(),
         error: None,
@@ -953,6 +980,42 @@ pub fn run_reserved_command(
     })
 }
 
+/// The running binary's path when `program`, resolved as exec would (a
+/// path against `cwd`, a bare name through `PATH`) and with links followed,
+/// is the same file as the running binary, compared by device and inode.
+/// A script or any other program with the same name is not.
+fn this_binary_if_same(program: &std::ffi::OsStr, cwd: &Path) -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let identity = |path: &Path| std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()));
+        let current = std::env::current_exe().ok()?;
+        let named = Path::new(program);
+        let resolved = if named.components().count() > 1 || named.is_absolute() {
+            Some(cwd.join(named))
+        } else {
+            std::env::split_paths(&std::env::var_os("PATH")?)
+                .map(|dir| {
+                    if dir.is_absolute() {
+                        dir
+                    } else {
+                        cwd.join(dir)
+                    }
+                })
+                .map(|dir| dir.join(named))
+                .find(|path| {
+                    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+                })
+        }?;
+        (identity(&resolved)? == identity(&current)?).then_some(current)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (program, cwd);
+        None
+    }
+}
+
 // The two merged gate changes (TSK-331 admission, TSK-411 failure detail)
 // meet here; one flow keeps each outcome next to the step that causes it.
 #[allow(clippy::too_many_lines)]
@@ -962,7 +1025,10 @@ fn spawn_prepared(
     timeout: Duration,
     emit_progress: bool,
     supervised: bool,
+    hand_over: bool,
 ) -> Result<CommandOutcome, TestingError> {
+    #[cfg(not(unix))]
+    let _ = hand_over;
     // Pipe output so it can be captured while we poll for the timeout. Reader
     // threads drain the pipes concurrently — without them a chatty command
     // could fill the pipe buffer and deadlock while we sit in try_wait().
@@ -995,7 +1061,7 @@ fn spawn_prepared(
 
     #[cfg(unix)]
     let mut watcher = if supervised {
-        Some(group_watch::GroupWatch::prepare(&mut cmd).map_err(spawn_err)?)
+        Some(group_watch::GroupWatch::prepare(&mut cmd, hand_over).map_err(spawn_err)?)
     } else {
         None
     };

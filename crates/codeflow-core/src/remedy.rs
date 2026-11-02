@@ -599,6 +599,10 @@ catalog! {
     /// A possible secret staged.
     SECRET_STAGED = Step::Git("git restore"),
         "remove the secret from the staged content, or unstage it with `git restore --staged <file>`; rotate it if it was ever committed";
+    /// The gitleaks engine of the staged secret scan cannot run the pinned
+    /// binary (TSK-412).
+    SECRET_ENGINE_UNAVAILABLE = Step::Codeflow("codeflow doctor"),
+        "download the pinned gitleaks release build ({archive}) over the network from https://github.com/gitleaks/gitleaks/releases, check it against that release's checksums file and put its gitleaks binary on PATH; `codeflow doctor --check secret-engine` then reports it pinned";
 
     // The push set.
 
