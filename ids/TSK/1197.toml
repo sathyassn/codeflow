@@ -1,0 +1,11 @@
+id = "TSK-1197"
+uid = "0b56267f-493d-40eb-b566-a938d21ad92c"
+kind = "TSK"
+title = "every shipped report specimen passes the comment round trip"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T17:40:29Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
