@@ -1,0 +1,19 @@
+# Project-owned facets. Inventory coverage has not yet been assessed.
+inventory: incomplete
+groups:
+  - {name: install, about: "init, update and customization"}
+  - {name: enforce, about: "git discipline and gates"}
+  - {name: verify, about: "test gates and evidence"}
+  - {name: land, about: "integration and landing"}
+  - {name: sessions, about: "orient, summary and recall"}
+  - {name: delegate, about: "seats and orchestration"}
+  - {name: models, about: "model bindings and evaluations"}
+  - {name: docs, about: "portal and presentation"}
+  - {name: plan, about: "estimation and planning"}
+tags:
+  - {name: rust, about: "the Rust crates"}
+  - {name: cli, about: "command surfaces"}
+  - {name: hooks, about: "git and session hooks"}
+  - {name: ci, about: "hosted checks"}
+  - {name: skills, about: "shipped agent skills"}
+  - {name: portal, about: "the documentation portal"}
