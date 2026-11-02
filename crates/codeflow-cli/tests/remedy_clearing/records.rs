@@ -604,6 +604,44 @@ fn clears_work_start_merge_planning() {
     );
 }
 
+/// TSK-1036: a task blocked on the target is unblocked in its own pull
+/// request by the printed `task status` step.
+#[test]
+fn clears_work_start_unblock() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    let block = [
+        "task",
+        "status",
+        "TSK-001",
+        "blocked",
+        "--reason",
+        "waits on the host",
+        "--owner",
+        "ops",
+        "--revisit",
+        "the host is ready",
+    ];
+    let out = codeflow(root, &block);
+    assert!(out.contains("blocked"), "{out}");
+    commit_all(root, "docs: block the work");
+    hosted.seed();
+    hosted.land("plan/work");
+    hosted.branch("task/TSK-001-work");
+    commit(root, "x.txt", "feat: add x");
+    prove(
+        "WORK_START_UNBLOCK",
+        "is blocked",
+        || hosted.ci("task/TSK-001-work", &[]),
+        |printed| {
+            let step = printed_command(printed, "WORK_START_UNBLOCK", None);
+            run_printed(root, &step, &[], &[]);
+            commit_all(root, "chore: unblock the work");
+        },
+    );
+}
+
 #[test]
 fn clears_task_record_missing() {
     // A task on the target turns durable-work tracking on, and a
