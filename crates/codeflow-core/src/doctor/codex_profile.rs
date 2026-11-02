@@ -409,7 +409,7 @@ fn folder_grants(
                 return GrantCheck::NotRun(format!("codex sandbox did not run: {reason}"))
             }
         };
-    *git_config = run.stdout.lines().find_map(|line| {
+    *git_config = run.stdout.split('\n').find_map(|line| {
         if let Some(path) = line.strip_prefix("git-config writable ") {
             Some(Ok(path.to_string()))
         } else {

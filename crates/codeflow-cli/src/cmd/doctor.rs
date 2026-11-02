@@ -546,6 +546,22 @@ fn codex_builder_load(
     (text, None)
 }
 
+/// Whether the codex project config under `root` defines a `cf-builder`
+/// profile. An unreadable or unparsable file defines none; the builder
+/// profile line reports why.
+fn defines_cf_builder(root: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(root.join(".codex/config.toml")) else {
+        return false;
+    };
+    let Ok(config) = text.parse::<toml::Table>() else {
+        return false;
+    };
+    config
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|profiles| profiles.contains_key("cf-builder"))
+}
+
 /// The preflight evidence report (TSK-452): each value is marked
 /// `configured` (what project files request), `observed` (what doctor saw on
 /// this host) or `unavailable` (what doctor cannot establish).
@@ -564,17 +580,7 @@ fn preflight_report(
     // Only where the project defines a cf-builder profile: a project with
     // none has no builder seat to describe.
     let launch = codeflow_core::doctor::builder_launch_root(root);
-    let defines_builder = std::fs::read_to_string(launch.join(".codex/config.toml"))
-        .ok()
-        .and_then(|text| text.parse::<toml::Table>().ok())
-        .and_then(|config| {
-            config
-                .get("permissions")
-                .and_then(toml::Value::as_table)
-                .cloned()
-        })
-        .is_some_and(|profiles| profiles.contains_key("cf-builder"));
-    if defines_builder {
+    if defines_cf_builder(&launch) {
         lines.push(format!(
             "codex builder seat limits: configured by the shipped cf-builder profile: {}",
             codeflow_core::doctor::BUILDER_SEAT_LIMITS

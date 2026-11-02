@@ -2041,9 +2041,15 @@ pub fn claim_on(
 /// Whether the local branch `old` has `branch.<old>.*` settings in the
 /// repository's git config (its remote and merge keys).
 fn branch_has_tracking_config(repo_root: &Path, old: &str) -> Result<bool, String> {
-    let keys = git(repo_root, &["config", "--local", "--name-only", "--list"])?;
+    // NUL-separated, so a key is read whole whatever characters it holds.
+    let keys = git_bytes(
+        repo_root,
+        &["config", "--local", "--name-only", "--list", "-z"],
+    )?;
     let prefix = format!("branch.{old}.");
-    Ok(keys.lines().any(|key| key.starts_with(&prefix)))
+    Ok(keys
+        .split(|byte| *byte == 0)
+        .any(|key| key.starts_with(prefix.as_bytes())))
 }
 
 /// Rename the checked-out standalone branch `current` to `branch` at `head`.
