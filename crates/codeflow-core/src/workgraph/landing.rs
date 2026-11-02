@@ -166,29 +166,46 @@ pub struct Replaced {
 impl Replaced {
     /// The remote-tracking ref of `branch` for the one configured remote
     /// whose URL is exactly `url`, at the tip it has now: the destination's
-    /// own copy of the branch. `None` when no remote or more than one has
-    /// that URL, or the ref is missing or does not peel to a commit.
-    #[must_use]
-    pub fn tracking(repo_root: &std::path::Path, url: &str, branch: &str) -> Option<Self> {
-        let repo = Repository::discover(repo_root).ok()?;
+    /// own copy of the branch. `Ok(None)` when no remote or more than one
+    /// has that URL, or the ref does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the repository, a remote or the ref cannot be read, or
+    /// that a remote's name is not UTF-8; the caller then sets nothing
+    /// aside.
+    pub fn tracking(
+        repo_root: &std::path::Path,
+        url: &str,
+        branch: &str,
+    ) -> Result<Option<Self>, String> {
+        let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
         let mut matching: Vec<String> = Vec::new();
-        for name in crate::git::name::remote_names(&repo).ok()? {
-            // A remote whose name is not UTF-8 makes the answer unknown.
-            let name = std::str::from_utf8(name.bytes()).ok()?;
-            let remote = repo.find_remote(name).ok()?;
+        for name in crate::git::name::remote_names(&repo).map_err(|error| error.to_string())? {
+            let name = std::str::from_utf8(name.bytes())
+                .map_err(|_| format!("remote {} is not UTF-8", name.display()))?;
+            let remote = repo.find_remote(name).map_err(|error| error.to_string())?;
             if remote.url_bytes() == url.as_bytes() {
                 matching.push(name.to_string());
             }
         }
         let [remote] = matching.as_slice() else {
-            return None;
+            return Ok(None);
         };
         let name = format!("refs/remotes/{remote}/{branch}");
-        let tip = repo.find_reference(&name).ok()?.peel_to_commit().ok()?.id();
-        Some(Self {
+        let reference = match repo.find_reference(&name) {
+            Ok(reference) => reference,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        let tip = reference
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?
+            .id();
+        Ok(Some(Self {
             name: name.into_bytes(),
             tip,
-        })
+        }))
     }
 }
 

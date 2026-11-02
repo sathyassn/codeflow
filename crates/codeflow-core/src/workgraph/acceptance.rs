@@ -4914,18 +4914,15 @@ fn copies_finding(
         Kept::Merge(left, right) => {
             let ours_commit = repo.find_commit(left).map_err(unreadable)?;
             let theirs_commit = repo.find_commit(right).map_err(unreadable)?;
-            let index = repo
-                .merge_commits(&ours_commit, &theirs_commit, None)
-                .map_err(unreadable)?;
+            let index =
+                history::merge_commits(repo, &ours_commit, &theirs_commit).map_err(unreadable)?;
             let path = std::path::Path::new(&ours.path);
             match index.get_path(path, 0) {
                 Some(entry) => {
                     let text = repo.find_blob(entry.id).map_err(unreadable)?;
-                    let merged = RecordView::parse(
-                        RecordKind::Task,
-                        &ours.path,
-                        &String::from_utf8_lossy(text.content()),
-                    )?;
+                    let text = std::str::from_utf8(text.content())
+                        .map_err(|_| format!("the merged {} is not UTF-8", ours.path))?;
+                    let merged = RecordView::parse(RecordKind::Task, &ours.path, text)?;
                     format!(
                         "the pull request's merge keeps {:.9}{}",
                         entry.id,

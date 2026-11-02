@@ -312,7 +312,8 @@ fn replaced_ref(
         return None;
     }
     let url = names.destination?;
-    let replaced = Replaced::tracking(root, url, branch)?;
+    // A read that fails sets nothing aside, the strict side.
+    let replaced = Replaced::tracking(root, url, branch).ok().flatten()?;
     if push {
         let destination = release_line::from_advertisement(url, names.advertisement?).ok()?;
         let advertised = destination

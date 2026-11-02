@@ -1039,7 +1039,7 @@ pub fn task_line_binding(
             record
                 .standalone_reason
                 .as_deref()
-                .is_some_and(|reason| !reason.trim().is_empty())
+                .is_some_and(|reason| reason.bytes().any(|byte| !byte.is_ascii_whitespace()))
                 && logical_target(record.integration_target.as_deref().unwrap_or_default()) == line
         }
     };
