@@ -1,0 +1,11 @@
+id = "TSK-1168"
+uid = "ff22a342-8514-48f7-a1ca-d9b88a20f5f8"
+kind = "TSK"
+title = "One shared top bar with the panel toggle, title and crumb, and the display gear"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T01:48:45Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
