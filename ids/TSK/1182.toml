@@ -1,0 +1,11 @@
+id = "TSK-1182"
+uid = "d8048575-a459-414f-8b83-78e5be655aca"
+kind = "TSK"
+title = "A new branch cut from an integration line tip is judged by that line's class"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T05:20:52Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
