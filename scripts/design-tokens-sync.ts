@@ -2,6 +2,7 @@
 import { cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
+import { styleLiterals } from '../assets/base/agents/skills/cf-present/resources/design-system/source/lint.ts';
 import { generate } from '../assets/base/agents/skills/cf-present/resources/design-system/source/generate.ts';
 const canonical = 'assets/base/agents/skills/cf-present/resources/design-system';
 const check = process.argv.includes('--check');
@@ -9,7 +10,8 @@ async function put(path: string, bytes: string | Buffer): Promise<void> {
   if (check) { if (!Buffer.from(await readFile(path)).equals(Buffer.from(bytes))) throw new Error(`Token consumer drift: ${path}`); }
   else { await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes); }
 }
-for (const [name, bytes] of await generate()) await put(join(canonical, name), bytes);
+const outputs = await generate();
+for (const [name, bytes] of outputs) await put(join(canonical, name), bytes);
 const paths: Record<string, string[]> = {
   'present.css': ['crates/codeflow-present/web/src/styles.css'],
   'export-fallback.css': ['crates/codeflow-present/web/src/export-fallback.css'],
@@ -49,3 +51,18 @@ for (const entry of portalManifest.files) {
   if (bytes.equals(actual)) portalState.files[entry.path] = { ownership: entry.ownership, pristine_sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 await put('.codeflow/docs-portal.json', JSON.stringify(portalState, null, 2) + '\n');
+
+// The generated file set is explicit. New consumer sheets cannot opt out by
+// claiming to be generated in a comment.
+const kitRoots = ['assets/base/agents/skills', '.agents/skills', '.claude/skills', '.codeflow/.baseline/.agents/skills', '.codeflow/.baseline/.claude/skills']
+  .flatMap(root => ['cf-present', 'cf-docs-portal'].map(skill => `${root}/${skill}/resources/design-system`));
+const generatedSheets = new Set([...kitRoots.flatMap(root => [...outputs.keys()].filter(name => name.endsWith('.css')).map(name => join(root, name))),
+  ...Object.entries(paths).filter(([name]) => name.endsWith('.css')).flatMap(([, targets]) => targets)]);
+for (const root of [...kitRoots, 'crates/codeflow-present/web/src', 'docs-portal/src', 'assets/docs-portal/starter/src']) {
+  for (const relative of await walk(root)) {
+    const path = join(root, relative);
+    if (!path.endsWith('.css') || generatedSheets.has(path)) continue;
+    const literals = styleLiterals(await readFile(path, 'utf8'));
+    if (literals.length) throw new Error(`Authored style literals in ${path}: ${literals.join(', ')}`);
+  }
+}

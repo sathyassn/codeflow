@@ -15,3 +15,7 @@ Browser captures and the bar/ring render proof are primary-owned. Run
 `node crates/codeflow-present/web/scripts/token-browser-check.mjs` from the
 worktree root after building its binary and portal. Captures go to
 `target/tsk-1162-browser/`. These captures have not been produced by the builder.
+
+`stylesheet-lint-before-after.txt` records a new consumer stylesheet accepted
+before the file scan and rejected after it. The automated control and planted
+fixture now run in `web/scripts/token-lint.test.mjs` as part of the web check.

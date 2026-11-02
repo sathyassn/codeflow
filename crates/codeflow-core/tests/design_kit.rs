@@ -579,7 +579,7 @@ fn reference_pages_stand_alone_in_the_kit_folder() {
             "{page} must load exactly the three sheets, settings.js and chrome.js"
         );
     }
-    let urls = Regex::new(r#"url\(\s*["']?([^"')]+)"#).unwrap();
+    let css_url = Regex::new(r#"url\(\s*["']?([^"')]+)"#).unwrap();
     for file in KIT_FILES {
         let text = read_kit(file);
         // Only these sheets are loaded by the standalone kit pages.
@@ -597,7 +597,7 @@ fn reference_pages_stand_alone_in_the_kit_folder() {
         assert!(urls.is_empty(), "{file} names remote URLs: {urls:?}");
         if is_sheet {
             assert!(!text.contains("@import"), "{file} imports another sheet");
-            for value in urls.captures_iter(&text) {
+            for value in css_url.captures_iter(&text) {
                 assert!(
                     value[1].starts_with("data:"),
                     "{file} loads an external resource: {}",
