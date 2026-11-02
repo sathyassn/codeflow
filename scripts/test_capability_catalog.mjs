@@ -1,4 +1,5 @@
-// Targeted catalog compatibility checks, run separately from the routine gate.
+// Catalog compatibility checks run in the full docs-portal gate.
+// The opt-in portal-build tests are POSIX only.
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -64,10 +65,12 @@ for (const layout of ["legacy", "folder", "mixed"]) {
   });
 }
 
-// Opt in with CODEFLOW_BIN pointing at the task build. Each layout runs the
+// Opt in with CODEFLOW_CATALOG_GATE=1 and CODEFLOW_BIN pointing at the task build.
+// Each layout runs the
 // actual docs-portal target and Rust fidelity check in a committed repository.
 for (const layout of ["legacy", "folder", "mixed"]) {
-  test(`docs-portal gate agrees with Rust for the ${layout} catalog`, { skip: !process.env.CODEFLOW_BIN, timeout: 600_000 }, async () => {
+  test(`docs-portal gate agrees with Rust for the ${layout} catalog`, { skip: process.env.CODEFLOW_CATALOG_GATE !== "1", timeout: 600_000 }, async () => {
+    assert.ok(process.env.CODEFLOW_BIN, "CODEFLOW_BIN must point at the task build for opt-in portal tests");
     const root = await mkdtemp(path.join(starterRoot, ".portal-test-runtime-"));
     try {
       const portal = path.join(root, "portal");

@@ -625,8 +625,8 @@ adrs: [ADR-0048, ADR-0058]
   all portal writes.
 - `codeflow portal transfer --confirm` hands runtime maintenance to the project.
 - The adapter generates pages, Markdown twins, `llms.txt` and search from one
-  clean committed snapshot, including folder and legacy catalogs. It rejects
-  mixed snapshots.
+  clean committed snapshot, including folder and legacy catalogs. It refuses
+  dirty or partly committed trees.
 - `codeflow validate --portal` runs no project code, writes nothing and checks
   the generated evidence.
 
