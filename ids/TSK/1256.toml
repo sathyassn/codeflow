@@ -1,0 +1,11 @@
+id = "TSK-1256"
+uid = "b6a1ef31-4ed0-487a-b3d2-69117a3dc0fe"
+kind = "TSK"
+title = "Capacity slots and older binaries' gate lock exclude each other"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T22:40:30Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
