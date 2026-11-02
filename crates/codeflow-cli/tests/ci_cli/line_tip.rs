@@ -222,24 +222,48 @@ fn a_line_without_trusted_authority_refuses() {
     );
 }
 
-/// AC-4 (b): adoption entries that cannot be read refuse: here the target's
-/// epic record, read for a head entry, is malformed.
-#[test]
-fn unreadable_adoption_entries_refuse() {
+/// A direct commit adopted only in the head, judged against a target whose
+/// fetched tip holds `epic` as the epic record.
+fn adopted_in_the_head_against(epic: Option<&str>) -> Output {
     let (f, tip) = published();
     let direct = f.direct();
-    f.git(&["switch", "-q", "main"]);
-    f.write(fixture::EPIC_PATH, "---\nid: EPC-001\n: [unclosed\n---\n");
-    f.commit("docs: break the epic record");
-    f.git(&["switch", "-q", LINE]);
+    if let Some(epic) = epic {
+        f.git(&["switch", "-q", "main"]);
+        f.write(fixture::EPIC_PATH, epic);
+        let broken = f.commit("docs: break the epic record");
+        f.git(&["push", "-q", "origin", "main"]);
+        // The judge reads the fetched target, so the record must be there.
+        assert_eq!(f.git(&["rev-parse", "refs/remotes/origin/main"]), broken);
+        f.git(&["switch", "-q", LINE]);
+    }
     f.adoption(&direct);
     f.commit("docs: adopt in the head");
-    let result = ci(&f, &["--base", &tip, "--head", "HEAD", "--line-tip", LINE]);
-    assert_eq!(result.status.code(), Some(1), "{}", output(&result));
+    ci(&f, &["--base", &tip, "--head", "HEAD", "--line-tip", LINE])
+}
+
+/// AC-4 (b): adoption entries that cannot be read refuse: here the epic
+/// record at the fetched target, read for a head entry, is malformed. The
+/// control with a readable target is refused for the unadopted commit
+/// instead, so the unreadable record is what the first run reports.
+#[test]
+fn unreadable_adoption_entries_refuse() {
+    let unreadable = adopted_in_the_head_against(Some("---\nid: EPC-001\n: [unclosed\n---\n"));
+    refused_by_rule(
+        &unreadable,
+        "cannot judge the head as an epic line's next tip",
+    );
     assert!(
-        output(&result).contains("work.epic_line"),
+        !output(&unreadable).contains("would receive a commit made directly"),
         "{}",
-        output(&result)
+        output(&unreadable)
+    );
+
+    let readable = adopted_in_the_head_against(None);
+    refused_by_rule(&readable, "would receive a commit made directly");
+    assert!(
+        !output(&readable).contains("cannot judge the head"),
+        "{}",
+        output(&readable)
     );
 }
 
