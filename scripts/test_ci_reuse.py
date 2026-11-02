@@ -551,6 +551,15 @@ class NoRecordedBase(FakeGit):
     def is_ancestor(self, ancestor, commit):
         return ancestor != BASE
 
+
+class RefusalTests(unittest.TestCase):
+    """AC-3 refusals for the run, its jobs and the apt cache."""
+
+    def skipped(self, **kwargs):
+        with self.assertRaises(reuse.Skip) as caught:
+            decide(**kwargs)
+        return str(caught.exception)
+
     def test_another_workflow_another_event_or_another_head_runs_everything(self):
         for other in (run(path=".github/workflows/codeflow-policy.yml"), run(event="push"),
                       run(event="pull_request_target"), run(head_sha=MAIN)):

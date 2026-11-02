@@ -136,8 +136,9 @@ Local-artifact authority job:
     push's, with a recorded base the line already held. Every job the push
     skips must have run on the push's runner image for its label, as
     GitHub's job log records it. A push that changes a build cache
-    input (the CI workflow included), or for which main lacks the present
-    part's apt cache for the current runner image, runs every job instead.
+    input (the CI workflow included), or for which neither the pushed line
+    nor main holds the present part's apt cache for the current runner
+    image, runs every job instead.
 - It checks write-visible host collisions. Its write-scoped token can see draft
   releases.
 - It fails closed on a wrong tag, source or public release, a foreign draft, or

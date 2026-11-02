@@ -401,5 +401,57 @@ class GateContracts(unittest.TestCase):
         self.assertIn('check-present-binary-delta', targets['present-binary-delta']['modes']['full']['command'])
         self.assertIn('structural', cfg['_description'])
 
+class TestCollection(unittest.TestCase):
+    """Every test a scripts/test_*.py file defines is one unittest collects
+    (TSK-359): a test method under a class that is not a TestCase, or a
+    module-level test function, would silently never run."""
+
+    def test_every_defined_test_is_collected(self):
+        import ast
+        import contextlib
+        import io
+        scripts = Path(__file__).resolve().parent
+        files = sorted(scripts.glob('test_*.py'))
+        self.assertTrue(files)
+        for path in files:
+            with self.subTest(file=path.name):
+                defined = []
+                for node in ast.parse(path.read_text()).body:
+                    if isinstance(node, ast.ClassDef):
+                        defined += [(node.name, item.name, item.lineno) for item in node.body
+                                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                    and item.name.startswith('test')]
+                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test'):
+                        defined.append(('<module>', node.name, node.lineno))
+                spec = importlib.util.spec_from_file_location(f'collection_{path.stem}', path)
+                module = importlib.util.module_from_spec(spec)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    spec.loader.exec_module(module)
+                collected = set()
+
+                def walk(suite):
+                    for test in suite:
+                        if isinstance(test, unittest.TestSuite):
+                            walk(test)
+                        else:
+                            collected.add((type(test).__name__, test._testMethodName))
+                walk(unittest.defaultTestLoader.loadTestsFromModule(module))
+                missed = [f'{path.name}:{line} {owner}.{name}' for owner, name, line in defined
+                          if (owner, name) not in collected]
+                self.assertEqual(missed, [], 'defined tests that unittest never collects')
+
+    def test_the_guard_catches_a_test_under_a_plain_class(self):
+        import ast
+        source = 'import unittest\nclass Helper:\n    def test_lost(self):\n        pass\n'
+        owners = [node.name for node in ast.parse(source).body if isinstance(node, ast.ClassDef)]
+        namespace = {}
+        exec(compile(source, '<probe>', 'exec'), namespace)
+        self.assertEqual(owners, ['Helper'])
+        self.assertFalse(issubclass(namespace['Helper'], unittest.TestCase))
+        module = type(unittest)('probe')
+        module.__dict__.update(namespace)
+        self.assertEqual(unittest.defaultTestLoader.loadTestsFromModule(module).countTestCases(), 0)
+
+
 if __name__ == '__main__':
     unittest.main()
