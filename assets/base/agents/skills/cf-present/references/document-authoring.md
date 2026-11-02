@@ -318,7 +318,8 @@ a portal form; in present an `html` block keeps only the two uses above.
 
 - Lead with the outcome, decision, or question; add context at the depth needed
   to assess it. A view of one entity (an epic, task, capability or issue)
-  opens with what it is, for whom and why now, before its numbers.
+  opens with what it is, for whom and why now, each as a short phrase,
+  before its numbers.
 - Separate verified, inferred, pending, and not-run claims. Link evidence by
   exact identifiers or bounded text, not fabricated certainty.
 - Write titles, labels, leads and captions by the copy guide

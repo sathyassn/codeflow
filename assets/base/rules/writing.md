@@ -116,6 +116,9 @@ reference lists the patterns under "Meaning taken".
 - **Times are wall clock with a zone.** Every time a reader sees names the
   clock time and its zone ("16:12 EST, 2 Nov"); a relative time ("40
   minutes ago") may accompany it, never replace it.
+- **Entity views open with what, for whom and why now.** A page or card
+  for an epic, task, capability or issue opens with what it is, for whom
+  and why now, each as a short phrase, before its numbers.
 - **Status names live-checked facts.** Each changeable fact a report or
   handoff states (a seat, a check, a PR, a line, a task's status, another
   agent's progress) is checked live for that report, or marked unverified

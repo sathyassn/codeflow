@@ -4494,7 +4494,7 @@ const COPY_GUIDE_INVENTORY: [CopyGuideEntry; 10] = [
         false,
         &[],
     ),
-    // TSK-1122: the names-first, whole-context and entity-opening rules.
+    // TSK-1255: the names-first, whole-context and entity-opening rules.
     (
         "entity-row-and-page-from-the-record",
         "CF-COPY-006",

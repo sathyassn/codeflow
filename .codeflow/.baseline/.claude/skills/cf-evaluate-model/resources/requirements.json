@@ -2896,7 +2896,7 @@
     {
       "id": "CF-COPY-006",
       "level": "hard",
-      "statement": "A row, chip, menu entry, breadcrumb, table cell or figure label names its subject in words before its identifier; a context string stays whole, with no ellipsis or clipped text; a time a reader sees is wall clock with its zone; and an entity's page or card opens with what it is, for whom and why now.",
+      "statement": "A row, chip, menu entry, breadcrumb, table cell or figure label names its subject in words before its identifier; a context string stays whole, with no ellipsis or clipped text; a time a reader sees is wall clock with its zone; and an entity's page or card opens with what it is, for whom and why now, each as a short phrase.",
       "sources": [
         {
           "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
@@ -2904,7 +2904,7 @@
             "the name in words first, the identifier after it",
             "Keep a context string whole",
             "wall clock with its zone",
-            "what it is, for whom and why now, in whole sentences"
+            "what it is, for whom and why now, each as a short phrase"
           ]
         }
       ]

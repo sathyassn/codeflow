@@ -4,18 +4,26 @@ This guide says how to write each kind of string CodeFlow ships or replies
 with, one section per string. Each section gives its rules and examples
 that exist word for word in a named source.
 
-The design system kit states the same rules in six lines, so a product that
-reads only the kit still gets them. The six lines below are the kit's own
+The design system kit states the same rules in short lines, so a product
+that reads only the kit still gets them. The lines below are the kit's own
 (`cf-docs-portal/resources/design-system/README.md`, "Writing rules"):
 
-- Visuals first: a lead sentence above each figure, the acting sentences below.
-- Short plain sentences; bullets or a table where they carry facts better
-  than prose.
+- Visuals first: a figure is the main view of any flow, comparison or
+  status, with a lead sentence above it and the acting sentences below; text
+  in styled boxes is not a figure, and the page leans visual, elegant and
+  balanced.
+- Short blocks: short plain sentences, at most two lines per text block
+  outside collapsed detail, one point per bullet and a unit on every number.
 - No em or en dash; use a comma, colon, full stop or hyphen.
-- Titles name the subject in words, never a bare identifier; in a row,
-  chip, menu entry or cell the name comes first and the identifier after.
-- Context stays whole, times are wall clock with a zone, and an entity's
-  opening says what it is, for whom and why now.
+- Names first: a title is never a bare identifier, and a row, chip, menu
+  entry, crumb, cell or figure label names its subject in words, with the
+  identifier after it.
+- Context whole: no "...", ellipsis or clipped text; a long string wraps or
+  goes behind a disclosure.
+- Times are wall clock with a zone ("16:12 EST, 2 Nov"); a relative time
+  only accompanies it.
+- An entity view opens with what it is, for whom and why now, each as a
+  short phrase.
 - Sentence case, except the uppercase mono kicker.
 - No slogans, no "not X but Y" turns, no rhetorical triplets.
 
@@ -213,8 +221,8 @@ stands, in a few lines, before the bullets or table that carry the details.
   a reply that leads into a list or table. An ADR context has its own
   shape, in the last section.
 - Open an entity's page or card (an epic, task, capability or issue) with
-  what it is, for whom and why now, in whole sentences, before any number
-  or identifier.
+  what it is, for whom and why now, each as a short phrase, before any
+  number or identifier.
 - Write a few lines a reader with no context understands. It is judgment,
   not a sentence count or a list of banned items: a key number, file name,
   data point or caveat belongs there when it is part of that context.
@@ -258,6 +266,30 @@ Example, the bullet rule for a pull request (source: `.github/pull_request_templ
 
 Example, noun headers (source: `cf-docs-portal/resources/design-system/README.md`):
 > | Check | How |
+
+## Page limits
+
+A present or portal page carries its facts in figures and short blocks;
+the rest goes behind a disclosure.
+
+- Keep each text block outside collapsed detail to two lines: 136
+  characters at the 68-character reading measure, with a hard break
+  starting a new line. A disclosure, a stage's Details and a code block are
+  exempt.
+- Put one point in each bullet.
+- Make a figure the main view of any flow, comparison or status. Text in
+  styled boxes, cards or callouts is not a figure.
+- Give every number its unit: "12 tasks", "40 minutes", "3.2 MB".
+- Put a subject's name before its identifier, as "Titles and headings"
+  sets out.
+- Lean the page visual, elegant and balanced: figures and short blocks
+  alternate, and no section is a run of text blocks.
+- Run `codeflow present check` on a present document. It warns on a text
+  block over two lines, on "..." or an ellipsis, and on a time without a
+  zone. Review holds a portal page to the same limits.
+
+Example, the limits as the kit states them (source: `cf-present/resources/design-system/README.md`):
+> Short blocks: short plain sentences, at most two lines per text block outside collapsed detail, one point per bullet and a unit on every number.
 
 ## Microcopy
 

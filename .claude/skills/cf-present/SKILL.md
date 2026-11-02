@@ -50,7 +50,10 @@ needed depth. `cf-editorial-review` applies where its description triggers
 it; write every string by the copy guide
 (`cf-editorial-review/references/copy-guide.md`). Write the
 page plainly: simple, straightforward and clear, no mannered prose (see
-`.codeflow/rules/writing.md`), in short prose and bullets. Keep it faithful
+`.codeflow/rules/writing.md`), within the copy guide's "Page limits": at
+most two lines per text block outside a disclosure, one point per bullet, a
+figure as the main view of any flow, comparison or status, a unit on every
+number and names before identifiers. Keep it faithful
 to the session and project voice; preserve exact identifiers and technical
 terms; invent no personality, certainty,
 familiarity, research, or decorative emoji.
@@ -88,8 +91,10 @@ as a **shape** (carrier first), not a form to pad.
    requested durable path, not staged by default; keep credentials, private
    history, external URLs, and filesystem paths out of it.
 2. Write a `schema_version: 2` document by
-   `references/document-authoring.md`; read the warnings of `codeflow present
-   check --file <document.json>`, then let `codeflow present open` validate.
+   `references/document-authoring.md`; run `codeflow present check --file
+   <document.json>` and fix every warning it prints, the copy warnings
+   (`copy-density`, `copy-ellipsis`, `copy-time-zone`) included, then let
+   `codeflow present open` validate.
 3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is for
    recovery, automation, or an agent sandbox (run in the project tree); it
    never attaches to the operator's browser or active view.

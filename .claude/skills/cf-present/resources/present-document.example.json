@@ -27,7 +27,7 @@
     {
       "type": "narrative",
       "id": "thesis",
-      "markdown": "The governing claim is structural: independent explore lanes meet only at settle ([fig:primary-stage]). Approve shipping with the Windows canary as explicit follow-up, or hold until that canary is green."
+      "markdown": "Independent explore lanes meet only at settle ([fig:primary-stage]).\n\nApprove shipping with the Windows canary as a follow-up, or hold until it is green."
     },
     {
       "type": "status",
@@ -68,7 +68,7 @@
       "type": "callout",
       "id": "comment-hint",
       "tone": "info",
-      "markdown": "Use **Comment** (`C`) on a lane, an arrow or a gate in the stage if the boundary is wrong. Notes rail appears only while Comment mode is on."
+      "markdown": "Use **Comment** (`C`) on a lane, an arrow or a gate if the boundary is wrong. The notes rail shows only while Comment mode is on."
     },
     {
       "type": "feedback_prompt",

@@ -62,7 +62,8 @@ surface for one agent's subject, and it stops at the review.
 
 The declaration also carries `id`, `binding`, `wide`, `narrow` and `twin`
 (`figure-grammar.md` section 6). Below the figure, two to four plain
-sentences say who opens a session and when to stay in chat.
+sentences, no block over two lines, say who opens a session and when to
+stay in chat.
 
 ---
 

@@ -338,7 +338,7 @@ COPY_GUIDE_INVENTORY = {
     "operator-reply-is-plain-prose-and-bullets": (
         "CF-OUT-002", ("policy_character_in_reply", "summary_buries_anchor_in_detail"), ()),
     "identifier-only-title-gets-words": ("CF-OUT-005", ("identifier_only_title_kept",), ()),
-    # TSK-1122: the entity row and page case of the names-first rules.
+    # TSK-1255: the entity row and page case of the names-first rules.
     "entity-row-and-page-from-the-record": (
         "CF-COPY-006", ("identifier_leads_row", "context_cut_to_ellipsis", "opening_omits_who_or_why_now",
                         "fact_invented"), ()),
@@ -608,7 +608,9 @@ def _entity_parts(answer: dict) -> dict:
     row = next((line for line in index.splitlines() if "EPC-204" in line), "")
     before = re.sub(r"^[\s\-*\[|]+", "", row.split("EPC-204", 1)[0])
     body = page.split("\n", 1)[1] if "\n" in page else ""
-    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip() and not p.lstrip().startswith(("- ", "|", "#", "```"))]
+    # The opening is the first block after the title: a paragraph, or the
+    # short What, For and Why now phrases as bullets.
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip() and not p.lstrip().startswith(("|", "#", "```"))]
     return {"row": row, "words_before_id": re.findall(r"[A-Za-z]{2,}", before), "page": page,
             "opening": paragraphs[0] if paragraphs else ""}
 
