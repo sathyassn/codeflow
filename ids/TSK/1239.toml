@@ -1,0 +1,11 @@
+id = "TSK-1239"
+uid = "79eaf7a4-0621-4f29-b17c-6950ce803498"
+kind = "TSK"
+title = "Commit standards admits a pull request when its CI run completes, with no polling"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T18:14:52Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
