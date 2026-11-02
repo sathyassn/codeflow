@@ -64,6 +64,43 @@ class PolicyCache(unittest.TestCase):
         self.assertIn('gh workflow run codeflow-policy.yml --repo "$GH_REPO" --ref main -f "build_sha=$BUILD_SHA"', job)
         self.assertNotIn('uses: actions/checkout', job)
         self.assertNotIn('pull_request.head', job)
+        self.assertIn('        continue-on-error: true\n', job)
+
+    @unittest.skipIf(os.name == "nt", "the target-cache script runs in Linux bash")
+    def test_dispatch_failure_warns_without_failing_the_job(self):
+        body = step(self.workflow, "Request a target build in main's cache scope")
+        run = script(body) if 'run: |' in body else body.split('run: ', 1)[1].splitlines()[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh = root / 'gh'
+            gh.write_text('#!/bin/sh\nexit "$DISPATCH_STATUS"\n')
+            gh.chmod(0o755)
+            for status in ('0', '1'):
+                with self.subTest(status=status):
+                    env = dict(os.environ, PATH=f'{root}{os.pathsep}{os.environ["PATH"]}',
+                               GH_REPO='fixture/repo', BUILD_SHA='a' * 40, DISPATCH_STATUS=status)
+                    result = subprocess.run(['bash', '-euo', 'pipefail', '-c', run],
+                                            env=env, text=True, capture_output=True)
+                    if status == '0':
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertNotIn('::warning::', result.stdout)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn('::warning::', result.stdout)
+                        self.assertIn('a' * 40, result.stdout)
+        # GitHub records the failed step outcome but keeps the warming job green.
+        self.assertIn('        continue-on-error: true\n', body)
+        self.assertEqual(self.workflow.count('continue-on-error: true'), 1)
+
+    def test_exact_binary_hits_skip_the_dependency_cache(self):
+        body = self.workflow.split('      - uses: Swatinem/rust-cache@', 1)[1].split('\n      - ', 1)[0]
+        self.assertIn("        if: steps.target-cache.outputs.cache-hit != 'true'\n", body)
+
+    def test_dispatch_does_not_repeat_registry_checks(self):
+        for name in ('Fetch the shared registry', 'codeflow ids check'):
+            with self.subTest(step=name):
+                self.assertIn("        if: github.event_name != 'workflow_dispatch'\n",
+                              step(self.workflow, name))
 
     @unittest.skipIf(os.name == "nt", "the target-cache script runs in Linux bash")
     def test_dispatch_requires_a_fetched_trusted_branch_containing_the_sha(self):
@@ -196,22 +233,31 @@ class PolicyCache(unittest.TestCase):
         run = script(step(self.workflow, 'Identify the target build'))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name, content in {'git': 'if [ "$1" = rev-parse ]; then echo "$TEST_SHA"; fi',
+            for name, content in {'git': 'if [ "$1" = rev-parse ]; then echo "$TEST_SHA"; '
+                                  'elif [ "$1" = diff ]; then '
+                                  'if [ "$TEST_DIRTY" = unstaged ] && [ "$2" = --quiet ]; then exit 1; fi; '
+                                  'if [ "$TEST_DIRTY" = staged ] && [ "$2" = --cached ]; then exit 1; fi; fi',
                                   'rustc': 'echo "$TEST_RUST"', 'cargo': 'echo cargo',
                                   'cc': 'echo compiler'}.items():
                 path = root / name
                 path.write_text('#!/bin/sh\n' + content + '\n')
                 path.chmod(0o755)
-            def key(sha='a' * 40, rust='rustc 1.94.0', image='20261102', event='pull_request_target', ref='integration/EPC-022', verified=''):
+            def key(sha='a' * 40, rust='rustc 1.94.0', image='20261102', event='pull_request_target', ref='integration/EPC-022', verified='', dirty=''):
                 output = root / 'output'
                 output.write_text('')
                 env = dict(os.environ, PATH=f'{root}{os.pathsep}{os.environ["PATH"]}',
-                           TEST_SHA=sha, TEST_RUST=rust, ImageOS='ubuntu24', ImageVersion=image,
+                           TEST_SHA=sha, TEST_RUST=rust, TEST_DIRTY=dirty, ImageOS='ubuntu24', ImageVersion=image,
                            RUNNER_ARCH='X64', EVENT=event, TARGET_REF=ref, VERIFIED_DISPATCH=verified, GITHUB_OUTPUT=str(output))
                 result = subprocess.run(['bash', '-euo', 'pipefail', '-c', run], env=env,
                                         capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
+                if dirty:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(output.read_text(), '', 'a dirty checkout must not emit a cache key')
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
                 return output.read_text()
+            key(dirty='unstaged')
+            key(dirty='staged')
             self.assertIn('allowed=true', key(event='workflow_dispatch', ref='main', verified='true'))
             self.assertIn('allowed=false', key(event='workflow_dispatch', ref='task/head', verified='true'))
             original = key()
