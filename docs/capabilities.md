@@ -624,11 +624,9 @@ adrs: [ADR-0048, ADR-0058]
 - Setup preserves user-owned configuration. Runtime drift or a collision stops
   all portal writes.
 - `codeflow portal transfer --confirm` hands runtime maintenance to the project.
-- The adapter generates pages, Markdown twins, `llms.txt` and search output from
-  one clean committed snapshot. It fails closed rather than publish mixed
-  content.
-- The capability summary reads folder records and legacy fences together; the
-  fidelity check verifies their combined row count.
+- The adapter generates pages, Markdown twins, `llms.txt` and search from one
+  clean committed snapshot, including folder and legacy catalogs. It rejects
+  mixed snapshots.
 - `codeflow validate --portal` runs no project code, writes nothing and checks
   the generated evidence.
 
