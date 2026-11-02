@@ -11,18 +11,18 @@
 //! the head lands by merge. A push is judged by the hook itself.
 //!
 //! `--line-tip <LINE>` claims the head is that line's next tip: the landing
-//! path's explicit claim. Every finding then blocks, and a line whose
-//! authority cannot be established refuses (charter D19). Without the claim,
-//! a run whose base is the fetched tip of exactly one epic line is judged
-//! the same way, but its findings print as warnings: such a run cannot tell
-//! a landing candidate from a change that lands by merge, and the generic CI
-//! template (`ci-generic.sh`) checks a task change that way, with the line
-//! tip as its base and no pull request signal. Authority comes only from the
-//! line's fetched tip, resolved once.
+//! path's explicit claim. Without the claim, a run whose base is the fetched
+//! tip of exactly one epic line, and not the default target's fetched tip
+//! (where a new line starts), is judged the same way: such a run cannot
+//! tell a landing candidate from a change that lands by merge, so a head
+//! that would add a direct commit refuses with a remedy naming both routes.
+//! Every finding blocks, and a line whose authority cannot be established
+//! refuses (charter D19). Authority comes only from the line's fetched tip,
+//! resolved once.
 use std::fmt::Write as _;
 use std::path::Path;
 
-use codeflow_core::hooks::{PolicyLevel, Violation};
+use codeflow_core::hooks::Violation;
 use codeflow_core::workgraph::{
     default_work_target_ref, durable_work_tracking_enabled_at, epic_line_bound_at, line_adoption,
     EpicLineBinding,
@@ -52,8 +52,8 @@ enum Source {
 }
 
 /// Judge the head as a line's next tip when the run's context says it is
-/// one; push a `work.epic_line` finding for each refusal, blocking for
-/// `--line-tip` and a warning for a line found from the base.
+/// one, or cannot say it is not; push a blocking `work.epic_line` finding
+/// for each refusal.
 pub(super) fn check(
     root: &Path,
     run: &Run<'_>,
@@ -101,6 +101,29 @@ fn destination(root: &Path, run: &Run<'_>) -> Result<Option<(String, Source)>, (
     let Some(base) = run.base else {
         return Ok(None);
     };
+    // A new line starts at the default target's tip, so a base there names
+    // the default target as much as the line: the head lands on the target.
+    // Only the fetched default target counts, never a local branch or one
+    // the run names.
+    if let Some(target) = default_work_target_ref(root)
+        .map_err(|error| {
+            (
+                format!("the default target cannot be read: {error}"),
+                Source::Base,
+            )
+        })?
+        .filter(|target| target.starts_with("refs/remotes/"))
+    {
+        let tip =
+            line_adoption::reference_tip(root, &target).map_err(|error| (error, Source::Base))?;
+        if tip.as_deref() == Some(base) {
+            println!(
+                "codeflow ci: line tip: none (the base is the default target's fetched tip '{}')",
+                codeflow_core::git::display_text(target.trim_start_matches("refs/remotes/"))
+            );
+            return Ok(None);
+        }
+    }
     let mut lines =
         line_adoption::fetched_lines_at(root, base).map_err(|error| (error, Source::Base))?;
     match lines.len() {
@@ -142,12 +165,18 @@ fn judge(
         .ok_or("no main or master branch to judge the line against")?;
     // Tracking as the hook judges it, at the head or the target, plus the
     // line's own tip: deleting the records in the head cannot switch it off.
-    let tracking = [head, tip_text.as_str(), target.as_str()]
-        .map(|revision| durable_work_tracking_enabled_at(root, revision));
-    if !tracking.iter().any(|state| state == &Ok(true)) {
-        if let Some(Err(error)) = tracking.iter().find(|state| state.is_err()) {
-            return Err(format!("durable work tracking cannot be read: {error}"));
-        }
+    // Any unreadable state refuses before the readable ones are combined, so
+    // one tracked revision never hides another's error.
+    let mut tracked = false;
+    for revision in [head, tip_text.as_str(), target.as_str()] {
+        tracked |= durable_work_tracking_enabled_at(root, revision).map_err(|error| {
+            format!(
+                "durable work tracking cannot be read at {}: {error}",
+                &revision[..revision.len().min(9)]
+            )
+        })?;
+    }
+    if !tracked {
         println!("codeflow ci: line tip: durable work tracking is off, so no epic line is judged");
         return Ok(());
     }
@@ -186,32 +215,27 @@ fn judge(
     let (message, mut remedy) =
         line_adoption::direct_commit_refusal(line, &report.unadopted, &remote);
     if source == Source::Base {
-        let shown = codeflow_core::git::display_text(line);
-        let _ = write!(
-            remedy,
-            "; this run found the line from its base, so this is a warning: pass --line-tip {shown} on a landing candidate to block, or --into {shown} for a pull request head that lands by merge"
-        );
+        let _ = write!(remedy, "; {}", routes(line));
     }
     tagged.push(super::TaggedViolation {
         sha: None,
-        violation: finding(message, &remedy, source),
+        violation: Violation::always_blocking(RULE, message, &remedy),
     });
     Ok(())
 }
 
-/// The finding at the level its source gives: `--line-tip` blocks, a line
-/// found from the base warns. The level is fixed either way.
-fn finding(message: String, remedy: &str, source: Source) -> Violation {
-    let mut violation = Violation::always_blocking(RULE, message, remedy);
-    if source == Source::Base {
-        violation.level = PolicyLevel::Warn;
-    }
-    violation
+/// The remedy for a run that found the line from its base: it names the
+/// route for each way the head can reach the line.
+fn routes(line: &str) -> String {
+    let shown = codeflow_core::git::display_text(line);
+    format!(
+        "this run found the line from its base and cannot tell how the head reaches it: pass --line-tip {shown} on a landing candidate, or, for a pull request head that lands by merge, --into {shown} or the pull request's body (--pr-body-file or CODEFLOW_PR_BODY)"
+    )
 }
 
-/// A run that cannot judge the line it was given refuses: CI is the hard
-/// line (charter D19), so an unreadable or unbound line is never skipped.
-/// A line found from the base reports the same cause as a warning.
+/// A run that cannot judge the line it was given or found refuses: CI is
+/// the hard line (charter D19), so an unreadable, unbound or ambiguous line
+/// is never skipped.
 fn refuse(
     tagged: &mut Vec<super::TaggedViolation>,
     message: &str,
@@ -219,14 +243,21 @@ fn refuse(
     source: Source,
 ) {
     let shown = line.map_or_else(|| "<LINE>".to_string(), codeflow_core::git::display_text);
+    let remedy = match source {
+        Source::Flag => format!(
+            "fetch the line (`git fetch origin`) and pass --line-tip {shown} for a landing candidate cut from its fetched tip, or --into {shown} for a pull request head that lands by merge"
+        ),
+        Source::Base => format!(
+            "fetch the lines (`git fetch origin`); {}",
+            routes(line.unwrap_or("<LINE>"))
+        ),
+    };
     tagged.push(super::TaggedViolation {
         sha: None,
-        violation: finding(
+        violation: Violation::always_blocking(
+            RULE,
             format!("cannot judge the head as an epic line's next tip: {message}"),
-            &format!(
-                "fetch the line (`git fetch origin`) and pass --line-tip {shown} for a landing candidate cut from its fetched tip, or --into {shown} for a pull request head that lands by merge"
-            ),
-            source,
+            &remedy,
         ),
     });
 }

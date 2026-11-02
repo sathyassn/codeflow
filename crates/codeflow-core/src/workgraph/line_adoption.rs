@@ -281,15 +281,23 @@ pub fn check_range(
 /// # Errors
 /// Returns an error when the repository or the ref cannot be read.
 pub fn fetched_tip(root: &Path, line: &str) -> Result<Option<String>, String> {
+    reference_tip(root, &format!("refs/remotes/origin/{line}"))
+}
+
+/// The commit the full reference `name` names, or `None` when it does not
+/// exist.
+///
+/// # Errors
+/// Returns an error when the repository or the reference cannot be read.
+pub fn reference_tip(root: &Path, name: &str) -> Result<Option<String>, String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
-    let name = format!("refs/remotes/origin/{line}");
-    let tip = match repo.find_reference(&name) {
+    let tip = match repo.find_reference(name) {
         Ok(reference) => reference
             .peel_to_commit()
             .map(|commit| Some(commit.id().to_string()))
-            .map_err(|e| format!("origin/{line}: {e}")),
+            .map_err(|e| format!("{name}: {e}")),
         Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
-        Err(error) => Err(format!("origin/{line}: {error}")),
+        Err(error) => Err(format!("{name}: {error}")),
     };
     tip
 }

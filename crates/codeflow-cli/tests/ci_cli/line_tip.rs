@@ -38,36 +38,28 @@ fn refused_by_rule(o: &Output, text: &str) {
     assert!(output(o).contains("work.epic_line"), "{}", output(o));
 }
 
-/// The run passes with a `work.epic_line` warning naming `text`.
-fn warned_by_rule(o: &Output, text: &str) {
-    passes(o);
-    warns(o, text);
+/// The run is refused by `work.epic_line` naming `text`, and the remedy
+/// names both routes for a run that found the line from its base.
+fn refused_naming_routes(o: &Output, text: &str) {
+    refused_by_rule(o, text);
+    let shown = output(o);
+    for route in [
+        format!("pass --line-tip {LINE} on a landing candidate"),
+        format!("--into {LINE}"),
+        "CODEFLOW_PR_BODY".to_string(),
+    ] {
+        assert!(shown.contains(&route), "missing {route}: {shown}");
+    }
 }
 
-/// The output carries a `work.epic_line` warning naming `text`, whatever
-/// other rules decide.
-fn warns(o: &Output, text: &str) {
-    let shown = output(o);
-    assert!(
-        !shown
-            .lines()
-            .any(|line| line.contains("BLOCKED") && line.contains("work.epic_line")),
-        "{shown}"
-    );
-    assert!(
-        shown
-            .lines()
-            .any(|line| line.contains("work.epic_line") && line.contains("warn")),
-        "{shown}"
-    );
-    assert!(shown.contains(text), "missing {text}: {shown}");
-}
+const PR_BODY: &str = "## Summary\nLand work.\n\nTask: TSK-001\n";
 
 /// AC-2, AC-3 and AC-7's shape: issue #489's four steps. A candidate of a
 /// no-ff merge and one plain commit is refused by `codeflow ci --line-tip`
 /// naming the commit, with the hook's message and remedy, and the hook
 /// refuses the same push. The issue's own invocation, without the flag,
-/// reports the same finding as a warning.
+/// cannot tell a candidate from a pull request head, so it refuses too and
+/// names both routes.
 #[test]
 fn a_candidate_with_a_direct_commit_is_refused_as_the_hook_refuses_it() {
     let (f, tip) = published();
@@ -89,19 +81,13 @@ fn a_candidate_with_a_direct_commit_is_refused_as_the_hook_refuses_it() {
     );
     // The same candidate through the hook.
     blocks(&f.push(&tip), &direct[..9]);
-    // The issue's invocation: the line is found from the base, and the
-    // same finding prints as a warning that names the flag.
-    let bare = ci(&f, &["--base", &tip, "--head", "HEAD"]);
-    warned_by_rule(&bare, &direct[..9]);
-    assert!(
-        output(&bare).contains(&format!("pass --line-tip {LINE}")),
-        "{}",
-        output(&bare)
-    );
+    // The issue's invocation: the line is found from the base.
+    refused_naming_routes(&ci(&f, &["--base", &tip, "--head", "HEAD"]), &direct[..9]);
 }
 
 /// AC-3: a candidate of merges only, and one whose direct commit a landed
-/// adoption names, pass both forms.
+/// adoption names, pass both forms; the same candidate before the adoption
+/// lands is refused by both, so the adoption is what changes the verdict.
 #[test]
 fn clean_candidates_pass_ci_and_the_hook() {
     let (f, tip) = published();
@@ -115,18 +101,23 @@ fn clean_candidates_pass_ci_and_the_hook() {
     );
     passes(&f.push(&tip));
 
+    // The fetched tip stays before the direct commit, so every run below
+    // judges a range that holds it.
     let (f, tip) = published();
     let direct = f.direct();
-    f.git(&["push", "-q", "origin", LINE]);
-    let adopted_tip = f.git(&["rev-parse", "HEAD"]);
-    assert_ne!(tip, adopted_tip);
+    let candidate = ["--base", tip.as_str(), "--head", "HEAD", "--line-tip", LINE];
+    refused_by_rule(&ci(&f, &candidate), &direct[..9]);
+    blocks(&f.push(&tip), &direct[..9]);
     f.land_adoption(&direct);
-    // The whole range from the earlier tip holds the adopted commit.
-    passes(&ci(
-        &f,
-        &["--base", &tip, "--head", "HEAD", "--line-tip", LINE],
-    ));
-    passes(&f.push(&adopted_tip));
+    assert_eq!(f.git(&["rev-parse", &format!("origin/{LINE}")]), tip);
+    let adopted = ci(&f, &candidate);
+    passes(&adopted);
+    assert!(
+        output(&adopted).contains("line tip: no unadopted direct commit"),
+        "{}",
+        output(&adopted)
+    );
+    passes(&f.push(&tip));
 }
 
 /// AC-4 (a): a base placed after an unadopted direct commit does not hide
@@ -205,7 +196,7 @@ fn a_line_without_trusted_authority_refuses() {
     );
 
     // Two lines at the same fetched tip: the base names no single line, so
-    // the run says so, as a warning since it was not given a line.
+    // the run refuses and names both routes.
     f.git(&["switch", "-q", LINE]);
     f.git(&[
         "push",
@@ -214,9 +205,12 @@ fn a_line_without_trusted_authority_refuses() {
         &format!("{tip}:refs/heads/integration/EPC-001-twin"),
     ]);
     f.git(&["fetch", "-q", "origin"]);
-    warned_by_rule(
-        &ci(&f, &["--base", &tip, "--head", "HEAD"]),
-        "several epic lines",
+    let twin = ci(&f, &["--base", &tip, "--head", "HEAD"]);
+    refused_by_rule(&twin, "several epic lines");
+    assert!(
+        output(&twin).contains("pass --line-tip <LINE> on a landing candidate"),
+        "{}",
+        output(&twin)
     );
 }
 
@@ -312,9 +306,9 @@ fn an_unlanded_adoption_in_the_head_adopts_nothing() {
 
 /// AC-5: the head's branch name grants and removes nothing. A head named
 /// like a task and offered as the line tip is refused, and without the flag
-/// it gets the same warning a line-named head gets; the same head as a pull
-/// request head (`--into`) lands by merge and is not a line tip. On `main`,
-/// a head named like a line is not judged by this rule.
+/// it is refused as a line-named head is; the same head as a pull request
+/// head (`--into` or its body) lands by merge and is not a line tip. On
+/// `main`, a head named like a line is not judged by this rule.
 #[test]
 fn the_head_name_grants_and_removes_nothing() {
     let (f, tip) = published();
@@ -336,38 +330,23 @@ fn the_head_name_grants_and_removes_nothing() {
         ),
         &direct[..9],
     );
-    // Other rules judge a task-named head on their own; this rule warns.
-    warns(
-        &ci(&f, &["--base", &tip, "--head", "HEAD", "--branch", task]),
-        &direct[..9],
-    );
-    warned_by_rule(
-        &ci(&f, &["--base", &tip, "--head", "HEAD", "--branch", LINE]),
-        &direct[..9],
-    );
-    let merged = ci(
-        &f,
-        &[
-            "--base",
-            &tip,
-            "--head",
-            "HEAD",
-            "--branch",
-            "task/TSK-001-work",
-            "--into",
-            LINE,
-        ],
-    );
-    assert!(
-        !output(&merged).contains("line tip:"),
-        "{}",
-        output(&merged)
-    );
-    assert!(
-        !output(&merged).contains("would receive a commit made directly"),
-        "{}",
-        output(&merged)
-    );
+    for name in [task, LINE] {
+        refused_naming_routes(
+            &ci(&f, &["--base", &tip, "--head", "HEAD", "--branch", name]),
+            &direct[..9],
+        );
+    }
+    for context in [["--into", LINE], ["--pr-body", PR_BODY]] {
+        let mut args = vec!["--base", tip.as_str(), "--head", "HEAD", "--branch", task];
+        args.extend(context);
+        let merged = ci(&f, &args);
+        let text = output(&merged);
+        assert!(!text.contains("line tip:"), "{text}");
+        assert!(
+            !text.contains("would receive a commit made directly"),
+            "{text}"
+        );
+    }
 
     // On main, a head named like a line: no line destination.
     f.git(&["switch", "-qc", "integration/EPC-001-onmain", "main"]);
@@ -378,4 +357,49 @@ fn the_head_name_grants_and_removes_nothing() {
     let text = output(&on_main);
     assert!(text.contains("line tip: none"), "{text}");
     assert!(!text.contains("work.epic_line"), "{text}");
+}
+
+/// AC-4 (b), review finding 2: tracking state that cannot be read at the
+/// line's tip refuses even when the head and the target read as tracked, so
+/// one readable revision never hides another's error.
+#[test]
+fn unreadable_tracking_at_the_tip_refuses() {
+    let (f, _) = published();
+    f.write(".codeflow/project.toml", "schema_version = [unclosed\n");
+    f.commit("chore: break the project state");
+    f.git(&["push", "-q", "origin", LINE]);
+    let tip = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["rm", "-q", ".codeflow/project.toml"]);
+    f.commit("chore: drop the broken state");
+    refused_by_rule(
+        &ci(&f, &["--base", &tip, "--head", "HEAD", "--line-tip", LINE]),
+        &format!("durable work tracking cannot be read at {}", &tip[..9]),
+    );
+}
+
+/// A new line starts at the default target's tip. A change whose base is
+/// that commit lands on the target, so it names no line and its own commit
+/// is not refused; the landing route's `--line-tip` claim still judges the
+/// same head as the line's next tip.
+#[test]
+fn a_new_line_at_the_default_tip_names_no_line() {
+    let f = Line::new();
+    f.git(&["push", "-q", "origin", "main", LINE]);
+    let main = f.git(&["rev-parse", "main"]);
+    assert_eq!(f.git(&["rev-parse", &format!("origin/{LINE}")]), main);
+    f.git(&["switch", "-qc", "fix/TSK-001-main", "main"]);
+    let own = f.direct();
+    let into_main = ci(&f, &["--base", &main, "--head", "HEAD"]);
+    let text = output(&into_main);
+    assert!(
+        text.contains(
+            "line tip: none (the base is the default target's fetched tip 'origin/main')"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("work.epic_line"), "{text}");
+    refused_by_rule(
+        &ci(&f, &["--base", &main, "--head", "HEAD", "--line-tip", LINE]),
+        &own[..9],
+    );
 }
