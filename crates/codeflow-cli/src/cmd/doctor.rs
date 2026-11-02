@@ -419,11 +419,24 @@ fn codex_builder_line(
         ),
         GrantCheck::NotRun(reason) => (
             format!(
-                "{line}; builder grants: unavailable: {}; builder readiness is not established, so a builder seat's own writes are the evidence",
-                shown(&reason)
+                "{line}; builder grants: unavailable: {}; builder readiness is not established, so a builder seat's own writes are the evidence{}",
+                shown(&reason),
+                inside_codex_seat_note()
             ),
             false,
         ),
+    }
+}
+
+/// Inside a Codex seat the nested `codex sandbox` probe cannot start (the
+/// seat's managed network proxy is already bound), so no observation of the
+/// shared git config file or the folders is made there (TSK-1156). Says so
+/// and names the check that does run in a seat; empty outside one.
+fn inside_codex_seat_note() -> &'static str {
+    if std::env::var_os("CODEX_SANDBOX").is_some_and(|value| !value.is_empty()) {
+        "; this run is inside a Codex seat, where that nested probe cannot start, so the shared git config file and the gate folders are not observed by this line: run `codeflow doctor --builder-write-probe` in the seat, which reports each folder and the shared git config file directly"
+    } else {
+        ""
     }
 }
 
