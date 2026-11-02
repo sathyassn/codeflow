@@ -1,7 +1,8 @@
-//! TSK-1128: a quick run under `codeflow reserve` uses the reserve's lock,
+//! TSK-1128: a quick run under `codeflow reserve` uses the reserve's slot,
 //! a forged hand-over grants nothing, a program only named `codeflow` gets
-//! no lock, a nested run's surviving target keeps the lock busy, and a
-//! direct quick run can wait a bounded time for the lock.
+//! no lock, and a nested run's surviving target keeps the slot busy.
+//! TSK-1145: other runs are admitted beside all of them in their own slots,
+//! and heavy work waits a bounded time only for a host-exclusive target.
 
 use super::{command, git, held_until_released, repo, run, spawn, stderr, wait_for};
 use std::path::Path;
@@ -23,7 +24,7 @@ fn heavy_quick(hold: bool) -> String {
         ""
     };
     format!(
-        r#"{{"schema_version":"1.0","execution":{{"heavy_wait_seconds":0}},"targets":[
+        r#"{{"schema_version":"1.0","execution":{{}},"targets":[
           {{"name":"nested-heavy","heavy":true,"timeout_seconds":30,"runner":"custom","modes":{{"quick":{{"command":"touch heavy-started; {wait}touch heavy-ran"}}}}}}
         ]}}"#
     )
@@ -53,8 +54,8 @@ fn wait_for_file(path: &Path) {
 }
 
 /// AC-1 (journey), AC-5: `codeflow reserve -- codeflow test --mode quick`
-/// runs the quick run's heavy target under the reserve's lock, while a
-/// second heavy run from another worktree is still refused.
+/// runs the quick run's heavy target under the reserve's slot, and heavy
+/// runs from another worktree are admitted beside it (TSK-1145).
 #[test]
 fn a_quick_run_under_reserve_runs_its_heavy_targets_under_the_reserved_lock() {
     let home = tempfile::tempdir().unwrap();
@@ -68,23 +69,23 @@ fn a_quick_run_under_reserve_runs_its_heavy_targets_under_the_reserved_lock() {
     wait_for(&rx, "[codeflow reserve] started process");
     wait_for_file(&first.path().join("heavy-started"));
 
+    // Another worktree's quick run is admitted beside the reserve, in the
+    // next slot: the nested run took no slot of its own (TSK-1145).
     let contender = run(&linked, home.path(), &["test", "--mode", "quick"]);
-    assert_eq!(contender.status.code(), Some(1), "{}", stderr(&contender));
+    assert_eq!(contender.status.code(), Some(0), "{}", stderr(&contender));
+    assert!(linked.join("heavy-ran").exists(), "{}", stderr(&contender));
+    assert!(home.path().join("locks/full-gate-1.lock").exists());
     assert!(
-        stderr(&contender).contains("heavy target refused"),
-        "{}",
-        stderr(&contender)
+        !home.path().join("locks/full-gate-2.lock").exists(),
+        "the nested run shares the reserve's slot"
     );
-    assert!(!linked.join("heavy-ran").exists());
-    let essential = run(&linked, home.path(), &["test", "--mode", "essential"]);
-    assert_eq!(essential.status.code(), Some(1), "{}", stderr(&essential));
     let reserved = run(
         &linked,
         home.path(),
         &["reserve", "--", "touch", "reserved"],
     );
-    assert_eq!(reserved.status.code(), Some(1), "{}", stderr(&reserved));
-    assert!(!linked.join("reserved").exists());
+    assert_eq!(reserved.status.code(), Some(0), "{}", stderr(&reserved));
+    assert!(linked.join("reserved").exists());
 
     std::fs::write(first.path().join("release"), "done").unwrap();
     let status = reserve.wait().unwrap();
@@ -97,15 +98,12 @@ fn a_quick_run_under_reserve_runs_its_heavy_targets_under_the_reserved_lock() {
             .any(|line| line.contains("enclosing `codeflow reserve`")),
         "{lines:#?}"
     );
-    // The lock is free again once the reserve ends.
-    let after = run(&linked, home.path(), &["test", "--mode", "quick"]);
-    assert!(after.status.success(), "{}", stderr(&after));
 }
 
-/// AC-5, AC-6: an essential gate under `codeflow reserve` takes the lock
-/// itself, so it is still refused and runs no target.
+/// AC-5, AC-6: an essential gate under `codeflow reserve` never inherits:
+/// it takes a slot of its own beside the reserve's (TSK-1145).
 #[test]
-fn an_essential_gate_under_reserve_still_refuses() {
+fn an_essential_gate_under_reserve_takes_its_own_slot() {
     let home = tempfile::tempdir().unwrap();
     let dir = repo(
         r#"{"schema_version":"1.0","targets":[{"name":"gate","runner":"custom","modes":{"essential":{"command":"touch essential-ran"}}}]}"#,
@@ -115,17 +113,15 @@ fn an_essential_gate_under_reserve_still_refuses() {
         home.path(),
         &["reserve", "--", &bin(), "test", "--mode", "essential"],
     );
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("one heavy gate"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(!dir.path().join("essential-ran").exists());
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(!stderr(&output).contains("enclosing `codeflow reserve`"));
+    assert!(dir.path().join("essential-ran").exists());
+    assert!(home.path().join("locks/full-gate-1.lock").exists());
 }
 
 /// AC-2: a process that opens the lock files itself and names them in the
-/// hand-over variable gains nothing while another gate holds the lock.
+/// hand-over variable gains nothing while another gate holds the slot: it
+/// falls back to ordinary admission and takes a slot of its own.
 #[test]
 fn a_forged_hand_over_is_refused_while_another_gate_holds_the_lock() {
     let home = tempfile::tempdir().unwrap();
@@ -152,24 +148,23 @@ fn a_forged_hand_over_is_refused_while_another_gate_holds_the_lock() {
         .env_remove("CI")
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("heavy target refused"),
-        "{}",
-        stderr(&output)
-    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert!(!stderr(&output).contains("enclosing `codeflow reserve`"));
-    assert!(!linked.join("heavy-started").exists());
+    assert!(linked.join("heavy-ran").exists());
+    assert!(home.path().join("locks/full-gate-1.lock").exists());
     std::fs::write(first.path().join("release"), "done").unwrap();
     assert!(holder.wait().unwrap().success());
 }
 
-/// AC-4: `--wait-seconds` bounds how long heavy quick work waits for the
-/// lock: it refuses after the bound, and runs once the holder ends inside it.
+/// TSK-1128 AC-4, TSK-1145 AC-4: `--wait-seconds` bounds how long heavy
+/// quick work waits while a host-exclusive target holds the host: it
+/// refuses after the bound, and runs once the holder ends inside it.
 #[test]
-fn a_direct_quick_run_waits_for_the_lock_up_to_its_bound() {
+fn a_direct_quick_run_waits_for_a_host_exclusive_target_up_to_its_bound() {
     let home = tempfile::tempdir().unwrap();
-    let first = held_until_released("full");
+    let first = repo(
+        r#"{"schema_version":"1.0","targets":[{"name":"holder","host_exclusive":true,"runner":"custom","timeout_seconds":60,"modes":{"full":{"command":"while ! test -f release; do sleep 0.01; done"}}}]}"#,
+    );
     let linked = linked_worktree(first.path(), &heavy_quick(false));
     let (mut holder, rx, _stdout) = spawn(command(first.path(), home.path(), &["test"]));
     wait_for(&rx, "starting target 'holder'");
@@ -188,6 +183,17 @@ fn a_direct_quick_run_waits_for_the_lock_up_to_its_bound() {
         stderr(&refused)
     );
     assert!(!linked.join("heavy-started").exists());
+    let reserved = run(
+        &linked,
+        home.path(),
+        &["reserve", "--", "touch", "reserved"],
+    );
+    assert_eq!(reserved.status.code(), Some(1), "{}", stderr(&reserved));
+    assert!(
+        stderr(&reserved).contains("host-exclusive"),
+        "{}",
+        stderr(&reserved)
+    );
 
     let release = first.path().join("release");
     let releaser = std::thread::spawn(move || {
@@ -210,45 +216,6 @@ fn a_direct_quick_run_waits_for_the_lock_up_to_its_bound() {
     );
     assert!(linked.join("heavy-ran").exists());
     assert!(holder.wait().unwrap().success());
-}
-
-/// AC-7 (journey): two reserves that wait for a held lock run in the order
-/// they arrived, once the holder ends.
-#[test]
-fn waiting_reserves_take_the_lock_in_arrival_order() {
-    let home = tempfile::tempdir().unwrap();
-    let first = held_until_released("full");
-    let linked = linked_worktree(first.path(), &heavy_quick(false));
-    let (mut holder, rx, _stdout) = spawn(command(first.path(), home.path(), &["test"]));
-    wait_for(&rx, "starting target 'holder'");
-    let order = first.path().join("order");
-    let script = format!("echo \"$1\" >> '{}'", order.display());
-    let waiter = |name: &str| {
-        let (child, lines, _stdout) = spawn(command(
-            &linked,
-            home.path(),
-            &[
-                "reserve",
-                "--wait-seconds",
-                "60",
-                "--",
-                "sh",
-                "-c",
-                &script,
-                "sh",
-                name,
-            ],
-        ));
-        wait_for(&lines, "waiting up to 60s in arrival order");
-        (child, lines)
-    };
-    let (mut earlier, _earlier_lines) = waiter("earlier");
-    let (mut later, _later_lines) = waiter("later");
-    std::fs::write(first.path().join("release"), "done").unwrap();
-    assert!(holder.wait().unwrap().success());
-    assert!(earlier.wait().unwrap().success());
-    assert!(later.wait().unwrap().success());
-    assert_eq!(std::fs::read_to_string(&order).unwrap(), "earlier\nlater\n");
 }
 
 /// A config with an essential target, for the gate that must refuse.
@@ -324,13 +291,15 @@ fn a_program_only_named_codeflow_receives_no_lock() {
         assert_eq!(env.trim(), "unset", "by path {by_path}");
         let fds = std::fs::read_to_string(first.path().join("fds.txt")).unwrap();
         assert_eq!(fds.trim(), "", "by path {by_path}: lock descriptors {fds}");
+        // The reserve's slot stays held, so the next run takes slot 1.
         let essential = run(&linked, home.path(), &["test", "--mode", "essential"]);
         assert_eq!(
             essential.status.code(),
-            Some(1),
+            Some(0),
             "by path {by_path}: {}",
             stderr(&essential)
         );
+        assert!(home.path().join("locks/full-gate-1.lock").exists());
 
         std::fs::write(first.path().join("release"), "done").unwrap();
         let status = reserve.wait().unwrap();
@@ -341,8 +310,8 @@ fn a_program_only_named_codeflow_receives_no_lock() {
 
 /// F2 (Grok round 01), AC-5: a nested quick run records its heavy target's
 /// process group on the reserve's record. When the nested run is killed and
-/// the reserve ends while that target still runs, the next gate refuses
-/// until the target exits.
+/// the reserve ends while that target still runs, its slot stays busy
+/// until the target exits, so the next run takes another slot.
 #[test]
 fn a_surviving_nested_target_keeps_the_lock_busy() {
     let home = tempfile::tempdir().unwrap();
@@ -350,7 +319,7 @@ fn a_surviving_nested_target_keeps_the_lock_busy() {
     // The light `survivor` is not: it starts while the heavy `holder` keeps
     // the lock held, records its group, and outlives the killed run.
     let first = repo(
-        r#"{"schema_version":"1.0","execution":{"heavy_wait_seconds":0,"parallel":true},"targets":[
+        r#"{"schema_version":"1.0","execution":{"parallel":true},"targets":[
           {"name":"first","heavy":true,"timeout_seconds":60,"runner":"custom","modes":{"quick":{"command":"touch first-ran"}}},
           {"name":"holder","heavy":true,"timeout_seconds":60,"runner":"custom","modes":{"quick":{"command":"while ! test -f release; do sleep 0.01; done"}}},
           {"name":"survivor","heavy":false,"timeout_seconds":60,"runner":"custom","requires":["first"],"modes":{"quick":{"command":"echo $$ > group.txt; sleep 30"}}}
@@ -416,11 +385,11 @@ fn a_surviving_nested_target_keeps_the_lock_busy() {
         "the target outlived the nested run and reserve"
     );
 
-    let refused = run(&linked, home.path(), &["test", "--mode", "essential"]);
-    let err = stderr(&refused);
-    assert_eq!(refused.status.code(), Some(1), "{err}");
-    assert!(err.contains("targets are still running"), "{err}");
-    assert!(err.contains(&format!("process group {group}")), "{err}");
+    // The surviving target keeps slot 0 busy: the next run takes slot 1.
+    let beside = run(&linked, home.path(), &["test", "--mode", "essential"]);
+    let err = stderr(&beside);
+    assert_eq!(beside.status.code(), Some(0), "{err}");
+    assert!(home.path().join("locks/full-gate-1.lock").exists(), "{err}");
 
     std::process::Command::new("kill")
         .args(["-KILL", "--", &format!("-{group}")])

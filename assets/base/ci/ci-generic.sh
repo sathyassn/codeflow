@@ -26,7 +26,10 @@
 # `codeflow test`.
 #
 # PR/MR body: export CODEFLOW_PR_BODY to also scan it (AI attribution, emoji,
-# and the required-section structure, git.pr_sections).
+# and the required-section structure, git.pr_sections). Outside a GitHub,
+# GitLab or Bitbucket pull request event, the body is also what tells
+# `codeflow ci` that a change into an epic line lands by merge; without it, a
+# change whose target is a line's tip is refused as a possible direct commit.
 #
 # Usage:
 #   ci-generic.sh <target> [<head>]        # target commit, head (default HEAD)

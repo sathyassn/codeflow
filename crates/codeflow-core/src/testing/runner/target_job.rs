@@ -1,9 +1,9 @@
 //! A kill-on-close job object for each target on Windows (TSK-142 AC-3).
 //!
-//! Unix runs each target in its own process group, and the gate lock stays
-//! held while that group outlives a killed gate (TSK-134). Windows has no
-//! such group, so a killed gate used to leave its target running while the
-//! OS freed the lock, and a second full gate could start beside it.
+//! Unix runs each target in its own process group, and the gate's slot
+//! counts as busy while that group outlives a killed gate (TSK-134,
+//! TSK-1145). Windows has no such group, so a killed gate used to leave its
+//! target running while the OS freed the lock, unseen by later runs.
 //!
 //! Here the runner starts the target suspended, places it in a new job
 //! object whose only handle this process holds, and then lets it run. The

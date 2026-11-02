@@ -437,7 +437,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "c2e144cc9c7509be12c07beced28b08dbfc3d1e5640329f75503475e2cd9384f",
+      "sha256": "cbae61f44ac5632ff5acbcafff18648a3ec0e29fc21a7827c997a8c05862a816",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -1283,7 +1283,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "c2e144cc9c7509be12c07beced28b08dbfc3d1e5640329f75503475e2cd9384f",
+      "sha256": "cbae61f44ac5632ff5acbcafff18648a3ec0e29fc21a7827c997a8c05862a816",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
@@ -1727,7 +1727,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "c7309465214cc5766e253ce5942b9c4a417f426619233483b1d0712415ca3942",
+      "sha256": "147f22372156bd34b96dee0c520d2c0a1e1fb27d0384f7d28a06d772a1dc9604",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
