@@ -852,6 +852,38 @@ exception. Files must be regular. When carrying documentation, indexes or
 names the excluded path and the admitted set; carry an excluded file in a
 task PR.
 
+## Own-task criteria on an integration line
+
+`codeflow ci` and the pre-push hook judge a task's criteria this way
+(TSK-350, SPC-013 R-52):
+
+- The branch's task comes from the task records at the judged head, with
+  the work prefixes of the policy the run judges with. A record only the
+  checkout holds grants no own-task authority, and a record the checkout
+  lacks takes none away, so a run from `main`, a detached checkout or the
+  task's worktree gives one verdict.
+- A task's own criteria change on its integration line is judged against
+  the line's tip and the range base when all of these hold: the
+  destination advertises the line and its tip is here; the task's record
+  declares the line at the line's tip and at the head; the line passes the
+  trusted-line binding; the line is not a protected branch. `main` stays
+  the policy and commit-history authority, and a completion `main` or
+  another ref holds still refuses the change.
+- Another task's record whose criteria the range leaves as the range base
+  holds them is not judged against the points. Equality with one judged
+  point, such as `main`'s tip, never skips the check.
+- When a push replaces a branch, or a run judges a branch before that
+  push, a completion held only by that branch's own remote-tracking ref,
+  at the tip the push replaces, is set aside. A completion any other ref
+  or the target holds still counts.
+- A line-to-main range that merges a task record whose criteria `main` and
+  the line each amended prints a `work.criteria_copies` note naming both
+  versions and the one the merge keeps; a reviewer confirms which the task
+  keeps.
+
+The hosted `codeflow-policy.yml` job passes no `--policy-from`, so it
+judges against the pull request's target only.
+
 ## Destination lookup failures
 
 `codeflow ci` and pre-push refuse under `ci.destination_unavailable` when

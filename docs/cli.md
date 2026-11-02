@@ -504,24 +504,9 @@ task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
 note and still refuses an added, removed, renumbered or reordered
 criterion, a changed tag or checkbox form, or an added list item that is
 no criterion (ADR-0080).
-`codeflow ci` reads the branch's task from the judged head, under the
-policy the run judges with, never from the checkout: a record only the
-checkout holds grants no own-task authority, and a record the checkout
-lacks takes none away, so a run from `main`, a detached checkout or the
-task's worktree gives one verdict (TSK-350).
-A task's own criteria change on its integration line is judged against
-the line's tip and the range base when the destination confirms the
-line, the task's record declares it at the line's tip and at the head,
-and the line passes the trusted-line binding; `main` stays the policy and
-commit-history authority, and a completion `main` or another ref holds
-still counts (SPC-013 R-52). A record whose criteria the range leaves as
-its base holds them is not judged against the points when it is another
-task's record. When a push replaces a branch, or a run judges a branch
-before that push, the completion only that branch's own remote-tracking
-ref holds is set aside. A line-to-main range that merges a task record
-whose criteria `main` and the line each amended prints a
-`work.criteria_copies` note naming both versions and the one the merge
-keeps.
+`codeflow ci` reads the branch's task from the judged head, never the
+checkout; how it judges a task's own criteria on its integration line is
+in the [policy reference](policy-reference.md#own-task-criteria-on-an-integration-line).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It writes only rulesets it owns
 by name, never another ruleset or classic branch protection, and never weakens
