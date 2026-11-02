@@ -178,6 +178,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ENV_FILE_STAGED", Runs),
     ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
+    ("SECRET_ENGINE_UNAVAILABLE", Excluded(Network)),
     ("PUSH_SET_CI", Runs),
     ("PUSH_SET_BY_HAND", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
