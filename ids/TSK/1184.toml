@@ -1,0 +1,11 @@
+id = "TSK-1184"
+uid = "7720908c-2f79-48e6-b4b3-b82dde2bd588"
+kind = "TSK"
+title = "Policy authority refuses when the configured and effective remote identities differ"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T16:40:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
