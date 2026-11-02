@@ -102,3 +102,16 @@ fn a_given_since_still_runs_every_target_and_says_it_narrows_nothing() {
     let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
     assert_eq!(runs.lines().count(), 3, "{runs}");
 }
+
+#[test]
+fn a_shallow_clone_runs_every_target_and_recommends_no_since() {
+    let source = committed_repo();
+    let parent = tempfile::tempdir().unwrap();
+    let clone = parent.path().join("shallow");
+    let url = format!("file://{}", source.path().display());
+    git(
+        parent.path(),
+        &["clone", "-q", "--depth", "1", &url, clone.to_str().unwrap()],
+    );
+    assert_every_target_runs_with_the_reason(&clone, "shallow clone");
+}

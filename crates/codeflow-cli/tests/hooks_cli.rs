@@ -5546,9 +5546,9 @@ fn push_without_gate_repo() -> tempfile::TempDir {
             "schema_version": "1.0",
             "targets": [
                 {"name": "slow-check", "runner": "custom", "heavy": true,
-                    "modes": {"quick": {"command": "sleep 30"}}},
+                    "modes": {"quick": {"command": "touch ran.marker; sleep 30"}}},
                 {"name": "failing-check", "runner": "custom",
-                    "modes": {"quick": {"command": "false"}}}]
+                    "modes": {"quick": {"command": "touch ran.marker; false"}}}]
         })
         .to_string(),
     )
@@ -5656,11 +5656,79 @@ fn installed_push_hook_runs_codeflow_ci_and_no_test_target() {
     assert_eq!(rev(dir.path(), "HEAD"), before);
 }
 
-/// Push `branch` to `upstream` through the installed hooks and assert that
-/// the push finished inside the budget, ran no test-config target and
-/// reached the destination.
+/// The fixture above with the destination's default branch seeded, so a push
+/// is judged by ordinary admission (`codeflow ci` over the pushed range) and
+/// not as the initialization of an empty destination (`push_set.rs`). Every
+/// target writes `ran.marker` when it starts.
 #[cfg(unix)]
-fn assert_push_runs_no_target(dir: &Path, branch: &str) {
+fn push_admission_repo() -> tempfile::TempDir {
+    let dir = push_without_gate_repo();
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "upstream",
+            "HEAD:refs/heads/main",
+        ],
+    );
+    ok(
+        "git",
+        dir.path(),
+        &["remote", "set-head", "upstream", "main"],
+    );
+    // A task record is judged against its target `main`, which must resolve.
+    ok(
+        "git",
+        dir.path(),
+        &["-c", "core.hooksPath=/dev/null", "branch", "main", "HEAD"],
+    );
+    dir
+}
+
+/// Bind the ids of the records committed so far in the shared registry and
+/// publish it to the destination, as a repository with an authority remote
+/// has it, so `codeflow ci` can judge a range that adds a record.
+#[cfg(unix)]
+fn publish_id_registry(dir: &Path) {
+    let seeded = with_installed_hooks("codeflow", dir, &["ids", "seed"]);
+    assert!(seeded.status.success(), "{}", both_streams(&seeded));
+    ok(
+        "git",
+        dir,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "upstream",
+            "codeflow/registry",
+        ],
+    );
+    ok("git", dir, &["fetch", "-q", "upstream"]);
+}
+
+/// Commit `file` with `message` through the installed hooks.
+#[cfg(unix)]
+fn commit_through_hooks(dir: &Path, file: &str, body: &str, message: &str) {
+    let path = dir.join(file);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, body).unwrap();
+    ok("git", dir, &["add", file]);
+    let committed = with_installed_hooks("git", dir, &["commit", "-q", "-m", message]);
+    assert!(committed.status.success(), "{}", both_streams(&committed));
+}
+
+/// Push `HEAD` to `branch` on `upstream` through the installed hooks and
+/// assert that ordinary admission judged it (the push set finished, the
+/// destination already holds a default branch), that the push finished
+/// inside the budget and reached the destination, and that no test-config
+/// target started (`ran.marker` is the execution marker).
+#[cfg(unix)]
+fn assert_admitted_push_runs_no_target(dir: &Path, branch: &str) {
     let started = std::time::Instant::now();
     let refspec = format!("HEAD:refs/heads/{branch}");
     let pushed = with_installed_hooks("git", dir, &["push", "upstream", &refspec]);
@@ -5671,62 +5739,88 @@ fn assert_push_runs_no_target(dir: &Path, branch: &str) {
         elapsed < std::time::Duration::from_secs(30),
         "{branch} {elapsed:?}: {output}"
     );
-    for absent in ["quick targets", "slow-check", "failing-check"] {
-        assert!(!output.contains(absent), "{branch} {absent}: {output}");
-    }
+    assert!(output.contains("push set finished"), "{branch}: {output}");
+    assert!(
+        output.contains(&format!(
+            "`codeflow ci` judges '{branch}' with the policy at"
+        )),
+        "ordinary admission did not judge {branch}: {output}"
+    );
+    assert!(!dir.join("ran.marker").exists(), "{branch}: {output}");
     assert!(ok("git", dir, &["ls-remote", "upstream"]).contains(&rev(dir, "HEAD")));
 }
 
+/// A commit `codeflow ci` refuses stops a push of the same fixture, which
+/// shows ordinary admission is active there and not the initialization skip.
+#[cfg(unix)]
+fn assert_admission_is_active(dir: &Path, branch: &str) {
+    ok(
+        "git",
+        dir,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "Not conventional",
+        ],
+    );
+    let refspec = format!("HEAD:refs/heads/{branch}");
+    let refused = with_installed_hooks("git", dir, &["push", "upstream", &refspec]);
+    let output = both_streams(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{output}");
+    assert!(!dir.join("ran.marker").exists(), "{output}");
+}
+
 // TSK-1039 AC-2, issue 494: with a quick target that always fails at the
-// tip, a push whose range touches only `project-management/` and one plan
-// row finishes and never runs the target (TSK-449).
+// tip, a records-only branch creation and a records-only update, each
+// touching only `project-management/` and one plan row, finish under
+// ordinary admission and never start the target (TSK-449).
 #[cfg(unix)]
 #[test]
 fn records_only_push_runs_no_failing_target() {
-    let dir = push_without_gate_repo();
-    std::fs::create_dir_all(dir.path().join("project-management/plan")).unwrap();
-    std::fs::write(
-        dir.path().join("project-management/plan/rows.md"),
-        "| row | status |\n|---|---|\n| one | todo |\n",
-    )
-    .unwrap();
-    ok("git", dir.path(), &["add", "project-management"]);
-    let committed = with_installed_hooks(
-        "git",
+    let dir = push_admission_repo();
+    commit_through_hooks(
         dir.path(),
-        &["commit", "-q", "-m", "docs: add one plan row"],
+        "project-management/plan/rows.md",
+        "| row | status |\n|---|---|\n| one | todo |\n",
+        "docs: add one plan row",
     );
-    assert!(committed.status.success(), "{}", both_streams(&committed));
-    assert_push_runs_no_target(dir.path(), "feat/probe");
+    assert_admitted_push_runs_no_target(dir.path(), "feat/probe");
+    commit_through_hooks(
+        dir.path(),
+        "project-management/plan/rows.md",
+        "| row | status |\n|---|---|\n| one | done |\n",
+        "docs: update the plan row",
+    );
+    assert_admitted_push_runs_no_target(dir.path(), "feat/probe");
+    assert_admission_is_active(dir.path(), "feat/probe");
 }
 
-// TSK-1039 AC-2, issue 494: the push `codeflow work claim` makes, a task
-// branch carrying its standalone record, finishes with the same failing
-// target at the tip and never runs it.
+// TSK-1039 AC-2, issue 494: the creation of a task branch carrying its
+// standalone record finishes under ordinary admission with the same failing
+// target at the tip. The `codeflow work claim` journey is
+// `claim_push_runs_no_failing_target_at_the_tip` in `work_cli.rs`.
 #[cfg(unix)]
 #[test]
-fn claim_shaped_push_runs_no_failing_target() {
-    let dir = push_without_gate_repo();
+fn task_branch_creation_runs_no_failing_target() {
+    let dir = push_admission_repo();
     ok(
         "git",
         dir.path(),
         &["switch", "-c", "task/TSK-001-fix-the-flaky-test"],
     );
-    let tasks = dir.path().join("project-management/tasks");
-    std::fs::create_dir_all(&tasks).unwrap();
-    std::fs::write(
-        tasks.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: \"fix a flaky test\"\nintegration_target: main\ntitle: fix the flaky test\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-11-02\n---\n\n## Description\nFix it.\n\n## Acceptance Criteria\n- AC-1 the test passes\n",
-    )
-    .unwrap();
-    ok("git", dir.path(), &["add", "project-management"]);
-    let committed = with_installed_hooks(
-        "git",
+    commit_through_hooks(
         dir.path(),
-        &["commit", "-q", "-m", "docs: add the standalone task record"],
+        "project-management/tasks/TSK-001.md",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: \"fix a flaky test\"\nintegration_target: main\ntitle: fix the flaky test\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-11-02\n---\n\n## Description\nFix it.\n\n## Acceptance Criteria\n- AC-1 the test passes\n",
+        "docs: add the standalone task record",
     );
-    assert!(committed.status.success(), "{}", both_streams(&committed));
-    assert_push_runs_no_target(dir.path(), "task/TSK-001-fix-the-flaky-test");
+    publish_id_registry(dir.path());
+    assert_admitted_push_runs_no_target(dir.path(), "task/TSK-001-fix-the-flaky-test");
+    assert_admission_is_active(dir.path(), "task/TSK-001-fix-the-flaky-test");
 }
 
 // TSK-449 AC-2: with the heavy-work admission lock held, a push neither
