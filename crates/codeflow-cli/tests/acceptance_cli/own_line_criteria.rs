@@ -351,6 +351,76 @@ fn ci_into_the_confirmed_line_gives_the_pre_push_verdict() {
     assert!(!text.contains(GRANTED), "without --into: {text}");
 }
 
+/// AC-6 (review 02, finding 1): the confirmed line tip stays a criteria
+/// point when the run's base is older than it and the head contains it.
+/// The line adds AC-3 and the branch cut from it drops AC-3: both bases
+/// give one verdict and report the removal, whose reason the pull request
+/// body must give. Before the fix the older base judged against its own
+/// record only and reported no removal. Keeping AC-3 reports none.
+#[test]
+fn an_older_base_keeps_the_confirmed_tip_as_a_criteria_point() {
+    let repo = shaped(Shape::Diverged);
+    let root = repo.dir.path();
+    let older = repo.line.clone();
+    let ac3 = "the command shall succeed.\n- AC-3 When asked, the system shall report.\n";
+    let with_ac3 = |ac1: &str| own_record(ac1).replace("the command shall succeed.\n", ac3);
+    amend_on_line(root, &with_ac3("the system shall work on the line."));
+    let tip = git_out(root, &["rev-parse", LINE]);
+    git(root, &["switch", "-q", "-C", OWN, LINE]);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &own_record("the system shall work on the branch."),
+    );
+    commit(root, "docs: TSK-002 drops AC-3");
+    with_destination(&repo);
+    let into = format!("--into={LINE}");
+    let run = |base: &str| {
+        ci_args(
+            root,
+            &[
+                "--base",
+                base,
+                "--head",
+                "HEAD",
+                "--branch",
+                OWN,
+                "--policy-from",
+                &repo.main,
+                "--commits-from",
+                &repo.main,
+                &into,
+            ],
+        )
+    };
+    let removed = "TSK-002 removes AC-3";
+    let at_tip = run(&tip);
+    assert!(at_tip.1.contains(removed), "the line tip: {}", at_tip.1);
+    let from_older = run(&older);
+    assert!(
+        from_older.1.contains(removed),
+        "an older base: {}",
+        from_older.1
+    );
+    assert_eq!(at_tip.0, from_older.0, "an older base: {}", from_older.1);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &with_ac3("the system shall work on the branch."),
+    );
+    commit(root, "docs: TSK-002 keeps AC-3");
+    let (code, text) = run(&older);
+    assert_eq!(code, 0, "own change from an older base: {text}");
+    assert!(
+        text.contains(OWN_DELTA),
+        "own change from an older base: {text}"
+    );
+    assert!(
+        !text.contains(removed),
+        "own change from an older base: {text}"
+    );
+}
+
 /// AC-8 (review 01, finding 1): the binding reads the pinned candidate
 /// authority and the confirmed line tip, never a local or remote-tracking
 /// ref. `main`'s pinned tip cancels the epic while `origin/main` is stale

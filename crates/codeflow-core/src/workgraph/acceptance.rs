@@ -2388,17 +2388,17 @@ pub(super) fn judge_in_range(
     // criteria points are the range anchor, the run's base and the line's
     // confirmed tip; the default branch's tip the run names as its policy
     // authority is none of them. Every point still counts for the landing.
+    // The confirmed tip stays a fixed point even when the head contains it,
+    // as it does when the run's base is older than the tip: the criteria
+    // the line holds are judged either way (TSK-350 review 02 finding 1).
     let criteria_points = match own_line {
         Some(line) => {
-            let bases: Vec<Oid> = criteria
-                .bases()
-                .first()
-                .copied()
-                .into_iter()
-                .chain(std::iter::once(line.tip))
-                .collect();
+            let bases: Vec<Oid> = criteria.bases().first().copied().into_iter().collect();
             match judged_points(repo, range, &bases) {
-                Ok((points, _)) => Some(points),
+                Ok((mut points, _)) => {
+                    points.push(line.tip);
+                    Some(points)
+                }
                 Err(reason) => return super::landing::TaskJudgement::unreadable(reason),
             }
         }
