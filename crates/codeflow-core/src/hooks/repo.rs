@@ -902,11 +902,12 @@ fn small_marker(path: &Path, what: &str) -> Result<String, String> {
     if !metadata.file_type().is_file() || metadata.len() > 4096 {
         return Err(format!("{what} must be a small regular file"));
     }
-    let mut text = String::new();
+    let mut bytes = Vec::new();
     std::fs::File::open(path)
-        .and_then(|file| file.take(4096).read_to_string(&mut text))
+        .and_then(|file| file.take(4096).read_to_end(&mut bytes))
         .map_err(|error| format!("cannot read {what}: {error}"))?;
-    Ok(text.trim_end().to_string())
+    String::from_utf8(bytes.trim_ascii_end().to_vec())
+        .map_err(|_| format!("{what} is not valid text"))
 }
 
 /// The git directory that holds the shared config for the checkout holding
@@ -929,10 +930,10 @@ pub fn shared_git_dir(project_dir: &Path) -> Result<PathBuf, String> {
         .map_err(|error| error.message().to_string())?;
     let admin = canonical(&found, "git directory")?;
     let commondir = admin.join("commondir");
-    match std::fs::symlink_metadata(&commondir) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(admin),
-        Err(error) => return Err(format!("cannot inspect commondir: {error}")),
-        Ok(_) => {}
+    if crate::absence::proven_absent(&commondir)
+        .map_err(|error| format!("cannot inspect commondir: {error}"))?
+    {
+        return Ok(admin);
     }
     let named = small_marker(&commondir, "commondir")?;
     if named.is_empty() {
@@ -966,7 +967,7 @@ pub fn shared_git_dir(project_dir: &Path) -> Result<PathBuf, String> {
     let text = small_marker(&marker, "checkout marker")?;
     let target = text
         .strip_prefix("gitdir:")
-        .map(str::trim)
+        .map(str::trim_ascii)
         .filter(|target| !target.is_empty())
         .ok_or("checkout marker does not name a git directory")?;
     if canonical(&checkout.join(target), "checkout git directory")? != admin {

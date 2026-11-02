@@ -381,12 +381,14 @@ pub fn probe_git_config_write(project_dir: &Path) -> (PathBuf, std::io::Result<(
     // a pipe in its place).
     let common = match crate::hooks::repo::shared_git_dir(project_dir) {
         Ok(common) => common,
-        Err(error) => return (
-            project_dir.to_path_buf(),
-            Err(std::io::Error::other(format!(
+        Err(error) => {
+            return (
+                project_dir.to_path_buf(),
+                Err(std::io::Error::other(format!(
                 "no usable git repository, so the shared git config file was not probed: {error}"
             ))),
-        ),
+            )
+        }
     };
     let config = common.join("config");
     let result = crate::contained::Tree::open(&common).and_then(|tree| {
@@ -2413,10 +2415,7 @@ mod tests {
         for forged in ["commondir", "gitdir"] {
             let (tmp, linked) = linked_fixture();
             let admin = tmp.path().join(".git").join("worktrees").join("linked");
-            let wrong = match forged {
-                "commondir" => other.path().join(".git"),
-                _ => other.path().join(".git"),
-            };
+            let wrong = other.path().join(".git");
             std::fs::write(admin.join(forged), format!("{}\n", wrong.display())).unwrap();
             let before = listing(tmp.path());
             let other_before = listing(other.path());
