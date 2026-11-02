@@ -179,8 +179,10 @@ limit state each CLI exposes.
    managed `.gitignore` keeps `.codeflow/local/` untracked.
 3. The agent launches each seat with only that family's variable
    (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`) by running
-   `eval "$(codeflow models launch-env --family <family>)"` in the seat's
-   shell first. No output means the family keeps the CLI's default home.
+   `home_line=$(codeflow models launch-env --family <family>) && eval "$home_line"`
+   in the seat's shell first. No output means the family keeps the CLI's
+   default home. A refused profile exits 2 with the reason and the launch
+   stops, so a seat never starts under the default account by mistake.
 4. `codeflow models limits` prints each family's account and limit state.
    Readings arrive from what each CLI already exposes:
 
@@ -189,6 +191,20 @@ limit state each CLI exposes.
    | Claude Code | statusline JSON `rate_limits.five_hour` and `seven_day` (Pro, Max and Ultra plans only, after the first response) | the statusline script pipes its input to `codeflow models record-limits --family claude` |
    | Codex | app-server `account/rateLimits/read` result and `account/rateLimits/updated` event | the payload piped to `codeflow models record-limits --family codex` |
    | Grok Build | no usage reading; only the limit-hit error | `codeflow models record-limits --family grok --limit-hit [--resets-at EPOCH]` |
+
+   Claude Code runs the statusline command on every refresh, so a script
+   that already reads the JSON from standard input adds one line:
+
+   ```bash
+   input=$(cat)
+   printf '%s' "$input" | codeflow models record-limits --family claude >/dev/null 2>&1
+   ```
+
+   Codex's `rateLimits` is its default quota bucket; a payload that lists
+   other buckets only under `rateLimitsByLimitId` is read for the default
+   one. The Codex window names come from the installed release's own schema,
+   not vendor documentation, so a payload the reader cannot parse is refused
+   with a message and nothing is stored.
 
    A window with no reading shows `not exposed`; a window that reset after
    its reading shows that, with the old figure. Choosing a route from these

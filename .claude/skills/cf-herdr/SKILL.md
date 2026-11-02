@@ -95,8 +95,9 @@ pane_id=$(printf '%s' "$created" | python3 -c \
 herdr pane run "$pane_id" 'export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; echo $CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'
 # Account profile: sets this family's own config-home variable, nothing
 # else; prints nothing when the project maps no home (transport rule,
-# "Account profiles").
-home_line=$(codeflow models launch-env --family <claude|codex|grok>)
+# "Account profiles"). A refused profile exits 2: do not start the seat,
+# or it would run under the CLI's default account.
+home_line=$(codeflow models launch-env --family <claude|codex|grok>) || exit 1
 [ -z "$home_line" ] || herdr pane run "$pane_id" "$home_line"
 herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
   --pane "$pane_id" -- <native-args>

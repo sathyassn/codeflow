@@ -876,7 +876,7 @@ impl Seats {
     /// `family`, in a cleared environment.
     fn launched_environment(&self, family: &str) -> String {
         let script = format!(
-            "eval \"$({bin} models launch-env --family {family})\"; env",
+            "home_line=$({bin} models launch-env --family {family}) && eval \"$home_line\"; env",
             bin = env!("CARGO_BIN_EXE_codeflow")
         );
         let output = Command::new("sh")
@@ -971,6 +971,36 @@ fn launch_with_no_profile_or_no_mapping_sets_nothing_and_says_so() {
 }
 
 #[test]
+fn a_refused_profile_stops_the_launch_snippet_before_any_variable_is_set() {
+    // The documented launch line must fail closed: a refused profile exits
+    // non-zero, so the seat is not started under the CLI's default account.
+    let seats = Seats::new();
+    seats
+        .profile("schema_version = 1\n[families.codex]\nconfig_home = \"/srv/c\"\ntoken = \"x\"\n");
+    let script = format!(
+        "home_line=$({bin} models launch-env --family codex 2>/dev/null) || {{ echo REFUSED; exit 1; }}; \
+         eval \"$home_line\"; echo STARTED; env",
+        bin = env!("CARGO_BIN_EXE_codeflow")
+    );
+    let output = Command::new("sh")
+        .current_dir(seats.project())
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", seats.home())
+        .env("CODEFLOW_HOME", seats.home().join(".codeflow"))
+        .args(["-c", &script])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("REFUSED") && !text.contains("STARTED"),
+        "{text}"
+    );
+    assert!(env_lines(&text, "CODEX_HOME").is_empty());
+}
+
+#[test]
 fn launch_json_names_the_variable_and_folder() {
     let seats = Seats::new();
     seats.profile(PROFILE);
@@ -1013,9 +1043,15 @@ fn a_profile_that_names_a_token_or_credential_is_refused_by_every_reader() {
         ] {
             let output = seats.run(&args);
             assert_eq!(output.status.code(), Some(2), "{args:?}");
-            assert!(output.stdout.is_empty(), "{args:?}: nothing for a shell to eval");
+            assert!(
+                output.stdout.is_empty(),
+                "{args:?}: nothing for a shell to eval"
+            );
             let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(stderr.contains("accounts.toml") && stderr.contains(needle), "{stderr}");
+            assert!(
+                stderr.contains("accounts.toml") && stderr.contains(needle),
+                "{stderr}"
+            );
         }
     }
 }

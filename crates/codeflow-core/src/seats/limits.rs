@@ -102,11 +102,23 @@ fn percent(value: &Value, what: &str) -> Result<f64, String> {
     Ok(number)
 }
 
+/// A JSON writer may print whole seconds as `1738425600.0`; accept that, not
+/// a fraction, a negative number or one too large to be a time.
+#[allow(
+    clippy::float_cmp,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn whole_seconds(n: f64) -> Option<u64> {
+    (n.is_finite() && (0.0..1e15).contains(&n) && n.trunc() == n).then_some(n as u64)
+}
+
 fn epoch(value: Option<&Value>, what: &str) -> Result<Option<u64>, String> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
             .as_u64()
+            .or_else(|| v.as_f64().and_then(whole_seconds))
             .map(Some)
             .ok_or_else(|| format!("{what} must be a Unix time in whole seconds")),
     }
@@ -385,6 +397,16 @@ mod tests {
         assert!(parse_claude_statusline(r#"{"model":{}}"#)
             .unwrap()
             .is_empty());
+        let whole =
+            r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":4102444800.0}}}"#;
+        assert_eq!(
+            parse_claude_statusline(whole)
+                .unwrap()
+                .five_hour
+                .unwrap()
+                .resets_at,
+            Some(4_102_444_800)
+        );
         let one = r#"{"rate_limits":{"seven_day":{"used_percentage":5}}}"#;
         let one = parse_claude_statusline(one).unwrap();
         assert!(one.five_hour.is_none() && one.weekly.unwrap().resets_at.is_none());
@@ -398,6 +420,7 @@ mod tests {
             r#"{"rate_limits":{"five_hour":{"used_percentage":"9"}}}"#,
             r#"{"rate_limits":{"five_hour":{"resets_at":5}}}"#,
             r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":-1}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":1.5}}}"#,
         ] {
             assert!(parse_claude_statusline(payload).is_err(), "{payload}");
         }
