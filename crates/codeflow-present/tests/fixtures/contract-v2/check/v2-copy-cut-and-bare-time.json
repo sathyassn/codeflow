@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "title": "Where the release stands",
+  "summary": "A status page whose copy cuts a sentence and drops the zone",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "lede",
+      "markdown": "The line moved at 13:41 and the records were read once."
+    },
+    {
+      "type": "table",
+      "id": "rows",
+      "title": "Open items",
+      "columns": ["Item", "State"],
+      "rows": [["the 4.0.0 milestone fixes and the quality defaults that...", "open"]]
+    },
+    {
+      "type": "code",
+      "id": "log",
+      "language": "text",
+      "code": "13:41 fetch origin ... done"
+    }
+  ]
+}

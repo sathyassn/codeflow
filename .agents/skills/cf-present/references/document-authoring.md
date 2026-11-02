@@ -317,7 +317,8 @@ a portal form; in present an `html` block keeps only the two uses above.
 ## Language and review quality
 
 - Lead with the outcome, decision, or question; add context at the depth needed
-  to assess it.
+  to assess it. A view of one entity (an epic, task, capability or issue)
+  opens with what it is, for whom and why now, before its numbers.
 - Separate verified, inferred, pending, and not-run claims. Link evidence by
   exact identifiers or bounded text, not fabricated certainty.
 - Write titles, labels, leads and captions by the copy guide

@@ -12,7 +12,10 @@ reads only the kit still gets them. The six lines below are the kit's own
 - Short plain sentences; bullets or a table where they carry facts better
   than prose.
 - No em or en dash; use a comma, colon, full stop or hyphen.
-- Titles name the subject in words, never a bare identifier.
+- Titles name the subject in words, never a bare identifier; in a row,
+  chip, menu entry or cell the name comes first and the identifier after.
+- Context stays whole, times are wall clock with a zone, and an entity's
+  opening says what it is, for whom and why now.
 - Sentence case, except the uppercase mono kicker.
 - No slogans, no "not X but Y" turns, no rhetorical triplets.
 
@@ -93,6 +96,11 @@ a digit where a number is measured.
   minutes". A small count in running prose may be a word.
 - Prefer the short common word when it is exact: "use", not "utilise";
   "before", not "prior to".
+- Write a time a reader sees as wall clock with its zone ("16:12 EST, 2
+  Nov"); a relative time ("40 minutes ago") may accompany it, never
+  replace it.
+- Keep a context string whole: no "...", ellipsis or clipped text. Wrap
+  it, or put the rest behind a disclosure.
 
 Example, an acronym expanded once (source: `docs/decisions/README.md`):
 > architecture decision record (ADR)
@@ -110,6 +118,10 @@ A title or heading is a noun phrase in words that names its subject.
 - Name the subject in words. A bare identifier (`TSK-066`, `ADR-0032`) or an
   unexpanded acronym is never the whole title; it goes in the body, the link
   or the frontmatter. An identifier followed by words is fine.
+- Keep the same order in a row, chip, menu entry, breadcrumb, table cell
+  or figure label: the name in words first, the identifier after it, as a
+  tag or in parentheses. A reader scans names; the identifier is for the
+  lookup.
 - Name the outcome in a how-to heading: what the reader has when the section
   is done.
 - Use sentence case: capitalise the first word and proper nouns only. The
@@ -200,6 +212,9 @@ stands, in a few lines, before the bullets or table that carry the details.
 - Open these with a summary: a closeout, a pull request body, a report, and
   a reply that leads into a list or table. An ADR context has its own
   shape, in the last section.
+- Open an entity's page or card (an epic, task, capability or issue) with
+  what it is, for whom and why now, in whole sentences, before any number
+  or identifier.
 - Write a few lines a reader with no context understands. It is judgment,
   not a sentence count or a list of banned items: a key number, file name,
   data point or caveat belongs there when it is part of that context.

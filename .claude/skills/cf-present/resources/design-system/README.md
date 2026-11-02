@@ -86,6 +86,12 @@ Every string on a page follows these rules; the copy guide
   than prose.
 - No em or en dash; use a comma, colon, full stop or hyphen.
 - Titles name the subject in words, never a bare identifier.
+- Names first: a row, chip, menu entry, crumb, cell or figure label names
+  its subject in words, with the identifier after it.
+- Context whole: no "...", ellipsis or clipped text; a long string wraps or
+  goes behind a disclosure.
+- Times are wall clock with a zone ("16:12 EST, 2 Nov"); a relative time
+  only accompanies it.
 - Sentence case, except the uppercase mono kicker.
 - No slogans, no "not X but Y" turns, no rhetorical triplets.
 

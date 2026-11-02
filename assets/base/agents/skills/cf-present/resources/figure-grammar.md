@@ -67,8 +67,9 @@ no box of text.
 ## 3. Altitude contract
 
 Figures lead at every altitude. Concept owns what the subject is, who it is for
-and what it is not. The other altitudes answer their own question and do not
-repeat Concept's.
+and what it is not. A view of one entity opens the same way, with what it is,
+for whom and why now, whatever its altitude. The other altitudes answer their
+own question and do not repeat Concept's.
 
 | Altitude | Reader question | Families that answer it | Prose role |
 |---|---|---|---|

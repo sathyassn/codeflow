@@ -2128,6 +2128,34 @@ mod tests {
         );
     }
 
+    /// TSK-1122: a sentence cut to an ellipsis and a clock time without a
+    /// zone are copy faults in prose, titles and cells; a code block, a code
+    /// span, a ratio and a zoned time are not.
+    #[test]
+    fn check_faults_cut_context_and_a_time_without_a_zone() {
+        let lines = check_document(&crate::contract_tests::fixture_bytes(
+            "check/v2-copy-cut-and-bare-time.json",
+        ));
+        let copy: Vec<_> = lines
+            .iter()
+            .map(|line| (line.block_id.as_deref(), line.rule, line.severity))
+            .collect();
+        assert_eq!(
+            copy,
+            [
+                (Some("lede"), "copy-time-zone", "fault"),
+                (Some("rows"), "copy-ellipsis", "fault"),
+            ],
+            "{lines:?}"
+        );
+        assert!(lines[0].message.contains("13:41"), "{}", lines[0].message);
+        assert!(
+            check_lines("check/v2-copy-whole-and-zoned.json").is_empty(),
+            "{:?}",
+            check_lines("check/v2-copy-whole-and-zoned.json")
+        );
+    }
+
     #[test]
     fn check_is_quiet_on_prose_and_never_doubles_a_v2_framing_fault() {
         assert!(check_lines("check/v1-prose.json").is_empty());

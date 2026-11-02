@@ -247,6 +247,47 @@
         ],
         "decision": "fail"
       }
+    ],
+    "entity-row-and-page-from-the-record": [
+      {
+        "role": "passing",
+        "answer": "status-entity-plain.json",
+        "surface": "file",
+        "signals": [
+          "row_names_subject_before_identifier",
+          "opening_states_what_it_is",
+          "opening_names_who_and_why_now",
+          "context_kept_whole",
+          "identifier_kept_in_page"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "status-entity-id-first.json",
+        "surface": "file",
+        "signals": [
+          "identifier_leads_row",
+          "context_cut_to_ellipsis",
+          "opening_states_what_it_is",
+          "opening_names_who_and_why_now",
+          "identifier_kept_in_page"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "status-entity-no-why-now.json",
+        "surface": "file",
+        "signals": [
+          "row_names_subject_before_identifier",
+          "opening_states_what_it_is",
+          "context_kept_whole",
+          "identifier_kept_in_page",
+          "opening_omits_who_or_why_now"
+        ],
+        "decision": "fail"
+      }
     ]
   }
 }
