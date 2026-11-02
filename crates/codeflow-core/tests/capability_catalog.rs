@@ -238,6 +238,31 @@ fn unsafe_paths_and_tree_modes_are_refused() {
         if ["absolute", "traversal", "nested"].contains(&case["case"].as_str().unwrap()) {
             assert!(validate_capability_path(path).is_err());
         }
+        if ["symlink", "executable"].contains(&case["case"].as_str().unwrap()) {
+            let dir = fixture();
+            let repo = git2::Repository::open(dir.path()).unwrap();
+            let mut index = repo.index().unwrap();
+            index
+                .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+                .unwrap();
+            let mut entry = index.get_path(Path::new(path), 0).unwrap();
+            let mode = case["mode"].as_u64().unwrap().to_string();
+            entry.mode = u32::from_str_radix(&mode, 8).unwrap();
+            let content = case["content"].as_str().unwrap();
+            entry.id = repo
+                .blob(if content == "valid.md" {
+                    VALID.as_bytes()
+                } else {
+                    content.as_bytes()
+                })
+                .unwrap();
+            index.add(&entry).unwrap();
+            let revision = index.write_tree().unwrap().to_string();
+            let error = load_capability_catalog_from_tree(dir.path(), &revision)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(path) && error.contains(&mode), "{error}");
+        }
     }
     let dir = fixture();
     std::fs::remove_file(dir.path().join(RECORD)).unwrap();
@@ -411,4 +436,21 @@ fn linked_catalog_parent_is_refused_without_reading_its_target() {
     std::fs::create_dir(dir.path().join("docs")).unwrap();
     std::os::unix::fs::symlink("../../outside", dir.path().join("docs/capabilities")).unwrap();
     refuse_both(dir.path(), "docs/capabilities", "");
+}
+
+#[test]
+fn legacy_validation_also_applies_to_pinned_trees() {
+    let dir = fixture();
+    write(
+        dir.path(),
+        "docs/capabilities.md",
+        &fence("CAP-099", "unknown"),
+    );
+    refuse_both(dir.path(), "docs/capabilities.md", "status");
+    write(
+        dir.path(),
+        "docs/capabilities.md",
+        &fence("CAP-099", "shipped").replace("['test: cargo test capability_catalog']", "[]"),
+    );
+    refuse_both(dir.path(), "docs/capabilities.md", "verified_by");
 }

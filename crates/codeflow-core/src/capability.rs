@@ -461,19 +461,38 @@ fn validate_record(
     vocabulary: Option<&CapabilityVocabulary>,
 ) -> Result<(), CapabilityCatalogError> {
     let file = record.file.to_string_lossy();
-    let bad = |key: &str, reason: &str| catalog_error(&file, format!("{key}: {reason}"));
+    let bad = |key: &str, reason: &str| CapabilityCatalogError {
+        file: file.to_string(),
+        line: record.entry.line,
+        message: format!("{key}: {reason}"),
+    };
     let entry = &record.entry;
+    if !CAPABILITY_STATUS_VALUES.contains(&entry.status.as_str()) {
+        return Err(bad(
+            "status",
+            &format!(
+                "\"{}\" is not one of: {}",
+                entry.status,
+                CAPABILITY_STATUS_VALUES.join(", ")
+            ),
+        ));
+    }
+    if entry.status == "shipped"
+        && entry
+            .verified_by
+            .iter()
+            .all(|value| value.trim().is_empty())
+    {
+        return Err(bad(
+            "verified_by",
+            "shipped capability has empty verified_by",
+        ));
+    }
     if record.uid.is_none() {
         return Ok(());
     }
     if !numeric_capability_id(&entry.id) {
         return Err(bad("id", "expected CAP- followed by at least three digits"));
-    }
-    if !CAPABILITY_STATUS_VALUES.contains(&entry.status.as_str()) {
-        return Err(bad(
-            "status",
-            "expected planned, building, shipped or deprecated",
-        ));
     }
 
     let expected = format!("{CATALOG_DIR}/{}-{}.md", entry.id, entry.name);

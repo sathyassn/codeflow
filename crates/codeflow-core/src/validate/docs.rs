@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::capability::{load_capability_catalog, CapabilityCatalog, CAPABILITY_STATUS_VALUES};
+use crate::capability::{load_capability_catalog, CapabilityCatalog};
 use crate::validate::{get_string_field, parse_frontmatter};
 use crate::workgraph::{is_valid_epic_format_id, is_valid_spec_format_id, is_valid_task_format_id};
 
@@ -471,32 +471,6 @@ fn lint_capabilities(catalog: &CapabilityCatalog, graph: &DocGraph, report: &mut
     for record in &catalog.records {
         let entry = &record.entry;
         let rel = &record.file;
-        // Status legality.
-        if !CAPABILITY_STATUS_VALUES.contains(&entry.status.as_str()) {
-            report.issues.push(DocsLintIssue {
-                file: rel.clone(),
-                line: entry.line,
-                message: format!(
-                    "{}: status \"{}\" is not one of: {}",
-                    entry.id,
-                    entry.status,
-                    CAPABILITY_STATUS_VALUES.join(", ")
-                ),
-            });
-        }
-
-        // Shipped capabilities must carry verification evidence.
-        if entry.status == "shipped" && entry.verified_by.iter().all(|t| t.trim().is_empty()) {
-            report.issues.push(DocsLintIssue {
-                file: rel.clone(),
-                line: entry.line,
-                message: format!(
-                    "{}: shipped capability has empty verified_by — name the test tags that prove it",
-                    entry.id
-                ),
-            });
-        }
-
         // epics[] resolve to project-management epic files.
         if graph.epics.is_none() {
             for epic_ref in &entry.epics {
