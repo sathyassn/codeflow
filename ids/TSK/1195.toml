@@ -1,0 +1,11 @@
+id = "TSK-1195"
+uid = "84a3f15c-40ed-417f-98fa-3c15f59950b0"
+kind = "TSK"
+title = "Product docs carry product screenshots and every page has a Markdown twin"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T17:09:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
