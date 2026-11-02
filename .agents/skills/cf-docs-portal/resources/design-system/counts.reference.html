@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en" data-cf-skin="graphite" data-cf-theme="light">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Positive count marks</title>
+<link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="chrome.css"><link rel="stylesheet" href="figure.css">
+<body><main><h1>One task of three hundred</h1>
+<p>Small positive marks keep their minimum visible size. Labels retain exact counts.</p>
+<figure class="cf-fig"><figcaption>Bar</figcaption><div id="bar"></div></figure>
+<figure class="cf-fig"><figcaption>Ring</figcaption><div id="ring"></div></figure>
+</main><script type="module">
+import {renderCountChart} from './count-charts.js';
+for (const kind of ['bar','ring']) {
+  const host=document.getElementById(kind);
+  const draw=()=>renderCountChart(host,{done:299,review:1},kind);
+  draw();new ResizeObserver(draw).observe(host);
+}
+</script></body></html>

@@ -1,12 +1,13 @@
+import type { Theme, Mode, settings } from "./tokens.ts";
 export const DOCUMENT_ROOT_ID = "cf-present-document";
 export const CHROME_ROOT_ID = "cf-present-chrome";
 export const CONFIG_ID = "cf-present-config";
 export const REQUEST_HEADER = "X-CF-Present";
 
-export type UtilityTheme = "graphite" | "slate" | "sage";
+export type UtilityTheme = Theme;
 export type Typeface = "archivo" | "inter" | "plex";
-export type TypeScale = "compact" | "default" | "large";
-export type AppearanceMode = "system" | "light" | "dark";
+export type TypeScale = typeof settings.sizes[number];
+export type AppearanceMode = Mode;
 export type ResolvedMode = Exclude<AppearanceMode, "system">;
 export type FeedbackKind = "comment" | "question" | "decision" | "suggestion" | "adjustment";
 export type ReviewVerdict =

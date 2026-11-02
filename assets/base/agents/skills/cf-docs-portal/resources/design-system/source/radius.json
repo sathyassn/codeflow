@@ -1,0 +1,13 @@
+[
+  {
+    "selector": ":root",
+    "values": {
+      "radius-chip": "5px",
+      "radius-ctl": "8px",
+      "radius-pop": "10px",
+      "radius-card": "12px",
+      "radius-panel": "14px",
+      "radius-pill": "999px"
+    }
+  }
+]

@@ -1,3 +1,5 @@
+import { runtime } from "./tokens.ts";
+import { settings } from "./tokens.ts";
 /**
  * Present review chrome — utility presentation system Comment SM + craft.
  * Rust owns #cf-present-document; this Preact tree owns chrome only (ADR-0049).
@@ -115,7 +117,7 @@ const COMMENT_INSTRUCTION = "Select words, click any part, or drag a box; hold S
 const TOUCH_INSTRUCTION = "Select words, tap a part, or use Select area to drag a box.";
 /** The instruction for this screen: a phone or touch screen has no Shift key. */
 function commentInstruction(): string {
-  return window.matchMedia("(max-width: 879.98px)").matches || navigator.maxTouchPoints > 0 ? TOUCH_INSTRUCTION : COMMENT_INSTRUCTION;
+  return window.matchMedia(runtime.compactQuery).matches || navigator.maxTouchPoints > 0 ? TOUCH_INSTRUCTION : COMMENT_INSTRUCTION;
 }
 
 
@@ -1663,7 +1665,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               </div>
               <div>
                 <div class="lbl">
-                  Palette<span class="d">Surfaces and accent</span>
+                  Theme<span class="d">Surfaces</span>
                 </div>
                 <div class="pills" data-testid="skin-pills">
                   {skinPills.map((t) => (
@@ -1671,7 +1673,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                       type="button"
                       data-skin={t}
                       aria-pressed={appearance.theme === t}
-                      onClick={() => setAppearance((c) => ({ ...c, theme: t }))}
+                      onClick={() => setAppearance((c) => ({ ...c, theme: t, accent: (settings.themes[t] as readonly string[]).includes(c.accent) ? c.accent : settings.defaultAccent }))}
                     >
                       <span class="sw" aria-hidden="true">
                         <i class="sw-canvas" />
@@ -1684,7 +1686,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               </div>
               <div>
                 <div class="lbl">
-                  Appearance<span class="d">Light, dark or the system</span>
+                  Mode<span class="d">Light, dark or the system</span>
                 </div>
                 <div class="pills">
                   {(Object.keys(modeLabels) as AppearanceMode[]).map((m) => (
@@ -1694,6 +1696,18 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                       onClick={() => setAppearance((c) => ({ ...c, mode: m }))}
                     >
                       {modeLabels[m]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div class="lbl">Accent<span class="d">Curated for this theme</span></div>
+                <div class="pills" data-testid="accent-pills">
+                  {settings.themes[appearance.theme].map((accent) => (
+                    <button type="button" data-accent={accent}
+                      aria-pressed={appearance.accent === accent}
+                      onClick={() => setAppearance((current) => ({ ...current, accent }))}>
+                      {accent === "green" ? "Deep green" : accent === "plum" ? "Plum" : "Violet"}
                     </button>
                   ))}
                 </div>
@@ -2087,7 +2101,7 @@ function regionDraftStyle(draft: RegionDraft): string {
 
 /** The width at which the notes rail becomes a bottom sheet (styles.css). */
 function sheetLayout(): boolean {
-  return window.matchMedia("(max-width: 879.98px)").matches;
+  return window.matchMedia(runtime.compactQuery).matches;
 }
 
 function composerPositionStyle(clientX: number, clientY: number): string {

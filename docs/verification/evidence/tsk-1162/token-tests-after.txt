@@ -1,0 +1,38 @@
+✔ CIEDE2000 reproduces Sharma reference vectors, including hue wrap (0.663208ms)
+✔ contrast and D65 lightness endpoints reproduce reference values (0.284875ms)
+✔ simulation has identity endpoints and collapses identical pairs (0.193292ms)
+✔ planted hex literal fails lint (1.489959ms)
+✔ planted functional literal fails lint (0.107167ms)
+✔ planted named literal fails lint (0.061709ms)
+✔ planted named extended literal fails lint (0.054083ms)
+✔ planted absolute size literal fails lint (0.057792ms)
+✔ planted exponent size literal fails lint (0.05825ms)
+✔ planted size literal fails lint (0.134291ms)
+✔ planted radius literal fails lint (0.055459ms)
+✔ planted fallback literal fails lint (0.06475ms)
+✔ clean token control permits intrinsic values and CSS variables (0.541042ms)
+✔ every authored style template is free of colour, size and radius literals (104.50075ms)
+✔ pseudo-highlight selectors are not named colour declarations (2.346208ms)
+✔ one of 300 is visible at wide and phone widths without changing labels (0.702541ms)
+✔ zero counts stay absent and a single positive count fills its chart (11.566375ms)
+✔ invalid or impossible geometry fails explicitly (1.224458ms)
+✔ planted cast is rejected (2.284958ms)
+✔ planted white is rejected (10.222834ms)
+✔ planted black is rejected (0.641792ms)
+✔ planted Neutral is rejected (0.599375ms)
+✔ planted one accent is rejected (0.637917ms)
+✔ planted contrast is rejected (0.625291ms)
+✔ planted status hue is rejected (0.602958ms)
+✔ clean Graphite theme control passes every theme check (0.692375ms)
+✔ every shipped theme and accent passes the colour floors (0.608042ms)
+✔ near-identical dark stage inks fail normal and all simulated floors (0.517416ms)
+✔ missed stage surface floor fails, with a clean palette control (0.163417ms)
+✔ all curated companions meet unchanged ordinary and simulated floors (2.950875ms)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 30
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 727.489709

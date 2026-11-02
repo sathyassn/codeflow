@@ -1,0 +1,48 @@
+[
+  {
+    "selector": ":root",
+    "values": {
+      "ease": "cubic-bezier(.2, .7, .2, 1)",
+      "dur-hover": "120ms",
+      "dur-select": "220ms",
+      "dur-panel": "240ms",
+      "dur-panel-fade": "160ms",
+      "dur-sheet-in": "280ms",
+      "dur-sheet-out": "200ms",
+      "dur-pop-in": "200ms",
+      "dur-pop-out": "140ms",
+      "dur-pane": "180ms",
+      "dur-theme": "200ms",
+      "dur-mark": "160ms",
+      "dur-toast-in": "200ms",
+      "dur-toast-out": "160ms",
+      "shift-sheet": "24px",
+      "shift-pop": "6px",
+      "shift-rail": "24px",
+      "shift-nudge": "2px"
+    }
+  },
+  {
+    "selector": ":root",
+    "media": "(prefers-reduced-motion: reduce)",
+    "values": {
+      "dur-hover": "0ms",
+      "dur-select": "0ms",
+      "dur-panel": "0ms",
+      "dur-panel-fade": "0ms",
+      "dur-sheet-in": "0ms",
+      "dur-sheet-out": "0ms",
+      "dur-pop-in": "0ms",
+      "dur-pop-out": "0ms",
+      "dur-pane": "0ms",
+      "dur-theme": "0ms",
+      "dur-mark": "0ms",
+      "dur-toast-in": "0ms",
+      "dur-toast-out": "0ms",
+      "shift-sheet": "0px",
+      "shift-pop": "0px",
+      "shift-rail": "0px",
+      "shift-nudge": "0px"
+    }
+  }
+]

@@ -1,3 +1,4 @@
+import { settings } from "../public/tokens.js";
 // The runtime's own inline scripts. Page content carries no script, so every
 // inline script a built page may carry comes from the runtime's templates:
 // the pre-paint display script this portal writes from its configured theme,
@@ -21,7 +22,7 @@ const THEME = "__THEME__";
 
 // The pre-paint display script for a theme, as the page inlines it.
 export function prePaintScript(theme, list = committed) {
-  return list.pre_paint_template.replace(THEME, JSON.stringify(theme));
+  return list.pre_paint_template.replace(THEME, JSON.stringify(theme)).replace("__DISPLAY__", JSON.stringify(settings));
 }
 
 // A script's text as a browser reads it (line endings normalized), hashed.

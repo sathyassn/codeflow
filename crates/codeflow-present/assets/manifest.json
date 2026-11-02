@@ -14,26 +14,26 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-27OXJXS4.js",
-      "present.style": "/app/assets/app-L4DMET5O.css"
+      "present.app": "/app/assets/app-2JDPM4FS.js",
+      "present.style": "/app/assets/app-R5NULHM2.css"
     },
     "inline": {
       "present.prepaint": {
-        "source": "\"use strict\";(()=>{function c(e){switch(e){case\"instrument\":case\"technical\":return\"graphite\";case\"editorial\":return\"slate\";case\"ink\":return\"sage\";default:return e}}function o(e){switch(e){case\"instrument\":return\"archivo\";case\"editorial\":return\"inter\";default:return e}}(()=>{let e=new Set([\"graphite\",\"slate\",\"sage\"]),i=new Set([\"system\",\"light\",\"dark\"]),m=new Set([\"archivo\",\"inter\",\"plex\"]),d=new Set([\"compact\",\"default\",\"large\"]),a=null,n=null,s=null,r=null;try{a=c(localStorage.getItem(\"cf-present-theme\")),n=localStorage.getItem(\"cf-present-mode\"),s=o(localStorage.getItem(\"cf-present-typeface\")),r=localStorage.getItem(\"cf-present-scale\")}catch{}let u=a&&e.has(a)?a:\"graphite\",l=n&&i.has(n)?n:\"system\",f=s&&m.has(s)?s:\"inter\",g=r&&d.has(r)?r:\"default\",h=l===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":l,t=document.documentElement;t.dataset.cfTheme=u,t.dataset.cfMode=l,t.dataset.cfModeResolved=h,t.dataset.cfTypeface=f,t.dataset.cfScale=g})();})();",
-        "sha256": "f50958fb63ba9c4dae14106c89be5fb5cf6e6b6e4635ab0e68f2df1052ec0425",
-        "csp_sha256": "sha256-9QlY+2O6nE2uFBBsib5ftc9ua25GNasOaPLfEFLsBCU="
+        "source": "\"use strict\";(()=>{var a={themes:{graphite:[\"green\",\"plum\"],slate:[\"green\",\"violet\"],sage:[\"green\",\"plum\"]},modes:[\"system\",\"light\",\"dark\"],sizes:[\"compact\",\"default\",\"large\"],defaultTheme:\"graphite\",defaultAccent:\"green\"};function s(e){switch(e){case\"instrument\":case\"technical\":return\"graphite\";case\"editorial\":return\"slate\";case\"ink\":return\"sage\";default:return e}}function h(e){switch(e){case\"instrument\":return\"archivo\";case\"editorial\":return\"inter\";default:return e}}(()=>{let e=new Set(Object.keys(a.themes)),m=new Set(a.modes),p=new Set([\"archivo\",\"inter\",\"plex\"]),d=new Set(a.sizes),c=null,r=null,n=null,l=null,f=null;try{c=s(localStorage.getItem(\"cf-present-theme\")),r=localStorage.getItem(\"cf-present-mode\"),n=h(localStorage.getItem(\"cf-present-typeface\")),l=localStorage.getItem(\"cf-present-scale\"),f=localStorage.getItem(\"cf-present-accent\")}catch{}let g=c&&e.has(c)?c:\"graphite\",o=r&&m.has(r)?r:\"system\",i=n&&p.has(n)?n:\"inter\",u=l&&d.has(l)?l:\"default\",x=o===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":o,t=document.documentElement;t.dataset.cfTheme=g;let b=a.themes[g];t.dataset.cfAccent=f&&b.includes(f)?f:a.defaultAccent,t.dataset.cfMode=o,t.dataset.cfModeResolved=x,t.dataset.cfTypeface=i,t.dataset.cfScale=u})();})();",
+        "sha256": "053bac81ccd4ff89478ece056d8eb7e429c8fb6a48d03bf95ca3d623191a6aff",
+        "csp_sha256": "sha256-BTusgczU/4lHjs4FbY635CnI+2pI0Dv5XKPWIxkaav8="
       }
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-27OXJXS4.js",
-        "stored_path": "service/app-27OXJXS4.js.br",
+        "request_path": "/app/assets/app-2JDPM4FS.js",
+        "stored_path": "service/app-2JDPM4FS.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 130880,
-        "encoded_bytes": 37885,
-        "sha256": "31312619137608e6917aa3b2e37a1a63362403234bee3aa956188d3a3d9c8c64",
-        "etag": "\"sha256-MTEmGRN2COaReqOy43oaYzYkAyNL7jqpVhiNOj2cjGQ=\"",
+        "raw_bytes": 131726,
+        "encoded_bytes": 38176,
+        "sha256": "61332ae73f03e967f3c2d7ada414f8663fbf4a981385590b4806fb27d1caac73",
+        "etag": "\"sha256-YTMq5z8D6WfzwtetpBT4Zj+/SpgThVkLSAb7J9HKrHM=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -48,7 +48,7 @@
             "kind": "dynamic-import"
           },
           {
-            "request_path": "/app/assets/chunk-fonts-4A3J6ZMY.js",
+            "request_path": "/app/assets/chunk-fonts-BOMRSZKH.js",
             "kind": "dynamic-import"
           },
           {
@@ -58,14 +58,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-27OXJXS4.js",
-        "stored_path": "service/app-27OXJXS4.js.gz",
+        "request_path": "/app/assets/app-2JDPM4FS.js",
+        "stored_path": "service/app-2JDPM4FS.js.gz",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 130880,
-        "encoded_bytes": 42635,
-        "sha256": "f655cb0cb55f4d98ad48a5f3b7870b998e1c0aa8790b6d4b223e7ea7a37aba51",
-        "etag": "\"sha256-9lXLDLVfTZitSKXzt4cLmY4cCqh5C21LIj5+p6N6ulE=\"",
+        "raw_bytes": 131726,
+        "encoded_bytes": 42971,
+        "sha256": "5225a456534e3af96ab0a3c0d8ad2ba916c7989f1e74dc3decf0c931e1f08d23",
+        "etag": "\"sha256-UiWkVlNOOvlqsKPA2K0rqRbHmJ8edNw97PDJMeHwjSM=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -80,7 +80,7 @@
             "kind": "dynamic-import"
           },
           {
-            "request_path": "/app/assets/chunk-fonts-4A3J6ZMY.js",
+            "request_path": "/app/assets/chunk-fonts-BOMRSZKH.js",
             "kind": "dynamic-import"
           },
           {
@@ -90,14 +90,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-L4DMET5O.css",
-        "stored_path": "service/app-L4DMET5O.css.br",
+        "request_path": "/app/assets/app-R5NULHM2.css",
+        "stored_path": "service/app-R5NULHM2.css.br",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 67447,
-        "encoded_bytes": 11403,
-        "sha256": "c9c62fca30325de09156dac83211019f58eba8107d072d9d1246351fc9caddbe",
-        "etag": "\"sha256-ycYvyjAyXeCRVtrIMhEBn1jrqBB9By2dEkY1H8nK3b4=\"",
+        "raw_bytes": 75340,
+        "encoded_bytes": 12294,
+        "sha256": "599016fe7b833943a3729a25bb7267828f0aad11924f496bddcdfb8302841c64",
+        "etag": "\"sha256-WZAW/nuDOUOjcpolu3Jngo8KrRGST0lr3c37gwKEHGQ=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -106,14 +106,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-L4DMET5O.css",
-        "stored_path": "service/app-L4DMET5O.css.gz",
+        "request_path": "/app/assets/app-R5NULHM2.css",
+        "stored_path": "service/app-R5NULHM2.css.gz",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 67447,
-        "encoded_bytes": 13168,
-        "sha256": "0f58f75e33e2f2f97f1ec88ece57ca284df934a6ee47b3b0ce5b81a128c1d771",
-        "etag": "\"sha256-D1j3XjPi8vl/HsiOzlfKKE35NKbuR7OwzluBoSjB13E=\"",
+        "raw_bytes": 75340,
+        "encoded_bytes": 14555,
+        "sha256": "8d512327eb2c022e29ba2ed03b38122026884ebf660a935a2d0253205e26d5f5",
+        "etag": "\"sha256-jVEjJ+ssAi4pui7QOzgSICaITr9mCpNaLQJTIF4m1fU=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -240,14 +240,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/chunk-fonts-4A3J6ZMY.js",
-        "stored_path": "service/chunk-fonts-4A3J6ZMY.js.br",
+        "request_path": "/app/assets/chunk-fonts-BOMRSZKH.js",
+        "stored_path": "service/chunk-fonts-BOMRSZKH.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 186275,
-        "encoded_bytes": 131206,
-        "sha256": "07d574ea85778baacdb5e6214cf3edfe492e3be5c9cbb0f7970e974f31c2b518",
-        "etag": "\"sha256-B9V06oV3i6rNteYhTPPt/kkuO+XJy7D3lw6XTzHCtRg=\"",
+        "raw_bytes": 186306,
+        "encoded_bytes": 131193,
+        "sha256": "4813f870de57ce3878bdfc1c158255c68ecd3af6feef0ad9bb70ca426aed4c23",
+        "etag": "\"sha256-SBP4cN5Xzjh4vfwcFYJVxo7NOvb+7wrZu3DKQmrtTCM=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -256,14 +256,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/chunk-fonts-4A3J6ZMY.js",
-        "stored_path": "service/chunk-fonts-4A3J6ZMY.js.gz",
+        "request_path": "/app/assets/chunk-fonts-BOMRSZKH.js",
+        "stored_path": "service/chunk-fonts-BOMRSZKH.js.gz",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 186275,
-        "encoded_bytes": 132502,
-        "sha256": "efbcb4105c401c58e47b32ae13d1e1f2459c453932bdb98fa6e9c4d474a9ce61",
-        "etag": "\"sha256-77y0EFxAHFjkezKuE9Hh8kWcRTkyvbmPpunE1HSpzmE=\"",
+        "raw_bytes": 186306,
+        "encoded_bytes": 132501,
+        "sha256": "c07f857f7fc0ef186383047f0732714e2284bae06d1fcdc649bf75ba0bcc7748",
+        "etag": "\"sha256-wH+Ff3/A7xhjgwR/BzJxTiKEuuBtH83GSb91ugvMd0g=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -603,22 +603,22 @@
     "metrics": {
       "asset_count": 15,
       "representation_count": 30,
-      "raw_corpus_bytes": 1093250,
-      "brotli_corpus_bytes": 285119,
-      "gzip_corpus_bytes": 311930,
-      "largest_gzip_chunk_bytes": 132502,
-      "largest_raw_chunk_bytes": 186275,
-      "largest_brotli_chunk_bytes": 131206
+      "raw_corpus_bytes": 1102020,
+      "brotli_corpus_bytes": 286288,
+      "gzip_corpus_bytes": 313652,
+      "largest_gzip_chunk_bytes": 132501,
+      "largest_raw_chunk_bytes": 186306,
+      "largest_brotli_chunk_bytes": 131193
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-c77df2ebd1805cba.js.gz",
+      "stored_path": "export/renderer-a1570a3ca415e43a.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 983502,
-      "encoded_bytes": 273328,
-      "sha256": "c77df2ebd1805cba0256e902fb8796909c6357f3012cd870919163a7051662a3"
+      "raw_bytes": 992423,
+      "encoded_bytes": 274853,
+      "sha256": "a1570a3ca415e43ac25fca07c1e437dcb7a16301e17f05ac33765d92cfe436ab"
     }
   },
   "budgets": {
@@ -630,5 +630,5 @@
     "largest_gzip_chunk_bytes": 150000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "ec4e5e4ee5381f0652f25edb3c4b8d63bee8cdb4fc18e7e9389327839412f6f2"
+  "corpus_sha256": "2536999fe8e2534142fad28301c041edffd532ac163379b5b81d198657dd3b2a"
 }

@@ -1,3 +1,4 @@
+import { runtime } from "./tokens.ts";
 // Fitting a review's crops into the service's body limit (QA defect 3). The
 // limit stays (SPC-014); the page shares what the notes leave of it among the
 // crops, smallest first. A crop over its share is re-encoded at a lower JPEG
@@ -95,7 +96,7 @@ export async function reencodeJpeg(image: Crop, limit: number): Promise<Crop | n
     canvas.width = Math.max(1, Math.round(width));
     canvas.height = Math.max(1, Math.round(height));
     // JPEG has no alpha; a transparent PNG crop is laid on white.
-    context.fillStyle = "#ffffff";
+    context.fillStyle = runtime.paper;
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(source, 0, 0, canvas.width, canvas.height);
     for (const quality of QUALITIES) {

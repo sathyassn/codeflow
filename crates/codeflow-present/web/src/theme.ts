@@ -1,3 +1,4 @@
+import { settings, type Accent } from "./tokens.ts";
 import { normalizeSkin, normalizeTypeface } from "./appearance-values";
 import type { AppearanceMode, ResolvedMode, TypeScale, Typeface, UtilityTheme } from "./contracts";
 
@@ -5,13 +6,14 @@ const MODE_KEY = "cf-present-mode";
 const THEME_KEY = "cf-present-theme";
 const TYPEFACE_KEY = "cf-present-typeface";
 const SCALE_KEY = "cf-present-scale";
-const THEMES: readonly UtilityTheme[] = ["graphite", "slate", "sage"];
+const THEMES = Object.keys(settings.themes) as UtilityTheme[];
 const TYPEFACES: readonly Typeface[] = ["archivo", "inter", "plex"];
-const SCALES: readonly TypeScale[] = ["compact", "default", "large"];
-const MODES: readonly AppearanceMode[] = ["system", "light", "dark"];
+const SCALES = settings.sizes;
+const MODES = settings.modes;
 
 export interface AppearanceState {
   readonly theme: UtilityTheme;
+  readonly accent: Accent;
   readonly mode: AppearanceMode;
   readonly typeface: Typeface;
   readonly scale: TypeScale;
@@ -22,13 +24,15 @@ export function initialAppearance(): AppearanceState {
   const mode = readChoice(readStorage(MODE_KEY), MODES) ?? "system";
   const typeface = readChoice(normalizeTypeface(readStorage(TYPEFACE_KEY)), TYPEFACES) ?? "inter";
   const scale = readChoice(readStorage(SCALE_KEY), SCALES) ?? "default";
-  return { theme, mode, typeface, scale };
+  const accent = readChoice(readStorage("cf-present-accent"), settings.themes[theme]) ?? settings.defaultAccent;
+  return { theme, mode, typeface, scale, accent };
 }
 
 export function applyAppearance(state: AppearanceState): void {
   const resolvedMode = resolveMode(state.mode);
   const root = document.documentElement;
   root.dataset.cfTheme = state.theme;
+  root.dataset.cfAccent = readChoice(state.accent, settings.themes[state.theme]) ?? settings.defaultAccent;
   root.dataset.cfMode = state.mode;
   root.dataset.cfModeResolved = resolvedMode;
   root.dataset.cfTypeface = state.typeface;
@@ -38,6 +42,7 @@ export function applyAppearance(state: AppearanceState): void {
 export function persistAppearance(state: AppearanceState): void {
   try {
     localStorage.setItem(THEME_KEY, state.theme);
+    localStorage.setItem("cf-present-accent", state.accent);
     localStorage.setItem(MODE_KEY, state.mode);
     localStorage.setItem(TYPEFACE_KEY, state.typeface);
     localStorage.setItem(SCALE_KEY, state.scale);

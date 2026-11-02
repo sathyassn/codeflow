@@ -5,45 +5,45 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-27OXJXS4.js.br",
-      "name": "service/app-27OXJXS4.js.br",
+      "bom-ref": "service/app-2JDPM4FS.js.br",
+      "name": "service/app-2JDPM4FS.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "31312619137608e6917aa3b2e37a1a63362403234bee3aa956188d3a3d9c8c64"
+          "content": "61332ae73f03e967f3c2d7ada414f8663fbf4a981385590b4806fb27d1caac73"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-27OXJXS4.js.gz",
-      "name": "service/app-27OXJXS4.js.gz",
+      "bom-ref": "service/app-2JDPM4FS.js.gz",
+      "name": "service/app-2JDPM4FS.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "f655cb0cb55f4d98ad48a5f3b7870b998e1c0aa8790b6d4b223e7ea7a37aba51"
+          "content": "5225a456534e3af96ab0a3c0d8ad2ba916c7989f1e74dc3decf0c931e1f08d23"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-L4DMET5O.css.br",
-      "name": "service/app-L4DMET5O.css.br",
+      "bom-ref": "service/app-R5NULHM2.css.br",
+      "name": "service/app-R5NULHM2.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "c9c62fca30325de09156dac83211019f58eba8107d072d9d1246351fc9caddbe"
+          "content": "599016fe7b833943a3729a25bb7267828f0aad11924f496bddcdfb8302841c64"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-L4DMET5O.css.gz",
-      "name": "service/app-L4DMET5O.css.gz",
+      "bom-ref": "service/app-R5NULHM2.css.gz",
+      "name": "service/app-R5NULHM2.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "0f58f75e33e2f2f97f1ec88ece57ca284df934a6ee47b3b0ce5b81a128c1d771"
+          "content": "8d512327eb2c022e29ba2ed03b38122026884ebf660a935a2d0253205e26d5f5"
         }
       ]
     },
@@ -137,23 +137,23 @@
     },
     {
       "type": "file",
-      "bom-ref": "service/chunk-fonts-4A3J6ZMY.js.br",
-      "name": "service/chunk-fonts-4A3J6ZMY.js.br",
+      "bom-ref": "service/chunk-fonts-BOMRSZKH.js.br",
+      "name": "service/chunk-fonts-BOMRSZKH.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "07d574ea85778baacdb5e6214cf3edfe492e3be5c9cbb0f7970e974f31c2b518"
+          "content": "4813f870de57ce3878bdfc1c158255c68ecd3af6feef0ad9bb70ca426aed4c23"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/chunk-fonts-4A3J6ZMY.js.gz",
-      "name": "service/chunk-fonts-4A3J6ZMY.js.gz",
+      "bom-ref": "service/chunk-fonts-BOMRSZKH.js.gz",
+      "name": "service/chunk-fonts-BOMRSZKH.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "efbcb4105c401c58e47b32ae13d1e1f2459c453932bdb98fa6e9c4d474a9ce61"
+          "content": "c07f857f7fc0ef186383047f0732714e2284bae06d1fcdc649bf75ba0bcc7748"
         }
       ]
     },
