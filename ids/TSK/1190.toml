@@ -1,0 +1,11 @@
+id = "TSK-1190"
+uid = "f828235b-252b-4dd8-a222-5d15d7b5dc3c"
+kind = "TSK"
+title = "Each target command receives the comparison base and the changed paths"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T16:41:42Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
