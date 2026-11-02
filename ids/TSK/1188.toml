@@ -1,0 +1,11 @@
+id = "TSK-1188"
+uid = "a64f9839-cab1-4d00-8b43-140c636bae51"
+kind = "TSK"
+title = "A green hosted run of the exact candidate can stand in for the landing's full gate"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T16:41:22Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
