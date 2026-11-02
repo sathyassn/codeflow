@@ -2430,12 +2430,12 @@ fn evidence_by_design(
 /// `--check permissions`. It states the refusals, not who must work around
 /// them; the git config probe in `doctor --builder-write-probe` observes the
 /// second sentence's first item live.
-pub const BUILDER_SEAT_LIMITS: &str = "can: write its worktree, commit, create and push branches, claim a task (`codeflow work claim` writes no git config), take the gate lock folders, and run `codeflow reserve`, quick and essential gates; cannot: write the shared git config file (so `git config`, `git push -u` and `git branch -m` of a branch that has tracking settings are refused) or ~/.codeflow/gate-runs (only a full run copies its record there; quick and essential runs keep theirs under the worktree); a grant on either is the operator's decision";
+pub const BUILDER_SEAT_LIMITS: &str = "shipped defaults, not measured for this seat (the measured results own what it can do; an adopter may have changed the profile); can: write its worktree, commit, create and push branches, claim a task (`codeflow work claim` writes no git config), take the gate lock folders, and run `codeflow reserve`, quick and essential gates; cannot: write the shared git config file (so `git config`, `git push -u` and `git branch -m` of a branch that has tracking settings are refused) or ~/.codeflow/gate-runs (only a full run copies its record there; quick and essential runs keep theirs under the worktree); a grant on either is the operator's decision";
 
 /// The note naming a builder seat's limits, for a check run in a Codex seat.
 fn builder_limits_note(in_codex: bool) -> String {
     if in_codex {
-        format!("; a Codex builder seat {BUILDER_SEAT_LIMITS}")
+        format!("; for a Codex builder seat under the {BUILDER_SEAT_LIMITS}")
     } else {
         String::new()
     }

@@ -359,17 +359,22 @@ fn probe_lock_dir(dir: &Path) -> std::io::Result<()> {
     })
 }
 
-/// Whether this process can rewrite the shared git config file of the
-/// repository holding `project_dir` (TSK-1156), and the path probed. Git
-/// rewrites that file for any `git config` change, `git push -u` and
-/// `git branch -m` of a branch with tracking settings; a profile that
-/// cannot write it refuses those with `could not write config file`.
+/// Whether this process can take the steps git starts with to rewrite the
+/// shared git config file of the repository holding `project_dir`
+/// (TSK-1156), and the path probed. Git rewrites that file for any
+/// `git config` change, `git push -u` and `git branch -m` of a branch with
+/// tracking settings; a profile that cannot write it refuses those with
+/// `could not write config file`.
 ///
-/// The probe does what git does and changes nothing: it takes
-/// `config.lock` (so no other git process writes meanwhile), reads the
-/// file and writes the same bytes back over it through the anchored
-/// temporary-file-and-rename write, then releases the lock. A held lock
-/// is reported, never removed.
+/// The probe never replaces or changes the file, because the file controls
+/// remotes and hooks and a replacement is a new file that could lose its
+/// ACL, owner or security attributes. It creates `config.lock` exclusively
+/// (the first step of git's own write, so no other git process writes
+/// meanwhile, and proof the folder accepts a new file), opens the config
+/// file for appending without writing a byte, and removes the lock. A held
+/// lock is reported, never removed. The final rename of the lock onto the
+/// config file is not tried, so `Ok` means the rewrite is not refused at
+/// either step it can observe, not that the rename will succeed.
 pub fn probe_git_config_write(project_dir: &Path) -> (PathBuf, std::io::Result<()>) {
     let common = match git2::Repository::discover(project_dir) {
         Ok(repo) => repo.commondir().to_path_buf(),
@@ -385,9 +390,14 @@ pub fn probe_git_config_write(project_dir: &Path) -> (PathBuf, std::io::Result<(
     let config = common.join("config");
     let result = crate::contained::Tree::open(&common).and_then(|tree| {
         tree.create_new("config.lock", b"")?;
-        let rewritten = std::fs::read(&config).and_then(|bytes| tree.write("config", &bytes));
+        // Append mode neither truncates nor writes: it asks the system
+        // whether this process may write the file, and changes nothing.
+        let opened = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&config)
+            .map(drop);
         let released = tree.remove("config.lock");
-        rewritten.and(released)
+        opened.and(released)
     });
     (config, result)
 }
@@ -2197,6 +2207,41 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&lock).unwrap(), "held");
         let plain = tempfile::tempdir().unwrap();
         assert!(probe_git_config_write(plain.path()).1.is_err());
+    }
+
+    /// The config file controls remotes and hooks, so measuring access to it
+    /// must leave the very same file in place: the same inode, which carries
+    /// its owner, mode, ACL and security attributes, and the same bytes and
+    /// modification time, after a probe that succeeds and after one that is
+    /// refused (a held lock). A replaced file would be a new inode that
+    /// could have lost any attribute the replacement does not copy.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_leaves_the_same_file_with_its_access_restrictions() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let config = tmp.path().join(".git").join("config");
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let identity = || {
+            let meta = std::fs::metadata(&config).unwrap();
+            (
+                meta.ino(),
+                meta.dev(),
+                meta.mode(),
+                meta.uid(),
+                meta.gid(),
+                meta.mtime(),
+                meta.mtime_nsec(),
+                std::fs::read(&config).unwrap(),
+            )
+        };
+        let before = identity();
+        probe_git_config_write(tmp.path()).1.unwrap();
+        assert_eq!(identity(), before, "a successful probe changed the file");
+        std::fs::write(tmp.path().join(".git").join("config.lock"), "held").unwrap();
+        assert!(probe_git_config_write(tmp.path()).1.is_err());
+        assert_eq!(identity(), before, "a refused probe changed the file");
     }
 
     #[test]

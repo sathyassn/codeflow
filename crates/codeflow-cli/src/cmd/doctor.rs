@@ -86,6 +86,10 @@ pub fn run(args: &DoctorArgs) -> i32 {
         match result {
             Ok(()) => {
                 let _ = term_writeln!(out, "git-config writable {config}");
+                let _ = term_writeln!(
+                    out,
+                    "git-config unverified the rename of a new file onto it is not tried, so the file is never replaced"
+                );
             }
             Err(error) => {
                 let _ = term_writeln!(out, "git-config denied {config}: {}", shown(&error));
@@ -393,7 +397,7 @@ fn codex_builder_line(
     let probe = codeflow_core::doctor::probe_codex_builder_grants(&root, &codex, codeflow);
     let config = match &probe.git_config {
         Some(Ok(path)) => format!(
-            "; shared git config file: observed writable ({}), so `git config`, `git push -u` and `git branch -m` work in a builder seat",
+            "; shared git config file: a lock file could be created and the file opened for writing ({}); the rename onto it is not tried, so `git config`, `git push -u` and `git branch -m` are expected to work in a builder seat, unverified",
             shown(path)
         ),
         Some(Err(denied)) => format!(
@@ -595,7 +599,7 @@ fn preflight_report(
     let launch = codeflow_core::doctor::builder_launch_root(root);
     if defines_cf_builder(&launch) {
         lines.push(format!(
-            "codex builder seat limits: configured by the shipped cf-builder profile: {}",
+            "codex builder seat limits: {}",
             codeflow_core::doctor::BUILDER_SEAT_LIMITS
         ));
     }
