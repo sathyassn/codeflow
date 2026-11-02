@@ -35,8 +35,15 @@ class GateContracts(unittest.TestCase):
         jobs = dict(zip(parts[1::2], parts[2::2]))
         windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
         gated = ('windows', 'windows-build', 'windows-tests', 'windows-journeys', 'windows-release-journey')
-        self.assertEqual(set(windows), {*gated, 'windows-verdict'})
+        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
+        # TSK-359: `windows-image` only reads the push's Windows runner image
+        # for the reuse decision. It runs on pushes alone and is no gate.
+        image = windows['windows-image']
+        self.assertIn("    if: github.event_name == 'push'\n", image)
+        self.assertNotIn('needs:', image)
+        self.assertNotIn('continue-on-error', image)
+        self.assertNotIn(image.split('name: ', 1)[1].split('\n', 1)[0], checks)
         for key in gated:
             with self.subTest(job=key):
                 job = windows[key]
