@@ -483,10 +483,53 @@ pub fn epic_problem(
     }
 }
 
+/// What the task records say about a task a pull request body names.
+enum TaskStanding {
+    /// A task record holds it on the target or at the head.
+    Recorded,
+    /// Records exist, and none holds it.
+    Unrecorded,
+    /// No task record exists on the target or at the head: durable tracking
+    /// is not in use, so there is nothing to vouch with or against.
+    TrackingOff,
+}
+
+fn task_standing(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    task: &str,
+) -> Result<TaskStanding, String> {
+    let read = |revision: &str| -> Result<(bool, bool), String> {
+        let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+        let graph = Graph::from_revision(&repo, revision)?;
+        let tasks = || {
+            graph
+                .records
+                .values()
+                .filter(|record| record.kind == RecordKind::Task)
+        };
+        Ok((
+            tasks().next().is_some(),
+            tasks().any(|record| record.id == task),
+        ))
+    };
+    let (base_any, base_has) = read(base)?;
+    let (head_any, head_has) = read(head)?;
+    Ok(if base_has || head_has {
+        TaskStanding::Recorded
+    } else if base_any || head_any {
+        TaskStanding::Unrecorded
+    } else {
+        TaskStanding::TrackingOff
+    })
+}
+
 /// Why `task`, named by a pull request body's `Task:` line, cannot be
-/// trusted as written: no task record holds it on the target or at the
-/// head. The message never repeats the identifier, which is the body's own
-/// text until a record vouches for it (TSK-1040).
+/// trusted as written: durable tracking is in use and no task record holds
+/// it on the target or at the head. The message never repeats the
+/// identifier, which is the body's own text until a record vouches for it
+/// (TSK-1040).
 #[must_use]
 pub fn task_problem(
     repo_root: &std::path::Path,
@@ -494,23 +537,25 @@ pub fn task_problem(
     head: &str,
     task: &str,
 ) -> Option<String> {
-    let found = |revision: &str| -> Result<bool, String> {
-        let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-        let graph = Graph::from_revision(&repo, revision)?;
-        Ok(graph
-            .records
-            .get(task)
-            .is_some_and(|record| record.kind == RecordKind::Task))
-    };
-    match (found(base), found(head)) {
-        (Err(error), _) | (_, Err(error)) => Some(format!(
+    match task_standing(repo_root, base, head, task) {
+        Err(error) => Some(format!(
             "cannot read the task records to check the `Task:` line: {error}"
         )),
-        (Ok(false), Ok(false)) => Some(
+        Ok(TaskStanding::Unrecorded) => Some(
             "`Task:` names a task that has no task record on the target or at the head".to_string(),
         ),
-        _ => None,
+        Ok(_) => None,
     }
+}
+
+/// Whether a task record holds `task` on the target or at the head, so a
+/// message may repeat it (TSK-1040). A read failure is no vouching.
+#[must_use]
+pub fn task_recorded(repo_root: &std::path::Path, base: &str, head: &str, task: &str) -> bool {
+    matches!(
+        task_standing(repo_root, base, head, task),
+        Ok(TaskStanding::Recorded)
+    )
 }
 
 /// Why a planning amendment that changes `AGENTS.md`'s managed block is

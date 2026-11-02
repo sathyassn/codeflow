@@ -213,6 +213,36 @@ fn task_line_values_the_body_selects_never_reach_the_log() {
     assert!(result.1.contains("tracked TSK-001"), "{}", result.1);
 }
 
+/// TSK-1040 (Codex round 05): a task-named change confined to
+/// `.gitleaksignore` is a secret-scan exemption, and a deletion falls back to
+/// tracked work. Neither route may repeat a `Task:` value the body selects
+/// and no record vouches for, in an announcement, an admission error or a
+/// remedy. A recorded task still passes as an exemption.
+#[test]
+fn exemption_routes_never_repeat_an_unrecorded_task() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    std::fs::write(root.join(".gitleaksignore"), "# notes\n").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "chore: add the scan ignore file"]);
+    branch_with(
+        root,
+        "feat/exemption",
+        &[(".gitleaksignore", "# notes changed\n")],
+    );
+    let modified = ci(root, "feat/exemption", &body("Task: TSK-987654"));
+    assert_eq!(modified.0, 1, "modified: {}", modified.1);
+    assert!(!modified.1.contains("987654"), "modified: {}", modified.1);
+    let recorded = ci(root, "feat/exemption", &body("Task: TSK-001"));
+    assert_eq!(recorded.0, 0, "a recorded exemption passes: {}", recorded.1);
+    git(root, &["switch", "-C", "feat/exemption-removed", "main"]);
+    git(root, &["rm", ".gitleaksignore"]);
+    git(root, &["commit", "-m", "chore: drop the scan ignore file"]);
+    let removed = ci(root, "feat/exemption-removed", &body("Task: TSK-987654"));
+    assert_eq!(removed.0, 1, "removed: {}", removed.1);
+    assert!(!removed.1.contains("987654"), "removed: {}", removed.1);
+}
+
 /// TSK-388: the pre-push hook hands `codeflow ci` the destination's default
 /// branch as `--into`, and a remote can put control characters in that
 /// name: an OSC title sequence, or the C1 control CSI that git accepts.

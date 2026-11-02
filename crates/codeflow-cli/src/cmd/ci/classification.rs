@@ -648,12 +648,13 @@ pub(super) fn dispatch(
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
     };
-    let task_problem = |task: &str| amendment::task_problem(root, range.base, range.head, task);
     let class = match classify(&input)
-        .and_then(|class| named_task_entry(&input, &task_problem, class))
         .and_then(|class| cancellation_entry(root, branch, range, &files, class))
         .and_then(|class| exemption_entry(root, range, &changes, class))
         .map(|class| release_class(release, class))
+        // Last, so every class a later step produces (a demoted exemption, a
+        // release integration) is judged as the task it finally names.
+        .and_then(|class| named_task_entry(&input, (root, range), class))
     {
         Ok(class) => class,
         Err(reason) => {
@@ -666,14 +667,12 @@ pub(super) fn dispatch(
             return None;
         }
     };
-    announce(&class, epic_line.as_ref());
+    announce(&class, epic_line.as_ref(), &task_shown(root, range, &input));
     match &class {
         Class::Tracked { task_id } | Class::SecretScanExemption(ExemptionWork::Task(task_id)) => {
-            let own_branch = input.branch_task.as_deref() == Some(task_id.as_str());
-            let level = git.work_planning_level();
             let anchor = Anchor {
-                own_branch,
-                level,
+                own_branch: input.branch_task.as_deref() == Some(task_id.as_str()),
+                level: git.work_planning_level(),
                 branch,
                 base: range.base,
                 head: range.head,
@@ -699,32 +698,52 @@ fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
         .map_err(Clone::clone)
 }
 
+/// Whether a message may repeat `task`: the branch spells it out, or a task
+/// record holds it (TSK-1040).
+fn task_shown<'a>(
+    root: &'a Path,
+    range: &'a Range<'a>,
+    input: &'a Input<'a>,
+) -> impl Fn(&str) -> bool + 'a {
+    move |task| {
+        branch_spells(input.branch, task)
+            || input.branch_task.as_deref() == Some(task)
+            || amendment::task_recorded(root, range.base, range.head, task)
+    }
+}
+
+/// Whether the branch name spells out `task` as a path segment or its prefix.
+fn branch_spells(branch: &str, task: &str) -> bool {
+    branch.split('/').any(|part| {
+        part == task
+            || part
+                .strip_prefix(task)
+                .is_some_and(|rest| rest.starts_with('-'))
+    })
+}
+
 /// A task the body names, and the branch does not carry, must have a task
 /// record before any message repeats it: until then the identifier is the
 /// body's own text, and the policy run's log carries none of the body
 /// (TSK-1040).
 fn named_task_entry(
     input: &Input<'_>,
-    task_problem: &dyn Fn(&str) -> Option<String>,
+    (root, range): (&Path, &Range<'_>),
     class: Class,
 ) -> Result<Class, String> {
-    // An exemption keeps its task identity checks where it always had them,
-    // and its announcement never names the task (see `announce`).
-    let Class::Tracked { task_id: named } = &class else {
+    let (Class::Tracked { task_id: named }
+    | Class::ReleaseIntegration { task_id: named }
+    | Class::SecretScanExemption(ExemptionWork::Task(named))) = &class
+    else {
         return Ok(class);
     };
     // The branch name is not the body: a task it spells out is already in
     // every context line, whether or not its record is visible yet.
-    let spelled = input.branch.split('/').any(|part| {
-        part == named
-            || part
-                .strip_prefix(named.as_str())
-                .is_some_and(|rest| rest.starts_with('-'))
-    });
+    let spelled = branch_spells(input.branch, named);
     if spelled || input.branch_task.as_deref() == Some(named.as_str()) {
         return Ok(class);
     }
-    match task_problem(named) {
+    match amendment::task_problem(root, range.base, range.head, named) {
         Some(problem) => Err(problem),
         None => Ok(class),
     }
@@ -812,7 +831,7 @@ fn exemption_entry(
 }
 
 /// Print the class and the direct commits its reviewer is accepting.
-fn announce(class: &Class, line: Option<&EpicLineResult>) {
+fn announce(class: &Class, line: Option<&EpicLineResult>, shown: &dyn Fn(&str) -> bool) {
     let adoptions = line
         .and_then(|result| result.as_ref().ok())
         .map(|(_, report)| report);
@@ -860,10 +879,12 @@ fn announce(class: &Class, line: Option<&EpicLineResult>) {
             println!("codeflow ci: pull request class: workspace root branch {name}");
         }
         Class::Tracked { task_id } => println!(
-            "codeflow ci: pull request class: tracked {task_id} (from the Task: line)"
+            "codeflow ci: pull request class: tracked {} (from the Task: line)",
+            if shown(task_id) { task_id } else { "the named task" }
         ),
         Class::ReleaseIntegration { task_id } => println!(
-            "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
+            "codeflow ci: pull request class: release integration {} (from the Task: line)",
+            if shown(task_id) { task_id } else { "the named task" }
         ),
     }
 }
