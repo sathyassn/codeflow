@@ -330,7 +330,14 @@ fn html_text(source: &str) -> String {
 /// on its own.
 fn lines_at_measure(text: &str) -> usize {
     text.split('\n')
-        .map(|segment| segment.trim().chars().count().div_ceil(MEASURE_CHARS).max(1))
+        .map(|segment| {
+            segment
+                .trim()
+                .chars()
+                .count()
+                .div_ceil(MEASURE_CHARS)
+                .max(1)
+        })
         .sum()
 }
 
@@ -386,8 +393,7 @@ fn clock_at(text: &str, start: usize) -> Option<Clock> {
         // "T" joins a date to its time in ISO 8601 ("2026-11-02T13:41").
         let iso = before == b'T' && start > 1 && bytes[start - 2].is_ascii_digit();
         // An offset ("+01:00") is part of the time before it, never a time.
-        if !iso && (before.is_ascii_alphanumeric() || matches!(before, b'.' | b':' | b',' | b'+'))
-        {
+        if !iso && (before.is_ascii_alphanumeric() || matches!(before, b'.' | b':' | b',' | b'+')) {
             return None;
         }
         if before == b'-' && start > 1 && bytes[start - 2].is_ascii_digit() {
@@ -444,12 +450,8 @@ fn zone_follows(after: &str) -> bool {
         }
     }
     let rest = rest.strip_prefix('(').unwrap_or(rest);
-    let letters = rest
-        .bytes()
-        .take_while(u8::is_ascii_uppercase)
-        .count();
-    (1..=5).contains(&letters)
-        && !rest[letters..].starts_with(|c: char| c.is_ascii_alphabetic())
+    let letters = rest.bytes().take_while(u8::is_ascii_uppercase).count();
+    (1..=5).contains(&letters) && !rest[letters..].starts_with(|c: char| c.is_ascii_alphabetic())
 }
 
 #[cfg(test)]

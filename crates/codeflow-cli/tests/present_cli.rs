@@ -3440,7 +3440,11 @@ fn tsk259_check_open_and_update_warn_on_a_v1_stage_without_refusing_it() {
     // (TSK-1255); the stage warnings stay thirteen.
     let copy = lines
         .iter()
-        .filter(|line| line["rule"].as_str().is_some_and(|rule| rule.starts_with("copy-")))
+        .filter(|line| {
+            line["rule"]
+                .as_str()
+                .is_some_and(|rule| rule.starts_with("copy-"))
+        })
         .count();
     assert!(copy > 0, "{stdout}");
     assert_eq!(lines.len() - copy, 13, "{stdout}");
@@ -3525,7 +3529,12 @@ fn tsk1255_check_and_open_print_the_copy_warnings_without_refusing() {
     let lines = check_lines(&stdout);
     let rules: Vec<_> = lines
         .iter()
-        .map(|line| (line["rule"].as_str().unwrap(), line["severity"].as_str().unwrap()))
+        .map(|line| {
+            (
+                line["rule"].as_str().unwrap(),
+                line["severity"].as_str().unwrap(),
+            )
+        })
         .collect();
     assert_eq!(
         rules,

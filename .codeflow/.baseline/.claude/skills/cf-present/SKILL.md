@@ -50,10 +50,11 @@ needed depth. `cf-editorial-review` applies where its description triggers
 it; write every string by the copy guide
 (`cf-editorial-review/references/copy-guide.md`). Write the
 page plainly: simple, straightforward and clear, no mannered prose (see
-`.codeflow/rules/writing.md`), within the copy guide's "Page limits": at
-most two lines per text block outside a disclosure, one point per bullet, a
-figure as the main view of any flow, comparison or status, a unit on every
-number and names before identifiers. Keep it faithful
+`.codeflow/rules/writing.md`), in short prose and bullets. Hold it to the
+copy guide's "Page limits": at most two lines per text block outside a
+disclosure, one point per bullet, a figure as the main view of any flow,
+comparison or status, a unit on every number and names before identifiers.
+Keep it faithful
 to the session and project voice; preserve exact identifiers and technical
 terms; invent no personality, certainty,
 familiarity, research, or decorative emoji.
