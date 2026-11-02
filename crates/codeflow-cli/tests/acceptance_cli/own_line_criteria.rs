@@ -1085,6 +1085,21 @@ fn the_verdict_does_not_depend_on_the_checkout() {
             "classed ci from {checkout}: {}",
             classed.1
         );
+        assert!(
+            classed
+                .1
+                .contains("pull request class: tracked TSK-002 (from the Task: line)"),
+            "classed ci from {checkout}: {}",
+            classed.1
+        );
+        assert!(
+            !classed
+                .1
+                .lines()
+                .any(|line| line.contains("BLOCKED") && line.contains("work.classification")),
+            "classed ci from {checkout}: {}",
+            classed.1
+        );
         classed_verdicts.push(verdict(&classed));
         let (code, text) = push(
             root,
