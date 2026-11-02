@@ -1,0 +1,11 @@
+id = "TSK-1180"
+uid = "df6c1b0e-d976-43a3-8ba4-8ab7aa738434"
+kind = "TSK"
+title = "The verb completes a reopened task by an append-only waiver and the route is documented"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T05:05:04Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
