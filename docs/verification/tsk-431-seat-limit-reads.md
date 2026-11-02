@@ -33,19 +33,25 @@ the release (`codex --version`), the method each value came from and the
 `codeflow models limits` output here. CodeFlow does not speak the app-server
 protocol itself; the seat's host supplies the payload.
 
-## AC-4: installed-build journey with a Herdr seat (to run)
+## AC-4: journey with the build under test (to run)
 
-With the installed build and a project whose
-`.codeflow/local/accounts.toml` maps one family to a second config home:
+The installed 3.1.0 has no `codeflow models launch-env`, so the journey runs
+with the build under test: put that build's `target/debug` folder first on
+`PATH`, and check `which codeflow` and `codeflow --version` name it before
+starting. In a project whose `.codeflow/local/accounts.toml` maps one family to
+a second config home:
 
 1. `codeflow models launch-env --family <family>` prints one line,
    `export <VARIABLE>='<second home>'`.
 2. A Herdr seat of that family starts after that line runs in its pane
-   (the `cf-herdr` launch). The seat's process environment holds that one
-   variable and neither of the other two families' variables.
+   (the `cf-herdr` launch, `home_line=$(codeflow models launch-env --family
+   <family>) && eval "$home_line"`). The seat's process environment holds that
+   one variable and neither of the other two families' variables.
 3. `codeflow models record-limits --family <family>` stores a payload from
    the seat, and `codeflow models limits` shows the account line
    `config home <second home> (via <VARIABLE>)` and the family's windows.
+4. With `token = "x"` added to the profile, `launch-env` exits 2 and prints
+   nothing to `eval`, so no seat starts.
 
 Not exercised so far: any of the steps above in a seat, a second account that
 is signed in (no credential is copied or created), and a live Claude
