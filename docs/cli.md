@@ -362,11 +362,11 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--family <FAMILY>` | Family the payload on standard input comes from. Required. One of `claude`, `codex`, `grok`. |
 | | `--limit-hit` | Grok only: record that Grok reported a usage limit, which is its only signal. Reads nothing from standard input. |
 | | `--resets-at <EPOCH>` | With --limit-hit: Unix time (seconds) the error says the limit resets. |
-| | `--config-home <DIR>` | Config home of the seat that produced the payload. Defaults to the family's variable in this process, else the CLI's default home. A reading is shown only for the home the current profile names. |
-| `codeflow models launch-env` | | Print the one config-home variable a seat of a family launches with, from the untracked account profile, as a shell line to `eval`: `export VARIABLE='folder'` when mapped, `unset VARIABLE` when not |
+| | `--config-home <DIR>` | Config home of the seat that produced the payload. Defaults to the family's own config-home variable in this process, or the CLI's default home when that is unset. A reading is shown only for the config home the current profile names. |
+| `codeflow models launch-env` | | Print the one config-home variable a seat of a family launches with, from the untracked account profile, as a shell line to `eval` |
 | | `--family <FAMILY>` | Family whose seat is about to launch. Required. One of `claude`, `codex`, `grok`. |
-| | `--json` | Print the variable and folder as JSON instead of a shell line. `config_home` is null when the family is not mapped. |
-| | `--check` | Print nothing to eval; exit 0 only when this process's variable is the mapped folder (or is unset for an unmapped family), else exit 2. |
+| | `--json` | Print the variable and folder as JSON instead of a shell line. |
+| | `--check` | Do not print a launch line: succeed only when this process's environment already matches the profile (the mapped variable is the mapped folder; for an unmapped family its variable is unset). |
 
 ### Present
 
