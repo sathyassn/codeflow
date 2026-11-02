@@ -365,6 +365,12 @@ fn render(state: &FamilyLimits, profile: Option<&Profile>) {
             None => println!("  limit hit reported {}, reset time not given", when(at)),
         }
     }
+    if state.legacy_unbound {
+        println!(
+            "  an earlier-format reading is stored; it names no account, so it is ignored and \
+             the next `record-limits` replaces it"
+        );
+    }
     if !state.other_homes.is_empty() {
         println!(
             "  unknown for this account: readings exist only for {}",

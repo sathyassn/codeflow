@@ -28,7 +28,9 @@ with a message and never guesses.
 The schema export above shows the shape. Still to do: in an interactive
 Codex seat on the supported release, read the live result of
 `account/rateLimits/read` and the next `account/rateLimits/updated` event,
-store each with `codeflow models record-limits --family codex`, and record
+store each with `codeflow models record-limits --family codex --config-home
+<the seat's CODEX_HOME>` (the host's own environment is not the seat's, so
+the producing home is passed explicitly), and record
 the release (`codex --version`), the method each value came from and the
 `codeflow models limits` output here. CodeFlow does not speak the app-server
 protocol itself; the seat's host supplies the payload.
@@ -47,13 +49,15 @@ a second config home:
 2. A Herdr seat of that family starts only after the published sequence
    passes in its pane (`cf-herdr`, "Create or resume"): the pane runs that
    line, then `launch-env --family <family> --check`, and `herdr pane
-   wait-output` sees the confirmation text. With `CODEX_HOME`,
+   wait-output` sees the acknowledgement made for this launch (a fresh
+   random value, printed only when the check passes). With `CODEX_HOME`,
    `CLAUDE_CONFIG_DIR` or `GROK_HOME` already set in the caller's
    environment to some other folder, the seat's own variable still holds the
    mapped folder (or is unset when unmapped). The other two families'
    variables are inherited unchanged and are not part of this check.
-3. `codeflow models record-limits --family <family>` stores a payload from
-   the seat, and `codeflow models limits` shows the account line
+3. `codeflow models record-limits --family <family> --config-home <second
+   home>` stores a payload from the seat (pass the producing seat's home
+   whenever the host's environment differs from the seat's), and `codeflow models limits` shows the account line
    `config home <second home> (via <VARIABLE>)` and the family's windows.
 4. With `token = "x"` added to the profile, `launch-env` exits 2 and prints
    nothing to `eval`; the sequence stops at its first `|| exit 1`, so no

@@ -555,23 +555,51 @@ pub fn record(
     Ok(Some(entry))
 }
 
-/// The stored snapshot for a family, or `None` when nothing was recorded.
+/// What is stored for a family.
+enum Stored {
+    /// No file.
+    Absent,
+    /// A version 1 file from an earlier build. It has no producing config
+    /// home, so its readings belong to no account: they are never shown, and
+    /// never assigned to the current home. The next recording replaces it.
+    Legacy,
+    /// A valid version 2 snapshot.
+    Current(Snapshot),
+}
+
+fn read_stored(project: &Path, family: Family) -> Result<Stored, String> {
+    let relative = file_for(family);
+    let Some(bytes) = confined_read(project, &relative, MAX_SNAPSHOT_BYTES)? else {
+        return Ok(Stored::Absent);
+    };
+    let shown = crate::git::display_path(&project.join(&relative));
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("{shown}: not a limit snapshot ({error})"))?;
+    if value.get("schema_version") == Some(&serde_json::json!(1))
+        && value.get("family") == Some(&serde_json::json!(family.id()))
+    {
+        return Ok(Stored::Legacy);
+    }
+    let snapshot: Snapshot = serde_json::from_value(value)
+        .map_err(|error| format!("{shown}: not a limit snapshot ({error})"))?;
+    snapshot
+        .validate(family)
+        .map_err(|reason| format!("{shown}: {reason}"))?;
+    Ok(Stored::Current(snapshot))
+}
+
+/// The stored snapshot for a family, or `None` when nothing was recorded or
+/// the file is a version 1 file from an earlier build (its readings name no
+/// account, so none is kept; see [`record`], which replaces it).
 ///
 /// # Errors
 /// The file exists but is under a link, is not a regular file, is too large or
 /// is not a valid snapshot (a percentage or time out of range included).
 pub fn load(project: &Path, family: Family) -> Result<Option<Snapshot>, String> {
-    let relative = file_for(family);
-    let Some(bytes) = confined_read(project, &relative, MAX_SNAPSHOT_BYTES)? else {
-        return Ok(None);
-    };
-    let shown = crate::git::display_path(&project.join(&relative));
-    let snapshot: Snapshot = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("{shown}: not a limit snapshot ({error})"))?;
-    snapshot
-        .validate(family)
-        .map_err(|reason| format!("{shown}: {reason}"))?;
-    Ok(Some(snapshot))
+    Ok(match read_stored(project, family)? {
+        Stored::Current(snapshot) => Some(snapshot),
+        Stored::Absent | Stored::Legacy => None,
+    })
 }
 
 /// What the view says about one window.
@@ -615,6 +643,9 @@ pub struct FamilyLimits {
     pub recorded_at: Option<u64>,
     /// Whether this config home has a reading.
     pub exposed: bool,
+    /// A version 1 file from an earlier build is stored. It names no
+    /// account, so it is ignored here and replaced by the next recording.
+    pub legacy_unbound: bool,
     /// Config homes that have readings other than the one asked about (the
     /// default home is `default home`). Those readings are not this
     /// account's and are not shown as its windows.
@@ -648,7 +679,11 @@ pub fn state(
     home: Option<&str>,
     now: u64,
 ) -> Result<FamilyLimits, String> {
-    let snapshot = load(project, family)?;
+    let (snapshot, legacy_unbound) = match read_stored(project, family)? {
+        Stored::Current(snapshot) => (Some(snapshot), false),
+        Stored::Legacy => (None, true),
+        Stored::Absent => (None, false),
+    };
     let homes = snapshot.as_ref().map_or(&[][..], |s| s.homes.as_slice());
     let mine = homes
         .iter()
@@ -672,6 +707,7 @@ pub fn state(
         source: mine.map(|h| h.source.clone()),
         recorded_at: mine.map(|h| h.recorded_at),
         exposed: mine.is_some(),
+        legacy_unbound,
         other_homes,
     })
 }
@@ -1030,7 +1066,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         for text in [
             "{".to_string(),
-            r#"{"schema_version":1,"family":"claude","homes":[]}"#.to_string(),
+            r#"{"schema_version":3,"family":"claude","homes":[]}"#.to_string(),
             r#"{"schema_version":2,"family":"codex","homes":[]}"#.to_string(),
             r#"{"schema_version":2,"family":"claude","homes":[{"source":"x","recorded_at":1,
                 "five_hour":{"used_percent":-123.0}}]}"#
@@ -1052,6 +1088,53 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn a_version_1_file_is_ignored_then_replaced_and_never_given_to_a_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = stored(dir.path(), Family::Claude);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // The shape the previous build wrote: one reading, no producing home.
+        std::fs::write(
+            &path,
+            r#"{"schema_version":1,"family":"claude","source":"claude-statusline",
+                "recorded_at":100,"five_hour":{"used_percent":77.0,"resets_at":4102444800}}"#,
+        )
+        .unwrap();
+        // Read: no error, nothing shown for any home, and the file is named.
+        assert!(load(dir.path(), Family::Claude).unwrap().is_none());
+        for home in [None, Some(HOME_A)] {
+            let view = state(dir.path(), Family::Claude, home, 200).unwrap();
+            assert!(view.legacy_unbound && !view.exposed);
+            assert_eq!(view.five_hour, WindowView::NotExposed);
+        }
+        // Another family's file is untouched by this one.
+        assert!(
+            !state(dir.path(), Family::Codex, None, 200)
+                .unwrap()
+                .legacy_unbound
+        );
+        // A fresh reading is recorded under its own home and replaces the file.
+        record(
+            dir.path(),
+            Family::Claude,
+            Some(HOME_A),
+            "claude-statusline",
+            &full_codex(),
+            300,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("\"schema_version\": 2") && !text.contains("77"),
+            "{text}"
+        );
+        let view = state(dir.path(), Family::Claude, Some(HOME_A), 400).unwrap();
+        assert!(view.exposed && !view.legacy_unbound);
+        // The old 77 percent was not carried to the current home or any other.
+        let other = state(dir.path(), Family::Claude, None, 400).unwrap();
+        assert_eq!(other.five_hour, WindowView::NotExposed);
     }
 
     #[cfg(unix)]

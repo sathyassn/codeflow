@@ -51,9 +51,10 @@ fn resolve(path: &Path) -> Result<PathBuf, String> {
 /// checkout, each linked worktree and the checkout the command runs in.
 fn project_regions(project_root: &Path, main: &Path) -> Result<Vec<PathBuf>, String> {
     let mut regions = vec![main.to_path_buf()];
-    if let Ok(here) = resolve(project_root) {
-        regions.push(here);
-    }
+    regions
+        .push(resolve(project_root).map_err(|reason| {
+            format!("cannot place the checkout the command runs in: {reason}")
+        })?);
     if let Some(repo) = open_repo(main)? {
         let names = repo
             .worktrees()
@@ -65,10 +66,11 @@ fn project_regions(project_root: &Path, main: &Path) -> Result<Vec<PathBuf>, Str
             let worktree = repo
                 .find_worktree(text)
                 .map_err(|e| format!("cannot read a linked worktree: {}", e.message()))?;
-            // A worktree whose folder is gone holds no files to protect.
-            if let Ok(folder) = resolve(worktree.path()) {
-                regions.push(folder);
-            }
+            // A folder that is gone resolves to its place (it holds no files);
+            // any other failure to place it stops the check, never skips it.
+            regions.push(resolve(worktree.path()).map_err(|reason| {
+                format!("cannot place a linked worktree of this repository: {reason}")
+            })?);
         }
     }
     Ok(regions)
@@ -82,7 +84,15 @@ fn refuse_tracked_local(main: &Path, project_root: &Path) -> Result<(), String> 
         let Some(repo) = open_repo(root)? else {
             continue;
         };
-        let Ok(index) = repo.index() else { continue };
+        // An unreadable index cannot show what is tracked, so the local
+        // exception stays closed (fail closed), never skipped.
+        let index = repo.index().map_err(|e| {
+            format!(
+                "cannot read the repository index ({}); a home under {LOCAL_DIR}/ cannot be \
+                 shown safe from commits. Repair the index or use a folder outside the project",
+                e.message()
+            )
+        })?;
         if index
             .iter()
             .any(|entry| entry.path.starts_with(prefix.as_bytes()))
@@ -251,5 +261,45 @@ mod tests {
         assert!(refused(&f, &local.join("codex")).contains("tracked"));
         // A home outside the project is unaffected.
         assert!(check_config_home(&f.outside.join("codex"), &f.main).is_ok());
+    }
+
+    #[test]
+    fn an_unreadable_index_closes_the_local_exception() {
+        let f = fixture();
+        let local = f.main.join(LOCAL_DIR);
+        std::fs::write(local.join("kept"), "x").unwrap();
+        let mut index = f.repo.index().unwrap();
+        index
+            .add_path(Path::new(&format!("{LOCAL_DIR}/kept")))
+            .unwrap();
+        index.write().unwrap();
+        assert!(refused(&f, &local.join("codex")).contains("tracked"));
+        // The same index, damaged: the tracked file can no longer be seen, and
+        // the home under the local folder must not be allowed because of it.
+        std::fs::write(f.repo.path().join("index"), b"not an index").unwrap();
+        let reason = refused(&f, &local.join("codex"));
+        assert!(
+            reason.contains("cannot read the repository index"),
+            "{reason}"
+        );
+        // A home outside the project never needed the index.
+        assert!(check_config_home(&f.outside.join("codex"), &f.main).is_ok());
+    }
+
+    #[test]
+    fn a_worktree_that_cannot_be_placed_stops_the_check() {
+        let f = fixture();
+        let linked = f.outside.join("linked");
+        f.repo.worktree("linked", &linked, None).unwrap();
+        // Replace the worktree folder by a regular file: it can neither be
+        // read as a folder nor be shown absent, so the check refuses outright
+        // rather than skipping it.
+        std::fs::remove_dir_all(&linked).unwrap();
+        std::fs::write(&linked, "x").unwrap();
+        let reason = refused(&f, &f.outside.join("codex"));
+        assert!(
+            reason.contains("cannot place a linked worktree"),
+            "{reason}"
+        );
     }
 }

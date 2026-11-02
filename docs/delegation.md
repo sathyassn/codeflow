@@ -200,8 +200,11 @@ limit state each CLI exposes.
    the first `|| exit 1` stops the launch itself, so a seat never starts under
    the default or an inherited account by mistake. The other two families'
    variables are not touched. In a Herdr seat the same three steps run in the
-   pane, and the launch waits for the pane to print its confirmation before
-   `herdr agent start` (`cf-herdr`, "Create or resume").
+   pane, and the launch waits for a fresh acknowledgement before
+   `herdr agent start` (`cf-herdr`, "Create or resume"). The acknowledgement
+   carries a random value made for that launch and is printed only when
+   `--check` passes, so a path, an echoed command, an error message or output
+   left in the pane by an earlier launch can never stand for it.
 4. `codeflow models limits` prints each family's account and limit state.
    Readings arrive from what each CLI already exposes:
 
@@ -229,7 +232,11 @@ limit state each CLI exposes.
    (`record-limits --config-home DIR`, else the family's variable in that
    process, else the CLI's default home). When the profile later names
    another home, the old reading is not shown as that account's: the family
-   shows `not exposed` and a note names the homes that have readings.
+   shows `not exposed` and a note names the homes that have readings. A file
+   written by the earlier build (version 1) names no home, so its readings
+   belong to no account: they are ignored, the view says so, and the next
+   `record-limits` for that family replaces the file. Nothing is carried over
+   to any home.
 
    A window with no reading shows `not exposed`; a window that reset after
    its reading shows that, with the old figure. Choosing a route from these

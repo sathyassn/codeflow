@@ -149,8 +149,10 @@ impl Profile {
         let value: toml::Value = text
             .parse()
             .map_err(|error: toml::de::Error| not_toml(text, &error))?;
-        refuse_credentials(&value)?;
+        // Secret shapes first: every later diagnostic may name a place, and a
+        // key can itself be the pasted secret.
         refuse_secret_shapes(&value)?;
+        refuse_credentials(&value)?;
         for line in text.split('\n') {
             if let Some(kind) = crate::hooks::scan::scan_line(line) {
                 return Err(format!(
@@ -173,7 +175,8 @@ impl Profile {
         let mut families = BTreeMap::new();
         for (id, account) in raw.families {
             let family = Family::from_id(&id).ok_or_else(|| {
-                format!("unknown family `{id}`; the families are claude, codex and grok")
+                "unknown family name in `[families.*]`; the families are claude, codex and grok"
+                    .to_string()
             })?;
             let config_home = account
                 .config_home
@@ -282,9 +285,10 @@ fn refuse_credentials(value: &toml::Value) -> Result<(), String> {
         for (key, inner) in table {
             let lower = key.to_ascii_lowercase();
             if let Some(word) = CREDENTIAL_NAMES.iter().find(|word| lower.contains(*word)) {
+                // The key text is untrusted and is never echoed.
                 return Err(format!(
-                    "`{key}` names a credential ({word}); the profile never holds a token, \
-                     a key or any secret"
+                    "a key in the file names a credential ({word}); the profile never holds \
+                     a token, a key or any secret"
                 ));
             }
             refuse_credentials(inner)?;
@@ -491,6 +495,27 @@ config_home = "/srv/claude-work"
             let error = parse(text).unwrap_err();
             assert!(!error.contains("SYNTHETIC_PRIVATE_VALUE"), "{error}");
             assert!(error.contains("line") || error.contains("credential"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_secret_shaped_or_credential_named_key_is_never_echoed() {
+        let secret = format!("sk-{}", "a1".repeat(20));
+        // A quoted key, plain and with its first letter written as an escape,
+        // both naming a credential and carrying a secret shape; plus a quoted
+        // unknown family name and a quoted key under a family.
+        for text in [
+            format!("schema_version = 1\n\"token {secret}\" = 1\n"),
+            format!("schema_version = 1\n\"token \\u0073k-{}\" = 1\n", "a1".repeat(20)),
+            format!("schema_version = 1\n[families.codex]\nconfig_home = \"/a\"\n\"api key {secret}\" = 1\n"),
+            format!("schema_version = 1\n[families.\"{secret}\"]\nconfig_home = \"/a\"\n"),
+            "schema_version = 1\n[families.codex]\nconfig_home = \"/a\"\n\"password SYNTHETIC_PRIVATE_KEY_TEXT\" = 1\n"
+                .to_string(),
+        ] {
+            let error = parse(&text).unwrap_err();
+            assert!(!error.contains(&secret), "{error}");
+            assert!(!error.contains(&"a1".repeat(20)), "{error}");
+            assert!(!error.contains("SYNTHETIC_PRIVATE_KEY_TEXT"), "{error}");
         }
     }
 

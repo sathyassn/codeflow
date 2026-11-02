@@ -395,7 +395,7 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "57c14533c3f3079c77d041670582ad06ebfc046ab6beb3a49f097121190317c8",
+      "sha256": "dae45d424c222ea2d03b582ec83490a740149d8ed0df8576a8dfb9f787b23a82",
       "exec": false
     },
     ".agents/skills/cf-herdr/references/review-and-harvest.md": {
@@ -1241,7 +1241,7 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "57c14533c3f3079c77d041670582ad06ebfc046ab6beb3a49f097121190317c8",
+      "sha256": "dae45d424c222ea2d03b582ec83490a740149d8ed0df8576a8dfb9f787b23a82",
       "exec": false
     },
     ".claude/skills/cf-herdr/references/review-and-harvest.md": {
