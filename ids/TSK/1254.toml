@@ -1,0 +1,11 @@
+id = "TSK-1254"
+uid = "8193daae-5848-4ba2-973d-31638f38401f"
+kind = "TSK"
+title = "Bump pulldown-cmark to 0.13.6 for RUSTSEC-2026-0433 on EPC-024"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T22:05:59Z"
+target = "integration/EPC-024-quality-defaults-local-scan-parity-and-seat-capa"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
