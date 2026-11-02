@@ -489,22 +489,16 @@ bases and targets retain protection. Pre-push validates and passes
 `--into=<target>`; its base follows the `--branch` row.
 CI context errors block the push.
 
-A landing candidate is checked before its gate: `codeflow ci --line-tip
-<LINE> --base <tip> --head <candidate>` judges the head as the line's next
-tip with the pre-push hook's `work.epic_line` rule, from the line's fetched
-tip `origin/<LINE>` whatever `--base` says, and with the line bound by the
-records at that tip. A line with no fetched tip or unbound at it, a head
-not cut from the tip, unreadable history or adoption entries, and a
-malformed adoption entry each refuse with the cause. A run with no pull
-request and no push context whose base is the fetched tip of exactly one
-epic line cannot tell a candidate from a change that lands by merge, so it
-is judged the same way without the flag and refuses with a remedy naming
-both routes. A base that is also the default target's fetched tip, as a
-new line's is, names the target and no line. This includes a bare
-`codeflow ci` on a task or planning
-branch whose declared line is fetched: pass `--into <LINE>` there. A pull
-request head (a body, a pull request event, or `--into`) lands by merge and
-is not a line tip; a push is judged by the hook.
+How `codeflow ci` treats a head that could become an epic line's next tip:
+
+| Run | Judged as the line's next tip | Outcome |
+|---|---|---|
+| `--line-tip <LINE>`, for a landing candidate before its gate | Yes, from `origin/<LINE>` whatever `--base` says, with the line bound by the records at that tip | A direct commit refuses with the hook's `work.epic_line` message; a line with no fetched tip or unbound there, a head not cut from the tip, and unreadable or malformed adoption entries refuse with the cause |
+| No role, and the base is the fetched tip of exactly one epic line, other than the default target's | Yes: the run cannot tell a candidate from a pull request head | A direct commit refuses, and the remedy names `--line-tip`, and `--into` or the body; a bare run on a task branch whose line is fetched passes `--into <LINE>` |
+| No role, and the base is the fetched tip of several epic lines | Cannot tell which line | Refuses |
+| No role, and the base is the default target's fetched tip, as a new line's is | No: the head lands on the target | Not judged |
+| A pull request head: a body, a pull request event, or `--into` | No: it lands by merge | Not judged |
+| A push hand-off from the pre-push hook | No | The hook judges the push |
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
 A pull request adding or modifying only the regular file `.gitleaksignore`
