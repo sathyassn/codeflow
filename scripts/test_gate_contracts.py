@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Targeted structural checks for the candidate gate and CI trust boundaries."""
+import ast
 import importlib.util
 import json
 import os
@@ -401,56 +402,177 @@ class GateContracts(unittest.TestCase):
         self.assertIn('check-present-binary-delta', targets['present-binary-delta']['modes']['full']['command'])
         self.assertIn('structural', cfg['_description'])
 
-class TestCollection(unittest.TestCase):
-    """Every test a scripts/test_*.py file defines is one unittest collects
-    (TSK-359): a test method under a class that is not a TestCase, or a
-    module-level test function, would silently never run."""
+UNITTEST_CASES = {'TestCase', 'IsolatedAsyncioTestCase'}
 
-    def test_every_defined_test_is_collected(self):
-        import ast
-        import contextlib
-        import io
-        scripts = Path(__file__).resolve().parent
-        files = sorted(scripts.glob('test_*.py'))
+
+def collection_problems(source, label):
+    """Tests a module defines that unittest's loader would never run, read
+    from the source alone (TSK-359). Nothing is imported or executed, so
+    checking a file has no side effect such as a build.
+
+    A test is a function named `test*` defined in a class body or at module
+    level, however deeply nested in classes or compound statements. It
+    counts as collected only when the module's final, unconditional
+    top-level binding of some class reaches `unittest.TestCase` through
+    bases this file defines, and that class resolves the test's name to that
+    very definition through its method resolution order (so a mixin
+    inherited by a concrete TestCase counts, and a definition a later one
+    replaces does not). A module that defines `load_tests` decides its own
+    collection, which a source check cannot judge, so it is refused."""
+    tree = ast.parse(source)
+    problems = []
+    unittest_modules, case_names = {'unittest'}, set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            unittest_modules |= {a.asname or a.name for a in node.names if a.name == 'unittest'}
+        elif isinstance(node, ast.ImportFrom) and node.module == 'unittest':
+            case_names |= {a.asname or a.name for a in node.names if a.name in UNITTEST_CASES}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == 'load_tests':
+            problems.append(f'{label}:{node.lineno} defines load_tests; the guard cannot judge its collection')
+
+    base_case = type('TestCaseRoot', (), {})
+
+    def is_unittest_case(expr):
+        if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name):
+            return expr.value.id in unittest_modules and expr.attr in UNITTEST_CASES
+        return isinstance(expr, ast.Name) and expr.id in case_names
+
+    bindings = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.ClassDef):
+            bases = []
+            for expr in stmt.bases:
+                if is_unittest_case(expr):
+                    bases.append(base_case)
+                elif isinstance(expr, ast.Name) and expr.id in bindings:
+                    bases.append(bindings[expr.id])
+            methods = {item.name: item for item in stmt.body
+                       if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            try:
+                bindings[stmt.name] = type(stmt.name, tuple(dict.fromkeys(bases)) or (object,), dict(methods))
+            except TypeError as error:
+                problems.append(f'{label}:{stmt.lineno} class {stmt.name} has no consistent order: {error}')
+                bindings.pop(stmt.name, None)
+            continue
+        targets = []
+        if isinstance(stmt, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+        elif isinstance(stmt, ast.Delete):
+            targets = stmt.targets
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Import, ast.ImportFrom)):
+            names = [stmt.name] if hasattr(stmt, 'name') else [a.asname or a.name.split('.')[0] for a in stmt.names]
+            targets = [ast.Name(id=name) for name in names]
+        for target in targets:
+            for name in ast.walk(target):
+                if isinstance(name, ast.Name):
+                    bindings.pop(name.id, None)
+    collected = set()
+    for cls in bindings.values():
+        if issubclass(cls, base_case):
+            for name in dir(cls):
+                found = getattr(cls, name)
+                if name.startswith('test') and isinstance(found, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    collected.add(id(found))
+
+    def walk(node, owner):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if child.name.startswith('test') and id(child) not in collected:
+                    problems.append(f'{label}:{child.lineno} {owner}.{child.name} is never collected')
+            elif isinstance(child, ast.ClassDef):
+                walk(child, child.name if owner == '<module>' else f'{owner}.{child.name}')
+            elif isinstance(child, ast.stmt):
+                walk(child, owner)
+    walk(tree, '<module>')
+    return problems
+
+
+class TestCollection(unittest.TestCase):
+    """Every test a scripts/test_*.py file defines is one unittest collects,
+    judged from the source (TSK-359). Loader errors are not judged here:
+    each file runs through unittest.main, which fails the run on one."""
+
+    def problems(self, source):
+        return collection_problems(source, 'probe.py')
+
+    def test_every_scripts_test_file_collects_what_it_defines(self):
+        files = sorted(Path(__file__).resolve().parent.glob('test_*.py'))
         self.assertTrue(files)
         for path in files:
             with self.subTest(file=path.name):
-                defined = []
-                for node in ast.parse(path.read_text()).body:
-                    if isinstance(node, ast.ClassDef):
-                        defined += [(node.name, item.name, item.lineno) for item in node.body
-                                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-                                    and item.name.startswith('test')]
-                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test'):
-                        defined.append(('<module>', node.name, node.lineno))
-                spec = importlib.util.spec_from_file_location(f'collection_{path.stem}', path)
-                module = importlib.util.module_from_spec(spec)
-                with contextlib.redirect_stdout(io.StringIO()):
-                    spec.loader.exec_module(module)
-                collected = set()
+                self.assertEqual(collection_problems(path.read_text(), path.name), [])
 
-                def walk(suite):
-                    for test in suite:
-                        if isinstance(test, unittest.TestSuite):
-                            walk(test)
-                        else:
-                            collected.add((type(test).__name__, test._testMethodName))
-                walk(unittest.defaultTestLoader.loadTestsFromModule(module))
-                missed = [f'{path.name}:{line} {owner}.{name}' for owner, name, line in defined
-                          if (owner, name) not in collected]
-                self.assertEqual(missed, [], 'defined tests that unittest never collects')
+    def test_a_test_under_a_plain_class_is_refused(self):
+        self.assertEqual(self.problems('import unittest\nclass Helper:\n    def test_lost(self):\n        pass\n'),
+                         ['probe.py:3 Helper.test_lost is never collected'])
 
-    def test_the_guard_catches_a_test_under_a_plain_class(self):
-        import ast
-        source = 'import unittest\nclass Helper:\n    def test_lost(self):\n        pass\n'
-        owners = [node.name for node in ast.parse(source).body if isinstance(node, ast.ClassDef)]
-        namespace = {}
-        exec(compile(source, '<probe>', 'exec'), namespace)
-        self.assertEqual(owners, ['Helper'])
-        self.assertFalse(issubclass(namespace['Helper'], unittest.TestCase))
-        module = type(unittest)('probe')
-        module.__dict__.update(namespace)
-        self.assertEqual(unittest.defaultTestLoader.loadTestsFromModule(module).countTestCases(), 0)
+    def test_a_nested_test_case_is_refused(self):
+        source = ('import unittest\nclass Outer(unittest.TestCase):\n    def test_runs(self):\n        pass\n'
+                  '    class Inner(unittest.TestCase):\n        def test_lost(self):\n            pass\n')
+        self.assertEqual(self.problems(source), ['probe.py:6 Outer.Inner.test_lost is never collected'])
+
+    def test_a_class_inside_a_conditional_is_refused(self):
+        source = 'import unittest\nif True:\n    class Helper:\n        def test_lost(self):\n            pass\n'
+        self.assertEqual(self.problems(source), ['probe.py:4 Helper.test_lost is never collected'])
+
+    def test_a_class_replaced_by_a_later_one_of_the_same_name_is_refused(self):
+        source = ('import unittest\nclass Case(unittest.TestCase):\n    def test_lost(self):\n        pass\n'
+                  'class Case(unittest.TestCase):\n    def test_kept(self):\n        pass\n')
+        self.assertEqual(self.problems(source), ['probe.py:3 Case.test_lost is never collected'])
+
+    def test_a_method_replaced_in_its_own_class_is_refused(self):
+        source = ('import unittest\nclass Case(unittest.TestCase):\n    def test_x(self):\n        pass\n'
+                  '    def test_x(self):\n        pass\n')
+        self.assertEqual(self.problems(source), ['probe.py:3 Case.test_x is never collected'])
+
+    def test_a_class_rebound_to_something_else_is_refused(self):
+        source = 'import unittest\nclass Case(unittest.TestCase):\n    def test_lost(self):\n        pass\nCase = None\n'
+        self.assertEqual(self.problems(source), ['probe.py:3 Case.test_lost is never collected'])
+
+    def test_a_module_level_test_function_is_refused(self):
+        self.assertEqual(self.problems('def test_lost():\n    pass\n'), ['probe.py:1 <module>.test_lost is never collected'])
+
+    def test_load_tests_is_refused(self):
+        source = ('import unittest\nclass Case(unittest.TestCase):\n    def test_x(self):\n        pass\n'
+                  'def load_tests(loader, tests, pattern):\n    raise RuntimeError("boom")\n')
+        self.assertEqual(self.problems(source), ['probe.py:5 defines load_tests; the guard cannot judge its collection'])
+
+    def test_a_mixin_test_collected_through_a_concrete_case_is_accepted(self):
+        source = ('import unittest\nclass Mixin:\n    def test_shared(self):\n        pass\n'
+                  'class Concrete(Mixin, unittest.TestCase):\n    pass\n')
+        self.assertEqual(self.problems(source), [])
+
+    def test_a_case_through_an_in_file_base_and_imported_names_is_accepted(self):
+        source = ('import unittest as ut\nfrom unittest import TestCase as Case\nclass Base(ut.TestCase):\n    pass\n'
+                  'class Child(Base):\n    def test_a(self):\n        pass\nclass Other(Case):\n    def test_b(self):\n        pass\n')
+        self.assertEqual(self.problems(source), [])
+
+    def test_a_helper_named_test_inside_a_test_is_not_a_test(self):
+        source = ('import unittest\nclass Case(unittest.TestCase):\n    def test_x(self):\n'
+                  '        def test_inner():\n            pass\n')
+        self.assertEqual(self.problems(source), [])
+
+    def test_the_guard_agrees_with_unittest_on_each_probe(self):
+        # The loader itself, run on each probe's text, collects fewer tests
+        # than the probe defines exactly where the guard refuses.
+        probes = (
+            ('import unittest\nclass Helper:\n    def test_lost(self):\n        pass\n', 0, True),
+            ('import unittest\nclass Mixin:\n    def test_shared(self):\n        pass\n'
+             'class Concrete(Mixin, unittest.TestCase):\n    pass\n', 1, False),
+            ('import unittest\nclass Case(unittest.TestCase):\n    def test_lost(self):\n        pass\n'
+             'class Case(unittest.TestCase):\n    def test_kept(self):\n        pass\n', 1, True),
+            ('import unittest\nclass Outer(unittest.TestCase):\n    def test_runs(self):\n        pass\n'
+             '    class Inner(unittest.TestCase):\n        def test_lost(self):\n            pass\n', 1, True),
+        )
+        for source, count, refused in probes:
+            with self.subTest(source=source[:40]):
+                namespace = {'__name__': 'probe'}
+                exec(compile(source, 'probe.py', 'exec'), namespace)
+                module = type(unittest)('probe')
+                module.__dict__.update(namespace)
+                self.assertEqual(unittest.defaultTestLoader.loadTestsFromModule(module).countTestCases(), count)
+                self.assertEqual(bool(self.problems(source)), refused)
 
 
 if __name__ == '__main__':
