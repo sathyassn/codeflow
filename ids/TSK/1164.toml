@@ -1,0 +1,11 @@
+id = "TSK-1164"
+uid = "4808b950-8605-4de3-86ce-743e30d1ecc5"
+kind = "TSK"
+title = "The cargo-dist plan runs on a pull request only when release config changes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T01:26:26Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
