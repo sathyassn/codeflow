@@ -27,6 +27,7 @@ mod context;
 pub(super) use context::{judged_declared_target, Declared};
 mod id_registry;
 mod judging;
+mod line_tip;
 pub(crate) mod pr_body;
 mod work_records;
 
@@ -168,6 +169,24 @@ pub struct CiArgs {
     /// hosted CI never passes it.
     #[arg(long, hide = true, requires = "destination")]
     pub advertisement_stdin: bool,
+
+    /// Judge the head as the next tip of this integration line, as a
+    /// landing candidate is: every commit on the head's first-parent chain
+    /// from the line's fetched tip (`origin/<LINE>`) must be a merge or a
+    /// direct commit a landed `line_adoptions` entry names, the rule the
+    /// pre-push hook applies to a push to the line (`work.epic_line`).
+    /// Without it, a run with no pull request and no push context whose
+    /// base is the fetched tip of exactly one epic line cannot tell how the
+    /// head reaches the line and refuses when the head would add a direct
+    /// commit; pass `--into <LINE>` or the body for a pull request head
+    /// that lands by merge.
+    #[arg(long, value_name = "LINE", conflicts_with_all = ["into", "pushed_ref"])]
+    pub line_tip: Option<String>,
+
+    /// The ref a push updates. The pre-push hook passes it: a push is not
+    /// a landing candidate, and the hook itself judges a push to a line.
+    #[arg(long, value_name = "REF", hide = true)]
+    pub pushed_ref: Option<String>,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -682,6 +701,20 @@ pub fn run(args: &CiArgs) -> i32 {
     // That remains a push, not a landing. Hosted PR metadata always wins.
     let pr_context = (args.into.is_some() && !args.advertisement_stdin)
         || is_pr_event(|key| environment.get(key).cloned());
+    // A landing candidate's head judged as its line's next tip (TSK-1155):
+    // the rule the pre-push hook applies to a push to the line.
+    line_tip::check(
+        &root,
+        &line_tip::Run {
+            line_tip: args.line_tip.as_deref(),
+            base: base_sha.as_deref(),
+            head: &head,
+            merge_landing: pr_body.is_some() || pr_context,
+            pushed: args.pushed_ref.is_some() || args.advertisement_stdin,
+        },
+        &mut tagged,
+        &mut ran,
+    );
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
     let stacked = if pr_body.is_none() && !pr_context {
