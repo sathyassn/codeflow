@@ -1,0 +1,11 @@
+id = "TSK-1185"
+uid = "e58ad2de-fac4-4bdc-83b6-e013db79a6e5"
+kind = "TSK"
+title = "import_authority orders a superseding record version whose branch forked before the old version"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T16:41:00Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
