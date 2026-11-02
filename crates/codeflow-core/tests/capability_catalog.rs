@@ -9,6 +9,172 @@ const VALID: &str = include_str!("fixtures/capability-catalog/valid.md");
 const VOCAB: &str = "inventory: incomplete\ngroups: [{name: records, about: Records}]\ntags: [{name: rust, about: Rust}]\n";
 
 #[test]
+fn alias_bomb_record_is_bounded() {
+    use std::time::{Duration, Instant};
+    const CHILD: &str = "CODEFLOW_CATALOG_ALIAS_BOMB_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "alias_bomb_record_is_bounded"])
+            .env("CODEFLOW_CATALOG_ALIAS_BOMB_CHILD", "1")
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "bounded alias-bomb subprocess failed");
+                return;
+            }
+            if started.elapsed() > Duration::from_secs(2) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("alias bomb exceeded the two-second subprocess limit");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let mut bomb = "&a [x,x,x,x,x,x,x,x,x,x]".to_string();
+    for level in b'b'..=b'i' {
+        let previous = char::from(level - 1);
+        bomb = format!(
+            "&{} [{bomb}{}]",
+            char::from(level),
+            format!(",*{previous}").repeat(9)
+        );
+    }
+    let content = format!("---\ntags: {bomb}\n---\n");
+    assert!(content.len() < 1024);
+    let dir = fixture();
+    write(dir.path(), RECORD, &content);
+    let revision = tree(dir.path());
+    let started = Instant::now();
+    let error = load_capability_catalog(dir.path()).unwrap_err();
+    assert!(error.message.contains("tags"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let started = Instant::now();
+    let error = load_capability_catalog_from_tree(dir.path(), &revision).unwrap_err();
+    assert!(error.message.contains("tags"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn typed_record_bounds_name_the_field_and_limit() {
+    for (from, to, key, expected) in [
+        (
+            "tags: [rust]",
+            format!("tags: [{}]", vec!["rust"; 65].join(",")),
+            "tags",
+            "list exceeds 64 items",
+        ),
+        (
+            "summary: Read capability records from a checkout or tree.",
+            format!("summary: {}", "x".repeat(1025)),
+            "summary",
+            "value exceeds 1024 characters",
+        ),
+        (
+            "kind: functional",
+            "kind: functional\nunknown_key: true".to_string(),
+            "unknown_key",
+            "unknown field `unknown_key`",
+        ),
+    ] {
+        let dir = fixture();
+        write(dir.path(), RECORD, &VALID.replace(from, &to));
+        refuse_both(dir.path(), RECORD, expected);
+        assert!(load_capability_catalog(dir.path())
+            .unwrap_err()
+            .message
+            .contains(key));
+    }
+}
+
+#[test]
+fn typed_record_size_limit_is_256_kib() {
+    let dir = fixture();
+    write(
+        dir.path(),
+        RECORD,
+        &format!("{VALID}{}", "x".repeat(262_145 - VALID.len())),
+    );
+    refuse_both(dir.path(), RECORD, "262144 bytes");
+}
+
+#[test]
+fn typed_record_accepts_bounded_scalar_aliases() {
+    let dir = fixture();
+    write(
+        dir.path(),
+        RECORD,
+        &VALID
+            .replace("summary: ", "summary: &text ")
+            .replace("kind: functional", "kind: functional\nmeasure: *text"),
+    );
+    assert!(load_capability_catalog(dir.path()).is_ok());
+}
+
+#[test]
+fn review_input_bytes_are_bounded_before_parsing() {
+    let dir = fixture();
+    let maximum = codeflow_core::capability::CAPABILITY_MAX_FILE_BYTES;
+    write(
+        dir.path(),
+        RECORD,
+        &format!("{VALID}{}", "x".repeat(maximum - VALID.len())),
+    );
+    let revision = tree(dir.path());
+    assert!(load_capability_catalog(dir.path()).is_ok());
+    assert!(load_capability_catalog_from_tree(dir.path(), &revision).is_ok());
+    let oversized = format!("{VALID}{}", "x".repeat(262_144));
+    write(dir.path(), RECORD, &oversized);
+    refuse_both(dir.path(), RECORD, "bytes");
+    std::fs::remove_file(dir.path().join(RECORD)).unwrap();
+    write(dir.path(), "docs/capabilities.md", &"x".repeat(262_145));
+    refuse_both(dir.path(), "docs/capabilities.md", "bytes");
+    write(dir.path(), "docs/capabilities.md", "");
+    write(
+        dir.path(),
+        "docs/capabilities/vocabulary.yaml",
+        &" ".repeat(262_145),
+    );
+    refuse_both(dir.path(), "vocabulary.yaml", "262144 bytes");
+    let (_, issues) = codeflow_core::capability::parse_capabilities(&"x".repeat(262_145));
+    assert!(issues.iter().any(|issue| issue.message.contains("bytes")));
+}
+
+#[test]
+fn typed_yaml_preserves_scalar_text_and_legacy_anchors() {
+    for value in [
+        "\"&literal *literal\"",
+        "'&literal *literal'",
+        "|\n  &literal *literal",
+        "plain text with an ' apostrophe and & literal",
+        ">\n  *literal\n  &literal",
+    ] {
+        let dir = fixture();
+        write(
+            dir.path(),
+            RECORD,
+            &VALID.replace(
+                "summary: Read capability records from a checkout or tree.",
+                &format!("summary: {value}"),
+            ),
+        );
+        assert!(load_capability_catalog(dir.path()).is_ok(), "{value}");
+    }
+    let dir = fixture();
+    write(
+        dir.path(),
+        "docs/capabilities/vocabulary.yaml",
+        &VOCAB.replace("inventory: incomplete", "inventory: &inventory incomplete"),
+    );
+    assert!(load_capability_catalog(dir.path()).is_ok());
+    let (_, issues) = codeflow_core::capability::parse_capabilities(
+        "```yaml\nid: CAP-001\nname: &name catalog\narea: engine\nstatus: planned\n```\n",
+    );
+    assert!(issues.is_empty());
+}
+
+#[test]
 fn empty_or_invalid_catalog_is_present_for_reference_checks() {
     let dir = fixture();
     std::fs::remove_file(dir.path().join(RECORD)).unwrap();

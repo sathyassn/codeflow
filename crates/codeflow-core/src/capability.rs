@@ -149,6 +149,14 @@ fn mask_html_comments(content: &str) -> String {
 pub fn parse_capabilities(content: &str) -> (Vec<CapabilityEntry>, Vec<CapabilityParseIssue>) {
     let mut entries = Vec::new();
     let mut issues = Vec::new();
+    if content.len() > CAPABILITY_MAX_FILE_BYTES {
+        issues.push(CapabilityParseIssue {
+            line: 1,
+            message: format!("input exceeds {CAPABILITY_MAX_FILE_BYTES} bytes"),
+        });
+        return (entries, issues);
+    }
+
     let masked = mask_html_comments(content);
     let lines: Vec<&str> = masked.lines().collect();
     let mut i = 0;
@@ -195,6 +203,9 @@ pub const CAPABILITY_MAX_VALUE_CHARS: usize = 1024;
 pub const CAPABILITY_MAX_LIST_ITEMS: usize = 64;
 /// Maximum keys in a record's frontmatter.
 pub const CAPABILITY_MAX_FRONTMATTER_KEYS: usize = 32;
+/// Maximum bytes per catalog input, including the legacy Markdown and vocabulary.
+pub const CAPABILITY_MAX_FILE_BYTES: usize = 256 * 1024;
+
 const CATALOG_DIR: &str = "docs/capabilities";
 const LEGACY_PATH: &str = "docs/capabilities.md";
 const VOCABULARY_PATH: &str = "docs/capabilities/vocabulary.yaml";
@@ -308,25 +319,62 @@ fn catalog_error(file: &str, message: impl Into<String>) -> CapabilityCatalogErr
     }
 }
 
+// The closed field set and duplicate-key refusals imply the 32-key bound.
+const _: () = assert!(RECORD_KEYS.len() <= CAPABILITY_MAX_FRONTMATTER_KEYS);
+
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RecordFields {
-    #[serde(flatten)]
-    entry: RawCapability,
+    #[serde(deserialize_with = "bounded_string")]
+    id: String,
+    #[serde(deserialize_with = "bounded_string")]
+    name: String,
+    #[serde(deserialize_with = "bounded_string")]
+    area: String,
+    #[serde(deserialize_with = "bounded_string")]
+    status: String,
+    #[serde(deserialize_with = "bounded_string")]
     uid: String,
+    #[serde(deserialize_with = "bounded_string")]
     summary: String,
+    #[serde(deserialize_with = "bounded_string")]
     kind: String,
-    audience: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_optional_string")]
     stage: Option<String>,
+    #[serde(default, deserialize_with = "bounded_optional_string")]
     quality: Option<String>,
+    #[serde(default, deserialize_with = "bounded_optional_string")]
     measure: Option<String>,
+    #[serde(default, deserialize_with = "bounded_optional_string")]
+    group: Option<String>,
+    #[serde(default, deserialize_with = "bounded_optional_string")]
+    since: Option<String>,
+    #[serde(deserialize_with = "bounded_strings")]
+    audience: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_strings")]
+    verified_by: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_strings")]
+    tags: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_strings")]
+    former_ids: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_reference_list")]
+    epics: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_reference_list")]
+    epic_id: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_reference_list")]
+    adrs: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_reference_list")]
+    specs: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_reference_list")]
+    depends_on: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_reference_list")]
+    capabilities: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_reference_list")]
+    related: Vec<String>,
+    #[serde(default, deserialize_with = "bounded_reference_list")]
+    superseded_by: Vec<String>,
     #[serde(default)]
     publish: bool,
-    group: Option<String>,
-    #[serde(default)]
-    tags: Vec<String>,
-    since: Option<String>,
-    #[serde(default)]
-    former_ids: Vec<String>,
 }
 
 fn numeric_capability_id(id: &str) -> bool {
@@ -369,29 +417,102 @@ pub fn validate_capability_path(path: &str) -> Result<(), CapabilityCatalogError
     Ok(())
 }
 
-fn bounds(file: &str, key: &str, value: &serde_yaml::Value) -> Result<(), CapabilityCatalogError> {
-    use serde_yaml::Value;
-    let refuse = |message: &str| catalog_error(file, format!("{key}: {message}"));
-    match value {
-        Value::Sequence(items) => {
-            if items.len() > CAPABILITY_MAX_LIST_ITEMS {
-                return Err(refuse(&format!(
-                    "list exceeds {CAPABILITY_MAX_LIST_ITEMS} items"
-                )));
-            }
-            for item in items {
-                bounds(file, key, item)?;
-            }
-        }
-        Value::String(value) if value.chars().count() > CAPABILITY_MAX_VALUE_CHARS => {
-            return Err(refuse(&format!(
+struct BoundedString(String);
+impl<'de> Deserialize<'de> for BoundedString {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_str(StringVisitor).map(Self)
+    }
+}
+struct StringVisitor;
+impl serde::de::Visitor<'_> for StringVisitor {
+    type Value = String;
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "a string of at most {CAPABILITY_MAX_VALUE_CHARS} characters"
+        )
+    }
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<String, E> {
+        if value.chars().take(CAPABILITY_MAX_VALUE_CHARS + 1).count() > CAPABILITY_MAX_VALUE_CHARS {
+            return Err(E::custom(format!(
                 "value exceeds {CAPABILITY_MAX_VALUE_CHARS} characters"
             )));
         }
-        Value::Mapping(_) | Value::Tagged(_) => {
-            return Err(refuse("expected a scalar or list of scalars"))
+        Ok(value.to_owned())
+    }
+}
+fn bounded_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    BoundedString::deserialize(deserializer).map(|value| value.0)
+}
+fn bounded_optional_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Option::<BoundedString>::deserialize(deserializer).map(|value| value.map(|value| value.0))
+}
+struct StringListVisitor<const ALLOW_SCALAR: bool>;
+impl<'de, const ALLOW_SCALAR: bool> serde::de::Visitor<'de> for StringListVisitor<ALLOW_SCALAR> {
+    type Value = Vec<String>;
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "a list of at most {CAPABILITY_MAX_LIST_ITEMS} strings"
+        )
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(
+        self,
+        mut sequence: A,
+    ) -> Result<Vec<String>, A::Error> {
+        let mut values = Vec::new();
+        while values.len() < CAPABILITY_MAX_LIST_ITEMS {
+            let Some(value) = sequence.next_element::<BoundedString>()? else {
+                return Ok(values);
+            };
+            values.push(value.0);
         }
-        _ => {}
+        // Detect item 65 without deserializing its subtree.
+        sequence.next_element_seed(RejectExtraItem)?;
+        Ok(values)
+    }
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Vec<String>, E> {
+        if ALLOW_SCALAR {
+            StringVisitor.visit_str(value).map(|value| vec![value])
+        } else {
+            Err(E::custom("expected a list of strings"))
+        }
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Vec<String>, E> {
+        if ALLOW_SCALAR {
+            Ok(Vec::new())
+        } else {
+            Err(E::custom("expected a list of strings"))
+        }
+    }
+}
+struct RejectExtraItem;
+impl<'de> serde::de::DeserializeSeed<'de> for RejectExtraItem {
+    type Value = ();
+    fn deserialize<D: serde::Deserializer<'de>>(self, _deserializer: D) -> Result<(), D::Error> {
+        Err(serde::de::Error::custom(format!(
+            "list exceeds {CAPABILITY_MAX_LIST_ITEMS} items"
+        )))
+    }
+}
+fn bounded_strings<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    deserializer.deserialize_seq(StringListVisitor::<false>)
+}
+fn bounded_reference_list<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    deserializer.deserialize_any(StringListVisitor::<true>)
+}
+fn scalar_bound(file: &str, key: &str, value: &str) -> Result<(), CapabilityCatalogError> {
+    if value.chars().take(CAPABILITY_MAX_VALUE_CHARS + 1).count() > CAPABILITY_MAX_VALUE_CHARS {
+        return Err(catalog_error(
+            file,
+            format!("{key}: value exceeds {CAPABILITY_MAX_VALUE_CHARS} characters"),
+        ));
     }
     Ok(())
 }
@@ -413,33 +534,28 @@ fn parse_record(file: &str, content: &str) -> Result<CapabilityRecord, Capabilit
     if !closed {
         return Err(catalog_error(file, "unterminated YAML frontmatter"));
     }
-    let value: serde_yaml::Value = serde_yaml::from_str(&yaml)
-        .map_err(|error| catalog_error(file, format!("malformed YAML: {error}")))?;
-    let map = value
-        .as_mapping()
-        .ok_or_else(|| catalog_error(file, "frontmatter must be a mapping"))?;
-    if map.len() > CAPABILITY_MAX_FRONTMATTER_KEYS {
-        return Err(catalog_error(
-            file,
-            format!("frontmatter: exceeds {CAPABILITY_MAX_FRONTMATTER_KEYS} keys"),
-        ));
-    }
-    for (key, val) in map {
-        let key = key
-            .as_str()
-            .ok_or_else(|| catalog_error(file, "frontmatter key must be a string"))?;
-        if !RECORD_KEYS.contains(&key) {
-            return Err(catalog_error(file, format!("{key}: unknown key")));
-        }
-        bounds(file, key, val)?;
-    }
-    let raw: RecordFields = serde_yaml::from_value(value)
-        .map_err(|error| catalog_error(file, format!("frontmatter: {error}")))?;
+    let raw: RecordFields = serde_yaml::from_str(&yaml)
+        .map_err(|error| catalog_error(file, format!("frontmatter YAML: {error}")))?;
     let uid = uuid::Uuid::parse_str(&raw.uid)
         .map_err(|error| catalog_error(file, format!("uid: {error}")))?
         .to_string();
     Ok(CapabilityRecord {
-        entry: raw.entry.into_entry(1),
+        entry: CapabilityEntry {
+            id: raw.id,
+            name: raw.name,
+            area: raw.area,
+            status: raw.status,
+            verified_by: raw.verified_by,
+            epics: raw.epics,
+            epic_id: raw.epic_id,
+            adrs: raw.adrs,
+            specs: raw.specs,
+            depends_on: raw.depends_on,
+            capabilities: raw.capabilities,
+            related: raw.related,
+            superseded_by: raw.superseded_by,
+            line: 1,
+        },
         file: file.into(),
         uid: Some(uid),
         summary: Some(raw.summary),
@@ -668,16 +784,8 @@ fn parse_vocabulary(content: &str) -> Result<CapabilityVocabulary, CapabilityCat
                     format!("{key}: names must be unique lowercase slugs"),
                 ));
             }
-            bounds(
-                VOCABULARY_PATH,
-                key,
-                &serde_yaml::Value::String(term.name.clone()),
-            )?;
-            bounds(
-                VOCABULARY_PATH,
-                key,
-                &serde_yaml::Value::String(term.about.clone()),
-            )?;
+            scalar_bound(VOCABULARY_PATH, key, &term.name)?;
+            scalar_bound(VOCABULARY_PATH, key, &term.about)?;
         }
     }
     Ok(vocabulary)
@@ -725,6 +833,13 @@ fn parse_catalog_with_issues(
     let mut issues = Vec::new();
     let mut texts = std::collections::BTreeMap::new();
     for (file, bytes) in files {
+        if bytes.len() > CAPABILITY_MAX_FILE_BYTES {
+            issues.push(catalog_error(
+                file,
+                format!("input exceeds {CAPABILITY_MAX_FILE_BYTES} bytes"),
+            ));
+            continue;
+        }
         match std::str::from_utf8(bytes) {
             Ok(text) => {
                 texts.insert(file.as_str(), text);
@@ -913,11 +1028,16 @@ pub(crate) fn inspect_capability_catalog(
         }
     };
     for path in paths {
-        let read = tree.open_regular(&path).and_then(|mut file| {
-            use std::io::Read;
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
-            Ok(bytes)
+        let read = tree.metadata(&path).and_then(|metadata| {
+            if metadata.len() > CAPABILITY_MAX_FILE_BYTES as u64 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("input exceeds {CAPABILITY_MAX_FILE_BYTES} bytes"),
+                ));
+            }
+            // The bounded read also enforces the limit if the file changes
+            // after metadata was read; this precheck supplies a size diagnostic.
+            tree.read(&path, CAPABILITY_MAX_FILE_BYTES as u64)
         });
         let bytes = match read {
             Ok(bytes) => bytes,
@@ -989,6 +1109,20 @@ pub fn load_capability_catalog_from_tree(
                 validate_capability_path(&path)?;
             }
             check_mode(&path, &mode)?;
+            let size = git
+                .run(&["cat-file", "-s", &blob])
+                .map_err(|error| catalog_error(&path, error.to_string()))?;
+            let size = size
+                .strip_suffix('\n')
+                .unwrap_or(&size)
+                .parse::<u64>()
+                .map_err(|error| catalog_error(&path, format!("invalid blob size: {error}")))?;
+            if size > CAPABILITY_MAX_FILE_BYTES as u64 {
+                return Err(catalog_error(
+                    &path,
+                    format!("input exceeds {CAPABILITY_MAX_FILE_BYTES} bytes"),
+                ));
+            }
             selected.push((path, blob));
         }
     }

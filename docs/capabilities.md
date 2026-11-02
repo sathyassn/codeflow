@@ -688,8 +688,9 @@ Records contain YAML frontmatter and Markdown prose, checked by `validate --docs
 | Evidence | References are syntax-checked, never opened or executed. Resolution belongs to TSK-362. A shipped record with only `gap:` evidence accepts `unassessed`, but refuses `beta` or `stable`. |
 | Scalar bound | `CAPABILITY_MAX_VALUE_CHARS` in `capability.rs`: 1024 Unicode characters per scalar or list item. |
 | List bound | `CAPABILITY_MAX_LIST_ITEMS`: 64 items per list. Scalar and list bounds also apply to the vocabulary. |
-| Key bound | `CAPABILITY_MAX_FRONTMATTER_KEYS`: 32 frontmatter keys per record. |
-| Schema refusals | Unknown or duplicate keys, malformed YAML and oversized values name the file and key; key-count errors name `frontmatter`. |
+| Key bound | `CAPABILITY_MAX_FRONTMATTER_KEYS`: 32 frontmatter keys per record. The closed field set contains fewer than 32 fields; unknown and duplicate keys are refused before reading their values. |
+| Input bound | `CAPABILITY_MAX_FILE_BYTES`: 262,144 bytes (256 KiB) per input, including the legacy file, project configuration and vocabulary. Checkout reads are bounded; tree blob sizes are checked before reading their contents. Record frontmatter deserializes directly into typed fields: visitors stop at overlong strings or item 65, and nested collections are refused without expansion. Bounded scalar aliases remain valid. |
+| Schema refusals | Unknown or duplicate keys, malformed YAML and oversized values name the file and key; typed frontmatter errors retain the field name. |
 | Revision | Checkout and pinned-tree readers share validation. Areas and vocabulary come from the selected revision, independently of the checkout. |
 | Vocabulary | `vocabulary.yaml` contains `inventory: incomplete` or `complete`, plus `groups` and `tags` lists of `{name, about}`. Names are unique lowercase slugs within each list. The example stays `incomplete` until inventory work establishes coverage. |
 | Operations | The loader reads data; it performs no migration or id allocation. |
