@@ -19,9 +19,9 @@ window with no duration is placed by position, `primary` first. A window
 that is absent shows `not exposed`.
 
 The Codex method names come from the installed release, not from vendor
-documentation. A different release can rename them, so the reader is
-qualified on `0.166.0` only, and a payload it cannot read is refused with a
-message, never guessed.
+documentation. A different release can rename them. The field names were
+schema checked on `0.166.0`; the reader refuses a payload it cannot read
+with a message and never guesses.
 
 ## AC-3: Codex app-server read in a native seat (to run)
 
@@ -42,16 +42,22 @@ starting. In a project whose `.codeflow/local/accounts.toml` maps one family to
 a second config home:
 
 1. `codeflow models launch-env --family <family>` prints one line,
-   `export <VARIABLE>='<second home>'`.
-2. A Herdr seat of that family starts after that line runs in its pane
-   (the `cf-herdr` launch, `home_line=$(codeflow models launch-env --family
-   <family>) && eval "$home_line"`). The seat's process environment holds that
-   one variable and neither of the other two families' variables.
+   `export <VARIABLE>='<second home>'`; for a family the profile does not map
+   it prints `unset <VARIABLE>`.
+2. A Herdr seat of that family starts only after the published sequence
+   passes in its pane (`cf-herdr`, "Create or resume"): the pane runs that
+   line, then `launch-env --family <family> --check`, and `herdr pane
+   wait-output` sees the confirmation text. With `CODEX_HOME`,
+   `CLAUDE_CONFIG_DIR` or `GROK_HOME` already set in the caller's
+   environment to some other folder, the seat's own variable still holds the
+   mapped folder (or is unset when unmapped). The other two families'
+   variables are inherited unchanged and are not part of this check.
 3. `codeflow models record-limits --family <family>` stores a payload from
    the seat, and `codeflow models limits` shows the account line
    `config home <second home> (via <VARIABLE>)` and the family's windows.
 4. With `token = "x"` added to the profile, `launch-env` exits 2 and prints
-   nothing to `eval`, so no seat starts.
+   nothing to `eval`; the sequence stops at its first `|| exit 1`, so no
+   `herdr agent start` runs and no seat starts.
 
 Not exercised so far: any of the steps above in a seat, a second account that
 is signed in (no credential is copied or created), and a live Claude

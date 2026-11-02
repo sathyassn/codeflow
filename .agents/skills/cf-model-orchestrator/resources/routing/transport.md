@@ -111,14 +111,22 @@ variable and no other, in the seat's shell before its CLI starts:
 | Grok | `GROK_HOME` |
 
 ```bash
-home_line=$(codeflow models launch-env --family <claude|codex|grok>) \
-  && eval "$home_line"
+home_line=$(codeflow models launch-env --family <claude|codex|grok>) || exit 1
+eval "$home_line" || exit 1
+codeflow models launch-env --family <claude|codex|grok> --check || exit 1
 ```
 
-No output means the profile maps no home for that family, and the CLI uses
-its default home. A refused profile exits 2 and prints nothing to `eval`:
-the launch stops there and reports the message, because starting the seat
-anyway would run it under the CLI's default account. A tracked Claude seat also passes the folder to
+Run it in the shell that starts the seat, before its CLI, and start the CLI
+only after all three lines pass. The line is `export VARIABLE='folder'`
+when the profile maps a home for the family, and `unset VARIABLE` when it
+does not (no profile, or no entry for that family), so a home inherited from
+the caller never reaches a seat the profile does not map. `--check` then
+fails unless the shell holds what the profile says. A refused profile exits
+2 and prints its reason on stderr; the first `|| exit 1` stops the launch
+itself, because starting the seat anyway would run it under the CLI's
+default or an inherited account. CodeFlow sets or unsets only the launching
+family's variable; the other two families' variables are inherited
+unchanged. A tracked Claude seat also passes the folder to
 `codeflow delegate init --config-home <dir>`, so each turn's provenance
 names it. CodeFlow never signs in, copies or moves a sign-in, or switches a
 seat between accounts: choosing another account is the operator's, and

@@ -53,6 +53,12 @@ pub struct RecordArgs {
     /// With --limit-hit: Unix time (seconds) the error says the limit resets.
     #[arg(long, value_name = "EPOCH", requires = "limit_hit")]
     resets_at: Option<u64>,
+    /// Config home of the seat that produced the payload. Defaults to the
+    /// family's own config-home variable in this process, or the CLI's
+    /// default home when that is unset. A reading is shown only for the
+    /// config home the current profile names.
+    #[arg(long, value_name = "DIR")]
+    config_home: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -61,8 +67,13 @@ pub struct LaunchEnvArgs {
     #[arg(long, value_enum)]
     family: FamilyArg,
     /// Print the variable and folder as JSON instead of a shell line.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "check")]
     json: bool,
+    /// Do not print a launch line: succeed only when this process's
+    /// environment already matches the profile (the mapped variable is the
+    /// mapped folder; for an unmapped family its variable is unset).
+    #[arg(long)]
+    check: bool,
 }
 
 fn load_profile(root: &Path) -> Result<Option<Profile>, String> {
@@ -76,6 +87,7 @@ fn load_profile(root: &Path) -> Result<Option<Profile>, String> {
 
 pub fn launch_env(args: &LaunchEnvArgs) -> i32 {
     let family = args.family.family();
+    let variable = family.config_home_var();
     let result = super::repo_root()
         .and_then(|root| load_profile(&root))
         .map(|profile| profile.and_then(|p| p.launch_env(family)));
@@ -89,13 +101,45 @@ pub fn launch_env(args: &LaunchEnvArgs) -> i32 {
             return 2;
         }
     };
+    if args.check {
+        let inherited = std::env::var_os(variable);
+        return match (&env, inherited) {
+            (Some(env), Some(value)) if std::path::Path::new(&value) == env.config_home => {
+                println!("{variable} is the mapped config home");
+                0
+            }
+            (None, None) => {
+                println!(
+                    "{variable} is unset; the {} seat uses the CLI's default home",
+                    family.id()
+                );
+                0
+            }
+            (Some(env), _) => {
+                eprintln!(
+                    "models launch-env: {variable} is not the mapped config home {}; stop the launch",
+                    codeflow_core::git::display_path(&env.config_home)
+                );
+                2
+            }
+            (None, Some(_)) => {
+                eprintln!(
+                    "models launch-env: {variable} is set but the profile maps no config home for {}; \
+                     stop the launch (run the unset line from `launch-env`)",
+                    family.id()
+                );
+                2
+            }
+        };
+    }
     let Some(env) = env else {
-        eprintln!(
-            "models launch-env: no config home is mapped for {}; its seats use the CLI's default home",
-            family.id()
-        );
         if args.json {
-            println!("null");
+            println!(
+                "{}",
+                json!({"family": family.id(), "variable": variable, "config_home": null})
+            );
+        } else {
+            println!("unset {variable}");
         }
         return 0;
     };
@@ -137,7 +181,7 @@ pub fn record(args: &RecordArgs) -> i32 {
                 }
                 (
                     "grok limit-hit error",
-                    limits::grok_limit_hit(args.resets_at),
+                    limits::grok_limit_hit(args.resets_at)?,
                 )
             }
             Family::Claude | Family::Codex => {
@@ -162,10 +206,22 @@ pub fn record(args: &RecordArgs) -> i32 {
                 }
             }
         };
-        let local = seats::local_dir(&super::repo_root()?)?;
+        let project = seats::shared_root(&super::repo_root()?)?;
+        let inherited = std::env::var_os(family.config_home_var());
+        let home = args
+            .config_home
+            .clone()
+            .or_else(|| inherited.map(std::path::PathBuf::from))
+            .map(|home| codeflow_core::git::display_path(&home));
         let now = limits::now_secs();
-        let snapshot = limits::record(&local, family, source, &reading, now)?;
-        Ok(snapshot.map(|_| format!("recorded {} limits from {source}", family.id())))
+        let snapshot = limits::record(&project, family, home.as_deref(), source, &reading, now)?;
+        Ok(snapshot.map(|_| {
+            format!(
+                "recorded {} limits from {source} for {}",
+                family.id(),
+                home.as_deref().unwrap_or("the default config home")
+            )
+        }))
     })();
     match outcome {
         Ok(Some(line)) => {
@@ -193,11 +249,17 @@ pub fn show_limits(args: &LimitsArgs) -> i32 {
     let outcome = (|| -> Result<(Vec<FamilyLimits>, Option<Profile>), String> {
         let root = super::repo_root()?;
         let profile = load_profile(&root)?;
-        let local = seats::local_dir(&root)?;
+        let project = seats::shared_root(&root)?;
         let now = limits::now_secs();
         let states = Family::ALL
             .into_iter()
-            .map(|family| limits::state(&local, family, now))
+            .map(|family| {
+                let home = profile
+                    .as_ref()
+                    .and_then(|p| p.config_home(family))
+                    .map(codeflow_core::git::display_path);
+                limits::state(&project, family, home.as_deref(), now)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok((states, profile))
     })();
@@ -302,6 +364,12 @@ fn render(state: &FamilyLimits, profile: Option<&Profile>) {
             Some(reset) => println!("  limit hit reported {}, resets {}", when(at), when(reset)),
             None => println!("  limit hit reported {}, reset time not given", when(at)),
         }
+    }
+    if !state.other_homes.is_empty() {
+        println!(
+            "  unknown for this account: readings exist only for {}",
+            state.other_homes.join(", ")
+        );
     }
     match (&state.source, state.recorded_at) {
         (Some(source), Some(at)) => println!("  read {} from {source}", when(at)),

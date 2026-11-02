@@ -23,8 +23,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::{local_dir, shared_root, Family, LOCAL_DIR};
-use crate::absence::proven_absent;
+use super::{shared_root, Family, LOCAL_DIR};
 
 /// File name of the profile, in the project's local folder or the user's
 /// `CodeFlow` home.
@@ -120,17 +119,27 @@ impl Profile {
         })
     }
 
+    /// The config home a seat of `family` runs under, or `None` for the
+    /// CLI's default home.
+    #[must_use]
+    pub fn config_home(&self, family: Family) -> Option<&Path> {
+        self.families.get(&family)?.config_home.as_deref()
+    }
+
     /// Parse profile text read from `source`.
     ///
-    /// `project_root` is the project's main checkout: a config home inside it
-    /// is refused unless it sits under the untracked local folder, so a
-    /// credential store cannot land in tracked files. `home` expands a leading
-    /// `~`.
+    /// `project_root` is the folder the command runs in; a config home is
+    /// checked against its main checkout and linked worktrees (see
+    /// [`super::boundary`]). `home` expands a leading `~`.
+    ///
+    /// Diagnostics carry a line and column or a key name, never a value or a
+    /// source excerpt, because a mistaken paste must not reach a log.
     ///
     /// # Errors
-    /// Refuses a credential key or value, an unknown key, a relative or
-    /// parent-walking path, a fallback without a valid cap or variable name,
-    /// and a family table that maps nothing.
+    /// Refuses a credential key, a secret-shaped key or value (escapes
+    /// decoded), an unknown key, a relative or parent-walking path, a home
+    /// that could be committed, a fallback without a valid cap or variable
+    /// name, and a family table that maps nothing.
     pub fn parse(
         text: &str,
         source: &Path,
@@ -139,8 +148,9 @@ impl Profile {
     ) -> Result<Profile, String> {
         let value: toml::Value = text
             .parse()
-            .map_err(|error| format!("not valid TOML: {error}"))?;
+            .map_err(|error: toml::de::Error| not_toml(text, &error))?;
         refuse_credentials(&value)?;
+        refuse_secret_shapes(&value)?;
         for line in text.split('\n') {
             if let Some(kind) = crate::hooks::scan::scan_line(line) {
                 return Err(format!(
@@ -148,9 +158,12 @@ impl Profile {
                 ));
             }
         }
-        let raw: Raw = value
-            .try_into()
-            .map_err(|error: toml::de::Error| error.message().to_string())?;
+        let raw: Raw = toml::from_str(text).map_err(|error: toml::de::Error| {
+            format!(
+                "does not match the profile format{}; see docs/delegation.md",
+                at(text, &error)
+            )
+        })?;
         if raw.schema_version != 1 {
             return Err(format!(
                 "unsupported schema_version {}; this CodeFlow reads 1",
@@ -190,6 +203,23 @@ impl Profile {
             families,
         })
     }
+}
+
+/// ` at line L, column C` for a TOML error, or nothing when it has no span.
+fn at(text: &str, error: &toml::de::Error) -> String {
+    let Some(span) = error.span() else {
+        return String::new();
+    };
+    let before = text.get(..span.start).unwrap_or("");
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    format!(" at line {line}, column {column}")
+}
+
+/// A parse failure described by place only: the parser's own message quotes
+/// the offending text, which may be a secret.
+fn not_toml(text: &str, error: &toml::de::Error) -> String {
+    format!("not valid TOML{}", at(text, error))
 }
 
 #[derive(Deserialize)]
@@ -263,6 +293,28 @@ fn refuse_credentials(value: &toml::Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Refuse a key or string whose decoded text looks like a secret. The raw
+/// line scan cannot see through TOML escapes (`\u0073k-...`), so the decoded
+/// text of every key and value, each line of a multi-line string included,
+/// is scanned too. The message names the shape, never the text.
+fn refuse_secret_shapes(value: &toml::Value) -> Result<(), String> {
+    let shape = |text: &str| text.split('\n').find_map(crate::hooks::scan::scan_line);
+    let refuse = |kind: &str| {
+        format!(
+            "a key or value looks like a secret ({kind}); the profile holds paths and caps only"
+        )
+    };
+    match value {
+        toml::Value::String(text) => shape(text).map_or(Ok(()), |kind| Err(refuse(kind))),
+        toml::Value::Array(items) => items.iter().try_for_each(refuse_secret_shapes),
+        toml::Value::Table(table) => table.iter().try_for_each(|(key, inner)| {
+            shape(key).map_or(Ok(()), |kind| Err(refuse(kind)))?;
+            refuse_secret_shapes(inner)
+        }),
+        _ => Ok(()),
+    }
+}
+
 fn resolve_config_home(
     text: &str,
     project_root: &Path,
@@ -289,60 +341,38 @@ fn resolve_config_home(
     {
         return Err(format!("config_home `{text}` must not use . or .. parts"));
     }
-    let shared = shared_root(project_root)?;
-    let local = shared.join(LOCAL_DIR);
-    let inside_project = expanded.starts_with(&shared);
-    if inside_project && !expanded.starts_with(&local) {
-        return Err(format!(
-            "config_home `{text}` is inside the project; a sign-in stored there could be \
-             committed. Use a folder outside the project, or one under {LOCAL_DIR}/"
-        ));
-    }
+    super::boundary::check_config_home(&expanded, project_root)?;
     Ok(expanded)
 }
 
-/// The profile files to try, first match wins: the project's untracked file,
-/// then the user's `CodeFlow` home.
-///
-/// # Errors
-/// As [`super::shared_root`].
-pub fn candidate_paths(root: &Path, codeflow_home: Option<&Path>) -> Result<Vec<PathBuf>, String> {
-    let mut paths = vec![local_dir(root)?.join(PROFILE_FILE)];
-    if let Some(home) = codeflow_home {
-        paths.push(home.join(PROFILE_FILE));
-    }
-    Ok(paths)
-}
-
 /// Load the profile for the project at `root`: `None` when no file exists.
+/// The project's untracked file wins over the one in the user's `CodeFlow`
+/// home. Each file is read without following a link at any component.
 ///
 /// # Errors
-/// A file that exists but cannot be read, is a link, is too large, or is
+/// A file that exists but cannot be read, is under a link, is too large, or is
 /// refused by [`Profile::parse`]; the message names the file.
 pub fn load(
     root: &Path,
     codeflow_home: Option<&Path>,
     user_home: Option<&Path>,
 ) -> Result<Option<Profile>, String> {
-    for path in candidate_paths(root, codeflow_home)? {
-        let unreadable = |error: &dyn std::fmt::Display| {
-            format!(
-                "{}: cannot read ({error}); the profile must be a regular file under 64 KiB",
-                crate::git::display_path(&path)
-            )
-        };
-        // Only a leaf proven missing under a folder that resolves skips a
-        // file; any other state is read, and a failure refuses.
-        if proven_absent(&path).map_err(|error| unreadable(&error))? {
+    let project = shared_root(root)?;
+    let local_file = format!("{LOCAL_DIR}/{PROFILE_FILE}");
+    let mut places = vec![(project, local_file)];
+    if let Some(home) = codeflow_home {
+        places.push((home.to_path_buf(), PROFILE_FILE.to_string()));
+    }
+    for (base, relative) in places {
+        let Some(bytes) = super::confined_read(&base, &relative, MAX_PROFILE_BYTES)? else {
             continue;
-        }
-        let bytes = crate::bounded_file::read_bounded_regular(&path, MAX_PROFILE_BYTES)
-            .map_err(|error| unreadable(&error))?;
-        let text = String::from_utf8(bytes)
-            .map_err(|_| format!("{}: not UTF-8 text", crate::git::display_path(&path)))?;
+        };
+        let path = base.join(&relative);
+        let shown = crate::git::display_path(&path);
+        let text = String::from_utf8(bytes).map_err(|_| format!("{shown}: not UTF-8 text"))?;
         return Profile::parse(&text, &path, root, user_home)
             .map(Some)
-            .map_err(|reason| format!("{}: {reason}", crate::git::display_path(&path)));
+            .map_err(|reason| format!("{shown}: {reason}"));
     }
     Ok(None)
 }
@@ -431,6 +461,37 @@ config_home = "/srv/claude-work"
                       key_env = \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP0123456789\"\n\
                       spend_cap_usd = 5\n";
         assert!(parse(pasted).unwrap_err().contains("NAME"));
+    }
+
+    #[test]
+    fn a_secret_shape_hidden_by_toml_escapes_is_refused() {
+        let key = "a1".repeat(20);
+        // `\u0073` decodes to `s`: the raw line has no `sk-` in it.
+        for text in [
+            format!("schema_version = 1\n[families.codex]\nconfig_home = \"/srv/\\u0073k-{key}\"\n"),
+            format!(
+                "schema_version = 1\n[families.codex]\nconfig_home = \"\"\"\n/srv/\\u0073k-{key}\"\"\"\n"
+            ),
+            format!("schema_version = 1\n[families.\"\\u0073k-{key}\"]\nconfig_home = \"/a\"\n"),
+        ] {
+            let error = parse(&text).unwrap_err();
+            assert!(error.contains("looks like a secret"), "{error}");
+            assert!(!error.contains(&key), "the diagnostic must not echo the value");
+        }
+    }
+
+    #[test]
+    fn diagnostics_name_a_place_and_never_quote_the_text() {
+        for text in [
+            "schema_version = 1\nsecret = \"SYNTHETIC_PRIVATE_VALUE\n",
+            "schema_version = 1\n[families.codex]\nconfig_home = 5\nnote = \"SYNTHETIC_PRIVATE_VALUE\"\n",
+            "schema_version = \"SYNTHETIC_PRIVATE_VALUE\"\n",
+            "schema_version = 1\n[families.codex]\nconfig_home = [\"SYNTHETIC_PRIVATE_VALUE\"]\n",
+        ] {
+            let error = parse(text).unwrap_err();
+            assert!(!error.contains("SYNTHETIC_PRIVATE_VALUE"), "{error}");
+            assert!(error.contains("line") || error.contains("credential"), "{error}");
+        }
     }
 
     #[test]

@@ -9,10 +9,38 @@
 use std::path::{Path, PathBuf};
 
 pub mod accounts;
+pub mod boundary;
 pub mod limits;
 
 /// Folder, under the main checkout, for untracked per-machine state.
 pub const LOCAL_DIR: &str = ".codeflow/local";
+
+/// Read `relative` below `base` without following a link at any component,
+/// or `None` when the file is proven missing under a folder that resolves.
+///
+/// # Errors
+/// A link or non-folder in the path, a leaf that is not a regular file, a file
+/// over `maximum` bytes, or any other read failure; the message names the file.
+pub(crate) fn confined_read(
+    base: &Path,
+    relative: &str,
+    maximum: u64,
+) -> Result<Option<Vec<u8>>, String> {
+    let shown = crate::git::display_path(&base.join(relative));
+    let unreadable = |error: &dyn std::fmt::Display| format!("{shown}: cannot read ({error})");
+    if let Some(link) = crate::contained::linked_component(base, relative) {
+        return Err(unreadable(&format!(
+            "{link} is a symbolic link or junction; CodeFlow never reads or writes local state through one"
+        )));
+    }
+    if crate::absence::proven_absent(&base.join(relative)).map_err(|e| unreadable(&e))? {
+        return Ok(None);
+    }
+    let tree = crate::contained::Tree::open(base).map_err(|e| unreadable(&e))?;
+    tree.read(relative, maximum)
+        .map(Some)
+        .map_err(|e| unreadable(&e))
+}
 
 /// A model family a seat can run: the CLI whose config home and limits are
 /// kept per project.
@@ -57,39 +85,39 @@ impl Family {
     }
 }
 
+/// The repository at `root`, or `None` when the folder is not one.
+///
+/// # Errors
+/// The repository exists but cannot be opened, so what it says cannot be
+/// told; the caller refuses instead of reading a different folder.
+pub(crate) fn open_repo(root: &Path) -> Result<Option<git2::Repository>, String> {
+    match git2::Repository::open(root) {
+        Ok(repo) => Ok(Some(repo)),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "cannot open the repository at {}: {}",
+            crate::git::display_path(root),
+            error.message()
+        )),
+    }
+}
+
 /// The main checkout's root when `root` is a linked worktree of it, else
 /// `root`. The untracked profile and the limit store live in the main
 /// checkout, so every worktree of a project reads the same ones. A folder
 /// that is not a repository is its own root.
 ///
 /// # Errors
-/// The repository exists but cannot be opened, so the shared folder cannot be
-/// told; the caller refuses instead of reading a different folder.
+/// The folder is a repository whose metadata cannot be read.
 pub fn shared_root(root: &Path) -> Result<PathBuf, String> {
-    let repo = match git2::Repository::open(root) {
-        Ok(repo) => repo,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(root.to_path_buf()),
-        Err(error) => {
-            return Err(format!(
-                "cannot open the repository at {}: {}",
-                crate::git::display_path(root),
-                error.message()
-            ))
-        }
+    let Some(repo) = open_repo(root)? else {
+        return Ok(root.to_path_buf());
     };
     let common = repo.commondir();
     let main = (common.file_name().is_some_and(|name| name == ".git"))
         .then(|| common.parent().map(Path::to_path_buf))
         .flatten();
     Ok(main.unwrap_or_else(|| root.to_path_buf()))
-}
-
-/// The untracked local folder of the project that holds `root`.
-///
-/// # Errors
-/// As [`shared_root`].
-pub fn local_dir(root: &Path) -> Result<PathBuf, String> {
-    Ok(shared_root(root)?.join(LOCAL_DIR))
 }
 
 #[cfg(test)]
@@ -125,10 +153,9 @@ mod tests {
             main
         );
         assert_eq!(
-            local_dir(&linked).unwrap(),
-            shared_root(&linked).unwrap().join(LOCAL_DIR)
+            std::fs::canonicalize(shared_root(&main).unwrap()).unwrap(),
+            main
         );
-        assert_eq!(local_dir(&main).unwrap(), main.join(LOCAL_DIR));
         // A folder that is not a repository is its own root.
         let plain = dir.path().join("plain");
         assert_eq!(shared_root(&plain).unwrap(), plain);

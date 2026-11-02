@@ -1,9 +1,9 @@
 //! Limit readings of each family, in one structure (TSK-431).
 //!
 //! A reading is a percentage used and a reset time per window, kept in a
-//! small file per family under the project's untracked local folder. Nothing
-//! here asks a vendor for anything: the readings come from what each CLI
-//! already hands the host.
+//! small file per family under the project's untracked local folder, one entry
+//! per config home that produced readings. Nothing here asks a vendor for
+//! anything: the readings come from what each CLI already hands the host.
 //!
 //! | Family | Where the reading comes from | Shape |
 //! |---|---|---|
@@ -15,30 +15,61 @@
 //! names are from the installed CLI's own generated schema
 //! (`codex app-server generate-json-schema`), not from vendor documentation;
 //! the qualification record says which release was read.
+//!
+//! A reading belongs to the config home of the process that recorded it, never
+//! to whatever the profile names later: a profile change makes the old reading
+//! show as belonging to another home. Every read and write goes through the
+//! confined local folder (no link at any component), and the read-merge-write
+//! of one family is serialized by a lock file.
 
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::Family;
+use super::{confined_read, Family, LOCAL_DIR};
 
 const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
+const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024;
 const FIVE_HOUR_MAX_MINS: i64 = 6 * 60;
 const WEEKLY_MIN_MINS: i64 = 6 * 24 * 60;
+const MAX_WINDOW_MINS: i64 = 366 * 24 * 60;
+const MAX_HOMES: usize = 8;
+const LOCK_WAIT: Duration = Duration::from_secs(10);
+
+/// The latest time any input may carry: 9999-12-31T23:59:59Z, the last second
+/// the RFC 3339 form shown to the operator can print. One range for payload
+/// times, `--resets-at`, the clock and stored files.
+pub const MAX_EPOCH: u64 = 253_402_300_799;
 
 /// Folder, under the local folder, that holds one reading file per family.
 pub const LIMITS_DIR: &str = "limits";
 
 /// One usage window.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Window {
     /// Share of the window used, 0 to 100.
     pub used_percent: f64,
     /// Unix time the window resets, when the CLI says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<u64>,
+}
+
+impl Window {
+    fn validate(&self, what: &str) -> Result<(), String> {
+        if !(self.used_percent.is_finite() && (0.0..=100.0).contains(&self.used_percent)) {
+            return Err(format!(
+                "{what}.used_percent must be a number from 0 to 100"
+            ));
+        }
+        if let Some(reset) = self.resets_at {
+            valid_time(reset, &format!("{what}.resets_at"))?;
+        }
+        Ok(())
+    }
 }
 
 /// What a payload carried.
@@ -55,22 +86,37 @@ pub struct Reading {
 }
 
 impl Reading {
-    fn is_empty(&self) -> bool {
+    /// Whether the payload carried nothing to record.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.five_hour.is_none() && self.weekly.is_none() && !self.limit_hit
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if let Some(window) = &self.five_hour {
+            window.validate("five_hour")?;
+        }
+        if let Some(window) = &self.weekly {
+            window.validate("weekly")?;
+        }
+        if let Some(reset) = self.limit_hit_resets_at {
+            valid_time(reset, "limit_hit_resets_at")?;
+        }
+        Ok(())
     }
 }
 
-/// A stored reading.
+/// What one config home has reported.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Snapshot {
-    /// Always 1.
-    pub schema_version: u32,
-    /// Family id.
-    pub family: String,
+pub struct HomeReading {
+    /// The config home of the recording process (a folder path, never a
+    /// credential), or `None` for the CLI's default home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_home: Option<String>,
     /// Where the reading came from.
     pub source: String,
-    /// Unix time the file was last written.
+    /// Unix time the entry was last written.
     pub recorded_at: u64,
     /// The 5-hour window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,6 +132,103 @@ pub struct Snapshot {
     pub limit_hit_resets_at: Option<u64>,
 }
 
+/// A stored file: the readings of one family, per producing config home.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Snapshot {
+    /// Always 2.
+    pub schema_version: u32,
+    /// Family id.
+    pub family: String,
+    /// One entry per config home that reported, newest data last written.
+    pub homes: Vec<HomeReading>,
+}
+
+fn valid_time(time: u64, what: &str) -> Result<(), String> {
+    if time > MAX_EPOCH {
+        return Err(format!(
+            "{what} must be a Unix time from 0 to {MAX_EPOCH} (year 9999)"
+        ));
+    }
+    Ok(())
+}
+
+fn valid_home(home: &str) -> Result<(), String> {
+    if home.is_empty()
+        || home.len() > 1024
+        || home.chars().any(char::is_control)
+        || !Path::new(home).is_absolute()
+    {
+        return Err(
+            "a config home must be an absolute path of at most 1024 bytes with no control \
+             characters"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn valid_source(source: &str) -> Result<(), String> {
+    if source.is_empty() || source.len() > 128 || source.chars().any(char::is_control) {
+        return Err("a source label must be 1 to 128 bytes with no control characters".into());
+    }
+    Ok(())
+}
+
+fn same_home(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Path::new(a) == Path::new(b),
+        _ => false,
+    }
+}
+
+impl HomeReading {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(home) = &self.config_home {
+            valid_home(home)?;
+        }
+        valid_source(&self.source)?;
+        valid_time(self.recorded_at, "recorded_at")?;
+        if let Some(window) = &self.five_hour {
+            window.validate("five_hour")?;
+        }
+        if let Some(window) = &self.weekly {
+            window.validate("weekly")?;
+        }
+        for (time, what) in [
+            (self.limit_hit_at, "limit_hit_at"),
+            (self.limit_hit_resets_at, "limit_hit_resets_at"),
+        ] {
+            if let Some(time) = time {
+                valid_time(time, what)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Snapshot {
+    fn validate(&self, family: Family) -> Result<(), String> {
+        if self.schema_version != 2 || self.family != family.id() {
+            return Err(format!("not a version 2 snapshot of {}", family.id()));
+        }
+        if self.homes.len() > MAX_HOMES {
+            return Err(format!("more than {MAX_HOMES} homes"));
+        }
+        for (position, home) in self.homes.iter().enumerate() {
+            home.validate()?;
+            let repeated = self.homes[..position]
+                .iter()
+                .any(|other| same_home(other.config_home.as_deref(), home.config_home.as_deref()));
+            if repeated {
+                return Err("a config home is listed twice".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Seconds since the Unix epoch.
 #[must_use]
 pub fn now_secs() -> u64 {
@@ -94,68 +237,110 @@ pub fn now_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn percent(value: &Value, what: &str) -> Result<f64, String> {
-    let number = value
-        .as_f64()
-        .filter(|n| n.is_finite() && (0.0..=100.0).contains(n))
-        .ok_or_else(|| format!("{what} must be a number from 0 to 100"))?;
-    Ok(number)
-}
-
-/// A JSON writer may print whole seconds as `1738425600.0`; accept that, not
-/// a fraction, a negative number or one too large to be a time.
-#[allow(
-    clippy::float_cmp,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
-fn whole_seconds(n: f64) -> Option<u64> {
-    (n.is_finite() && (0.0..1e15).contains(&n) && n.trunc() == n).then_some(n as u64)
-}
-
-fn epoch(value: Option<&Value>, what: &str) -> Result<Option<u64>, String> {
-    match value {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => v
-            .as_u64()
-            .or_else(|| v.as_f64().and_then(whole_seconds))
-            .map(Some)
-            .ok_or_else(|| format!("{what} must be a Unix time in whole seconds")),
-    }
-}
-
 fn parse_json(text: &str) -> Result<Value, String> {
     if text.len() > MAX_PAYLOAD_BYTES {
         return Err("payload is larger than 256 KiB".into());
     }
-    serde_json::from_str(text).map_err(|error| format!("payload is not JSON: {error}"))
+    let json: Value =
+        serde_json::from_str(text).map_err(|error| format!("payload is not JSON: {error}"))?;
+    if !json.is_object() {
+        return Err("payload must be a JSON object".into());
+    }
+    Ok(json)
+}
+
+/// A field that may be absent or null, but when present must be an object.
+fn optional_object<'a>(
+    parent: &'a Value,
+    key: &str,
+    path: &str,
+) -> Result<Option<&'a Value>, String> {
+    match parent.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) if value.is_object() => Ok(Some(value)),
+        Some(_) => Err(format!("{path} must be an object")),
+    }
+}
+
+/// A required percentage, 0 to 100.
+fn percent(entry: &Value, key: &str, path: &str) -> Result<f64, String> {
+    let value = entry
+        .get(key)
+        .ok_or_else(|| format!("{path}.{key} is missing"))?;
+    value
+        .as_f64()
+        .filter(|n| n.is_finite() && (0.0..=100.0).contains(n))
+        .ok_or_else(|| format!("{path}.{key} must be a number from 0 to 100"))
+}
+
+/// Whole seconds as an integer, or a float with no fraction (`1738425600.0`).
+// MAX_EPOCH is far below 2^53, so the float comparison and the casts are exact.
+#[allow(
+    clippy::float_cmp,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn whole_seconds(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        let n = value.as_f64()?;
+        (n.is_finite() && n >= 0.0 && n <= MAX_EPOCH as f64 && n.trunc() == n).then_some(n as u64)
+    })
+}
+
+/// An optional Unix time in the one supported range.
+fn epoch(entry: &Value, key: &str, path: &str) -> Result<Option<u64>, String> {
+    match entry.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let time = whole_seconds(value)
+                .ok_or_else(|| format!("{path}.{key} must be a Unix time in whole seconds"))?;
+            valid_time(time, &format!("{path}.{key}"))?;
+            Ok(Some(time))
+        }
+    }
+}
+
+/// An optional window length in minutes: a whole number from 1 to a year.
+fn duration_mins(entry: &Value, path: &str) -> Result<Option<i64>, String> {
+    match entry.get("windowDurationMins") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let mins = value
+                .as_i64()
+                .filter(|mins| (1..=MAX_WINDOW_MINS).contains(mins))
+                .ok_or_else(|| {
+                    format!(
+                        "{path}.windowDurationMins must be a whole number of minutes from 1 to \
+                         {MAX_WINDOW_MINS}"
+                    )
+                })?;
+            Ok(Some(mins))
+        }
+    }
 }
 
 /// Read Claude Code's statusline JSON. A payload without `rate_limits` (an
 /// API-key session, or before the first response) is an empty reading, not an
-/// error.
+/// error, and so is a window that is absent or null; a field of the wrong type
+/// is an error.
 ///
 /// # Errors
-/// Invalid JSON, or a window with a malformed percentage or reset time.
+/// Invalid JSON, or a field with a wrong type or a value out of range.
 pub fn parse_claude_statusline(text: &str) -> Result<Reading, String> {
     let json = parse_json(text)?;
     let mut reading = Reading::default();
-    let Some(limits) = json.get("rate_limits").filter(|v| v.is_object()) else {
+    let Some(limits) = optional_object(&json, "rate_limits", "rate_limits")? else {
         return Ok(reading);
     };
     let window = |name: &str| -> Result<Option<Window>, String> {
-        let Some(entry) = limits.get(name).filter(|v| v.is_object()) else {
+        let path = format!("rate_limits.{name}");
+        let Some(entry) = optional_object(limits, name, &path)? else {
             return Ok(None);
         };
-        let used = entry
-            .get("used_percentage")
-            .ok_or_else(|| format!("rate_limits.{name}.used_percentage is missing"))?;
         Ok(Some(Window {
-            used_percent: percent(used, &format!("rate_limits.{name}.used_percentage"))?,
-            resets_at: epoch(
-                entry.get("resets_at"),
-                &format!("rate_limits.{name}.resets_at"),
-            )?,
+            used_percent: percent(entry, "used_percentage", &path)?,
+            resets_at: epoch(entry, "resets_at", &path)?,
         }))
     };
     reading.five_hour = window("five_hour")?;
@@ -166,11 +351,13 @@ pub fn parse_claude_statusline(text: &str) -> Result<Reading, String> {
 /// Read a Codex app-server rate-limit payload: the `account/rateLimits/read`
 /// result, the `account/rateLimits/updated` params, or either wrapped in its
 /// JSON-RPC envelope. Windows are told apart by `windowDurationMins` (up to 6
-/// hours is the 5-hour window, 6 days or more is the weekly one); a window
-/// that gives no duration is placed by position, `primary` first.
+/// hours is the 5-hour window, 6 days or more is the weekly one, any length
+/// between is not one this reads and is left out); a window that gives no
+/// duration is placed by position, `primary` first.
 ///
 /// # Errors
-/// Invalid JSON, a missing `rateLimits`, or a window with a malformed value.
+/// Invalid JSON, a missing `rateLimits`, or a field with a wrong type or a
+/// value out of range.
 pub fn parse_codex_rate_limits(text: &str) -> Result<Reading, String> {
     let mut json = parse_json(text)?;
     for envelope in ["params", "result"] {
@@ -184,20 +371,15 @@ pub fn parse_codex_rate_limits(text: &str) -> Result<Reading, String> {
         .ok_or("no rateLimits object; expected the account/rateLimits read result or update")?;
     let mut reading = Reading::default();
     for (position, name) in ["primary", "secondary"].into_iter().enumerate() {
-        let Some(entry) = limits.get(name).filter(|v| v.is_object()) else {
+        let path = format!("rateLimits.{name}");
+        let Some(entry) = optional_object(limits, name, &path)? else {
             continue;
         };
-        let used = entry
-            .get("usedPercent")
-            .ok_or_else(|| format!("rateLimits.{name}.usedPercent is missing"))?;
         let window = Window {
-            used_percent: percent(used, &format!("rateLimits.{name}.usedPercent"))?,
-            resets_at: epoch(
-                entry.get("resetsAt"),
-                &format!("rateLimits.{name}.resetsAt"),
-            )?,
+            used_percent: percent(entry, "usedPercent", &path)?,
+            resets_at: epoch(entry, "resetsAt", &path)?,
         };
-        let weekly = match entry.get("windowDurationMins").and_then(Value::as_i64) {
+        let weekly = match duration_mins(entry, &path)? {
             Some(mins) if mins <= FIVE_HOUR_MAX_MINS => false,
             Some(mins) if mins >= WEEKLY_MIN_MINS => true,
             Some(_) => continue,
@@ -214,92 +396,181 @@ pub fn parse_codex_rate_limits(text: &str) -> Result<Reading, String> {
 
 /// A Grok Build limit-hit report: Grok exposes no usage reading, so the error
 /// itself is the signal.
-#[must_use]
-pub fn grok_limit_hit(resets_at: Option<u64>) -> Reading {
-    Reading {
+///
+/// # Errors
+/// The reset time is outside the supported range.
+pub fn grok_limit_hit(resets_at: Option<u64>) -> Result<Reading, String> {
+    if let Some(reset) = resets_at {
+        valid_time(reset, "the reset time")?;
+    }
+    Ok(Reading {
         limit_hit: true,
         limit_hit_resets_at: resets_at,
         ..Reading::default()
+    })
+}
+
+fn limits_folder() -> String {
+    format!("{LOCAL_DIR}/{LIMITS_DIR}")
+}
+
+fn file_for(family: Family) -> String {
+    format!("{}/{}.json", limits_folder(), family.id())
+}
+
+/// Whether opening the lock failed with the transient "no such file" a
+/// concurrent replace in the same folder can cause on macOS. A link in the path
+/// is reported by [`crate::contained::Tree`] without an OS error code, so it
+/// never matches.
+#[cfg(unix)]
+fn lock_creation_raced(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ENOENT)
+}
+
+#[cfg(not(unix))]
+fn lock_creation_raced(_: &std::io::Error) -> bool {
+    false
+}
+
+/// An exclusive hold on one family's reading file while it is merged.
+struct FamilyLock {
+    _file: std::fs::File,
+}
+
+impl FamilyLock {
+    fn acquire(tree: &crate::contained::Tree, family: Family) -> Result<Self, String> {
+        let relative = format!("{}/{}.lock", limits_folder(), family.id());
+        let shown = crate::git::display_path(&tree.path().join(&relative));
+        let started = Instant::now();
+        // Creating the lock while another recorder replaces the snapshot in
+        // the same folder can report "not found" on macOS (APFS) for an
+        // instant, although the folder exists. Open again, bounded by the
+        // same wait as the lock itself.
+        let file = loop {
+            match tree.lock_file(&relative) {
+                Ok(file) => break file,
+                Err(error) if lock_creation_raced(&error) && started.elapsed() < LOCK_WAIT => {
+                    tree.create_dir_all(&limits_folder())
+                        .map_err(|e| format!("cannot use {}: {e}", limits_folder()))?;
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => return Err(format!("{shown}: cannot open the lock ({error})")),
+            }
+        };
+        loop {
+            match file.try_lock_exclusive() {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(error) if error.kind() == fs2::lock_contended_error().kind() => {
+                    if started.elapsed() >= LOCK_WAIT {
+                        return Err(format!(
+                            "{shown}: another process holds the lock; try again"
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => return Err(format!("{shown}: cannot take the lock ({error})")),
+            }
+        }
     }
 }
 
-fn file_for(local: &Path, family: Family) -> PathBuf {
-    local.join(LIMITS_DIR).join(format!("{}.json", family.id()))
-}
-
-/// Merge `reading` into the family's stored snapshot and write it. A window
-/// the reading carries replaces the stored one; a window it lacks is kept
-/// (Codex updates are sparse); a window already past its reset time is
-/// dropped first.
+/// Merge `reading` into the stored entry of the config home that produced it
+/// (`home`, `None` for the CLI's default home) and write the file. A window the
+/// reading carries replaces the stored one; a window it lacks is kept (Codex
+/// updates are sparse); a window already past its reset time is dropped first.
+/// The read, merge and replace happen under a per-family lock, so two
+/// recorders never lose each other's windows.
 ///
 /// Returns `None`, writing nothing, when the reading is empty.
 ///
 /// # Errors
-/// The stored file is unreadable or invalid, or the write fails.
+/// An input outside its range, a stored file that is unreadable or invalid, a
+/// link or non-folder in the local folder's path, a lock that stays held, or a
+/// failed write.
 pub fn record(
-    local: &Path,
+    project: &Path,
     family: Family,
+    home: Option<&str>,
     source: &str,
     reading: &Reading,
     now: u64,
-) -> Result<Option<Snapshot>, String> {
+) -> Result<Option<HomeReading>, String> {
+    if let Some(home) = home {
+        valid_home(home)?;
+    }
+    valid_source(source)?;
+    valid_time(now, "the clock")?;
+    reading.validate()?;
     if reading.is_empty() {
         return Ok(None);
     }
-    let mut snapshot = load(local, family)?.unwrap_or(Snapshot {
-        schema_version: 1,
+    let tree = crate::contained::Tree::open(project).map_err(|e| {
+        format!(
+            "{}: cannot be opened ({e})",
+            crate::git::display_path(project)
+        )
+    })?;
+    tree.create_dir_all(&limits_folder())
+        .map_err(|e| format!("cannot use {}: {e}", limits_folder()))?;
+    let _lock = FamilyLock::acquire(&tree, family)?;
+    let mut snapshot = load(project, family)?.unwrap_or(Snapshot {
+        schema_version: 2,
         family: family.id().into(),
-        source: source.into(),
-        recorded_at: now,
-        five_hour: None,
-        weekly: None,
-        limit_hit_at: None,
-        limit_hit_resets_at: None,
+        homes: Vec::new(),
     });
+    let position = snapshot
+        .homes
+        .iter()
+        .position(|entry| same_home(entry.config_home.as_deref(), home));
+    let mut entry = position.map_or_else(
+        || HomeReading {
+            config_home: home.map(str::to_string),
+            source: source.into(),
+            recorded_at: now,
+            five_hour: None,
+            weekly: None,
+            limit_hit_at: None,
+            limit_hit_resets_at: None,
+        },
+        |at| snapshot.homes.remove(at),
+    );
     let live = |w: Option<Window>| w.filter(|w| w.resets_at.is_none_or(|t| t > now));
-    snapshot.five_hour = reading.five_hour.or(live(snapshot.five_hour));
-    snapshot.weekly = reading.weekly.or(live(snapshot.weekly));
+    entry.five_hour = reading.five_hour.or(live(entry.five_hour));
+    entry.weekly = reading.weekly.or(live(entry.weekly));
     if reading.limit_hit {
-        snapshot.limit_hit_at = Some(now);
-        snapshot.limit_hit_resets_at = reading.limit_hit_resets_at;
+        entry.limit_hit_at = Some(now);
+        entry.limit_hit_resets_at = reading.limit_hit_resets_at;
     }
-    snapshot.source = source.into();
-    snapshot.recorded_at = now;
-    let path = file_for(local, family);
-    let dir = path.parent().ok_or("no limits folder")?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    entry.source = source.into();
+    entry.recorded_at = now;
+    snapshot.homes.push(entry.clone());
+    if snapshot.homes.len() > MAX_HOMES {
+        snapshot.homes.sort_by_key(|h| h.recorded_at);
+        snapshot.homes.remove(0);
+    }
+    snapshot.validate(family)?;
     let text = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())? + "\n";
-    let mut file = tempfile::NamedTempFile::new_in(dir)
-        .map_err(|e| format!("cannot write in {}: {e}", dir.display()))?;
-    std::io::Write::write_all(&mut file, text.as_bytes())
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    file.persist(&path)
-        .map_err(|e| format!("cannot replace {}: {}", path.display(), e.error))?;
-    Ok(Some(snapshot))
+    tree.write(&file_for(family), text.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", file_for(family)))?;
+    Ok(Some(entry))
 }
 
 /// The stored snapshot for a family, or `None` when nothing was recorded.
 ///
 /// # Errors
-/// The file exists but is a link, too large or not a valid snapshot.
-pub fn load(local: &Path, family: Family) -> Result<Option<Snapshot>, String> {
-    let path = file_for(local, family);
-    let unreadable =
-        |error: &dyn std::fmt::Display| format!("{}: cannot read ({error})", path.display());
-    if crate::absence::proven_absent(&path).map_err(|error| unreadable(&error))? {
+/// The file exists but is under a link, is not a regular file, is too large or
+/// is not a valid snapshot (a percentage or time out of range included).
+pub fn load(project: &Path, family: Family) -> Result<Option<Snapshot>, String> {
+    let relative = file_for(family);
+    let Some(bytes) = confined_read(project, &relative, MAX_SNAPSHOT_BYTES)? else {
         return Ok(None);
-    }
-    let bytes = crate::bounded_file::read_bounded_regular(&path, 64 * 1024)
-        .map_err(|error| unreadable(&error))?;
+    };
+    let shown = crate::git::display_path(&project.join(&relative));
     let snapshot: Snapshot = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("{}: not a limit snapshot ({error})", path.display()))?;
-    if snapshot.schema_version != 1 || snapshot.family != family.id() {
-        return Err(format!(
-            "{}: not a version 1 snapshot of {}",
-            path.display(),
-            family.id()
-        ));
-    }
+        .map_err(|error| format!("{shown}: not a limit snapshot ({error})"))?;
+    snapshot
+        .validate(family)
+        .map_err(|reason| format!("{shown}: {reason}"))?;
     Ok(Some(snapshot))
 }
 
@@ -307,7 +578,7 @@ pub fn load(local: &Path, family: Family) -> Result<Option<Snapshot>, String> {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum WindowView {
-    /// The CLI gave no reading for this window.
+    /// No reading for this window and this config home.
     NotExposed,
     /// A reading still inside its window.
     Used {
@@ -325,7 +596,7 @@ pub enum WindowView {
     },
 }
 
-/// One family's limit state at a moment.
+/// One family's limit state at a moment, for one config home.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FamilyLimits {
     /// Family id.
@@ -342,8 +613,12 @@ pub struct FamilyLimits {
     pub source: Option<String>,
     /// Unix time of the reading.
     pub recorded_at: Option<u64>,
-    /// Whether the family exposes any reading in this project.
+    /// Whether this config home has a reading.
     pub exposed: bool,
+    /// Config homes that have readings other than the one asked about (the
+    /// default home is `default home`). Those readings are not this
+    /// account's and are not shown as its windows.
+    pub other_homes: Vec<String>,
 }
 
 fn view(window: Option<Window>, now: u64) -> WindowView {
@@ -362,22 +637,42 @@ fn view(window: Option<Window>, now: u64) -> WindowView {
     }
 }
 
-/// The limit state of `family` at `now`.
+/// The limit state of `family` at `now` for the config home `home` (`None` for
+/// the CLI's default home), as the current profile says it.
 ///
 /// # Errors
 /// The stored snapshot is invalid.
-pub fn state(local: &Path, family: Family, now: u64) -> Result<FamilyLimits, String> {
-    let snapshot = load(local, family)?;
-    let exposed = snapshot.is_some();
+pub fn state(
+    project: &Path,
+    family: Family,
+    home: Option<&str>,
+    now: u64,
+) -> Result<FamilyLimits, String> {
+    let snapshot = load(project, family)?;
+    let homes = snapshot.as_ref().map_or(&[][..], |s| s.homes.as_slice());
+    let mine = homes
+        .iter()
+        .find(|entry| same_home(entry.config_home.as_deref(), home));
+    let other_homes = homes
+        .iter()
+        .filter(|entry| !same_home(entry.config_home.as_deref(), home))
+        .map(|entry| {
+            entry
+                .config_home
+                .as_deref()
+                .map_or_else(|| "default home".to_string(), crate::git::display_text)
+        })
+        .collect();
     Ok(FamilyLimits {
         family: family.id(),
-        five_hour: view(snapshot.as_ref().and_then(|s| s.five_hour), now),
-        weekly: view(snapshot.as_ref().and_then(|s| s.weekly), now),
-        limit_hit_at: snapshot.as_ref().and_then(|s| s.limit_hit_at),
-        limit_hit_resets_at: snapshot.as_ref().and_then(|s| s.limit_hit_resets_at),
-        source: snapshot.as_ref().map(|s| s.source.clone()),
-        recorded_at: snapshot.as_ref().map(|s| s.recorded_at),
-        exposed,
+        five_hour: view(mine.and_then(|h| h.five_hour), now),
+        weekly: view(mine.and_then(|h| h.weekly), now),
+        limit_hit_at: mine.and_then(|h| h.limit_hit_at),
+        limit_hit_resets_at: mine.and_then(|h| h.limit_hit_resets_at),
+        source: mine.map(|h| h.source.clone()),
+        recorded_at: mine.map(|h| h.recorded_at),
+        exposed: mine.is_some(),
+        other_homes,
     })
 }
 
@@ -387,6 +682,12 @@ mod tests {
     use super::*;
 
     const FAR: u64 = 4_102_444_800; // 2100-01-01
+    const HOME_A: &str = "/srv/codex-a";
+    const HOME_B: &str = "/srv/codex-b";
+
+    fn stored(dir: &Path, family: Family) -> std::path::PathBuf {
+        dir.join(file_for(family))
+    }
 
     #[test]
     fn claude_statusline_windows_are_read_and_absence_is_not_an_error() {
@@ -399,6 +700,16 @@ mod tests {
         assert!(parse_claude_statusline(r#"{"model":{}}"#)
             .unwrap()
             .is_empty());
+        for absent in [
+            r#"{"rate_limits":null}"#,
+            r#"{"rate_limits":{"five_hour":null}}"#,
+            r#"{"rate_limits":{}}"#,
+        ] {
+            assert!(
+                parse_claude_statusline(absent).unwrap().is_empty(),
+                "{absent}"
+            );
+        }
         let whole =
             r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":4102444800.0}}}"#;
         assert_eq!(
@@ -415,17 +726,31 @@ mod tests {
     }
 
     #[test]
-    fn claude_statusline_rejects_malformed_windows() {
+    fn wrong_types_and_out_of_range_values_are_errors_not_absence() {
         for payload in [
             "not json",
+            "[]",
+            r#"{"rate_limits":"oops"}"#,
+            r#"{"rate_limits":[]}"#,
+            r#"{"rate_limits":{"five_hour":"oops"}}"#,
+            r#"{"rate_limits":{"seven_day":7}}"#,
             r#"{"rate_limits":{"five_hour":{"used_percentage":101}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":-123}}}"#,
             r#"{"rate_limits":{"five_hour":{"used_percentage":"9"}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":null}}}"#,
             r#"{"rate_limits":{"five_hour":{"resets_at":5}}}"#,
             r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":-1}}}"#,
             r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":1.5}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":"soon"}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":18446744073709551615}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":253402300800}}}"#,
         ] {
             assert!(parse_claude_statusline(payload).is_err(), "{payload}");
         }
+        // The latest supported second is accepted.
+        let edge =
+            r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":253402300799}}}"#;
+        assert!(parse_claude_statusline(edge).is_ok());
     }
 
     #[test]
@@ -437,16 +762,34 @@ mod tests {
         let reading = parse_codex_rate_limits(read).unwrap();
         assert_eq!(reading.five_hour.unwrap().used_percent, 12.0);
         assert_eq!(reading.weekly.unwrap().used_percent, 60.0);
-        // Only a weekly window, sent as `primary` with its duration.
         let weekly_only =
             r#"{"rateLimits":{"primary":{"usedPercent":7,"windowDurationMins":10080}}}"#;
         let reading = parse_codex_rate_limits(weekly_only).unwrap();
         assert!(reading.five_hour.is_none() && reading.weekly.is_some());
-        // No durations: position decides.
         let bare = r#"{"rateLimits":{"primary":{"usedPercent":1},"secondary":{"usedPercent":2}}}"#;
         let reading = parse_codex_rate_limits(bare).unwrap();
         assert_eq!(reading.five_hour.unwrap().used_percent, 1.0);
         assert_eq!(reading.weekly.unwrap().used_percent, 2.0);
+        // A window length that is neither 5-hour nor weekly is left out.
+        let odd = r#"{"rateLimits":{"primary":{"usedPercent":3,"windowDurationMins":1440}}}"#;
+        assert!(parse_codex_rate_limits(odd).unwrap().is_empty());
+    }
+
+    #[test]
+    fn codex_durations_and_wrong_types_are_errors() {
+        for payload in [
+            r#"{"rateLimits":{"primary":{"usedPercent":5,"windowDurationMins":"weekly"}}}"#,
+            r#"{"rateLimits":{"primary":{"usedPercent":5,"windowDurationMins":-5}}}"#,
+            r#"{"rateLimits":{"primary":{"usedPercent":5,"windowDurationMins":0}}}"#,
+            r#"{"rateLimits":{"primary":{"usedPercent":5,"windowDurationMins":300.5}}}"#,
+            r#"{"rateLimits":{"primary":{"usedPercent":5,"windowDurationMins":99999999}}}"#,
+            r#"{"rateLimits":{"primary":"oops"}}"#,
+            r#"{"rateLimits":{"primary":{"usedPercent":150}}}"#,
+            r#"{"rateLimits":{"primary":{"usedPercent":5,"resetsAt":18446744073709551615}}}"#,
+            r#"{"rateLimits":"x"}"#,
+        ] {
+            assert!(parse_codex_rate_limits(payload).is_err(), "{payload}");
+        }
     }
 
     #[test]
@@ -471,22 +814,40 @@ mod tests {
         .is_err());
     }
 
-    #[test]
-    fn a_sparse_update_keeps_the_window_it_does_not_carry() {
-        let dir = tempfile::tempdir().unwrap();
-        let full = parse_codex_rate_limits(
+    fn full_codex() -> Reading {
+        parse_codex_rate_limits(
             r#"{"rateLimits":{"primary":{"usedPercent":10,"windowDurationMins":300,"resetsAt":4102444800},
                 "secondary":{"usedPercent":50,"windowDurationMins":10080,"resetsAt":4102531200}}}"#,
         )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_sparse_update_keeps_the_window_it_does_not_carry() {
+        let dir = tempfile::tempdir().unwrap();
+        record(
+            dir.path(),
+            Family::Codex,
+            Some(HOME_A),
+            "codex",
+            &full_codex(),
+            1000,
+        )
         .unwrap();
-        record(dir.path(), Family::Codex, "codex", &full, 1000).unwrap();
         let sparse = parse_codex_rate_limits(
             r#"{"rateLimits":{"primary":{"usedPercent":30,"windowDurationMins":300,"resetsAt":4102444800}}}"#,
         )
         .unwrap();
-        let merged = record(dir.path(), Family::Codex, "codex", &sparse, 2000)
-            .unwrap()
-            .unwrap();
+        let merged = record(
+            dir.path(),
+            Family::Codex,
+            Some(HOME_A),
+            "codex",
+            &sparse,
+            2000,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(merged.five_hour.unwrap().used_percent, 30.0);
         assert_eq!(merged.weekly.unwrap().used_percent, 50.0);
         assert_eq!(merged.recorded_at, 2000);
@@ -506,8 +867,8 @@ mod tests {
             }),
             ..Reading::default()
         };
-        record(dir.path(), Family::Claude, "claude", &old, 100).unwrap();
-        let shown = state(dir.path(), Family::Claude, 600).unwrap();
+        record(dir.path(), Family::Claude, None, "claude", &old, 100).unwrap();
+        let shown = state(dir.path(), Family::Claude, None, 600).unwrap();
         assert_eq!(
             shown.five_hour,
             WindowView::ResetSinceReading {
@@ -523,24 +884,36 @@ mod tests {
             }),
             ..Reading::default()
         };
-        let merged = record(dir.path(), Family::Claude, "claude", &only_weekly, 600)
-            .unwrap()
-            .unwrap();
+        let merged = record(
+            dir.path(),
+            Family::Claude,
+            None,
+            "claude",
+            &only_weekly,
+            600,
+        )
+        .unwrap()
+        .unwrap();
         assert!(merged.five_hour.is_none());
     }
 
     #[test]
     fn nothing_recorded_reads_as_not_exposed_and_an_empty_reading_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let shown = state(dir.path(), Family::Grok, 1).unwrap();
+        let shown = state(dir.path(), Family::Grok, None, 1).unwrap();
         assert!(!shown.exposed);
         assert_eq!(shown.five_hour, WindowView::NotExposed);
-        assert!(
-            record(dir.path(), Family::Grok, "grok", &Reading::default(), 1)
-                .unwrap()
-                .is_none()
-        );
-        assert!(!dir.path().join(LIMITS_DIR).exists());
+        assert!(record(
+            dir.path(),
+            Family::Grok,
+            None,
+            "grok",
+            &Reading::default(),
+            1
+        )
+        .unwrap()
+        .is_none());
+        assert!(!dir.path().join(LOCAL_DIR).exists());
     }
 
     #[test]
@@ -549,29 +922,215 @@ mod tests {
         record(
             dir.path(),
             Family::Grok,
+            None,
             "grok limit-hit",
-            &grok_limit_hit(Some(FAR)),
+            &grok_limit_hit(Some(FAR)).unwrap(),
             700,
         )
         .unwrap();
-        let shown = state(dir.path(), Family::Grok, 800).unwrap();
+        let shown = state(dir.path(), Family::Grok, None, 800).unwrap();
         assert_eq!(shown.limit_hit_at, Some(700));
         assert_eq!(shown.limit_hit_resets_at, Some(FAR));
         assert_eq!(shown.five_hour, WindowView::NotExposed);
+        assert!(grok_limit_hit(Some(u64::MAX)).is_err());
     }
 
     #[test]
-    fn a_damaged_or_foreign_snapshot_is_refused() {
+    fn a_reading_belongs_to_the_home_that_produced_it() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join(LIMITS_DIR);
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("claude.json"), "{").unwrap();
-        assert!(load(dir.path(), Family::Claude).is_err());
-        std::fs::write(
-            folder.join("claude.json"),
-            r#"{"schema_version":1,"family":"codex","source":"x","recorded_at":1}"#,
+        record(
+            dir.path(),
+            Family::Codex,
+            Some(HOME_A),
+            "codex",
+            &full_codex(),
+            1000,
         )
         .unwrap();
+        // The profile now names home B: A's windows are not B's.
+        let b = state(dir.path(), Family::Codex, Some(HOME_B), 1500).unwrap();
+        assert!(!b.exposed);
+        assert_eq!(b.five_hour, WindowView::NotExposed);
+        assert_eq!(b.weekly, WindowView::NotExposed);
+        assert_eq!(b.other_homes, vec![HOME_A.to_string()]);
+        // The default home is a different identity too.
+        let default = state(dir.path(), Family::Codex, None, 1500).unwrap();
+        assert!(!default.exposed);
+        // A is still readable as itself.
+        let a = state(dir.path(), Family::Codex, Some(HOME_A), 1500).unwrap();
+        assert!(a.exposed && matches!(a.five_hour, WindowView::Used { .. }));
+        assert!(a.other_homes.is_empty());
+        // Recording for B keeps both.
+        record(
+            dir.path(),
+            Family::Codex,
+            Some(HOME_B),
+            "codex",
+            &full_codex(),
+            1600,
+        )
+        .unwrap();
+        assert_eq!(
+            load(dir.path(), Family::Codex)
+                .unwrap()
+                .unwrap()
+                .homes
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn only_the_newest_eight_homes_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..10u64 {
+            let home = format!("/srv/h{i}");
+            record(
+                dir.path(),
+                Family::Codex,
+                Some(&home),
+                "codex",
+                &full_codex(),
+                100 + i,
+            )
+            .unwrap();
+        }
+        let snapshot = load(dir.path(), Family::Codex).unwrap().unwrap();
+        assert_eq!(snapshot.homes.len(), MAX_HOMES);
+        assert!(snapshot
+            .homes
+            .iter()
+            .all(|h| h.config_home.as_deref() != Some("/srv/h0")));
+    }
+
+    #[test]
+    fn bad_identities_and_times_are_refused_on_ingest() {
+        let dir = tempfile::tempdir().unwrap();
+        let reading = full_codex();
+        for home in ["relative/path", "", "/srv/a\nb"] {
+            assert!(record(dir.path(), Family::Codex, Some(home), "codex", &reading, 1).is_err());
+        }
+        assert!(record(dir.path(), Family::Codex, None, "", &reading, 1).is_err());
+        assert!(record(
+            dir.path(),
+            Family::Codex,
+            None,
+            "codex",
+            &reading,
+            MAX_EPOCH + 1
+        )
+        .is_err());
+        assert!(!dir.path().join(LOCAL_DIR).exists());
+    }
+
+    #[test]
+    fn a_damaged_foreign_or_out_of_range_snapshot_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = stored(dir.path(), Family::Claude);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for text in [
+            "{".to_string(),
+            r#"{"schema_version":1,"family":"claude","homes":[]}"#.to_string(),
+            r#"{"schema_version":2,"family":"codex","homes":[]}"#.to_string(),
+            r#"{"schema_version":2,"family":"claude","homes":[{"source":"x","recorded_at":1,
+                "five_hour":{"used_percent":-123.0}}]}"#
+                .to_string(),
+            r#"{"schema_version":2,"family":"claude","homes":[{"source":"x","recorded_at":1,
+                "five_hour":{"used_percent":5.0,"resets_at":18446744073709551615}}]}"#
+                .to_string(),
+            r#"{"schema_version":2,"family":"claude","homes":[{"source":"x","recorded_at":1,
+                "config_home":"relative"}]}"#
+                .to_string(),
+            r#"{"schema_version":2,"family":"claude","homes":[{"source":"x","recorded_at":1},
+                {"source":"y","recorded_at":2}]}"#
+                .to_string(),
+        ] {
+            std::fs::write(&path, &text).unwrap();
+            assert!(load(dir.path(), Family::Claude).is_err(), "{text}");
+            assert!(
+                state(dir.path(), Family::Claude, None, 5).is_err(),
+                "{text}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_limits_folder_or_file_is_refused_for_reads_and_writes() {
+        use std::os::unix::fs::symlink;
+        let outside = tempfile::tempdir().unwrap();
+        // The limits folder is a link to a folder outside.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(LOCAL_DIR)).unwrap();
+        symlink(outside.path(), dir.path().join(LOCAL_DIR).join(LIMITS_DIR)).unwrap();
+        let err = record(dir.path(), Family::Claude, None, "claude", &full_codex(), 1);
+        assert!(err.is_err());
+        assert!(state(dir.path(), Family::Claude, None, 1).is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        // The local folder itself is a link.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        symlink(outside.path(), dir.path().join(LOCAL_DIR)).unwrap();
+        assert!(record(dir.path(), Family::Claude, None, "claude", &full_codex(), 1).is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        // The snapshot file is a link to a file outside.
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join(LOCAL_DIR).join(LIMITS_DIR);
+        std::fs::create_dir_all(&folder).unwrap();
+        let target = outside.path().join("target.json");
+        std::fs::write(&target, "{}").unwrap();
+        symlink(&target, folder.join("claude.json")).unwrap();
+        assert!(record(dir.path(), Family::Claude, None, "claude", &full_codex(), 1).is_err());
         assert!(load(dir.path(), Family::Claude).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{}");
+        // The lock file is a link.
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join(LOCAL_DIR).join(LIMITS_DIR);
+        std::fs::create_dir_all(&folder).unwrap();
+        symlink(&target, folder.join("claude.lock")).unwrap();
+        assert!(record(dir.path(), Family::Claude, None, "claude", &full_codex(), 1).is_err());
+    }
+
+    #[test]
+    fn concurrent_sparse_recorders_never_lose_each_others_windows() {
+        use std::sync::{Arc, Barrier};
+        for round in 0..30u64 {
+            let dir = tempfile::tempdir().unwrap();
+            let barrier = Arc::new(Barrier::new(2));
+            let primary = parse_codex_rate_limits(
+                r#"{"rateLimits":{"primary":{"usedPercent":1,"windowDurationMins":300,"resetsAt":4102444800}}}"#,
+            )
+            .unwrap();
+            let secondary = parse_codex_rate_limits(
+                r#"{"rateLimits":{"secondary":{"usedPercent":2,"windowDurationMins":10080,"resetsAt":4102444800}}}"#,
+            )
+            .unwrap();
+            let handles: Vec<_> = [primary, secondary]
+                .into_iter()
+                .map(|reading| {
+                    let (root, barrier) = (dir.path().to_path_buf(), Arc::clone(&barrier));
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        record(
+                            &root,
+                            Family::Codex,
+                            Some(HOME_A),
+                            "codex",
+                            &reading,
+                            50 + round,
+                        )
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap().unwrap();
+            }
+            let shown = state(dir.path(), Family::Codex, Some(HOME_A), 100).unwrap();
+            assert!(
+                matches!(shown.five_hour, WindowView::Used { .. })
+                    && matches!(shown.weekly, WindowView::Used { .. }),
+                "round {round} lost a window: {shown:?}"
+            );
+        }
     }
 }

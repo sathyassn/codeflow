@@ -173,16 +173,35 @@ limit state each CLI exposes.
    spend_cap_usd = 25
    ```
 
+   The spend cap is a figure the profile records and `models limits`
+   shows. CodeFlow does not enforce it or read the key.
+
    A key whose name says token, secret or credential, a value shaped like a
-   secret, an unknown key, a relative path, and a config home inside the
-   project outside `.codeflow/local/` each refuse the whole file. The
-   managed `.gitignore` keeps `.codeflow/local/` untracked.
+   secret, an unknown key, a relative path, a config home that is not a
+   folder, and a config home that is or links into the project (the main
+   checkout or any linked worktree) outside a real folder under
+   `.codeflow/local/` each refuse the whole file. A parse error names a line
+   and column, never the text. The managed `.gitignore` keeps
+   `.codeflow/local/` untracked.
 3. The agent launches each seat with only that family's variable
-   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`) by running
-   `home_line=$(codeflow models launch-env --family <family>) && eval "$home_line"`
-   in the seat's shell first. No output means the family keeps the CLI's
-   default home. A refused profile exits 2 with the reason and the launch
-   stops, so a seat never starts under the default account by mistake.
+   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`) by running, in the
+   seat's shell before its CLI starts:
+
+   ```bash
+   home_line=$(codeflow models launch-env --family <family>) || exit 1
+   eval "$home_line" || exit 1
+   codeflow models launch-env --family <family> --check || exit 1
+   ```
+
+   The line is `export VARIABLE='folder'` for a mapped family and
+   `unset VARIABLE` for one the profile does not map, so a home inherited
+   from the caller never reaches that seat. `--check` fails unless the shell
+   holds what the profile says. A refused profile exits 2 with the reason and
+   the first `|| exit 1` stops the launch itself, so a seat never starts under
+   the default or an inherited account by mistake. The other two families'
+   variables are not touched. In a Herdr seat the same three steps run in the
+   pane, and the launch waits for the pane to print its confirmation before
+   `herdr agent start` (`cf-herdr`, "Create or resume").
 4. `codeflow models limits` prints each family's account and limit state.
    Readings arrive from what each CLI already exposes:
 
@@ -205,6 +224,12 @@ limit state each CLI exposes.
    one. The Codex window names come from the installed release's own schema,
    not vendor documentation, so a payload the reader cannot parse is refused
    with a message and nothing is stored.
+
+   A reading belongs to the config home of the process that recorded it
+   (`record-limits --config-home DIR`, else the family's variable in that
+   process, else the CLI's default home). When the profile later names
+   another home, the old reading is not shown as that account's: the family
+   shows `not exposed` and a note names the homes that have readings.
 
    A window with no reading shows `not exposed`; a window that reset after
    its reading shows that, with the old figure. Choosing a route from these
