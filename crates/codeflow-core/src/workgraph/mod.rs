@@ -27,6 +27,7 @@ pub mod record_template;
 pub mod record_text;
 pub(crate) mod redaction;
 pub mod release_line;
+pub mod status_steps;
 pub mod status_verb;
 pub mod store;
 pub mod work_start;

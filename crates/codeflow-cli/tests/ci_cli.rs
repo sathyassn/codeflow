@@ -32,6 +32,8 @@ mod pr_body_fixtures;
 mod range_context;
 #[path = "ci_cli/secret_scan_exemption.rs"]
 mod secret_scan_exemption;
+#[path = "ci_cli/status_steps.rs"]
+mod status_steps;
 
 use std::path::Path;
 use std::process::{Command, Output};
