@@ -660,3 +660,38 @@ The status stays building until task TSK-007 records the full native platform
 and browser matrix.
 Detail: [present architecture](architecture/present.md) and
 [present guide](present-guide.md).
+
+### Catalog record schema
+
+Records contain YAML frontmatter and Markdown prose, checked by `validate --docs`.
+
+| Field | Shape |
+|---|---|
+| `id`, `uid`, `name` | Required: `CAP-` and at least three digits, a UUID, and a lowercase slug. Id and name match the filename. |
+| `summary`, `area` | Required: nonempty summary and an area from this revision's `.codeflow/project.toml`. |
+| `status` | Required: `planned`, `building`, `shipped`, `deprecated`. |
+| `stage` | Required when shipped: `unassessed`, `experimental`, `beta`, `stable`. Beta and stable require non-gap evidence. |
+| `kind` | Required: `functional` or `non-functional`. |
+| `quality`, `measure` | Required when non-functional: a characteristic and a nonempty measurement sentence. Optional for functional records. Characteristics: `functional-suitability`, `performance-efficiency`, `compatibility`, `interaction-capability`, `reliability`, `security`, `maintainability`, `flexibility`, `safety`. |
+| `audience` | Required nonempty list drawn from `external`, `internal`, `agent`. |
+| `publish` | Boolean, default `false`; separate from audience. |
+| `group`, `tags` | Optional project facets from this revision's `vocabulary.yaml` groups and tags. |
+| `verified_by` | Required nonempty list when shipped. Each string is `test: ref`, `journey: ref`, `record: ref` or `gap: reason`, with a nonempty reference. |
+| `since`, `former_ids` | Optional first-shipped version string and list of numeric CAP ids. |
+| `epics`, `epic_id`, `adrs`, `specs`, `depends_on`, `related`, `superseded_by`, `capabilities` | Optional record references, accepting a string or list as in legacy fences. |
+
+| Validation rule | Contract |
+|---|---|
+| Record files | Regular files directly under `docs/capabilities/`, named `CAP-NNN-<slug>.md`. Git index or tree mode must be non-executable; synthetic filesystem execute bits are ignored, including with `core.fileMode=false`. Untracked records have no Git mode until indexed. This mode rule does not apply to legacy or configuration files. Absolute paths, `..`, nested paths and symlinks are refused. Containment applies only to record files, not references inside them. |
+| Legacy compatibility | Fences and distinct folder records coexist. A CAP page without frontmatter remains companion prose when its id has a legacy fence. Legacy fences retain their field shapes and ignore unknown keys; known string and list fields use the same bounds during deserialization. |
+| Identity | Duplicate ids or UUIDs name both sources. An identity in both layouts is refused regardless of bindings or payload equality. |
+| Evidence | References are syntax-checked, never opened or executed. Resolution belongs to TSK-362. A shipped record with only `gap:` evidence accepts `unassessed`, but refuses `beta` or `stable`. |
+| Scalar bound | `CAPABILITY_MAX_VALUE_CHARS` in `capability.rs`: 1024 Unicode characters per known string scalar or list item. |
+| List bound | `CAPABILITY_MAX_LIST_ITEMS`: 64 items per list. The same visitors enforce scalar and list bounds while reading records, legacy fences and vocabulary. |
+| Key bound | `CAPABILITY_MAX_FRONTMATTER_KEYS`: 32 frontmatter keys per record. The closed field set contains fewer than 32 fields; unknown and duplicate keys are refused before reading their values. |
+| Input bound | `CAPABILITY_MAX_FILE_BYTES`: 262,144 bytes (256 KiB) per input, including the legacy file, project configuration and vocabulary. Checkout reads are bounded; tree blob sizes are checked before reading their contents. Record frontmatter deserializes directly into typed fields: visitors stop at overlong strings or item 65, and nested collections are refused without expansion. Bounded scalar aliases remain valid. |
+| Schema refusals | Unknown record or vocabulary keys, duplicate keys, malformed YAML and oversized values name the file and key; typed frontmatter errors retain the field name. |
+| Revision | Checkout and pinned-tree readers share validation. Areas and vocabulary come from the selected revision, independently of the checkout. |
+| Vocabulary | `vocabulary.yaml` contains `inventory: incomplete` or `complete`, plus `groups` and `tags` lists of `{name, about}`. Names are unique lowercase slugs within each list. The example stays `incomplete` until inventory work establishes coverage. |
+| Operations | The loader reads data; it performs no migration or id allocation. |
+| Diagnostics | Strict loaders refuse an invalid catalog. Docs validation collects issues from every readable record, retains parsed identities for reference checks, and treats an existing file or folder as present even when records are invalid. |

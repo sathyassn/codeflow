@@ -1545,7 +1545,7 @@ fn clears_docs_layer_absent() {
     std::fs::remove_file(root.join("docs/capabilities.md")).unwrap();
     prove(
         "DOCS_LAYER_ABSENT",
-        "docs/capabilities.md absent",
+        "docs/capabilities.md and folder records absent; capability checks skipped",
         || validate(&root),
         |printed| {
             let step = printed_command(printed, "DOCS_LAYER_ABSENT", None);
