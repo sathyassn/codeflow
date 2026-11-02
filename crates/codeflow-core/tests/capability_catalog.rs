@@ -304,7 +304,7 @@ fn bounds_accept_exact_limits_and_count_unicode_characters() {
         )
         .replace(
             "tags: [rust]",
-            &format!("tags: [{}]", vec!["rust"; 64].join(", ")),
+            &format!("tags: [{}]", ["rust"; 64].join(", ")),
         );
     write(dir.path(), RECORD, &content);
     assert!(load_capability_catalog(dir.path()).is_ok());

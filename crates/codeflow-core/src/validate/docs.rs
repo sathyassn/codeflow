@@ -2126,7 +2126,8 @@ mod r22_regressions {
                 report
                     .issues
                     .iter()
-                    .any(|issue| issue.file.ends_with("capabilities.md")),
+                    .any(|issue| issue.file == Path::new("docs/capabilities")
+                        && issue.message.contains("docs is a symbolic link")),
                 "{report:?}"
             );
         }
