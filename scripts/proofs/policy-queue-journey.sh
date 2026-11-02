@@ -34,22 +34,44 @@
 # The verdict fails when evidence is missing. It expects the runs the
 # journey causes (the opening run, one run for the push and one for each of
 # the two edits). Every run must complete and none may be cancelled. A run
-# may fail only with the workflow's own stale-input diagnostic, which AC-3
-# requires when the head, base branch or body changed while it ran; any
-# other failure fails the journey. The newest run must succeed on the final
+# may fail only in the step that detects stale input (the head fetch, or the
+# final read), with that step's whole diagnostic and the runner's exit-code
+# annotation and nothing else; AC-3 requires that failure when the head,
+# base branch or body changed while the run judged it. Any other failure
+# fails the journey. The newest run must succeed on the final
 # head, and the newest "commit standards" check on that head must pass.
 set -euo pipefail
 
 workflow=codeflow-policy.yml
 extra_events=3 # the push and the two body edits
 
-# The workflow's diagnostics for a run whose judged input went stale
-# (assets/base/ci/codeflow-policy.yml): its head fetch, and its final read.
-stale_pattern='the pull request head moved|changed while this run judged it'
+# A run whose judged input went stale fails in exactly one of two steps of
+# assets/base/ci/codeflow-policy.yml, each with its own whole diagnostic,
+# plus the runner's exit-code annotation for that step. Anything else in a
+# failed run, another failed step or any other failure annotation, fails
+# the journey.
+fetch_step='Fetch the pull request head as data'
+recheck_step='the pull request is unchanged since it was judged'
+# shellcheck disable=SC2016 # jq source, expanded by jq, not the shell
+stale_jq='
+  def sha: "[0-9a-f]{40}";
+  def moved: "^the pull request head moved \\(" + sha + ", event " + sha + "\\); this run belongs to an older event, so it fails; re-run the check for the current head$";
+  def changed: "^the pull request (head changed while this run judged it \\(judged " + sha + ", now " + sha + "\\); the run queued by the new head decides|base branch changed while this run judged it \\(judged .+, now .+\\); the run queued by that change decides|body changed while this run judged it \\(judged sha256 [0-9a-f]{64}, now [0-9a-f]{64}\\); the run queued by that edit decides)$";
+  def exited: "^Process completed with exit code 1\\.$";
+  def stale_failure($fetch; $recheck):
+    .conclusion == "failure"
+    and (.errors | length) == 2
+    and (.errors | map(select(test(exited))) | length) == 1
+    and (
+      (.failed_steps == [$fetch] and (.errors | map(select(test(moved))) | length) == 1)
+      or (.failed_steps == [$recheck] and (.errors | map(select(test(changed))) | length) == 1)
+    );
+'
 
 # verdict RUNS_JSON CHECKS_JSON WANT_RUNS WANT_CHECKS HEAD
 #   RUNS_JSON: array of {id,status,conclusion,created_at,head_sha,html_url,
-#     errors}, one per run, where errors lists the run's error annotations
+#     failed_steps,errors}, one per run: failed_steps names the steps whose
+#     conclusion is failure, errors lists the run's failure annotations
 #   CHECKS_JSON: array of {status,conclusion,started_at} for the "commit
 #     standards" check runs on the final head (one per event that fired on
 #     it: the push and the two edits)
@@ -62,10 +84,10 @@ verdict() {
     || { echo "FAIL: a run has not completed"; return 1; }
   jq -e 'all(.[]; .conclusion != "cancelled")' <<<"$runs" >/dev/null \
     || { echo "FAIL: a run was cancelled"; return 1; }
-  jq -e --arg stale "$stale_pattern" \
-    'all(.[]; .conclusion == "success" or (.conclusion == "failure" and any(.errors[]?; test($stale))))' \
+  jq -e --arg fetch "$fetch_step" --arg recheck "$recheck_step" \
+    "$stale_jq"' all(.[]; .conclusion == "success" or stale_failure($fetch; $recheck))' \
     <<<"$runs" >/dev/null \
-    || { echo "FAIL: a run failed without the stale-input diagnostic"; return 1; }
+    || { echo "FAIL: a run failed other than with only a stale-input step and its diagnostic"; return 1; }
   jq -e --arg head "$head" 'max_by(.created_at) | .conclusion == "success" and .head_sha == $head' <<<"$runs" >/dev/null \
     || { echo "FAIL: the newest run did not succeed on the final head"; return 1; }
   jq -e --argjson want "$want_checks" \
@@ -78,30 +100,48 @@ verdict() {
 
 self_test() {
   local h=abc
-  run() { # run CREATED CONCLUSION [ERROR] [HEAD]
-    jq -n --arg c "$1" --arg k "$2" --arg e "${3:-}" --arg s "${4:-$h}" \
-      '{status: "completed", conclusion: $k, created_at: $c, head_sha: $s, errors: (if $e == "" then [] else [$e] end)}'
+  h=$(printf 'a%.0s' {1..40})
+  local o; o=$(printf 'b%.0s' {1..40})
+  local d1 d2; d1=$(printf 'c%.0s' {1..64}); d2=$(printf 'd%.0s' {1..64})
+  local exit1='Process completed with exit code 1.'
+  local body_stale="the pull request body changed while this run judged it (judged sha256 $d1, now $d2); the run queued by that edit decides"
+  local head_stale="the pull request head changed while this run judged it (judged $o, now $h); the run queued by the new head decides"
+  local moved="the pull request head moved ($h, event $o); this run belongs to an older event, so it fails; re-run the check for the current head"
+  run() { # run CREATED CONCLUSION HEAD [FAILED_STEPS_JSON] [ERRORS_JSON]
+    jq -n --arg c "$1" --arg k "$2" --arg s "$3" --argjson f "${4:-[]}" --argjson e "${5:-[]}" \
+      '{status: "completed", conclusion: $k, created_at: $c, head_sha: $s, failed_steps: $f, errors: $e}'
   }
+  steps() { jq -nc '$ARGS.positional' --args "$@"; }
   local ok1 ok2 ok3 ok4 stale other
-  ok1=$(run 1 success "" old)
-  ok2=$(run 2 success)
-  ok3=$(run 3 success)
-  ok4=$(run 4 success)
-  stale=$(run 3 failure "the pull request body changed while this run judged it (judged sha256 a, now b); the run queued by that edit decides")
-  other=$(run 3 failure "Process completed with exit code 1.")
+  ok1=$(run 1 success "$o")
+  ok2=$(run 2 success "$h")
+  ok3=$(run 3 success "$h")
+  ok4=$(run 4 success "$h")
+  stale=$(run 3 failure "$o" "$(steps "$recheck_step")" "$(steps "$body_stale" "$exit1")")
+  local stalefetch; stalefetch=$(run 3 failure "$o" "$(steps "$fetch_step")" "$(steps "$moved" "$exit1")")
+  other=$(run 3 failure "$h" "$(steps "codeflow ci (commit + branch + PR-body standards)")" "$(steps "$exit1")")
+  # Round 07's negative cases: a valid stale diagnostic beside an unrelated
+  # failed cleanup step, and an unrelated annotation quoting the diagnostic.
+  local plusclean; plusclean=$(run 3 failure "$o" "$(steps "$recheck_step" "Post job cleanup.")" "$(steps "$body_stale" "$exit1" "cleanup failed" "$exit1")")
+  local quoted; quoted=$(run 3 failure "$o" "$(steps "codeflow ci (commit + branch + PR-body standards)")" "$(steps "codeflow ci found: $body_stale" "$exit1")")
+  local wrongstep; wrongstep=$(run 3 failure "$o" "$(steps "codeflow ci (commit + branch + PR-body standards)")" "$(steps "$body_stale" "$exit1")")
+  local crossed; crossed=$(run 3 failure "$o" "$(steps "$fetch_step")" "$(steps "$body_stale" "$exit1")")
   local all; all=$(jq -n --argjson a "$ok1" --argjson b "$ok2" --argjson c "$ok3" --argjson d "$ok4" '[$a,$b,$c,$d]')
   local withstale; withstale=$(jq -n --argjson a "$ok1" --argjson b "$ok2" --argjson c "$stale" --argjson d "$ok4" '[$a,$b,$c,$d]')
   local withother; withother=$(jq -n --argjson a "$ok1" --argjson b "$ok2" --argjson c "$other" --argjson d "$ok4" '[$a,$b,$c,$d]')
   local pend; pend=$(jq -c '.[3].status = "in_progress" | .[3].conclusion = null' <<<"$all")
   local canc; canc=$(jq -c '.[3].conclusion = "cancelled"' <<<"$all")
-  local lastfail; lastfail=$(jq -c --argjson s "$(run 5 failure "the pull request head changed while this run judged it (judged a, now b); the run queued by the new head decides")" '. + [$s]' <<<"$all")
-  local lastold; lastold=$(jq -c --argjson s "$(run 5 success "" old)" '. + [$s]' <<<"$all")
+  local lastfail; lastfail=$(jq -c --argjson s "$(run 5 failure "$h" "$(steps "$recheck_step")" "$(steps "$head_stale" "$exit1")")" '. + [$s]' <<<"$all")
+  local lastold; lastold=$(jq -c --argjson s "$(run 5 success "$o")" '. + [$s]' <<<"$all")
+  replace3() { jq -c --argjson r "$1" '.[2] = $r' <<<"$all"; }
   check() { jq -n --arg t "$1" --arg k "$2" '{status: "completed", conclusion: $k, started_at: $t}'; }
   local checks; checks=$(jq -n --argjson a "$(check 2 success)" --argjson b "$(check 3 success)" --argjson c "$(check 4 success)" '[$a,$b,$c]')
   local checksstale; checksstale=$(jq -n --argjson a "$(check 2 success)" --argjson b "$(check 3 failure)" --argjson c "$(check 4 success)" '[$a,$b,$c]')
   verdict "$all" "$checks" 4 3 "$h" >/dev/null || { echo "self-test: a complete journey must pass"; return 1; }
   verdict "$withstale" "$checksstale" 4 3 "$h" >/dev/null \
     || { echo "self-test: a superseded run failing with the stale-input diagnostic must pass"; return 1; }
+  verdict "$(replace3 "$stalefetch")" "$checksstale" 4 3 "$h" >/dev/null \
+    || { echo "self-test: a superseded run failing its head fetch must pass"; return 1; }
   must_fail() { # must_fail LABEL REASON RUNS CHECKS: fails for that reason
     local out
     if out=$(verdict "$3" "$4" 4 3 "$h" 2>&1); then
@@ -116,14 +156,18 @@ self_test() {
   must_fail short "expected at least 4 runs" "$(jq -c '.[:3]' <<<"$all")" "$checks"
   must_fail pending "has not completed" "$pend" "$checks"
   must_fail cancelled "was cancelled" "$canc" "$checks"
-  must_fail otherfailure "without the stale-input diagnostic" "$withother" "$checks"
+  must_fail otherfailure "other than with only a stale-input step" "$withother" "$checks"
+  must_fail staleplusclean "other than with only a stale-input step" "$(replace3 "$plusclean")" "$checks"
+  must_fail quoteddiagnostic "other than with only a stale-input step" "$(replace3 "$quoted")" "$checks"
+  must_fail stalewrongstep "other than with only a stale-input step" "$(replace3 "$wrongstep")" "$checks"
+  must_fail stalecrossedstep "other than with only a stale-input step" "$(replace3 "$crossed")" "$checks"
   must_fail newestfailed "newest run did not succeed" "$lastfail" "$checks"
   must_fail newestoldhead "newest run did not succeed" "$lastold" "$checks"
   must_fail nochecks "commit standards checks on the head" "$all" '[]'
   must_fail shortchecks "commit standards checks on the head" "$all" "$(jq -c '.[:2]' <<<"$checks")"
   must_fail cancelledcheck "commit standards checks on the head" "$all" "$(jq -c '.[2].conclusion = "cancelled"' <<<"$checks")"
   must_fail newestcheckfailed "newest commit standards check" "$all" "$(jq -c '.[2].conclusion = "failure"' <<<"$checks")"
-  echo "self-test ok: a complete journey and a stale-input failure pass; empty, short, pending, cancelled, other-failure, failed or old-head newest run, and missing, cancelled or failing checks each fail"
+  echo "self-test ok: a complete journey and a stale-input failure in either step pass; empty, short, pending, cancelled, other-failure, stale-plus-other-failure, quoted-diagnostic, wrong-step and crossed-step failures, a failed or old-head newest run, and missing, cancelled or failing checks each fail"
 }
 
 if [ "${1:-}" = "--self-test" ]; then
@@ -137,16 +181,19 @@ branch="task/${task}-queue-journey-$(date +%s)"
 body_file=$(mktemp)
 trap 'rm -f "$body_file"' EXIT
 
-pr_runs() { # the runs of $workflow for pull request $1, with their error annotations
-  local ids id errors out='[]' run
+pr_runs() { # the runs of $workflow for pull request $1, with failed steps and failure annotations
+  local ids id jobs failed errors out='[]' run
   ids=$(gh api --paginate "repos/$repo/actions/workflows/$workflow/runs?event=pull_request_target&per_page=100" \
     --jq ".workflow_runs[] | select(any(.pull_requests[]?; .number == $1)) | {id, status, conclusion, created_at, head_sha, html_url}" \
     | jq -s .)
   for id in $(jq -r '.[].id' <<<"$ids"); do
-    errors=$(gh api "repos/$repo/actions/runs/$id/jobs" --jq '.jobs[].check_run_url' \
+    jobs=$(gh api "repos/$repo/actions/runs/$id/jobs")
+    failed=$(jq -c '[.jobs[].steps[] | select(.conclusion == "failure") | .name]' <<<"$jobs")
+    errors=$(jq -r '.jobs[].check_run_url' <<<"$jobs" \
       | while read -r url; do gh api "$url/annotations" --jq '.[] | select(.annotation_level == "failure") | .message'; done \
       | jq -R . | jq -s .)
-    run=$(jq --argjson id "$id" --argjson e "$errors" '.[] | select(.id == $id) | .errors = $e' <<<"$ids")
+    run=$(jq --argjson id "$id" --argjson f "$failed" --argjson e "$errors" \
+      '.[] | select(.id == $id) | .failed_steps = $f | .errors = $e' <<<"$ids")
     out=$(jq --argjson r "$run" '. + [$r]' <<<"$out")
   done
   echo "$out"
