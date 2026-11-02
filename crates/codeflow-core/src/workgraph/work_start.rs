@@ -1283,6 +1283,42 @@ pub fn task_id_from_branch_at(
     let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
         return Ok(None);
     };
+    task_id_in_head(repo_root, suffix, head)
+}
+
+/// The task id a work branch carries, judged as `codeflow ci` judges a
+/// range (TSK-350 AC-1, AC-2): the work prefixes come from `prefixes`, the
+/// `git.branch_prefixes` of the policy the run judges with, and the id from
+/// the task records at the judged `head`. The checkout supplies neither, so
+/// a record only the checkout holds grants no own-task authority, and one
+/// the checkout lacks takes none away.
+///
+/// # Errors
+///
+/// Returns an error if the revision or its task records cannot be read.
+pub fn judged_task_id(
+    repo_root: &Path,
+    prefixes: &[String],
+    branch: &str,
+    head: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let prefixes: Vec<String> = prefixes
+        .iter()
+        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
+        .cloned()
+        .collect();
+    let Some(suffix) = work_suffix(&prefixes, branch) else {
+        return Ok(None);
+    };
+    task_id_in_head(repo_root, suffix, head)
+}
+
+/// The longest task id at `head` that `suffix` starts with, followed by `-`.
+fn task_id_in_head(
+    repo_root: &Path,
+    suffix: &str,
+    head: &str,
+) -> Result<Option<String>, WorkStartError> {
     let repo = Repository::discover(repo_root)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let tree = repo
@@ -1290,15 +1326,24 @@ pub fn task_id_from_branch_at(
         .and_then(|object| object.peel_to_commit())
         .and_then(|commit| commit.tree())
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    Ok(records_from_tree(&repo, &tree)?
-        .into_iter()
-        .filter(|(id, record)| {
-            record.kind == RecordKind::Task
-                && is_valid_task_format_id(id)
-                && suffix.starts_with(&format!("{id}-"))
-        })
-        .map(|(id, _)| id)
-        .max_by_key(String::len))
+    // The task record files at `head`, by name as the checkout lookup reads
+    // them: no record is parsed, so another record that does not parse
+    // keeps the refusal that names it rather than this lookup's.
+    let ids = std::cell::RefCell::new(std::collections::BTreeSet::new());
+    records_from_tree_matching(&repo, &tree, |path, kind| {
+        if kind == RecordKind::Task {
+            if let Some(id) = path
+                .rsplit('/')
+                .next()
+                .and_then(markdown_stem)
+                .filter(|id| is_valid_task_format_id(id))
+            {
+                ids.borrow_mut().insert(id.to_owned());
+            }
+        }
+        false
+    })?;
+    Ok(carried_task_id(suffix, &ids.into_inner()))
 }
 
 /// Whether a work branch names a task id by shape (`<prefix>/TSK-<digits>-`),
