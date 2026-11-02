@@ -1,0 +1,11 @@
+id = "TSK-1169"
+uid = "ad08a5b2-1c05-4256-86d4-bc02dff67039"
+kind = "TSK"
+title = "Browser interaction test for the shared sidebar, checked against the reference app"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T02:26:33Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
