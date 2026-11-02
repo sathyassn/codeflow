@@ -10,10 +10,12 @@
 //! never reports fewer lines than the page shows at that measure. A phone
 //! column is narrower, so a block within the limit can take three or four
 //! lines there. A hard break starts a new line.
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Tag, TagEnd};
 use scraper::{ElementRef, Html};
 
-use crate::document::{Block, PresentationDocument};
+use crate::document::{
+    coalesced_markdown, reference_segments, Block, PresentationDocument, TextSegment,
+};
 
 /// Characters on one line of the default reading measure (68ch).
 pub(crate) const MEASURE_CHARS: usize = 68;
@@ -248,7 +250,7 @@ fn markdown_runs(markdown: &str) -> Vec<Run> {
         current.0.clear();
         current.1.clear();
     };
-    for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
+    for (event, in_link) in coalesced_markdown(markdown) {
         match event {
             Event::Start(Tag::CodeBlock(_)) => code_block += 1,
             Event::End(TagEnd::CodeBlock) => code_block = code_block.saturating_sub(1),
@@ -265,8 +267,21 @@ fn markdown_runs(markdown: &str) -> Vec<Run> {
                 flush(&mut current, &mut runs, !heading);
             }
             Event::Text(text) if code_block == 0 => {
-                current.0.push_str(&text);
-                current.1.push_str(&text);
+                // A reference reads as its label ("Figure 1"), as the page
+                // shows it; inside a link it stays literal.
+                let segments = if in_link {
+                    vec![TextSegment::Text(&text)]
+                } else {
+                    reference_segments(&text)
+                };
+                for segment in segments {
+                    let shown = match segment {
+                        TextSegment::Text(text) => text.to_string(),
+                        TextSegment::Reference { kind, .. } => format!("{} 1", kind.noun()),
+                    };
+                    current.0.push_str(&shown);
+                    current.1.push_str(&shown);
+                }
             }
             // A code span takes room on the line, but its characters are
             // literal, so it never reads as a cut sentence or a bare time.
@@ -349,16 +364,15 @@ pub(crate) fn bare_clock_time(text: &str) -> Option<String> {
             continue;
         };
         if !found.zoned {
-            return Some(text[index..found.time_end].to_string());
+            return Some(text[index..found.end].to_string());
         }
-        index = found.resume;
+        index = found.end;
     }
     None
 }
 
 struct Clock {
-    time_end: usize,
-    resume: usize,
+    end: usize,
     zoned: bool,
 }
 
@@ -406,13 +420,9 @@ fn clock_at(text: &str, start: usize) -> Option<Clock> {
     if hour > 23 || minutes > 59 {
         return None;
     }
-    let after = &text[end..];
-    let resume = end;
-    let zoned = zone_follows(after);
     Some(Clock {
-        time_end: end,
-        resume,
-        zoned,
+        end,
+        zoned: zone_follows(&text[end..]),
     })
 }
 
@@ -477,7 +487,9 @@ mod tests {
 
     #[test]
     fn markdown_runs_split_blocks_and_leave_out_code() {
-        let runs = markdown_runs("## Heading\n\nFirst `a...b` para.\n\n- one\n- two\n\n```\n13:41 ...\n```\n");
+        let runs = markdown_runs(
+            "## Heading\n\nFirst `a...b` para.\n\n- one\n- [table:t] two\n\n```\n13:41 ...\n```\n",
+        );
         let texts: Vec<_> = runs
             .iter()
             .map(|run| (run.text.as_str(), run.prose.as_str(), run.dense))
@@ -488,7 +500,7 @@ mod tests {
                 ("Heading", "Heading", false),
                 ("First a...b para.", "First       para.", true),
                 ("one", "one", true),
-                ("two", "two", true)
+                ("Table 1 two", "Table 1 two", true)
             ]
         );
     }

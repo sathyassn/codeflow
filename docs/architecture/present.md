@@ -130,7 +130,7 @@ A note on an older revision is placed on the current one in this order
 | 5. Document | the block is gone: `orphaned`, shown unpositioned; a whole-document note holds while the document does |
 | Entity checks | on submit the service refuses a note with `unknown_entity`, `label_mismatch`, `digest_mismatch` or `crop_outside_entity`, and stores its own label |
 | Ledgers | review notes are in `events.jsonl`; answers, replies, reopens and tombstones append to `responses.jsonl` |
-| `present check` | each line carries a `severity`: a `fault` fails the check with exit 9; a `warning` (`framing`, `entities`, `version`) never does, and `open` and `update` print the warnings on stderr and proceed |
+| `present check` | each line carries a `severity`: a `fault` fails the check with exit 9; a `warning` (`framing`, `entities`, `version`, and the copy warnings `copy-density`, `copy-ellipsis` and `copy-time-zone`) never does, and `open` and `update` print the warnings on stderr and proceed |
 | Agent-side `resolve` | requires the event's current delivered version and appends addressed or dismissed state; stale or cross-session updates fail closed |
 | Text selection | retains the selected occurrence and revalidates live ranges before pinning |
 | Comment capture | toolbar capture survives focus changes, and leaving Comment releases it; iframe figures use native hit-testing while commenting and regain their pointer interaction afterwards |
@@ -165,6 +165,12 @@ its rules, and this section is their current home:
   `none` subtree, are not counted), and again for an element with
   `role="img"` that contains an entity; one `version` line when a schema 1
   document drew either. A missing `description` is never warned about.
+  The copy warnings (TSK-1255, `src/copy_rules.rs`) apply the copy guide's
+  "Page limits": `copy-density` for a visible text block over two lines,
+  counted as 68 characters a line, the default reading measure;
+  `copy-ellipsis` for text cut to "..."; `copy-time-zone` for a clock time
+  without a zone. Code blocks and code spans are exempt, and collapsed
+  detail is exempt from the length limit.
   `present open` and `present update` print the warnings on stderr and
   proceed.
 

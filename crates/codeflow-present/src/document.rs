@@ -1956,6 +1956,13 @@ pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
             }
         }
     }
+    for finding in crate::copy_rules::copy_findings(&document) {
+        faults.push(CheckFault::warning(
+            finding.block_id,
+            finding.rule,
+            finding.message,
+        ));
+    }
     faults.extend(review_warnings(&document));
     faults.extend(figure_balance_warnings(&document));
     faults
@@ -2086,7 +2093,13 @@ mod tests {
 
     #[test]
     fn check_warns_on_each_v1_stage_of_the_delivery_document_and_once_on_its_version() {
-        let lines = check_lines("check/delivery-v1.json");
+        let all = check_lines("check/delivery-v1.json");
+        // Its long framing paragraphs also draw copy warnings (TSK-1255).
+        assert!(all.iter().any(|(_, rule, _)| *rule == "copy-density"));
+        let lines: Vec<_> = all
+            .into_iter()
+            .filter(|(_, rule, _)| !rule.starts_with("copy-"))
+            .collect();
         let stages = [
             "stage-guards",
             "stage-registry",
