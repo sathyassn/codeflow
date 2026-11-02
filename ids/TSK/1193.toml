@@ -1,0 +1,11 @@
+id = "TSK-1193"
+uid = "f044f947-7695-42b8-aa2e-67b52cf22ca1"
+kind = "TSK"
+title = "The git tree reader batches blob size lookups"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T16:42:08Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
