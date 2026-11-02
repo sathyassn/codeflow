@@ -1,0 +1,11 @@
+id = "TSK-1249"
+uid = "c8f9b365-0e96-49a0-8483-f4ec152f09af"
+kind = "TSK"
+title = "Gates run inside the Claude sandbox without unsandboxed retries"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T22:00:42Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
