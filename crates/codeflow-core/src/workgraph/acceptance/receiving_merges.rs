@@ -6,6 +6,14 @@ use super::{
     BINDING_RULE,
 };
 
+/// The tip of a task branch's own target line, given only for the push of
+/// that task branch (TSK-1149). A merge whose other parents are all already
+/// on this tip is the branch's own sync of its line: its hand-resolved
+/// hunks are the task's unreviewed work, which `codeflow ci` judges at
+/// ready and at landing, not on a push for durability.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LineSyncTip(pub(super) Oid);
+
 pub(super) fn findings(
     repo: &Repository,
     base: Oid,
@@ -13,6 +21,7 @@ pub(super) fn findings(
     line: Option<&str>,
     graph: &Graph,
     reviewed: &[Oid],
+    sync_tip: Option<LineSyncTip>,
 ) -> Result<Vec<Finding>, String> {
     let Some(line) = line.filter(|line| super::super::line_adoption::epic_id(line).is_ok()) else {
         return Ok(Vec::new());
@@ -30,7 +39,7 @@ pub(super) fn findings(
             .map_err(|error| error.to_string())?;
         let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
         if parents.len() > 1 {
-            merges.push((commit.id(), parents[0]));
+            merges.push((commit.id(), parents));
         }
     }
     if merges.is_empty() {
@@ -69,7 +78,13 @@ pub(super) fn findings(
     }
     let project = super::super::amendment::project_at(repo, base)?;
     let mut found = Vec::new();
-    for (merge, first) in merges {
+    for (merge, parents) in merges {
+        let first = parents[0];
+        if let Some(LineSyncTip(tip)) = sync_tip {
+            if line_sync(repo, &parents, tip)? {
+                continue;
+            }
+        }
         // The range's base is already the receiving line's work: a task
         // branch that re-merges its target line brings nothing new from it.
         let mut hide: Vec<String> = reviewed
@@ -90,6 +105,19 @@ pub(super) fn findings(
         }
     }
     Ok(found)
+}
+
+/// Whether a merge only brings in its own target line: every parent other
+/// than the first is the line's tip or an ancestor of it. The facts are the
+/// merge's parents and the line's tip, so a merge of anything the line does
+/// not hold, `main` included, is judged as before.
+fn line_sync(repo: &Repository, parents: &[Oid], tip: Oid) -> Result<bool, String> {
+    for parent in &parents[1..] {
+        if !is_ancestor_or_same(repo, *parent, tip)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// A home imported later from this receiver cannot authorize the receiver's
