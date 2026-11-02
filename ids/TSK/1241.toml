@@ -1,0 +1,11 @@
+id = "TSK-1241"
+uid = "2b442ab7-4bc1-4761-8a3b-fcce76d312d7"
+kind = "TSK"
+title = "Coverage measurement splits from Linux test execution on integration pull requests"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T18:15:15Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
