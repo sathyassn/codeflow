@@ -41,6 +41,7 @@ Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases), [pendin
 - [ ] 1.6 The notes rendered from the final assembled source were read twice before the tag, as a new user and as a user upgrading from the last release. Evidence: both reads and their fixes.
 - [ ] 1.7 No published section changed; any correction is a dated `## Errata` entry. Evidence: the `CHANGELOG.md` diff.
 - [ ] 1.8 The ceremony report over the release's window is pasted with a one-line comparison against the recorded baseline. Evidence: the report output.
+- [ ] 1.9 No build between c1481a51a and TSK-1256 is released: a release whose source includes c1481a51a (TSK-1145) also includes the TSK-1256 gate lock fence. Evidence: `git merge-base --is-ancestor` output for both commits against the release commit.
 
 #### Scope and version details
 
@@ -54,6 +55,7 @@ Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases), [pendin
 | 1.6 | Rendering: step 3 of [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication) |
 | 1.8 | The report informs the release decision and never blocks it |
 | 1.8 | Procedure: [ceremony check before a release](releasing.md#ceremony-check-before-a-release) |
+| 1.9 | Builds with TSK-1145 but not TSK-1256 take a later slot when `full-gate.lock` is busy, so a 3.1 gate or a newer 4.0 run on the same machine does not keep them out. See [older CodeFlow binaries on the same machine](troubleshooting.md#older-codeflow-binaries-on-the-same-machine) |
 
 ### 2. Source and security gates
 

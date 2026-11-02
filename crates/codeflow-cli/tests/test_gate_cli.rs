@@ -413,6 +413,60 @@ fn a_killed_gates_surviving_target_keeps_older_binaries_out() {
     assert!(freed, "the fence frees once the target's group ends");
 }
 
+/// TSK-1256 R1: an older binary's gate that was killed while its target ran
+/// leaves the target's group in its record. That target runs alone, as its
+/// gate did, so a new full gate refuses at once and starts no target until
+/// the group ends.
+#[cfg(unix)]
+#[test]
+fn an_older_gates_surviving_target_keeps_a_new_gate_out() {
+    use std::os::unix::process::CommandExt;
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "marker", "runner": "custom",
+   "modes": {"full": {"command": "touch ran"}}}
+]}"#,
+    );
+    let mut survivor = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = survivor.id();
+    // The record a 3.1 gate keeps inside its lock file; its pid is gone.
+    let locks = home.path().join("locks");
+    std::fs::create_dir_all(&locks).unwrap();
+    std::fs::write(
+        locks.join("full-gate.lock"),
+        format!("pid=999999\nstarted=1\nmode=full\ngroup={group}\n"),
+    )
+    .unwrap();
+    let refused = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    let message = stderr(&refused);
+    assert!(message.contains("older CodeFlow binary"), "{message}");
+    assert!(
+        message.contains(&format!("process groups {group}")),
+        "{message}"
+    );
+    assert!(message.contains("last recorded holder"), "{message}");
+    assert!(
+        !root.path().join("ran").exists(),
+        "no target starts while the survivor lives"
+    );
+    assert!(!locks.join("full-gate-1.lock").exists(), "no slot is taken");
+
+    survivor.kill().unwrap();
+    survivor.wait().unwrap();
+    let admitted = run(root.path(), home.path(), &["test", "--mode", "full"]);
+    assert!(admitted.status.success(), "{}", stderr(&admitted));
+    assert!(
+        root.path().join("ran").exists(),
+        "the target runs once it ends"
+    );
+}
+
 #[cfg(unix)]
 fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
     let home = tempfile::tempdir().unwrap();
@@ -1795,8 +1849,17 @@ fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     let status = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let text = String::from_utf8_lossy(&status.stdout);
-    // The fence and slot 1 of both folders name the run (TSK-1256).
-    assert_eq!(text.matches("recorded holder:").count(), 4, "{text}");
+    // Slot 1 of both folders names the run, and the fence of both names it
+    // as the last recorded holder (TSK-1256).
+    assert_eq!(text.matches(": recorded holder:").count(), 2, "{text}");
+    assert_eq!(
+        text.matches(
+            ": last recorded holder (may have ended; the slot lines show the live holders): "
+        )
+        .count(),
+        2,
+        "{text}"
+    );
     for value in [
         format!("pid {}", child.id()),
         "essential mode".into(),
@@ -1811,12 +1874,19 @@ fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     assert!(child.wait().unwrap().success());
     let after = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(after.status.success());
+    let after = String::from_utf8_lossy(&after.stdout);
     assert_eq!(
-        String::from_utf8_lossy(&after.stdout)
-            .matches("no recorded holder")
+        after.matches("no recorded holder").count(),
+        4,
+        "the host lock and slot 1 of both folders: {after}"
+    );
+    // The fence record names the last admitted run, which has ended.
+    assert_eq!(
+        after
+            .matches(": last recorded holder (may have ended")
             .count(),
-        6,
-        "the host lock, the fence and slot 1 of both folders"
+        2,
+        "{after}"
     );
 }
 
