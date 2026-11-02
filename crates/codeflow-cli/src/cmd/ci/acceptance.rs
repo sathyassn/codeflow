@@ -192,7 +192,9 @@ fn own_line(
         return None;
     };
     names.candidate?;
-    let into = names.into?;
+    // Only an explicit `--into` earns the exception: a target inferred from
+    // the head's own record keeps today's rule (TSK-350 Description).
+    let into = names.into_flag.and(names.into)?;
     match own_line_tip(root, git, range, names, task, into) {
         Ok(line) => {
             println!(
@@ -218,8 +220,8 @@ fn own_line(
 /// `task`: `into` is an epic line, not a protected branch; the branch
 /// carries `task` at the judged head; the destination advertises `into`
 /// and its tip is here; the task's record declares `into` at that tip and
-/// at the head; and the declared target passes the trusted-line binding
-/// that `codeflow ci` and the pre-push hook apply to a declared target.
+/// at the head; and the records at the pinned candidate authority and at
+/// that tip bind the line, with no refusal at either.
 fn own_line_tip(
     root: &Path,
     git: &GitPolicy,
@@ -228,7 +230,7 @@ fn own_line_tip(
     task: &str,
     into: &str,
 ) -> Result<OwnLine, String> {
-    use super::context::{judged_declared_target, Declared};
+    use codeflow_core::workgraph::EpicLineBinding;
     if codeflow_core::workgraph::line_adoption::epic_id(into).is_err()
         || git.branch_is_protected_any_case(into)
         || git.branch_folds_onto_protected(into)
@@ -248,28 +250,41 @@ fn own_line_tip(
     .map_err(|error| format!("the destination cannot confirm the line: {error}"))?;
     let tip = release_line::advertised_tip_here(root, &destination, into)
         .map_err(|error| format!("the destination cannot confirm the line: {error}"))?;
+    // Every read below is at an exact revision and by the task's id: the
+    // declarations at the confirmed line tip and the head, and the binding
+    // at the pinned candidate authority and that tip, where a refusal at
+    // either wins. No checkout policy and no local or remote-tracking ref
+    // takes part (TSK-350 review 01, findings 1 and 2).
+    let tip_text = tip.to_string();
     for (revision, place) in [
-        (tip.to_string(), "the line's tip"),
-        (range.head.to_string(), "the head"),
+        (tip_text.as_str(), "the line's tip"),
+        (range.head, "the head"),
     ] {
-        let declared =
-            codeflow_core::workgraph::declared_work_target_at_revision(root, branch, &revision)
-                .map_err(|error| error.to_string())?;
+        let declared = codeflow_core::workgraph::task_target_at_revision(root, task, revision)
+            .map_err(|error| error.to_string())?;
         if declared.as_deref() != Some(into) {
             return Err(format!(
                 "{task}'s record at {place} does not declare this line as its integration_target"
             ));
         }
     }
-    match judged_declared_target(root, branch, range.head, &git.protected_branches)? {
-        Some(Declared::Eligible(target)) if super::context::normalize(&target) == into => {
-            Ok(OwnLine {
-                task: task.to_string(),
-                tip,
-            })
+    let candidate = names
+        .candidate
+        .ok_or_else(|| "no pinned candidate authority".to_string())?;
+    let anchors = [
+        (candidate, "the candidate authority"),
+        (tip_text.as_str(), "the line's tip"),
+    ];
+    match codeflow_core::workgraph::task_line_binding(root, task, range.head, into, &anchors)
+        .map_err(|error| error.to_string())?
+    {
+        EpicLineBinding::Bound => Ok(OwnLine {
+            task: task.to_string(),
+            tip,
+        }),
+        EpicLineBinding::Refused(reason) | EpicLineBinding::Unbound(reason) => {
+            Err(format!("the line {reason}, so it is not a bound epic line"))
         }
-        Some(Declared::Rejected { reason, .. }) => Err(format!("the declared line {reason}")),
-        _ => Err("the declared line is not bound by trusted records".into()),
     }
 }
 
