@@ -1,0 +1,11 @@
+id = "TSK-1172"
+uid = "67adcb57-4c34-458a-a359-1cc27269a243"
+kind = "TSK"
+title = "The clock ends at the bound approval or the verification, and deferred proof stays owed"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T04:27:42Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
