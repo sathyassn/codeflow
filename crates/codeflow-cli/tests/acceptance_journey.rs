@@ -15,6 +15,8 @@ mod outcome;
 mod process_folders;
 #[path = "acceptance_journey/sequence.rs"]
 mod sequence;
+#[path = "acceptance_journey/unblock.rs"]
+mod unblock;
 use process_folders::isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {

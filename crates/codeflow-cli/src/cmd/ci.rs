@@ -1875,8 +1875,7 @@ fn evaluate_work_start(
                         "work.stable_planning_anchor",
                         level,
                         error.to_string(),
-                        codeflow_core::remedy::WORK_START_MERGE_PLANNING
-                            .with(&[("target", &target), ("id", &task_id)]),
+                        error.admission_remedy(&target, &task_id),
                     )
                 },
             });

@@ -175,6 +175,18 @@ pub enum NotReady {
 }
 
 impl WorkStartError {
+    /// The catalogued step that clears this refusal of a task's admission:
+    /// a task blocked on the target is unblocked in its own pull request
+    /// (TSK-1036); any other refusal reconciles the planning anchor.
+    #[must_use]
+    pub fn admission_remedy(&self, target: &str, task_id: &str) -> crate::remedy::Remedy {
+        match self {
+            Self::Blocked { .. } => crate::remedy::WORK_START_UNBLOCK.with(&[("id", task_id)]),
+            _ => crate::remedy::WORK_START_MERGE_PLANNING
+                .with(&[("target", target), ("id", task_id)]),
+        }
+    }
+
     /// The derived state this refusal puts a task in.
     #[must_use]
     pub fn not_ready(&self) -> NotReady {
@@ -2109,6 +2121,22 @@ fn check_task_anchor(
             }
         }
     }
+    // A task blocked at the merge-base may be unblocked in its own range
+    // (TSK-1036, issue #365): only its status is projected, as a reopen is,
+    // and only when the range proves the unblock step by step. Every other
+    // planning input and every dependency still comes from the merge-base,
+    // so an unblock never admits work the graph does not.
+    if at_base
+        && records
+            .get(task_id)
+            .is_some_and(|task| task.status == "blocked" || task.blocker_reason.is_some())
+        && unblocked_in_range(&repo, repo_root, &merge_base, head, head_id, task_id)?
+    {
+        if let Some(task) = records.get_mut(task_id) {
+            task.status = "todo".into();
+            task.blocker_reason = None;
+        }
+    }
     let anchored = validate_task_structure(
         &repo,
         &records,
@@ -2119,8 +2147,8 @@ fn check_task_anchor(
         admission != Admission::SecretScanExemption,
     )?;
     // The start gate judges the record as the merge base has it, with a
-    // reopen in this range projected above: a task complete or cancelled
-    // there takes no further change. A standalone record arriving with its
+    // reopen or an unblock in this range projected above: a task complete
+    // or cancelled there takes no further change. A standalone record arriving with its
     // code (admission) has no base record; `standalone_at_head` judged it.
     if admission == Admission::Start || at_base {
         start_gate(&records[task_id], task_id)?;
@@ -2363,6 +2391,62 @@ fn refuse_retarget(
 
 /// The commit the check reads: `head` when a caller names one (CI's pull
 /// request head), else the checkout's `HEAD`.
+/// Whether the change this check reads (the named head, else the checkout)
+/// unblocks `task_id`, blocked at `merge_base` (TSK-1036): the record there
+/// is `todo` or `complete` with no Blocker, or `cancelled`, at the same
+/// path, and every status step from the merge-base is read and legal, so a
+/// direct `blocked -> complete` or unreadable history projects nothing.
+fn unblocked_in_range(
+    repo: &Repository,
+    repo_root: &Path,
+    merge_base: &str,
+    head: Option<&str>,
+    head_id: Oid,
+    task_id: &str,
+) -> Result<bool, WorkStartError> {
+    use super::lifecycle::Graph;
+    use super::status_steps::{judge, step_allowed};
+    let base = Graph::from_revision(repo, merge_base).map_err(WorkStartError::InvalidGraph)?;
+    let Some(old) = base.records.get(task_id) else {
+        return Ok(false);
+    };
+    let current = match head {
+        Some(_) => Graph::from_revision(repo, &head_id.to_string()),
+        None => Graph::from_worktree(repo_root),
+    }
+    .map_err(WorkStartError::InvalidGraph)?;
+    let Some(now) = current.records.get(task_id) else {
+        return Ok(false);
+    };
+    let cleared = match now.status.as_str() {
+        "todo" | "complete" => super::record_text::parse_blocker(&now.body).is_none(),
+        "cancelled" => true,
+        _ => false,
+    };
+    if now.path != old.path || !cleared {
+        return Ok(false);
+    }
+    let base_id = Oid::from_str(merge_base)
+        .map_err(|error| WorkStartError::Repository(error.message().to_string()))?;
+    if !judge(repo, base_id, head_id, RecordKind::Task, &now.id).proven {
+        return Ok(false);
+    }
+    if head.is_none() {
+        // The checkout's uncommitted change is the last step.
+        let committed = Graph::from_revision(repo, &head_id.to_string())
+            .map_err(WorkStartError::InvalidGraph)?;
+        let Some(at_head) = committed.records.get(task_id) else {
+            return Ok(false);
+        };
+        if at_head.path != now.path
+            || step_allowed(RecordKind::Task, Some(&at_head.status), &now.status).is_err()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn head_commit(repo: &Repository, head: Option<&str>) -> Result<Oid, WorkStartError> {
     match head {
         Some(revision) => repo
