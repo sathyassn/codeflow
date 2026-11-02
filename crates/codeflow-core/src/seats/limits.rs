@@ -284,11 +284,13 @@ pub fn record(
 /// The file exists but is a link, too large or not a valid snapshot.
 pub fn load(local: &Path, family: Family) -> Result<Option<Snapshot>, String> {
     let path = file_for(local, family);
-    let bytes = match crate::bounded_file::read_bounded_regular(&path, 64 * 1024) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("{}: cannot read ({error})", path.display())),
-    };
+    let unreadable =
+        |error: &dyn std::fmt::Display| format!("{}: cannot read ({error})", path.display());
+    if crate::absence::proven_absent(&path).map_err(|error| unreadable(&error))? {
+        return Ok(None);
+    }
+    let bytes = crate::bounded_file::read_bounded_regular(&path, 64 * 1024)
+        .map_err(|error| unreadable(&error))?;
     let snapshot: Snapshot = serde_json::from_slice(&bytes)
         .map_err(|error| format!("{}: not a limit snapshot ({error})", path.display()))?;
     if snapshot.schema_version != 1 || snapshot.family != family.id() {

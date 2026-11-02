@@ -24,6 +24,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 
 use super::{local_dir, shared_root, Family, LOCAL_DIR};
+use crate::absence::proven_absent;
 
 /// File name of the profile, in the project's local folder or the user's
 /// `CodeFlow` home.
@@ -140,7 +141,7 @@ impl Profile {
             .parse()
             .map_err(|error| format!("not valid TOML: {error}"))?;
         refuse_credentials(&value)?;
-        for line in text.lines() {
+        for line in text.split('\n') {
             if let Some(kind) = crate::hooks::scan::scan_line(line) {
                 return Err(format!(
                     "a line looks like a secret ({kind}); the profile holds paths and caps only"
@@ -288,8 +289,9 @@ fn resolve_config_home(
     {
         return Err(format!("config_home `{text}` must not use . or .. parts"));
     }
-    let local = shared_root(project_root).join(LOCAL_DIR);
-    let inside_project = expanded.starts_with(shared_root(project_root));
+    let shared = shared_root(project_root)?;
+    let local = shared.join(LOCAL_DIR);
+    let inside_project = expanded.starts_with(&shared);
     if inside_project && !expanded.starts_with(&local) {
         return Err(format!(
             "config_home `{text}` is inside the project; a sign-in stored there could be \
@@ -301,13 +303,15 @@ fn resolve_config_home(
 
 /// The profile files to try, first match wins: the project's untracked file,
 /// then the user's `CodeFlow` home.
-#[must_use]
-pub fn candidate_paths(root: &Path, codeflow_home: Option<&Path>) -> Vec<PathBuf> {
-    let mut paths = vec![local_dir(root).join(PROFILE_FILE)];
+///
+/// # Errors
+/// As [`super::shared_root`].
+pub fn candidate_paths(root: &Path, codeflow_home: Option<&Path>) -> Result<Vec<PathBuf>, String> {
+    let mut paths = vec![local_dir(root)?.join(PROFILE_FILE)];
     if let Some(home) = codeflow_home {
         paths.push(home.join(PROFILE_FILE));
     }
-    paths
+    Ok(paths)
 }
 
 /// Load the profile for the project at `root`: `None` when no file exists.
@@ -320,23 +324,25 @@ pub fn load(
     codeflow_home: Option<&Path>,
     user_home: Option<&Path>,
 ) -> Result<Option<Profile>, String> {
-    for path in candidate_paths(root, codeflow_home) {
-        match crate::bounded_file::read_bounded_regular(&path, MAX_PROFILE_BYTES) {
-            Ok(bytes) => {
-                let text = String::from_utf8(bytes)
-                    .map_err(|_| format!("{}: not UTF-8 text", path.display()))?;
-                return Profile::parse(&text, &path, root, user_home)
-                    .map(Some)
-                    .map_err(|reason| format!("{}: {reason}", path.display()));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!(
-                    "{}: cannot read ({error}); the profile must be a regular file under 64 KiB",
-                    path.display()
-                ));
-            }
+    for path in candidate_paths(root, codeflow_home)? {
+        let unreadable = |error: &dyn std::fmt::Display| {
+            format!(
+                "{}: cannot read ({error}); the profile must be a regular file under 64 KiB",
+                crate::git::display_path(&path)
+            )
+        };
+        // Only a leaf proven missing under a folder that resolves skips a
+        // file; any other state is read, and a failure refuses.
+        if proven_absent(&path).map_err(|error| unreadable(&error))? {
+            continue;
         }
+        let bytes = crate::bounded_file::read_bounded_regular(&path, MAX_PROFILE_BYTES)
+            .map_err(|error| unreadable(&error))?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| format!("{}: not UTF-8 text", crate::git::display_path(&path)))?;
+        return Profile::parse(&text, &path, root, user_home)
+            .map(Some)
+            .map_err(|reason| format!("{}: {reason}", crate::git::display_path(&path)));
     }
     Ok(None)
 }

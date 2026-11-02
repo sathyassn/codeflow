@@ -59,24 +59,37 @@ impl Family {
 
 /// The main checkout's root when `root` is a linked worktree of it, else
 /// `root`. The untracked profile and the limit store live in the main
-/// checkout, so every worktree of a project reads the same ones.
-#[must_use]
-pub fn shared_root(root: &Path) -> PathBuf {
-    git2::Repository::open(root)
-        .ok()
-        .and_then(|repo| {
-            let common = repo.commondir().to_path_buf();
-            (common.file_name().is_some_and(|name| name == ".git"))
-                .then(|| common.parent().map(Path::to_path_buf))
-                .flatten()
-        })
-        .unwrap_or_else(|| root.to_path_buf())
+/// checkout, so every worktree of a project reads the same ones. A folder
+/// that is not a repository is its own root.
+///
+/// # Errors
+/// The repository exists but cannot be opened, so the shared folder cannot be
+/// told; the caller refuses instead of reading a different folder.
+pub fn shared_root(root: &Path) -> Result<PathBuf, String> {
+    let repo = match git2::Repository::open(root) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(root.to_path_buf()),
+        Err(error) => {
+            return Err(format!(
+                "cannot open the repository at {}: {}",
+                crate::git::display_path(root),
+                error.message()
+            ))
+        }
+    };
+    let common = repo.commondir();
+    let main = (common.file_name().is_some_and(|name| name == ".git"))
+        .then(|| common.parent().map(Path::to_path_buf))
+        .flatten();
+    Ok(main.unwrap_or_else(|| root.to_path_buf()))
 }
 
 /// The untracked local folder of the project that holds `root`.
-#[must_use]
-pub fn local_dir(root: &Path) -> PathBuf {
-    shared_root(root).join(LOCAL_DIR)
+///
+/// # Errors
+/// As [`shared_root`].
+pub fn local_dir(root: &Path) -> Result<PathBuf, String> {
+    Ok(shared_root(root)?.join(LOCAL_DIR))
 }
 
 #[cfg(test)]
@@ -108,9 +121,16 @@ mod tests {
         repo.worktree("linked", &linked, None).unwrap();
         let main = std::fs::canonicalize(&main).unwrap();
         assert_eq!(
-            std::fs::canonicalize(local_dir(&linked)).unwrap_or_else(|_| local_dir(&linked)),
-            main.join(LOCAL_DIR)
+            std::fs::canonicalize(shared_root(&linked).unwrap()).unwrap(),
+            main
         );
-        assert_eq!(local_dir(&main), main.join(LOCAL_DIR));
+        assert_eq!(
+            local_dir(&linked).unwrap(),
+            shared_root(&linked).unwrap().join(LOCAL_DIR)
+        );
+        assert_eq!(local_dir(&main).unwrap(), main.join(LOCAL_DIR));
+        // A folder that is not a repository is its own root.
+        let plain = dir.path().join("plain");
+        assert_eq!(shared_root(&plain).unwrap(), plain);
     }
 }

@@ -65,16 +65,13 @@ pub struct LaunchEnvArgs {
     json: bool,
 }
 
-fn user_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .filter(|value| !value.is_empty())
-        .map(Into::into)
-}
-
 fn load_profile(root: &Path) -> Result<Option<Profile>, String> {
     let home = registry::codeflow_home();
-    accounts::load(root, home.as_deref(), user_home().as_deref())
+    accounts::load(
+        root,
+        home.as_deref(),
+        codeflow_core::portable_path::user_home().as_deref(),
+    )
 }
 
 pub fn launch_env(args: &LaunchEnvArgs) -> i32 {
@@ -106,7 +103,7 @@ pub fn launch_env(args: &LaunchEnvArgs) -> i32 {
         let value = json!({
             "family": family.id(),
             "variable": env.variable,
-            "config_home": env.config_home.to_string_lossy(),
+            "config_home": codeflow_core::git::display_path(&env.config_home),
         });
         println!("{value}");
         return 0;
@@ -165,7 +162,7 @@ pub fn record(args: &RecordArgs) -> i32 {
                 }
             }
         };
-        let local = seats::local_dir(&super::repo_root()?);
+        let local = seats::local_dir(&super::repo_root()?)?;
         let now = limits::now_secs();
         let snapshot = limits::record(&local, family, source, &reading, now)?;
         Ok(snapshot.map(|_| format!("recorded {} limits from {source}", family.id())))
@@ -196,7 +193,7 @@ pub fn show_limits(args: &LimitsArgs) -> i32 {
     let outcome = (|| -> Result<(Vec<FamilyLimits>, Option<Profile>), String> {
         let root = super::repo_root()?;
         let profile = load_profile(&root)?;
-        let local = seats::local_dir(&root);
+        let local = seats::local_dir(&root)?;
         let now = limits::now_secs();
         let states = Family::ALL
             .into_iter()
@@ -220,7 +217,7 @@ pub fn show_limits(args: &LimitsArgs) -> i32 {
                     .and_then(|f| profile.as_ref().and_then(|p| p.families.get(&f)))
                     .map(|a| {
                         json!({
-                            "config_home": a.config_home.as_ref().map(|p| p.to_string_lossy()),
+                            "config_home": a.config_home.as_deref().map(codeflow_core::git::display_path),
                             "api_fallback": a.api_fallback.as_ref().map(|f| json!({
                                 "key_env": f.key_env,
                                 "spend_cap_usd": f.spend_cap_usd,
@@ -233,7 +230,7 @@ pub fn show_limits(args: &LimitsArgs) -> i32 {
             })
             .collect();
         let out = json!({
-            "profile": profile.as_ref().map(|p| p.source.to_string_lossy()),
+            "profile": profile.as_ref().map(|p| codeflow_core::git::display_path(&p.source)),
             "families": families,
         });
         match serde_json::to_string_pretty(&out) {
