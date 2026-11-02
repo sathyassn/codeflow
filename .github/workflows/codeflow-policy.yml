@@ -47,6 +47,11 @@ on:
   schedule:
     - cron: "23 4 * * *"
   workflow_dispatch:
+    inputs:
+      build_sha:
+        description: Commit contained in main or an integration branch to cache
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -56,6 +61,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
+  # Only a trusted integration push can request default-scope population.
+  # No checkout or PR data runs with this job's dispatch permission.
+  warm-target-cache:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Request a target build in main's cache scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_SHA: ${{ github.sha }}
+        run: gh workflow run codeflow-policy.yml --repo "$GH_REPO" --ref main -f "build_sha=$BUILD_SHA"
+
   commit-lint:
     name: commit standards
     runs-on: ubuntu-24.04
@@ -75,6 +97,35 @@ jobs:
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
           fetch-depth: 0
 
+      # Dispatch inputs confer no trust. Refresh branch authority, prove
+      # containment, then select the exact commit before running its tools.
+      - name: Verify the dispatched target
+        id: dispatch-target
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          BUILD_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$WORKFLOW_REF" != refs/heads/main ] || ! [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::cache population requires a full commit SHA and a workflow dispatched on main"; exit 1
+          fi
+          git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          git cat-file -e "$BUILD_SHA^{commit}"
+          refs=$(git for-each-ref --contains="$BUILD_SHA" --format='%(refname)' refs/remotes/origin)
+          trusted=false
+          while IFS= read -r ref; do
+            case "$ref" in
+              refs/remotes/origin/main|refs/remotes/origin/integration/*) trusted=true ;;
+            esac
+          done <<< "$refs"
+          if [ "$trusted" != true ]; then
+            echo "::error::requested cache SHA is not contained in main or an integration branch"; exit 1
+          fi
+          git checkout --detach "$BUILD_SHA"
+          [ "$(git rev-parse HEAD)" = "$BUILD_SHA" ]
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
       # This repository IS codeflow, so it builds the checked-out TARGET
       # branch's own source instead of installing a pinned release. The PR
       # head is never checked out or built. The toolchain is pinned in
@@ -84,12 +135,13 @@ jobs:
 
       # A target checkout determines the key before any head is fetched.
       # The namespace fixes release/default features/native target. No
-      # fallback keys: even a prefix match must rebuild. Dispatches and
-      # targets outside the trusted lines never use this binary cache.
+      # fallback keys: even a prefix match must rebuild. A dispatch uses
+      # only the SHA whose trusted branch containment was proved above.
       - name: Identify the target build
         id: target-build
         env:
           EVENT: ${{ github.event_name }}
+          VERIFIED_DISPATCH: ${{ steps.dispatch-target.outputs.verified }}
           TARGET_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref_name }}
         run: |
           set -euo pipefail
@@ -100,6 +152,7 @@ jobs:
           allowed=false
           case "$EVENT:$TARGET_REF" in
             push:main|push:master|push:integration/*|pull_request_target:main|pull_request_target:master|pull_request_target:integration/*|schedule:main|schedule:master) allowed=true ;;
+            workflow_dispatch:main) if [ "$VERIFIED_DISPATCH" = true ]; then allowed=true; fi ;;
           esac
           identity=$({
             rustc -vV
@@ -119,14 +172,18 @@ jobs:
         with:
           path: ${{ runner.temp }}/codeflow-policy-binary
           key: ${{ steps.target-build.outputs.key }}
+          # A writer needs no downloaded executable when its exact key exists.
+          lookup-only: ${{ github.event_name == 'workflow_dispatch' }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: github.event_name != 'workflow_dispatch' || steps.target-cache.outputs.cache-hit != 'true'
         with:
           # Head builds cannot populate the trusted dependency scope either.
           save-if: ${{ github.event_name == 'push' && steps.target-build.outputs.allowed == 'true' }}
 
       - name: Verify or rebuild the target binary
         id: target-binary
+        if: github.event_name != 'workflow_dispatch' || steps.target-cache.outputs.cache-hit != 'true'
         env:
           TARGET_SHA: ${{ steps.target-build.outputs.sha }}
           CACHE_HIT: ${{ steps.target-cache.outputs.cache-hit }}
@@ -155,10 +212,12 @@ jobs:
           echo "built=$built" >> "$GITHUB_OUTPUT"
           echo "$BINARY_DIR" >> "$GITHUB_PATH"
 
-      # Only a trusted line push saves a fresh, verified build. PR events
-      # restore read-only; an invalid immutable entry is rebuilt, not replaced.
+      # A verified main-scope dispatch or trusted push saves a fresh build.
+      # PR events remain read-only under GitHub's default cache permissions;
+      # no cache-mode expression or write override is needed. An invalid
+      # immutable entry is rebuilt by the reader, not replaced.
       - name: Save the verified target binary
-        if: github.event_name == 'push' && steps.target-build.outputs.allowed == 'true' && steps.target-binary.outputs.built == 'true' && steps.target-cache.outputs.cache-hit != 'true'
+        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && steps.dispatch-target.outputs.verified == 'true')) && steps.target-build.outputs.allowed == 'true' && steps.target-binary.outputs.built == 'true' && steps.target-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/codeflow-policy-binary
@@ -215,6 +274,7 @@ jobs:
       # The registry is fetched explicitly with full history, never forced
       # (R-20); the pull request head above was fetched as data only.
       - name: Fetch the shared registry
+        if: github.event_name != 'workflow_dispatch' || steps.target-cache.outputs.cache-hit != 'true'
         run: |
           if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
             git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
@@ -223,6 +283,7 @@ jobs:
           fi
 
       - name: codeflow ids check
+        if: github.event_name != 'workflow_dispatch' || steps.target-cache.outputs.cache-hit != 'true'
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

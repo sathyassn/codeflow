@@ -156,7 +156,7 @@ class GateContracts(unittest.TestCase):
         self.assertNotIn('github.event.pull_request.body', workflow)
         actions = '      actions: read\n' if admission else ''
         self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)
-        self.assertNotIn(': write', workflow)
+        self.assertNotIn(': write', workflow.split('  commit-lint:', 1)[1])
         self.assertIn('    timeout-minutes: 45\n' if admission else '    timeout-minutes: 20\n', workflow)
 
     def test_one_target_source_build_judges_policy_and_registry_and_cancels_only_pr_runs(self):

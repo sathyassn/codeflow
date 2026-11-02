@@ -37,8 +37,11 @@ def cache_contract(workflow):
     assert "if: steps.target-build.outputs.allowed == 'true'" in restore
     assert 'actions/cache/restore@' in restore
     assert 'restore-keys:' not in restore
+    assert "lookup-only: ${{ github.event_name == 'workflow_dispatch' }}" in restore
+    assert workflow.index('Verify the dispatched target') < workflow.index('Install Rust (rust-toolchain.toml)')
+    assert "if: github.event_name != 'workflow_dispatch' || steps.target-cache.outputs.cache-hit != 'true'" in step(workflow, 'Verify or rebuild the target binary')
     assert 'key: ${{ steps.target-build.outputs.key }}' in restore
-    assert "if: github.event_name == 'push' && steps.target-build.outputs.allowed == 'true' && steps.target-binary.outputs.built == 'true' && steps.target-cache.outputs.cache-hit != 'true'" in save
+    assert "if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && steps.dispatch-target.outputs.verified == 'true')) && steps.target-build.outputs.allowed == 'true' && steps.target-binary.outputs.built == 'true' && steps.target-cache.outputs.cache-hit != 'true'" in save
     assert 'actions/cache/save@' in save
     assert 'key: ${{ steps.target-build.outputs.key }}' in save
     assert workflow.index('Verify or rebuild the target binary') < workflow.index('Save the verified target binary') < workflow.index('Fetch the pull request head as data')
@@ -51,13 +54,78 @@ class PolicyCache(unittest.TestCase):
     def setUp(self):
         self.workflow = WORKFLOW.read_text()
 
+
+    def test_only_integration_pushes_can_dispatch_to_main(self):
+        job = self.workflow.split('  warm-target-cache:\n', 1)[1].split('  commit-lint:\n', 1)[0]
+        self.assertIn("if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/')", job)
+        self.assertIn('      actions: write\n', job)
+        self.assertEqual(self.workflow.count('actions: write'), 1)
+        self.assertIn('BUILD_SHA: ${{ github.sha }}', job)
+        self.assertIn('gh workflow run codeflow-policy.yml --repo "$GH_REPO" --ref main -f "build_sha=$BUILD_SHA"', job)
+        self.assertNotIn('uses: actions/checkout', job)
+        self.assertNotIn('pull_request.head', job)
+
+    @unittest.skipIf(os.name == "nt", "the target-cache script runs in Linux bash")
+    def test_dispatch_requires_a_fetched_trusted_branch_containing_the_sha(self):
+        run = script(step(self.workflow, 'Verify the dispatched target'))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = root / 'remote'
+            checkout = root / 'checkout'
+            def git(*args, cwd=checkout):
+                return subprocess.check_output(['git', *args], cwd=cwd, text=True, stderr=subprocess.DEVNULL).strip()
+            remote.mkdir()
+            git('init', '-b', 'main', cwd=remote)
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                'commit', '--allow-empty', '-m', 'chore: initial', cwd=remote)
+            main = git('rev-parse', 'HEAD', cwd=remote)
+            git('checkout', '-b', 'integration/fixture', cwd=remote)
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                'commit', '--allow-empty', '-m', 'chore: trusted target', cwd=remote)
+            target = git('rev-parse', 'HEAD', cwd=remote)
+            git('checkout', '-b', 'task/untrusted', cwd=remote)
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                'commit', '--allow-empty', '-m', 'chore: untrusted head', cwd=remote)
+            head = git('rev-parse', 'HEAD', cwd=remote)
+            git('clone', str(remote), str(checkout), cwd=root)
+            def verify(sha, workflow_ref='refs/heads/main'):
+                output = root / 'output'
+                output.write_text('')
+                env = dict(os.environ, BUILD_SHA=sha, WORKFLOW_REF=workflow_ref, GITHUB_OUTPUT=str(output))
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', run], cwd=checkout,
+                                        env=env, text=True, capture_output=True)
+                return result, output.read_text()
+            for sha in (main, target):
+                result, output = verify(sha)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(git('rev-parse', 'HEAD'), sha)
+                self.assertIn('verified=true', output)
+            for sha, ref in ((head, 'refs/heads/main'), ('0' * 40, 'refs/heads/main'),
+                             ('main', 'refs/heads/main'), ('$(touch injected)', 'refs/heads/main'),
+                             (target, 'refs/heads/task/head')):
+                result, output = verify(sha, ref)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('verified=true', output)
+            # An obsolete remote-tracking branch must not authorize a writer.
+            git('branch', '-D', 'integration/fixture', cwd=remote)
+            result, output = verify(target)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('verified=true', output)
+            self.assertFalse((checkout / 'injected').exists())
+            # Failure to refresh the authority must fail closed, even for main.
+            git('remote', 'set-url', 'origin', str(root / 'absent'))
+            result, output = verify(main)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('verified=true', output)
+
     def test_cache_authority(self):
         cache_contract(self.workflow)
 
     def test_head_written_or_head_selected_cache_is_rejected(self):
         cache_contract(self.workflow)
         mutations = (
-            ("github.event_name == 'push' && steps.target-build.outputs.allowed", "github.event_name == 'pull_request' && steps.target-build.outputs.allowed"),
+            ("if: (github.event_name == 'push' ||", "if: (github.event_name == 'pull_request' ||"),
+            ("steps.dispatch-target.outputs.verified == 'true'", "true"),
             ('sha=$(git rev-parse HEAD)', 'sha=${{ github.event.pull_request.head.sha }}'),
             ('key: ${{ steps.target-build.outputs.key }}', 'key: ${{ github.sha }}'),
             ('actions/cache/restore@', 'actions/cache@'),
@@ -132,16 +200,18 @@ class PolicyCache(unittest.TestCase):
                 path = root / name
                 path.write_text('#!/bin/sh\n' + content + '\n')
                 path.chmod(0o755)
-            def key(sha='a' * 40, rust='rustc 1.94.0', image='20261102', event='pull_request_target', ref='integration/EPC-022'):
+            def key(sha='a' * 40, rust='rustc 1.94.0', image='20261102', event='pull_request_target', ref='integration/EPC-022', verified=''):
                 output = root / 'output'
                 output.write_text('')
                 env = dict(os.environ, PATH=f'{root}{os.pathsep}{os.environ["PATH"]}',
                            TEST_SHA=sha, TEST_RUST=rust, ImageOS='ubuntu24', ImageVersion=image,
-                           RUNNER_ARCH='X64', EVENT=event, TARGET_REF=ref, GITHUB_OUTPUT=str(output))
+                           RUNNER_ARCH='X64', EVENT=event, TARGET_REF=ref, VERIFIED_DISPATCH=verified, GITHUB_OUTPUT=str(output))
                 result = subprocess.run(['bash', '-euo', 'pipefail', '-c', run], env=env,
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return output.read_text()
+            self.assertIn('allowed=true', key(event='workflow_dispatch', ref='main', verified='true'))
+            self.assertIn('allowed=false', key(event='workflow_dispatch', ref='task/head', verified='true'))
             original = key()
             self.assertIn('allowed=true', original)
             self.assertNotEqual(original, key(sha='b' * 40))
