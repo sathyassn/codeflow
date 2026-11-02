@@ -1,0 +1,11 @@
+id = "TSK-1179"
+uid = "09ead251-2198-43bf-b0ee-73ebedec7cdd"
+kind = "TSK"
+title = "A reopened task records a superseded criterion in its own PR by an append-only waiver"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T04:28:24Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
