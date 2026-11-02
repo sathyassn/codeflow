@@ -9,7 +9,18 @@ and the present Comment flow. Both products consume generated files from the sam
 
 | File | What it is |
 |---|---|
-| `source/*.json` | Authored colour, type, space, radius, elevation, motion, layout, geometry and floor values |
+| `source/colour.json` | Theme palettes and curated accent bases |
+| `source/type.json` | Typefaces, sizes and line heights |
+| `source/space.json` | Spacing scale |
+| `source/radius.json` | Corner radii |
+| `source/elevation.json` | Surface shadows |
+| `source/motion.json` | Durations and easing |
+| `source/layout.json` | Fixed layout dimensions and media breakpoints |
+| `source/geometry.json` | Count-chart geometry |
+| `source/floors.json` | Contrast, separation and minimum-mark floors |
+| `source/matrices.json` | Full-severity colour-deficiency simulation matrices |
+| `source/stages.json` | Stage-to-figure role mapping |
+| `source/named-colours.json` | CSS colour names rejected by the authored-style lint |
 | `tokens.json` | Generated resolved palettes for six theme/mode pairs |
 | `tokens.ts` | Generated typed values and display choices |
 | `counts.reference.html` | Shared bar and ring renderer at one task in three hundred |
