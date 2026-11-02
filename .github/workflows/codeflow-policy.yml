@@ -75,15 +75,21 @@ jobs:
       actions: write
     steps:
       - name: Request a target build in main's cache scope
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           BUILD_SHA: ${{ github.sha }}
         run: |
-          if ! gh workflow run codeflow-policy.yml --repo "$GH_REPO" --ref main -f "build_sha=$BUILD_SHA"; then
-            echo "::warning::Could not request cache warming for $BUILD_SHA; main must contain the build_sha writer. Readers rebuild on a miss."
-            exit 1
+          if dispatch_output=$(gh workflow run codeflow-policy.yml --repo "$GH_REPO" --ref main -f "build_sha=$BUILD_SHA" 2>&1); then
+            printf '%s\n' "$dispatch_output"
+          else
+            dispatch_status=$?
+            printf '%s\n' "$dispatch_output" >&2
+            if [[ "$dispatch_output" == *'HTTP 422: Unexpected inputs provided: ["build_sha"]'* ]]; then
+              echo "::warning::Main does not yet accept build_sha; cache warming for $BUILD_SHA is unavailable. Readers rebuild on a miss."
+              exit 0
+            fi
+            exit "$dispatch_status"
           fi
 
   commit-lint:

@@ -64,33 +64,42 @@ class PolicyCache(unittest.TestCase):
         self.assertIn('gh workflow run codeflow-policy.yml --repo "$GH_REPO" --ref main -f "build_sha=$BUILD_SHA"', job)
         self.assertNotIn('uses: actions/checkout', job)
         self.assertNotIn('pull_request.head', job)
-        self.assertIn('        continue-on-error: true\n', job)
+        self.assertNotIn('continue-on-error:', job)
 
     @unittest.skipIf(os.name == "nt", "the target-cache script runs in Linux bash")
-    def test_dispatch_failure_warns_without_failing_the_job(self):
+    def test_only_missing_main_input_downgrades_dispatch_failure(self):
         body = step(self.workflow, "Request a target build in main's cache scope")
         run = script(body) if 'run: |' in body else body.split('run: ', 1)[1].splitlines()[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             gh = root / 'gh'
-            gh.write_text('#!/bin/sh\nexit "$DISPATCH_STATUS"\n')
+            gh.write_text('#!/bin/sh\nprintf "%s\\n" "$DISPATCH_ERROR" >&2\nexit "$DISPATCH_STATUS"\n')
             gh.chmod(0o755)
-            for status in ('0', '1'):
-                with self.subTest(status=status):
+            for status, error, missing_input in (
+                (0, '', False),
+                (1, 'could not create workflow dispatch event: HTTP 422: Unexpected inputs provided: ["build_sha"] (https://api.github.com/repos/fixture/repo/actions/workflows/codeflow-policy.yml/dispatches)', True),
+                (2, 'HTTP 403: Resource not accessible by integration', False),
+                (1, 'HTTP 500: Internal Server Error', False),
+                (1, 'HTTP 422: Validation Failed', False),
+                (1, 'HTTP 422: Unexpected inputs provided: ["other"]', False),
+                (1, 'HTTP 500: Unexpected inputs provided: ["build_sha"]', False),
+            ):
+                with self.subTest(status=status, error=error):
                     env = dict(os.environ, PATH=f'{root}{os.pathsep}{os.environ["PATH"]}',
-                               GH_REPO='fixture/repo', BUILD_SHA='a' * 40, DISPATCH_STATUS=status)
+                               GH_REPO='fixture/repo', BUILD_SHA='a' * 40,
+                               DISPATCH_STATUS=str(status), DISPATCH_ERROR=error)
                     result = subprocess.run(['bash', '-euo', 'pipefail', '-c', run],
                                             env=env, text=True, capture_output=True)
-                    if status == '0':
+                    if missing_input:
                         self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertNotIn('::warning::', result.stdout)
-                    else:
-                        self.assertNotEqual(result.returncode, 0)
                         self.assertIn('::warning::', result.stdout)
                         self.assertIn('a' * 40, result.stdout)
-        # GitHub records the failed step outcome but keeps the warming job green.
-        self.assertIn('        continue-on-error: true\n', body)
-        self.assertEqual(self.workflow.count('continue-on-error: true'), 1)
+                    else:
+                        self.assertEqual(result.returncode, status, result.stderr)
+                        self.assertNotIn('::warning::', result.stdout)
+                    if status:
+                        self.assertIn(error, result.stderr)
+        self.assertNotIn('continue-on-error:', body)
 
     def test_exact_binary_hits_skip_the_dependency_cache(self):
         body = self.workflow.split('      - uses: Swatinem/rust-cache@', 1)[1].split('\n      - ', 1)[0]
