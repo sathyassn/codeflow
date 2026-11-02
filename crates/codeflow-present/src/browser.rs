@@ -2842,7 +2842,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn process_group_cleanup_reverifies_before_forced_escalation() {
+        use std::io::BufRead as _;
         use std::os::unix::process::CommandExt as _;
+        use std::os::unix::process::ExitStatusExt as _;
 
         let _process_group_test_lease = PROCESS_GROUP_TEST_LEASE
             .lock()
@@ -2853,31 +2855,45 @@ mod tests {
         let profile = temp.path().join("browser-profile");
         fs::create_dir(&profile).unwrap();
         let instance = Uuid::new_v4();
+        // The fixture reports ready only once it ignores TERM, so the
+        // graceful signal can never land before the trap and end it early.
         let mut command = crate::platform::restricted_command("/bin/sh");
         command
             .args([
                 "-c",
-                "trap '' TERM; read value",
+                "trap '' TERM; echo ready; read value",
                 "cf-present-browser",
                 &format!("--user-data-dir={}", profile.display()),
                 &format!("--cf-present-instance={instance}"),
             ])
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .process_group(0);
         let mut child = command.spawn().unwrap();
+        // Held open until the fixture is reaped: `Child::wait` closes a
+        // stdin it still owns, and `read` would then end the fixture on EOF
+        // before cleanup reached the escalation path.
+        let stdin = child.stdin.take().unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready, "ready\n", "the fixture exited before it was ready");
         let pid = child.id();
         let waiter = thread::spawn(move || child.wait().unwrap());
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while process_identity(pid, instance, &profile).unwrap() != ProcessIdentity::Owned {
-            assert!(Instant::now() < deadline);
-            thread::sleep(Duration::from_millis(10));
-        }
+        assert_eq!(
+            process_identity(pid, instance, &profile).unwrap(),
+            ProcessIdentity::Owned
+        );
 
         terminate_qualified_process(pid, instance, &profile).unwrap();
         let status = waiter.join().unwrap();
+        drop(stdin);
         assert!(!status.success());
+        // Ended by the forced signal: the fixture ignores TERM and its stdin
+        // stays open, so only the escalation path can end it.
+        assert_eq!(status.signal(), Some(libc::SIGKILL), "{status:?}");
         assert!(owned_process_candidates(instance, &profile)
             .unwrap()
             .is_empty());

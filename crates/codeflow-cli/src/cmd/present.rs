@@ -183,11 +183,13 @@ const EXIT_CLOSED: i32 = 7;
 /// outside the agent sandbox; the sandbox preset can write only inside it.
 /// A failure is reported but does not fail the scaffold operation.
 pub fn provision_state_root_or_warn() {
-    if let Err(error) = codeflow_present::state::provision_state_root() {
-        eprintln!(
-            "warning: could not create the cf-present state directory: {error}",
-            error = crate::cmd::shown(&error)
-        );
+    // `update` calls this after its report, so the line is a fixed
+    // `Shown` (TSK-1029); `codeflow present` names the cause when it runs.
+    if codeflow_present::state::provision_state_root().is_err() {
+        crate::cmd::warn(&codeflow_core::scaffold::Shown::fixed(
+            "warning: could not create the cf-present state directory; `codeflow present` \
+             names the cause when it runs",
+        ));
     }
 }
 

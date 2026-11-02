@@ -72,6 +72,7 @@ impl Hosted {
         assert!(out.contains("TSK-001"), "{out}");
         let task = read(&self.root, TASK).replacen("- AC-1\n", CRITERION, 1);
         write(&self.root, TASK, &task);
+        state_outcome(&self.root, TASK);
         commit_all(&self.root, "docs: plan the work");
     }
 
@@ -585,6 +586,7 @@ fn clears_work_start_merge_planning() {
     hosted.seed();
     let out = codeflow(root, &["epic", "new", "an outcome"]);
     assert!(out.contains("EPC-001"), "{out}");
+    state_outcome(root, EPIC);
     set_field(root, TASK, "epic_id", "EPC-001");
     set_field(root, TASK, "standalone_reason", "null");
     commit_all(root, "docs: plan the epic");
@@ -598,6 +600,44 @@ fn clears_work_start_merge_planning() {
             hosted.land("plan/work");
             let step = printed_command(printed, "WORK_START_MERGE_PLANNING", None);
             run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+/// TSK-1036: a task blocked on the target is unblocked in its own pull
+/// request by the printed `task status` step.
+#[test]
+fn clears_work_start_unblock() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    let block = [
+        "task",
+        "status",
+        "TSK-001",
+        "blocked",
+        "--reason",
+        "waits on the host",
+        "--owner",
+        "ops",
+        "--revisit",
+        "the host is ready",
+    ];
+    let out = codeflow(root, &block);
+    assert!(out.contains("blocked"), "{out}");
+    commit_all(root, "docs: block the work");
+    hosted.seed();
+    hosted.land("plan/work");
+    hosted.branch("task/TSK-001-work");
+    commit(root, "x.txt", "feat: add x");
+    prove(
+        "WORK_START_UNBLOCK",
+        "is blocked",
+        || hosted.ci("task/TSK-001-work", &[]),
+        |printed| {
+            let step = printed_command(printed, "WORK_START_UNBLOCK", None);
+            run_printed(root, &step, &[], &[]);
+            commit_all(root, "chore: unblock the work");
         },
     );
 }
@@ -692,7 +732,7 @@ fn clears_acceptance_binding() {
     commit(root, "y.txt", "feat: add y");
     prove(
         "ACCEPTANCE_BINDING",
-        "changed after the reviewed commit",
+        "changed between the reviewed commit",
         || hosted.ci("task/TSK-001-work", &[]),
         |printed| {
             // Review the pull request head, then take the printed steps in
@@ -749,9 +789,16 @@ fn clears_review_row_binding() {
     assert!(out.contains("todo -> complete"), "{out}");
     commit_all(root, "chore: complete the work");
     let body = hosted.dir.path().join("review-row.md");
+    // A short form that holds a digit: the Reviews reader takes a hex word
+    // without one for prose, so an all-letter prefix such as `bbfbddbaa`
+    // names no commit and the section defers to the block (hosted run
+    // 40734999603).
+    let short = reviewed
+        .find(|c: char| c.is_ascii_digit())
+        .map_or(reviewed.len(), |at| (at + 1).max(9));
     let house = format!(
         "| Reviewer | whole unit at `{}` | approved, no findings |",
-        &reviewed[..9]
+        &reviewed[..short]
     );
     let table = format!("| Seat | Scope | Verdict |\n|---|---|---|\n{house}");
     std::fs::write(&body, BODY.replace("None: pending review.", &table)).unwrap();

@@ -377,7 +377,8 @@ class GateBinaryControls(unittest.TestCase):
 
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
                 '--extract-overwrite --no-fail-fast --profile codeflow '
-                '-E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }})"')
+                '-E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }} '
+                '--list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"')
 ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst"
 
 
@@ -428,7 +429,8 @@ class WindowsPartitionControls(unittest.TestCase):
                                                              "--archive-file target/other.tar.zst")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--no-fail-fast ", "")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$(python -B scripts/windows-partitions.py filter '
-                                                             '${{ matrix.partition }})"',
+                                                             '${{ matrix.partition }} '
+                                                             '--list "$RUNNER_TEMP/windows-test-list/windows-tests.json")"',
                                                              "--partition count:${{ matrix.partition }}/12"))):
             with self.subTest(new=new):
                 workflow = WORKFLOW.replace("run: " + old, "run: " + new)

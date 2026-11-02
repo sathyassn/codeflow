@@ -145,9 +145,13 @@ fn remote_protect_dry_run_prints_plan_from_policy() {
     );
     assert!(out.status.success());
     let text = stdout(&out);
-    assert!(text.contains("main [branch protection]:"), "{text}");
+    assert!(text.contains("ruleset codeflow protect main:"), "{text}");
     assert!(
-        text.contains("release/* [ruleset (glob pattern)]:"),
+        text.contains("ruleset codeflow protect release/*:"),
+        "{text}"
+    );
+    assert!(
+        text.contains("ruleset codeflow authority checks on ~DEFAULT_BRANCH:"),
         "{text}"
     );
     assert!(
@@ -348,7 +352,7 @@ fn r23_remote_protect_reads_the_nearest_initialized_project() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        text.contains("release/* [ruleset (glob pattern)]:"),
+        text.contains("ruleset codeflow protect release/*:"),
         "{text}"
     );
     assert!(!String::from_utf8_lossy(&out.stderr).contains("not found"));
@@ -434,7 +438,7 @@ fn remote_protect_degrades_legibly_on_free_plan_403() {
     assert!(text.contains("Upgrade to GitHub Pro"), "{text}");
     assert!(text.contains("Manual checklist"), "{text}");
     assert!(
-        text.contains("[ ] main: require a pull request before merging"),
+        text.contains("[ ] codeflow protect main: require a pull request before merging"),
         "{text}"
     );
     assert!(text.contains("status: degraded"), "{text}");

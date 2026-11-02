@@ -201,6 +201,59 @@ fn read_back(git: &Git, entry: &Entry, commit: &str, why: &str) -> Result<Reserv
     }
 }
 
+/// Reserve exactly `id` for a record written with `uid`, without asking the
+/// authority: a commit on the local registry, as an offline `new` makes.
+/// It is pending until the next push or `ids sync` publishes it, or local
+/// when there is no authority remote. `None` when a registry here already
+/// binds `uid`, so nothing is written twice (TSK-338).
+///
+/// # Errors
+///
+/// Returns an error when another record holds `id` here, or the registry
+/// cannot be read or committed (an unseeded registry among them).
+pub fn reserve_exact_offline(
+    root: &Path,
+    id: &RegId,
+    uid: &str,
+    title: &str,
+) -> Result<Option<Standing>, IdsError> {
+    let git = Git::new(root);
+    let _lock = state::lock(&git)?;
+    let ledgers = [
+        Ledger::read(&git, REGISTRY_REF)?,
+        Ledger::read(&git, &tracking_ref(AUTHORITY))?,
+    ];
+    if ledgers
+        .iter()
+        .any(|ledger| !ledger.ids_for_uid(uid).is_empty())
+    {
+        return Ok(None);
+    }
+    if ledgers.iter().any(|ledger| ledger.holds(id)) {
+        return Err(IdsError::Invalid(format!(
+            "{id} is already held in the registry by another record"
+        )));
+    }
+    let standing = if git.has_remote(AUTHORITY)? {
+        Standing::Pending
+    } else {
+        Standing::Local
+    };
+    let request = Request {
+        kind: id.kind(),
+        title: title.to_string(),
+        target: "none".to_string(),
+        uid: Some(uid.to_string()),
+        wanted: Some(id.clone()),
+        issuer: None,
+        verb: "issue",
+        resume: None,
+    };
+    let issuer = git.user_email()?;
+    let reservation = commit_local(&git, &request, uid, &issuer, standing, None)?;
+    Ok(Some(reservation.standing))
+}
+
 /// Commit a reservation on the local registry (offline, or no authority).
 fn commit_local(
     git: &Git,
@@ -261,16 +314,22 @@ fn choose(git: &Git, ledgers: &[&Ledger], request: &Request) -> Result<RegId, Id
         }
     }
     let kind = request.kind;
-    let history = ledgers
-        .iter()
-        .map(|ledger| ledger.max_seq(kind))
-        .max()
-        .unwrap_or(0);
+    let mut history = 0;
+    for ledger in ledgers {
+        history = history.max(ledger.max_seq(kind)?);
+    }
     let refs = inventory::max_seq_on_refs(git, kind)?;
-    let worktree = inventory::max_seq_in_worktree(git.root(), kind).map_err(|error| {
-        IdsError::Invalid(format!("cannot inventory work records before issuing an ID: {error}; restore readable record directories, then retry"))
+    let worktree = inventory::max_seq_in_worktree(git.root(), kind)?;
+    successor(kind, history.max(refs).max(worktree))
+}
+
+/// The id after the highest issued sequence, or an error when none is left.
+fn successor(kind: Kind, highest: u64) -> Result<RegId, IdsError> {
+    let next = highest.checked_add(1).ok_or_else(|| {
+        IdsError::Invalid(format!(
+            "{kind}-{highest} is the last {kind} number there is, so no next id exists"
+        ))
     })?;
-    let next = history.max(refs).max(worktree) + 1;
     Ok(RegId::canonical(kind, next))
 }
 
@@ -1024,6 +1083,25 @@ pub fn resume(root: &Path, id: &RegId) -> Result<Unwritten, IdsError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_last_sequence_has_no_successor() {
+        use crate::ids::Kind;
+        assert_eq!(
+            super::successor(Kind::Tsk, 999).unwrap().to_string(),
+            "TSK-1000"
+        );
+        assert_eq!(
+            super::successor(Kind::Adr, u64::MAX - 1)
+                .unwrap()
+                .to_string(),
+            "ADR-18446744073709551615"
+        );
+        let error = super::successor(Kind::Tsk, u64::MAX)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no next id exists"), "{error}");
+    }
+
     #[test]
     fn failed_push_redacts_urls_without_changing_classification() {
         let text =

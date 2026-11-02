@@ -31,6 +31,13 @@ use regex::Regex;
 use super::hash::sha256_hex;
 use super::state::{read_beneath_root, state_text, write_record, PROJECT_TOML};
 use super::version::{is_older, is_parseable};
+use super::Shown;
+use crate::shown;
+
+/// The archive `CodeFlow` publishes for `triple`, as a report names it.
+fn asset_name(triple: &'static str) -> Shown {
+    shown!("codeflow-cli-{}.tar.xz", Shown::fixed(triple))
+}
 
 /// The release triples `CodeFlow` publishes for macOS and Linux, the ones the
 /// CI installers download, in the order the table lists them.
@@ -48,51 +55,69 @@ pub const TABLE: &str = "scaffold_sha256";
 pub const DEFAULT_RELEASE_URL: &str = "https://github.com/sathyassn/codeflow/releases/download";
 
 /// What `codeflow update --pin` wrote.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PinReport {
     /// The version pinned before, if any.
     pub previous: Option<String>,
     /// The version now pinned.
     pub version: String,
-    /// Each triple and the digest pinned for it.
-    pub digests: Vec<(String, String)>,
+    /// Each triple and the digest pinned for it, as this binary computed it
+    /// from the downloaded archive.
+    pub digests: Vec<(&'static str, Shown)>,
+}
+
+impl PinReport {
+    /// The report, inside the display boundary ([`Shown`], TSK-1029).
+    #[must_use]
+    pub fn shown(&self) -> Shown {
+        let file = Shown::path(PROJECT_TOML);
+        let mut lines = vec![match &self.previous {
+            Some(previous) if previous != &self.version => shown!(
+                "codeflow update --pin: scaffold_version {} -> {} in {}",
+                Shown::version(previous),
+                Shown::version(&self.version),
+                file
+            ),
+            _ => shown!(
+                "codeflow update --pin: scaffold_version {} in {}",
+                Shown::version(&self.version),
+                file
+            ),
+        }];
+        lines.push(shown!(
+            "  [{}] pins the release archives, each checked against the release's sha256.sum:",
+            Shown::fixed(TABLE)
+        ));
+        for (triple, digest) in &self.digests {
+            lines.push(shown!("    {} = {}", Shown::fixed(triple), digest));
+        }
+        lines.push(Shown::fixed(
+            "  next: review the digests and land this change on its own; CI then installs only these archives",
+        ));
+        lines.push(shown!(
+            "  then: with codeflow {} installed, run `codeflow update` on a new branch",
+            Shown::version(&self.version)
+        ));
+        Shown::join(lines, "\n")
+    }
+}
+
+impl fmt::Debug for PinReport {
+    /// The same text as [`PinReport::shown`]: a derived form would print
+    /// both versions with any suffix the project wrote (TSK-1029).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PinReport({})", self.shown())
+    }
 }
 
 impl fmt::Display for PinReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.previous {
-            Some(previous) if previous != &self.version => writeln!(
-                f,
-                "codeflow update --pin: scaffold_version {previous} -> {} in {PROJECT_TOML}",
-                self.version
-            )?,
-            _ => writeln!(
-                f,
-                "codeflow update --pin: scaffold_version {} in {PROJECT_TOML}",
-                self.version
-            )?,
-        }
-        writeln!(
-            f,
-            "  [{TABLE}] pins the release archives, each checked against the release's sha256.sum:"
-        )?;
-        for (triple, digest) in &self.digests {
-            writeln!(f, "    {triple} = {digest}")?;
-        }
-        writeln!(
-            f,
-            "  next: review the digests and land this change on its own; CI then installs only these archives"
-        )?;
-        write!(
-            f,
-            "  then: with codeflow {} installed, run `codeflow update` on a new branch",
-            self.version
-        )
+        f.write_str(&self.shown())
     }
 }
 
 /// The digest table a project state pins, as read from its text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum PinnedDigests {
     /// No `[scaffold_sha256]` table.
     Absent,
@@ -105,7 +130,33 @@ pub enum PinnedDigests {
     },
     /// A table the installers refuse to read, with the reason: declared
     /// twice, a key listed twice, or written in a form they do not read.
-    Unreadable(String),
+    Unreadable(Shown),
+}
+
+impl fmt::Debug for PinnedDigests {
+    /// The table's `version` as [`Shown::version`] shows it: a derived form
+    /// would print any suffix the project wrote (TSK-1029).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Absent => f.write_str("Absent"),
+            Self::Table {
+                version,
+                listed,
+                missing,
+            } => f
+                .debug_struct("Table")
+                .field(
+                    "version",
+                    &version
+                        .as_deref()
+                        .map(|version| Shown::version(version).into_string()),
+                )
+                .field("listed", listed)
+                .field("missing", missing)
+                .finish(),
+            Self::Unreadable(reason) => f.debug_tuple("Unreadable").field(reason).finish(),
+        }
+    }
 }
 
 /// Why the installers refuse a table: it is declared twice.
@@ -194,20 +245,30 @@ fn byte_line(line: &str) -> Result<Option<&str>, &'static str> {
     Ok(Some(trimmed))
 }
 
+/// The reason for a key the digest table lists twice. The key is named only
+/// when `CodeFlow` defines it; any other key is the project's own text, which
+/// can hold a secret (TSK-1029).
+fn listed_twice(key: &str) -> Shown {
+    match std::iter::once("version")
+        .chain(TRIPLES)
+        .find(|name| *name == key)
+    {
+        Some(name) => shown!("lists {} twice", Shown::fixed(name)),
+        None => Shown::fixed("lists one of its own keys twice"),
+    }
+}
+
 /// The first line at which the installers stop reading `state` as a digest
-/// table they can use: its number from 1, and a label naming it with its
-/// escapes shown, or `None` when they read it.
+/// table they can use: its number from 1, and a label naming it by number,
+/// or `None` when they read it. The line's text is never shown: the
+/// project wrote it and it can hold a secret (TSK-1029).
 #[must_use]
-pub fn unread_line(state: &str) -> Option<(usize, String)> {
+pub fn unread_line(state: &str) -> Option<(usize, Shown)> {
     let mut end = 0;
     for (index, line) in state.split_inclusive('\n').enumerate() {
         end += line.len();
         if matches!(pinned_digests(&state[..end]), PinnedDigests::Unreadable(_)) {
-            let shown: String = format!("{:?}", line.trim_end_matches(['\n', '\r']))
-                .chars()
-                .take(120)
-                .collect();
-            return Some((index + 1, format!("line {} ({shown})", index + 1)));
+            return Some((index + 1, shown!("line {}", Shown::count(index + 1))));
         }
     }
     None
@@ -238,21 +299,21 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
     let (mut inside, mut table) = (false, false);
     let mut version = None;
     let mut values = std::collections::BTreeMap::new();
-    let mut bad: Option<String> = None;
-    let mut flag = |reason: String| {
+    let mut bad: Option<Shown> = None;
+    let mut flag = |reason: Shown| {
         bad.get_or_insert(reason);
     };
     for line in state.lines() {
         let trimmed = match byte_line(line) {
             Err(reason) => {
-                flag(reason.to_string());
+                flag(Shown::fixed(reason));
                 continue;
             }
             Ok(None) => continue,
             Ok(Some(trimmed)) => trimmed,
         };
         if line.contains("\"\"\"") || line.contains("'''") {
-            flag(MULTILINE.to_string());
+            flag(Shown::fixed(MULTILINE));
         }
         if trimmed.starts_with('[') {
             inside = header.is_match(line);
@@ -261,18 +322,18 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
             let name = line.split(']').next().unwrap_or(line);
             if inside {
                 if table {
-                    flag(TWICE.to_string());
+                    flag(Shown::fixed(TWICE));
                 }
                 table = true;
             } else {
                 if name.contains(TABLE) {
-                    flag(OTHER_FORM.to_string());
+                    flag(Shown::fixed(OTHER_FORM));
                 }
                 if name.contains('\\') {
-                    flag(ESCAPED.to_string());
+                    flag(Shown::fixed(ESCAPED));
                 }
                 if !name.is_ascii() {
-                    flag(NON_ASCII_NAME.to_string());
+                    flag(Shown::fixed(NON_ASCII_NAME));
                 }
             }
             continue;
@@ -280,24 +341,24 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
         // A key runs to the first `=`; its value and comment never count.
         if let Some((name, _)) = line.split_once('=') {
             if name.contains(TABLE) {
-                flag(OTHER_FORM.to_string());
+                flag(Shown::fixed(OTHER_FORM));
             }
             if name.contains('\\') {
-                flag(ESCAPED.to_string());
+                flag(Shown::fixed(ESCAPED));
             }
             if !name.is_ascii() {
-                flag(NON_ASCII_NAME.to_string());
+                flag(Shown::fixed(NON_ASCII_NAME));
             }
         }
         if !inside || trimmed.is_empty() {
             continue;
         }
         let Some(key) = entry.captures(line) else {
-            flag(STRAY.to_string());
+            flag(Shown::fixed(STRAY));
             continue;
         };
         if (&key[1] == "version" && version.is_some()) || values.contains_key(&key[1]) {
-            flag(format!("lists {} twice", &key[1]));
+            flag(listed_twice(&key[1]));
         }
         let rest = line
             .split_once('=')
@@ -343,14 +404,13 @@ fn is_digest(text: &str) -> bool {
 ///
 /// A value that is not UTF-8 refuses (issue 79): reading it as unset would
 /// pin digests from another release host than the one named.
-pub fn release_url() -> Result<String, String> {
+pub fn release_url() -> Result<String, Shown> {
     match std::env::var("CODEFLOW_RELEASE_URL") {
         Ok(url) if !url.is_empty() => Ok(url),
         Ok(_) | Err(std::env::VarError::NotPresent) => Ok(DEFAULT_RELEASE_URL.to_string()),
-        Err(std::env::VarError::NotUnicode(_)) => Err(
-            "CODEFLOW_RELEASE_URL is not UTF-8, so the release host it names cannot be read"
-                .to_string(),
-        ),
+        Err(std::env::VarError::NotUnicode(_)) => Err(Shown::fixed(
+            "CODEFLOW_RELEASE_URL is not UTF-8, so the release host it names cannot be read",
+        )),
     }
 }
 
@@ -359,19 +419,84 @@ pub fn release_url() -> Result<String, String> {
 ///
 /// # Errors
 ///
-/// The reason curl could not run or fetch the URL.
-pub fn fetch_with_curl(url: &str) -> Result<Vec<u8>, String> {
+/// The category of the failure: never the URL, whose base comes from
+/// `CODEFLOW_RELEASE_URL` and can carry credentials, and never curl's own
+/// message, which repeats it (TSK-1029). Callers name the artifact.
+pub fn fetch_with_curl(url: &str) -> Result<Vec<u8>, Shown> {
     let out = std::process::Command::new("curl")
         .args(["-fsSL", "--", url])
         .output()
-        .map_err(|error| format!("cannot run curl to download {url}: {error}"))?;
+        .map_err(|error| shown!("curl could not run ({})", Shown::io(&error)))?;
     if !out.status.success() {
-        return Err(format!(
-            "cannot download {url}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(Shown::fixed(curl_failure(out.status.code())));
     }
     Ok(out.stdout)
+}
+
+/// A fixed description of a curl exit code.
+fn curl_failure(code: Option<i32>) -> &'static str {
+    match code {
+        Some(3) => "the release URL is malformed",
+        Some(5 | 6) => "the release host could not be resolved",
+        Some(7) => "the release host refused or dropped the connection",
+        Some(22) => "the release host answered with an HTTP error",
+        Some(28) => "the download timed out",
+        Some(35 | 51 | 58 | 60) => "the TLS connection failed",
+        Some(37) => "the release file could not be read",
+        Some(_) => "the download failed",
+        None => "curl was stopped by a signal",
+    }
+}
+
+/// Each published archive downloaded and checked against `sums`, the
+/// release's checksum file, as the pin records it.
+fn verified_digests(
+    sums: &str,
+    release: &str,
+    label: &Shown,
+    fetch: &dyn Fn(&str) -> Result<Vec<u8>, Shown>,
+) -> Result<Vec<(&'static str, Shown)>, Shown> {
+    let mut digests = Vec::new();
+    for triple in TRIPLES {
+        let asset = format!("codeflow-cli-{triple}.tar.xz");
+        let listed = sums
+            .lines()
+            .find_map(|line| {
+                let mut fields = line.split_whitespace();
+                let digest = fields.next()?;
+                let name = fields.next()?.trim_start_matches('*');
+                (name == asset).then(|| digest.to_ascii_lowercase())
+            })
+            .filter(|digest| is_digest(digest))
+            .ok_or_else(|| {
+                shown!(
+                    "sha256.sum for codeflow {} lists no checksum for {}",
+                    label,
+                    asset_name(triple)
+                )
+            })?;
+        let archive = fetch(&format!("{release}/{asset}")).map_err(|error| {
+            shown!(
+                "cannot download {} for codeflow {}: {}",
+                asset_name(triple),
+                label,
+                error
+            )
+        })?;
+        // The listed checksum is never shown: the release host wrote it, and
+        // a hexadecimal secret passes the digest shape (TSK-1029). The
+        // archive's own digest is this binary's hash of what it downloaded.
+        if sha256_hex(&archive) != listed {
+            return Err(shown!(
+                "{} for codeflow {} does not match its sha256.sum entry (the archive hashes to {}); nothing was pinned",
+                asset_name(triple),
+                label,
+                Shown::sha256_of(&archive)
+            ));
+        }
+        digests.push((triple, Shown::sha256_of(&archive)));
+    }
+    Ok(digests)
 }
 
 /// Pins `version` and its release digests in `root`'s
@@ -389,18 +514,26 @@ pub fn pin_release(
     root: &Path,
     version: &str,
     base: &str,
-    fetch: &dyn Fn(&str) -> Result<Vec<u8>, String>,
-) -> Result<PinReport, String> {
+    fetch: &dyn Fn(&str) -> Result<Vec<u8>, Shown>,
+) -> Result<PinReport, Shown> {
     if !is_parseable(version) {
-        return Err(format!(
-            "`{version}` is not a codeflow version: it must read as MAJOR.MINOR.PATCH, with an optional -prerelease and +build; nothing was downloaded or written"
+        return Err(Shown::fixed(
+            "the `--pin` value is not a codeflow version: it must read as MAJOR.MINOR.PATCH, with an optional -prerelease and +build; nothing was downloaded or written",
         ));
     }
+    // Versions are printed through the version display rule (TSK-1029).
+    let label = Shown::version(version);
+    let file = Shown::path(PROJECT_TOML);
     let text = read_beneath_root(root, PROJECT_TOML)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("no {PROJECT_TOML}: run `codeflow init` first"))?;
-    let mut state: toml::Table =
-        toml::from_str(&text).map_err(|error| format!("{PROJECT_TOML} does not parse: {error}"))?;
+        .map_err(|error| Shown::from(&error))?
+        .ok_or_else(|| shown!("no {}: run `codeflow init` first", file))?;
+    let mut state: toml::Table = toml::from_str(&text).map_err(|error| {
+        shown!(
+            "{} does not parse: {}",
+            file,
+            Shown::place(&super::ParsePlace::toml(&text, &error))
+        )
+    })?;
     let previous = state
         .get("scaffold_version")
         .and_then(toml::Value::as_str)
@@ -408,14 +541,18 @@ pub fn pin_release(
     if let Some(previous) = previous.as_deref() {
         match is_older(version, previous) {
             Ok(true) => {
-                return Err(format!(
-                    "{version} is older than the pinned {previous}; the pin only rises"
+                return Err(shown!(
+                    "{} is older than the pinned {}; the pin only rises",
+                    label,
+                    Shown::version(previous)
                 ))
             }
             Ok(false) => {}
-            Err(error) => {
-                return Err(format!(
-                    "scaffold_version {error} in {PROJECT_TOML}, so it cannot be compared with {version}; correct it and retry; nothing was downloaded or written"
+            Err(_) => {
+                return Err(shown!(
+                    "scaffold_version is not a parseable version in {}, so it cannot be compared with {}; correct it and retry; nothing was downloaded or written",
+                    file,
+                    label
                 ))
             }
         }
@@ -423,48 +560,30 @@ pub fn pin_release(
 
     let release = format!("{}/v{version}", base.trim_end_matches('/'));
     let sums = fetch(&format!("{release}/sha256.sum")).map_err(|error| {
-        format!("codeflow {version} has no published checksum file (sha256.sum): {error}")
+        shown!(
+            "codeflow {} has no published checksum file (sha256.sum): {}",
+            label,
+            error
+        )
     })?;
     let sums = std::str::from_utf8(&sums)
-        .map_err(|error| format!("sha256.sum for codeflow {version} is not UTF-8 text: {error}"))?;
-    let mut digests = Vec::new();
-    for triple in TRIPLES {
-        let asset = format!("codeflow-cli-{triple}.tar.xz");
-        let listed = sums
-            .lines()
-            .find_map(|line| {
-                let mut fields = line.split_whitespace();
-                let digest = fields.next()?;
-                let name = fields.next()?.trim_start_matches('*');
-                (name == asset).then(|| digest.to_ascii_lowercase())
-            })
-            .filter(|digest| is_digest(digest))
-            .ok_or_else(|| {
-                format!("sha256.sum for codeflow {version} lists no checksum for {asset}")
-            })?;
-        let archive = fetch(&format!("{release}/{asset}"))
-            .map_err(|error| format!("cannot download {asset} for codeflow {version}: {error}"))?;
-        let actual = sha256_hex(&archive);
-        if actual != listed {
-            return Err(format!(
-                "{asset} for codeflow {version} does not match its sha256.sum entry (listed {listed}, got {actual}); nothing was pinned"
-            ));
-        }
-        digests.push((triple.to_string(), actual));
-    }
+        .map_err(|_| shown!("sha256.sum for codeflow {} is not UTF-8 text", label))?;
+    let digests = verified_digests(sums, &release, &label, fetch)?;
 
     let mut table = toml::Table::new();
     table.insert("version".into(), toml::Value::String(version.to_string()));
     for (triple, digest) in &digests {
-        table.insert(triple.clone(), toml::Value::String(digest.clone()));
+        table.insert(
+            (*triple).to_string(),
+            toml::Value::String(digest.to_string()),
+        );
     }
     state.insert(
         "scaffold_version".into(),
         toml::Value::String(version.to_string()),
     );
     state.insert(TABLE.into(), toml::Value::Table(table));
-    let out =
-        state_text(&state).map_err(|error| format!("cannot write {PROJECT_TOML}: {error}"))?;
+    let out = state_text(&state).map_err(|_| shown!("cannot write {}", file))?;
     // A line the project wrote that the installers refuse (a key named
     // outside printable ASCII, say) stays as it was, and would fail every
     // CI install, so the pin stops before writing and names it.
@@ -473,17 +592,21 @@ pub fn pin_release(
         // and the rewrite does not, name the line of the rewrite.
         let line = unread_line(&text).map_or_else(
             || {
-                unread_line(&out).map_or_else(String::new, |(_, shown)| {
-                    format!(" at {shown} of the state the pin would write")
+                unread_line(&out).map_or_else(Shown::default, |(_, line)| {
+                    shown!(" at {} of the state the pin would write", line)
                 })
             },
-            |(_, shown)| format!(" at {shown}"),
+            |(_, line)| shown!(" at {}", line),
         );
-        return Err(format!(
-            "the [{TABLE}] table in {PROJECT_TOML} {reason}{line}; rename, rewrite or remove that line and pin again (nothing was written)"
+        return Err(shown!(
+            "the [{}] table in {} {}{}; rename, rewrite or remove that line and pin again (nothing was written)",
+            Shown::fixed(TABLE),
+            file,
+            reason,
+            line
         ));
     }
-    write_record(root, PROJECT_TOML, out.as_bytes()).map_err(|error| error.to_string())?;
+    write_record(root, PROJECT_TOML, out.as_bytes()).map_err(|error| Shown::from(&error))?;
     Ok(PinReport {
         previous,
         version: version.to_string(),
@@ -527,8 +650,8 @@ mod tests {
         files
     }
 
-    fn served(files: &BTreeMap<String, Vec<u8>>) -> impl Fn(&str) -> Result<Vec<u8>, String> + '_ {
-        move |url: &str| files.get(url).cloned().ok_or_else(|| format!("404 {url}"))
+    fn served(files: &BTreeMap<String, Vec<u8>>) -> impl Fn(&str) -> Result<Vec<u8>, Shown> + '_ {
+        move |url: &str| files.get(url).cloned().ok_or_else(|| Shown::fixed("404"))
     }
 
     #[test]
@@ -604,12 +727,13 @@ mod tests {
         let fetched = std::cell::Cell::new(0);
         let fetch = |_: &str| {
             fetched.set(fetched.get() + 1);
-            Err("unreachable".to_string())
+            Err(Shown::fixed("unreachable"))
         };
         for version in ["3.2", "10.0", "3.2.0x", "1.2.3-", "01.2.3"] {
             let error = pin_release(dir.path(), version, "base", &fetch).unwrap_err();
             assert!(
-                error.contains(&format!("`{version}` is not a codeflow version")),
+                error.contains("the `--pin` value is not a codeflow version")
+                    && !error.contains(&format!("`{version}`")),
                 "{error}"
             );
         }
@@ -617,6 +741,18 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dir.path().join(PROJECT_TOML)).unwrap(),
             before
+        );
+    }
+
+    /// TSK-1029: a key `CodeFlow` does not define is the project's own text,
+    /// so a duplicate is reported without naming it.
+    #[test]
+    fn a_duplicate_project_key_is_not_named() {
+        assert_eq!(
+            pinned_digests(&format!(
+                "[scaffold_sha256]\nopaque-31337 = \"{DIGEST}\"\nopaque-31337 = \"{DIGEST}\"\n"
+            )),
+            PinnedDigests::Unreadable(Shown::fixed("lists one of its own keys twice"))
         );
     }
 
@@ -630,7 +766,7 @@ mod tests {
         let files = release("9.9.9");
         let error = pin_release(dir.path(), "9.9.9", "base", &served(&files)).unwrap_err();
         assert!(
-            error.contains("\"10.0\" is not a parseable version"),
+            error.contains("scaffold_version is not a parseable version"),
             "{error}"
         );
         assert!(
@@ -695,7 +831,7 @@ mod tests {
         ] {
             assert_eq!(
                 pinned_digests(&unread),
-                PinnedDigests::Unreadable(OTHER_FORM.into()),
+                PinnedDigests::Unreadable(Shown::fixed(OTHER_FORM)),
                 "{unread}"
             );
         }
@@ -711,7 +847,7 @@ mod tests {
                 pinned_digests(&format!(
                     "{start}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
                 )),
-                PinnedDigests::Unreadable(UNREAD_START.into()),
+                PinnedDigests::Unreadable(Shown::fixed(UNREAD_START)),
                 "{start:?}"
             );
         }
@@ -736,7 +872,7 @@ mod tests {
                 pinned_digests(&format!(
                     "{text}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
                 )),
-                PinnedDigests::Unreadable(reason.into()),
+                PinnedDigests::Unreadable(Shown::fixed(reason)),
                 "{text:?}"
             );
         }
@@ -751,7 +887,7 @@ mod tests {
         ] {
             assert_eq!(
                 pinned_digests(&folded),
-                PinnedDigests::Unreadable(UNREAD_CR.into()),
+                PinnedDigests::Unreadable(Shown::fixed(UNREAD_CR)),
                 "{folded:?}"
             );
         }
@@ -770,7 +906,7 @@ mod tests {
         );
         assert_eq!(
             pinned_digests(&twice),
-            PinnedDigests::Unreadable(TWICE.into())
+            PinnedDigests::Unreadable(Shown::fixed(TWICE))
         );
         for (doubled, key) in [
             (
@@ -786,7 +922,7 @@ mod tests {
         ] {
             assert_eq!(
                 pinned_digests(&format!("[scaffold_sha256]\n{doubled}")),
-                PinnedDigests::Unreadable(format!("lists {key} twice"))
+                PinnedDigests::Unreadable(shown!("lists {} twice", Shown::fixed(key)))
             );
         }
         assert_eq!(
@@ -818,7 +954,7 @@ mod tests {
         ] {
             assert_eq!(
                 pinned_digests(&escaped),
-                PinnedDigests::Unreadable(ESCAPED.into()),
+                PinnedDigests::Unreadable(Shown::fixed(ESCAPED)),
                 "{escaped}"
             );
         }
@@ -827,7 +963,7 @@ mod tests {
         );
         assert_eq!(
             pinned_digests(&single),
-            PinnedDigests::Unreadable(STRAY.into())
+            PinnedDigests::Unreadable(Shown::fixed(STRAY))
         );
         // A multi-line string could fake an entry or a table, so any is
         // refused; inside the table only plain entries are read, so a
@@ -837,11 +973,11 @@ mod tests {
         );
         assert_eq!(
             pinned_digests(&faked),
-            PinnedDigests::Unreadable(MULTILINE.into())
+            PinnedDigests::Unreadable(Shown::fixed(MULTILINE))
         );
         assert_eq!(
             pinned_digests("scaffold_version = \"3.1.0\"\nnotes = \"\"\"\nscaffold_sha256 is optional = later\n\"\"\"\n"),
-            PinnedDigests::Unreadable(MULTILINE.into())
+            PinnedDigests::Unreadable(Shown::fixed(MULTILINE))
         );
         for stray in [
             format!("'x86_64-unknown-linux-gnu' = \"{DIGEST}\""),
@@ -853,7 +989,7 @@ mod tests {
                 pinned_digests(&format!(
                     "[scaffold_sha256]\nversion = \"1.2.3\"\n{stray}\n"
                 )),
-                PinnedDigests::Unreadable(STRAY.into()),
+                PinnedDigests::Unreadable(Shown::fixed(STRAY)),
                 "{stray}"
             );
         }
@@ -869,5 +1005,33 @@ mod tests {
                 missing: vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
             }
         );
+    }
+
+    /// TSK-1029 review: a version suffix the project wrote shows in neither
+    /// the pin report's text nor its `Debug` form, for the version before or
+    /// after, nor in the read table's `Debug`.
+    #[test]
+    fn private_version_suffixes_stay_out_of_debug() {
+        let report = PinReport {
+            previous: Some("1.0.0+private-label".into()),
+            version: "1.1.0-private-pre".into(),
+            digests: vec![("aarch64-apple-darwin", Shown::sha256_of(b"archive"))],
+        };
+        let table = PinnedDigests::Table {
+            version: Some("1.0.0+private-label".into()),
+            listed: vec!["aarch64-apple-darwin"],
+            missing: Vec::new(),
+        };
+        for text in [
+            report.to_string(),
+            format!("{report:?}"),
+            format!("{table:?}"),
+        ] {
+            assert!(!text.contains("private"), "{text}");
+            assert!(
+                text.contains("1.0.0 (with a suffix)") || text.contains("1.1.0"),
+                "{text}"
+            );
+        }
     }
 }

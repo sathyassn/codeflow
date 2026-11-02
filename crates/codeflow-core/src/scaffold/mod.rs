@@ -22,6 +22,7 @@
 
 pub mod assets;
 pub mod detect;
+pub mod diff_redact;
 pub mod init;
 pub mod json_edit;
 pub mod manifest;
@@ -33,6 +34,7 @@ pub mod release_pin;
 pub mod report;
 pub mod rule_map;
 pub mod settings_merge;
+pub mod shown;
 pub mod state;
 pub mod template;
 pub mod update;
@@ -85,6 +87,35 @@ fn should_skip_initial_stack_adr(
     Ok(false)
 }
 
+/// Reserve the starter ADR's number for the `uid` it carries, on the local
+/// registry: pending until the next push publishes it, so `init` stays
+/// offline (TSK-338). Returns the report note, `None` when the registry
+/// here already binds it. A failure never fails `init`; its note names the
+/// sanctioned way to reserve the number by hand.
+fn reserve_initial_stack_adr(root: &std::path::Path) -> Option<Shown> {
+    let fallback = Shown::fixed(
+        "the starter ADR's number could not be reserved in the id registry here; reserve it with `codeflow ids admit docs/decisions/ADR-0001-stack-choice.md` before pushing it",
+    );
+    let Ok(text) = std::fs::read_to_string(root.join(INITIAL_STACK_ADR)) else {
+        return Some(fallback);
+    };
+    let (Some(uid), Some(id)) = (
+        crate::ids::entry::frontmatter_value(&text, "uid").filter(|uid| crate::ids::is_uid(uid)),
+        crate::ids::record_id_from_path(INITIAL_STACK_ADR),
+    ) else {
+        return Some(fallback);
+    };
+    let title = crate::ids::entry::frontmatter_value(&text, "title").unwrap_or_default();
+    match crate::ids::issue::reserve_exact_offline(root, &id, &uid, &title) {
+        Ok(None) => None,
+        Ok(Some(standing)) => Some(crate::shown!(
+            "id registry: starter ADR-0001 {}",
+            Shown::fixed(standing.describe())
+        )),
+        Err(_) => Some(fallback),
+    }
+}
+
 fn is_adr_name(name: &std::ffi::OsStr) -> bool {
     crate::git::GitName::from_os_str(name).starts_with(b"ADR-")
         && std::path::Path::new(name)
@@ -117,40 +148,228 @@ pub use hash::sha256_hex;
 pub use init::{init, InitAnswers, InitOptions};
 pub use manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest, Tier};
 pub use report::{Action, FileReport, Report};
+pub use shown::Shown;
 pub use update::{update, UpdateOptions};
 pub use version::version_skew_warning;
 
-/// Errors produced by the scaffold engine.
-#[derive(Debug, thiserror::Error)]
+/// Errors produced by the scaffold engine. Every text a variant holds is a
+/// [`Shown`], a path or a [`ParsePlace`], and no variant keeps a source:
+/// [`std::error::Error::source`] is `None`, and `Debug` writes the same text
+/// as `Display`, so neither an error chain nor a `{:?}` can carry what a
+/// project wrote (TSK-1029, the display boundary in [`shown`]).
+#[derive(thiserror::Error)]
 pub enum ScaffoldError {
-    #[error("io error on {path}: {source}")]
+    /// An I/O failure, shown by its path and the failure's category. The
+    /// `io::Error` itself is not kept: a custom error's message can hold any
+    /// text, and a field named `source` would become the error's source.
+    #[error("io error on {}: {kind}", .path.display())]
     Io {
         path: std::path::PathBuf,
-        #[source]
-        source: std::io::Error,
+        kind: Shown,
     },
     #[error("scaffold manifest missing from assets ({0})")]
-    ManifestMissing(String),
+    ManifestMissing(Shown),
     #[error("scaffold manifest invalid: {0}")]
-    ManifestInvalid(String),
-    #[error("refusing to follow a symlink at {path} — scaffold IO stays beneath the repo root")]
+    ManifestInvalid(Shown),
+    #[error("refusing to follow a symlink at {} — scaffold IO stays beneath the repo root", .path.display())]
     UnsafeSymlink { path: std::path::PathBuf },
     #[error("not a codeflow project (no .codeflow/project.toml) — run `codeflow init`")]
     NotInitialized,
     #[error("invalid {what}: {detail}")]
-    InvalidState { what: String, detail: String },
+    InvalidState { what: Shown, detail: Shown },
     #[error("git: {0}")]
-    Git(String),
-    #[error("json: {0}")]
-    Json(#[from] serde_json::Error),
+    Git(Shown),
+    /// A JSON file the project writes did not parse. Only the place is
+    /// kept: the parser's own error is dropped at the conversion, so
+    /// neither this error's text nor its `Debug` form nor an error chain
+    /// can carry what the project wrote (TSK-1029).
+    #[error("{0}")]
+    Json(ParsePlace),
+}
+
+impl From<serde_json::Error> for ScaffoldError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(ParsePlace::json(&error))
+    }
+}
+
+/// Where a file the project writes failed to parse: its format, the kind
+/// of failure, and a line and column. It holds nothing else, and has no
+/// source, because a parser's message and rendering quote keys, values and
+/// source lines the project wrote, and a value can hold any delimiter the
+/// message would put around it (TSK-1029).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsePlace {
+    /// `JSON` or `TOML`.
+    pub format: &'static str,
+    /// A fixed description of the failure, never parser text.
+    pub kind: &'static str,
+    /// The 1-based line and column, when the parser gave a position.
+    pub position: Option<(usize, usize)>,
+}
+
+impl ParsePlace {
+    /// The place of a JSON error.
+    #[must_use]
+    pub fn json(error: &serde_json::Error) -> Self {
+        let kind = match error.classify() {
+            serde_json::error::Category::Io => "read error",
+            serde_json::error::Category::Syntax => "syntax error",
+            serde_json::error::Category::Data => {
+                "error: a key or value does not fit the expected shape"
+            }
+            serde_json::error::Category::Eof => "error: the input ends early",
+        };
+        let position = (error.line() > 0).then(|| (error.line(), error.column()));
+        Self {
+            format: "JSON",
+            kind,
+            position,
+        }
+    }
+
+    /// The place of a TOML error in `text`.
+    #[must_use]
+    pub fn toml(text: &str, error: &toml::de::Error) -> Self {
+        let position = error
+            .span()
+            .and_then(|span| text.get(..span.start))
+            .map(|before| {
+                let line = before.matches('\n').count() + 1;
+                let column = before
+                    .rsplit('\n')
+                    .next()
+                    .map_or(0, |tail| tail.chars().count())
+                    + 1;
+                (line, column)
+            });
+        Self {
+            format: "TOML",
+            kind: "parse error",
+            position,
+        }
+    }
+}
+
+impl std::fmt::Display for ParsePlace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.format, self.kind)?;
+        match self.position {
+            Some((line, column)) => write!(f, " at line {line}, column {column}"),
+            None => write!(f, " (the parser gave no position)"),
+        }
+    }
+}
+
+/// A TOML error for a file the project writes, named by its line and
+/// column only ([`ParsePlace`], TSK-1029).
+pub(crate) fn toml_error(text: &str, error: &toml::de::Error) -> String {
+    ParsePlace::toml(text, error).to_string()
+}
+
+/// A JSON error for a file the project writes, named by its kind and its
+/// line and column only ([`ParsePlace`], TSK-1029).
+#[must_use]
+pub fn json_error(error: &serde_json::Error) -> String {
+    ParsePlace::json(error).to_string()
 }
 
 impl ScaffoldError {
-    fn io(path: impl Into<std::path::PathBuf>, source: std::io::Error) -> Self {
+    /// An invalid file or value: `what` names it, `detail` says why.
+    #[must_use]
+    pub fn invalid(what: Shown, detail: Shown) -> Self {
+        Self::InvalidState { what, detail }
+    }
+
+    // Taken by value so `map_err(|e| ScaffoldError::io(path, e))` reads
+    // plainly; only the category is kept.
+    #[allow(clippy::needless_pass_by_value)]
+    fn io(path: impl Into<std::path::PathBuf>, error: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),
-            source,
+            kind: Shown::io(&error),
         }
+    }
+}
+
+impl std::fmt::Debug for ScaffoldError {
+    /// The same text as `Display`: every field is inside the boundary, and
+    /// a derived form would print each field's own `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ScaffoldError({self})")
+    }
+}
+
+#[cfg(test)]
+mod starter_adr_tests {
+    use super::*;
+
+    fn starter(root: &std::path::Path, uid: &str) {
+        let decisions = root.join("docs/decisions");
+        std::fs::create_dir_all(&decisions).unwrap();
+        std::fs::write(
+            root.join(INITIAL_STACK_ADR),
+            format!("---\nid: ADR-0001\nuid: {uid}\ntitle: stack choice for rust\n---\n"),
+        )
+        .unwrap();
+    }
+
+    /// TSK-338: an existing repository's starter ADR is reserved for its
+    /// uid once, in the local registry, without asking any remote.
+    #[test]
+    fn the_starter_adr_is_reserved_once_for_its_uid() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"# project\n")]);
+        // The registry commit needs a Git identity, as `new` does. Hosted
+        // runners have none and cannot guess one, so the repository names it.
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "adopter").unwrap();
+        config
+            .set_str("user.email", "adopter@example.test")
+            .unwrap();
+        let uid = crate::ids::new_uid();
+        starter(dir.path(), &uid);
+        let note = reserve_initial_stack_adr(dir.path()).unwrap();
+        assert!(
+            note.as_str()
+                .contains("ADR-0001 reserved in the local registry"),
+            "{}",
+            note.as_str()
+        );
+        let git = crate::ids::Git::new(dir.path());
+        let ledger = crate::ids::Ledger::read(&git, crate::ids::REGISTRY_REF).unwrap();
+        assert_eq!(
+            ledger.ids_for_uid(&uid),
+            vec![crate::ids::RegId::parse("ADR-0001").unwrap()]
+        );
+        // A second run writes nothing.
+        assert!(reserve_initial_stack_adr(dir.path()).is_none());
+        // Another record's uid for the same number is refused, never renumbered.
+        starter(dir.path(), &crate::ids::new_uid());
+        let note = reserve_initial_stack_adr(dir.path()).unwrap();
+        assert!(
+            note.as_str().contains("codeflow ids admit"),
+            "{}",
+            note.as_str()
+        );
+    }
+
+    #[test]
+    fn a_starter_adr_without_a_uid_names_the_admit_step() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"# project\n")]);
+        std::fs::create_dir_all(dir.path().join("docs/decisions")).unwrap();
+        std::fs::write(
+            dir.path().join(INITIAL_STACK_ADR),
+            "---\nid: ADR-0001\n---\n",
+        )
+        .unwrap();
+        let note = reserve_initial_stack_adr(dir.path()).unwrap();
+        assert!(
+            note.as_str().contains("codeflow ids admit"),
+            "{}",
+            note.as_str()
+        );
     }
 }
 
@@ -196,5 +415,186 @@ mod r22_tests {
         std::os::unix::fs::symlink("missing", dir.path().join("link")).unwrap();
         assert!(path_exists(&dir.path().join("link")).is_err());
         assert!(path_exists(&dir.path().join("link/leaf")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod parse_error_tests {
+    use super::{json_error, toml_error, ScaffoldError};
+
+    /// A synthetic value no message may show.
+    const SECRET: &str = "opaque-neighbour-value-31337";
+
+    #[test]
+    fn a_toml_error_names_its_place_never_the_source_line() {
+        let text = format!("a = 1\nbroken = \"{SECRET}\n");
+        let error = toml::from_str::<toml::Table>(&text).unwrap_err();
+        assert!(
+            error.to_string().contains(SECRET),
+            "the parser quotes the line"
+        );
+        let shown = toml_error(&text, &error);
+        assert!(!shown.contains(SECRET), "{shown}");
+        assert!(
+            shown.starts_with("TOML parse error at line 2, column "),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn a_typed_error_loses_its_quoted_value() {
+        let error = serde_json::from_str::<bool>(&format!("\"{SECRET}\"")).unwrap_err();
+        let shown = json_error(&error);
+        assert!(!shown.contains(SECRET), "{shown}");
+        assert_eq!(
+            shown,
+            "JSON error: a key or value does not fit the expected shape at line 1, column 30"
+        );
+        let early = serde_json::from_str::<Vec<bool>>("[").unwrap_err();
+        assert_eq!(
+            json_error(&early),
+            "JSON error: the input ends early at line 1, column 1"
+        );
+        let syntax = serde_json::from_str::<Vec<bool>>("[tru]").unwrap_err();
+        assert!(
+            json_error(&syntax).starts_with("JSON syntax error at line 1, column "),
+            "{}",
+            json_error(&syntax)
+        );
+    }
+
+    /// A shape with a closed set of keys and one enum, as the project
+    /// files update reads have.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Shape {
+        mode: Option<Mode>,
+        flag: Option<bool>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    enum Mode {
+        Block,
+        Warn,
+    }
+
+    /// Everything an error chain can print: its text, its `Debug` form and
+    /// every source's text, as the CLI prints a chain.
+    fn chain(error: &dyn std::error::Error) -> String {
+        use std::fmt::Write as _;
+        let mut shown = format!("{error}\n{error:?}");
+        let mut source = error.source();
+        while let Some(cause) = source {
+            let _ = write!(shown, "\nCaused by: {cause} {cause:?}");
+            source = cause.source();
+        }
+        shown
+    }
+
+    /// Why `shown` fails, if it shows the value or does not name its line.
+    fn misplaced(shown: &str, line: usize) -> Option<String> {
+        if shown.contains(SECRET) {
+            Some(format!("a project value is shown: {shown}"))
+        } else if !shown.contains(&format!("line {line}, column ")) {
+            Some(format!("the diagnostic does not name its place: {shown}"))
+        } else {
+            None
+        }
+    }
+
+    /// TSK-1029 review: values a project writes can hold the delimiters
+    /// the parser puts around them, so no message may depend on finding
+    /// where a quoted value ends.
+    #[test]
+    fn adversarial_json_values_and_keys_never_show() {
+        let mut failures = Vec::new();
+        for (text, line) in [
+            // An escaped double quote inside a string value.
+            (format!("\n{{\"flag\": \"a\\\" {SECRET}\"}}"), 2),
+            // A backtick inside an enum value serde puts in backticks.
+            (format!("{{\"mode\": \"x` {SECRET}\"}}"), 1),
+            // A backtick inside a key the project wrote.
+            (format!("{{\"x` {SECRET}\": 1}}"), 1),
+            // A single quote and a space inside an enum value.
+            (format!("{{\"mode\": \"it' {SECRET}\"}}"), 1),
+        ] {
+            let error = serde_json::from_str::<Shape>(&text).unwrap_err();
+            assert!(error.to_string().contains(SECRET), "{error}");
+            failures.extend(misplaced(&chain(&ScaffoldError::from(error)), line));
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn adversarial_toml_values_and_keys_never_show() {
+        let mut failures = Vec::new();
+        for (text, line) in [
+            // A duplicate key the project wrote.
+            (format!("{SECRET} = 1\n{SECRET} = 2\n"), 2),
+            // A backtick inside an enum value.
+            (format!("mode = \"x` {SECRET}\"\n"), 1),
+            // A backtick inside a quoted key the project wrote.
+            (format!("\"x` {SECRET}\" = 1\n"), 1),
+            // An escaped quote inside a string of the wrong type.
+            (format!("\nflag = \"a\\\" {SECRET}\"\n"), 2),
+        ] {
+            let error = toml::from_str::<Shape>(&text).unwrap_err();
+            assert!(error.to_string().contains(SECRET), "{error}");
+            failures.extend(misplaced(&toml_error(&text, &error), line));
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// TSK-1029 review: an I/O error's message is any text its maker
+    /// chose, so neither the error, its `Debug` form nor its source shows
+    /// it; a kept PR template's headings and a report holding one stay out
+    /// of `Debug` too.
+    #[test]
+    fn io_errors_and_kept_templates_never_show_their_text_in_debug() {
+        use super::pr_template::KeptTemplate;
+        use std::error::Error as _;
+        let error = ScaffoldError::io(
+            "docs/x.md",
+            std::io::Error::other(format!("custom {SECRET}")),
+        );
+        assert!(error.source().is_none(), "the io::Error is not kept");
+        let shown = chain(&error);
+        assert!(!shown.contains(SECRET), "{shown}");
+        assert!(shown.contains("docs/x.md"), "{shown}");
+        let kept = KeptTemplate {
+            path: ".github/pull_request_template.md".into(),
+            headings: vec![format!("## {SECRET}")],
+        };
+        let mut report = super::Report::new(super::Shown::fixed("update"));
+        report.pending_pr_template = Some(kept.clone());
+        for debug in [format!("{kept:?}"), format!("{report:?}")] {
+            assert!(!debug.contains(SECRET), "{debug}");
+            assert!(debug.contains("headings: 1"), "{debug}");
+        }
+    }
+
+    /// TSK-1029 review: the other public report and error types on the
+    /// update path keep project text out of `Debug` too.
+    #[test]
+    fn update_report_and_error_types_never_show_project_text_in_debug() {
+        use super::pr_template::Diagnosis;
+        let unparseable = super::version::Unparseable(SECRET.into());
+        let unreadable = crate::registry::RootUnreadable {
+            path: "proj/.codeflow".into(),
+            error: std::io::Error::other(format!("custom {SECRET}")),
+        };
+        let diagnosis = Diagnosis::Diagnosed {
+            mapping: [("Summary".to_string(), format!("## {SECRET}"))].into(),
+            unmatched: vec![SECRET.into()],
+        };
+        for debug in [
+            format!("{unparseable:?}"),
+            format!("{unreadable:?}"),
+            format!("{diagnosis:?}"),
+        ] {
+            assert!(!debug.contains(SECRET), "{debug}");
+        }
     }
 }

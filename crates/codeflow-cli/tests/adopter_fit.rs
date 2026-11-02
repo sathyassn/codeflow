@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -658,6 +660,64 @@ fn first_pr(dir: &Path) {
     git(dir, &["commit", "-m", "feat: add the widget endpoint"]);
 }
 
+/// Land the working copy's policy on `main`, as the adoption PR's merge
+/// does. `codeflow ci --base main` judges with the policy at the base, and
+/// an adoption range, whose base holds none, is judged by the shipped
+/// defaults (TSK-1077), so a fixture that checks the installed policy's
+/// verdict lands it first.
+fn land_policy(dir: &Path) {
+    let index = dir.join(".git").join("land-policy.index");
+    let run = |args: &[&str]| -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_INDEX_FILE", &index)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim_end().to_owned()
+    };
+    run(&["read-tree", "main"]);
+    let blob = run(&["hash-object", "-w", ".codeflow/policy.json"]);
+    run(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("100644,{blob},.codeflow/policy.json"),
+    ]);
+    let tree = run(&["write-tree"]);
+    let commit = run(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit-tree",
+        &tree,
+        "-p",
+        "main",
+        "-m",
+        "chore: land the adopted policy",
+    ]);
+    // The merge happens on the forge; the installed local hooks, which
+    // refuse a local update of `main`, are not part of that landing.
+    run(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        "refs/heads/main",
+        &commit,
+    ]);
+    let _ = std::fs::remove_file(&index);
+}
+
 fn ci_pr(dir: &Path, body: &str) -> Output {
     codeflow(
         dir,
@@ -691,7 +751,12 @@ fn first_install_diagnoses_the_kept_template_and_warns_until_decided() {
         all.contains("recorded git.pr_section_mapping = diagnosed"),
         "{all}"
     );
-    assert!(all.contains("Summary -> Description"), "{all}");
+    // The report names a template heading by its position: the heading
+    // text is the project's and is never printed (TSK-1029).
+    assert!(all.contains("Summary -> template heading 1"), "{all}");
+    for heading in ["Description", "How has this been tested?", "Release notes"] {
+        assert!(!all.contains(heading), "{heading} printed: {all}");
+    }
     assert!(all.contains("warn (diagnosed)"), "{all}");
     // No second template: the only template is the project's.
     assert_eq!(
@@ -704,6 +769,17 @@ fn first_install_diagnoses_the_kept_template_and_warns_until_decided() {
     assert_eq!(policy["git"]["pr_section_mapping"]["decided"], "none");
 
     first_pr(dir.path());
+    // The adoption range itself writes the policy, so it cannot judge
+    // itself: its base holds none, and the shipped defaults decide.
+    let out = ci_pr(dir.path(), PROJECT_BODY);
+    let all = text(&out);
+    assert!(
+        all.contains(
+            "verifying against the shipped defaults, since .codeflow/policy.json is absent at base"
+        ),
+        "{all}"
+    );
+    land_policy(dir.path());
     let out = ci_pr(dir.path(), PROJECT_BODY);
     let all = text(&out);
     assert_eq!(out.status.code(), Some(0), "{all}");
@@ -960,6 +1036,7 @@ fn decided(answer: &str) -> tempfile::TempDir {
     let policy = policy_value(dir.path());
     assert_ne!(policy["git"]["pr_section_mapping"]["decided"], "none");
     first_pr(dir.path());
+    land_policy(dir.path());
     dir
 }
 
@@ -1016,6 +1093,7 @@ fn custom_mapping_checks_the_policy_list_the_project_sets() {
         "\"pr_code_sections\": [\"How has this been tested?\"]",
     );
     std::fs::write(&path, edited).unwrap();
+    land_policy(dir.path());
     let out = ci_pr(dir.path(), PROJECT_BODY);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
 }
@@ -1128,6 +1206,7 @@ fn records_are_created_at_the_minimal_and_standard_tiers() {
             dir.path(),
             &["spec", "new", "--for", "TSK-001", "first spec"],
         ));
+        outcome::state_outcomes(dir.path());
         let out = codeflow(dir.path(), &["validate", "--docs"]);
         assert_eq!(out.status.code(), Some(0), "{tier}: {}", text(&out));
         assert!(
@@ -1163,7 +1242,9 @@ fn project_templates_are_used_when_valid_and_fall_back_when_not() {
     let record = std::fs::read_to_string(path).unwrap();
     assert!(record.contains("Team rule: link the ticket"), "{record}");
     // Rendered from the project template, the record passes the validator
-    // with the work-record rules at block.
+    // with the work-record rules at block, once its author states the
+    // Outcome (TSK-435).
+    outcome::state_outcomes(dir.path());
     let out = codeflow(dir.path(), &["validate", "--docs"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
 
@@ -1178,6 +1259,7 @@ fn project_templates_are_used_when_valid_and_fall_back_when_not() {
     assert!(all.contains("not a usable task template"), "{all}");
     let record = std::fs::read_to_string(created(&out)).unwrap();
     assert!(record.contains("## Acceptance Criteria"), "{record}");
+    outcome::state_outcomes(dir.path());
     let out = codeflow(dir.path(), &["validate", "--docs"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
 
@@ -1214,6 +1296,7 @@ fn project_templates_are_used_when_valid_and_fall_back_when_not() {
         );
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
         assert!(record.contains(&format!("id: {stem}\n")), "{record}");
+        outcome::state_outcomes(dir.path());
         let out = codeflow(dir.path(), &["validate", "--docs"]);
         assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     }

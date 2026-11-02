@@ -754,10 +754,56 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
     }
 
     let content = std::fs::read_to_string(path)?;
+    parse_test_config(path, &content)
+}
 
+/// The largest named test config `codeflow test --config` reads.
+const NAMED_CONFIG_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Load the test config a caller names (`codeflow test --config`, TSK-1001
+/// and TSK-1020), with the exact bytes it was parsed from. The path itself
+/// must be a regular file: a missing path, a symbolic link (whatever it
+/// points to), a directory or other special file, and an unreadable or
+/// oversized file are refused, so a caller that names a trusted copy reads
+/// exactly that copy.
+///
+/// # Errors
+///
+/// `ConfigNotFound` for a missing path, `ConfigInvalid` for a link, a file
+/// that is not regular, unreadable or changed while read, and the errors of
+/// [`load_test_config`] for its contents.
+pub fn load_named_test_config(path: &Path) -> Result<(TestConfig, Vec<u8>), TestingError> {
+    let refuse = |message: String| TestingError::ConfigInvalid {
+        path: path.to_path_buf(),
+        message,
+    };
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(TestingError::ConfigNotFound(path.to_path_buf()));
+        }
+        Err(error) => return Err(refuse(format!("cannot be read: {error}"))),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(refuse(
+            "is a symbolic link; name the config file itself".to_string(),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(refuse("is not a regular file".to_string()));
+    }
+    let bytes = crate::bounded_file::read_bounded_regular(path, NAMED_CONFIG_MAX_BYTES)
+        .map_err(|error| refuse(format!("cannot be read: {error}")))?;
+    let content =
+        String::from_utf8(bytes.clone()).map_err(|_| refuse("is not UTF-8 text".to_string()))?;
+    Ok((parse_test_config(path, &content)?, bytes))
+}
+
+/// Parse and validate test config text read from `path`.
+fn parse_test_config(path: &Path, content: &str) -> Result<TestConfig, TestingError> {
     // First, check schema_version before full parse
     let raw: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| TestingError::ConfigInvalid {
+        serde_json::from_str(content).map_err(|e| TestingError::ConfigInvalid {
             path: path.to_path_buf(),
             message: format!("{e}"),
         })?;

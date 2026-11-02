@@ -51,7 +51,9 @@ fn acquire_exclusive_lock(path: &Path) -> Result<fs::File, RmwError> {
 pub(crate) enum RmwError {
     /// The step that failed and its OS error.
     Io(&'static str, std::io::Error),
-    /// A parse, callback or serialize failure.
+    /// The file did not parse; only its place is kept (TSK-1029).
+    Parse(crate::scaffold::ParsePlace),
+    /// A callback or serialize failure.
     Other(String),
 }
 
@@ -60,7 +62,7 @@ impl RmwError {
     pub(crate) fn io(&self) -> Option<&std::io::Error> {
         match self {
             Self::Io(_, error) => Some(error),
-            Self::Other(_) => None,
+            Self::Parse(_) | Self::Other(_) => None,
         }
     }
 }
@@ -69,6 +71,7 @@ impl std::fmt::Display for RmwError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(step, error) => write!(f, "{step}: {error}"),
+            Self::Parse(place) => write!(f, "parse: {place}"),
             Self::Other(message) => f.write_str(message),
         }
     }
@@ -137,7 +140,8 @@ where
 
     // Read
     let data = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let mut value: Value = serde_json::from_str(&data).map_err(|e| format!("parse: {e}"))?;
+    let mut value: Value = serde_json::from_str(&data)
+        .map_err(|e| format!("parse: {}", crate::scaffold::json_error(&e)))?;
 
     // Modify
     f(&mut value);
@@ -163,7 +167,8 @@ pub fn locked_read(path: &Path) -> Result<Value, String> {
     let _lock = acquire_shared_lock(path)?;
 
     let data = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let value: Value = serde_json::from_str(&data).map_err(|e| format!("parse: {e}"))?;
+    let value: Value = serde_json::from_str(&data)
+        .map_err(|e| format!("parse: {}", crate::scaffold::json_error(&e)))?;
 
     // Lock released on drop
     Ok(value)
@@ -258,9 +263,8 @@ where
 
     // Read (default on NotFound)
     let mut value: T = match fs::read_to_string(path) {
-        Ok(data) => {
-            serde_json::from_str(&data).map_err(|e| RmwError::Other(format!("parse: {e}")))?
-        }
+        Ok(data) => serde_json::from_str(&data)
+            .map_err(|e| RmwError::Parse(crate::scaffold::ParsePlace::json(&e)))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => default_fn(),
         Err(e) => return Err(RmwError::Io("read", e)),
     };

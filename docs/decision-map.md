@@ -83,6 +83,7 @@ Two pages link back to the decisions:
 | Cross-vendor transport and delegation | [ADR-0037](decisions/ADR-0037-canonical-delegate-prompt-boundary.md) | require a canonical delegate prompt boundary | accepted | none |
 | Cross-vendor transport and delegation | [ADR-0059](decisions/ADR-0059-qualified-native-transport-fallback.md) | qualify native transport by capabilities instead of plugin exclusivity | accepted | none |
 | Cross-vendor transport and delegation | [ADR-0077](decisions/ADR-0077-another-model-family-is-reached-through-an-inter.md) | Another model family is reached through an interactive seat in a Herdr tab | accepted | none |
+| Cross-vendor transport and delegation | [ADR-0094](decisions/ADR-0094-lanes-as-recorded-sessions.md) | Lanes as recorded sessions | accepted | none |
 | Duo orchestration and quality | [ADR-0015](decisions/ADR-0015-duo-model-orchestration.md) | duo-model orchestration: the Claude and Codex develop flow (cf-model-orchestrator) | accepted | ADR-0023 |
 | Duo orchestration and quality | [ADR-0024](decisions/ADR-0024-stage-aware-duo-and-bounded-parallelism.md) | stage-aware duo default with bounded parallel worktrees | accepted | none |
 | Duo orchestration and quality | [ADR-0028](decisions/ADR-0028-evidence-routed-model-effort.md) | route model effort by evidence and task demand | accepted | none |
@@ -92,6 +93,7 @@ Two pages link back to the decisions:
 | Duo orchestration and quality | [ADR-0035](decisions/ADR-0035-capability-routed-duo-execution.md) | route duo execution by verified per-task capability | accepted | none |
 | Duo orchestration and quality | [ADR-0038](decisions/ADR-0038-critical-path-deferral-stewardship.md) | preserve critical-path focus without reflexive deferral or escalation | accepted | none |
 | Duo orchestration and quality | [ADR-0056](decisions/ADR-0056-high-primary-effort-with-bounded-workers.md) | High primary effort with bounded workers | accepted | none |
+| Duo orchestration and quality | [ADR-0087](decisions/ADR-0087-effort-is-each-person-s-setting-not-the-project.md) | Effort is each person's setting, not the project's | accepted | none |
 | Duo orchestration and quality | [ADR-0060](decisions/ADR-0060-accountable-worker-delegation.md) | separate primary accountability from worker execution | accepted | none |
 | Model and harness qualification | [ADR-0027](decisions/ADR-0027-native-interactive-model-evaluation.md) | qualify model and harness bindings with native-interactive evaluations | accepted | none |
 | Model and harness qualification | [ADR-0039](decisions/ADR-0039-qualified-model-harness-bindings.md) | separate durable orchestration doctrine from qualified model and harness bindings | accepted | none |

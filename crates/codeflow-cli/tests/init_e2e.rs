@@ -43,6 +43,8 @@ const PRESENT_SCHEMAS: &[&str] = &[
     "utility-tokens-v1.schema.json",
 ];
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -312,7 +314,7 @@ fn assert_update_round_trips(root: &Path) {
     // The project changes one shipped compaction key, removes the other and
     // adds its own entry; update keeps all three choices (TSK-211 AC-2).
     assert_eq!(
-        settings["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50",
+        settings["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "35",
         "init did not write the compaction default"
     );
     settings["env"] = serde_json::json!({
@@ -560,7 +562,12 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
     let codex = read(&root, ".codex/config.toml");
     assert!(!codex.contains("sandbox_mode"));
     assert!(codex.contains("approvals_reviewer = \"auto_review\""));
-    assert!(codex.contains("model_reasoning_effort = \"high\""));
+    assert!(
+        !codex
+            .lines()
+            .any(|line| line.starts_with("model_reasoning_effort")),
+        "effort is each person's setting (TSK-1028)"
+    );
     assert!(codex.contains("web_search = \"live\""));
 
     assert_engine_placeholders_rendered(&root);
@@ -1179,7 +1186,7 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
         "- AC-1\n",
         "- AC-1 When read, the guide shall explain setup.\n",
     );
-    std::fs::write(&task_path, task).unwrap();
+    std::fs::write(&task_path, outcome::with_outcome(&task)).unwrap();
     git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
     git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
@@ -1364,7 +1371,7 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
         "- AC-1\n",
         "- AC-1 When read, the guide shall explain setup.\n",
     );
-    std::fs::write(&task_path, task).unwrap();
+    std::fs::write(&task_path, outcome::with_outcome(&task)).unwrap();
     git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
     git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
@@ -2420,11 +2427,15 @@ fn a_fresh_standard_project_prints_steps_that_clear_each_finding() {
 }
 
 /// Let the destination take `chore/seed` as `target` by fetching, so no
-/// client hook runs on the protected branch, and refresh `origin`.
+/// client hook runs on the protected branch, refresh `origin` and record
+/// `target` as its default branch.
 fn seed(root: &Path, dest: &Path, target: &str) {
     let refspec = format!("chore/seed:{target}");
     git_stdout(dest, &["fetch", "-q", root.to_str().unwrap(), &refspec]);
     git_with_binary(root, &["fetch", "-q", "origin"]);
+    // Git before 2.48 does not record origin/HEAD on fetch, and the policy
+    // authority is the remote default branch alone (ADR-0091).
+    git_with_binary(root, &["remote", "set-head", "origin", target]);
 }
 
 fn stderr_text(out: &Output) -> String {

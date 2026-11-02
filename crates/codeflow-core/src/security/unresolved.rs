@@ -1076,7 +1076,11 @@ pub(crate) struct WriterRead {
 ///
 /// [`program_name`]: crate::hooks::git_guard::program_name
 pub(crate) fn writer_name(program: &str) -> &str {
-    crate::hooks::git_guard::program_name(basename(program).trim_end_matches(".exe"))
+    match crate::hooks::git_guard::program_name(basename(program).trim_end_matches(".exe")) {
+        "gtar" | "bsdtar" => "tar",
+        "egrep" | "fgrep" => "grep",
+        name => name,
+    }
 }
 
 /// Read a writer call with the shared scan: its command line, then each

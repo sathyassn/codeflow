@@ -1,6 +1,27 @@
 //! Range spelling and context regressions for issues 130, 141 and 165.
-use super::line_adoption::fixture::{output, passes, Line, LINE};
+use super::line_adoption::fixture::{blocks, output, passes, Line, LINE};
 use std::process::Output;
+
+/// A run with no role whose base is its declared line's fetched tip cannot
+/// tell a pull request head from the line's next tip (TSK-1155): the head's
+/// own commit is the only refusal, and the remedy names both routes. Every
+/// other check passes, so base selection is judged on its own.
+fn refused_only_for_its_role(out: &Output) {
+    let text = output(out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    let blocked: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("BLOCKED"))
+        .collect();
+    assert!(
+        !blocked.is_empty() && blocked.iter().all(|line| line.contains("work.epic_line")),
+        "{text}"
+    );
+    assert!(
+        text.contains("cannot tell how the head reaches it"),
+        "{text}"
+    );
+}
 
 fn ci(f: &Line, args: &[&str], env: Option<(&str, &str)>) -> Output {
     let mut command = f.command(env!("CARGO_BIN_EXE_codeflow"));
@@ -128,8 +149,8 @@ fn planning_branch_uses_its_epic_line_before_protected_fallback() {
         &["--branch", "plan/EPC-001-amend", "--base", LINE],
         None,
     );
-    passes(&explicit);
-    passes(&automatic);
+    refused_only_for_its_role(&explicit);
+    refused_only_for_its_role(&automatic);
     let text = output(&automatic);
     assert!(
         text.contains("declared target") && text.contains(LINE),
@@ -237,7 +258,7 @@ fn task_target_selects_base_from_flag_ci_or_checkout() {
         (vec![], None),
     ] {
         let out = ci(&f, &args, env);
-        passes(&out);
+        refused_only_for_its_role(&out);
         let text = output(&out);
         assert!(text.contains(&format!("range {}..", &base[..8])), "{text}");
         assert!(
@@ -524,7 +545,13 @@ fn unresolved_explicit_and_ci_targets_name_their_source() {
         ),
     ] {
         let out = ci(&f, &args, env);
-        passes(&out);
+        // The range falls back to the protected branches, but the Outcome
+        // marker is judged only against the target's own tip, so a target
+        // that does not resolve refuses (TSK-435).
+        blocks(
+            &out,
+            "the tip of the target branch 'integration/missing' cannot be resolved",
+        );
         let text = output(&out);
         assert!(
             text.contains(&format!("{source} 'integration/missing' does not resolve")),
@@ -713,7 +740,7 @@ fn records_only_on_the_remote_line() -> (Line, String) {
 fn round_four_remote_line_records_bind_the_declared_line() {
     let (f, tip) = records_only_on_the_remote_line();
     let out = ci(&f, &[], None);
-    passes(&out);
+    refused_only_for_its_role(&out);
     let text = output(&out);
     assert!(text.contains(&format!("range {}..", &tip[..8])), "{text}");
     assert!(
@@ -727,7 +754,7 @@ fn round_four_remote_line_records_bind_the_declared_line() {
     // A stale local branch of the same name never replaces the remote ref.
     f.git(&["branch", "-f", LINE, &format!("{tip}~1")]);
     let out = ci(&f, &[], None);
-    passes(&out);
+    refused_only_for_its_role(&out);
     let text = output(&out);
     assert!(text.contains(&format!("range {}..", &tip[..8])), "{text}");
     assert!(
@@ -956,7 +983,7 @@ fn standalone_task_uses_remote_bound_line_in_ci_and_work_start() {
         "{text}"
     );
     assert!(!text.contains("warning: branch declared target"), "{text}");
-    passes(&out);
+    refused_only_for_its_role(&out);
 }
 
 #[test]

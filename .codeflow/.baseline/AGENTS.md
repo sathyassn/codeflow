@@ -1,4 +1,4 @@
-<!-- codeflow:managed:begin scaffold=3.2.0 -->
+<!-- codeflow:managed:begin scaffold=4.0.0 -->
 <!-- Owned by `codeflow update`; project text goes below the end marker. -->
 
 ## How to use this map

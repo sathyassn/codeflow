@@ -8,6 +8,7 @@ Node versions, coordinator-owned binary paths and the parts of the split
 Linux full gate, its coverage shards and their report are also checked.
 """
 
+import hashlib
 import json
 import re
 import sys
@@ -85,7 +86,8 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
 # TSK-203: the Windows suite runs in nextest partitions. TSK-265: one job
 # builds the suite into a nextest archive and each partition runs that
 # archive with the filterset scripts/windows-partitions.py gives it from
-# measured durations. The archived run stands for the whole suite only when
+# measured durations and the archive's test list (TSK-1063: the list places
+# binaries the data does not know). The archived run stands for the whole suite only when
 # the archive is built from the whole workspace with the same profile, and
 # the matrix runs every partition from 1 to the plan's count exactly once.
 # The plan itself gives every test exactly one partition, and the Windows
@@ -94,7 +96,8 @@ ARCHIVE = re.compile(r"^cargo nextest archive --workspace --profile codeflow --a
 ARCHIVED_RUN = re.compile(
     r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
     r"--no-fail-fast --profile codeflow "
-    r'-E "\$\(python -B scripts/windows-partitions\.py filter \$\{\{ matrix\.partition \}\}\)"$')
+    r'-E "\$\(python -B scripts/windows-partitions\.py filter \$\{\{ matrix\.partition \}\} '
+    r'--list "\$RUNNER_TEMP/windows-test-list/windows-tests\.json"\)"$')
 PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
 
 
@@ -402,6 +405,7 @@ GATES_IF = re.compile(r"^\$\{\{ !cancelled\(\) && needs\.reuse\.outputs\.run == 
 REUSE_JOB = """\
     if: github.event_name == 'push'
     name: reuse a pull request verdict
+    needs: [ubuntu-image, windows-image]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -424,11 +428,22 @@ REUSE_JOB = """\
           PUSHED_REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: >-
-          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
-          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
-          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
-          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          WINDOWS_IMAGE_OS: ${{ needs.windows-image.outputs.os }}
+          WINDOWS_IMAGE_VERSION: ${{ needs.windows-image.outputs.version }}
+          DECIDER_SHA256: @DECIDER_SHA256@
+        run: |
+          actual=$(sha256sum scripts/ci-reuse.py | cut -d ' ' -f 1)
+          if [ "$actual" != "$DECIDER_SHA256" ]; then
+            echo "ci-reuse: every job runs: scripts/ci-reuse.py ($actual) is not the script this workflow pins ($DECIDER_SHA256); changing it needs the same reviewed edit to this workflow"
+            exit 0
+          fi
+          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT" \\
+            --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF" \\
+            --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}" \\
+            --windows-image-os "$WINDOWS_IMAGE_OS" --windows-image-version "$WINDOWS_IMAGE_VERSION" \\
+            --push-only "reuse a pull request verdict" --push-only "read the Windows runner image" \\
+            --push-only "read the Ubuntu runner image" \\
+            --require "codeflow gates" --require windows
 """
 
 
@@ -456,6 +471,7 @@ WINDOWS_VERDICT_JOB = """\
           TESTS: ${{{{ needs.windows-tests.result }}}}
           JOURNEYS: ${{{{ needs.windows-journeys.result }}}}
           RELEASE: ${{{{ needs.windows-release-journey.result }}}}
+          MISSING: ${{{{ needs.windows-journeys.outputs.missing }}}}
         run: |
           if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \\
             && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
@@ -467,6 +483,9 @@ WINDOWS_VERDICT_JOB = """\
             exit 1
           fi
           if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
+            if [ -n "$MISSING" ]; then
+              echo "::error::Windows test partition(s) ${{MISSING}} ended without a report (a timeout or a cancellation); their tests did not finish, none is known to have failed"
+            fi
             echo "::error::Windows concluded checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}}; see the windows jobs"
             exit 1
           fi
@@ -513,9 +532,13 @@ def build_job_problems(jobs: dict[str, str], gate: str) -> list[str]:
 
 
 def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
-    if norm_job(jobs.get("reuse", "")) != norm_job(REUSE_JOB):
+    # The job pins the decider by hash (TSK-359), so editing scripts/ci-reuse.py
+    # needs the same reviewed edit to the workflow.
+    pin = hashlib.sha256((ROOT / "scripts" / "ci-reuse.py").read_bytes()).hexdigest()
+    expected = REUSE_JOB.replace("@DECIDER_SHA256@", pin)
+    if norm_job(jobs.get("reuse", "")) != norm_job(expected):
         return ["the `reuse` job must be exactly this, so only a push can reuse a verdict, its token stays "
-                "read-only and scripts/ci-reuse.py decides:\n" + REUSE_JOB]
+                "read-only and the pinned scripts/ci-reuse.py decides:\n" + expected]
     return []
 
 

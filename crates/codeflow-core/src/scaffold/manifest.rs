@@ -14,7 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{AssetSource, ScaffoldError};
+use super::{AssetSource, ScaffoldError, Shown};
+use crate::shown;
 
 /// Path of the manifest inside the asset tree.
 pub const MANIFEST_ASSET_PATH: &str = "base/scaffold-manifest.toml";
@@ -141,9 +142,10 @@ impl ScaffoldManifest {
     /// the structural rules (region format, tiers, path hygiene).
     pub fn load(source: &dyn AssetSource) -> Result<Self, ScaffoldError> {
         let text = super::assets::read_text(source, MANIFEST_ASSET_PATH)?
-            .ok_or_else(|| ScaffoldError::ManifestMissing(MANIFEST_ASSET_PATH.to_string()))?;
-        let manifest: Self =
-            toml::from_str(&text).map_err(|e| ScaffoldError::ManifestInvalid(e.to_string()))?;
+            .ok_or_else(|| ScaffoldError::ManifestMissing(Shown::fixed(MANIFEST_ASSET_PATH)))?;
+        let manifest: Self = toml::from_str(&text).map_err(|e| {
+            ScaffoldError::ManifestInvalid(Shown::place(&super::ParsePlace::toml(&text, &e)))
+        })?;
         manifest.validate()?;
         Ok(manifest)
     }
@@ -169,29 +171,29 @@ impl ScaffoldManifest {
     fn validate(&self) -> Result<(), ScaffoldError> {
         for entry in &self.entries {
             if entry.ownership == Ownership::ManagedRegion && entry.region.is_none() {
-                return Err(ScaffoldError::ManifestInvalid(format!(
+                return Err(ScaffoldError::ManifestInvalid(shown!(
                     "managed-region entry {} must declare a region format",
-                    entry.dest
+                    Shown::path(&entry.dest)
                 )));
             }
             if entry.tiers.is_empty() {
-                return Err(ScaffoldError::ManifestInvalid(format!(
+                return Err(ScaffoldError::ManifestInvalid(shown!(
                     "entry {} declares no tiers",
-                    entry.dest
+                    Shown::path(&entry.dest)
                 )));
             }
             for bad in ["..", "//"] {
                 if entry.dest.contains(bad) || entry.src.contains(bad) {
-                    return Err(ScaffoldError::ManifestInvalid(format!(
+                    return Err(ScaffoldError::ManifestInvalid(shown!(
                         "entry {} contains a suspicious path segment",
-                        entry.dest
+                        Shown::path(&entry.dest)
                     )));
                 }
             }
             if entry.dest.starts_with('/') || entry.src.starts_with('/') {
-                return Err(ScaffoldError::ManifestInvalid(format!(
+                return Err(ScaffoldError::ManifestInvalid(shown!(
                     "entry {} must use relative paths",
-                    entry.dest
+                    Shown::path(&entry.dest)
                 )));
             }
         }

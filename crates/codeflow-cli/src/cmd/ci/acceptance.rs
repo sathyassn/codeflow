@@ -13,7 +13,7 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
-    is_correction, pull_request_findings_judged, Criteria, Finding, AUTHORITY_NOTE, FROZEN_RULE,
+    is_correction, pull_request_findings_into, Criteria, Finding, AUTHORITY_NOTE, FROZEN_RULE,
     IMPORT_RULE, REMOVAL_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
@@ -26,10 +26,13 @@ use super::classification::{range_changes, root_branch_at, Class, Range};
 /// head, and a range resolves. `class` is the pull request's validated
 /// class, when it was classified. `body` is the pull request body, which
 /// gives the reason for each criterion a task removes from its own record.
+/// `push` is true for the pre-push hook's hand-off, never for a pull
+/// request check.
 #[allow(clippy::too_many_arguments)] // The run's shared state and the stacked heads, passed once.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
+    push: bool,
     body: Option<&str>,
     range: Option<&Range<'_>>,
     names: &super::Names<'_>,
@@ -68,13 +71,18 @@ pub(super) fn dispatch(
                 codeflow_core::git::display_text(branch),
                 codeflow_core::git::display_text(range.target)
             );
-            pull_request_findings_judged(
+            let sync_tip = if push {
+                line_sync_tip(root, git, range, names)
+            } else {
+                None
+            };
+            pull_request_findings_into(
                 root,
                 range.base,
                 range.head,
                 &criteria,
                 names.candidate,
-                Some(names.branch),
+                (Some(names.branch), Some(range.target), sync_tip.as_deref()),
                 stacked,
             )
         }),
@@ -118,6 +126,35 @@ pub(super) fn dispatch(
             },
         )),
     }
+}
+
+/// The target line's tip as the destination advertises it, for the pre-push
+/// hand-off of a task branch (TSK-1149). Pushing keeps work durable; the
+/// review of a hand-resolved sync of the branch's own line belongs to the
+/// pull request check at ready and at landing, which never asks for this
+/// tip. `None`, which keeps every merge judged, when the pushed branch is
+/// protected or folds onto a protected name, carries no task, or the
+/// destination does not advertise the target under that exact name.
+fn line_sync_tip(
+    root: &Path,
+    git: &GitPolicy,
+    range: &Range<'_>,
+    names: &super::Names<'_>,
+) -> Option<String> {
+    let (Some(url), Some(listed)) = (names.destination, names.advertisement) else {
+        return None;
+    };
+    let branch = names.branch;
+    if git.branch_is_protected_any_case(branch) || git.branch_folds_onto_protected(branch) {
+        return None;
+    }
+    if !matches!(task_id_from_branch(root, branch), Ok(Some(_))) {
+        return None;
+    }
+    let destination = release_line::from_advertisement(url, listed).ok()?;
+    release_line::advertised_tip_here(root, &destination, range.target)
+        .ok()
+        .map(|tip| tip.to_string())
 }
 
 /// The release-range judgement (SPC-013 R-120), or `None` for an ordinary
@@ -320,10 +357,10 @@ fn criteria(
         Some(Class::EpicLine(_) | Class::RootBranch(_)) => true,
         Some(_) => false,
         None => {
-            if root_branch_at(root, range.base)?.as_deref() == Some(branch)
-                || (branch.starts_with("integration/")
-                    && check_epic_line(root, branch, range.target, range.base, range.head).is_ok())
-            {
+            let root_branch = root_branch_at(root, range.base)?.as_deref() == Some(branch);
+            let line = (!root_branch && branch.starts_with("integration/"))
+                .then(|| check_epic_line(root, branch, range.target, range.base, range.head));
+            if root_branch || matches!(line, Some(Ok(_))) {
                 true
             } else if task_id_from_branch(root, branch)
                 .map_err(|error| error.to_string())?
@@ -332,6 +369,10 @@ fn criteria(
             {
                 return Ok(Criteria::Amendment(None));
             } else {
+                // Only now are the criteria frozen, so only now say why.
+                if let Some(Err(reason)) = line {
+                    frozen_line_note(branch, &reason);
+                }
                 false
             }
         }
@@ -341,6 +382,23 @@ fn criteria(
     } else {
         Criteria::Frozen
     })
+}
+
+/// Print once why `branch`, an `integration/` head judged without a pull
+/// request body, is judged as frozen task work: it is not a verified epic
+/// line, so each completion binds at the range head (TSK-433 AC-7, issue
+/// #341). Printed only once the criteria are frozen, never when the range
+/// falls back to a planning amendment; a pull request's classification
+/// already names the reason.
+fn frozen_line_note(branch: &str, reason: &str) {
+    let note = codeflow_core::remedy::Finding::new(
+        format!(
+            "'{}' is not a verified epic line, so its completions bind at the range head with frozen criteria: {reason}",
+            codeflow_core::git::display_text(branch)
+        ),
+        codeflow_core::remedy::UNVERIFIED_LINE_FROZEN.remedy(),
+    );
+    println!("{}", note.line("codeflow ci: acceptance", "note"));
 }
 
 /// Whether the range carries only what a planning amendment may, read

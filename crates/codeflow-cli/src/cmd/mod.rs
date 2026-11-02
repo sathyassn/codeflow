@@ -31,6 +31,8 @@ use std::path::{Path, PathBuf};
 
 use codeflow_core::hooks::{any_blocking, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use codeflow_core::registry;
+use codeflow_core::scaffold::Shown;
+use codeflow_core::shown;
 
 /// `true` when the `codeflow integrate` gate-context token is present in the
 /// environment (charter §6.2 / D9).
@@ -231,6 +233,33 @@ fn operation_of(plane: &str) -> &'static str {
     }
 }
 
+/// Writes a line of [`Shown`] text to stdout. With [`warn`] and [`prompt`],
+/// the only printers on the paths `codeflow update` and `codeflow update
+/// --pin` take (TSK-1029): what they print is a `Shown`, so the type, not
+/// the call site, keeps a project's text out. The scan test
+/// `update_display_boundary` checks that no other print reaches those
+/// paths. The crate's own `println!` family applies the terminal sink rule
+/// (`display_print`), so a control character in a path prints escaped.
+pub fn say(line: &Shown) {
+    println!("{line}");
+}
+
+/// Writes a line of [`Shown`] text to stderr ([`say`]).
+pub fn warn(line: &Shown) {
+    eprintln!("{line}");
+}
+
+/// Writes a prompt of [`Shown`] text to stdout, without a newline, and
+/// flushes it ([`say`]).
+///
+/// # Errors
+/// When stdout cannot be flushed.
+pub fn prompt(text: &Shown) -> std::io::Result<()> {
+    use std::io::Write as _;
+    print!("{text}");
+    std::io::stdout().flush()
+}
+
 /// Cheap per-command registry touch (charter §7 layer 3): when the current
 /// working directory is inside an initialized codeflow repo, upsert its
 /// entry in `~/.codeflow/registry.json`. Never blocks or fails the actual
@@ -245,23 +274,28 @@ pub fn touch_registry_best_effort() {
     let root = match registry::find_repo_root_checked(&cwd) {
         Ok(root) => root,
         Err(unreadable) => {
-            let path = unreadable.path.display().to_string();
-            let finding = codeflow_core::remedy::Finding::new(
-                format!("registry touch skipped: {unreadable}"),
-                codeflow_core::remedy::REGISTRY_ROOT_UNREADABLE.with(&[("path", &path)]),
-            );
-            eprintln!("{}", finding.line("codeflow", "warning"));
+            warn(&codeflow_core::remedy::shown_line(
+                "codeflow",
+                "warning",
+                &shown!(
+                    "registry touch skipped: cannot inspect {} ({})",
+                    Shown::path(&unreadable.path),
+                    Shown::io(&unreadable.error)
+                ),
+                &codeflow_core::remedy::REGISTRY_ROOT_UNREADABLE.shown_for(&unreadable.path),
+            ));
             return;
         }
     };
     if let Some(root) = root {
         if let Err(e) = registry::touch_registry(&home, &root) {
-            let path = registry::registry_path(&home).display().to_string();
-            let finding = codeflow_core::remedy::Finding::new(
-                format!("registry touch failed: {e}"),
-                codeflow_core::remedy::REGISTRY_UNWRITTEN.with(&[("path", &path)]),
-            );
-            eprintln!("{}", finding.line("codeflow", "warning"));
+            warn(&codeflow_core::remedy::shown_line(
+                "codeflow",
+                "warning",
+                &shown!("registry touch failed: {}", e),
+                &codeflow_core::remedy::REGISTRY_UNWRITTEN
+                    .shown_for(&registry::registry_path(&home)),
+            ));
         }
     }
 }

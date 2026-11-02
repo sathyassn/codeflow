@@ -165,7 +165,7 @@ pub(super) fn records(repo: &Repository) -> Result<Vec<Record>, String> {
             }
         }
     }
-    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out.sort_by(|a, b| crate::ids::compare_ids(&a.id, &b.id));
     Ok(out)
 }
 
@@ -730,4 +730,47 @@ fn record_blobs(repo: &Repository, homes: Subtrees) -> Result<Vec<Oid>, String> 
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Complete tasks come back by id number, so TSK-1000 follows TSK-999.
+    #[test]
+    fn records_list_by_id_number_past_three_digits() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let tasks = dir.path().join(TASKS);
+        std::fs::create_dir_all(&tasks).unwrap();
+        for id in ["TSK-10000", "TSK-1000", "TSK-999", "TSK-100"] {
+            std::fs::write(
+                tasks.join(format!("{id}.md")),
+                format!("---\nid: {id}\ntitle: work\nstatus: complete\n---\n"),
+            )
+            .unwrap();
+        }
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "add tasks",
+            &tree,
+            &[],
+        )
+        .unwrap();
+        let ids: Vec<String> = records(&repo)
+            .unwrap()
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+        assert_eq!(ids, ["TSK-100", "TSK-999", "TSK-1000", "TSK-10000"]);
+    }
 }

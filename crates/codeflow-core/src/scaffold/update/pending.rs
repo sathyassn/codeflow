@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::scaffold::state::{
     guard_beneath_root, read_beneath_root, write_record, Baseline, InstalledManifest,
 };
-use crate::scaffold::{hash, ScaffoldError};
+use crate::scaffold::{hash, ScaffoldError, Shown};
+use crate::shown;
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct PendingResolution {
@@ -20,11 +21,11 @@ pub(super) fn path(dest: &str) -> String {
     format!(".codeflow/.pending-update/{dest}.json")
 }
 
-fn invalid(dest: &str, detail: &str) -> ScaffoldError {
-    ScaffoldError::InvalidState {
-        what: format!("update resolution for {dest}"),
-        detail: format!("{detail}; update changed nothing"),
-    }
+fn invalid(dest: &str, detail: &Shown) -> ScaffoldError {
+    ScaffoldError::invalid(
+        shown!("update resolution for {}", Shown::path(dest)),
+        shown!("{}; update changed nothing", detail),
+    )
 }
 
 impl PendingResolution {
@@ -49,7 +50,11 @@ impl PendingResolution {
         if read_beneath_root(root, &format!("{dest}.new"))?.is_some() {
             return Err(invalid(
                 dest,
-                &format!("resolve {dest}.new and move it over {dest}, then retry"),
+                &shown!(
+                    "resolve {}.new and move it over {}, then retry",
+                    Shown::path(dest),
+                    Shown::path(dest)
+                ),
             ));
         }
         let Some(text) = text else {
@@ -58,9 +63,10 @@ impl PendingResolution {
         let pending: Self = serde_json::from_str(&text).map_err(|error| {
             invalid(
                 dest,
-                &format!(
-                    "cannot read {}: {error}; restore the pending record",
-                    path(dest)
+                &shown!(
+                    "cannot read {}: {}; restore the pending record",
+                    Shown::path(path(dest)),
+                    Shown::place(&crate::scaffold::ParsePlace::json(&error))
                 ),
             )
         })?;
@@ -78,14 +84,14 @@ impl PendingResolution {
         {
             return Err(invalid(
                 dest,
-                "baseline, manifest or pending content does not match the recorded shipped versions; restore the metadata from a known-good copy and retry",
+                &Shown::fixed("baseline, manifest or pending content does not match the recorded shipped versions; restore the metadata from a known-good copy and retry"),
             ));
         }
         let current = read_beneath_root(root, dest)?;
         let Some(current) = current else {
             return Err(invalid(
                 dest,
-                "resolved file is missing; restore it and retry",
+                &Shown::fixed("resolved file is missing; restore it and retry"),
             ));
         };
         // diffy's proposal always uses seven-character markers. Check each
@@ -98,7 +104,7 @@ impl PendingResolution {
         }) {
             return Err(invalid(
                 dest,
-                "resolve the remaining conflict markers and retry",
+                &Shown::fixed("resolve the remaining conflict markers and retry"),
             ));
         }
         Ok(Some(pending))

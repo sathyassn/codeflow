@@ -93,6 +93,21 @@ pub fn run(args: &HookArgs) -> i32 {
         );
         return 2;
     }
+    let guard = match args.name {
+        HookName::GitGuard => Some("git-guard"),
+        HookName::ExecGuard => Some("exec-guard"),
+        HookName::EditGuard => Some("edit-guard"),
+        _ => None,
+    };
+    if let Some(guard) = guard {
+        if let Err(error) = arm_guard_deadline(guard) {
+            eprintln!(
+                "codeflow {guard}: cannot start the guard's deadline ({error}); refusing",
+                error = shown(&error)
+            );
+            return 2;
+        }
+    }
     let stdin = if matches!(args.name, HookName::DelegateTurn) && args.state_dir.is_some() {
         match read_bounded_utf8(std::io::stdin(), MAX_SCHEMA_HOOK_INPUT_BYTES) {
             Ok(stdin) => stdin,
@@ -125,6 +140,79 @@ pub fn run(args: &HookArgs) -> i32 {
         HookName::SessionSummary => session_summary(&stdin),
         HookName::DelegateTurn => delegate_turn(args, &stdin),
     }
+}
+
+/// Refuse on the guard's own clock (TSK-1082). A harness that times a
+/// guard out lets the tool call through in Grok and Codex, and in Claude
+/// without `onFailure`, so a guard that has not decided within
+/// [`GUARD_DEADLINE_SECS`](codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS),
+/// inside the shipped hook timeout, ends its own process with exit 2 and a
+/// reason on stderr, which every harness reads as a block. The thread
+/// starts before the payload is read, so a stalled stdin counts too; a
+/// guard that decides in time exits first and the thread dies with it.
+fn arm_guard_deadline(guard: &'static str) -> std::io::Result<()> {
+    use codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS;
+    std::thread::Builder::new()
+        .name("guard-deadline".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(GUARD_DEADLINE_SECS));
+            let finding = codeflow_core::remedy::Finding::new(
+                format!(
+                    "BLOCKED: the guard reached no decision within {GUARD_DEADLINE_SECS} seconds, so it cannot show the call is allowed; refusing"
+                ),
+                codeflow_core::remedy::GUARD_DEADLINE.remedy(),
+            );
+            let line = format!("{}\n", finding.line(&format!("codeflow {guard}"), "error"));
+            // The reason goes out without std's stderr lock, which the main
+            // thread may hold, and the exit never waits on it for longer than
+            // REFUSAL_WRITE_WAIT: a stderr pipe nobody reads blocks a raw
+            // write too, and the exit has to come first.
+            write_within(line.into_bytes(), REFUSAL_WRITE_WAIT, |bytes| {
+                let _ = write_stderr_unlocked(bytes);
+            });
+            std::process::exit(2);
+        })
+        .map(drop)
+}
+
+/// How long the deadline's refusal waits for its reason to be written
+/// before it exits 2 regardless.
+const REFUSAL_WRITE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Run `write` on its own thread and wait at most `wait` for it to finish;
+/// whether it finished in time. A write that blocks keeps its thread, which
+/// the process exit ends.
+fn write_within(
+    bytes: Vec<u8>,
+    wait: std::time::Duration,
+    write: impl FnOnce(&[u8]) + Send + 'static,
+) -> bool {
+    let (done, finished) = std::sync::mpsc::channel();
+    let started = std::thread::Builder::new()
+        .name("guard-deadline-write".into())
+        .spawn(move || {
+            write(&bytes);
+            let _ = done.send(());
+        });
+    started.is_ok() && finished.recv_timeout(wait).is_ok()
+}
+
+/// Write to the process's stderr through a duplicate of its descriptor or
+/// handle, which never takes the lock `std::io::stderr()` writes hold.
+fn write_stderr_unlocked(bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let owned = {
+        use std::os::fd::AsFd as _;
+        std::io::stderr().as_fd().try_clone_to_owned()?
+    };
+    #[cfg(windows)]
+    let owned = {
+        use std::os::windows::io::AsHandle as _;
+        std::io::stderr().as_handle().try_clone_to_owned()?
+    };
+    let mut file = std::fs::File::from(owned);
+    file.write_all(bytes)?;
+    file.flush()
 }
 
 /// The advisory entry: dispatch on the payload's event. Output writes do not
@@ -334,8 +422,10 @@ fn git_guard(stdin: &str) -> i32 {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
                 return 0;
             }
-            eprintln!("codeflow git-guard: {error}", error = shown(&error));
-            return 2;
+            if unresolved_read_only(command, &cwd, &error) {
+                return 0;
+            }
+            return authority_refusal(&error);
         }
     };
     let policy = &authority.policy;
@@ -404,6 +494,33 @@ fn git_guard(stdin: &str) -> i32 {
         &authority.source,
     );
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
+}
+
+/// Read-only git passes while the policy authority cannot be resolved
+/// (TSK-1104); the unresolved state is disclosed and nothing else is let by.
+fn unresolved_read_only(command: &str, cwd: &std::path::Path, error: &str) -> bool {
+    if !codeflow_core::hooks::ref_authority::read_only_git_runs_nothing(command, cwd) {
+        return false;
+    }
+    eprintln!(
+        "codeflow: policy authority unresolved, so only read-only git passes: {error}",
+        error = shown(&error)
+    );
+    true
+}
+
+/// What both guards add to an authority refusal.
+const READ_ONLY_STAYS: &str =
+    "read-only git (status, log, diff, show, rev-parse and the like) stays allowed meanwhile when it runs no configured program";
+
+/// The git-guard refusal for an unresolved policy authority: the error, and
+/// the read-only git that stays allowed.
+fn authority_refusal(error: &str) -> i32 {
+    eprintln!(
+        "codeflow git-guard: {error}; {READ_ONLY_STAYS}",
+        error = shown(&error)
+    );
+    2
 }
 
 /// A git-guard refusal for an input it cannot read: the error, escaped.
@@ -571,7 +688,14 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
                 return 0;
             }
-            let _ = term_writeln!(err, "codeflow hook: {error}", error = shown(&error));
+            if unresolved_read_only(command, &cwd, &error) {
+                return 0;
+            }
+            let _ = term_writeln!(
+                err,
+                "codeflow hook: {error}; {READ_ONLY_STAYS}",
+                error = shown(&error)
+            );
             return 2;
         }
     };
@@ -584,15 +708,68 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         let _ = term_writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
         return 2;
     };
-    let violations = exec_guard::evaluate_in(
+    // Which text rule judges this call (TSK-397): strict unless the policy
+    // of the call's repository and of the session's project both choose
+    // `relaxed` at the protected remote-tracking refs; a retry flag and
+    // native Windows keep it strict.
+    let host = codeflow_core::hooks::sandbox_state::Host::for_hook(&cwd, &root);
+    let mut policy_reasons = Vec::new();
+    policy_reasons.extend(codeflow_core::hooks::sandbox_state::policy_reason(
+        &authority,
+        "the project policy",
+    ));
+    if let Some(session) = host.session.as_deref() {
+        if let Some(reason) = session_policy_reason(session, &root) {
+            policy_reasons.push(reason);
+        }
+    }
+    let outcome = codeflow_core::hooks::sandbox_state::outcome(
+        &host,
+        payload.tool_input.sandbox_retry(),
+        &policy_reasons,
+    );
+    let violations = exec_guard::evaluate_ruled(
         command,
         exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)),
         &policy.security,
         policy.git.hook_integrity,
         &cwd,
         &root,
+        &outcome,
     );
     exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
+}
+
+/// Why the session project's policy keeps a call made from `root` strict:
+/// it does not choose `relaxed` at its protected remote-tracking refs, or it
+/// cannot be read. `None` when the session project is the call's
+/// repository, whose policy the caller already read, or when it chooses
+/// `relaxed` there.
+fn session_policy_reason(session: &std::path::Path, root: &std::path::Path) -> Option<String> {
+    let session_root = match super::project_root(session) {
+        Ok(session_root) => session_root,
+        Err(error) => {
+            return Some(format!(
+            "the session project `{}` cannot be read ({}), so its `security.text_guard` is unknown",
+            session.display(),
+            shown(&error)
+        ))
+        }
+    };
+    if session_root == root {
+        return None;
+    }
+    match codeflow_core::hooks::landed_policy::load(&session_root) {
+        Ok(authority) => codeflow_core::hooks::sandbox_state::policy_reason(
+            &authority,
+            "the session project's policy",
+        ),
+        Err(error) => Some(format!(
+            "the session project's policy at `{}` cannot be read ({}), so its `security.text_guard` is unknown",
+            session_root.display(),
+            shown(&error)
+        )),
+    }
 }
 
 fn edit_guard(stdin: &str) -> i32 {
@@ -751,6 +928,40 @@ fn session_summary(stdin: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// TSK-1082 review nit 3: the deadline's reason is written without the
+    /// lock `std::io::stderr()` holds, so a main thread holding that lock
+    /// cannot keep the refusal from being written.
+    #[test]
+    fn the_deadline_writes_its_reason_while_another_thread_holds_the_stderr_lock() {
+        let held = std::io::stderr().lock();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let written = super::write_stderr_unlocked(
+                b"codeflow guard-deadline test: written past a held stderr lock\n",
+            );
+            let _ = done.send(written.is_ok());
+        });
+        let result = finished.recv_timeout(std::time::Duration::from_secs(10));
+        drop(held);
+        assert_eq!(result, Ok(true));
+    }
+
+    /// TSK-1082 review nit 3: a write that never finishes, such as one to a
+    /// stderr pipe nobody reads, holds the exit back by at most the wait.
+    #[test]
+    fn a_write_that_never_finishes_holds_the_exit_back_only_for_the_wait() {
+        let (_never, blocked) = std::sync::mpsc::channel::<()>();
+        let blocked = std::sync::Mutex::new(blocked);
+        let wait = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let finished = super::write_within(b"x".to_vec(), wait, move |_| {
+            let _ = blocked.lock().unwrap().recv();
+        });
+        assert!(!finished);
+        assert!(started.elapsed() < wait + std::time::Duration::from_secs(5));
+        assert!(super::write_within(b"x".to_vec(), wait, |_| {}));
+    }
+
     #[test]
     fn r16_guard_payload_parse_errors_refuse() {
         assert_eq!(super::git_guard("{"), 2);

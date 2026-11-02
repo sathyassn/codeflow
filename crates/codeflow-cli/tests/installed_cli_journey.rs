@@ -16,6 +16,8 @@ use std::process::{Command, Output};
 
 const LINE: &str = "integration/EPC-001-offline";
 
+#[path = "support/outcome.rs"]
+mod outcome;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -91,7 +93,10 @@ fn refused(out: &Output, what: &str, reason: &str) -> String {
     all
 }
 
+/// Commit everything, each new record's Outcome stated first as its
+/// author states it (TSK-435).
 fn commit(root: &Path, message: &str) -> String {
+    outcome::state_outcomes(root);
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", message]);
     git(root, &["rev-parse", "HEAD"])
@@ -446,6 +451,8 @@ fn history_overlay_is_refused_by_installed_hook_work_start_and_ci() {
     let url = remote.to_str().unwrap();
     git(&root, &["remote", "add", "origin", url]);
     git(&root, &["fetch", "origin"]);
+    // Git before 2.48 records no remote HEAD on fetch (ADR-0091).
+    git(&root, &["remote", "set-head", "origin", "-a"]);
     ok(
         &codeflow(&root, &["ids", "seed"]),
         "seed destination registry",

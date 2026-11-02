@@ -546,8 +546,8 @@
   ],
   [
     "mkdir L && rsync -a --link-dest=../src src/ L/ && python3 tool.py L/app.py",
-    0,
-    0
+    2,
+    2
   ],
   [
     "pax -rw -l .claude L && gdd if=/dev/null of=L/.claude/settings.json",

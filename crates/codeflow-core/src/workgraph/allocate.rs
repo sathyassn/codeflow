@@ -69,16 +69,63 @@ pub(crate) fn repository_root(pm_root: &Path) -> &Path {
     }
 }
 
-fn sequence(id: &str, prefix: &str) -> Option<u32> {
-    id.strip_prefix(prefix)?.parse().ok()
+/// The sequence number a record name carries, if it is one for this prefix.
+/// A number above `u64::MAX` is an error, never skipped, so it cannot hide
+/// the true highest number.
+fn sequence(id: &str, prefix: &str) -> Result<Option<u64>, StoreError> {
+    let Some(number) = id.strip_prefix(prefix) else {
+        return Ok(None);
+    };
+    parse_sequence(number, id)
+}
+
+fn parse_sequence(number: &str, id: &str) -> Result<Option<u64>, StoreError> {
+    match number.parse::<u64>() {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if *error.kind() == std::num::IntErrorKind::PosOverflow => {
+            Err(StoreError::Invalid(format!(
+                "the record name {id} has a number above {}, so the next id cannot be chosen; rename or remove it",
+                u64::MAX
+            )))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+/// The highest sequence among the names, or an error for one out of range.
+fn highest_sequence(
+    stems: &[String],
+    read: impl Fn(&str) -> Result<Option<u64>, StoreError>,
+) -> Result<u64, StoreError> {
+    let mut highest = 0;
+    for stem in stems {
+        if let Some(value) = read(stem)? {
+            highest = highest.max(value);
+        }
+    }
+    Ok(highest)
+}
+
+/// The number after `highest`, or an error when none is left.
+fn after(highest: u64, prefix: &str) -> Result<u64, StoreError> {
+    highest.checked_add(1).ok_or_else(|| {
+        StoreError::Invalid(format!(
+            "{prefix}-{highest} is the last {prefix} number there is, so no next id exists"
+        ))
+    })
 }
 
 /// Reserve the first sequence of either `TSK-NNN` or historical
 /// `TSK-NNN-NNN`. Reserving the legacy epic segment prevents a canonical
 /// `TSK-051` from becoming visually ambiguous beside `TSK-051-008`.
-fn task_reservation_sequence(id: &str) -> Option<u32> {
-    let rest = id.strip_prefix("TSK-")?;
-    rest.split('-').next()?.parse().ok()
+fn task_reservation_sequence(id: &str) -> Result<Option<u64>, StoreError> {
+    let Some(rest) = id.strip_prefix("TSK-") else {
+        return Ok(None);
+    };
+    match rest.split('-').next() {
+        Some(number) => parse_sequence(number, id),
+        None => Ok(None),
+    }
 }
 
 fn record_stem(path: &Path) -> Option<String> {
@@ -126,13 +173,10 @@ fn task_record_stems(pm_root: &Path) -> Result<Vec<String>, StoreError> {
 ///
 /// Returns an error if the epic directory or one of its entries cannot be read.
 pub fn next_epic_id(pm_root: &Path) -> Result<String, StoreError> {
-    let next = direct_record_stems(&pm_root.join("epics"))?
-        .iter()
-        .filter_map(|id| sequence(id, "EPC-"))
-        .max()
-        .unwrap_or(0)
-        + 1;
-    Ok(format!("EPC-{next:03}"))
+    let highest = highest_sequence(&direct_record_stems(&pm_root.join("epics"))?, |id| {
+        sequence(id, "EPC-")
+    })?;
+    Ok(format!("EPC-{:03}", after(highest, "EPC")?))
 }
 
 /// Next free spec id (`SPC-NNN`, max visible sequence + 1).
@@ -141,13 +185,10 @@ pub fn next_epic_id(pm_root: &Path) -> Result<String, StoreError> {
 ///
 /// Returns an error if the spec directory or one of its entries cannot be read.
 pub fn next_spec_id(pm_root: &Path) -> Result<String, StoreError> {
-    let next = direct_record_stems(&pm_root.join("specs"))?
-        .iter()
-        .filter_map(|id| sequence(id, "SPC-"))
-        .max()
-        .unwrap_or(0)
-        + 1;
-    Ok(format!("SPC-{next:03}"))
+    let highest = highest_sequence(&direct_record_stems(&pm_root.join("specs"))?, |id| {
+        sequence(id, "SPC-")
+    })?;
+    Ok(format!("SPC-{:03}", after(highest, "SPC")?))
 }
 
 /// Next free independent task id (`TSK-NNN`, max canonical or legacy
@@ -157,13 +198,10 @@ pub fn next_spec_id(pm_root: &Path) -> Result<String, StoreError> {
 ///
 /// Returns an error if a task inventory directory or entry cannot be read.
 pub fn next_task_id(pm_root: &Path) -> Result<String, StoreError> {
-    let next = task_record_stems(pm_root)?
-        .iter()
-        .filter_map(|id| task_reservation_sequence(id))
-        .max()
-        .unwrap_or(0)
-        + 1;
-    Ok(format!("TSK-{next:03}"))
+    let highest = highest_sequence(&task_record_stems(pm_root)?, |id| {
+        task_reservation_sequence(id)
+    })?;
+    Ok(format!("TSK-{:03}", after(highest, "TSK")?))
 }
 
 /// Whether a stable work-item id exists in the visible checkout.
@@ -716,6 +754,44 @@ mod tests {
         assert_eq!(next_epic_id(dir.path()).unwrap(), "EPC-001");
         assert_eq!(next_spec_id(dir.path()).unwrap(), "SPC-001");
         assert_eq!(next_task_id(dir.path()).unwrap(), "TSK-001");
+    }
+
+    /// The last number there is has no successor, and a number past it is
+    /// refused rather than skipped (a wrap would reissue id 000).
+    #[test]
+    fn allocators_refuse_an_exhausted_or_out_of_range_number() {
+        type Next = fn(&Path) -> Result<String, StoreError>;
+        let cases: [(&str, &str, &str, Next); 3] = [
+            ("epics", "EPC", "EPC-18446744073709551615", next_epic_id),
+            ("specs", "SPC", "SPC-18446744073709551615", next_spec_id),
+            ("tasks", "TSK", "TSK-18446744073709551615", next_task_id),
+        ];
+        for (dir_name, prefix, last, next) in cases {
+            let dir = project();
+            seed(
+                dir.path(),
+                dir_name,
+                &format!("{prefix}-18446744073709551614"),
+            );
+            assert_eq!(next(dir.path()).unwrap(), last);
+            seed(dir.path(), dir_name, last);
+            let error = next(dir.path()).unwrap_err().to_string();
+            assert!(error.contains("no next id exists"), "{prefix}: {error}");
+            seed(
+                dir.path(),
+                dir_name,
+                &format!("{prefix}-18446744073709551616"),
+            );
+            let error = next(dir.path()).unwrap_err().to_string();
+            assert!(
+                error.contains("above 18446744073709551615"),
+                "{prefix}: {error}"
+            );
+        }
+        // A legacy task name reserves its first group, so its overflow counts too.
+        let dir = project();
+        seed(dir.path(), "tasks", "TSK-18446744073709551616-001");
+        assert!(next_task_id(dir.path()).is_err());
     }
 
     #[test]

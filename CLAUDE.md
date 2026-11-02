@@ -1,4 +1,4 @@
-<!-- codeflow:managed:begin scaffold=3.2.0 -->
+<!-- codeflow:managed:begin scaffold=4.0.0 -->
 @AGENTS.md
 
 ## Routing gate

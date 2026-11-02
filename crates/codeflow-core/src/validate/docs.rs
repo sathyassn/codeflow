@@ -1062,7 +1062,7 @@ fn md_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             paths.push(path);
         }
     }
-    paths.sort();
+    paths.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(paths)
 }
 fn inventory_files(

@@ -500,7 +500,8 @@ fn recent_adrs(root: &Path, n: usize) -> Vec<String> {
                 && !n.eq_ignore_ascii_case("readme.md")
         })
         .collect();
-    names.sort();
+    // ADR-10000 is newer than ADR-9999, so the order reads the number.
+    names.sort_by(|a, b| crate::ids::compare_ids(a, b));
     names
         .iter()
         .rev()
@@ -676,6 +677,24 @@ mod tests {
             "approval_policy = \"on-request\"\n",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn recent_adrs_are_the_highest_numbers_past_four_digits() {
+        let dir = tempfile::tempdir().unwrap();
+        let decisions = dir.path().join("docs/decisions");
+        std::fs::create_dir_all(&decisions).unwrap();
+        for id in ["ADR-0002", "ADR-9999", "ADR-10000", "ADR-10001"] {
+            std::fs::write(
+                decisions.join(format!("{id}-x.md")),
+                format!("# {id} title\n"),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            recent_adrs(dir.path(), 2),
+            ["ADR-10001 title".to_string(), "ADR-10000 title".to_string()]
+        );
     }
 
     #[test]
