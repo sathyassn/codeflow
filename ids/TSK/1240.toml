@@ -1,0 +1,11 @@
+id = "TSK-1240"
+uid = "312d8349-0596-4ab4-8664-a4568160907f"
+kind = "TSK"
+title = "Commit standards caches the target build by the target's SHA"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T18:15:05Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
