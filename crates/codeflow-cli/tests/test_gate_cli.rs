@@ -17,6 +17,8 @@ mod drain_pipe;
 mod evidence;
 #[path = "test_gate_cli/named_config.rs"]
 mod named_config;
+#[path = "test_gate_cli/no_comparison_base.rs"]
+mod no_comparison_base;
 #[path = "support/own_repository.rs"]
 mod own_repository;
 #[cfg(unix)]
@@ -89,7 +91,7 @@ fn every_selection_control_names_why_every_target_runs() {
     for (args, reason) in [
         (
             vec!["test", "--mode", "quick"],
-            "every target: no local run record earns selection credit (ADR-0089)",
+            "every target: local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)",
         ),
         (
             vec!["test", "--mode", "quick", "--since", "HEAD"],
