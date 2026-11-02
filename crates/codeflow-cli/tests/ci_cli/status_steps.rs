@@ -211,6 +211,23 @@ fn a_cancellation_revived_across_a_gap_is_refused() {
     }
 }
 
+/// The record is the file that states its id: TSK-001 replaced by a file
+/// named TSK-002 that states `id: TSK-001` and is cancelled, then restored
+/// under its own name as `todo`, is refused (TSK-1036 review 02).
+#[test]
+fn a_cancellation_held_only_under_another_file_name_is_refused() {
+    const OTHER: &str = "project-management/tasks/TSK-002.md";
+    let dir = repo();
+    let root = dir.path();
+    std::fs::remove_file(root.join(TASK)).unwrap();
+    write(root, OTHER, &record("cancelled"));
+    commit(root, "docs: hold the task under another name");
+    std::fs::remove_file(root.join(OTHER)).unwrap();
+    write(root, TASK, &record("todo"));
+    commit(root, "docs: restore the task");
+    refused(root, "held only under another file name", TERMINAL, None);
+}
+
 /// A side branch from `main` that cancels TSK-001; returns its name.
 fn cancelled_side(root: &Path) -> &'static str {
     git(root, &["switch", "-qc", "side", "main"]);
