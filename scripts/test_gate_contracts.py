@@ -13,6 +13,12 @@ ROOT = Path(os.environ.get('CODEFLOW_GATE_CONTRACT_ROOT', Path(__file__).resolve
 _SPEC = importlib.util.spec_from_file_location('gate_parity', Path(__file__).resolve().parent / 'gate-parity.py')
 PARITY = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(PARITY)
+# Run the target-cache adversarial and shell tests with the existing gate.
+_CACHE_SPEC = importlib.util.spec_from_file_location('policy_cache', Path(__file__).resolve().parent / 'test_policy_cache.py')
+_CACHE = importlib.util.module_from_spec(_CACHE_SPEC)
+_CACHE_SPEC.loader.exec_module(_CACHE)
+_CACHE.WORKFLOW = ROOT / '.github/workflows/codeflow-policy.yml'
+PolicyCache = _CACHE.PolicyCache
 def read(path):
     return (ROOT / path).read_text()
 
