@@ -1,0 +1,11 @@
+id = "TSK-1251"
+uid = "3a5e40ed-4630-4e0e-bd24-dc5d3f37f729"
+kind = "TSK"
+title = "Git common dir and test-lint folder walks fail closed"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T22:01:00Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
