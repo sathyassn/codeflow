@@ -1,8 +1,7 @@
 # Seat account profiles and limit reads: qualification record
 
-Status: partial. It records what was read from each CLI's own schema and
-documentation, and the steps that still have to run in native seats for
-TSK-431 AC-3 and AC-4. No token, sign-in file or credential helper was read,
+Status: Codex read qualified and the AC-4 journey run on 2026-11-02 (see the
+two sections below). No token, sign-in file or credential helper was read,
 copied or queried.
 
 ## What each family exposes
@@ -23,19 +22,27 @@ documentation. A different release can rename them. The field names were
 schema checked on `0.166.0`; the reader refuses a payload it cannot read
 with a message and never guesses.
 
-## AC-3: Codex app-server read in a native seat (to run)
+## AC-3: Codex app-server read on the supported release
 
-The schema export above shows the shape. Still to do: in an interactive
-Codex seat on the supported release, read the live result of
-`account/rateLimits/read` and the next `account/rateLimits/updated` event,
-store each with `codeflow models record-limits --family codex --config-home
-<the seat's CODEX_HOME>` (the host's own environment is not the seat's, so
-the producing home is passed explicitly), and record
-the release (`codex --version`), the method each value came from and the
-`codeflow models limits` output here. CodeFlow does not speak the app-server
-protocol itself; the seat's host supplies the payload.
+Read on 2026-11-02 with `codex-cli 0.166.0` by a short script that starts
+`codex app-server`, sends `initialize`, `initialized` and then
+`account/rateLimits/read` (script and raw reply:
+`/tmp/cf-tsk431-ac4/read_limits.py`, `/tmp/cf-tsk431-ac4/ratelimits-read.json`,
+kept on the operator's host). The reply carries `rateLimits.primary` with
+`usedPercent` 71, `windowDurationMins` 10080 and `resetsAt` 1794181768, and a
+null `secondary`. `codeflow models record-limits --family codex` accepted it
+and `codeflow models limits` showed `weekly: 71% used, resets
+2026-11-08T23:49:28Z` and `5-hour: not exposed`. The method name is from the
+release's own schema, not vendor documentation.
 
-## AC-4: journey with the build under test (to run)
+Limits of this read: the process was a stand-alone app-server on the
+operator's host, not a process inside the seat, so it shows the method and
+the payload shape on this release, not the seat's own channel. The
+`account/rateLimits/updated` event was not received, so only the read is
+qualified. The reply holds an account identifier, so the raw file is not
+copied into the repository.
+
+## AC-4: journey with the build under test
 
 The installed 3.1.0 has no `codeflow models launch-env`, so the journey runs
 with the build under test: put that build's `target/debug` folder first on
@@ -63,6 +70,26 @@ a second config home:
    nothing to `eval`; the sequence stops at its first `|| exit 1`, so no
    `herdr agent start` runs and no seat starts.
 
-Not exercised so far: any of the steps above in a seat, a second account that
-is signed in (no credential is copied or created), and a live Claude
-statusline payload.
+Result (2026-11-02, evidence in `/tmp/cf-tsk431-ac4/`, not copied because the
+raw files name accounts and host paths):
+
+- Step 1, `step1-output.txt`, run by the operator with the build under test
+  (`codeflow 3.2.0 source=4dfcef551 dirty=false`): `export
+  CODEX_HOME='/Users/sathya/.codex-second'`, then `CODEX_HOME is the mapped
+  config home`, `rc=0`.
+- Step 2, `step5-shell-before-start.txt`: in the Herdr pane the mapped line and
+  `--check` passed (`check_rc=0`) before `herdr agent start`. The seat
+  (agent `cf-codeflow-tsk431ac4-cx01`) reached `interactive_ready` true and
+  showed `OpenAI Codex (v0.166.0)` in this worktree
+  (`step5-pane-read.txt`).
+- Step 3, `step5-output.txt`: after `record-limits` stored the reading,
+  `codeflow models limits` printed `account: config home
+  /Users/sathya/.codex-second (via CODEX_HOME)` and `weekly: 71% used, resets
+  2026-11-08T23:49:28Z`.
+- Step 4 (refusal when the profile names a token) is covered by the
+  `models_cli` launch tests, not by a seat run.
+
+Not exercised: the seat's own environment could not be read with `ps`, so
+`CODEX_HOME` inside the seat process is shown by the pane that launched it and
+not by a process listing; the limits view shows the stored reading, not a live
+one; the update notification; a live Claude statusline payload.
