@@ -243,6 +243,47 @@ fn exemption_routes_never_repeat_an_unrecorded_task() {
     assert!(!removed.1.contains("987654"), "removed: {}", removed.1);
 }
 
+/// TSK-1040 (Codex round 06): a full-tier project tracks work durably before
+/// its first task record exists, so a `Task:` value no record vouches for is
+/// refused with the fixed diagnostic on the ordinary and the exemption
+/// routes, and no announcement, admission error or remedy repeats it.
+#[test]
+fn a_full_tier_project_without_records_never_repeats_the_task_value() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    git(root, &["rm", "-rq", "project-management"]);
+    std::fs::write(
+        root.join(".codeflow/project.toml"),
+        "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n",
+    )
+    .unwrap();
+    std::fs::write(root.join(".gitleaksignore"), "# notes\n").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "chore: full tier without records"]);
+    branch_with(
+        root,
+        "feat/body-canary",
+        &[("src/lib.rs", "pub fn changed() {}\n")],
+    );
+    branch_with(
+        root,
+        "feat/exemption",
+        &[(".gitleaksignore", "# notes changed\n")],
+    );
+    git(root, &["switch", "-qC", "feat/exemption-removed", "main"]);
+    git(root, &["rm", "-q", ".gitleaksignore"]);
+    git(root, &["commit", "-qm", "chore: drop the scan ignore file"]);
+    for branch in [
+        "feat/body-canary",
+        "feat/exemption",
+        "feat/exemption-removed",
+    ] {
+        let result = ci(root, branch, &body("Task: TSK-987654"));
+        assert_blocks(&result, branch, "has no task record");
+        assert!(!result.1.contains("987654"), "{branch}: {}", result.1);
+    }
+}
+
 /// TSK-388: the pre-push hook hands `codeflow ci` the destination's default
 /// branch as `--into`, and a remote can put control characters in that
 /// name: an OSC title sequence, or the C1 control CSI that git accepts.

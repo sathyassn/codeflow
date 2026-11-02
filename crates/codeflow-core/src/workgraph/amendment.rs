@@ -483,53 +483,32 @@ pub fn epic_problem(
     }
 }
 
-/// What the task records say about a task a pull request body names.
-enum TaskStanding {
-    /// A task record holds it on the target or at the head.
-    Recorded,
-    /// Records exist, and none holds it.
-    Unrecorded,
-    /// No task record exists on the target or at the head: durable tracking
-    /// is not in use, so there is nothing to vouch with or against.
-    TrackingOff,
-}
-
-fn task_standing(
+/// Whether a task record holds `task` on the target or at the head.
+///
+/// The caller judges a `Task:` line only where durable tracking is on (the
+/// classification's own decision), so a project with no record yet is not
+/// tracking off: a full-tier project tracks work before its first record.
+fn task_on_record(
     repo_root: &std::path::Path,
     base: &str,
     head: &str,
     task: &str,
-) -> Result<TaskStanding, String> {
-    let read = |revision: &str| -> Result<(bool, bool), String> {
+) -> Result<bool, String> {
+    let read = |revision: &str| -> Result<bool, String> {
         let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
         let graph = Graph::from_revision(&repo, revision)?;
-        let tasks = || {
-            graph
-                .records
-                .values()
-                .filter(|record| record.kind == RecordKind::Task)
-        };
-        Ok((
-            tasks().next().is_some(),
-            tasks().any(|record| record.id == task),
-        ))
+        Ok(graph
+            .records
+            .get(task)
+            .is_some_and(|record| record.kind == RecordKind::Task))
     };
-    let (base_any, base_has) = read(base)?;
-    let (head_any, head_has) = read(head)?;
-    Ok(if base_has || head_has {
-        TaskStanding::Recorded
-    } else if base_any || head_any {
-        TaskStanding::Unrecorded
-    } else {
-        TaskStanding::TrackingOff
-    })
+    Ok(read(base)? || read(head)?)
 }
 
 /// Why `task`, named by a pull request body's `Task:` line, cannot be
-/// trusted as written: durable tracking is in use and no task record holds
-/// it on the target or at the head. The message never repeats the
-/// identifier, which is the body's own text until a record vouches for it
-/// (TSK-1040).
+/// trusted as written: no task record holds it on the target or at the
+/// head. The message never repeats the identifier, which is the body's own
+/// text until a record vouches for it (TSK-1040).
 #[must_use]
 pub fn task_problem(
     repo_root: &std::path::Path,
@@ -537,14 +516,14 @@ pub fn task_problem(
     head: &str,
     task: &str,
 ) -> Option<String> {
-    match task_standing(repo_root, base, head, task) {
+    match task_on_record(repo_root, base, head, task) {
         Err(error) => Some(format!(
             "cannot read the task records to check the `Task:` line: {error}"
         )),
-        Ok(TaskStanding::Unrecorded) => Some(
+        Ok(false) => Some(
             "`Task:` names a task that has no task record on the target or at the head".to_string(),
         ),
-        Ok(_) => None,
+        Ok(true) => None,
     }
 }
 
@@ -552,10 +531,7 @@ pub fn task_problem(
 /// message may repeat it (TSK-1040). A read failure is no vouching.
 #[must_use]
 pub fn task_recorded(repo_root: &std::path::Path, base: &str, head: &str, task: &str) -> bool {
-    matches!(
-        task_standing(repo_root, base, head, task),
-        Ok(TaskStanding::Recorded)
-    )
+    task_on_record(repo_root, base, head, task).unwrap_or(false)
 }
 
 /// Why a planning amendment that changes `AGENTS.md`'s managed block is
