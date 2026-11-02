@@ -1,0 +1,11 @@
+id = "TSK-1252"
+uid = "806499a8-0faf-4f53-990f-f0c38bc2cf91"
+kind = "TSK"
+title = "codeflow ci resolves the destination's default branch from trusted CI context, without a credential"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T22:01:14Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
