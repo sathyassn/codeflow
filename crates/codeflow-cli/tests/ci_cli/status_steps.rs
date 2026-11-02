@@ -171,17 +171,23 @@ fn a_cancellation_revived_inside_one_range_is_refused() {
 
 /// A cancellation revived across a gap is refused like the direct edit:
 /// the record deleted then recreated, moved to its epic's task path, or
-/// parked off the record paths and restored (TSK-1036 review 01).
+/// parked off the record paths and restored (TSK-1036 review 01), or
+/// cancelled only in another task file that states its id (review 02).
 #[test]
 fn a_cancellation_revived_across_a_gap_is_refused() {
     const EPIC_TASK: &str = "project-management/epics/EPC-001/tasks/TSK-001.md";
-    let gaps: [(&str, &str, Option<&str>); 3] = [
+    let gaps: [(&str, &str, Option<&str>); 4] = [
         ("deleted then recreated", TASK, None),
         ("moved to the epic path", EPIC_TASK, Some(EPIC_TASK)),
         (
             "parked off the record paths",
             TASK,
             Some("notes/TSK-001.md"),
+        ),
+        (
+            "held under another task file name",
+            TASK,
+            Some("project-management/tasks/TSK-002.md"),
         ),
     ];
     for (what, back, gap) in gaps {
