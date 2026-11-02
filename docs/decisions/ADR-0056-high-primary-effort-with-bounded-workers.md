@@ -81,3 +81,11 @@ supersedes the sentence "Codex project settings pin high. Claude settings
 provide `effortLevel: high` as a starting default". The scaffold no longer
 ships either key, and effort in shared settings is a project opt-in. The rest
 of this record stands, including high as the primaries' launch effort.
+
+## Note of 2026-11-01: the high default is superseded
+
+[ADR-0095](ADR-0095-default-effort-follows-each-vendor-s-recommendat.md)
+supersedes the primary-effort default above ("Claude, Codex, and catalog Grok
+development primaries enter at high"). Seats now default to each vendor's
+recommended effort and are raised to high by trigger or task need. The
+worker, cross-family and xhigh rules above stand.

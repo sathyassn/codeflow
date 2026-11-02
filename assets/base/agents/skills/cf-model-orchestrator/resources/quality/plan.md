@@ -85,25 +85,36 @@ is a reassignment: it is recorded and reviewed by one other-lineage seat (in
 the batched epic amendment for epic tasks) before the affected work continues.
 A same-seat trigger-based effort escalation, including direct high to xhigh, is
 ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
-high primary stays the orchestrator and spawns same-family workers at that
+primary stays the orchestrator and spawns same-family workers at that
 effort, each as a native subagent of its own session (the seat section of
 `SKILL.md`). Where the harness has no native route for that model, the
-recorded fallback is `primary-retained`: keep the high primary, record the
+recorded fallback is `primary-retained`: keep the primary, record the
 missing route as a limitation, and do not infer a pass. A permitted worker
 change within the approved responsible-primary seat remains internal routing
 unless it changes the named primary or reviewer.
 
-Default effort is high for primary seats, not a ceiling or a mandate to make
-every worker high; a primary already qualified at high performs suitable
-reasoning directly. Delegate substantial, well-specified routine implementation,
+Default effort follows each vendor's recommended default for the bound
+model, as the current ensemble records it (in this ensemble: medium for Opus,
+Sonnet and the Codex lines, high for Grok, and high for Fable, whose lowest
+effort is high). The orchestrating session starts at its own model's default.
+It is not a ceiling. Raise a seat or worker to high, or xhigh on Codex, only
+when a named need applies to that lane, such as a hard build, a security
+review or a stuck diagnosis, and never by default or by category for an
+orchestrating, director or coordinator session. Design starts at the model's
+default like any other lane. A primary already at the needed effort
+performs suitable reasoning directly. The highest-cost reasoning model (Fable
+in this ensemble) is used only for key review, analysis and direction
+(design, architecture and planning decisions), never to execute; each of its
+runs names a deliverable and an end and is closed when done, and execution
+goes to a lower-cost line. Delegate substantial, well-specified routine implementation,
 evidence, or review-support work to a capable permitted route when one is
 available and the unit is separable enough to inspect; direct primary
 execution remains valid for a tiny warm-context change, inseparable
 unresolved reasoning, material risk, an unavailable route, or bounded
 recovery. Record the concrete reason whenever substantial routine work is
-retained. Complex architecture and technical planning use the strongest
-capable permitted same-family reasoning route at high or xhigh from the active
-binding's permitted routes. An xhigh trigger requires the owning primary to
+retained. A unit named a hard build in architecture or technical planning
+uses the strongest capable permitted same-family reasoning route at high or
+xhigh from the active binding's permitted routes. An xhigh trigger requires the owning primary to
 obtain xhigh reasoning through a supported same-family worker route; do not
 spend a high attempt merely to fail first. The primary critically integrates worker
 findings and retains approvals. If no required capable route is available,

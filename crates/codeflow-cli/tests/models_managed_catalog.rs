@@ -402,8 +402,11 @@ fn catalog_data_alone_moves_resolution_fallback_and_open_duties() {
     let design = repo.resolved("design", "claude-code", "none", &[], true);
     for result in [&review, &design] {
         assert_pinned_launches(&catalog, result);
-        assert_eq!(result["participants"][0]["effort"], "high");
     }
+    // ADR-0095: review starts at the model's vendor default (medium for the
+    // Codex primary and for Opus); design has no high floor.
+    assert_eq!(review["participants"][0]["effort"], "medium");
+    assert_eq!(design["participants"][0]["effort"], "medium");
     assert_eq!(review["participants"][0]["seat"], codex_id);
 
     // A catalog-only change moves the requested selector and effort.
@@ -505,11 +508,12 @@ fn bucket_exclusion_moves_the_fallback_and_no_codex_leaves_review_open() {
 }
 
 #[test]
-fn xhigh_trigger_keeps_the_design_seat_at_high_and_adds_a_worker() {
+fn xhigh_trigger_keeps_the_design_seat_at_its_default_and_adds_a_worker() {
     let catalog = managed();
     let owner = catalog["design_owner"].as_str().unwrap().to_owned();
     let repo = Repo::new(&catalog);
-    // An xhigh trigger keeps the design seat at high and adds an xhigh worker.
+    // An xhigh trigger keeps the design seat at its default (medium for Opus,
+    // ADR-0095) and adds an xhigh worker.
     let trigger = catalog["xhigh_triggers"][0].as_str().unwrap();
     let design = repo.resolved(
         "design",
@@ -519,7 +523,7 @@ fn xhigh_trigger_keeps_the_design_seat_at_high_and_adds_a_worker() {
         true,
     );
     assert_eq!(design["participants"][0]["seat"], owner.as_str());
-    assert_eq!(design["participants"][0]["effort"], "high");
+    assert_eq!(design["participants"][0]["effort"], "medium");
     let worker = &design["obligations"][0];
     assert_eq!(worker["participant"], format!("xhigh-reasoning:{owner}"));
     assert_eq!(worker["effort"], "xhigh");
@@ -527,4 +531,35 @@ fn xhigh_trigger_keeps_the_design_seat_at_high_and_adds_a_worker() {
     assert_eq!(worker["approval_owner"], owner.as_str());
     assert_eq!(design["xhigh_trigger_met"], true);
     assert_pinned_launches(&catalog, &design);
+}
+
+#[test]
+fn orchestrating_host_starts_at_its_model_default_and_no_trigger_raises_it() {
+    let catalog = managed();
+    let repo = Repo::new(&catalog);
+    let trigger = catalog["high_triggers"][0].as_str().unwrap();
+    // ADR-0095: the directing session starts at its bound model's vendor
+    // default, high for Grok 4.7 and medium for Opus and Astra, and a
+    // trigger never changes it.
+    for (host, want) in [
+        ("claude-code", "medium"),
+        ("codex-app", "medium"),
+        ("grok-cli", "high"),
+    ] {
+        for extra in [&[][..], &["--trigger", trigger][..]] {
+            let host_seat = repo.resolved("orchestrate", host, "none", extra, true);
+            let chosen = &host_seat["participants"][0];
+            assert_eq!(chosen["participant"], "host", "{host}: {host_seat}");
+            assert_eq!(chosen["harness"], host, "{host}: {host_seat}");
+            assert_eq!(chosen["effort"], want, "{host} {extra:?}: {host_seat}");
+            // The highest-cost reasoning line never hosts or backs the
+            // orchestrating session, not even as a fallback (operator rule,
+            // 2026-11-01).
+            let mut lines = vec![chosen["line"].as_str().unwrap()];
+            for alternative in chosen["remaining_alternatives"].as_array().unwrap() {
+                lines.push(alternative["line"].as_str().unwrap());
+            }
+            assert!(!lines.contains(&"fable"), "{host} {extra:?}: {host_seat}");
+        }
+    }
 }

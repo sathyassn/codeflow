@@ -58,8 +58,10 @@ A project that wants one effort for everyone adds it to its shared files:
 (ADR-0056 and ADR-0087): a shared value gives every session someone starts by
 hand the same starting effort, and it replaces the effort of every
 contributor who prefers another, `xhigh` included. Without it, a person with
-no effort of their own gets the harness default, which may be lower than
-high. Ask before adding it, and add it only when the project chooses it.
+no effort of their own gets the harness default, which follows the vendor's
+recommendation for the model (medium on several current models). Seats
+CodeFlow launches pass the effort the ensemble resolves either way. Ask
+before adding it, and add it only when the project chooses it.
 
 ## What `codeflow update` does
 

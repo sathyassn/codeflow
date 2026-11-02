@@ -133,3 +133,10 @@ supersedes one clause of this record and no other.
   tasks of an epic, rides in the batched epic amendment with one
   other-lineage reviewer. The named other-lineage seat still reviews the
   actual unit, and the rest of this record stands.
+
+## Note of 2026-11-01: high defaults superseded
+
+[ADR-0095](ADR-0095-default-effort-follows-each-vendor-s-recommendat.md)
+supersedes the seat efforts above ("at high by default"). Each seat now
+starts at its model's vendor-recommended effort and rises to high only for
+a named need on that lane. The rest of this record stands.

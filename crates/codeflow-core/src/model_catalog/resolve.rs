@@ -314,7 +314,7 @@ impl Catalog {
         if !version.efforts.contains(&request.effort) {
             return Err("unsupported effort; never clamped".into());
         }
-        if request.effort < floor(request.duty, request.seat.is_some()) {
+        if request.effort < floor(request.duty) {
             return Err("effort below duty floor".into());
         }
         for exclusion in request.exclusions.iter().filter(|e| e.fresh_native) {
@@ -686,7 +686,11 @@ impl Catalog {
                     &family.harnesses[0]
                 }
             });
-            let effort = if seat.is_none()
+            // ADR-0095: a lane starts at its catalog default (the model's
+            // vendor default) and a named trigger raises that lane only; the
+            // orchestrating director or coordinator session is never raised
+            // by a trigger. A project binding keeps its bound effort.
+            let mut effort = if request.duty != "orchestrate"
                 && alternative.effort < Effort::High
                 && self
                     .high_triggers
@@ -697,6 +701,9 @@ impl Catalog {
             } else {
                 alternative.effort
             };
+            if let Some(bound) = seat.and_then(|s| self.bound_effort(&s.role, harness)) {
+                effort = effort.max(bound);
+            }
             for version in line.versions.iter().rev() {
                 if seat.is_none()
                     && line.adoption == Adoption::Manual
@@ -710,6 +717,26 @@ impl Catalog {
                         .push(format!("{} is serving the seat", version.id));
                     continue;
                 }
+                // ADR-0095: a seat starts at its bound model's default. A
+                // seat line that offers nothing at the route's effort starts
+                // at its own lowest effort above it (Fable offers only
+                // high); line and worker routes are never clamped. The
+                // orchestrating session is never raised, so a line without
+                // its effort (Fable) never hosts or backs it.
+                let effort = match seat {
+                    Some(_)
+                        if request.duty != "orchestrate" && !version.efforts.contains(&effort) =>
+                    {
+                        version
+                            .efforts
+                            .iter()
+                            .copied()
+                            .filter(|offered| *offered > effort)
+                            .min()
+                            .unwrap_or(effort)
+                    }
+                    _ => effort,
+                };
                 let eligibility_request = EligibilityRequest {
                     duty: request.duty,
                     line: &line.id,
@@ -783,6 +810,26 @@ impl Catalog {
                 .flat_map(|l| &l.versions)
                 .any(|v| v.pinned_id == *observed && v.lifecycle != Lifecycle::Active)
             && Self::check_native(version, family, request).is_ok()
+    }
+
+    /// The effort a project binding records for this seat role and harness,
+    /// kept as the seat's effort when it is above the catalog default.
+    fn bound_effort(&self, role: &str, harness: &str) -> Option<Effort> {
+        let selection = self.selection.as_ref()?;
+        selection
+            .bindings
+            .iter()
+            .filter(|entry| entry.role == role)
+            .filter_map(|entry| {
+                self.bindings
+                    .iter()
+                    .find(|record| record.binding_id == entry.binding_id)
+            })
+            .find(|record| record.requested.harness == harness)
+            .and_then(|record| {
+                serde_json::from_value(serde_json::Value::String(record.requested.effort.clone()))
+                    .ok()
+            })
     }
 
     fn serves_host_seat(&self, version: &Version, request: &ResolveRequest<'_>) -> bool {
@@ -901,9 +948,6 @@ impl Catalog {
         if route.effort != record.route.effort {
             return Err("OPERATOR_OVERRIDE effort mismatch".into());
         }
-        if route.effort < floor("design", true) {
-            return Err("OPERATOR_OVERRIDE effort below design duty floor".into());
-        }
         let harness = route
             .harness
             .as_deref()
@@ -933,7 +977,8 @@ impl Catalog {
         for line in lines {
             for version in line.versions.iter().rev() {
                 // The override changes the design line restriction only. Check
-                // ordinary seat authority after explicitly checking the design floor.
+                // ordinary seat authority; the version's effort list still
+                // refuses an effort the model does not offer.
                 let eligibility_request = EligibilityRequest {
                     duty: "orchestrate",
                     line: &line.id,
