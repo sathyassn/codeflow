@@ -316,6 +316,9 @@ fn run_ci_ranges(
             let running = policy.test_gate_on_push.to_string();
             let mut args = vec!["ci", "--base", &base, "--head", &r.local_sha];
             args.extend(["--branch", branch, "--run-level", &running]);
+            // A push is never a landing candidate: the hook judges a push to
+            // a line itself (`work.epic_line`), so CI does not judge it again.
+            args.extend(["--pushed-ref", &r.remote_ref]);
             // Range boundaries can be unnamed merge bases. Pass destination
             // intent separately so CI does not infer it from coincident refs.
             let into = ci_target(root, r, branch, &judged, destination, report)?;
