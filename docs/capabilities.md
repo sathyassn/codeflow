@@ -477,11 +477,10 @@ stated once, in `cf-model-orchestrator/resources/routing/transport.md`
 (ADR-0077): another family runs its own interactive CLI in a Herdr tab that
 `cf-herdr` hosts, Codex on its app-server; the Codex plugin is an optional
 fallback and tmux the last. Headless task execution is prohibited. Delegates
-edit only inside a worktree on a feature branch, under the same gates. A
-project can keep an untracked account profile that maps each family to a
-config home (never a token), every managed launch sets only that family's
-variable, and `codeflow models limits` shows each family's limit state where
-its CLI exposes one. Detail: [delegation](delegation.md).
+edit only inside a worktree on a feature branch, under the same gates. An
+untracked account profile can map each family to a config home, and
+`codeflow models limits` shows each family's limit state. Detail:
+[delegation](delegation.md).
 
 #### duo-model-orchestration
 
