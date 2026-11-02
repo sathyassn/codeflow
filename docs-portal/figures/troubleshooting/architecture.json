@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "Which check inspects which surface, and which checks can fail?",
-    "idea": "The twenty-five checks fall into six groups by the surface they read, and only eleven of them can fail; the other fourteen warn at most.",
-    "title": "The twenty-five checks, by what they read",
+    "idea": "The twenty-six checks fall into six groups by the surface they read, and only twelve of them can fail; the other fourteen warn at most.",
+    "title": "The twenty-six checks, by what they read",
     "kicker": "Doctor checks",
-    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
+    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
     "states": [
       {
         "name": "canfail",
@@ -23,12 +23,12 @@
     ],
     "facts": [
       {
-        "claim": "eleven checks can fail",
+        "claim": "twelve checks can fail",
         "source": "docs/troubleshooting.md#technical",
         "derive": "the fail sentence",
         "check": {
           "kind": "contains",
-          "text": "Eleven checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
+          "text": "Twelve checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
         },
         "value": true
       },
@@ -312,16 +312,33 @@
           ]
         },
         {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 371,
+          "cy": 167,
+          "r": 7,
+          "id": "g2c5"
+        },
+        {
+          "text": "secret-engine",
+          "x": 387,
+          "y": 172,
+          "style": "mono",
+          "for": [
+            "g2c5"
+          ]
+        },
+        {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 400,
+          "cx": 513,
           "cy": 167,
           "r": 7,
           "id": "g2c4"
         },
         {
           "text": "git-config-includes",
-          "x": 416,
+          "x": 529,
           "y": 172,
           "style": "mono",
           "for": [
@@ -840,6 +857,23 @@
           ]
         },
         {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 221,
+          "cy": 291,
+          "r": 7,
+          "id": "g2c5"
+        },
+        {
+          "text": "secret-engine",
+          "x": 235,
+          "y": 296,
+          "style": "mono",
+          "for": [
+            "g2c5"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
@@ -1089,7 +1123,7 @@
         ],
         [
           "Policy and config",
-          "`config`, `permissions`, `policy-source`, `adopter-fit`",
+          "`config`, `permissions`, `policy-source`, `secret-engine`, `adopter-fit`",
           "`git-config-includes`"
         ],
         [

@@ -236,6 +236,7 @@ fn every_emitted_git_rule_reads_its_own_level_key() {
     // sets (always-blocking, guard-only or a fixed warning).
     let fixed = [
         "git.secret_scan",
+        "git.secret_scan_engine",
         "git.path_policy",
         "git.ignored_files",
         "git.max_file_bytes",
