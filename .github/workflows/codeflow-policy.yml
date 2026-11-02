@@ -85,7 +85,10 @@ jobs:
           else
             dispatch_status=$?
             printf '%s\n' "$dispatch_output" >&2
-            if [[ "$dispatch_output" == *'HTTP 422: Unexpected inputs provided: ["build_sha"]'* ]]; then
+            # Only the complete supported error qualifies: gh exit status 1 and
+            # output that is exactly this one diagnostic, nothing before or after.
+            missing_input='^(could not create workflow dispatch event: )?HTTP 422: Unexpected inputs provided: \["build_sha"\]( \(https://api\.github\.com/[^[:space:]]*\))?$'
+            if [[ "$dispatch_status" -eq 1 && "$dispatch_output" =~ $missing_input ]]; then
               echo "::warning::Main does not yet accept build_sha; cache warming for $BUILD_SHA is unavailable. Readers rebuild on a miss."
               exit 0
             fi

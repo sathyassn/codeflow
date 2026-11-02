@@ -83,6 +83,12 @@ class PolicyCache(unittest.TestCase):
                 (1, 'HTTP 422: Validation Failed', False),
                 (1, 'HTTP 422: Unexpected inputs provided: ["other"]', False),
                 (1, 'HTTP 500: Unexpected inputs provided: ["build_sha"]', False),
+                (2, 'HTTP 403: Forbidden; diagnostic context: HTTP 422: Unexpected inputs provided: ["build_sha"]', False),
+                (1, 'HTTP 422: Unexpected inputs provided: ["build_sha"]\nHTTP 503: Service Unavailable', False),
+                (2, 'could not create workflow dispatch event: HTTP 422: Unexpected inputs provided: ["build_sha"]', False),
+                (127, 'HTTP 422: Unexpected inputs provided: ["build_sha"]', False),
+                (1, 'HTTP 422: Unexpected inputs provided: ["build_sha", "other"]', False),
+                (1, '', False),
             ):
                 with self.subTest(status=status, error=error):
                     env = dict(os.environ, PATH=f'{root}{os.pathsep}{os.environ["PATH"]}',
