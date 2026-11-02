@@ -1,0 +1,11 @@
+id = "TSK-1244"
+uid = "1e37b3f3-f401-4517-9c2c-04fe2ca78c85"
+kind = "TSK"
+title = "An agent can create a disposable sample repository through a sanctioned path"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T18:15:47Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
