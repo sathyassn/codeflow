@@ -771,6 +771,10 @@ fn another_records_description_passes_beside_diverged_copies() {
     let (code, text) = judged_other(&repo);
     assert!(!text.contains(FROZEN_BLOCK), "{text}");
     assert_eq!(code, 0, "{text}");
+    with_destination(&repo);
+    let (code, text) = push(repo.dir.path(), &["origin", "fix/tidy-records"]);
+    assert!(!text.contains("work.criteria_frozen"), "pre-push: {text}");
+    assert_eq!(code, 0, "pre-push: {text}");
 }
 
 /// AC-11 (issue #420): the same range still refuses when it changes the
