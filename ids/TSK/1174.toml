@@ -1,0 +1,11 @@
+id = "TSK-1174"
+uid = "ca4605a3-879f-43bc-ab57-d8719fee44c4"
+kind = "TSK"
+title = "A pull request summary opens with enough context for anyone to know what it is and why"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T04:27:52Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
