@@ -83,6 +83,24 @@ pub fn reserve(root: &Path, request: &Request) -> Result<Reservation, IdsError> 
     reserve_locked(&git, request)
 }
 
+/// Reserve locally without contacting the authority, for tracking-off creation.
+/// The durable local binding keeps the number occupied when tracking is enabled.
+///
+/// # Errors
+/// Returns registry, identity, inventory or write failures without issuing a record.
+pub fn reserve_local(root: &Path, request: &Request) -> Result<Reservation, IdsError> {
+    let git = Git::new(root);
+    let _lock = state::lock(&git)?;
+    let uid = request.uid.clone().unwrap_or_else(super::new_uid);
+    let issuer = git.user_email()?;
+    let standing = if git.has_remote(AUTHORITY)? {
+        Standing::Pending
+    } else {
+        Standing::Local
+    };
+    commit_local(&git, request, &uid, &issuer, standing, None)
+}
+
 fn reserve_locked(git: &Git, request: &Request) -> Result<Reservation, IdsError> {
     let uid = request.uid.clone().unwrap_or_else(super::new_uid);
     let issuer = match request.issuer.clone() {

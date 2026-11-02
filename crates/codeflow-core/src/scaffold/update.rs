@@ -460,6 +460,11 @@ fn update_writes(
             .push(shown!("diff written to {}", Shown::path(path)));
     }
 
+    report.notes.push(shown!(
+        "capability coverage: {}",
+        crate::capability::coverage::report(root)
+    ));
+
     Ok(report)
 }
 

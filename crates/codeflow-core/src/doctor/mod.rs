@@ -323,6 +323,7 @@ const CHECK_NAMES: &[&str] = &[
     "test-config",
     "id-registry",
     "adopter-fit",
+    "capabilities",
 ];
 
 /// Return the ordered list of all available check names.
@@ -363,7 +364,23 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("test-config", check_test_config);
     m.insert("id-registry", check_id_registry);
     m.insert("adopter-fit", check_adopter_fit);
+    m.insert("capabilities", check_capabilities);
     m
+}
+
+fn check_capabilities(opts: &Options) -> CheckResult {
+    let start = std::time::Instant::now();
+    let root = Path::new(&opts.project_dir);
+    let (status, message) = match crate::capability::load_capability_catalog(root) {
+        Ok(catalog) => (Status::Pass, crate::capability::coverage::line(&catalog)),
+        Err(error) => (Status::Fail, format!("coverage unavailable: {error}")),
+    };
+    CheckResult {
+        name: "capabilities".to_string(),
+        status,
+        message,
+        duration: start.elapsed(),
+    }
 }
 
 /// Run all checks concurrently and return results in canonical order.

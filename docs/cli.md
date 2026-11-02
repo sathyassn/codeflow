@@ -621,6 +621,37 @@ its remotes live, so a narrow fetch cannot hide work.
 | `present feedback --wait` | Exits 6 on timeout; 7 when the session closes with nothing pending |
 | `present update --expected-revision` | Exits 8 when another revision is current |
 
+### Create and inspect a capability
+
+Create a planned record with a stable UUID and the next available CAP number:
+
+```sh
+codeflow capability new catalog-search \
+  --summary "Agents can find capabilities by their stated promise" \
+  --area engine --audience agent
+```
+
+| Input | Requirement or default |
+|---|---|
+| `<name>` | Lowercase slug used in the filename. |
+| `--summary` | Required description of the capability. |
+| `--area` | Required area from the project's configuration. |
+| `--audience` | Required: `external`, `internal` or `agent`, repeated or comma-separated. |
+| `--kind` | Defaults to `functional`; `non-functional` requires `--quality` and `--measure`. |
+| New record | Starts as `planned` with `publish: false`; supplied facets are checked before reserving an id. |
+
+| Behavior | Meaning |
+|---|---|
+| Tracking enabled | Allocate through the shared id registry. |
+| Tracking disabled | Reserve locally without contacting the remote; enabling tracking later preserves that number. |
+| Existing records | Allocation counts legacy fences and folder records on visible branches and in the working tree. |
+| Inventory coverage | Complete only when vocabulary declares it complete and the catalog is nonempty. |
+| Evidence declarations | Count shipped records with an assessed stage and typed, non-gap references; this does not claim reference resolution or passing tests. |
+| Unassessed | Records without a stage, including legacy fences, or with `stage: unassessed`. |
+
+`init`, `update`, `orient`, `status` and `doctor --check capabilities` report
+inventory separately from evidence declarations.
+
 ### General exit behavior
 
 | Result | Exit |

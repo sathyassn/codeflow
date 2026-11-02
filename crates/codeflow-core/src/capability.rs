@@ -6,6 +6,9 @@
 //! the `validate --docs` referential-integrity lint, which needs line
 //! numbers for `file:line`-style messages.
 
+pub mod coverage;
+pub mod create;
+
 use serde::Deserialize;
 
 /// Legal capability status values (charter §5: planned → building →

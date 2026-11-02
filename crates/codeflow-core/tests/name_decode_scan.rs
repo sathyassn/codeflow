@@ -3058,14 +3058,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:guidance-words",
     ),
-    // Optional orientation summary only; unreadable input cannot authorize or route a command.
-    (
-        "crates/codeflow-core/src/hooks/orient.rs",
-        "capabilities_line",
-        "obtain-absent:read_to_string",
-        1,
-        "display",
-    ),
     // Optional hook-installation display only; actual hook enforcement obtains its own inputs.
     (
         "crates/codeflow-core/src/hooks/orient.rs",

@@ -12,11 +12,20 @@ pub enum Kind {
     Adr,
     /// An operator feedback item (`FB-NNN`).
     Fb,
+    /// A capability catalog record (`CAP-NNN`).
+    Cap,
 }
 
 impl Kind {
     /// Every kind, in registry order.
-    pub const ALL: [Kind; 5] = [Kind::Epc, Kind::Spc, Kind::Tsk, Kind::Adr, Kind::Fb];
+    pub const ALL: [Kind; 6] = [
+        Kind::Epc,
+        Kind::Spc,
+        Kind::Tsk,
+        Kind::Adr,
+        Kind::Fb,
+        Kind::Cap,
+    ];
 
     /// The id prefix and registry directory name.
     #[must_use]
@@ -27,6 +36,7 @@ impl Kind {
             Kind::Tsk => "TSK",
             Kind::Adr => "ADR",
             Kind::Fb => "FB",
+            Kind::Cap => "CAP",
         }
     }
 

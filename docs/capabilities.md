@@ -661,6 +661,8 @@ and browser matrix.
 Detail: [present architecture](architecture/present.md) and
 [present guide](present-guide.md).
 
+See [capability commands](cli.md#create-and-inspect-a-capability).
+
 ### Catalog record schema
 
 Records contain YAML frontmatter and Markdown prose, checked by `validate --docs`.
