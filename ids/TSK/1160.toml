@@ -1,0 +1,11 @@
+id = "TSK-1160"
+uid = "4f61c885-5f7b-46c3-a69b-8c88e8a183f5"
+kind = "TSK"
+title = "One shared navigation component with a spec and a browser test that every page build passes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T00:51:34Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
