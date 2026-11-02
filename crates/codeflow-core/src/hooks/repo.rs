@@ -904,6 +904,39 @@ fn small_marker(tree: &crate::contained::Tree, name: &str, what: &str) -> Result
         .map_err(|_| format!("{what} is not valid text"))
 }
 
+/// Whether the held directory is a git directory: a `HEAD` file and
+/// `objects` and `refs` folders, checked on the handle that is returned.
+fn require_repository(tree: &crate::contained::Tree) -> Result<(), String> {
+    if !tree.metadata("HEAD").is_ok_and(|m| m.is_file()) {
+        return Err("git directory has no `HEAD` file".into());
+    }
+    for folder in ["objects", "refs"] {
+        if !tree.metadata(folder).is_ok_and(|m| m.is_dir()) {
+            return Err(format!("git directory has no `{folder}` folder"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+type Interleave = Box<dyn FnMut(&str)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs at the named points inside [`shared_git_tree`] so a test can
+    /// swap a folder exactly there.
+    pub(crate) static INTERLEAVE: std::cell::RefCell<Option<Interleave>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn interleave(stage: &str) {
+    if let Some(mut hook) = INTERLEAVE.with(|slot| slot.borrow_mut().take()) {
+        hook(stage);
+        INTERLEAVE.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+}
+
 /// The tree that holds the shared config for the checkout holding
 /// `project_dir`, found without opening the repository (opening reads its
 /// config, which can block on a pipe in its place).
@@ -931,12 +964,18 @@ pub(crate) fn shared_git_tree(project_dir: &Path) -> Result<crate::contained::Tr
     use crate::contained::Tree;
     let found = Repository::discover_path(project_dir, [] as [&Path; 0])
         .map_err(|error| error.message().to_string())?;
+    #[cfg(test)]
+    interleave("before-admin");
     let admin =
         Tree::open(&found).map_err(|error| format!("cannot open git directory: {error}"))?;
     match admin.metadata("commondir") {
         Ok(_) => {}
-        // No commondir in the held directory: an ordinary git directory.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(admin),
+        // No commondir in the held directory: an ordinary git directory,
+        // which is accepted only when this handle itself holds a repository.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            require_repository(&admin)?;
+            return Ok(admin);
+        }
         Err(error) => return Err(format!("cannot inspect commondir: {error}")),
     }
     let named = small_marker(&admin, "commondir", "commondir")?;
@@ -951,16 +990,31 @@ pub(crate) fn shared_git_tree(project_dir: &Path) -> Result<crate::contained::Tr
     let physical = registrations
         .parent()
         .ok_or("worktree registration has no common directory")?;
+    let admin_name = admin
+        .path()
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or("worktree administrative directory has no usable name")?;
+    #[cfg(test)]
+    interleave("before-common");
     let common = Tree::open(&admin.path().join(&named))
         .map_err(|error| format!("cannot open common directory: {error}"))?;
     if common.path() != physical {
         return Err("worktree common directory disagrees with its registration".into());
     }
-    for folder in ["objects", "refs"] {
-        if !common.metadata(folder).is_ok_and(|m| m.is_dir()) {
-            return Err(format!("common directory has no `{folder}` folder"));
-        }
+    // The registration, found again beneath the common directory that was
+    // just opened, must be the very folder held as `admin`: a common
+    // directory swapped in after `admin` was opened holds a different one.
+    let registered_here = common
+        .subtree(&format!("worktrees/{admin_name}"))
+        .map_err(|error| format!("common directory does not hold the registration: {error}"))?;
+    if !registered_here
+        .same_directory(&admin)
+        .map_err(|error| format!("cannot compare the registration: {error}"))?
+    {
+        return Err("common directory holds a different registration than the one read".into());
     }
+    require_repository(&common)?;
     // The registration names the checkout's marker, and that marker names
     // this administrative directory.
     let registered = registered_marker_from(
@@ -987,11 +1041,19 @@ pub(crate) fn shared_git_tree(project_dir: &Path) -> Result<crate::contained::Tr
         .filter(|target| !target.is_empty())
         .ok_or("checkout marker does not name a git directory")?;
     let named = checkout.path().join(target);
+    #[cfg(test)]
+    interleave("before-checkout-target");
     let named = Tree::open(&named)
         .map_err(|error| format!("cannot open checkout git directory: {error}"))?;
-    if named.path() != admin.path() {
+    if named.path() != admin.path()
+        || !named
+            .same_directory(&admin)
+            .map_err(|error| format!("cannot compare the checkout marker's target: {error}"))?
+    {
         return Err("checkout marker names a different git directory".into());
     }
+    // The same objects must still be what the held common directory lists.
+    require_repository(&common)?;
     Ok(common)
 }
 

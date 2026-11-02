@@ -2814,30 +2814,170 @@ mod tests {
         assert!(moved.join("config").is_file());
     }
 
+    /// Replace the linked fixture's common directory with a look-alike that
+    /// has its own `worktrees/linked` registration for the same checkout.
+    #[cfg(unix)]
+    fn swap_common_directory(tmp: &std::path::Path) {
+        let common = tmp.join(".git");
+        let aside = tmp.join("git-original");
+        std::fs::rename(&common, &aside).unwrap();
+        let admin = common.join("worktrees").join("linked");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::create_dir(common.join("objects")).unwrap();
+        std::fs::create_dir(common.join("refs")).unwrap();
+        std::fs::write(common.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::copy(
+            aside.join("worktrees").join("linked").join("gitdir"),
+            admin.join("gitdir"),
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    fn interleave_at(stage: &'static str, action: impl Fn() + 'static) {
+        crate::hooks::repo::INTERLEAVE.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |at: &str| {
+                if at == stage {
+                    action();
+                }
+            }));
+        });
+    }
+
+    #[cfg(unix)]
+    fn no_interleave() {
+        crate::hooks::repo::INTERLEAVE.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    /// The common directory is replaced after the administrative directory
+    /// was opened and before the common directory is. The replacement's path
+    /// equals the stored one and it lists its own registration, but that is
+    /// not the folder held: refused, and nothing is created in it.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_refuses_a_common_directory_swapped_after_the_admin_opens() {
+        let (tmp, linked) = linked_fixture();
+        let root = tmp.path().to_path_buf();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = seen.clone();
+        interleave_at("before-common", move || {
+            swap_common_directory(&root);
+            *record.borrow_mut() = listing(&root.join(".git"));
+        });
+        let (_, result) = probe_git_config_write(&linked);
+        no_interleave();
+        let error = result.expect_err("a swapped common directory was accepted");
+        assert!(
+            error.to_string().contains("different registration"),
+            "{error}"
+        );
+        assert!(!seen.borrow().is_empty(), "the swap did not run");
+        assert_eq!(listing(&tmp.path().join(".git")), *seen.borrow());
+        assert!(!tmp.path().join(".git").join("config.lock").exists());
+    }
+
+    /// The same swap after the common directory was validated and before the
+    /// checkout marker's target is opened: that target is the replacement's
+    /// folder, not the held one.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_refuses_a_checkout_target_swapped_late() {
+        let (tmp, linked) = linked_fixture();
+        let root = tmp.path().to_path_buf();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = seen.clone();
+        interleave_at("before-checkout-target", move || {
+            swap_common_directory(&root);
+            *record.borrow_mut() = listing(&root.join(".git"));
+        });
+        let (_, result) = probe_git_config_write(&linked);
+        no_interleave();
+        let error = result.expect_err("a swapped checkout target was accepted");
+        assert!(
+            error.to_string().contains("different git directory"),
+            "{error}"
+        );
+        assert!(!seen.borrow().is_empty(), "the swap did not run");
+        assert_eq!(listing(&tmp.path().join(".git")), *seen.borrow());
+        assert!(!tmp.path().join(".git").join("config.lock").exists());
+    }
+
+    /// The discovered folder is replaced by one that is no repository, before
+    /// the first handle is taken: a linked worktree's administrative folder
+    /// and an ordinary git folder are both refused, with nothing created.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_refuses_a_folder_swapped_before_the_first_open() {
+        let (tmp, linked) = linked_fixture();
+        let admin = tmp.path().join(".git").join("worktrees").join("linked");
+        let root = tmp.path().to_path_buf();
+        let at = admin.clone();
+        interleave_at("before-admin", move || {
+            std::fs::rename(&at, root.join("admin-original")).unwrap();
+            std::fs::create_dir(&at).unwrap();
+            // A config file, so only the repository check can refuse it.
+            std::fs::write(at.join("config"), "").unwrap();
+        });
+        let (_, result) = probe_git_config_write(&linked);
+        no_interleave();
+        assert!(
+            result.is_err(),
+            "a swapped administrative folder was accepted"
+        );
+        assert_eq!(listing(&admin).len(), 1, "something was created in it");
+
+        let (tmp, git_dir) = config_fixture();
+        let root = tmp.path().to_path_buf();
+        let at = git_dir.clone();
+        interleave_at("before-admin", move || {
+            std::fs::rename(&at, root.join("git-original")).unwrap();
+            std::fs::create_dir(&at).unwrap();
+            // A config file, so only the repository check can refuse it.
+            std::fs::write(at.join("config"), "").unwrap();
+        });
+        let (_, result) = probe_git_config_write(tmp.path());
+        no_interleave();
+        assert!(result.is_err(), "a swapped git folder was accepted");
+        assert_eq!(listing(&git_dir).len(), 1, "something was created in it");
+    }
+
     /// A marker that is a pipe or a link when the probe reads it is refused
     /// without blocking: the read is one open that follows nothing.
     #[cfg(unix)]
     #[test]
     fn the_git_config_probe_refuses_a_marker_that_is_a_pipe_or_a_link() {
         for kind in ["pipe", "link"] {
-            for marker in ["commondir", "gitdir"] {
+            // The two registration files and the checkout's own `.git` marker.
+            for marker in ["commondir", "gitdir", "checkout .git"] {
                 let (tmp, linked) = linked_fixture();
                 let admin = tmp.path().join(".git").join("worktrees").join("linked");
-                let original = std::fs::read(admin.join(marker)).unwrap();
-                std::fs::remove_file(admin.join(marker)).unwrap();
+                let file = if marker == "checkout .git" {
+                    linked.join(".git")
+                } else {
+                    admin.join(marker)
+                };
+                let original = std::fs::read(&file).unwrap();
+                std::fs::remove_file(&file).unwrap();
                 if kind == "pipe" {
-                    let path =
-                        std::ffi::CString::new(admin.join(marker).to_str().unwrap()).unwrap();
+                    let path = std::ffi::CString::new(file.to_str().unwrap()).unwrap();
                     // SAFETY: a valid NUL-terminated path.
                     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
                 } else {
                     let target = tmp.path().join("real-marker");
                     std::fs::write(&target, original).unwrap();
-                    std::os::unix::fs::symlink(&target, admin.join(marker)).unwrap();
+                    std::os::unix::fs::symlink(&target, &file).unwrap();
                 }
                 let before = listing(tmp.path());
                 let result = probe_with_deadline(&linked);
-                assert!(result.is_err(), "{kind} {marker} was accepted");
+                // Git discovery steps over a pipe that stands where a
+                // checkout's `.git` should be and finds the enclosing
+                // repository, which is then measured on its own terms; every
+                // other case is refused. None blocks or leaves a file.
+                if !(kind == "pipe" && marker == "checkout .git") {
+                    assert!(result.is_err(), "{kind} {marker} was accepted");
+                }
                 assert_eq!(listing(tmp.path()), before, "{kind} {marker}");
             }
         }

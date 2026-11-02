@@ -136,6 +136,37 @@ impl Tree {
         Ok(Self { path, anchor })
     }
 
+    /// Hold the folder `relative` beneath this root, entered by no-follow
+    /// steps from the held handle, so its identity is the object found there
+    /// now and not a path resolved again later.
+    ///
+    /// # Errors
+    ///
+    /// When a component is a link, missing, or not a folder.
+    pub(crate) fn subtree(&self, relative: &str) -> io::Result<Self> {
+        let path = checked(relative)?;
+        let directory = self.explained(relative, || self.walk(path, false))?;
+        Ok(Self {
+            path: self.path.join(path),
+            anchor: ConfinedRoot::from_directory(directory),
+        })
+    }
+
+    /// Whether both trees are the same folder object, by the identity of the
+    /// held handles. Where the platform gives no handle identity here, by
+    /// the canonical paths, which held Windows handles keep from being
+    /// renamed.
+    ///
+    /// # Errors
+    ///
+    /// When a handle cannot be inspected.
+    pub(crate) fn same_directory(&self, other: &Self) -> io::Result<bool> {
+        Ok(self
+            .anchor
+            .same_object(&other.anchor)?
+            .unwrap_or_else(|| self.path == other.path))
+    }
+
     /// The canonical root.
     pub(crate) fn path(&self) -> &Path {
         &self.path
