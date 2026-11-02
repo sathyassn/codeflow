@@ -1,0 +1,11 @@
+id = "TSK-1194"
+uid = "ac26a52e-bc71-4cf5-9271-56efc60ff83a"
+kind = "TSK"
+title = "The docs portal builds a product site with a features home, feature captures and developer docs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-02T17:09:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
