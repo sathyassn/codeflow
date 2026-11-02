@@ -268,6 +268,24 @@ pub fn frontmatter_value(text: &str, key: &str) -> Option<String> {
     None
 }
 
+/// Read the UID bound to a CAP number from its registry blob.
+///
+/// The caller supplies the bytes of `ids/CAP/<N>.toml` from its chosen
+/// registry revision. This validates the complete entry, including its id,
+/// kind and UID; it does not fetch refs or certify append-only history.
+///
+/// # Errors
+/// Returns [`super::IdsError::Invalid`] for non-UTF-8 bytes and
+/// [`super::IdsError::Damaged`] for malformed or mismatched entries.
+pub fn capability_uid_from_blob(number: u64, blob: &[u8]) -> Result<String, super::IdsError> {
+    let path = RegId::canonical(Kind::Cap, number).registry_path();
+    let text = std::str::from_utf8(blob)
+        .map_err(|error| super::IdsError::Invalid(format!("{path} is not valid UTF-8: {error}")))?;
+    Entry::parse(&path, text)
+        .map(|entry| entry.uid)
+        .map_err(super::IdsError::Damaged)
+}
+
 /// One registry file (SPC-013 Interfaces). Every field is required.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -533,6 +551,36 @@ mod tests {
         assert!(problems[0].contains("expected TSK-101"), "{problems:?}");
         let problems = Entry::parse("ids/TSK/100.toml", "id = \"TSK-100\"\n").unwrap_err();
         assert!(problems.iter().any(|p| p.contains("lacks field uid")));
+    }
+
+    #[test]
+    fn capability_binding_lookup_validates_the_blob_and_number() {
+        let uid = new_uid();
+        let entry = Entry::issued(
+            RegId::canonical(Kind::Cap, 17),
+            uid.clone(),
+            "Catalog binding",
+            "catalog@example.test",
+            "none",
+        );
+        let blob = entry.render();
+        assert_eq!(capability_uid_from_blob(17, blob.as_bytes()).unwrap(), uid);
+        for bytes in [
+            blob.replace("CAP-017", "CAP-018").into_bytes(),
+            blob.replace("CAP", "TSK").into_bytes(),
+            blob.replace(&uid, "invalid-uid").into_bytes(),
+            b"not valid toml".to_vec(),
+            Vec::new(),
+        ] {
+            assert!(matches!(
+                capability_uid_from_blob(17, &bytes),
+                Err(super::super::IdsError::Damaged(_))
+            ));
+        }
+        assert!(matches!(
+            capability_uid_from_blob(17, &[0xff]),
+            Err(super::super::IdsError::Invalid(_))
+        ));
     }
 
     #[test]
