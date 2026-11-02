@@ -26,7 +26,7 @@
   --hover: rgb(0 0 0 / .045); --pressed: rgb(0 0 0 / .08);
   --text: #1c1c1c; --text-2: #545454; --text-3: #676767; --line: #e1e1e1; --line-2: #c4c4c4;
   --ok: #2b7149; --ok-wash: #e2f0e6; --warn: #9a5c00; --warn-mark: #b07000; --warn-wash: #f6ebd4; --danger: #a8203c; --danger-wash: #f8e2df;
-  --fig-ink: #2a2a2a; --fig-ink-2: #6a6a6a; --fig-ink-3: #a3a3a3; --fig-fill: #e8e8e8; --fig-hatch: #c4c4c4; --fig-outline: #858585;
+  --fig-ink: #2a2a2a; --fig-ink-2: #6a6a6a; --fig-ink-3: #a3a3a3; --fig-fill: #e8e8e8; --fig-hatch: #c4c4c4; --fig-outline: #858585; --stage-todo: #8a8a8a;
   --series-1: #a86400; --series-2: #8a3a86; --series-3: #2f7a4f; --series-other: #8a8a8a;
   --accent: #12766e; --accent-hover: #0f635c; --accent-ink: #0f6a62; --accent-wash: #d9eeeb; --accent-wash-2: #bfe1dc; --on-accent: #f6fbfa; --focus: #12766e;
 }
@@ -36,7 +36,7 @@
   --hover: rgb(255 255 255 / .06); --pressed: rgb(255 255 255 / .1);
   --text: #ececec; --text-2: #a9a9a9; --text-3: #8f8f8f; --line: #2e2e2e; --line-2: #474747;
   --ok: #5fb573; --ok-wash: #1d3325; --warn: #dca83a; --warn-mark: #dca83a; --warn-wash: #3a2d14; --danger: #f0788a; --danger-wash: #3f2220;
-  --fig-ink: #dcdcdc; --fig-ink-2: #9e9e9e; --fig-ink-3: #666666; --fig-fill: #2c2c2c; --fig-hatch: #4a4a4a; --fig-outline: #7e7e7e;
+  --fig-ink: #dcdcdc; --fig-ink-2: #9e9e9e; --fig-ink-3: #666666; --fig-fill: #2c2c2c; --fig-hatch: #4a4a4a; --fig-outline: #7e7e7e; --stage-todo: #7a7a7a;
   --series-1: #bf8318; --series-2: #ad74b8; --series-3: #4fa460; --series-other: #8a8a8a;
   --accent: #63cbbf; --accent-hover: #7ad8cd; --accent-ink: #6fd2c6; --accent-wash: #1d3b37; --accent-wash-2: #244c46; --on-accent: #10201d; --focus: #63cbbf;
   --shadow-1: 0 1px 2px rgb(0 0 0 / .4), 0 0 0 1px var(--line); --shadow-2: 0 16px 40px -14px rgb(0 0 0 / .7), 0 0 0 1px var(--line-2); }
@@ -46,23 +46,25 @@
   --hover: rgb(255 255 255 / .06); --pressed: rgb(255 255 255 / .1);
   --text: #ececec; --text-2: #a9a9a9; --text-3: #8f8f8f; --line: #2e2e2e; --line-2: #474747;
   --ok: #5fb573; --ok-wash: #1d3325; --warn: #dca83a; --warn-mark: #dca83a; --warn-wash: #3a2d14; --danger: #f0788a; --danger-wash: #3f2220;
-  --fig-ink: #dcdcdc; --fig-ink-2: #9e9e9e; --fig-ink-3: #666666; --fig-fill: #2c2c2c; --fig-hatch: #4a4a4a; --fig-outline: #7e7e7e;
+  --fig-ink: #dcdcdc; --fig-ink-2: #9e9e9e; --fig-ink-3: #666666; --fig-fill: #2c2c2c; --fig-hatch: #4a4a4a; --fig-outline: #7e7e7e; --stage-todo: #7a7a7a;
   --series-1: #bf8318; --series-2: #ad74b8; --series-3: #4fa460; --series-other: #8a8a8a;
   --accent: #63cbbf; --accent-hover: #7ad8cd; --accent-ink: #6fd2c6; --accent-wash: #1d3b37; --accent-wash-2: #244c46; --on-accent: #10201d; --focus: #63cbbf;
   --shadow-1: 0 1px 2px rgb(0 0 0 / .4), 0 0 0 1px var(--line); --shadow-2: 0 16px 40px -14px rgb(0 0 0 / .7), 0 0 0 1px var(--line-2); }
 :root[data-mode="dark"][data-accent="plum"] { --accent: #c38ac2; --accent-hover: #d09fcf; --accent-ink: #cf9bce; --accent-wash: #3b2639; --accent-wash-2: #4d304b; --on-accent: #171717; --focus: #c38ac2; }
 
-/* ---- Slate and Sage: few, tasteful alternates, each with curated accents ------------------------ */
-:root[data-theme="slate"] { --ground: #eef1f5; --surface: #f6f8fb; --raised: #fbfcfd; --overlay: #fbfcfd; --sunken: #e3e8ee; --text: #182029; --text-2: #52606f; --text-3: #5e6b77; --line: #d9dfe7; --line-2: #b9c3cf; --fig-ink: #2a3340; --fig-ink-2: #65727f; --fig-ink-3: #a0abb6; --fig-fill: #e3e8ee; --fig-hatch: #b9c3cf; --fig-outline: #7d8894;
-  --accent: #4f5fd0; --accent-hover: #4250b9; --accent-ink: #3f4db2; --accent-wash: #e4e7f8; --accent-wash-2: #d2d7f3; --focus: #4f5fd0; }
+/* ---- Slate and Sage: few, tasteful alternates. The operator decided on 2026-11-02 (15:3x EST) that the deep green
+   #12766e light / #63cbbf dark is the main accent in every theme; the second accent is plum for Graphite and Sage and
+   violet for Slate. The alternate themes change only their greys. ------------------------------------------------ */
+:root[data-theme="slate"] { --ground: #eef1f5; --surface: #f6f8fb; --raised: #fbfcfd; --overlay: #fbfcfd; --sunken: #e3e8ee; --text: #182029; --text-2: #52606f; --text-3: #5e6b77; --line: #d9dfe7; --line-2: #b9c3cf; --fig-ink: #2a3340; --fig-ink-2: #65727f; --fig-ink-3: #a0abb6; --fig-fill: #e3e8ee; --fig-hatch: #b9c3cf; --fig-outline: #7d8894; --stage-todo: #86909a;
+  --accent: #12766e; --accent-hover: #0f635c; --accent-ink: #0f6a62; --accent-wash: #dbeeeb; --accent-wash-2: #c3e1dc; --focus: #12766e; }
 :root[data-theme="slate"][data-accent="violet"] { --accent: #7a4fc9; --accent-hover: #6941b0; --accent-ink: #6a43ad; --accent-wash: #ece4f8; --accent-wash-2: #ded0f3; --focus: #7a4fc9; }
-:root[data-theme="sage"] { --ground: #f1f3ee; --surface: #f8f9f6; --raised: #fcfcfa; --overlay: #fcfcfa; --sunken: #e6eae2; --text: #1b211c; --text-2: #55605a; --text-3: #606b64; --line: #dde2d9; --line-2: #bcc5b9; --fig-ink: #2d352f; --fig-ink-2: #687269; --fig-ink-3: #a1aba3; --fig-fill: #e6eae2; --fig-hatch: #bcc5b9; --fig-outline: #7d887f;
-  --accent: #3f7a5b; --accent-hover: #35674d; --accent-ink: #32634a; --accent-wash: #e0ece4; --accent-wash-2: #cfe1d5; --focus: #3f7a5b; }
+:root[data-theme="sage"] { --ground: #f1f3ee; --surface: #f8f9f6; --raised: #fcfcfa; --overlay: #fcfcfa; --sunken: #e6eae2; --text: #1b211c; --text-2: #55605a; --text-3: #606b64; --line: #dde2d9; --line-2: #bcc5b9; --fig-ink: #2d352f; --fig-ink-2: #687269; --fig-ink-3: #a1aba3; --fig-fill: #e6eae2; --fig-hatch: #bcc5b9; --fig-outline: #7d887f; --stage-todo: #828b84;
+  --accent: #12766e; --accent-hover: #0f635c; --accent-ink: #0f6a62; --accent-wash: #dbeeeb; --accent-wash-2: #c3e1dc; --focus: #12766e; }
 :root[data-theme="sage"][data-accent="plum"] { --accent: #8a3a86; --accent-hover: #74306f; --accent-ink: #7a3276; --accent-wash: #f1e2f0; --accent-wash-2: #e6cfe4; --focus: #8a3a86; }
-:root[data-mode="dark"][data-theme="slate"], :root:not([data-mode="light"])[data-theme="slate"].sys-dark { --ground: #12171d; --surface: #1a2028; --raised: #222a34; --overlay: #262e39; --sunken: #0e1216; --text: #e5ebf2; --text-2: #9ca8b6; --text-3: #86929f; --line: #2a323d; --line-2: #3f4956; --fig-ink: #d5dde6; --fig-ink-2: #97a3b1; --fig-ink-3: #5f6a77; --fig-fill: #262e39; --fig-hatch: #3f4956; --fig-outline: #7f8b98;
-  --accent: #8f9bf0; --accent-hover: #a2acf4; --accent-ink: #a6b0f5; --accent-wash: #272c4b; --accent-wash-2: #333a66; --on-accent: #12171d; --focus: #8f9bf0; }
-:root[data-mode="dark"][data-theme="sage"], :root:not([data-mode="light"])[data-theme="sage"].sys-dark { --ground: #151a16; --surface: #1c221d; --raised: #242b26; --overlay: #28302a; --sunken: #101410; --text: #e6ebe7; --text-2: #9faba3; --text-3: #89968d; --line: #2b332d; --line-2: #434d47; --fig-ink: #d6ddd8; --fig-ink-2: #98a49b; --fig-ink-3: #5f6a62; --fig-fill: #29312c; --fig-hatch: #434d47; --fig-outline: #7f8a81;
-  --accent: #7fbf9a; --accent-hover: #95ccab; --accent-ink: #94cbab; --accent-wash: #203429; --accent-wash-2: #2a4536; --on-accent: #151a16; --focus: #7fbf9a; }
+:root[data-mode="dark"][data-theme="slate"], :root:not([data-mode="light"])[data-theme="slate"].sys-dark { --ground: #12171d; --surface: #1a2028; --raised: #222a34; --overlay: #262e39; --sunken: #0e1216; --text: #e5ebf2; --text-2: #9ca8b6; --text-3: #86929f; --line: #2a323d; --line-2: #3f4956; --fig-ink: #d5dde6; --fig-ink-2: #97a3b1; --fig-ink-3: #5f6a77; --fig-fill: #262e39; --fig-hatch: #3f4956; --fig-outline: #7f8b98; --stage-todo: #7a848f;
+  --accent: #63cbbf; --accent-hover: #7ad8cd; --accent-ink: #6fd2c6; --accent-wash: #1d3b3a; --accent-wash-2: #244c49; --on-accent: #12171d; --focus: #63cbbf; }
+:root[data-mode="dark"][data-theme="sage"], :root:not([data-mode="light"])[data-theme="sage"].sys-dark { --ground: #151a16; --surface: #1c221d; --raised: #242b26; --overlay: #28302a; --sunken: #101410; --text: #e6ebe7; --text-2: #9faba3; --text-3: #89968d; --line: #2b332d; --line-2: #434d47; --fig-ink: #d6ddd8; --fig-ink-2: #98a49b; --fig-ink-3: #5f6a62; --fig-fill: #29312c; --fig-hatch: #434d47; --fig-outline: #7f8a81; --stage-todo: #7a847c;
+  --accent: #63cbbf; --accent-hover: #7ad8cd; --accent-ink: #6fd2c6; --accent-wash: #1d3b37; --accent-wash-2: #244c46; --on-accent: #151a16; --focus: #63cbbf; }
 
 /* Dark values of the alternate accents, after the dark theme rules so they win the cascade */
 :root[data-mode="dark"][data-theme="slate"][data-accent="violet"], :root:not([data-mode="light"])[data-theme="slate"].sys-dark[data-accent="violet"] { --accent: #b39af0; --accent-hover: #c2adf4; --accent-ink: #bfa8f5; --accent-wash: #322a4d; --accent-wash-2: #413666; --on-accent: #12171d; --focus: #b39af0; }
@@ -155,7 +157,7 @@ kbd { font: 500 var(--fs-0)/1 var(--mono); padding: 2px 5px; border-radius: 4px;
   .nav-scrim { display: block; position: fixed; inset: var(--bar-h) 0 0 0; z-index: 44; background: rgb(0 0 0 / .38); opacity: 0; visibility: hidden; transition: opacity var(--dur-3) var(--ease), visibility 0s linear var(--dur-3); }
   .shell[data-drawer="open"] .nav-scrim { opacity: 1; visibility: visible; transition-delay: 0s; }
   .grip { display: none !important; }
-  .main { padding: 20px 16px 56px; }
+  .main { padding: 20px 16px 96px; }
 }
 
 /* ---- Views and transitions ----------------------------------------------------------------- */
@@ -176,7 +178,7 @@ kbd { font: 500 var(--fs-0)/1 var(--mono); padding: 2px 5px; border-radius: 4px;
 .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 20px 0 24px; overflow-x: auto; scrollbar-width: none; }
 .tab { position: relative; flex: none; height: 38px; padding: 0 12px; border: 0; background: none; color: var(--text-2); font-size: var(--fs-2); font-weight: 500; cursor: pointer; white-space: nowrap; }
-.tab:hover { color: var(--text); } .tab[aria-selected="true"] { color: var(--text); }
+.tab:hover { color: var(--text); } .tab[aria-selected="true"] { color: var(--text); } .view h2[tabindex="-1"]:focus { outline: none; } .view h2[tabindex="-1"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
 .tab::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: var(--accent); border-radius: 2px; transform: scaleX(0); opacity: 0; transition: transform var(--dur-2) var(--ease), opacity var(--dur-2) var(--ease); }
 .tab[aria-selected="true"]::after { transform: none; opacity: 1; }
 
@@ -199,10 +201,11 @@ kbd { font: 500 var(--fs-0)/1 var(--mono); padding: 2px 5px; border-radius: 4px;
 /* Visual table: rows as a grid with marks, no prose cells */
 .vt { display: grid; gap: 1px; background: var(--line); border-radius: var(--r-2); overflow: hidden; box-shadow: var(--shadow-1); font-size: var(--fs-1); }
 .vt > div { display: grid; grid-template-columns: var(--vt-cols, 1fr 1fr); gap: 12px; align-items: center; padding: 9px 14px; background: var(--surface); min-height: 40px; }
-.vt > .vt-head { background: var(--sunken); color: var(--text-3); font-size: var(--fs-0); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; min-height: 32px; }
+.vt > .vt-head { background: var(--sunken); color: var(--text-2); font-size: var(--fs-0); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; min-height: 32px; }
 .vt .mono { color: var(--text); font-family: var(--font); font-weight: 600; } .vt .mute { color: var(--text-2); }
-.vt .cell-bar { display: flex; align-items: center; gap: 8px; } .vt .cell-bar .track { flex: 1; height: 8px; border-radius: 4px; background: var(--fig-fill); overflow: hidden; } .vt .cell-bar .fill { height: 100%; background: var(--accent); border-radius: 4px; } .vt .cell-bar .n { font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; color: var(--text-2); }
-@media (max-width: 640px) { .vt > div { grid-template-columns: 1fr !important; gap: 4px; } .vt > .vt-head { display: none; } }
+.vt .cell-bar { display: flex; align-items: center; gap: 8px; } .vt .cell-bar .track { flex: 1; height: 8px; border-radius: 4px; background: var(--stage-todo); overflow: hidden; } .vt .cell-bar .fill { height: 100%; background: var(--accent); border-radius: 4px; } .vt .cell-bar .n { font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; color: var(--text-2); }
+@media (max-width: 640px) { .vt > div { grid-template-columns: 1fr !important; gap: 4px; } .vt > .vt-head { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; min-height: 0; padding: 0; }
+  .vt > div > [data-l]:not([data-l=""])::before { content: attr(data-l) ": "; color: var(--text-2); font-size: var(--fs-0); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin-right: 4px; } }
 /* Steps dots */
 .steps { display: inline-flex; gap: 5px; align-items: center; vertical-align: middle; } .steps i { width: 10px; height: 10px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--fig-ink-3); } .steps i.done { background: var(--accent); box-shadow: none; } .steps i.now { box-shadow: inset 0 0 0 2.5px var(--accent); }
 
@@ -219,7 +222,7 @@ kbd { font: 500 var(--fs-0)/1 var(--mono); padding: 2px 5px; border-radius: 4px;
 .fig .acc-path { stroke: var(--accent); fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; } .fig .acc-fill { fill: var(--accent); } .fig .acc-wash { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.4; } .fig .acc-dash { stroke: var(--accent); fill: none; stroke-width: 2; stroke-dasharray: 4 4; stroke-linecap: round; }
 .fig .node { fill: var(--raised); stroke: var(--fig-ink); stroke-width: 1.5; } .fig .node-soft { fill: var(--fig-fill); stroke: var(--fig-ink-2); stroke-width: 1.2; } .fig .person { fill: var(--text); } .fig .stopbar { stroke: var(--danger); stroke-width: 3.5; stroke-linecap: round; } .fig .fill { fill: var(--fig-fill); } .fig .hatch { fill: url(#hatch); } .fig .cross { stroke: var(--danger); stroke-width: 2; stroke-linecap: round; }
 .fig .layer { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.2; } .fig .layer-op { fill: var(--text); } .fig .layer-cond { fill: none; stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 4 3; }
-:is(.fig,.marks) .ok-fill { fill: var(--ok); } :is(.fig,.marks) .danger-fill { fill: var(--danger); } :is(.fig,.marks) .st-main { fill: var(--text); } :is(.fig,.marks) .st-line { fill: var(--accent); } :is(.fig,.marks) .st-pr { fill: var(--fig-pr); stroke: var(--accent); stroke-width: 1.2; } :is(.fig,.marks) .st-todo { fill: var(--fig-fill); stroke: var(--fig-outline); stroke-width: 1.2; } :is(.fig,.marks) .warn-fill { fill: var(--warn-mark); } :is(.fig,.marks) .unk-ring { fill: none; stroke: var(--fig-outline); stroke-width: 1.6; } :is(.fig,.marks) .st-block { fill: var(--danger); }
+:is(.fig,.marks) .ok-fill { fill: var(--ok); } :is(.fig,.marks) .danger-fill { fill: var(--danger); } :is(.fig,.marks) .st-main { fill: var(--text); } :is(.fig,.marks) .st-line { fill: var(--accent); } :is(.fig,.marks) .st-pr { fill: var(--fig-pr); stroke: var(--accent); stroke-width: 1.2; } :is(.fig,.marks) .st-todo { fill: var(--stage-todo); stroke: var(--stage-todo); stroke-width: 1.2; } :is(.fig,.marks) .warn-fill { fill: var(--warn-mark); } :is(.fig,.marks) .unk-ring { fill: none; stroke: var(--fig-outline); stroke-width: 1.6; } :is(.fig,.marks) .st-block { fill: var(--danger); }
 .fig .hit { fill: transparent; stroke: transparent; stroke-width: 14; }
 .fig .ok-ink { stroke: var(--ok); } .fig .series-1 { fill: var(--series-1); } .fig .series-2 { fill: var(--series-2); } .fig .series-3 { fill: var(--series-3); }
 

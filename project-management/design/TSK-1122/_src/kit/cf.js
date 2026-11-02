@@ -3,7 +3,7 @@
 (() => {
   const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const root = document.documentElement, store = { get: k => { try { return localStorage.getItem('cf4.' + k); } catch { return null; } }, set: (k, v) => { try { v == null ? localStorage.removeItem('cf4.' + k) : localStorage.setItem('cf4.' + k, v); } catch {} } };
-  const ACCENTS = { graphite: ['green', 'plum'], slate: ['indigo', 'violet'], sage: ['sage', 'plum'] };
+  const ACCENTS = { graphite: ['green', 'plum'], slate: ['green', 'violet'], sage: ['green', 'plum'] }; // the operator's 2026-11-02 decision: deep green first in every theme
   const prefs = { mode: store.get('mode') || 'system', theme: store.get('theme') || 'graphite', accent: store.get('accent') || '', size: store.get('size') || 'default' };
   const sysDark = matchMedia('(prefers-color-scheme: dark)');
   function applyPrefs() {
@@ -42,7 +42,7 @@
       + '<span class="kicker">Themes</span>' + pills('theme', [['graphite', 'Graphite'], ['slate', 'Slate'], ['sage', 'Sage']])
       + '<span class="kicker">Accent</span><div class="pills" data-accent-pills aria-label="Theme accent"></div>'
       + '<span class="kicker">Text size</span>' + pills('size', [['default', 'Default'], ['large', 'Large']]);
-    sh.after(pop);
+    bar.after(pop); // right after the bar in the tab sequence, so the gear, the dialog and the page follow each other
     if (!$('.toast')) { const t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); t.setAttribute('aria-live', 'polite'); document.body.appendChild(t); }
     if ($('.rail') || sh.hasAttribute('data-comments')) {
       const c = document.createElement('button'); c.className = 'btn comment-btn'; c.type = 'button'; c.setAttribute('data-comment-toggle', ''); c.setAttribute('aria-pressed', 'false'); c.title = 'Comment (C)'; c.textContent = 'Comment';
@@ -111,7 +111,11 @@
     });
     shell.classList.add('no-anim'); shell.dataset.menu = state; sync(); requestAnimationFrame(() => requestAnimationFrame(() => shell.classList.remove('no-anim')));
     const setMenu = s => { state = s === 'rail' || s === 'hidden' ? 'rail' : 'full'; store.set('nav', state); closePeek(true); shell.dataset.menu = state; sync(); if (state === 'rail' && toggle && (menu.contains(document.activeElement) || document.activeElement === document.body || !document.activeElement)) toggle.focus(); };
-    const setDrawer = open => { if (open) shell.dataset.drawer = 'open'; else delete shell.dataset.drawer; sync(); if (open) { const r = $('.row', areaOf(sel)); if (r) setTimeout(() => r.focus({ preventScroll: true }), 30); } };
+    const main = $('.main', shell), cbtnEl = () => $('[data-comment-toggle]');
+    const setDrawer = open => { const was = shell.dataset.drawer === 'open'; if (open) shell.dataset.drawer = 'open'; else delete shell.dataset.drawer; sync();
+      // the drawer behaves as a modal: the page behind it is inert while it is open, and focus returns to the toggle on close
+      if (main) main.toggleAttribute('inert', !!open); const cb = cbtnEl(); if (cb) cb.toggleAttribute('inert', !!open);
+      if (open) { const r = $('.row', areaOf(sel)); if (r) setTimeout(() => r.focus({ preventScroll: true }), 30); } else if (was && toggle && (!document.activeElement || document.activeElement === document.body || menu.contains(document.activeElement) || rail.contains(document.activeElement))) toggle.focus(); };
     const doToggle = () => { if (narrow()) setDrawer(shell.dataset.drawer !== 'open'); else setMenu(state === 'rail' ? 'full' : 'rail'); };
     if (toggle) toggle.addEventListener('click', doToggle);
     document.addEventListener('keydown', e => {
@@ -119,6 +123,10 @@
       if (e.key === '[' && !e.metaKey && !e.ctrlKey && !e.altKey && !/input|textarea|select/i.test(e.target.tagName) && !e.target.isContentEditable) doToggle();
       if (e.key === 'Escape' && shell.dataset.peek === 'open') closePeek();
       if (e.key === 'Escape' && shell.dataset.drawer === 'open') { setDrawer(false); if (toggle) toggle.focus(); }
+      if (e.key === 'Tab' && shell.dataset.drawer === 'open') { // keep focus inside the drawer (rail and menu) while it is open
+        const f = [...rail.querySelectorAll('button:not([inert])'), ...menu.querySelectorAll('a, button, [tabindex="0"]')].filter(x => x.offsetParent !== null || x.getClientRects().length);
+        if (!f.length) return; const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); } else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); } else if (!rail.contains(document.activeElement) && !menu.contains(document.activeElement)) { first.focus(); e.preventDefault(); } }
     });
     menu.addEventListener('click', e => { const r = e.target.closest('a.row, button.row, [data-view-link]'); if (!r) return; if (shell.dataset.peek === 'open') { select(menu.dataset.area); closePeek(true); } if (narrow()) setDrawer(false); });
     scrim.addEventListener('click', () => setDrawer(false));
@@ -154,12 +162,13 @@
   /* Views (menu rows and tabs) with a leave then enter transition; hash routing only to real views */
   const views = $$('.view'); let current = views.find(v => v.classList.contains('is-active')) || views[0] || null;
   const isView = el => !!el && el.classList.contains('view');
-  function show(id, push = true) {
+  function show(id, push = true, focus = push) {
     const next = document.getElementById(id); if (!isView(next) || next === current) return;
     const dur = parseFloat(getComputedStyle(root).getPropertyValue('--dur-1')) || 0;
     const prev = current; current = next;
     if (prev) { prev.classList.remove('is-active'); prev.classList.add('is-leaving'); }
-    setTimeout(() => { if (prev) prev.classList.remove('is-leaving'); next.classList.add('is-active'); window.scrollTo({ top: 0, behavior: 'instant' }); }, prev ? dur : 0);
+    setTimeout(() => { if (prev) prev.classList.remove('is-leaving'); next.classList.add('is-active'); window.scrollTo({ top: 0, behavior: 'instant' });
+      if (focus) { const h = next.querySelector('h1, h2'); if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); } } }, prev ? dur : 0);
     $$('[data-view-link]').forEach(a => { const on = a.dataset.viewLink === id; a.getAttribute('role') === 'tab' ? a.setAttribute('aria-selected', String(on)) : (on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')); });
     const crumb = $('.bar .crumb span[data-crumb]'); if (crumb) crumb.textContent = next.dataset.title || '';
     if (push) history.replaceState(null, '', '#' + id);
@@ -167,12 +176,17 @@
   }
   document.addEventListener('click', e => { const a = e.target.closest('[data-view-link]'); if (!a) return; e.preventDefault(); show(a.dataset.viewLink); });
   const hashTarget = location.hash ? document.getElementById(location.hash.slice(1)) : null;
-  if (isView(hashTarget)) show(hashTarget.id, false); else if (current) $$('[data-view-link]').forEach(a => { if (a.dataset.viewLink === current.id) a.getAttribute('role') === 'tab' ? a.setAttribute('aria-selected', 'true') : a.setAttribute('aria-current', 'page'); });
+  if (isView(hashTarget)) show(hashTarget.id, false, false); else if (current) $$('[data-view-link]').forEach(a => { if (a.dataset.viewLink === current.id) a.getAttribute('role') === 'tab' ? a.setAttribute('aria-selected', 'true') : a.setAttribute('aria-current', 'page'); });
   window.cfShow = show;
 
   /* Display popover, Comment mode, forms, copy, toast */
-  const pop = $('.pop'), gear = $('[data-gear]'); const closePop = () => { if (pop && gear) { pop.classList.remove('is-open'); gear.setAttribute('aria-expanded', 'false'); } }; document.addEventListener('keydown', e => { if (e.key === 'Escape') closePop(); });
-  if (gear && pop) { gear.addEventListener('click', () => { const open = !pop.classList.contains('is-open'); pop.classList.toggle('is-open', open); gear.setAttribute('aria-expanded', String(open)); }); document.addEventListener('pointerdown', e => { if (pop.classList.contains('is-open') && !pop.contains(e.target) && !gear.contains(e.target)) closePop(); }); }
+  const pop = $('.pop'), gear = $('[data-gear]');
+  const closePop = (refocus = true) => { if (!pop || !gear || !pop.classList.contains('is-open')) return; pop.classList.remove('is-open'); gear.setAttribute('aria-expanded', 'false'); if (refocus) gear.focus(); };
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && pop && pop.classList.contains('is-open')) closePop(true);
+    if (e.key === 'Tab' && pop && pop.classList.contains('is-open')) { const f = [...pop.querySelectorAll('button')]; if (!f.length) return; const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); } else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); } } });
+  if (gear && pop) { gear.addEventListener('click', () => { const open = !pop.classList.contains('is-open'); if (!open) return closePop(true); pop.classList.add('is-open'); gear.setAttribute('aria-expanded', 'true'); const f = pop.querySelector('[aria-pressed="true"]') || pop.querySelector('button'); if (f) setTimeout(() => f.focus(), 20); });
+    document.addEventListener('pointerdown', e => { if (pop.classList.contains('is-open') && !pop.contains(e.target) && !gear.contains(e.target)) closePop(false); }); }
   const toast = $('.toast'); let toastT; window.cfToast = m => { if (!toast) return; toast.textContent = m; toast.classList.add('is-open'); clearTimeout(toastT); toastT = setTimeout(() => toast.classList.remove('is-open'), 1800); };
   const cbtn = $('[data-comment-toggle]'), rail = $('.rail'); let notes = 0;
   if (cbtn && rail) { cbtn.addEventListener('click', () => { const on = root.dataset.comment !== 'armed'; root.dataset.comment = on ? 'armed' : ''; cbtn.setAttribute('aria-pressed', String(on)); rail.classList.toggle('is-open', on || notes > 0); if (!on && !notes) rail.classList.remove('is-open'); });

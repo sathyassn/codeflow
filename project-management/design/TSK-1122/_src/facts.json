@@ -6,7 +6,8 @@
   "lineTip": "aa84d8544",
   "mainTip": "b2bb61af3",
   "repo": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-1122",
-  "codeflow": "codeflow 4.0.0"
+  "codeflow": "codeflow 4.0.0",
+  "recordsRefreshedAt": "2026-11-02 16:25 EST"
  },
  "scope": {
   "total": 246,
@@ -934,7 +935,10 @@
      "TSK-1181",
      "TSK-1182"
     ]
-   }
+   },
+   "whatItIs": "The 4.0.0 release plan addresses issues filed by this repository and by adopters. The original 2026-10-12 scope covered 26 issues against CodeFlow 3.0.0 and 3.1.0. The combined scope covers `codeflow ci` verdicts that depend on how a range is spelled, planning and exemption pull requests that cannot be classified, guards that miss commands, writers and history reads that can be redirected in a local clone, CodeFlow's own pushes using a personal credential, managed CI steps an adopter must edit by hand, a landing mode, tests that touch an enclosing repository, and one post-release evaluation. This epic fixes or settles each of them for the 4.0.0 release, which the operator renumbered from 3.2.0 on 2026-10-28 (Version relabel amendment below).",
+   "serves": "It serves every adopter and contributor who runs `codeflow ci`, the hooks, the guards and the managed CI.",
+   "doneMeans": "each task below has landed on `integration/EPC-022-the-3-2-0-milestone-fixes` with its cross-lineage review, the integrated body passes the full gate and the journey below on the installed candidate, and its pull request to `main` is ready for a human merge."
   },
   "EPC-024": {
    "id": "EPC-024",
@@ -1081,7 +1085,10 @@
      "TSK-1117",
      "TSK-1118"
     ]
-   }
+   },
+   "whatItIs": "Five feature requests from adopters in October 2026 ask CodeFlow to change its defaults rather than fix a defect: a define-once gate with a tracked exemption register (issue 274), strict typing and linting by default with an explicit opt-out (275), a repository that holds only what it needs long term (279), a local run of the managed secret scan and dependency audit (252), per-project account profiles with limit-aware seat routing (234), and the supervisor and separate-account layers of lane isolation (286, items 2 and 3; item 1 is TSK-437 in 4.0.0). The operator placed them on 2026-10-22 in one separate epic, smaller than EPC-022, sized by issue 280's guidance; this epic is that placement.",
+   "serves": "It serves adopters who run several languages, several seats and hosted scans.",
+   "doneMeans": "each task has landed on this epic's line with its cross-lineage review, the integrated body passes the full gate and the journeys below on the installed candidate, and its pull request to `main` is ready for a human merge."
   },
   "EPC-025": {
    "id": "EPC-025",
@@ -1160,7 +1167,10 @@
      "TSK-440",
      "TSK-1126"
     ]
-   }
+   },
+   "whatItIs": "Issue 272 asked for an orchestrator follow-up ledger: every handed-over item logged, checked and closed on proof. The operator shaped it on 2026-10-22 into project-level working state that CodeFlow owns for any orchestrating model, and an independent Codex review of the design (sound with changes, 22 findings, 14 high) settled its contracts: the coordination ledger, a clone-local single event log with follow-ups (`FU-NNN`, `codeflow follow`) and lanes (`LN-NNN`, `codeflow lane`), the coordinator as lead role, hooks on every harness, and the rules and skills that adopt them (ADR-0086). It is its own small epic, sized by issue 280's guidance, and it targets 3.2.0 as the operator placed issue 272 there. It lands on its own integration line, `integration/EPC-025-the-coordination-ledger-follow-ups-and-lanes`, cut from the EPC-022 line, because the epic-line binding (`crates/codeflow-core/src/workgraph/work_start.rs:880-917`) requires a task's epic to equal the line's epic, so an EPC-025 task cannot bind to the EPC-022 line (found at the first EPC-025 push on 2026-10-23; amended the same day, a reversible primary decision). The closing step: once its four tasks have landed and the epic's criteria are proven on its own installed candidate, the EPC-025 line merges into the EPC-022 line through one reviewed pull request, gated once as a candidate there, before the 3.2.0 pull request to `main`; that pull request describes both epics' outcomes, and the operator merges it. Amended 2026-10-24: `codeflow ci` lands an `integration/` head only on the default branch, so each merge of this line into the EPC-022 line is carried by an EPC-022 task branch that merges it (the first is TSK-1000), and the operator chose that day to merge the line once now, with TSK-422 landed, so the 3.2.0 pull request can open.",
+   "serves": "not recorded",
+   "doneMeans": "not recorded"
   }
  },
  "tasks": {
@@ -2925,7 +2935,7 @@
    "title": "The exec guard adds a strict rule where the sandbox is absent or loosened",
    "created": "2026-10-18",
    "depends_on": [],
-   "about": "After this merges, the strict text rule applies in every session by default, and an operator can choose the line's rule for a project by landing `security.text_guard: relaxed` on its protected refs. No command the line refuses is allowed, except a line made only of bare `cd`, `pushd` and `popd` builtins under relaxed, which writes nothing. The change is breaking (4.0.0): `codeflow doctor --check s",
+   "about": "After this merges, the strict text rule applies in every session by default, and an operator can choose the line's rule for a project by landing `security.text_guard: relaxed` on its protected refs. No command the line refuses is allowed, except a line made only of bare `cd`, `pushd` and `popd` builtins under relaxed, which writes nothing. The change is breaking (4.0.0): `codeflow doctor --check sandbox` shows the rule in force.",
    "criteria": 8,
    "serves": [
     "EPC-022 AC-86"
@@ -3810,7 +3820,7 @@
    "title": "The estimation method is in the shipped references, templates and plan flow, and CodeFlow's profile is on",
    "created": "2026-10-26",
    "depends_on": [],
-   "about": "after this merges, a planner in any adopted full-tier project can write a Delivery size block, an epic Estimate section and a task Estimate block from the shipped templates and `cf-plan`; the references explain the bands and the clock; the pace rule is gone from every managed site; and CodeFlow's `.codeflow/estimate.json` and `profile-v1.md` exist, so every task planned after the profile's effecti",
+   "about": "after this merges, a planner in any adopted full-tier project can write a Delivery size block, an epic Estimate section and a task Estimate block from the shipped templates and `cf-plan`; the references explain the bands and the clock; the pace rule is gone from every managed site; and CodeFlow's `.codeflow/estimate.json` and `profile-v1.md` exist, so every task planned after the profile's effective date carries a band.",
    "criteria": 16,
    "serves": [
     "EPC-022 AC-201"
@@ -5024,7 +5034,7 @@
    "depends_on": [
     "TSK-1038"
    ],
-   "about": "After this merges, anyone on an adopting project can run `codeflow status` with a scope and get, for a task, an epic or the whole line, the percent complete at each level with its basis, what is on `main` and what is not with the path to `main`, the order of work, the lanes carrying it, a window per item and milestone with its basis, and the issues per item, each fact live or marked unverified, as",
+   "about": "After this merges, anyone on an adopting project can run `codeflow status` with a scope and get, for a task, an epic or the whole line, the percent complete at each level with its basis, what is on `main` and what is not with the path to `main`, the order of work, the lanes carrying it, a window per item and milestone with its basis, and the issues per item, each fact live or marked unverified, as text and JSON.",
    "criteria": 15,
    "serves": [
     "EPC-022 AC-190"
@@ -5202,7 +5212,7 @@
    "depends_on": [
     "TSK-1094"
    ],
-   "about": "After this merges, the qualification operator can run trials under the per-trial `--codex-hook-trust=bypass` option whose subject opens a Codex review seat in its task worktree, as the method prescribes: the peer reaches ready, receives its delivery and the trial finishes with no validity flag from it; under the default `review` option such a peer is still refused at its hook screen; and the runne",
+   "about": "After this merges, the qualification operator can run trials under the per-trial `--codex-hook-trust=bypass` option whose subject opens a Codex review seat in its task worktree, as the method prescribes: the peer reaches ready, receives its delivery and the trial finishes with no validity flag from it; under the default `review` option such a peer is still refused at its hook screen; and the runner still refuses any peer whose working directory fails the stated identity checks at any moment it looks.",
    "criteria": 10,
    "serves": [
     "EPC-022 AC-175"
@@ -5345,7 +5355,7 @@
    "depends_on": [
     "TSK-1077"
    ],
-   "about": "After this merges, an agent running a Herdr seat in any project knows from the shipped instructions that a hook-trust prompt goes to the operator unless that project records an operator-authorized hook-trust rule, how it verifies the rule is landed, current and unrevoked, what the rule lets it approve and how it checks the hooks, and what it must refuse; in this repository the recorded rule lets i",
+   "about": "After this merges, an agent running a Herdr seat in any project knows from the shipped instructions that a hook-trust prompt goes to the operator unless that project records an operator-authorized hook-trust rule, how it verifies the rule is landed, current and unrevoked, what the rule lets it approve and how it checks the hooks, and what it must refuse; in this repository the recorded rule lets it answer the prompt itself.",
    "criteria": 6,
    "serves": [
     "EPC-022 AC-186"
@@ -5848,7 +5858,7 @@
    "depends_on": [
     "TSK-350"
    ],
-   "about": "After this merges, an adopter whose task branch passes `codeflow ci --branch` is no longer refused by pre-push, or judged against the wrong base, because of a target-line mismatch; a push to a destination that does not advertise the line is still refused. <!-- One line saying what someone can do once this lands, in the form \"after this merges, <who> can <do what>\". `codeflow validate --docs` refus",
+   "about": "After this merges, an adopter whose task branch passes `codeflow ci --branch` is no longer refused by pre-push, or judged against the wrong base, because of a target-line mismatch; a push to a destination that does not advertise the line is still refused. <!-- One line saying what someone can do once this lands, in the form \"after this merges, <who> can <do what>\". `codeflow validate --docs` refuses an open record created after the project adopted this section when the line is missing (`outcome_present_uids` in `.codeflow/project.toml`), and warns for an older open record. -->",
    "criteria": 3,
    "serves": [
     "EPC-022 AC-47"
@@ -5970,7 +5980,7 @@
     "TSK-1171",
     "TSK-436"
    ],
-   "about": "after this merges, a task's clock ends at the later of a review approval bound to the final reviewed commit and the task's verification point, with the landing standing in when the completion was written later; an approval on an earlier commit is ignored with a note; a deferred criterion is reported as owed against the task with its later result linked; and a failed deferred proof places the task ",
+   "about": "after this merges, a task's clock ends at the later of a review approval bound to the final reviewed commit and the task's verification point, with the landing standing in when the completion was written later; an approval on an earlier commit is ignored with a note; a deferred criterion is reported as owed against the task with its later result linked; and a failed deferred proof places the task in the `reopened` category with its follow-up task linked, while the task's status stays `complete` as TSK-436 defines.",
    "criteria": 4,
    "serves": [
     "EPC-022 AC-201"
@@ -5993,7 +6003,7 @@
    "title": "A claim is one step that records the task's start",
    "created": "2026-11-02",
    "depends_on": [],
-   "about": "after this merges, `work claim` creates the task branch and its worktree, commits `claimed:` and `claim_base:` into the task's record as one commit, pushes the branch with that commit and runs the start preflight; `estimate outcomes` takes the `claimed:` time as the start when it is the task's own claim; `work start` stays the read-only re-entry check for a resumed session and CI; and a claim with",
+   "about": "after this merges, `work claim` creates the task branch and its worktree, commits `claimed:` and `claim_base:` into the task's record as one commit, pushes the branch with that commit and runs the start preflight; `estimate outcomes` takes the `claimed:` time as the start when it is the task's own claim; `work start` stays the read-only re-entry check for a resumed session and CI; and a claim with no later commit reads as an idle claim with its age.",
    "criteria": 8,
    "serves": [
     "EPC-022 AC-200"
@@ -6140,7 +6150,7 @@
    "title": "Codeflow ci admits an append-only waiver annotation on a reopened task's criterion",
    "created": "2026-11-02",
    "depends_on": [],
-   "about": "after this merges, `codeflow ci` accepts a reopened task whose completion landed when its own PR completes it with `AC-n: waived | <40-hex sha>`, where that commit appends a waiver annotation to criterion n, keeps its original text unchanged, cites the superseding commit by its SHA, and changes only planning records; any other change to a frozen criterion, and any unprovable condition, is refused ",
+   "about": "after this merges, `codeflow ci` accepts a reopened task whose completion landed when its own PR completes it with `AC-n: waived | <40-hex sha>`, where that commit appends a waiver annotation to criterion n, keeps its original text unchanged, cites the superseding commit by its SHA, and changes only planning records; any other change to a frozen criterion, and any unprovable condition, is refused with the cause named and the planning route.",
    "criteria": 8,
    "serves": [
     "EPC-022 AC-37"
@@ -7194,5 +7204,152 @@
    "waiting": 96,
    "blocked": 8
   }
- }
+ },
+ "capabilities": {
+  "CAP-001": "scaffold init",
+  "CAP-002": "scaffold update",
+  "CAP-012": "scaffold customize",
+  "CAP-017": "optional agentic estimation",
+  "CAP-003": "git policy gates",
+  "CAP-008": "remote protect doctor",
+  "CAP-011": "security redteam review",
+  "CAP-004": "test gate",
+  "CAP-005": "integrate",
+  "CAP-007": "orient session summary",
+  "CAP-006": "recall registry",
+  "CAP-009": "cross vendor delegation",
+  "CAP-010": "duo model orchestration",
+  "CAP-013": "model binding evaluation",
+  "CAP-014": "transport neutral delegate lifecycle",
+  "CAP-015": "opt in documentation portal",
+  "CAP-016": "interactive presentation review"
+ },
+ "docsChanged": [
+  {
+   "file": "docs/adoption.md",
+   "added": 7,
+   "removed": 2,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/architecture.md",
+   "added": 4,
+   "removed": 4,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/architecture/enforcement-planes.md",
+   "added": 12,
+   "removed": 14,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/capabilities.md",
+   "added": 18,
+   "removed": 13,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/capabilities/CAP-010-duo-model-orchestration.md",
+   "added": 4,
+   "removed": 2,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/cli.md",
+   "added": 32,
+   "removed": 16,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/decisions/ADR-0088-the-exec-guard-s-text-rule-follows-the-readable.md",
+   "added": 51,
+   "removed": 0,
+   "kind": "new"
+  },
+  {
+   "file": "docs/decisions/ADR-0089-local-gate-runs-earn-no-selection-credit.md",
+   "added": 56,
+   "removed": 0,
+   "kind": "new"
+  },
+  {
+   "file": "docs/decisions/ADR-0091-the-default-branch-at-one-commit-is-the-only-pol.md",
+   "added": 228,
+   "removed": 0,
+   "kind": "new"
+  },
+  {
+   "file": "docs/decisions/ADR-0092-the-ignored-file-rule-matches-with-the-ignore-cr.md",
+   "added": 71,
+   "removed": 0,
+   "kind": "new"
+  },
+  {
+   "file": "docs/delivery.md",
+   "added": 19,
+   "removed": 0,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/glossary.md",
+   "added": 1,
+   "removed": 1,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/harness-posture.md",
+   "added": 37,
+   "removed": 1,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/policy-reference.md",
+   "added": 430,
+   "removed": 18,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/test-gate.md",
+   "added": 62,
+   "removed": 61,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/troubleshooting.md",
+   "added": 105,
+   "removed": 12,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/verification/evidence/permission-presets/actions.json",
+   "added": 2,
+   "removed": 1,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/verification/evidence/permission-presets/claude/acceptEdits.json",
+   "added": 1,
+   "removed": 0,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/verification/evidence/permission-presets/claude/bypass-sandboxed.json",
+   "added": 1,
+   "removed": 0,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/verification/evidence/permission-presets/claude/default.json",
+   "added": 1,
+   "removed": 0,
+   "kind": "changed"
+  },
+  {
+   "file": "docs/verification/evidence/permission-presets/grok/sandbox.toml",
+   "added": 6,
+   "removed": 0,
+   "kind": "changed"
+  }
+ ]
 }
