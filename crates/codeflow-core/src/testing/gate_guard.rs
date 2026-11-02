@@ -359,16 +359,6 @@ fn probe_lock_dir(dir: &Path) -> std::io::Result<()> {
     })
 }
 
-/// The folder holding the shared config. A linked worktree's git folder is
-/// `<common>/worktrees/<name>`; any other git folder holds its own config.
-fn common_git_dir(git_dir: &Path) -> PathBuf {
-    let listed = git_dir
-        .parent()
-        .filter(|parent| parent.file_name().is_some_and(|name| name == "worktrees"))
-        .and_then(Path::parent);
-    listed.unwrap_or(git_dir).to_path_buf()
-}
-
 /// Whether this process can take the steps git starts with to rewrite the
 /// shared git config file of the repository holding `project_dir`
 /// (TSK-1156), and the path probed. Git rewrites that file for any
@@ -386,18 +376,17 @@ fn common_git_dir(git_dir: &Path) -> PathBuf {
 /// config file is not tried, so `Ok` means the rewrite is not refused at
 /// either step it can observe, not that the rename will succeed.
 pub fn probe_git_config_write(project_dir: &Path) -> (PathBuf, std::io::Result<()>) {
-    // `discover_path` finds the git folder without opening the repository,
-    // which would read the config file and block on a pipe in its place.
-    let common = match git2::Repository::discover_path(project_dir, [] as [&Path; 0]) {
-        Ok(git_dir) => common_git_dir(&git_dir),
-        Err(error) => {
-            return (
-                project_dir.to_path_buf(),
-                Err(std::io::Error::other(format!(
-                    "no git repository, so the shared git config file was not probed: {error}"
-                ))),
-            )
-        }
+    // The shared root comes from a validated registration, found without
+    // opening the repository (which would read the config file, and block on
+    // a pipe in its place).
+    let common = match crate::hooks::repo::shared_git_dir(project_dir) {
+        Ok(common) => common,
+        Err(error) => return (
+            project_dir.to_path_buf(),
+            Err(std::io::Error::other(format!(
+                "no usable git repository, so the shared git config file was not probed: {error}"
+            ))),
+        ),
     };
     let config = common.join("config");
     let result = crate::contained::Tree::open(&common).and_then(|tree| {
@@ -2305,6 +2294,137 @@ mod tests {
             path.canonicalize().unwrap(),
             git_dir.join("config").canonicalize().unwrap()
         );
+    }
+
+    /// Every path under `root`, for proving a refused probe created nothing.
+    #[cfg(unix)]
+    fn listing(root: &std::path::Path) -> Vec<String> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                out.push(path.display().to_string());
+                if path.is_dir() && !path.is_symlink() {
+                    walk(&path, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, &mut out);
+        out.sort();
+        out
+    }
+
+    /// A repository with one commit and a linked worktree `linked` beside it.
+    #[cfg(unix)]
+    fn linked_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
+        let (tmp, _git_dir) = config_fixture();
+        let repo = git2::Repository::open(tmp.path()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        let linked = tmp.path().join("linked");
+        repo.worktree("linked", &linked, None).unwrap();
+        (tmp, linked)
+    }
+
+    /// A git folder stored under a folder named `worktrees` is not a linked
+    /// worktree: the probe measures that folder's own config and creates
+    /// nothing beside it, for a bare folder and for a checkout pointing at it.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_does_not_take_a_folder_name_for_a_registration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outer = tmp.path().join("x");
+        let separate = outer.join("worktrees").join("repo.git");
+        std::fs::create_dir_all(&separate).unwrap();
+        git2::Repository::init_bare(&separate).unwrap();
+        let checkout = tmp.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        std::fs::write(
+            checkout.join(".git"),
+            format!("gitdir: {}\n", separate.display()),
+        )
+        .unwrap();
+        let before = listing(tmp.path());
+        let (path, result) = probe_git_config_write(&checkout);
+        result.unwrap();
+        assert_eq!(
+            path.canonicalize().unwrap(),
+            separate.join("config").canonicalize().unwrap()
+        );
+        assert_eq!(listing(tmp.path()), before, "the probe left a file behind");
+        assert!(!outer.join("config.lock").exists());
+        let (path, result) = probe_git_config_write(&separate);
+        result.unwrap();
+        assert_eq!(
+            path.canonicalize().unwrap(),
+            separate.join("config").canonicalize().unwrap()
+        );
+        assert_eq!(listing(tmp.path()), before);
+    }
+
+    /// A checkout marker steered at an administrative folder under an
+    /// unrelated `worktrees` folder, with a `commondir` naming a real
+    /// repository, is refused before any lock is created.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_refuses_a_forged_checkout_marker() {
+        let (real, _linked) = linked_fixture();
+        let tmp = tempfile::tempdir().unwrap();
+        let fake = tmp.path().join("x").join("worktrees").join("fake");
+        std::fs::create_dir_all(&fake).unwrap();
+        std::fs::write(fake.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            fake.join("commondir"),
+            format!("{}\n", real.path().join(".git").display()),
+        )
+        .unwrap();
+        std::fs::write(
+            fake.join("gitdir"),
+            format!("{}\n", real.path().join("linked").join(".git").display()),
+        )
+        .unwrap();
+        let checkout = tmp.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        std::fs::write(
+            checkout.join(".git"),
+            format!("gitdir: {}\n", fake.display()),
+        )
+        .unwrap();
+        let before = listing(tmp.path());
+        let real_before = listing(real.path());
+        let (_, result) = probe_git_config_write(&checkout);
+        assert!(result.is_err(), "a forged marker was accepted");
+        assert_eq!(listing(tmp.path()), before);
+        assert_eq!(listing(real.path()), real_before);
+        assert!(!tmp.path().join("x").join("config.lock").exists());
+    }
+
+    /// A registration whose `commondir` or `gitdir` backlink disagrees with
+    /// the checkout is refused, and nothing is created.
+    #[cfg(unix)]
+    #[test]
+    fn the_git_config_probe_refuses_a_registration_that_disagrees() {
+        let other = tempfile::tempdir().unwrap();
+        git2::Repository::init(other.path()).unwrap();
+        for forged in ["commondir", "gitdir"] {
+            let (tmp, linked) = linked_fixture();
+            let admin = tmp.path().join(".git").join("worktrees").join("linked");
+            let wrong = match forged {
+                "commondir" => other.path().join(".git"),
+                _ => other.path().join(".git"),
+            };
+            std::fs::write(admin.join(forged), format!("{}\n", wrong.display())).unwrap();
+            let before = listing(tmp.path());
+            let other_before = listing(other.path());
+            let (_, result) = probe_git_config_write(&linked);
+            assert!(result.is_err(), "{forged} mismatch was accepted");
+            assert_eq!(listing(tmp.path()), before, "{forged}");
+            assert_eq!(listing(other.path()), other_before, "{forged}");
+        }
     }
 
     /// A special file or a folder in the config's place is refused without

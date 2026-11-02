@@ -893,6 +893,88 @@ fn check_common_directory(repo: &Repository) -> Result<(), String> {
     Ok(())
 }
 
+/// The text of a small regular marker file, never through a link and never
+/// more than 4 KiB.
+fn small_marker(path: &Path, what: &str) -> Result<String, String> {
+    use std::io::Read;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect {what}: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.len() > 4096 {
+        return Err(format!("{what} must be a small regular file"));
+    }
+    let mut text = String::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(4096).read_to_string(&mut text))
+        .map_err(|error| format!("cannot read {what}: {error}"))?;
+    Ok(text.trim_end().to_string())
+}
+
+/// The git directory that holds the shared config for the checkout holding
+/// `project_dir`, found without opening the repository (opening reads its
+/// config, which can block on a pipe in its place).
+///
+/// An ordinary git directory is its own shared root. A linked worktree's
+/// administrative directory is accepted only when its registration is real:
+/// its `commondir` file names a common directory that physically contains
+/// `worktrees/<name>`, its `gitdir` file names the checkout's `.git` marker,
+/// and that checkout's marker names this administrative directory. Any
+/// disagreement refuses before a caller creates a file.
+///
+/// # Errors
+///
+/// When no git directory is found, a marker is not a small regular file, or
+/// the registration, common directory and checkout disagree.
+pub fn shared_git_dir(project_dir: &Path) -> Result<PathBuf, String> {
+    let found = Repository::discover_path(project_dir, [] as [&Path; 0])
+        .map_err(|error| error.message().to_string())?;
+    let admin = canonical(&found, "git directory")?;
+    let commondir = admin.join("commondir");
+    match std::fs::symlink_metadata(&commondir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(admin),
+        Err(error) => return Err(format!("cannot inspect commondir: {error}")),
+        Ok(_) => {}
+    }
+    let named = small_marker(&commondir, "commondir")?;
+    if named.is_empty() {
+        return Err("commondir is empty".into());
+    }
+    let common = canonical(&admin.join(&named), "common directory")?;
+    let registrations = admin
+        .parent()
+        .ok_or("worktree has no registration directory")?;
+    if canonical(&common.join("worktrees"), "registration directory")? != registrations
+        || !common.join("objects").is_dir()
+        || !common.join("refs").is_dir()
+    {
+        return Err("worktree common directory disagrees with its registration".into());
+    }
+    // The registration names the checkout's marker, and that marker names
+    // this administrative directory.
+    let registered = registered_marker(&admin)?;
+    let mut checkout = None;
+    for dir in project_dir.ancestors() {
+        if std::fs::symlink_metadata(dir.join(".git")).is_ok() {
+            checkout = Some(canonical(dir, "checkout")?);
+            break;
+        }
+    }
+    let checkout = checkout.ok_or("no checkout marker above the project")?;
+    let marker = checkout.join(".git");
+    if canonical(&registered, "registered checkout marker")? != marker {
+        return Err("worktree registration names a different checkout".into());
+    }
+    let text = small_marker(&marker, "checkout marker")?;
+    let target = text
+        .strip_prefix("gitdir:")
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .ok_or("checkout marker does not name a git directory")?;
+    if canonical(&checkout.join(target), "checkout git directory")? != admin {
+        return Err("checkout marker names a different git directory".into());
+    }
+    Ok(common)
+}
+
 // Inventory the administrative names before interpreting their pointers. A
 // relative missing leaf is prunable too; the generic worktree reader requires
 // a checkout parent in the raw text before it can represent that checkout.

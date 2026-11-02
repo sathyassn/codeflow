@@ -512,33 +512,96 @@ fn judge(
     violations
 }
 
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+/// The Rust sources under `dir`, found without following a link. Every
+/// failure to list a folder and every link is added to `problems`, so a
+/// source cannot hide behind an unreadable folder or an alias. A missing
+/// `dir` is an error unless `may_be_missing` (a crate with no `tests`).
+fn rust_files(
+    dir: &Path,
+    may_be_missing: bool,
+    out: &mut Vec<PathBuf>,
+    problems: &mut Vec<String>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if may_be_missing && error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            problems.push(format!("{}: cannot list folder ({error})", dir.display()));
+            return;
+        }
     };
     for entry in entries {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                problems.push(format!("{}: cannot list folder ({error})", dir.display()));
+                continue;
+            }
+        };
+        let path = entry.path();
+        // `DirEntry::file_type` does not follow a link.
+        match entry.file_type() {
+            Ok(kind) if kind.is_symlink() => problems.push(format!(
+                "{}: a link in the source tree is refused, never followed",
+                path.display()
+            )),
+            Ok(kind) if kind.is_dir() => rust_files(&path, false, out, problems),
+            Ok(_) if path.extension().is_some_and(|ext| ext == "rs") => out.push(path),
+            Ok(_) => {}
+            Err(error) => problems.push(format!("{}: cannot inspect ({error})", path.display())),
         }
     }
+}
+
+/// Every Rust source under `crates/*/src` and `crates/*/tests`, or the
+/// problems that stopped the walk from seeing some.
+fn collect_sources(crates: &Path) -> (Vec<PathBuf>, Vec<String>) {
+    let mut files = Vec::new();
+    let mut problems = Vec::new();
+    match std::fs::read_dir(crates) {
+        Ok(entries) => {
+            for entry in entries {
+                match entry {
+                    Ok(entry) => {
+                        let krate = entry.path();
+                        match entry.file_type() {
+                            Ok(kind) if kind.is_dir() => {
+                                rust_files(&krate.join("src"), true, &mut files, &mut problems);
+                                rust_files(&krate.join("tests"), true, &mut files, &mut problems);
+                            }
+                            Ok(kind) if kind.is_symlink() => problems.push(format!(
+                                "{}: a link in the source tree is refused, never followed",
+                                krate.display()
+                            )),
+                            Ok(_) => {}
+                            Err(error) => problems
+                                .push(format!("{}: cannot inspect ({error})", krate.display())),
+                        }
+                    }
+                    Err(error) => {
+                        problems.push(format!(
+                            "{}: cannot list folder ({error})",
+                            crates.display()
+                        ));
+                    }
+                }
+            }
+        }
+        Err(error) => problems.push(format!(
+            "{}: cannot list folder ({error})",
+            crates.display()
+        )),
+    }
+    (files, problems)
 }
 
 #[test]
 fn no_test_registers_a_remote_on_the_network() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(&crates).unwrap() {
-        let krate = entry.unwrap().path();
-        rust_files(&krate.join("src"), &mut files);
-        rust_files(&krate.join("tests"), &mut files);
-    }
+    let (files, mut unexpected) = collect_sources(&crates);
     assert!(files.len() > 100, "the lint found {} sources", files.len());
     let mut found: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut skipped = Vec::new();
-    let mut unexpected = Vec::new();
     for file in &files {
         let shown = file
             .strip_prefix(&crates)
@@ -720,4 +783,58 @@ fn an_allowance_is_bound_to_its_file_host_and_count() {
     // An entry that matches nothing is stale.
     found.clear();
     assert_eq!(judge(&found, allowed).len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_walk_refuses_an_unreadable_folder_and_a_link() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let krate = tmp.path().join("one");
+    let src = krate.join("src");
+    let nested = src.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(src.join("lib.rs"), "fn a() {}").unwrap();
+    std::fs::write(nested.join("hidden.rs"), "fn b() {}").unwrap();
+    // A crate with no tests folder is fine.
+    let (files, problems) = collect_sources(tmp.path());
+    assert_eq!(files.len(), 2, "{files:?}");
+    assert!(problems.is_empty(), "{problems:?}");
+
+    // An unreadable nested folder is reported, not skipped.
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (_, problems) = collect_sources(tmp.path());
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = unsafe { libc::geteuid() } == 0;
+    assert!(
+        root || problems.iter().any(|p| p.contains("cannot list folder")),
+        "{problems:?}"
+    );
+
+    // A link with an innocent name to a target that must stay unopened: the
+    // target is made unreadable, so any read of it would also be an error,
+    // and the walk must name the link as the problem.
+    let target = tmp.path().join("target-never-read.txt");
+    std::fs::write(&target, "never read").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::os::unix::fs::symlink(&target, src.join("alias.rs")).unwrap();
+    let (files, problems) = collect_sources(tmp.path());
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("alias.rs") && p.contains("link")),
+        "{problems:?}"
+    );
+    assert!(!files.iter().any(|f| f.ends_with("alias.rs")), "{files:?}");
+    // A linked folder is refused too.
+    std::fs::remove_file(src.join("alias.rs")).unwrap();
+    std::os::unix::fs::symlink(&nested, src.join("folder")).unwrap();
+    let (_, problems) = collect_sources(tmp.path());
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("folder") && p.contains("link")),
+        "{problems:?}"
+    );
 }
